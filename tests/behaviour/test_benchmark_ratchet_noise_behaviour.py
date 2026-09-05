@@ -8,6 +8,7 @@ of the median.
 
 from __future__ import annotations
 
+import json
 import typing as typ
 
 from pytest_bdd import given, parsers, scenario, then, when
@@ -16,13 +17,13 @@ from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import (
     BaselineHistory,
     HistorySample,
-    RatchetPolicy,
+    write_history,
 )
-from benchmarks.ratchet_rust_performance import compare_rust_regressions
-from benchmarks.ratchet_types import BenchmarkRunPayload
+from benchmarks.ratchet_rust_performance import main as ratchet_cli
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import pathlib as pth
 
 FEATURE = "../features/benchmark_ratchet_noise.feature"
 SCENARIO = "medium-single-nocb"
@@ -54,6 +55,11 @@ def test_measuring_what_main_measures_is_never_a_regression() -> None:
     """Measuring what main measures is never a regression."""
 
 
+@scenario(FEATURE, "A missing baseline skips the ratchet with durable evidence")
+def test_a_missing_baseline_skips_the_ratchet_with_durable_evidence() -> None:
+    """A missing baseline skips the ratchet with durable evidence."""
+
+
 def _sample(ratio: float, *, run_id: str) -> HistorySample:
     """Return one recorded main-branch measurement."""
     return HistorySample(
@@ -74,19 +80,19 @@ def _parse_ratios(measurements: str) -> tuple[float, ...]:
     )
 
 
-def _candidate(ratio: float) -> BenchmarkRunPayload:
-    """Return a pull-request run measuring one Rust/Python ratio.
+def _candidate_payloads(ratio: float) -> tuple[dict[str, object], dict[str, object]]:
+    """Return plan and throughput payloads for one pull-request measurement.
 
     The Python mean is fixed at one second so the Rust mean carries the
     ratio the ratchet reads.
 
     Returns
     -------
-    BenchmarkRunPayload
-        A candidate measurement with logical Hyperfine command names.
+    tuple[dict[str, object], dict[str, object]]
+        Candidate plan and throughput payloads with logical command names.
     """
-    return BenchmarkRunPayload(
-        plan={
+    return (
+        {
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
             "worker_iterations": WORKER_ITERATIONS,
             "scenarios": [
@@ -94,14 +100,18 @@ def _candidate(ratio: float) -> BenchmarkRunPayload:
                 {"name": f"rust-{SCENARIO}", "backend": "rust"},
             ],
         },
-        throughput={
+        {
             "results": [
                 {"command": f"python-{SCENARIO}", "mean": 1.0},
                 {"command": f"rust-{SCENARIO}", "mean": ratio},
             ],
         },
-        context_name="candidate",
     )
+
+
+def _write_json(*, path: pth.Path, payload: dict[str, object]) -> None:
+    """Write one CLI fixture as JSON."""
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 # -- Given steps ---------------------------------------------------------------
@@ -132,6 +142,11 @@ def given_a_noisy_main_run(
     return history.appended(_sample(measurement, run_id="noisy"))
 
 
+@given("no main baseline is available", target_fixture="history")
+def given_no_main_baseline_is_available() -> None:
+    """Represent a first ratchet run with no downloaded baseline artefact."""
+
+
 # -- When steps ----------------------------------------------------------------
 
 
@@ -140,15 +155,63 @@ def given_a_noisy_main_run(
     target_fixture="verdict",
 )
 def when_a_pull_request_measures(
-    history: BaselineHistory, measurement: float
+    history: BaselineHistory | None, measurement: float, tmp_path: pth.Path
 ) -> cabc.Mapping[str, object]:
-    """Judge the pull request's measurement against the window."""
-    report = compare_rust_regressions(
-        candidate=_candidate(measurement),
-        history=history,
-        policy=RatchetPolicy(max_regression=0.30),
+    """Judge the pull request through the ratchet CLI and persisted report."""
+    candidate_plan, candidate_throughput = _candidate_payloads(measurement)
+    candidate_plan_path = tmp_path / "candidate-plan.json"
+    candidate_throughput_path = tmp_path / "candidate-throughput.json"
+    output_path = tmp_path / "ratchet-report.json"
+    _write_json(path=candidate_plan_path, payload=candidate_plan)
+    _write_json(path=candidate_throughput_path, payload=candidate_throughput)
+    argv = [
+        "--candidate-plan",
+        str(candidate_plan_path),
+        "--candidate-throughput",
+        str(candidate_throughput_path),
+        "--max-regression",
+        "0.30",
+        "--output",
+        str(output_path),
+    ]
+    if history is not None:
+        history_path = tmp_path / "main-baseline-history.json"
+        write_history(history=history, output_path=history_path)
+        argv.extend(("--baseline-history", str(history_path)))
+
+    exit_code = ratchet_cli(argv)
+    verdict = typ.cast("dict[str, object]", json.loads(output_path.read_text()))
+
+    assert exit_code == int(not verdict["passed"]), (
+        "the ratchet CLI exit code must match its persisted passed verdict"
     )
-    return report.as_dict()
+    if history is None:
+        assert verdict["baseline_source"] == "none", (
+            "a first run must record that no baseline source was selected"
+        )
+        assert verdict["baseline_reason"] == "no_baseline_available", (
+            "a first run must retain its bounded no-baseline reason"
+        )
+        assert verdict["compatible_sample_count"] == 0, (
+            "a first run cannot have compatible history samples"
+        )
+        assert verdict["comparison_state"] == "skipped_no_baseline", (
+            "a first run must persist its intentional skipped comparison"
+        )
+    else:
+        assert verdict["baseline_source"] == "history", (
+            "the behavioural window must be selected from recorded history"
+        )
+        assert verdict["baseline_reason"] == "compatible_history", (
+            "the compatible history selection must be durable evidence"
+        )
+        assert verdict["compatible_sample_count"] == len(history.samples), (
+            "the report must retain every compatible history sample in this scenario"
+        )
+        assert verdict["comparison_state"] == "compared", (
+            "history-backed behavioural scenarios must perform a comparison"
+        )
+    return verdict
 
 
 # -- Then steps ----------------------------------------------------------------
@@ -160,6 +223,9 @@ def then_the_ratchet_passes(verdict: cabc.Mapping[str, object]) -> None:
     assert verdict["passed"] is True, (
         f"expected the ratchet to pass; report was {verdict}"
     )
+    assert verdict["regressions"] == [], (
+        "a passing report must not retain any regression entries"
+    )
 
 
 @then("the ratchet fails")
@@ -167,4 +233,16 @@ def then_the_ratchet_fails(verdict: cabc.Mapping[str, object]) -> None:
     """Assert the comparison reported a regression."""
     assert verdict["passed"] is False, (
         f"expected the ratchet to fail; report was {verdict}"
+    )
+    assert verdict["regressions"], "a failed report must retain a regression entry"
+
+
+@then("the ratchet is skipped with no-baseline evidence")
+def then_the_ratchet_is_skipped_with_no_baseline_evidence(
+    verdict: cabc.Mapping[str, object],
+) -> None:
+    """Assert the skipped first-run report remains machine-readable evidence."""
+    assert verdict["passed"] is True, "a missing baseline must intentionally pass"
+    assert verdict["comparison_performed"] is False, (
+        "a missing baseline must not claim that it performed a comparison"
     )

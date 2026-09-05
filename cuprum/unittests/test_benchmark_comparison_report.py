@@ -306,3 +306,42 @@ def test_render_summary_markdown_includes_table_and_ratchet_status() -> None:
         in markdown
     )
     assert "| `small-single-nocb` | 0.420000 | 0.210000 | 2.00x | rust |" in markdown
+
+
+def test_summary_renders_durable_ratchet_decision_fields(tmp_path: pth.Path) -> None:
+    """The workflow summary must retain persisted ratchet decision evidence."""
+    ratchet_path = _write_json(
+        tmp_path=tmp_path,
+        filename="ratchet-report.json",
+        payload={
+            "passed": False,
+            "comparison_performed": True,
+            "baseline_available": True,
+            "baseline_source": "history",
+            "baseline_reason": "compatible_history",
+            "compatible_sample_count": 7,
+            "comparison_state": "compared",
+            "confirmation_status": "confirmed",
+        },
+    )
+    report = compare_candidate_backend_results(
+        plan_payload=_candidate_plan_payload(),
+        throughput_payload=_candidate_throughput_payload(),
+    )
+
+    markdown = render_summary_markdown(
+        report=report,
+        ratchet_status=load_ratchet_report(ratchet_path),
+    )
+
+    for expected in (
+        "| Baseline source | `history` |",
+        "| Baseline reason | `compatible_history` |",
+        "| Compatible samples | 7 |",
+        "| Comparison state | `compared` |",
+        "| Confirmation status | `confirmed` |",
+    ):
+        assert expected in markdown, (
+            "the workflow summary must render durable ratchet decision evidence; "
+            f"missing {expected!r} from:\n{markdown}"
+        )

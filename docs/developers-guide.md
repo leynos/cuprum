@@ -1650,6 +1650,21 @@ completed `main` baseline artefact as a single sample — the pre-window bar,
 reported in `ratchet-report.json` as `baseline_sample_count: 1` so a
 surprising verdict can be read against the evidence behind it.
 
+Every `ratchet-report.json` carries a bounded decision record.
+`baseline_source` is `history`, `fallback`, or `none`; `baseline_reason` is
+`compatible_history`, `history_unavailable`, `no_compatible_history`,
+`no_baseline_available`, or `incompatible_profile`. The
+`compatible_sample_count` records compatible samples in the selected window
+before scenario-specific selection, while `comparison_state` is `compared`,
+`skipped_no_baseline`, or `skipped_incompatible_profile`. These fields explain
+passes, regressions, fallbacks, and intentional skips from the artefact.
+
+The combined confirmation report preserves `confirmation_performed` and adds
+`confirmation_status`: `not_required`, `confirmed`, `unconfirmed`, or
+`unavailable`. It records whether retry evidence reproduced, cleared, or could
+not re-measure a primary regression; confirmation-only regressions cannot
+change the verdict.
+
 ### Benchmark-ratchet implementation boundaries
 
 The ratchet is split by responsibility rather than by the workflow steps that
@@ -1668,9 +1683,12 @@ invoke it:
   and `load_throughput` validate the two input payloads, `run_ratios` derives
   the matched Rust/Python ratios, and `profile_metadata` exposes the profile
   version and worker-iteration contract used for compatibility filtering.
+- `benchmarks/ratchet_baseline.py` selects compatible history or the
+  single-sample fallback and returns its typed `RatchetDecision` provenance.
+  `ratchet_rust_performance.py` consumes that selection during orchestration.
 - `benchmarks/ratchet_rust_performance.py` is the comparison entry point. Its
-  `compare_rust_regressions` function selects a compatible history window (or
-  the single-sample fallback), consumes comparison-group validation from
+  `compare_rust_regressions` function consumes the selected baseline and
+  comparison-group validation from
   `ratchet_ratio_extraction`, and returns the typed report; `main` supplies the
   CLI exit status and `write_report` serializes the result. A malformed input
   returns status 2, a regression status 1, and a passing or profile-skipped

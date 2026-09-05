@@ -151,6 +151,23 @@ def test_the_comparison_reads_the_window() -> None:
     )
 
 
+def test_the_bootstrap_report_records_the_skipped_decision() -> None:
+    """A first run must preserve a durable no-baseline explanation."""
+    script = script_of(_step(BENCHMARK_STEP))
+    assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
+
+    for expected in (
+        '"baseline_source": "none"',
+        '"baseline_reason": "no_baseline_available"',
+        '"compatible_sample_count": 0',
+        '"comparison_state": "skipped_no_baseline"',
+    ):
+        assert expected in script, (
+            "the first-run report must retain durable no-baseline evidence; "
+            f"missing {expected!r} from:\n{script}"
+        )
+
+
 def test_a_reported_regression_is_measured_again_before_it_fails() -> None:
     """The failure path must re-measure and combine, not just report.
 

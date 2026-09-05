@@ -113,6 +113,9 @@ def test_a_regression_that_reproduces_fails() -> None:
     assert combined["unconfirmed_regressions"] == [], (
         "a reproduced primary regression must not be marked unconfirmed"
     )
+    assert combined["confirmation_status"] == "confirmed", (
+        "a reproduced regression must retain the bounded confirmed status"
+    )
 
 
 def test_a_regression_that_does_not_reproduce_passes() -> None:
@@ -128,6 +131,9 @@ def test_a_regression_that_does_not_reproduce_passes() -> None:
     )
     assert combined["confirmed_regressions"] == [], (
         "a missing confirmation must not become a confirmed failure"
+    )
+    assert combined["confirmation_status"] == "unconfirmed", (
+        "a completed retry without a reproduction must be marked unconfirmed"
     )
 
 
@@ -164,6 +170,9 @@ def test_the_confirmation_cannot_introduce_a_new_failure() -> None:
     assert combined["confirmed_regressions"] == [], (
         "a confirmation-only scenario must remain unconfirmed"
     )
+    assert combined["confirmation_status"] == "not_required", (
+        "a passing primary result must not claim that confirmation was required"
+    )
 
 
 def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
@@ -183,6 +192,9 @@ def test_an_unusable_confirmation_leaves_the_first_verdict_standing() -> None:
     )
     assert _names(combined["confirmed_regressions"]) == ["medium-single-nocb"], (
         "the primary regression must remain confirmed without retry evidence"
+    )
+    assert combined["confirmation_status"] == "unavailable", (
+        "an unusable retry must record unavailable confirmation evidence"
     )
 
 
@@ -426,6 +438,7 @@ def test_a_typed_confirmation_result_serializes_to_the_existing_shape() -> None:
         primary_payload=primary,
         confirmation_payload=confirmation,
         result=result,
+        confirmation=confirmation_report_from_payload(confirmation),
     )
 
     assert payload["passed"] is False, "a confirmed typed regression must fail"
@@ -434,4 +447,7 @@ def test_a_typed_confirmation_result_serializes_to_the_existing_shape() -> None:
     )
     assert _names(payload["primary_regressions"]) == ["medium-single-nocb"], (
         "the serialized report must preserve the primary evidence"
+    )
+    assert payload["confirmation_status"] == "confirmed", (
+        "typed serialization must expose the bounded confirmation outcome"
     )

@@ -173,6 +173,9 @@ def then_the_ratchet_passes(verdict: cabc.Mapping[str, object]) -> None:
     assert verdict["passed"] is True, (
         f"expected a pass; confirmed {_names(verdict['confirmed_regressions'])}"
     )
+    assert verdict["confirmation_status"] in {"unconfirmed", "not_required"}, (
+        "a passing confirmation report must persist why no failure remained"
+    )
 
 
 @then(parsers.parse("the ratchet fails on {name}"))
@@ -193,4 +196,15 @@ def then_reported_as_unconfirmed(verdict: cabc.Mapping[str, object], name: str) 
     """
     assert name in _names(verdict["unconfirmed_regressions"]), (
         f"expected {name!r} to remain unconfirmed; report was {verdict}"
+    )
+    assert verdict["confirmation_status"] == "unconfirmed", (
+        "a completed non-reproducing retry must retain its bounded status"
+    )
+
+
+@then("confirmation is unavailable")
+def then_confirmation_is_unavailable(verdict: cabc.Mapping[str, object]) -> None:
+    """Assert an unusable retry persists its bounded availability status."""
+    assert verdict["confirmation_status"] == "unavailable", (
+        "a skipped retry must record unavailable confirmation evidence"
     )

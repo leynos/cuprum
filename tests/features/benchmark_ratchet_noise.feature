@@ -30,3 +30,8 @@ Feature: Tolerating benchmark noise without tolerating regressions
     Given main has measured 1.013, 1.001, 1.069, 0.916 and 1.105
     When a pull request measures 1.013
     Then the ratchet passes
+
+  Scenario: A missing baseline skips the ratchet with durable evidence
+    Given no main baseline is available
+    When a pull request measures 1.110
+    Then the ratchet is skipped with no-baseline evidence

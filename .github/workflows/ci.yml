@@ -1289,6 +1289,10 @@ jobs:
               json.dumps(
                   {
                       "baseline_available": False,
+                      "baseline_source": "none",
+                      "baseline_reason": "no_baseline_available",
+                      "compatible_sample_count": 0,
+                      "comparison_state": "skipped_no_baseline",
                       "comparison_performed": False,
                       "passed": True,
                       "reason": "no_previous_main_benchmark_baseline",

@@ -30,3 +30,4 @@ Feature: Confirming a reported regression before failing the job
     Given the first measurement flagged medium-single-nocb
     When a second measurement cannot be compared
     Then the ratchet fails on medium-single-nocb
+    And confirmation is unavailable

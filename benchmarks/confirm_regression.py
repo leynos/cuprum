@@ -41,7 +41,7 @@ from benchmarks._validation import (
     _require_mapping,
     _require_non_empty_string,
 )
-from benchmarks.ratchet_confirmation import confirm_regressions
+from benchmarks.ratchet_confirmation import confirm_regressions, confirmation_status
 from benchmarks.ratchet_types import (
     ConfirmationReport,
     ConfirmationResult,
@@ -145,6 +145,7 @@ def confirmation_result_to_payload(
     primary_payload: cabc.Mapping[str, object],
     confirmation_payload: cabc.Mapping[str, object],
     result: ConfirmationResult,
+    confirmation: ConfirmationReport,
 ) -> dict[str, object]:
     """Adapt a typed confirmation result to the established JSON report.
 
@@ -156,6 +157,8 @@ def confirmation_result_to_payload(
         Original confirmation report supplying serialized comparison evidence.
     result : ConfirmationResult
         Pure confirmation-policy decision to serialize.
+    confirmation : ConfirmationReport
+        Typed retry evidence used to derive the bounded confirmation status.
 
     Returns
     -------
@@ -182,6 +185,9 @@ def confirmation_result_to_payload(
     combined.update({
         "passed": result.passed,
         "confirmation_performed": True,
+        "confirmation_status": confirmation_status(
+            result=result, confirmation=confirmation
+        ).value,
         "confirmed_regressions": confirmed,
         "unconfirmed_regressions": unconfirmed,
         "regressions": confirmed,
@@ -207,6 +213,7 @@ def combine_report_payloads(
         primary_payload=primary_report.payload,
         confirmation_payload=confirmation_report.payload,
         result=result,
+        confirmation=confirmation_report.report,
     )
 
 

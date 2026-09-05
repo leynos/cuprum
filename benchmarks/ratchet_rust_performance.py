@@ -4,9 +4,8 @@
 then invokes the canonical ratio extractor to derive within-run Rust/Python
 ratios.
 
-`compare_rust_regressions` selects compatible rolling history or a
-single-sample fallback. `RatchetPolicy`, median baselines, and MAD-derived
-tolerance determine each regression threshold.
+`compare_rust_regressions` selects history or a fallback. `RatchetPolicy`,
+median baselines, and MAD tolerance determine each regression threshold.
 
 The orchestration produces `ComparisonReport` and `ScenarioComparison` values.
 `write_report` and `main` adapt them to JSON and process status: `0` passes or
@@ -20,12 +19,13 @@ import argparse
 import json
 import logging
 import pathlib as pth
+import typing as typ
 
 from benchmarks.benchmark_profile import (
     IncompatibleBenchmarkProfileError,
-    validate_matching_profiles,
     write_incompatible_profile_report,
 )
+from benchmarks.ratchet_baseline import _baseline_window, _compatible_history_window
 from benchmarks.ratchet_history import (
     DEFAULT_NOISE_SIGMAS,
     DEFAULT_WINDOW_SIZE,
@@ -40,12 +40,16 @@ from benchmarks.ratchet_ratio_extraction import _validate_matching_comparison_gr
 from benchmarks.ratchet_ratios import (
     load_plan,
     load_throughput,
-    profile_metadata,
     run_ratios,
 )
+from benchmarks.ratchet_ratios import profile_metadata as profile_metadata
 from benchmarks.ratchet_types import (
+    BaselineReason,
+    BaselineSource,
     BenchmarkRunPayload,
     ComparisonReport,
+    ComparisonState,
+    RatchetDecision,
     ScenarioComparison,
 )
 
@@ -55,47 +59,8 @@ __all__ = [
     *("profile_metadata", "run_ratios", "write_report"),
 ]
 _logger = logging.getLogger(__name__)
-
-
-def _baseline_window(
-    *,
-    baseline: BenchmarkRunPayload | None,
-    candidate: BenchmarkRunPayload,
-    history: BaselineHistory | None,
-    window_size: int,
-) -> dict[str, tuple[float, ...]]:
-    """Return compatible history samples, falling back to a single baseline."""
-    recent = _compatible_history_window(
-        candidate=candidate, history=history, window_size=window_size
-    )
-    if recent.samples:
-        return {name: recent.ratios_for(name) for name in recent.scenarios}
-
-    if baseline is None:
-        msg = "a baseline run or a non-empty baseline history is required"
-        raise ValueError(msg)
-    _logger.info("no compatible baseline history; comparing against one sample")
-    validate_matching_profiles(
-        baseline_plan=baseline.plan, candidate_plan=candidate.plan
-    )
-    return {name: (ratio,) for name, ratio in run_ratios(baseline).items()}
-
-
-def _compatible_history_window(
-    *,
-    candidate: BenchmarkRunPayload,
-    history: BaselineHistory | None,
-    window_size: int,
-) -> BaselineHistory:
-    """Return recent history samples compatible with the candidate's profile."""
-    if history is None:
-        return BaselineHistory()
-    version, worker_iterations = profile_metadata(candidate.plan)
-    compatible = history.compatible_with(
-        benchmark_profile_version=version,
-        worker_iterations=worker_iterations,
-    )
-    return BaselineHistory(samples=compatible.samples[-window_size:])
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def _compare_scenario(
@@ -208,7 +173,7 @@ def compare_rust_regressions(
         If the policy, baseline, or comparison groups are invalid.
     """  # ruff: ignore[docstring-extraneous-exception] - policy and payload validation intentionally propagate their contract errors.
     resolved = _comparison_policy(options)
-    window = _baseline_window(
+    window, decision = _baseline_window(
         baseline=baseline,
         candidate=candidate,
         history=history,
@@ -230,6 +195,7 @@ def compare_rust_regressions(
             )
             for scenario_name in sorted(window)
         ),
+        decision=decision,
     )
 
 
@@ -255,7 +221,7 @@ def write_report(*, report: ComparisonReport, output_path: pth.Path) -> None:
     output_path.write_text(payload, encoding="utf-8")
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for the benchmark ratchet CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -302,13 +268,16 @@ def _parse_args() -> argparse.Namespace:
         help="How many of the most recent history samples to compare against.",
     )
     parser.add_argument("--output", type=pth.Path, required=True)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
     """Load the single-sample fallback baseline, when one was supplied."""
-    if args.baseline_plan is None or args.baseline_throughput is None:
+    if args.baseline_plan is None and args.baseline_throughput is None:
         return None
+    if args.baseline_plan is None or args.baseline_throughput is None:
+        msg = "--baseline-plan and --baseline-throughput must be supplied together"
+        raise ValueError(msg)
     return BenchmarkRunPayload(
         plan=load_plan(args.baseline_plan),
         throughput=load_throughput(args.baseline_throughput),
@@ -316,19 +285,25 @@ def _load_baseline(args: argparse.Namespace) -> BenchmarkRunPayload | None:
     )
 
 
-def _load_history_or_empty(path: pth.Path | None) -> BaselineHistory:
-    """Load an optional history, treating only its intentional absence as empty."""
+def _load_optional_history(path: pth.Path | None) -> BaselineHistory | None:
+    """Load optional history while preserving whether it was unavailable."""
     if path is not None:
         try:
             return load_history(path)
         except BaselineHistoryNotFoundError:
             pass
     _logger.info("no baseline history is available; using the fallback baseline")
-    return BaselineHistory()
+    return None
 
 
-def main() -> int:
+def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Execute the benchmark ratchet comparison.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None
+        Optional argument vector. When omitted, the process command line is
+        parsed.
 
     Returns
     -------
@@ -338,20 +313,43 @@ def main() -> int:
     logging.basicConfig(
         level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s"
     )
-    args = _parse_args()
+    args = _parse_args(argv)
     try:
         candidate = BenchmarkRunPayload(
             plan=load_plan(args.candidate_plan),
             throughput=load_throughput(args.candidate_throughput),
             context_name="candidate",
         )
-        history = _compatible_history_window(
+        history = _load_optional_history(args.baseline_history)
+        compatible_history = _compatible_history_window(
             candidate=candidate,
-            history=_load_history_or_empty(args.baseline_history),
+            history=history,
             window_size=args.history_window,
         )
+        baseline = None if compatible_history.samples else _load_baseline(args)
+        if baseline is None and not compatible_history.samples:
+            write_report(
+                report=ComparisonReport(
+                    max_regression=args.max_regression,
+                    comparisons=(),
+                    decision=RatchetDecision(
+                        baseline_source=BaselineSource.NONE,
+                        baseline_reason=(
+                            BaselineReason.NO_BASELINE_AVAILABLE
+                            if history is None
+                            else BaselineReason.NO_COMPATIBLE_HISTORY
+                        ),
+                        compatible_sample_count=0,
+                        comparison_state=ComparisonState.SKIPPED_NO_BASELINE,
+                    ),
+                    baseline_available=False,
+                    comparison_performed=False,
+                ),
+                output_path=args.output,
+            )
+            return 0
         report = compare_rust_regressions(
-            baseline=None if history.samples else _load_baseline(args),
+            baseline=baseline,
             candidate=candidate,
             history=history,
             policy=RatchetPolicy(
@@ -362,7 +360,16 @@ def main() -> int:
         )
         write_report(report=report, output_path=args.output)
     except IncompatibleBenchmarkProfileError as exc:
-        write_incompatible_profile_report(reason=str(exc), output_path=args.output)
+        write_incompatible_profile_report(
+            reason=str(exc),
+            decision=RatchetDecision(
+                baseline_source=BaselineSource.NONE,
+                baseline_reason=BaselineReason.INCOMPATIBLE_PROFILE,
+                compatible_sample_count=0,
+                comparison_state=ComparisonState.SKIPPED_INCOMPATIBLE_PROFILE,
+            ),
+            output_path=args.output,
+        )
         _logger.info("benchmark ratchet skipped: %s", exc)
         return 0
     except (json.JSONDecodeError, OSError, TypeError, ValueError):

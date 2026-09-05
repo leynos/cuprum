@@ -3,8 +3,75 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import enum
 
 _FLOAT_TOLERANCE = 1e-12
+
+
+class BaselineSource(enum.StrEnum):
+    """Bounded sources from which a ratchet can select baseline evidence."""
+
+    HISTORY = "history"
+    FALLBACK = "fallback"
+    NONE = "none"
+
+
+class BaselineReason(enum.StrEnum):
+    """Bounded explanations for a baseline selection or skipped comparison."""
+
+    COMPATIBLE_HISTORY = "compatible_history"
+    HISTORY_UNAVAILABLE = "history_unavailable"
+    NO_COMPATIBLE_HISTORY = "no_compatible_history"
+    NO_BASELINE_AVAILABLE = "no_baseline_available"
+    INCOMPATIBLE_PROFILE = "incompatible_profile"
+
+
+class ComparisonState(enum.StrEnum):
+    """Bounded states for the ratchet comparison itself."""
+
+    COMPARED = "compared"
+    SKIPPED_NO_BASELINE = "skipped_no_baseline"
+    SKIPPED_INCOMPATIBLE_PROFILE = "skipped_incompatible_profile"
+
+
+class ConfirmationStatus(enum.StrEnum):
+    """Bounded outcomes of a confirmation measurement."""
+
+    NOT_REQUIRED = "not_required"
+    CONFIRMED = "confirmed"
+    UNCONFIRMED = "unconfirmed"
+    UNAVAILABLE = "unavailable"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class RatchetDecision:
+    """Durable provenance for one ratchet outcome.
+
+    Attributes
+    ----------
+    baseline_source : BaselineSource
+        Evidence selected for comparison, or ``none`` when no comparison ran.
+    baseline_reason : BaselineReason
+        Bounded reason for the selection or skipped comparison.
+    compatible_sample_count : int
+        Compatible history samples before scenario-specific selection.
+    comparison_state : ComparisonState
+        Whether comparison ran or the reason it was intentionally skipped.
+    """
+
+    baseline_source: BaselineSource
+    baseline_reason: BaselineReason
+    compatible_sample_count: int
+    comparison_state: ComparisonState
+
+    def as_dict(self) -> dict[str, object]:
+        """Serialize the decision record for a ratchet report."""
+        return {
+            "baseline_source": self.baseline_source.value,
+            "baseline_reason": self.baseline_reason.value,
+            "compatible_sample_count": self.compatible_sample_count,
+            "comparison_state": self.comparison_state.value,
+        }
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -68,10 +135,27 @@ class ScenarioComparison:
 
 @dc.dataclass(frozen=True, slots=True)
 class ComparisonReport:
-    """Summary report for Rust benchmark regression comparison."""
+    """Summary report for Rust benchmark regression comparison.
+
+    Attributes
+    ----------
+    max_regression : float
+        Flat regression threshold configured for this comparison.
+    comparisons : tuple[ScenarioComparison, ...]
+        Per-scenario threshold decisions.
+    decision : RatchetDecision
+        Durable baseline provenance and comparison state.
+    baseline_available : bool
+        Whether any usable baseline evidence existed for this outcome.
+    comparison_performed : bool
+        Whether the ratchet compared at least one scenario.
+    """
 
     max_regression: float
     comparisons: tuple[ScenarioComparison, ...]
+    decision: RatchetDecision
+    baseline_available: bool = True
+    comparison_performed: bool = True
 
     @property
     def baseline_sample_count(self) -> int:
@@ -120,6 +204,9 @@ class ComparisonReport:
         """
         return {
             "max_regression": self.max_regression,
+            **self.decision.as_dict(),
+            "baseline_available": self.baseline_available,
+            "comparison_performed": self.comparison_performed,
             "baseline_sample_count": self.baseline_sample_count,
             "passed": self.passed,
             "rust_scenarios_compared": self.rust_scenarios_compared,

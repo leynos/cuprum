@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from benchmarks.ratchet_types import ConfirmationReport, ConfirmationResult
+from benchmarks.ratchet_types import (
+    ConfirmationReport,
+    ConfirmationResult,
+    ConfirmationStatus,
+)
 
 
 def confirm_regressions(
@@ -45,3 +49,16 @@ def confirm_regressions(
         confirmed_regressions=confirmed,
         unconfirmed_regressions=unconfirmed,
     )
+
+
+def confirmation_status(
+    *, result: ConfirmationResult, confirmation: ConfirmationReport
+) -> ConfirmationStatus:
+    """Return the typed status of confirmation evidence and its outcome."""
+    if not result.primary_regressions:
+        return ConfirmationStatus.NOT_REQUIRED
+    if not confirmation.comparison_performed:
+        return ConfirmationStatus.UNAVAILABLE
+    if result.confirmed_regressions:
+        return ConfirmationStatus.CONFIRMED
+    return ConfirmationStatus.UNCONFIRMED
