@@ -3065,7 +3065,9 @@ maturin version declared in `pyproject.toml`,
 `.github/workflows/build-wheels.yml`, and
 `.github/actions/build-wheels/action.yml` are identical. When updating the
 maturin pin, update all three locations and run this test to confirm they are
-in step.
+in step. The pinned version at the time of writing is 1.15.0; the
+pin-synchronization test and the wheel snapshot's `Generator` assertion both
+fail if the three locations drift apart.
 
 **Aarch64 manylinux container pin**
 (`test_manylinux_aarch64_container_is_pinned_to_sha256` and
