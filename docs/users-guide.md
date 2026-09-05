@@ -1801,6 +1801,8 @@ wait; its default is 0.5 seconds. On expiry, the caller receives its original
 `CancelledError`, while worker-owned descriptors stay quarantined for the
 completion callback. Grace expiry emits `cleanup_grace_expired` with
 `PumpEvent.elapsed_s`; eventual callback cleanup emits `cleanup_deferred`.
+That callback alone closes and restores worker-owned state, so it neither
+double closes a writer nor resumes a reader while native I/O can still use it.
 
 Cleanup can also be correlated with the active pipeline-stage span. Register
 the same `TracingHook` with both `sh.observe(hook)` and

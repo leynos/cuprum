@@ -868,16 +868,16 @@ observation channel, not an extension of `ExecEvent`. A caller registers the
 same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
-open pipeline-stage span; it is not a trace attribute, and the correlation
-does not use a PID. The hook records `cuprum.cleanup_started` when cleanup
-begins, `cuprum.cleanup_completed` on normal completion,
-`cuprum.cleanup_grace_expired` when the caller returns, and
-`cuprum.cleanup_deferred` when the callback later completes. Every event has
-`operation="native_pump_cleanup"` and a bounded `outcome`; normal completion
-carries `duration_s`, while grace expiry carries `elapsed_s`, both in monotonic
-seconds. Descriptor numbers, command arguments, exception text, and other
-unbounded values are excluded. Events without a matching active span are
-dropped, and cleanup events neither set span status nor end the span.
+open pipeline-stage span; it is not a trace attribute, and the correlation does
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins,
+`cuprum.cleanup_completed` on normal completion, `cuprum.cleanup_grace_expired`
+when the caller returns, and `cuprum.cleanup_deferred` when the callback later
+completes. Every event has `operation="native_pump_cleanup"` and a bounded
+`outcome`; normal completion carries `duration_s`, while grace expiry carries
+`elapsed_s`, both in monotonic seconds. Descriptor numbers, command arguments,
+exception text, and other unbounded values are excluded. Events without a
+matching active span are dropped, and cleanup events neither set span status
+nor end the span.
 
 ### 7.2 Logging via `logging`
 
