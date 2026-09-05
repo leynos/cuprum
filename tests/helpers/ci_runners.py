@@ -65,19 +65,27 @@ SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
     "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
 )
-#: Both shared actions are pinned to the same revision. It drops `target` from
-#: their own caches, so the no-target-archive rule holds even if a caller ever
-#: switches back to `cache-provider: github`; it adds the `all-features`,
-#: `all-targets`, and `doctests` inputs the coverage jobs depend on; and it
-#: installs cargo-nextest from checksummed official release archives with no
-#: source-build fallback, which matters because the coverage job is now the
-#: only place nextest runs. The revision itself is estate-wide rather than
-#: Cuprum-specific: its most recent change is to `install-whitaker`, which this
-#: repository does not consume, and both actions here are byte-identical to the
-#: previous pin. Holding one SHA across the estate is the point.
+#: The pinned shared coverage action. It drops `target` from its own cache, so
+#: the no-target-archive rule holds even if a caller ever switches back to
+#: `cache-provider: github`; it adds the `all-features`, `all-targets`, and
+#: `doctests` inputs the coverage jobs depend on; and it installs cargo-nextest
+#: from checksummed official release archives with no source-build fallback,
+#: which matters because the coverage job is now the only place nextest runs.
+#:
+#: It is deliberately ahead of `SETUP_RUST` for now. From this revision the
+#: ratchet baseline is published only on a push to `refs/heads/main` unless
+#: `publish-baseline` says otherwise, and cuprum needs that: without it a pull
+#: request advances the baseline it is then measured against. Holding one SHA
+#: across the estate is still the aim, and the next estate-wide bump should
+#: bring `SETUP_RUST` up to meet this one rather than pulling this one back.
+#:
+#: Asserted by value rather than by shape, unlike the Dependabot-owned pins in
+#: `test_workflow_contract.py`. A bump has to update this constant, which is
+#: the point: it makes someone confirm the new revision still keeps a pull
+#: request from publishing.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+    "77ea10341249024e22ec5d9069e3caa7596e0d4f"
 )
 OBSERVATION_STEP = "Record cache observations"
 
