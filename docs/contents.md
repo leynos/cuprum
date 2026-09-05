@@ -59,8 +59,8 @@ open each document.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 - [Tee hot-path read-size sweep (2026-08-29)][tee-read-size-sweep] - the
-  interleaved measurement that selected the Python stream read size for
-  roadmap item 5.1.1.
+  interleaved measurement that selected the Python stream read size for roadmap
+  item 5.1.1.
 
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [adr-005]: adr-005-unified-rust-availability-probe.md

@@ -2043,8 +2043,8 @@ behavioural guarantees.
 ### 13.1 Motivation
 
 The pure-Python implementation now reads and writes data in 64 KiB chunks
-(defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The previous
-4 KiB value was the subject of the original profiling baseline. A fresh,
+(defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The previous 4
+KiB value was the subject of the original profiling baseline. A fresh,
 interleaved 15-round sweep selected 64 KiB: the tee scenario improved by
 22.9997% (95% paired-bootstrap interval 22.5508% to 23.2037%) against its
 same-session 4 KiB control. The complete measurements are in
@@ -2081,12 +2081,11 @@ and `config.errors`, and `_drain()` applies the same error policy when decoding
 captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
 
-At the former 4 KiB setting, a 1 GiB data stream required approximately
-262,000 parent-side read iterations. At the tuned setting, the same stream
-requires approximately 16,000 iterations. Each iteration still allocates and
-processes a returned `bytes` object, so this tuning reduces fixed event-loop
-overhead but does not remove the Python implementation's allocation or GIL
-costs:
+At the former 4 KiB setting, a 1 GiB data stream required approximately 262,000
+parent-side read iterations. At the tuned setting, the same stream requires
+approximately 16,000 iterations. Each iteration still allocates and processes a
+returned `bytes` object, so this tuning reduces fixed event-loop overhead but
+does not remove the Python implementation's allocation or GIL costs:
 
 - approximately 16,000 round-trips through the Python event loop;
 - approximately 16,000 `bytes` object allocations;

@@ -14,8 +14,7 @@ Cuprum's stream operations route data through Python's asyncio event loop in 64
 KiB chunks (defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The
 read size was raised from 4 KiB after the 2026-08-29 interleaved sweep; see
 [`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
-The core
-functions affected are:
+The core functions affected are:
 
 - `_pump_stream()` – transfers data between pipeline stages with backpressure;
 - `_consume_stream()` – dispatcher that routes to one of the two functions
