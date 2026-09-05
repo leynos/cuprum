@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 
 import cuprum as c
-from cuprum import context, pump_events, pump_observation
+from cuprum import context, echo_events, pump_events, pump_observation
 from cuprum.events import ExecHook, new_exec_id
 
 
@@ -113,3 +113,47 @@ def test_exec_id_keeps_its_positional_slot() -> None:
     assert event.timeout_s is None, (
         f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
     )
+
+def test_relay_fallback_is_exported_from_its_definition_site() -> None:
+    """The package-root RelayFallback is the echo_events definition."""
+    assert c.RelayFallback is echo_events.RelayFallback, (
+        "RelayFallback must be exported from cuprum.echo_events"
+    )
+
+def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
+    """``relay_fallbacks`` must stay the last, defaulted CommandResult field.
+
+    ``CommandResult`` is a public, non-``kw_only`` dataclass with six
+    pre-existing positional fields. Appending ``relay_fallbacks`` after
+    ``stderr`` keeps every existing six-argument positional construction
+    valid; inserting a field earlier would silently rebind those calls.
+    """
+    fields = [f.name for f in dc.fields(c.CommandResult)]
+    assert fields[-1] == "relay_fallbacks", (
+        "relay_fallbacks must stay last so existing positional callers keep "
+        f"binding stdout and stderr, got {fields}"
+    )
+    result = c.CommandResult(
+        c.ECHO,  # program
+        (),  # argv
+        0,  # exit_code
+        4242,  # pid
+        "out",  # stdout
+        "err",  # stderr
+    )
+    assert result.stdout == "out"
+    assert result.stderr == "err"
+    assert result.relay_fallbacks == (), (
+        f"the defaulted diagnostics must be empty, got {result.relay_fallbacks!r}"
+    )
+
+def test_command_result_type_hints_resolve_at_runtime() -> None:
+    """Public annotations on CommandResult resolve via typing.get_type_hints."""
+    import typing as typ
+
+    hints = typ.get_type_hints(c.CommandResult)
+    assert hints["relay_fallbacks"] == tuple[c.RelayFallback, ...], (
+        f"the annotation must resolve to the public record, got "
+        f"{hints['relay_fallbacks']!r}"
+    )
+    assert hints["stdout"] == str | None

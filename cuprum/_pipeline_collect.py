@@ -118,6 +118,10 @@ def _stage_relay_fallbacks(
     """
     stage_tuples: list[tuple[RelayFallback, ...]] = []
     for stderr_diagnostics, stdout_diagnostics in spawn.relay_diagnostics_by_stage:
+        if stdout_diagnostics is not None:
+            stdout_diagnostics.settle()
+        if stderr_diagnostics is not None:
+            stderr_diagnostics.settle()
         stdout_fallbacks = (
             () if stdout_diagnostics is None else stdout_diagnostics.snapshot()
         )
