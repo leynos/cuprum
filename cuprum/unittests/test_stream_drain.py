@@ -292,6 +292,102 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
     )
 
 
+class _Cp1252TextOnlySink:
+    """Text-only sink modelling a parent stream too narrow for the output."""
+
+    def __init__(self) -> None:
+        """Record attempted non-empty writes."""
+        self.writes = 0
+
+    def write(self, payload: str) -> int:
+        """Reject payloads the CP1252 codec cannot represent."""
+        if payload:
+            self.writes += 1
+        payload.encode("cp1252")
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+def test_drain_completes_capture_when_text_sink_cannot_encode() -> None:
+    """A UnicodeEncodeError from a text sink disables echo without aborting."""
+    chunks = (b"Cargo metadata: ", "ś".encode(), b" ", "ń".encode())
+    sink = _Cp1252TextOnlySink()
+
+    captured = asyncio.run(
+        _drain(
+            _reader(chunks),
+            _config(typ.cast("typ.IO[str]", sink), capture=True, echo=True),
+        ),
+    )
+
+    assert captured == _decode_chunks(chunks), (
+        "capture must complete even when the echo sink rejects a chunk for "
+        f"chunks={chunks!r}, captured={captured!r}"
+    )
+    assert sink.writes == 2, (
+        "echo must stop once a chunk is rejected: the first chunk still echoes "
+        f"and the rejecting chunk counts as attempted for writes={sink.writes!r}"
+    )
+
+
+def test_drain_stops_echo_after_first_encode_failure() -> None:
+    """Echo is disabled for the drain after its first UnicodeEncodeError."""
+    chunks = (b"plain ", "ś".encode(), b" plain ", "ń".encode())
+    sink = _Cp1252TextOnlySink()
+    seen: list[int] = []
+    original_write = sink.write
+
+    def track_writes(payload: str) -> int:
+        """Record each write attempt before delegating to the sink."""
+        seen.append(sink.writes + 1)
+        return original_write(payload)
+
+    sink.write = track_writes  # type: ignore[method-assign]
+
+    captured = asyncio.run(
+        _drain(
+            _reader(chunks),
+            _config(typ.cast("typ.IO[str]", sink), capture=True, echo=True),
+        ),
+    )
+
+    assert captured == _decode_chunks(chunks), (
+        "capture must stay complete while echo is disabled for "
+        f"chunks={chunks!r}, captured={captured!r}"
+    )
+    assert seen == [1, 2], (
+        "later chunks must not reach the sink after the first encode failure "
+        f"for writes={seen!r}"
+    )
+
+
+def test_flush_after_disabled_echo_does_not_raise() -> None:
+    """A disabled echo never re-attempts the final decoder flush write."""
+
+    async def run_case() -> tuple[str | None, _Cp1252TextOnlySink]:
+        """Cancel after buffering an incomplete UTF-8 sequence without EOF."""
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\xc3")
+        sink = _Cp1252TextOnlySink()
+        task = asyncio.create_task(
+            _drain(reader, _config(typ.cast("typ.IO[str]", sink), echo=True)),
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        return await task, sink
+
+    captured, sink = asyncio.run(run_case())
+
+    assert captured == "\N{REPLACEMENT CHARACTER}", (
+        f"capture must flush the decoder tail after echo is disabled for {captured!r}"
+    )
+    assert sink.writes == 1, (
+        f"flush must not re-attempt a rejected sink for writes={sink.writes!r}"
+    )
+
+
 @settings(
     max_examples=_PROPERTY_MAX_EXAMPLES,
     deadline=None,
