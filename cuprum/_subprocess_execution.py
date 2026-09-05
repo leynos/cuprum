@@ -17,6 +17,7 @@ import typing as typ
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
@@ -39,19 +40,6 @@ from cuprum.echo_events import EchoStream
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
-
-
-from cuprum._streams_pump import _current_read_size
-
-"""Internal subprocess execution machinery.
-Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
-stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
