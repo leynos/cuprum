@@ -15,9 +15,9 @@ import types
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
 from cuprum._streams import _RelayDiagnostics
 from cuprum.echo_events import RelayFallback
+from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
 
 
 class _ExecutionInvariantError(RuntimeError):
