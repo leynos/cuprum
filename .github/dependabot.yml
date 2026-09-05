@@ -23,6 +23,7 @@ updates:
     labels:
       - "dependencies"
       - "python"
+      - "uv"
     schedule:
       interval: "daily"
     cooldown:
