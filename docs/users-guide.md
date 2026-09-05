@@ -489,7 +489,6 @@ cancellation prevents a result from being produced, no new exception payload is
 added: the already-emitted `EchoEvent` values remain observable through
 `observe_echo`, and partial capture is preserved as before.
 
-
 ### Lading integration boundary
 
 Lading can consume the new `CommandResult.relay_fallbacks` records for
