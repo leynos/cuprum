@@ -87,6 +87,16 @@ class TeeProfileWorkerResult(typ.TypedDict):
     stdout_line_count: int
 
 
+def _validate_repeat_count(repeat_count: int) -> None:
+    """Validate the bounded worker repeat count."""
+    if repeat_count < 1:
+        msg = f"repeat-count must be >= 1, got {repeat_count}"
+        raise ValueError(msg)
+    if repeat_count > _MAX_REPEAT_COUNT:
+        msg = f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {repeat_count}"
+        raise ValueError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class TeeProfileWorkerConfig:
     """Configuration for one tee profiling worker execution."""
@@ -121,14 +131,7 @@ class TeeProfileWorkerConfig:
         if self.stages < 1:
             msg = f"stages must be >= 1, got {self.stages}"
             raise ValueError(msg)
-        if self.repeat_count < 1:
-            msg = f"repeat-count must be >= 1, got {self.repeat_count}"
-            raise ValueError(msg)
-        if self.repeat_count > _MAX_REPEAT_COUNT:
-            msg = (
-                f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {self.repeat_count}"
-            )
-            raise ValueError(msg)
+        _validate_repeat_count(self.repeat_count)
         if self.read_size < 1:
             msg = f"read-size must be >= 1, got {self.read_size}"
             raise ValueError(msg)
