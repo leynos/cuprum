@@ -11,9 +11,10 @@ Every expectation comes from outside the exception under test. The same failing
 extension is held to; deriving the expectation from the raised exception would
 let a hard-coded or simply wrong native code satisfy the assertion.
 
-No job executes this arm today — native Windows runtime coverage is tracked by
-leynos/cuprum#277 (see `docs/developers-guide.md`, "Preserving the operating-
-system error code") — so until then these cases encode the contract.
+CI's `extension-tests-windows` job executes this arm on `windows-2022` after
+building the extension through `make develop`; it then runs the shared
+`make test-extension` target, which keeps the platform-specific contract in
+the same module list as the Linux boundary coverage.
 
 Example
 -------

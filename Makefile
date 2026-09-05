@@ -74,8 +74,12 @@ shell_quote = '$(subst ','"'"',$(1))'
 TYPOS_VERSION ?= 1.48.0
 TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
+ifeq ($(OS),Windows_NT)
+LOCAL_TOOL_ENV =
+else
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
+endif
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF_ENV = RAYON_NUM_THREADS=1
 # Pin Ruff so `make` invokes the same version as the `ruff==` dev dependency
