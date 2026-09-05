@@ -136,8 +136,11 @@ class TestRustPumpFailures:
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
                     writer=None,
-                    reader_fd=1,
-                    writer_fd=2,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=1,
+                        writer_fd=2,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
 
@@ -167,8 +170,11 @@ class TestRustPumpFailures:
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
+                            handoff=_pipeline_streams._RustPumpHandoff(
+                                reader_fd=read_fd,
+                                writer_fd=write_fd,
+                                cleanup_grace_s=0.5,
+                            ),
                         )
                     )
                 )
@@ -199,7 +205,7 @@ class TestRustPumpFailures:
             duplicated_fds.append(duplicate)
             return duplicate
 
-        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
+        monkeypatch.setattr(os, "dup", record_dup)
 
         import cuprum._streams_rs as streams_rs
 
@@ -249,8 +255,11 @@ class TestRustPumpFailures:
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
+                            handoff=_pipeline_streams._RustPumpHandoff(
+                                reader_fd=read_fd,
+                                writer_fd=write_fd,
+                                cleanup_grace_s=0.5,
+                            ),
                         )
                     )
                 )

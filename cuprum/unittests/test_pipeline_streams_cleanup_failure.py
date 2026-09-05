@@ -11,7 +11,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum._pipeline_stream_fds import RUST_PUMP_TEARDOWN_FAILED_ACTION
 from cuprum.unittests._rust_pump_test_helpers import install_fake_pump, owned_fds
 
@@ -49,7 +53,7 @@ async def _cancel_pump_with_failing_restore(
     task: asyncio.Task[None] | None = None
     try:
         with owned_fds() as (reader_fd, writer_fd):
-            pump_state = _pipeline_streams._RustPumpState(
+            pump_state = _pipeline_stream_native_cleanup._RustPumpState(
                 reader_fd=reader_fd,
                 writer_fd=writer_fd,
                 blocking_mode_guard=typ.cast(
@@ -98,23 +102,28 @@ def _run_cancelled_pump_with_captured_cleanup(
         state.worker_finished.set()
         return 0
 
-    original_await_cleanup = _pipeline_streams._await_native_pump_cleanup
+    original_await_cleanup = _pipeline_stream_native_cleanup._await_native_pump_cleanup
+    capture_state = state
 
     async def capture_cleanup_future(
         cleanup_complete: asyncio.Future[None],
         *,
         monotonic_clock: cabc.Callable[[], float],
+        cleanup_grace_s: float,
+        state: _pipeline_stream_native_cleanup._RustPumpState | None = None,
     ) -> None:
         """Retain cleanup state so a broken implementation remains bounded."""
-        state.cleanup_futures.append(cleanup_complete)
+        capture_state.cleanup_futures.append(cleanup_complete)
         await original_await_cleanup(
             cleanup_complete,
             monotonic_clock=monotonic_clock,
+            cleanup_grace_s=cleanup_grace_s,
+            state=state,
         )
 
     install_fake_pump(monkeypatch, blocking_pump)
     monkeypatch.setattr(
-        _pipeline_streams,
+        _pipeline_stream_native_cleanup,
         "_await_native_pump_cleanup",
         capture_cleanup_future,
     )

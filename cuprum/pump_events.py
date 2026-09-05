@@ -52,6 +52,8 @@ type PumpPhase = typ.Literal[
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
+    "cleanup_grace_expired",
+    "cleanup_deferred",
 ]
 """What a :class:`PumpEvent` reports.
 
@@ -65,6 +67,12 @@ type PumpPhase = typ.Literal[
 ``cleanup_completed``
     The native worker released its descriptors after cancellation; ``duration_s``
     records the monotonic cleanup wait.
+``cleanup_grace_expired``
+    The caller's bounded cleanup grace elapsed; ``elapsed_s`` records the
+    monotonic grace wait before callback-owned cleanup was deferred.
+``cleanup_deferred``
+    A worker that outlived its caller-facing grace later completed its deferred
+    descriptor cleanup.
 """
 
 
@@ -73,8 +81,9 @@ class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
 
     The event carries the phase, the closed-set reason for a decline, and the
-    monotonic wait duration for completed native-pump cleanup, and the source
-    stage token needed to correlate cleanup tracing. Descriptor numbers,
+    monotonic wait duration for completed native-pump cleanup, the monotonic
+    elapsed grace wait, and the source stage token needed to correlate cleanup
+    tracing. Descriptor numbers,
     command arguments, exception types, and tracebacks are all either
     unbounded as metric labels or a disclosure risk, and the DEBUG log records
     emitted alongside these events carry the diagnostic detail — including the
@@ -90,6 +99,9 @@ class PumpEvent:
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
+    elapsed_s:
+        Monotonic seconds spent waiting before ``cleanup_grace_expired``.
+        ``None`` for every other phase.
     exec_id:
         The upstream pipeline stage's stable execution token for native-cleanup
         phases. Tracing observers use it only to locate an existing execution
@@ -120,6 +132,7 @@ class PumpEvent:
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
     duration_s: float | None = None
+    elapsed_s: float | None = None
     exec_id: ExecId | None = None
 
 

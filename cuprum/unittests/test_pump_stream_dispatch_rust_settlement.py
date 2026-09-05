@@ -143,8 +143,11 @@ class TestRustPumpSettlement:
                     _pipeline_streams._run_rust_pump(
                         reader=typ.cast("asyncio.StreamReader", object()),
                         writer=None,
-                        reader_fd=read_fd,
-                        writer_fd=write_fd,
+                        handoff=_pipeline_streams._RustPumpHandoff(
+                            reader_fd=read_fd,
+                            writer_fd=write_fd,
+                            cleanup_grace_s=0.5,
+                        ),
                     )
                 )
             )
@@ -186,8 +189,11 @@ async def _cancel_before_native_worker_settles(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
                     writer=None,
-                    reader_fd=read_fd,
-                    writer_fd=write_fd,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=read_fd,
+                        writer_fd=write_fd,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
             await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)

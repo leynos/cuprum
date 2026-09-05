@@ -217,3 +217,23 @@ Both events have the stable `operation="native_pump_cleanup"` attribute and an
 data, command arguments, exception text, or unbounded trace attributes. Events
 without a matching open span are dropped safely. Cleanup tracing does not set
 span status or end the span.
+
+## Addendum — 2026-09-04
+
+Native-pump cancellation cleanup now has a caller-configurable bounded grace:
+`ExecutionContext.native_pump_cleanup_grace`. `run_in_executor` cannot
+interrupt the Rust worker, so expiry raises the caller's original
+`CancelledError` while the worker continues with quarantined duplicated
+descriptors. It never restores, closes, reuses, or resumes a descriptor that
+native I/O can still use.
+
+`cleanup_grace_expired` reports the bounded caller wait and carries
+`PumpEvent.elapsed_s`. Once the worker later settles, its one completion
+callback performs the single descriptor close/restore/resume sequence and emits
+`cleanup_deferred`. The callback never double-closes a worker writer or resumes
+the reader early. The unlabelled counters
+`cuprum_rust_pump_cleanup_grace_expired_total` and
+`cuprum_rust_pump_cleanup_deferred_total` make both outcomes observable without
+widening metric cardinality. Tracing projects the phases as
+`cuprum.cleanup_grace_expired` and `cuprum.cleanup_deferred`; only grace expiry
+has an `elapsed_s` attribute.

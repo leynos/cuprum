@@ -846,19 +846,21 @@ The concrete shape is an implementation detail, but the design assumes:
 
 Rust-pump declines, failures recovered after cancellation, and native cleanup
 are routing facts, not command lifecycle phases. They are therefore represented
-by `PumpEvent` on the separate `observe_pump` channel. Its
-`phase="cleanup_started"` event marks cancellation beginning to wait for the
-native worker, while `phase="cleanup_completed"` marks the worker releasing
-descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
-cleanup wait duration; other phases leave it unset. Cleanup is required because
-the executor worker retains descriptor ownership until it settles.
+by `PumpEvent` on the separate `observe_pump` channel. `cleanup_started` marks
+cancellation beginning to wait for the native worker, while `cleanup_completed`
+marks normal release of descriptor ownership and carries
+`PumpEvent.duration_s`. If `ExecutionContext.native_pump_cleanup_grace` expires
+first, `cleanup_grace_expired` carries `PumpEvent.elapsed_s`, the caller
+receives its original `CancelledError`, and `cleanup_deferred` reports eventual
+callback cleanup after the uninterruptible worker settles.
 
-`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each
-completed native cleanup and one observation of
-`cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
-metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
-bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
-counters without extending the closed `ExecPhase` contract. See
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each normal
+cleanup and one observation of `cuprum_rust_pump_cleanup_duration_seconds`. The
+unlabelled `cuprum_rust_pump_cleanup_grace_expired_total` and
+`cuprum_rust_pump_cleanup_deferred_total` count the bounded and eventual sides
+of deferred cleanup. `RustPumpDeclineReason` bounds the `reason` label on the
+decline metric, and `PumpMetricsHook` emits counters without extending the
+closed `ExecPhase` contract. See
 [ADR-008](adr-008-rust-pump-observation-channel.md).
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
@@ -867,13 +869,15 @@ same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
 open pipeline-stage span; it is not a trace attribute, and the correlation does
-not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins and
-`cuprum.cleanup_completed` when descriptor ownership is released. Both events
-have `operation="native_pump_cleanup"` and a bounded `outcome` (`"started"` or
-`"completed"`); only completion has `duration_s`, the monotonic cleanup wait in
-seconds. Descriptor numbers, command arguments, exception text, and other
-unbounded values are excluded. Events without a matching active span are
-dropped, and cleanup events neither set span status nor end the span.
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins,
+`cuprum.cleanup_completed` on normal completion, `cuprum.cleanup_grace_expired`
+when the caller returns, and `cuprum.cleanup_deferred` when the callback later
+completes. Every event has `operation="native_pump_cleanup"` and a bounded
+`outcome`; normal completion carries `duration_s`, while grace expiry carries
+`elapsed_s`, both in monotonic seconds. Descriptor numbers, command arguments,
+exception text, and other unbounded values are excluded. Events without a
+matching active span are dropped, and cleanup events neither set span status
+nor end the span.
 
 ### 7.2 Logging via `logging`
 
@@ -2629,12 +2633,14 @@ each path is testable without a live pump:
   on a reader nothing can restart.
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
-cannot interrupt the worker thread running the Rust pump, and that thread still
-owns both raw descriptors. Cancelling the awaiting task therefore propagates
-promptly, while the native-pump completion callback closes the duplicate and
-restores the descriptor and transport state once the worker returns. Restoring
-or resuming earlier would hand the descriptors back to asyncio while native
-code was still mid-transfer.
+cannot interrupt the worker thread running the Rust pump. The hand-off gives
+native I/O and its callback their own duplicates, leaving asyncio transport
+descriptors safe for pipeline teardown. Cancelling the awaiting task waits only
+until `native_pump_cleanup_grace`; on expiry it re-raises `CancelledError` and
+retains the executor future. The one completion callback later closes the
+worker duplicate, restores the callback-owned blocking state, closes those
+state duplicates, then resumes the reader. No descriptor is restored, closed,
+reused, or resumed while native code can still use it.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code

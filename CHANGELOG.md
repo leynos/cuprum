@@ -29,6 +29,14 @@
   cleanup `DEBUG` records. The native worker retains descriptor ownership until
   cleanup completes, so these events and records describe the
   cancellation-cleanup contract.
+- **Bounded native-pump cancellation cleanup:** Add
+  `ExecutionContext.native_pump_cleanup_grace`. Grace expiry returns the
+  caller's original `CancelledError` while duplicated descriptors remain
+  callback-owned until the uninterruptible worker settles. Add
+  `cleanup_grace_expired` with `PumpEvent.elapsed_s`, `cleanup_deferred`, and
+  the unlabelled `cuprum_rust_pump_cleanup_grace_expired_total` and
+  `cuprum_rust_pump_cleanup_deferred_total` counters. The completion callback
+  preserves descriptor ownership with no double close or early reader resume.
 - **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
   `phase` and, for a decline, the `reason` for the decline.
 - **`PumpHook`:** The synchronous callable type a pump observer must satisfy.
@@ -95,10 +103,11 @@
 
 ### Changed
 
-- **Source spelling enforcement:** Check tracked Python and Rust source as well
-  as Markdown for en-GB-oxendict spelling, including code identifiers, so
-  contributor changes can now fail the spelling gate on source-code drift
-  ([#259](https://github.com/leynos/cuprum/pull/259)).
+- **Environment overlays (breaking):** Document that scoped `env(...)` overlays
+  resolve against the live `os.environ` at subprocess spawn time, so callers
+  that depended on an import-time or scope-entry snapshot must pass explicit
+  values through the overlay or `ExecutionContext.env` instead
+  ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
 
 ### Fixed
 
@@ -138,5 +147,3 @@
   that depended on an import-time or scope-entry snapshot must pass explicit
   values through the overlay or `ExecutionContext.env` instead
   ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
-
-[0.2.0]: https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6
