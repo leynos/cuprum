@@ -5,7 +5,13 @@ from __future__ import annotations
 import dataclasses as dc
 
 import cuprum as c
-from cuprum import context, pump_events, pump_observation
+from cuprum import (
+    context,
+    pump_events,
+    pump_observation,
+    pump_span_events,
+    pump_span_observation,
+)
 from cuprum.events import ExecHook, new_exec_id
 
 
@@ -50,6 +56,15 @@ def test_public_exports_are_available() -> None:
     )
     assert c.observe_pump is pump_observation.observe_pump, (
         "observe_pump must be exported from cuprum.pump_observation"
+    )
+    assert c.PumpHopOutcome is pump_span_events.PumpHopOutcome, (
+        "PumpHopOutcome must be exported from cuprum.pump_span_events"
+    )
+    assert c.PumpHopSpanRegistration is pump_span_observation.PumpHopSpanRegistration, (
+        "PumpHopSpanRegistration must come from cuprum.pump_span_observation"
+    )
+    assert c.observe_pump_span is pump_span_observation.observe_pump_span, (
+        "observe_pump_span must come from cuprum.pump_span_observation"
     )
 
 

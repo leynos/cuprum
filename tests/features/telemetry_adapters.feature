@@ -33,3 +33,13 @@ Feature: Telemetry adapters for structured execution events
     Given an in-memory tracer
     When I run a command that fails with tracing
     Then the span status indicates an error
+
+  Scenario: Rust-pump hop tracing records a successful executor hop
+    Given an in-memory pump-hop tracer
+    When I run a successful Rust-pump executor hop
+    Then the pump-hop span is successful and records transferred bytes
+
+  Scenario: Rust-pump hop tracing records cancellation cleanup
+    Given an in-memory pump-hop tracer
+    When I cancel a Rust-pump executor hop while its worker owns descriptors
+    Then the pump-hop span is cancelled after the worker returns

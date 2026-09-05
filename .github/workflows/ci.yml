@@ -1512,7 +1512,10 @@ jobs:
       # would correct it are the ones rejected. `!cancelled()` rather than
       # `always()` so an interrupted, half-measured run records nothing.
       - name: Record this run's benchmark sample
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
+        if: >-
+          ${{ !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.candidate-artefacts.outputs.available == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1527,7 +1530,10 @@ jobs:
             --output "${artifact_dir}/main-baseline-history.json"
 
       - name: Upload main benchmark baseline artifact
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
+        if: >-
+          ${{ !cancelled() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.candidate-artefacts.outputs.available == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet-main-baseline
