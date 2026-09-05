@@ -85,10 +85,30 @@ class _RelayDiagnostics:
     """
 
     fallbacks: list[RelayFallback] = dc.field(default_factory=list)
+    is_settled: bool = False
 
     def record(self, fallback: RelayFallback) -> None:
         """Append one handled echo-disablement record."""
         self.fallbacks.append(fallback)
+
+    def settle(self) -> None:
+        """Publish the collected records for the owning command's result.
+
+        Idempotent: the reconciliation paths run exactly once per drain, and a
+        second call keeps whichever record list that call captured.
+        """
+        self.is_settled = True
+
+    def snapshot(self) -> tuple[RelayFallback, ...]:
+        """Return the collected records, or ``()`` before the drain settled.
+
+        A drain that never settled — cancelled or abandoned during teardown —
+        leaves its records unread: those diagnostics remain on the echo
+        observation channel, so callers on a non-result path see ``()``.
+        """
+        if not self.is_settled:
+            return ()
+        return tuple(self.fallbacks)
 
 
 @dc.dataclass(slots=True)

@@ -24,6 +24,7 @@ import typing as typ
 
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
@@ -63,11 +64,18 @@ class _DrainContext:
 
 @dc.dataclass(frozen=True, slots=True)
 class _RunTaskOwnership:
-    """The stdin writer and stream consumers owned by one streamed run."""
+    """The stdin writer, stream consumers, and diagnostics owned by one run.
+
+    ``relay_diagnostics`` holds the per-stream collectors handed to the
+    consumer drains, so the run's one reconciliation point — success gather or
+    teardown drain — reads the result diagnostics from the tasks it already
+    settles rather than inspecting them a second time.
+    """
 
     stdin_task: asyncio.Task[None] | None
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
     discard_on_cancel: asyncio.Event
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
 
 
 async def _await_eof_grace(
@@ -332,6 +340,11 @@ async def _reconcile_run_tasks(
 ) -> tuple[str | None, str | None]:
     """Cancel the stdin writer and drain the stream consumers, in that order.
 
+    The stream consumers drain with ``return_exceptions=True``, so their
+    already-recorded diagnostics survive the cancellation that a teardown
+    performs: a cancelled reader keeps the fallback it recorded before it was
+    cancelled.
+
     The two halves are one unit so a caller can run them under
     :func:`_shielded_cleanup` and know both finish: draining first would leave
     a writer blocked on a pipe nobody is reading, and shielding them separately
@@ -344,10 +357,13 @@ async def _reconcile_run_tasks(
         :func:`_drain_stream_consumers`.
     """
     await _cancel_stdin_writer(tasks.stdin_task)
-    return await _drain_stream_consumers(
+    stdout_text, stderr_text = await _drain_stream_consumers(
         tasks.consumers,
         context,
     )
+    for diagnostics in tasks.relay_diagnostics:
+        diagnostics.settle()
+    return stdout_text, stderr_text
 
 
 __all__ = [
