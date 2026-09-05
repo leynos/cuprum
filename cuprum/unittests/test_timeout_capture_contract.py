@@ -260,9 +260,10 @@ def readers_that_never_reach_eof(
         *,
         on_line: cabc.Callable[[str], None] | None = None,
         read_size: int = 4096,
+        relay_diagnostics: object = None,
     ) -> str | None:
         """Stand in for a reader that is cancelled before EOF ever arrives."""
-        del on_line, read_size  # Required by the _consume_stream callback interface.
+        del on_line, read_size, relay_diagnostics  # Required by the _consume_stream callback interface.
         await asyncio.Event().wait()
         return
 

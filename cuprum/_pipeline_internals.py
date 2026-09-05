@@ -267,6 +267,7 @@ async def _run_pipeline(
             stderr_tasks,
             stdout_task,
             started_at,
+            relay_diagnostics_by_stage,
         ) = await _spawn_pipeline_processes(
             parts,
             config,
@@ -276,6 +277,7 @@ async def _run_pipeline(
             processes=processes,
             stderr_tasks=stderr_tasks,
             stdout_task=stdout_task,
+            relay_diagnostics_by_stage=tuple(relay_diagnostics_by_stage),
             stages=_StageWaitContext(
                 started_at=tuple(started_at),
                 observations=observations,
