@@ -17,7 +17,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._streams import _consume_stream
+from cuprum._streams import _consume_stream, _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
@@ -60,12 +60,22 @@ def _create_stage_capture_tasks(
     is_last_stage: bool,
     observation: _StageObservation,
 ) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
-    """Create stderr and stdout capture tasks for a pipeline stage."""
+    """Create stderr and stdout capture tasks for a pipeline stage.
+
+    Returns
+    -------
+    tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None, tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]]
+        The stderr and stdout capture tasks, together with the per-stream
+        relay diagnostics collectors (stderr first, stdout second, either
+        ``None`` when that stream has no capture task). The caller retains
+        them with the spawn state so the pipeline's result builders can read
+        each stage's diagnostics from its own streams.
+    """
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
     if not config.capture_or_echo:
-        return stderr_task, stdout_task
+        return stderr_task, stdout_task, (None, None)
 
     stderr_on_line: cabc.Callable[[str], None] | None = None
     if observation.hooks.observe_hooks:
@@ -77,6 +87,7 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
+    stderr_relay_diagnostics = _RelayDiagnostics()
     stderr_task = asyncio.create_task(
         _consume_stream(
             process.stderr,
@@ -86,11 +97,12 @@ def _create_stage_capture_tasks(
                 stream=EchoStream.STDERR,
             ),
             on_line=stderr_on_line,
+            relay_diagnostics=stderr_relay_diagnostics,
         ),
     )
 
     if not is_last_stage:
-        return stderr_task, stdout_task
+        return stderr_task, stdout_task, (stderr_relay_diagnostics, None)
 
     stdout_on_line: cabc.Callable[[str], None] | None = None
     if observation.hooks.observe_hooks:
@@ -102,12 +114,18 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
+    stdout_relay_diagnostics = _RelayDiagnostics()
     stdout_task = asyncio.create_task(
         _consume_stream(
             process.stdout,
             config.stream_config,
             on_line=stdout_on_line,
+            relay_diagnostics=stdout_relay_diagnostics,
         ),
     )
 
-    return stderr_task, stdout_task
+    return (
+        stderr_task,
+        stdout_task,
+        (stderr_relay_diagnostics, stdout_relay_diagnostics),
+    )

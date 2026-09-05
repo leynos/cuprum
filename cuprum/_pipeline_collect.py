@@ -106,6 +106,28 @@ async def _gather_pipeline_outputs(
     return stderr_by_stage, final_stdout
 
 
+def _stage_relay_fallbacks(
+    spawn: _PipelineSpawnResult,
+) -> tuple[tuple[RelayFallback, ...], ...]:
+    """Read each stage's relay diagnostics from its own collectors.
+
+    Every stage's tuple lists its stdout records first (final stage only,
+    matching the single-command result order) and then its stderr records.
+    Unsettled collectors — a drain cancelled during teardown — contribute an
+    empty tuple, keeping those diagnostics on the echo observation channel.
+    """
+    stage_tuples: list[tuple[RelayFallback, ...]] = []
+    for stderr_diagnostics, stdout_diagnostics in spawn.relay_diagnostics_by_stage:
+        stdout_fallbacks = (
+            () if stdout_diagnostics is None else stdout_diagnostics.snapshot()
+        )
+        stderr_fallbacks = (
+            () if stderr_diagnostics is None else stderr_diagnostics.snapshot()
+        )
+        stage_tuples.append(stdout_fallbacks + stderr_fallbacks)
+    return tuple(stage_tuples)
+
+
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
@@ -150,6 +172,7 @@ async def _collect_pipeline_inputs(
         await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+        relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)
         if timeout is None:
             msg = "TimeoutError without a configured timeout"
             raise _PipelineInvariantError(msg) from exc
@@ -157,6 +180,7 @@ async def _collect_pipeline_inputs(
             stderr_by_stage=stderr_by_stage,
             final_stdout=final_stdout,
             capture=config.capture,
+            relay_fallbacks_by_stage=relay_fallbacks_by_stage,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
     finally:
@@ -182,4 +206,5 @@ async def _collect_pipeline_inputs(
         wait_result=wait_result,
         stderr_by_stage=stderr_by_stage,
         final_stdout=final_stdout,
+        relay_fallbacks_by_stage=_stage_relay_fallbacks(spawn),
     )

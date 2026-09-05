@@ -94,8 +94,15 @@ def _spawn_stream_consumers(
     stream_config: _StreamConfig,
     *,
     pid: int | None,
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics],
 ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks."""
+    """Spawn stdout and stderr stream consumer tasks.
+
+    Each consumer drains into its collector from ``relay_diagnostics``:
+    index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
+    pair on its ``_RunTaskOwnership`` so its single reconciliation point can
+    settle and read them exactly once.
+    """
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
     stderr_config = dc.replace(
@@ -113,6 +120,7 @@ def _spawn_stream_consumers(
                 process.stdout,
                 stream_config,
                 on_line=stdout_on_line,
+                relay_diagnostics=relay_diagnostics[0],
             ),
         ),
         asyncio.create_task(
@@ -120,6 +128,7 @@ def _spawn_stream_consumers(
                 process.stderr,
                 stderr_config,
                 on_line=stderr_on_line,
+                relay_diagnostics=relay_diagnostics[1],
             ),
         ),
     )
@@ -226,7 +235,13 @@ async def _run_subprocess_with_streams(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
         ),
-        consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
+        consumers=_spawn_stream_consumers(
+            process,
+            execution,
+            stream_config,
+            pid=pid,
+            relay_diagnostics=relay_diagnostics,
+        ),
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
     )
@@ -259,6 +274,8 @@ async def _run_subprocess_with_streams(
             raise
     try:
         stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+        for diagnostics in tasks.relay_diagnostics:
+            diagnostics.settle()
     except BaseException:
         # `gather` re-raises the first failure and leaves its sibling running,
         # so a reader wedged on a pipe would outlive the run it belonged to.

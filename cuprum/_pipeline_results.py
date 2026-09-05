@@ -108,6 +108,7 @@ def _build_pipeline_stage_results(
                 pid=process.pid if process.pid is not None else -1,
                 stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
                 stderr=inputs.stderr_by_stage[idx],
+                relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
             ),
         )
     return stage_results
