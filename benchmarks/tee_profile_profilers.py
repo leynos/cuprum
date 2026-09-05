@@ -41,7 +41,7 @@ def _run_worker_measured(
     scenario_dir: pth.Path,
 ) -> TeeProfileWorkerResult:
     """Run the worker directly and write ``worker-result.json``."""
-    from benchmarks.tee_profile_driver import _write_json
+    from benchmarks.tee_profile_output import _write_json
 
     result = run_tee_profile_worker(scenario.worker_config())
     _write_json(scenario_dir / "worker-result.json", result)
@@ -64,7 +64,7 @@ def _run_perf(
     config: TeeProfileDriverConfig,
 ) -> dict[str, object]:
     """Record one scenario with Linux ``perf`` and generate text artefacts."""
-    from benchmarks.tee_profile_driver import _write_json
+    from benchmarks.tee_profile_output import _write_json
 
     perf = _require_tool("perf")
     perf_data = scenario_dir / "perf.data"

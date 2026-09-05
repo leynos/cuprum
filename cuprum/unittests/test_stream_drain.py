@@ -31,9 +31,11 @@ class _ChunkedReader:
     def __init__(self, chunks: cabc.Sequence[bytes]) -> None:
         """Store chunks for sequential ``read`` calls."""
         self._chunks = list(chunks)
+        self.read_sizes: list[int] = []
 
-    async def read(self, _size: int) -> bytes:
+    async def read(self, size: int) -> bytes:
         """Return the next queued chunk, or empty bytes at EOF."""
+        self.read_sizes.append(size)
         await asyncio.sleep(0)
         if not self._chunks:
             return b""
@@ -127,6 +129,25 @@ def test_drain_empty_capture_returns_empty_text() -> None:
 
     assert captured == "", "empty captured streams must decode to empty text"
     assert sink.getvalue() == "", "non-echoing empty streams must not write to sink"
+
+
+def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
+    """The drain loop retains the injected benchmark read size."""
+    reader = _ChunkedReader((b"first", b"second"))
+
+    captured = asyncio.run(
+        _drain(
+            typ.cast("asyncio.StreamReader", reader),
+            _config(io.StringIO()),
+            read_size=17,
+        )
+    )
+
+    assert captured == "firstsecond", f"expected complete capture, got {captured!r}"
+    assert reader.read_sizes == [17, 17, 17], (
+        "every drain reader call must retain the explicit read size, got "
+        f"{reader.read_sizes}"
+    )
 
 
 def test_drain_respects_capture_and_echo_flags() -> None:

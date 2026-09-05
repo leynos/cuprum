@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import random
 import typing as typ
 
 from benchmarks.tee_profile_configuration import (
@@ -30,13 +31,13 @@ from benchmarks.tee_profile_driver import (
     _base_parser,
     _matrix_exit_status,
     _worker_result_exit_status,
-    _write_json,
 )
 from benchmarks.tee_profile_execution import (
     _build_profile_plan,
     _ProfilePlan,
     _run_profile_sweep,
 )
+from benchmarks.tee_profile_output import _write_json
 from benchmarks.tee_profile_profilers import (
     ProfilerAdapter,
     _NoneProfiler,
@@ -293,7 +294,15 @@ def run_profile_sweep(
         config=config,
         scenario_resolver=_scenario_by_name,
         scenario_runner=_run_profile_scenario,
+        shuffle=_shuffle_for(config),
     )
+
+
+def _shuffle_for(
+    config: TeeProfileDriverConfig,
+) -> cabc.Callable[[list[int]], None] | None:
+    """Construct the optional source of randomized read-size order."""
+    return random.SystemRandom().shuffle if config.randomize_order else None
 
 
 def run_profile_matrix(

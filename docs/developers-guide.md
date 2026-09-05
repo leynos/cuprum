@@ -1876,16 +1876,20 @@ totals for `TeeProfileWorkerResult`, not process-lifetime aggregates.
 `benchmarks/profile_tee_hotpath.py` remains the public driver and module entry
 point. It re-exports the stable API while the implementation is split across
 supporting modules: scenario composition in
-`benchmarks/tee_profile_scenarios.py`, profiler orchestration in
-`benchmarks/tee_profile_profilers.py`, and command-line interface and JSON
-output helpers in `benchmarks/tee_profile_driver.py`. `TeeProfileScenario`
-records a resolved scenario: name, fixture path, stage count, mode, sink kind,
-line-callback flag, backend, repeat count, encoding, and error handling.
-`TeeProfileDriverConfig` records fixture paths, output directory, profiler
-choice, warm-up count, measured repeat count, `perf` frequency, call-graph
-configuration, and an optional scenario name. It validates that run counts and
-`perf` frequency are in range, and that the `perf` call-graph setting is not
-blank.
+`benchmarks/tee_profile_scenarios.py`, configuration resolution and worker
+command construction in `benchmarks/tee_profile_configuration.py`, plan and
+sweep execution in `benchmarks/tee_profile_execution.py`, profiler
+orchestration in `benchmarks/tee_profile_profilers.py`, and command-line
+interface and JSON output helpers in `benchmarks/tee_profile_driver.py`.
+`TeeProfileScenario` records a resolved scenario: name, fixture path, stage
+count, mode, sink kind, line-callback flag, backend, repeat count, read size,
+encoding, and error handling. `TeeProfileDriverConfig` records fixture paths,
+output directory, profiler choice, warm-up count, measured repeat count, `perf`
+frequency, call-graph configuration, read sizes, sweep rounds, randomization
+order, and an optional scenario name. `read_sizes` must be a non-empty tuple of
+positive integers and `rounds` must be at least one; the configuration also
+validates the run counts, `perf` frequency, and non-blank `perf` call-graph
+setting.
 
 The default matrix is stable and ordered:
 
@@ -1907,6 +1911,11 @@ The driver exposes three CLI subcommands:
 - `run-scenario` runs one named scenario with warm-up executions followed by one
   measured run.
 - `run` executes the full matrix serially.
+
+The profiling sweep controls are `--read-sizes`, a comma-separated list of
+positive byte counts, and `--rounds`, the number of complete matrix passes.
+`--randomize-order` shuffles the configured read-size order within each round;
+the emitted plan and sweep artefact retain every requested size and round.
 
 Profiler modes are selected through `TeeProfileDriverConfig.profiler`. `none`
 runs the worker directly and writes a note that profiler artefacts were not
@@ -1952,6 +1961,7 @@ profiling scenario. Its fields are:
 | `with_line_callbacks` | `bool`         | Whether stdout-line observers are registered during the run.                    |
 | `backend`             | `BackendName`  | Stream backend: `"auto"`, `"python"`, or `"rust"`.                              |
 | `repeat_count`        | `int`          | Number of measured repetitions.                                                 |
+| `read_size`           | `int`          | Stream read size in bytes used by this scenario.                                |
 
 <!-- markdownlint-enable MD013 -->
 

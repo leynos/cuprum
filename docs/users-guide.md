@@ -799,6 +799,7 @@ hooks receive `ExecEvent` values describing:
 - `exit` — subprocess finished (exit code and duration).
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
+
 - `teardown_error` — a stream consumer drained with an unexpected error during
   cleanup (ancillary; the error is absorbed to preserve the primary exception).
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
@@ -815,6 +816,10 @@ hooks receive `ExecEvent` values describing:
   its own `pipeline_stage_index` or `pipeline_stages` tag shadows the tag
   copies, whereas the typed fields always report the stage the pipeline
   actually acted on.
+
+Line events omit their line terminators. A CRLF pair split across internal
+reads is held until both bytes arrive, so it emits one line event and never an
+empty event for the boundary.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
