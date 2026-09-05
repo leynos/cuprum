@@ -1047,7 +1047,6 @@ unregistered callers pay nothing. Hook failures are reported and skipped,
 mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
 what a run captures.
 
-
 ### Result diagnostics ownership
 
 The same transition also appends one `cuprum.echo_events.RelayFallback` record
