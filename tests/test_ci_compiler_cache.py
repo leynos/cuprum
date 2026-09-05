@@ -153,7 +153,7 @@ def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
         setup_steps = [
             step
             for step in steps(workflow_name, job_name)
-            if step.get("uses") == SETUP_RUST
+            if str(step.get("uses", "")).startswith(f"{SETUP_RUST}@")
         ]
         if not setup_steps:
             continue
