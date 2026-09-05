@@ -54,18 +54,24 @@ def test_tar_builder() -> None:
 
 @dc.dataclass(frozen=True, slots=True)
 class _CommandResult:
+    """Outcome of one builder invocation, argv or error."""
+
     argv_with_program: tuple[str, ...] | None = None
     error: Exception | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
 class _RsyncPaths:
+    """Source and destination paths for the rsync builder scenario."""
+
     source: str
     destination: str
 
 
 @dc.dataclass(frozen=True, slots=True)
 class _TarInputs:
+    """Archive and source paths for the tar builder scenario."""
+
     archive: str
     sources: tuple[str, ...]
 

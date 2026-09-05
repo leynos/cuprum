@@ -87,6 +87,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
     """
 
     def __init__(self, *, encoding: str, errors: str) -> None:
+        """Record the slave-stream encoding for later ``__enter__`` calls."""
         self._encoding = encoding
         self._errors = errors
         self._master_fd: int | None = None

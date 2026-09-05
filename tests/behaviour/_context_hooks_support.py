@@ -45,14 +45,17 @@ def build_before_hook_context(call_order: list[int]) -> CuprumContext:
     """
 
     def hook1(cmd: object) -> None:
+        """Record the first hook invocation in the shared call order."""
         _ = cmd  # Unused
         call_order.append(1)
 
     def hook2(cmd: object) -> None:
+        """Record the second hook invocation in the shared call order."""
         _ = cmd  # Unused
         call_order.append(2)
 
     def hook3(cmd: object) -> None:
+        """Record the third hook invocation in the shared call order."""
         _ = cmd  # Unused
         call_order.append(3)
 
@@ -83,14 +86,17 @@ def build_after_hook_context(call_order: list[int]) -> CuprumContext:
     """
 
     def hook1(cmd: object, result: object) -> None:
+        """Record the first after hook invocation in the shared call order."""
         _, _ = cmd, result  # Unused
         call_order.append(1)
 
     def hook2(cmd: object, result: object) -> None:
+        """Record the second after hook invocation in the shared call order."""
         _, _ = cmd, result  # Unused
         call_order.append(2)
 
     def hook3(cmd: object, result: object) -> None:
+        """Record the third after hook invocation in the shared call order."""
         _, _ = cmd, result  # Unused
         call_order.append(3)
 
@@ -166,12 +172,14 @@ def run_async_allowlist_checks(
         name: str,
         programs: frozenset[Program],
     ) -> tuple[str, tuple[bool, bool]]:
+        """Check both programs within this task's scoped allowlist."""
         with scoped(ScopeConfig(allowlist=programs)):
             await asyncio.sleep(0.01)  # Allow interleaving
             ctx = current_context()
             return (name, (ctx.is_allowed(ECHO), ctx.is_allowed(LS)))
 
     async def run_tasks() -> AllowlistResults:
+        """Run both tasks concurrently and collect their allowlist results."""
         collected = await asyncio.gather(
             task_worker("task1", async_setup["task1"]),
             task_worker("task2", async_setup["task2"]),
