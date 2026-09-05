@@ -66,7 +66,12 @@ from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
-from cuprum.pump_events import PumpEvent, PumpHook, RustPumpDeclineReason
+from cuprum.pump_events import (
+    PumpEvent,
+    PumpHook,
+    RustPumpDeclineReason,
+    RustPumpHandoffOutcome,
+)
 from cuprum.pump_observation import PumpHookRegistration, observe_pump
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
@@ -127,6 +132,7 @@ __all__ = [
     "PumpHookRegistration",
     "RunOutputOptions",
     "RustPumpDeclineReason",
+    "RustPumpHandoffOutcome",
     "SafeCmd",
     "SafeCmdBuilder",
     "ScopeConfig",

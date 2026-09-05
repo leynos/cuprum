@@ -23,6 +23,7 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 
 if typ.TYPE_CHECKING:
@@ -208,10 +209,17 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
         asyncio.run(_cancel_mid_transfer(context))
 
     assert [event.phase for event in pump_events] == [
+        "handoff",
         "cleanup_started",
         "cleanup_completed",
-    ], f"cleanup telemetry must bracket cancellation, found {pump_events}"
-    duration_s = pump_events[1].duration_s
+    ], (
+        "submission and cleanup telemetry must bracket cancellation, found "
+        f"{pump_events}"
+    )
+    assert pump_events[0].outcome == RustPumpHandoffOutcome.SUBMITTED, (
+        "accepted native work must record submission before cancellation cleanup"
+    )
+    duration_s = pump_events[2].duration_s
     assert duration_s is not None, (
         f"cleanup completion must carry a monotonic duration, found {duration_s!r}"
     )

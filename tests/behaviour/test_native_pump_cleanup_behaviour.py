@@ -32,6 +32,7 @@ from cuprum.adapters.metrics_adapter import InMemoryMetrics
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_CLEANUP_DURATION_SECONDS,
     RUST_PUMP_CLEANUP_TOTAL,
+    RUST_PUMP_HANDOFF_TOTAL,
     PumpMetricsHook,
 )
 from cuprum.pump_observation import observe_pump
@@ -97,9 +98,14 @@ async def _cancel_public_pipeline(
         task.cancel()
         cleanup_waiting = await asyncio.to_thread(scenario.cleanup_started.wait, 5.0)
         assert cleanup_waiting, "cancellation must begin waiting for native cleanup"
-        assert [event.phase for event in scenario.cleanup_events] == [
-            "cleanup_started"
-        ], "cleanup completion must wait for native worker descriptor ownership"
+        cleanup_phases = [
+            event.phase
+            for event in scenario.cleanup_events
+            if event.phase.startswith("cleanup_")
+        ]
+        assert cleanup_phases == ["cleanup_started"], (
+            "cleanup completion must wait for native worker descriptor ownership"
+        )
         assert scenario.restores == [], (
             "descriptor state must not restore before worker release"
         )
@@ -131,10 +137,11 @@ def _install_blocked_native_pump(
 
     def blocked_native_pump(reader_fd: int, writer_fd: int) -> int:
         """Retain worker descriptor ownership until the test releases it."""
-        del reader_fd, writer_fd
+        del reader_fd
         scenario.worker_started.set()
         released = scenario.release_worker.wait(timeout=5.0)
         assert released, "the test must release the fake native worker"
+        os.close(writer_fd)
         scenario.worker_released.set()
         return 0
 
@@ -199,17 +206,20 @@ def _force_rust_pump_path(
 
 def _assert_cleanup_telemetry(scenario: _CleanupScenario) -> None:
     """Assert public cancellation emitted the complete cleanup telemetry contract."""
-    assert [event.phase for event in scenario.cleanup_events] == [
+    cleanup_events = [
+        event for event in scenario.cleanup_events if event.phase.startswith("cleanup_")
+    ]
+    assert [event.phase for event in cleanup_events] == [
         "cleanup_started",
         "cleanup_completed",
     ], (
         "cancellation must emit one ordered cleanup lifecycle, found "
         f"{scenario.cleanup_events}"
     )
-    assert scenario.cleanup_events[0].duration_s is None, (
+    assert cleanup_events[0].duration_s is None, (
         "cleanup start must not carry a completion duration"
     )
-    completion_duration = scenario.cleanup_events[1].duration_s
+    completion_duration = cleanup_events[1].duration_s
     assert completion_duration is not None, (
         "cleanup completion must carry a monotonic duration"
     )
@@ -217,8 +227,11 @@ def _assert_cleanup_telemetry(scenario: _CleanupScenario) -> None:
         "cleanup completion must carry a non-negative duration, found "
         f"{completion_duration!r}"
     )
-    assert scenario.metrics.counters == {RUST_PUMP_CLEANUP_TOTAL: 1.0}, (
-        "cleanup completion must increment its metric once, found "
+    assert scenario.metrics.counters == {
+        RUST_PUMP_CLEANUP_TOTAL: 1.0,
+        RUST_PUMP_HANDOFF_TOTAL: 1.0,
+    }, (
+        "cleanup completion and submitted hand-off must increment once, found "
         f"{scenario.metrics.counters}"
     )
     assert scenario.metrics.histograms == {
@@ -230,8 +243,9 @@ def _assert_cleanup_telemetry(scenario: _CleanupScenario) -> None:
     assert scenario.restores == [True], (
         f"descriptor restoration must occur once, found {scenario.restores}"
     )
-    assert scenario.writer_closes == [True], (
-        f"duplicate writer cleanup must occur once, found {scenario.writer_closes}"
+    assert scenario.writer_closes == [], (
+        "Python must never close the Rust-owned duplicate after submission, found "
+        f"{scenario.writer_closes}"
     )
 
 

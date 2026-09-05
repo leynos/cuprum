@@ -22,6 +22,7 @@ from unittest import mock
 import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
+from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum.sh import Pipeline, RunOutputOptions
@@ -158,7 +159,9 @@ def test_pipeline_non_positive_timeout_at_public_boundary(
 # -- Inter-stage pump ownership on the immediate path -------------------------
 
 
-def test_zero_timeout_reconciles_pipe_tasks() -> None:
+def test_zero_timeout_reconciles_pipe_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A zero deadline must settle the inter-stage pumps the caller owns.
 
     The pumps exist before ``asyncio.wait_for`` is entered, and a zero timeout
@@ -168,6 +171,8 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
     writes more than a pipe buffer holds and the second never reads, leaving
     the pump genuinely blocked when the deadline fires.
     """
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
+    get_stream_backend.cache_clear()
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     created: list[asyncio.Task[None]] = []
@@ -224,6 +229,7 @@ def test_zero_timeout_reconciles_pipe_tasks() -> None:
         ):
             asyncio.run(run_case())
     finally:
+        get_stream_backend.cache_clear()
         for pid in started_pids(events):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)

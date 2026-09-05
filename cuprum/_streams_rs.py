@@ -19,13 +19,29 @@ output = rust_consume_stream(reader_fd, buffer_size=65536)
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import importlib
+import logging
+import operator
 import os
 import typing as typ
 
+from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
+from cuprum.pump_events import RustPumpHandoffOutcome
+from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from types import ModuleType
+
+
+_DUPLICATE_SAME_ACCESS = 2
+_I64_MIN = -(1 << 63)
+_I64_MAX = (1 << 63) - 1
+_MAX_BUFFER_SIZE = 1 << 30
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _NativeBackend(typ.Protocol):
@@ -48,6 +64,14 @@ class _NativeBackend(typ.Protocol):
     @staticmethod
     def rust_consume_stream(reader_fd: int, *, buffer_size: int = ...) -> str:
         """Drain ``reader_fd`` and decode it as UTF-8."""
+
+
+class _PreparedRustPumpCall(typ.NamedTuple):
+    """Prepared inputs that leave writer ownership independent."""
+
+    native_pump: cabc.Callable[..., int]
+    reader: int
+    buffer_size: int
 
 
 @functools.lru_cache(maxsize=1)
@@ -81,6 +105,129 @@ def _convert_fd_for_platform(fd: int) -> int:
     return handle & mask
 
 
+def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
+    """Close a writer that never reached the native ownership boundary."""
+    with contextlib.suppress(OSError):
+        os.close(writer_fd)
+
+
+def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
+    """Raise native-compatible buffer-size errors before transferring a writer."""
+    size = operator.index(buffer_size)
+    if not _I64_MIN <= size <= _I64_MAX:
+        msg = "Python int too large to convert to C long"
+        raise OverflowError(msg)
+    if size <= 0:
+        msg = "buffer_size must be greater than zero"
+        raise ValueError(msg)
+    if size > _MAX_BUFFER_SIZE:
+        msg = "buffer_size exceeds the maximum permitted size"
+        raise ValueError(msg)
+    return size
+
+
+def _prepare_rust_pump_call(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+    buffer_size: int,
+) -> _PreparedRustPumpCall:
+    """Prepare native inputs while Python still owns the writer."""
+    try:
+        native_pump = _load_native().rust_pump_stream
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
+        raise
+    try:
+        reader = _convert_fd_for_platform(reader_fd)
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "reader_preparation",
+            error,
+        )
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.READER_PREPARATION_FAILED
+        )
+        raise
+    try:
+        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
+            buffer_size
+        )
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
+        raise
+    return _PreparedRustPumpCall(
+        native_pump=native_pump,
+        reader=reader,
+        buffer_size=validated_buffer_size,
+    )
+
+
+def _duplicate_windows_handle(handle: int) -> int:
+    """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    current_process = kernel32.GetCurrentProcess()
+    duplicated_handle = ctypes.c_void_p()
+    should_inherit_handle = False
+    duplicate_succeeded = kernel32.DuplicateHandle(
+        current_process,
+        ctypes.c_void_p(handle),
+        current_process,
+        ctypes.byref(duplicated_handle),
+        0,
+        should_inherit_handle,
+        _DUPLICATE_SAME_ACCESS,
+    )
+    if not duplicate_succeeded:
+        raise _windows_error(ctypes)
+    if duplicated_handle.value is None:
+        msg = "DuplicateHandle returned a null handle"
+        raise OSError(msg)
+    return int(duplicated_handle.value)
+
+
+def _close_windows_handle(handle: int) -> None:
+    """Close a duplicated Win32 handle that was not handed to Rust."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
+        raise _windows_error(ctypes)
+
+
+def _windows_error(ctypes_module: ModuleType) -> OSError:
+    """Build an OSError from a Windows-only ctypes last-error function."""
+    get_last_error = typ.cast(
+        "cabc.Callable[[], int]",
+        getattr(ctypes_module, "get_last_error"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API
+    )
+    win_error = typ.cast(
+        "cabc.Callable[[int], OSError]",
+        getattr(ctypes_module, "WinError"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API
+    )
+    return win_error(get_last_error())
+
+
+def _transfer_writer_fd_for_platform(writer_fd: int) -> int:
+    """Return a writer resource that Rust can consume without a CRT FD leak."""
+    if os.name != "nt":
+        return writer_fd
+
+    owned_handle = _duplicate_windows_handle(_convert_fd_for_platform(writer_fd))
+    try:
+        os.close(writer_fd)
+    except BaseException:
+        _close_windows_handle(owned_handle)
+        raise
+    return owned_handle
+
+
 def rust_pump_stream(
     reader_fd: int,
     writer_fd: int,
@@ -105,21 +252,48 @@ def rust_pump_stream(
     int
         The number of bytes successfully written.
 
+    Raises
+    ------
+    OSError
+        If the Rust pump encounters an I/O error.
+
     Notes
     -----
-    Failures propagate unchanged from the Rust extension rather than being
-    raised here: ``ImportError`` if the native module cannot be imported,
-    ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
-    1 GiB maximum, and ``OSError`` if an I/O error occurs while pumping bytes.
+    The wrapper validates ``buffer_size`` before transferring a Windows writer
+    resource, preserving the native entry point's errors without leaking a
+    duplicated handle. Other failures propagate unchanged from the Rust
+    extension: ``ImportError`` if the native module cannot be imported and
+    ``OSError`` if an I/O error occurs while pumping bytes.
     """
-    native = _load_native()
-    return int(
-        native.rust_pump_stream(
-            _convert_fd_for_platform(reader_fd),
-            _convert_fd_for_platform(writer_fd),
-            buffer_size=buffer_size,
-        ),
+    prepared = _prepare_rust_pump_call(
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+        buffer_size=buffer_size,
     )
+    try:
+        writer = _transfer_writer_fd_for_platform(writer_fd)
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "platform_writer_transfer",
+            error,
+        )
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED
+        )
+        raise
+    try:
+        return int(
+            prepared.native_pump(
+                prepared.reader,
+                writer,
+                buffer_size=prepared.buffer_size,
+            )
+        )
+    except OSError:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+        raise
 
 
 def rust_consume_stream(

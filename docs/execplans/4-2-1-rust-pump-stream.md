@@ -106,6 +106,8 @@ completion.
     reader is now borrowed through `with_borrowed_reader`, which wraps the
     handle in `ManuallyDrop` so the reader FD stays open on every exit path,
     panic-unwind included. See the addendum below.
+  - The Python-side duplicate-and-hand-over convention is recorded in the
+    [Rust FD-borrow ownership contract](../developers-guide.md#rust-fd-borrow-ownership-contract).
 
 ## Outcomes & retrospective
 

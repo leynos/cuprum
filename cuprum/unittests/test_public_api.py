@@ -42,6 +42,9 @@ def test_public_exports_are_available() -> None:
     assert c.RustPumpDeclineReason is pump_events.RustPumpDeclineReason, (
         "RustPumpDeclineReason must be exported from cuprum.pump_events"
     )
+    assert c.RustPumpHandoffOutcome is pump_events.RustPumpHandoffOutcome, (
+        "RustPumpHandoffOutcome must be exported from cuprum.pump_events"
+    )
     assert c.PumpHookRegistration is pump_observation.PumpHookRegistration, (
         "PumpHookRegistration must be exported from cuprum.pump_observation"
     )

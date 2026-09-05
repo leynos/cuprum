@@ -146,6 +146,8 @@ ruled Option A out.
 
 - Changing Rust-pump transfer semantics, descriptor lifecycle, or fall-back
   behaviour.
+- Turning fatal duplicate-setup or executor-submission diagnostics into
+  `PumpEvent` values or metrics; those remain bounded `DEBUG` log records.
 - Counting successful hand-offs. There is no pump event for a hop that
   succeeds; success is the absence of a decline.
 - Supporting asynchronous pump hooks. Both emission sites are synchronous, and
