@@ -49,10 +49,16 @@ class _SubprocessExecution:
     cmd: SafeCmd
     ctx: ExecutionContext
     capture: bool
-    echo: bool
+    echo_stdout: bool
+    echo_stderr: bool
     timeout: float | None
     observation: _StageObservation
     stdin_data: bytes | None
+
+    @property
+    def consumes_any_stream(self) -> bool:
+        """Whether any stream must be consumed for capture or echo."""
+        return self.capture or self.echo_stdout or self.echo_stderr
 
 
 async def _spawn_subprocess(
@@ -63,12 +69,12 @@ async def _spawn_subprocess(
         *execution.cmd.argv_with_program,
         stdout=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo
+            if execution.capture or execution.echo_stdout
             else asyncio.subprocess.DEVNULL
         ),
         stderr=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo
+            if execution.capture or execution.echo_stderr
             else asyncio.subprocess.DEVNULL
         ),
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
@@ -100,6 +106,7 @@ def _spawn_stream_consumers(
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
     stderr_config = dc.replace(
         stream_config,
+        echo_output=execution.echo_stderr,
         sink=(
             execution.ctx.stderr_sink
             if execution.ctx.stderr_sink is not None
@@ -132,7 +139,7 @@ def _build_stream_config(
     """Build the stdout _StreamConfig for an execution context."""
     return _StreamConfig(
         capture_output=execution.capture,
-        echo_output=execution.echo,
+        echo_output=execution.echo_stdout,
         sink=(
             execution.ctx.stdout_sink
             if execution.ctx.stdout_sink is not None
@@ -313,7 +320,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stdout_text: str | None = None
     stderr_text: str | None = None
     try:
-        if execution.capture or execution.echo:
+        if execution.consumes_any_stream:
             (
                 exit_code,
                 exited_at,

@@ -22,7 +22,7 @@ from cuprum._observability import (
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_config import _prepare_pipeline_config
+from cuprum._pipeline_config import _PipelineStreamOptions, _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
@@ -350,13 +350,58 @@ class RunOutputOptions:
     Attributes
     ----------
     capture:
-        When ``True`` capture stdout/stderr; otherwise discard them.
+        When ``True`` capture stdout/stderr; otherwise discard them. Capture
+        applies to both streams together and is independent of echo: a stream
+        that is not echoed is still captured while ``capture`` is ``True``.
     echo:
-        When ``True`` tee stdout/stderr to the parent process.
+        Shorthand that sets both ``echo_stdout`` and ``echo_stderr``. Leave
+        the per-stream fields as ``None`` (the default) to inherit it.
+    echo_stdout:
+        When ``True`` tee stdout to the parent process; ``None`` inherits
+        ``echo``. Takes precedence over ``echo`` for stdout alone.
+    echo_stderr:
+        When ``True`` tee stderr to the parent process; ``None`` inherits
+        ``echo``. Takes precedence over ``echo`` for stderr alone.
+
+    Examples
+    --------
+    >>> RunOutputOptions(capture=True, echo=True)
+    RunOutputOptions(capture=True, echo=True, echo_stdout=True, echo_stderr=True)
+    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False)
+    RunOutputOptions(capture=True, echo=True, echo_stdout=False, echo_stderr=True)
     """
 
     capture: bool = True
     echo: bool = False
+    echo_stdout: bool | None = None
+    echo_stderr: bool | None = None
+
+    def __post_init__(self) -> None:
+        """Resolve per-stream echo from the ``echo`` shorthand."""
+        object.__setattr__(
+            self,
+            "echo_stdout",
+            self.echo if self.echo_stdout is None else self.echo_stdout,
+        )
+        object.__setattr__(
+            self,
+            "echo_stderr",
+            self.echo if self.echo_stderr is None else self.echo_stderr,
+        )
+
+    @property
+    def resolved_echo(self) -> tuple[bool, bool]:
+        """The resolved ``(echo_stdout, echo_stderr)`` gates.
+
+        ``__post_init__`` fills any ``None`` per-stream field from ``echo``,
+        so the returned pair is always concrete and reflects an explicit
+        per-stream override where one was supplied.
+        """
+        # The dataclass is frozen and ``__post_init__`` resolves both fields,
+        # but the declared field types stay ``bool | None``; the resolved pair
+        # is the constructor's contract, not something the declared types can
+        # express to the type checker.
+        return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -425,7 +470,8 @@ def _prepare_execution_observation(
         _base_stage_tags(
             cmd,
             capture=output.capture,
-            echo=output.echo,
+            echo_stdout=output.resolved_echo[0],
+            echo_stderr=output.resolved_echo[1],
         ),
         context.tags,
     )
@@ -577,7 +623,8 @@ class SafeCmd:
                 cmd=self,
                 ctx=ctx,
                 capture=out.capture,
-                echo=out.echo,
+                echo_stdout=out.resolved_echo[0],
+                echo_stderr=out.resolved_echo[1],
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -703,7 +750,10 @@ class Pipeline:
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
             capture=out.capture,
-            echo=out.echo,
+            output=_PipelineStreamOptions(
+                echo_stdout=out.resolved_echo[0],
+                echo_stderr=out.resolved_echo[1],
+            ),
             timeout=effective_timeout,
             context=context,
         )
