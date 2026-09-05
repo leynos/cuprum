@@ -52,6 +52,22 @@ class _SubprocessExecution:
     stdin_data: bytes | None
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StreamConsumerSpawnContext:
+    """Inputs a run hands to its stream-consumer spawn.
+
+    Bundles the stdout stream configuration, the subprocess PID, and the
+    per-stream relay diagnostics collectors so the spawn helper takes one
+    argument instead of three. The context is created before any consumer
+    task exists; ownership of the collectors stays with the run, which
+    continues to retain the same tuple on its ``_RunTaskOwnership``.
+    """
+
+    stream_config: _StreamConfig
+    pid: int | None
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -85,17 +101,14 @@ def _create_stream_callback(
     return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
 
 
-def _spawn_stream_consumers(  # ruff: ignore[too-many-arguments] - the collector pair stays explicit so the run owns it.  # pylint: disable=too-many-arguments
+def _spawn_stream_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-    *,
-    pid: int | None,
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics],
+    spawn_context: _StreamConsumerSpawnContext,
 ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
     """Spawn stdout and stderr stream consumer tasks.
 
-    Each consumer drains into its collector from ``relay_diagnostics``:
+    Each consumer drains into its collector from ``spawn_context``:
     index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
     pair on its ``_RunTaskOwnership`` so its single reconciliation point can
     settle and read them exactly once.
@@ -105,6 +118,9 @@ def _spawn_stream_consumers(  # ruff: ignore[too-many-arguments] - the collector
     tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
         The stdout and stderr consumer tasks, in that order.
     """
+    pid = spawn_context.pid
+    stream_config = spawn_context.stream_config
+    relay_diagnostics = spawn_context.relay_diagnostics
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
     stderr_config = dc.replace(
@@ -276,6 +292,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 
 
 __all__ = [
+    "_StreamConsumerSpawnContext",
     "_SubprocessExecution",
     "_build_stream_config",
     "_create_stream_callback",

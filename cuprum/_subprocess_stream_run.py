@@ -107,11 +107,20 @@ async def _run_subprocess_with_streams(
     from cuprum._subprocess_execution import (
         _build_stream_config,
         _spawn_stream_consumers,
+        _StreamConsumerSpawnContext,
     )
 
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
     relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    # The spawn context is a value snapshot, not an ownership hand-off: the
+    # run keeps retaining the same collector tuple on _RunTaskOwnership so
+    # its single reconciliation point settles them exactly once.
+    spawn_context = _StreamConsumerSpawnContext(
+        stream_config=stream_config,
+        pid=pid,
+        relay_diagnostics=relay_diagnostics,
+    )
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
@@ -119,9 +128,7 @@ async def _run_subprocess_with_streams(
         consumers=_spawn_stream_consumers(
             process,
             execution,
-            stream_config,
-            pid=pid,
-            relay_diagnostics=relay_diagnostics,
+            spawn_context,
         ),
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
