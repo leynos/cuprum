@@ -14,17 +14,9 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
-from time import perf_counter
 
 type LineStreamName = typ.Literal["stdout", "stderr"]
 type LineHook = cabc.Callable[[LineEvent], None]
-
-
-# Bound as a module-level name rather than reached through the ``time`` module
-# so tests can pin the clock by replacing this attribute alone; reaching
-# through ``time.perf_counter`` would change the clock every other module in
-# the process reads. Mirrors the seam pattern in ``cuprum._pipeline_wait``.
-perf_counter = perf_counter
 
 
 @dc.dataclass(frozen=True, slots=True)
