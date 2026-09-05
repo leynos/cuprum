@@ -52,7 +52,7 @@ from cuprum.context import scoped as scoped
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.
 from cuprum.program import (
-    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
 type _ArgValue = str | int | float | bool | Path
@@ -60,6 +60,29 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
+_DEFAULT_CANCEL_GRACE = 0.5
+_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
+# Names the aggregate raised when draining observe-hook tasks fails while a
+# single-command execution is already unwinding.
+_COMMAND_FINALIZATION_ERROR = "command finalization failed"
+_DEFAULT_ENCODING = "utf-8"
+_DEFAULT_ERROR_HANDLING = "replace"
+
+
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+
+"""Safe command construction and execution facade for curated programs.
+This module focuses on the typed core: building ``SafeCmd`` instances from
+curated ``Program`` values and providing a minimal async runtime for executing
+them with predictable semantics.
+"""
+# Public annotations use ``Program``. Keep it in module globals so
+# ``typing.get_type_hints`` can resolve the postponed public annotations.
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+type _ArgValue = str | int | float | bool | Path
+type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
+type _EnvMapping = cabc.Mapping[str, str] | None
+type _CwdType = str | Path | None
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a
@@ -364,34 +387,13 @@ class StdinInput:
 class RunOutputOptions:
     """Controls how a command's output streams are handled.
 
-    Attributes
-    ----------
-    capture:
-        When ``True`` capture stdout/stderr; otherwise discard them. Capture
-        applies to both streams together and is independent of echo: a stream
-        that is not echoed is still captured while ``capture`` is ``True``.
-    echo:
-        Shorthand that sets both ``echo_stdout`` and ``echo_stderr``. Leave
-        the per-stream fields as ``None`` (the default) to inherit it.
-    echo_stdout:
-        When ``True`` tee stdout to the parent process; ``None`` inherits
-        ``echo``. Takes precedence over ``echo`` for stdout alone.
-    echo_stderr:
-        When ``True`` tee stderr to the parent process; ``None`` inherits
-        ``echo``. Takes precedence over ``echo`` for stderr alone.
-
-    Examples
-    --------
-    >>> RunOutputOptions(capture=True, echo=True)
-    RunOutputOptions(capture=True, echo=True, echo_stdout=True, echo_stderr=True)
-    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False)
-    RunOutputOptions(capture=True, echo=True, echo_stdout=False, echo_stderr=True)
     """
 
     capture: bool = True
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
+    max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -406,7 +408,17 @@ class RunOutputOptions:
             self.echo if self.echo_stderr is None else self.echo_stderr,
         )
 
-    @property
+        if self.max_echo_line_bytes is None:
+            return
+        bound = self.max_echo_line_bytes
+        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
+        if not is_positive_int or bound <= 0:
+            msg = (
+                "RunOutputOptions max_echo_line_bytes must be a positive "
+                f"integer or None, got {bound!r}"
+            )
+            raise ValueError(msg)
+
     def resolved_echo(self) -> tuple[bool, bool]:
         """The resolved ``(echo_stdout, echo_stderr)`` gates.
 
@@ -419,7 +431,6 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
-
 
 @dc.dataclass(frozen=True, slots=True)
 class IOOptions(RunOutputOptions):
@@ -557,16 +568,21 @@ class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
     program: Program
+
     argv: tuple[str, ...]
+
     project: ProjectSettings
+
     __weakref__: object = dc.field(
         init=False,
         repr=False,
         hash=False,
         compare=False,
+
     )
 
     @property
+
     def argv_with_program(self) -> tuple[str, ...]:
         """The program name followed by this command's arguments.
 
@@ -585,39 +601,11 @@ class SafeCmd:
         self,
         *,
         output: RunOutputOptions | None = None,
-        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
-        # not a callee-owned deadline; keeping it is a deliberate design choice.
         timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command asynchronously with predictable cancellation.
-
-        Parameters
-        ----------
-        output:
-            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-        stdin:
-            Optional ``StdinInput`` data to feed to the subprocess.
-
-        Returns
-        -------
-        CommandResult
-            Structured information about the completed process.
-
-        Raises
-        ------
-        ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the command completes.
-        UnicodeEncodeError
-            If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+        """Execute the command asynchronously with predictable cancellation."""
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
@@ -627,17 +615,10 @@ class SafeCmd:
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
         )
-        observation = _prepare_execution_observation(
-            self,
-            ctx,
-            tracking,
-            out,
-        )
-
+        observation = _prepare_execution_observation(self, ctx, tracking, out)
         observation.emit("plan", _EventDetails(pid=None))
         for hook in tracking.execution_hooks.before_hooks:
             hook(self)
-
         return await _execute_with_hooks(
             self,
             _SubprocessExecution(
@@ -646,6 +627,7 @@ class SafeCmd:
                 capture=out.capture,
                 echo_stdout=out.resolved_echo[0],
                 echo_stderr=out.resolved_echo[1],
+                max_echo_line_bytes=out.max_echo_line_bytes,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -661,28 +643,10 @@ class SafeCmd:
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command synchronously.
-
-        Mirrors :meth:`run`; all parameters and return semantics are identical.
-
-        Returns
-        -------
-        CommandResult
-            Structured information about the completed process.
-
-        Raises
-        ------
-        ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the command completes.
-        UnicodeEncodeError
-            If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+        """Execute the command synchronously."""
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
-
 
 @dc.dataclass(frozen=True, slots=True)
 class Pipeline:
@@ -701,6 +665,7 @@ class Pipeline:
         return Pipeline.concat(self, other)
 
     @classmethod
+
     def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
         """Compose a pipeline from two stage operands.
 
@@ -724,49 +689,11 @@ class Pipeline:
         self,
         *,
         output: RunOutputOptions | None = None,
-        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
-        # not a callee-owned deadline; keeping it is a deliberate design choice.
         timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline asynchronously with streaming and backpressure.
-
-        Parameters
-        ----------
-        output:
-            Optional ``RunOutputOptions`` controlling stdout/stderr handling,
-            mirroring :meth:`SafeCmd.run`. Defaults to ``RunOutputOptions()``
-            (capture on, echo off).
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-        deprecated_flags:
-            Deprecated flat ``capture`` / ``echo`` flags retained for
-            backwards compatibility; pass ``output=RunOutputOptions(...)``
-            instead. Supplying either emits a ``DeprecationWarning``;
-            combining them with ``output`` raises ``ValueError``.
-
-        Returns
-        -------
-        PipelineResult
-            Structured per-stage results for the completed pipeline.
-
-        Raises
-        ------
-        ForbiddenProgramError
-            If any stage's program is not permitted by the active context
-            allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the pipeline completes.
-        TypeError
-            If ``deprecated_flags`` contains keys other than ``capture`` or
-            ``echo``.
-        ValueError
-            If ``output`` is combined with the deprecated ``capture``/``echo``
-            flags.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
+        """Execute the pipeline asynchronously with streaming and backpressure."""
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
@@ -784,40 +711,11 @@ class Pipeline:
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline synchronously via ``asyncio.run``.
-
-        Mirrors :meth:`run`; all parameters and return semantics are identical,
-        including the deprecation of the flat ``capture``/``echo`` flags.
-
-        Returns
-        -------
-        PipelineResult
-            Structured per-stage results for the completed pipeline.
-
-        Raises
-        ------
-        ForbiddenProgramError
-            If any stage's program is not permitted by the active context
-            allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the pipeline completes.
-        TypeError
-            If an unexpected deprecated output keyword argument is supplied.
-        ValueError
-            If ``output`` is combined with the deprecated ``capture``/``echo``
-            flags.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
-        # Resolve here so the DeprecationWarning points at the caller rather
-        # than at the internal ``self.run`` delegation.
+        """Execute the pipeline synchronously via ``asyncio.run``."""
         out = _resolve_pipeline_output(output, deprecated_flags)
         return asyncio.run(
-            self.run(
-                output=out,
-                timeout=timeout,
-                context=context,
-            ),
+            self.run(output=out, timeout=timeout, context=context),
         )
-
 
 def make(
     program: Program,

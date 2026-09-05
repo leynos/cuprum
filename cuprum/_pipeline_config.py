@@ -17,19 +17,29 @@ class _PipelineRunConfig:
     """Normalized runtime options for pipeline execution."""
 
     ctx: ExecutionContext
+
     capture: bool
+
     echo_stdout: bool
+
     echo_stderr: bool
+
+    max_echo_line_bytes: int | None
+
     timeout: float | None
+
     stdout_sink: typ.IO[str]
+
     stderr_sink: typ.IO[str]
 
     @property
+
     def stdout_capture_or_echo(self) -> bool:
         """Whether stdout must be consumed for capture or echo."""
         return self.capture or self.echo_stdout
 
     @property
+
     def stderr_capture_or_echo(self) -> bool:
         """Whether stderr must be consumed for capture or echo."""
         return self.capture or self.echo_stderr
@@ -40,6 +50,7 @@ class _PipelineRunConfig:
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stdout,
+            echo_max_line_bytes=self.max_echo_line_bytes,
             sink=self.stdout_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
@@ -51,11 +62,11 @@ class _PipelineRunConfig:
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stderr,
+            echo_max_line_bytes=self.max_echo_line_bytes,
             sink=self.stderr_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
         )
-
 
 def _prepare_pipeline_config(
     *,
@@ -84,6 +95,7 @@ def _prepare_pipeline_config(
         capture=output.capture,
         echo_stdout=echo_stdout,
         echo_stderr=echo_stderr,
+        max_echo_line_bytes=output.max_echo_line_bytes,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
