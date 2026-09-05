@@ -234,12 +234,12 @@ Key files for this task:
   are currently unchecked.
 
 - `pyproject.toml` — build configuration. Uses `uv_build` as the primary
-  build backend. Maturin 1.13.3 is pinned as a dev dependency. The
+  build backend. Maturin 1.15.0 is pinned as a dev dependency. The
   `[tool.maturin]` section configures PyO3 bindings with manifest path
   `rust/cuprum-rust/Cargo.toml` and module name `cuprum._rust_backend_native`.
 
 - `rust/cuprum-rust/Cargo.toml` — the Rust crate configuration. Uses
-  `edition = "2024"` (requiring Rust 1.85+), PyO3 0.27.2, and `libc 0.2` on
+  `edition = "2024"` (requiring Rust 1.85+), PyO3 0.29.2, and `libc 0.2` on
   Linux.
 
 - `Makefile` — unified Python, Rust, and documentation build targets including
@@ -270,7 +270,7 @@ From the actual build configuration:
 - Python: 3.12+ (from `pyproject.toml` `requires-python`)
 - Rust toolchain: 1.85+ (from `edition = "2024"` in Cargo.toml)
 - cargo: ships with the Rust toolchain via `rustup`
-- maturin: 1.13.3 (pinned in `pyproject.toml` dev dependencies)
+- maturin: 1.15.0 (pinned in `pyproject.toml` dev dependencies)
 - uv: used as the Python package manager (not strictly a build
   prerequisite, but needed for the development workflow)
 
@@ -345,7 +345,7 @@ extensions (optional Rust)" section. The updated content should include:
 - How to install: `rustup` with a link to the official installer
 - cargo: bundled with rustup
 - maturin: installed automatically as a dev dependency via
-  `uv sync --group dev`, or manually via `pip install maturin==1.13.3`
+  `uv sync --group dev`, or manually via `pip install maturin==1.15.0`
 - Step-by-step: `maturin develop` from the project root
 - How to verify: `python -c "import cuprum; print(cuprum.is_rust_available())"`
   should print `True`

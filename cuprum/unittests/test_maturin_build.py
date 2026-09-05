@@ -26,6 +26,13 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
 
+# Redacted into the syrupy snapshot in place of the built wheel's maturin
+# generator version. The raw value is asserted against the pyproject pin in
+# `test_maturin_wheel_build_snapshot`, so the snapshot itself stays stable
+# across maturin bumps instead of churning on every pin update.
+MATURIN_GENERATOR_PLACEHOLDER = "<maturin-version>"
+
+
 def _build_with_fake_subprocess_run(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -138,7 +145,14 @@ def test_maturin_wheel_build_snapshot(
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
     )
-    assert snapshot_payload == snapshot, (
+    # The generator version is pinned by the assertion above, so the snapshot
+    # compares the redacted placeholder instead of the raw version string and
+    # stays stable across maturin bumps.
+    redacted_payload = {
+        **snapshot_payload,
+        "generator": MATURIN_GENERATOR_PLACEHOLDER,
+    }
+    assert redacted_payload == snapshot, (
         "Built wheel metadata, file list, and build settings changed."
     )
 
