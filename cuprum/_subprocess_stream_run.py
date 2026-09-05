@@ -82,6 +82,38 @@ async def _wait_for_streamed_process_exit(
         raise
 
 
+async def _await_stdin_writer_and_reconcile_consumers(
+    tasks: _RunTaskOwnership,
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> None:
+    """Await the stdin writer, reconciling the consumers if that fails.
+
+    An unexpected stdin-writer failure (or a cancellation landing on this
+    await) must still reconcile the stdout/stderr consumers, mirroring the
+    timeout and cancellation paths, so those tasks are cancelled and drained
+    before the error propagates. The writer has already settled here, so only
+    the consumers need draining. A run with no stdin writer returns at once.
+    """
+    if tasks.stdin_task is None:
+        return
+    try:
+        await tasks.stdin_task
+    except BaseException:
+        await _shielded_cleanup(
+            _drain_stream_consumers(
+                tasks.consumers,
+                _DrainContext(
+                    capture=False,
+                    pid=pid,
+                    observation=execution.observation,
+                    discard_on_cancel=tasks.discard_on_cancel,
+                ),
+            )
+        )
+        raise
+
+
 async def _run_subprocess_with_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -139,27 +171,7 @@ async def _run_subprocess_with_streams(
         tasks,
         pid,
     )
-    if tasks.stdin_task is not None:
-        try:
-            await tasks.stdin_task
-        except BaseException:
-            # An unexpected stdin-writer failure (or a cancellation landing on
-            # this await) must still reconcile the stdout/stderr consumers,
-            # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates. The writer
-            # has already settled here, so only the consumers need draining.
-            await _shielded_cleanup(
-                _drain_stream_consumers(
-                    tasks.consumers,
-                    _DrainContext(
-                        capture=False,
-                        pid=pid,
-                        observation=execution.observation,
-                        discard_on_cancel=tasks.discard_on_cancel,
-                    ),
-                )
-            )
-            raise
+    await _await_stdin_writer_and_reconcile_consumers(tasks, execution, pid)
     try:
         stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
         for diagnostics in tasks.relay_diagnostics:
