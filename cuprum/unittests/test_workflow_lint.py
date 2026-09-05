@@ -119,17 +119,22 @@ def _make_environment(
         **os.environ,
         "HOME": str(tmp_path / "home"),
         "LINT_INVOCATION_LOG": str(invocation_log),
-        "PATH": f"{tool_directory}:{os.environ['PATH']}",
+        "PATH": os.pathsep.join((str(tool_directory), os.defpath)),
     }
     return environment, invocation_log
 
 
 def _run_make(
-    *targets: str, environment: dict[str, str]
+    *targets: str,
+    environment: dict[str, str],
+    makefiles: cabc.Iterable[pth.Path] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run fixed Makefile targets and capture their outcome."""
+    command = ["make"]
+    for makefile in makefiles:
+        command.extend(("-f", str(makefile)))
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed command.
-        ["make", *targets],  # ruff: ignore[start-process-with-partial-path] - test PATH.
+        [*command, *targets],
         capture_output=True,
         check=False,
         cwd=repo_root(),
@@ -202,6 +207,10 @@ def _assert_actionlint_provisioning() -> None:
     assert actionlint_download.get("shell") == "bash"
     for expected_script_line in _ACTIONLINT_INSTALLER_LINES:
         assert expected_script_line in download_script
+    assert (
+        "printf '%s  %s\\n' \"${ACTIONLINT_SHA256}\" "
+        '"${ACTIONLINT_ARCHIVE_PATH}" | sha256sum --check --'
+    ) in download_script
     assert download_script.index("sha256sum --check --") < download_script.index(
         'bash "${ACTIONLINT_INSTALLER_PATH}" "${ACTIONLINT_VERSION}"'
     )
@@ -243,10 +252,35 @@ def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
     ]
 
 
+def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
+    """The aggregate lint target reaches both GitHub Actions linters."""
+    environment, invocation_log = _make_environment(
+        tmp_path, tools=("uv", "yamllint", "actionlint")
+    )
+    overrides = tmp_path / "lint-target-overrides.mk"
+    overrides.write_text(
+        ".PHONY: python-lint rust-lint\npython-lint:\n\t@:\nrust-lint:\n\t@:\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_make(
+        "lint",
+        environment=environment,
+        makefiles=(repo_root() / "Makefile", overrides),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "uv\trun\twhich\truff",
+        f"yamllint\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
+        "actionlint",
+    ]
+
+
 def test_the_workflow_lint_target_rejects_a_missing_linter(tmp_path: pth.Path) -> None:
     """A missing yamllint fails before Actionlint could make the target pass."""
     environment, invocation_log = _make_environment(tmp_path, tools=("actionlint",))
-    environment["PATH"] = f"{tmp_path / 'tools'}:/usr/bin:/bin"
+    environment["PATH"] = os.pathsep.join((str(tmp_path / "tools"), os.defpath))
 
     completed = _run_make("github-actions-lint", environment=environment)
 
