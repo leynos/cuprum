@@ -384,7 +384,6 @@ categorical values (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
 emitted and no telemetry dependency is added. A failing metrics collector is
 reported and skipped rather than changing the run's capture behaviour.
 
-
 ### Echo-fallback diagnostics on `CommandResult`
 
 The same handled disablement is also reported on the result itself. Every
@@ -408,7 +407,6 @@ traceback, or the command's arguments.
 cancellation prevents a result from being produced, no new exception payload is
 added: the already-emitted `EchoEvent` values remain observable through
 `observe_echo`, and partial capture is preserved as before.
-
 
 ### Lading integration boundary
 
