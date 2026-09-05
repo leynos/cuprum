@@ -37,7 +37,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
+from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream, RelayFallback
 from cuprum.echo_observation import _emit_echo_event
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
@@ -90,7 +90,20 @@ class _DrainState:
 
     echo_guard: _EchoGuard
 
+    relay_diagnostics: _RelayDiagnostics
+
     echo_limiter: _EchoLineLimiter | None = None
+
+
+@dc.dataclass(slots=True)
+class _RelayDiagnostics:
+    """Collect handled echo-disablement records for one drain."""
+
+    fallbacks: list[RelayFallback] = dc.field(default_factory=list)
+
+    def record(self, fallback: RelayFallback) -> None:
+        """Append one handled echo-disablement record."""
+        self.fallbacks.append(fallback)
 
 
 @dc.dataclass(slots=True)
@@ -106,6 +119,7 @@ async def _consume_stream(
     *,
     on_line: cabc.Callable[[str], None] | None = None,
     read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if on_line is None:
@@ -117,6 +131,7 @@ async def _consume_stream(
             on_line=on_line,
             read_size=read_size,
             drain=_drain,
+            relay_diagnostics=relay_diagnostics,
         ),
     )
 
@@ -127,6 +142,7 @@ async def _drain(
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
     read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
     if config.echo_output and config.echo_max_line_bytes is not None:
@@ -144,6 +160,7 @@ async def _drain(
         echo_decoder,
         on_chunk,
         echo_guard,
+        relay_diagnostics or _RelayDiagnostics(),
         echo_limiter=echo_limiter,
     )
     measurement = _start_stream_operation(StreamOperation.DRAIN)
@@ -220,11 +237,17 @@ async def _consume_stream_without_lines(
     config: _StreamConfig,
     *,
     read_size: int,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config, read_size=read_size)
+    return await _drain(
+        stream,
+        config,
+        read_size=read_size,
+        relay_diagnostics=relay_diagnostics,
+    )
 
 
 def _write_chunk(
@@ -341,9 +364,14 @@ def _echo_write(
         return False
     try:
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         state.echo_guard.disabled = True
-        # The first failure emits both projections; the guard prevents retries.
+        state.relay_diagnostics.record(
+            RelayFallback(
+                stream=state.config.stream,
+                error_category=EchoErrorCategory.UNICODE_ENCODE,
+            ),
+        )
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
@@ -351,14 +379,12 @@ def _echo_write(
             ),
         )
         _LOGGER.warning(
-            "echo_disabled encoding=%s error=%s",
-            state.config.encoding,
-            type(exc).__name__,
-            exc_info=exc,
+            "echo_disabled_stream_rejected_output",
             extra={
-                "cuprum_encoding": state.config.encoding,
-                "cuprum_sink_type": type(state.config.sink).__name__,
-                "cuprum_error_type": type(exc).__name__,
+                "cuprum_operation": "echo_chunk",
+                "cuprum_stream": str(state.config.stream),
+                "cuprum_transition": "echo_disabled",
+                "cuprum_error_category": EchoErrorCategory.UNICODE_ENCODE.value,
             },
         )
         return False
@@ -381,6 +407,7 @@ def _flush_echo_decoder(state: _DrainState) -> None:
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_RelayDiagnostics",
     "_StreamConfig",
     "_WriteOutcome",
     "_close_stream_writer",
