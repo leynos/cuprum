@@ -14,7 +14,6 @@ import sys
 import time
 import typing as typ
 
-from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _current_read_size
@@ -43,6 +42,21 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
+from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
+
+"""Internal subprocess execution machinery.
+Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
+stream consumers, and assembling the ``CommandResult``. The rules for ending a
+run — applying the deadline, terminating the process, and draining the stream
+consumers exactly once — live in ``cuprum._subprocess_wait``.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum.lines import LineHook
+    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _SubprocessExecution:
     """Execution context bundle for subprocess spawning."""
@@ -64,6 +78,10 @@ class _SubprocessExecution:
     observation: _StageObservation
 
     stdin_data: bytes | None
+    on_line: LineHook | None = None
+    # Monotonic reference the per-line ``at`` stamps are measured from; taken
+    # once at spawn so every line of a run shares one time base.
+    started_at: float = 0.0
 
     @property
     def consumes_any_stream(self) -> bool:
@@ -96,12 +114,13 @@ async def _spawn_subprocess(
 def _create_stream_callback(
     observation: _StageObservation,
     event_type: typ.Literal["stdout", "stderr"],
-    pid: int | None,
+    emission: _LineEmissionContext,
 ) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
+    """Create the composed per-line callback for one stream, or ``None``."""
+    return _compose_line_callbacks(
+        observation,
+        dc.replace(emission, stream=event_type),
+    )
 
 
 def _spawn_stream_consumers(
@@ -112,8 +131,22 @@ def _spawn_stream_consumers(
     pid: int | None,
 ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
     """Spawn stdout and stderr stream consumer tasks."""
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
+    emission = _LineEmissionContext(
+        stream="stdout",
+        pid=pid,
+        on_line=execution.on_line,
+        started_at=execution.started_at,
+    )
+    stdout_on_line = _create_stream_callback(
+        execution.observation,
+        "stdout",
+        emission,
+    )
+    stderr_on_line = _create_stream_callback(
+        execution.observation,
+        "stderr",
+        emission,
+    )
     stderr_config = dc.replace(
         stream_config,
         echo_output=execution.echo_stderr,

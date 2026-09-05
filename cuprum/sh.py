@@ -61,6 +61,9 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
+if typ.TYPE_CHECKING:
+    from cuprum.lines import LineHook
+
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a
@@ -384,6 +387,13 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+    on_line : LineHook | None, default=None
+        Optional synchronous callback invoked once per decoded output line
+        with a ``LineEvent`` carrying the stream name, the monotonic seconds
+        since the command started, and the line text. Independent of
+        ``capture`` and ``echo``; lines are delivered in arrival order per
+        stream. Lines are observed on the Python pathway, so the Rust
+        fast-path dispatcher stays out of the way whenever this is set.
     """
 
     capture: bool = True
@@ -391,6 +401,7 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+    on_line: LineHook | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
