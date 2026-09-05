@@ -70,6 +70,28 @@ _DEFAULT_ENCODING = "utf-8"
 _DEFAULT_ERROR_HANDLING = "replace"
 
 
+from cuprum.echo_events import RelayFallback as RelayFallback
+
+"""Safe command construction and execution facade for curated programs.
+This module focuses on the typed core: building ``SafeCmd`` instances from
+curated ``Program`` values and providing a minimal async runtime for executing
+them with predictable semantics.
+"""
+# Public annotations use ``Program``. Keep it in module globals so
+# ``typing.get_type_hints`` can resolve the postponed public annotations.
+type _ArgValue = str | int | float | bool | Path
+type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
+type _EnvMapping = cabc.Mapping[str, str] | None
+type _CwdType = str | Path | None
+_DEFAULT_CANCEL_GRACE = 0.5
+_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
+# Names the aggregate raised when draining observe-hook tasks fails while a
+# single-command execution is already unwinding.
+_COMMAND_FINALIZATION_ERROR = "command finalization failed"
+_DEFAULT_ENCODING = "utf-8"
+_DEFAULT_ERROR_HANDLING = "replace"
+
+
 def _stringify_arg(value: _ArgValue) -> str:
     """Convert values into argv-safe strings."""
     if value is None:
@@ -136,6 +158,12 @@ class CommandResult:
         Captured standard output, or ``None`` when capture was disabled.
     stderr:
         Captured standard error, or ``None`` when capture was disabled.
+    relay_fallbacks:
+        Handled echo-disablement records from this command's own streams, one
+        per affected drain in stdout-then-stderr order. The ordering does not
+        reconstruct chronological interleaving between the two streams. Empty
+        when no echo write was handled as failed, and an echo failure does not
+        change ``exit_code`` or ``ok``.
 
     """
 
@@ -145,6 +173,7 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
+    relay_fallbacks: tuple[RelayFallback, ...] = ()
 
     @property
     def ok(self) -> bool:
