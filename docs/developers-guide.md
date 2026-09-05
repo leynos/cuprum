@@ -3343,6 +3343,27 @@ probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
 extend `maturin_script_locatable()` in place if maturin changes how it locates
 its binary.
 
+## Mutation-testing harness
+
+The mutmut mutation-testing workflow runs the selected test suite from its
+`mutants/` working tree. Files at the repository root that those tests read
+must therefore be listed in `[tool.mutmut].also_copy` in `pyproject.toml`:
+
+- `CHANGELOG.md`, read by
+  `test_changelog_records_cleanup_telemetry_contract` in
+  `cuprum/unittests/test_tracing_native_pump_cleanup.py`.
+- `Makefile`, read by `test_toolchain_pins` in
+  `cuprum/unittests/test_toolchain_pins.py`.
+
+`cuprum/unittests/test_mutmut_config_contract.py` checks this list and names
+the reader for each required root-level file. Update the configuration and this
+contract's fixture map together when a test gains another repository-root file
+dependency. Run the focused check with:
+
+```bash
+uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
+```
+
 ## Rust stream buffer-size validation
 
 `rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
