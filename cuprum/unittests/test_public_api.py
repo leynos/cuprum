@@ -114,11 +114,13 @@ def test_exec_id_keeps_its_positional_slot() -> None:
         f"the correlation token must not land on timeout_s, got {event.timeout_s!r}"
     )
 
+
 def test_relay_fallback_is_exported_from_its_definition_site() -> None:
     """The package-root RelayFallback is the echo_events definition."""
     assert c.RelayFallback is echo_events.RelayFallback, (
         "RelayFallback must be exported from cuprum.echo_events"
     )
+
 
 def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
     """``relay_fallbacks`` must stay the last, defaulted CommandResult field.
@@ -146,6 +148,7 @@ def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
     assert result.relay_fallbacks == (), (
         f"the defaulted diagnostics must be empty, got {result.relay_fallbacks!r}"
     )
+
 
 def test_command_result_type_hints_resolve_at_runtime() -> None:
     """Public annotations on CommandResult resolve via typing.get_type_hints."""
