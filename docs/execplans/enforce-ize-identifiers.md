@@ -189,10 +189,9 @@ The final widened `spelling` target must report no unapproved source spelling.
   exercise the spelling renderer and stream splitting. They require exact
   pattern ignores; accepting their words globally would weaken the gate.
 - Common Changelog repeats `Changed` headings across releases, while the
-  repository's Markdown configuration rejects duplicate headings globally.
-  The existing released `Changed` heading now carries a one-line MD024
-  exception so the new Unreleased section can use the required conventional
-  heading.
+  repository's Markdown configuration rejects duplicate headings globally. The
+  existing released `Changed` heading now carries a one-line MD024 exception,
+  so the new Unreleased section can use the required conventional heading.
 
 ## Decision Log
 
@@ -217,8 +216,9 @@ milestone, and three foreground `coderabbit review --agent` runs reported zero
 findings.
 
 The exact requested branch is published and tracks its matching origin branch.
-Draft PR [#259](https://github.com/leynos/cuprum/pull/259) closes issue #249 and
-contains the literal Lody session reference. The main lesson is that whole-file
-spelling enforcement necessarily covers more than identifiers: external wire
-contracts and deliberate fixtures need precise local patterns, while all
-repository-owned source prose must start green before the pathspec widens.
+Draft PR [#259](https://github.com/leynos/cuprum/pull/259) closes issue #249
+and contains the literal Lody session reference. The main lesson is that
+whole-file spelling enforcement necessarily covers more than identifiers:
+external wire contracts and deliberate fixtures need precise local patterns,
+while all repository-owned source prose must start green before the pathspec
+widens.

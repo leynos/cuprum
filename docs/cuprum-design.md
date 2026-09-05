@@ -853,8 +853,8 @@ descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
 cleanup wait duration; other phases leave it unset. Cleanup is required because
 the executor worker retains descriptor ownership until it settles.
 
-`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each completed
-native cleanup and one observation of
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each
+completed native cleanup and one observation of
 `cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
 metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
 bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
@@ -866,15 +866,14 @@ observation channel, not an extension of `ExecEvent`. A caller registers the
 same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
-open pipeline-stage span; it is not a trace attribute, and the correlation
-does not use a PID. The hook records `cuprum.cleanup_started` when cleanup
-begins and `cuprum.cleanup_completed` when descriptor ownership is released.
-Both events have `operation="native_pump_cleanup"` and a bounded `outcome`
-(`"started"` or `"completed"`); only completion has `duration_s`, the
-monotonic cleanup wait in seconds. Descriptor numbers, command arguments,
-exception text, and other unbounded values are excluded. Events without a
-matching active span are dropped, and cleanup events neither set span status
-nor end the span.
+open pipeline-stage span; it is not a trace attribute, and the correlation does
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins and
+`cuprum.cleanup_completed` when descriptor ownership is released. Both events
+have `operation="native_pump_cleanup"` and a bounded `outcome` (`"started"` or
+`"completed"`); only completion has `duration_s`, the monotonic cleanup wait in
+seconds. Descriptor numbers, command arguments, exception text, and other
+unbounded values are excluded. Events without a matching active span are
+dropped, and cleanup events neither set span status nor end the span.
 
 ### 7.2 Logging via `logging`
 
@@ -1050,14 +1049,13 @@ implemented with the following decisions:
 
 - **Event phases:** Cuprum emits `plan`, `start`, `stdout`, `stderr`, `stdin`,
   `stdin_error`, `exit`, `timeout`, `teardown_error`,
-  `capture_eof_grace_expired`, and `pipeline_fail_fast`
-  phases for both single commands and pipeline stages — the declared
-  `ExecPhase` values. `timeout`, `teardown_error`, and
-  `capture_eof_grace_expired` are ancillary diagnostics rather than lifecycle
-  phases. `capture_eof_grace_expired` is emitted only when a capturing drain
-  exhausts its fixed `_CAPTURE_EOF_GRACE_S` budget with one or more readers
-  still pending.
-  Pipeline stage events are tagged with a stage index and stage count.
+  `capture_eof_grace_expired`, and `pipeline_fail_fast` phases for both single
+  commands and pipeline stages — the declared `ExecPhase` values. `timeout`,
+  `teardown_error`, and `capture_eof_grace_expired` are ancillary diagnostics
+  rather than lifecycle phases. `capture_eof_grace_expired` is emitted only
+  when a capturing drain exhausts its fixed `_CAPTURE_EOF_GRACE_S` budget with
+  one or more readers still pending. Pipeline stage events are tagged with a
+  stage index and stage count.
 - **Fail-fast decision:** a pipeline emits one `pipeline_fail_fast` event when
   a non-final stage is the first to fail and at least one other stage remains
   running. It is published before every other still-running stage — upstream
@@ -1162,12 +1160,11 @@ The `SafeCmd` executes the process, then invokes the `on_exit` hook with the
 command and the resulting `CommandResult`, and only then returns that result to
 the user — `_execute_with_hooks` dispatches the after-hooks before its own
 return, so a hook cannot observe a command the caller has already been told
-about. The exit hook
-asks again whether the exit level is enabled: if it is disabled it returns
-immediately, leaving nothing to clean up because nothing was stored; if it is
-enabled it takes the lock, pops the recorded start time — removing the entry,
-so the store cannot grow without bound — releases the lock, computes
-`duration_s`, and logs the `cuprum.exit` record.
+about. The exit hook asks again whether the exit level is enabled: if it is
+disabled it returns immediately, leaving nothing to clean up because nothing
+was stored; if it is enabled it takes the lock, pops the recorded start time —
+removing the entry, so the store cannot grow without bound — releases the lock,
+computes `duration_s`, and logs the `cuprum.exit` record.
 
 Figure 3: Sequence of start/exit logging hook execution
 
@@ -1270,21 +1267,20 @@ preserving the `SafeCmd.run()` execution contract:
   escalation), and draining the stream consumers exactly once. Its explicit
   drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
   task with the stdout and stderr consumer tasks, `_DrainContext` to carry
-  capture and observability settings, and `_reconcile_run_tasks(tasks,
-  context)` to cancel stdin before settling both consumers as one shielded
-  cleanup unit. A capturing drain gives readers a bounded
-  `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation, maps an
-  absent reader result to an empty string, and therefore keeps captured timeout
-  output deterministic; non-capturing drains skip the window and retain `None`
-  for absent text. Split out of `_subprocess_execution` so that module stays
-  about orchestration — spawning, wiring streams, assembling the result.
+  capture and observability settings, and
+  `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
+  consumers as one shielded cleanup unit. A capturing drain gives readers a
+  bounded `_CAPTURE_EOF_GRACE_S` window to observe EOF before cancellation,
+  maps an absent reader result to an empty string, and therefore keeps captured
+  timeout output deterministic; non-capturing drains skip the window and retain
+  `None` for absent text. Split out of `_subprocess_execution` so that module
+  stays about orchestration — spawning, wiring streams, assembling the result.
 - When that window expires with readers still pending, `_subprocess_wait` uses
-  `_timeout_reporting` to emit one correlated
-  `capture_eof_grace_expired` `ExecEvent`. The event carries the execution's
-  `exec_id` and `pid`, `operation="drain"`, `eof_grace_s`, and
-  `pending_readers`. `MetricsHook` projects it to
-  `cuprum_capture_eof_grace_expired_total` with only `program` and `project`
-  labels, while `TracingHook` adds a
+  `_timeout_reporting` to emit one correlated `capture_eof_grace_expired`
+  `ExecEvent`. The event carries the execution's `exec_id` and `pid`,
+  `operation="drain"`, `eof_grace_s`, and `pending_readers`. `MetricsHook`
+  projects it to `cuprum_capture_eof_grace_expired_total` with only `program`
+  and `project` labels, while `TracingHook` adds a
   `cuprum.capture_eof_grace_expired` event to the matching span. No captured
   stream payload is emitted in that event. Unexpected reader failures remain
   separately reported as `teardown_error`.
@@ -1709,11 +1705,10 @@ design decisions guide these adapters:
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
-  `cuprum_pipeline_fail_fast_total`,
-  `cuprum_capture_eof_grace_expired_total`) are incremented on the
-  corresponding event phases. The EOF-grace counter has only the low-cardinality
-  `program` and `project` labels; duration and pending-reader count remain event
-  fields, not labels.
+  `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`)
+  are incremented on the corresponding event phases. The EOF-grace counter has
+  only the low-cardinality `program` and `project` labels; duration and
+  pending-reader count remain event fields, not labels.
 - Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
 - All metrics include `program` and `project` labels for multi‑dimensional
   analysis. The `project` label uses `_project_tag` and falls back to
@@ -1731,7 +1726,7 @@ design decisions guide these adapters:
 - Events without an `exec_id` (legacy or manually constructed) are ambiguous
   and are ignored: no span is created for such a `start`, and their `stdout`/
   `stderr`/`stdin_error`/`timeout`/`teardown_error`/
-  `capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` events are dropped
+  `capture_eof_grace_expired` /`pipeline_fail_fast`/`exit` events are dropped
   rather than guessed from PID.
 - Output lines can optionally be recorded as span events (controlled by
   `record_output` parameter). `stdin_error`, `timeout`, and `teardown_error`
@@ -1768,14 +1763,14 @@ design decisions guide these adapters:
 - Labels are resolved only when the reducer yields at least one operation, so a
   `plan` event — which records nothing — never projects labels off the event.
 - The reducer is total over `ExecPhase` — every declared phase has an arm,
-  including `capture_eof_grace_expired` — and fail-closed beyond it: any other phase
-  raises `_UnhandledMetricsPhaseError` rather than being silently ignored. That
-  is deliberate, and its cost is worth stating plainly. A hook exception is not
-  swallowed, so adding a value to `ExecPhase` without adding an arm here would
-  raise for every caller that has already registered `MetricsHook`. A new phase
-  therefore cannot reach metrics without a decision in this reducer. The
-  structured logging adapter is fail-open by contrast, formatting an
-  unrecognized phase generically.
+  including `capture_eof_grace_expired` — and fail-closed beyond it: any other
+  phase raises `_UnhandledMetricsPhaseError` rather than being silently
+  ignored. That is deliberate, and its cost is worth stating plainly. A hook
+  exception is not swallowed, so adding a value to `ExecPhase` without adding
+  an arm here would raise for every caller that has already registered
+  `MetricsHook`. A new phase therefore cannot reach metrics without a decision
+  in this reducer. The structured logging adapter is fail-open by contrast,
+  formatting an unrecognized phase generically.
 
 For screen readers: The following sequence diagram shows how one execution
 event becomes collector calls. The observe-hook dispatcher invokes
@@ -2844,9 +2839,8 @@ closed for every event, including pushes to `main`, so an unknown path verdict
 cannot spend paid-runner time. The gate summary records both the detector
 status and the resulting benchmark decision. The gate and its rationale are
 described under "Gating the paid benchmark job" in the developers' guide. The
-job executes smoke-mode throughput benchmarks for the
-current checkout (with a release build of the Rust extension) and compares
-each scenario's within-run
+job executes smoke-mode throughput benchmarks for the current checkout (with a
+release build of the Rust extension) and compares each scenario's within-run
 Rust-to-Python mean ratio against the latest successful `main` baseline
 artefact. The CI profile measures ten runs per command and orders matched
 Python/Rust commands adjacently so time-dependent runner load is less likely to

@@ -1,12 +1,9 @@
 # Debugging Plan: benchmark runner cannot fetch df12-python-lints
 
-**Generated**: 2026-09-03T00:03:05Z
-**Issue ID**: PR #289, CI run 33678861823
-**Severity**: High
-**Falsification sub-agent**: alchemist
-**Planning agent boundary**: This document was prepared by the planning agent.
-Falsification must be executed by the named sub-agent, not by the planning
-agent.
+**Generated**: 2026-09-03T00:03:05Z **Issue ID**: PR #289, CI run 33678861823
+**Severity**: High **Falsification sub-agent**: alchemist **Planning agent
+boundary**: This document was prepared by the planning agent. Falsification
+must be executed by the named sub-agent, not by the planning agent.
 
 ## Problem Statement
 
@@ -60,8 +57,9 @@ resolved commit `4cf41736cce2f7ba2778882a5c629c044568a0e5`.
 - **H3 falsified.** The public `refs/tags/v0.3.0` advertises the exact commit in
   `uv.lock`, and the same failure occurred before the configuration switched
   from that commit SHA to the tag.
-- **H4 inconclusive.** GitHub rejected `gh run rerun --failed` with `Resource
-  not accessible by integration`, so no unchanged hosted retry was available.
+- **H4 inconclusive.** GitHub rejected `gh run rerun --failed` with
+  `Resource not accessible by integration`, so no unchanged hosted retry was
+  available.
 - **H5 not falsified.** A fresh dev-group sync with
   `--no-install-package df12-python-lints` installed the other 53 packages,
   including Maturin 1.13.3, without fetching or installing the lint plugin.
@@ -178,9 +176,8 @@ ______________________________________________________________________
 development group. Excluding that package leaves the extension toolchain
 available while removing the failing Git fetch.
 
-**Prediction**: A fresh dev sync with
-`--no-install-package df12-python-lints` neither fetches nor installs the plugin
-and still installs Maturin.
+**Prediction**: A fresh dev sync with `--no-install-package df12-python-lints`
+neither fetches nor installs the plugin and still installs Maturin.
 
 **Falsification test**: Sync the dev group into fresh cache, tool, and virtual
 environment directories with that exclusion, then query Maturin directly.

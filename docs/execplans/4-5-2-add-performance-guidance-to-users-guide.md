@@ -412,24 +412,24 @@ Do not mark the roadmap item done until every required gate passes.
 
 4. Run targeted tests and capture the red phase.
 
-```bash
-set -o pipefail
-uv run pytest -q cuprum/unittests/test_backend.py \
-  cuprum/unittests/test_pipeline_stream_backend_selection.py \
-  2>&1 | tee /tmp/4-5-2-targeted-unit-pre.log
-```
+   ```bash
+   set -o pipefail
+   uv run pytest -q cuprum/unittests/test_backend.py \
+     cuprum/unittests/test_pipeline_stream_backend_selection.py \
+     2>&1 | tee /tmp/4-5-2-targeted-unit-pre.log
+   ```
 
-```bash
-set -o pipefail
-uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
-  tests/behaviour/test_stream_backend_pipeline.py \
-  2>&1 | tee /tmp/4-5-2-targeted-bdd-pre.log
-```
+   ```bash
+   set -o pipefail
+   uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
+     tests/behaviour/test_stream_backend_pipeline.py \
+     2>&1 | tee /tmp/4-5-2-targeted-bdd-pre.log
+   ```
 
    Expected before documentation updates: a new or adjusted assertion should
    fail if the documented contract is not already covered correctly.
 
-1. Update `docs/users-guide.md`.
+5. Update `docs/users-guide.md`.
 
    The final guide should likely include:
 
@@ -445,7 +445,7 @@ uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
      transfers can see substantial improvements and should be measured with
      `make benchmark-e2e`.
 
-2. Update `docs/cuprum-design.md`.
+6. Update `docs/cuprum-design.md`.
 
    Reconcile section 13.5 and nearby text so the design document no longer
    implies that Rust consume-path acceleration is active if it is not.
@@ -454,45 +454,45 @@ uv run pytest -q tests/behaviour/test_backend_dispatcher_behaviour.py \
    in the design document as a design clarification rather than leaving it only
    in the guide.
 
-3. Mark roadmap item `4.5.2` done.
+7. Mark roadmap item `4.5.2` done.
 
    Update `docs/roadmap.md` only after the guide, design document, and tests
    all reflect the same final behaviour.
 
-4. Run full validation.
+8. Run full validation.
 
-```bash
-set -o pipefail
-make check-fmt 2>&1 | tee /tmp/4-5-2-check-fmt.log
-```
+   ```bash
+   set -o pipefail
+   make check-fmt 2>&1 | tee /tmp/4-5-2-check-fmt.log
+   ```
 
-```bash
-set -o pipefail
-make typecheck 2>&1 | tee /tmp/4-5-2-typecheck.log
-```
+   ```bash
+   set -o pipefail
+   make typecheck 2>&1 | tee /tmp/4-5-2-typecheck.log
+   ```
 
-```bash
-set -o pipefail
-make lint 2>&1 | tee /tmp/4-5-2-lint.log
-```
+   ```bash
+   set -o pipefail
+   make lint 2>&1 | tee /tmp/4-5-2-lint.log
+   ```
 
-```bash
-set -o pipefail
-make test 2>&1 | tee /tmp/4-5-2-test.log
-```
+   ```bash
+   set -o pipefail
+   make test 2>&1 | tee /tmp/4-5-2-test.log
+   ```
 
-```bash
-set -o pipefail
-MDLINT=/root/.bun/bin/markdownlint-cli2 make markdownlint \
-  2>&1 | tee /tmp/4-5-2-markdownlint.log
-```
+   ```bash
+   set -o pipefail
+   MDLINT=/root/.bun/bin/markdownlint-cli2 make markdownlint \
+     2>&1 | tee /tmp/4-5-2-markdownlint.log
+   ```
 
-```bash
-set -o pipefail
-make nixie 2>&1 | tee /tmp/4-5-2-nixie.log
-```
+   ```bash
+   set -o pipefail
+   make nixie 2>&1 | tee /tmp/4-5-2-nixie.log
+   ```
 
-1. Record the outcome in this ExecPlan.
+9. Record the outcome in this ExecPlan.
 
    Update:
 

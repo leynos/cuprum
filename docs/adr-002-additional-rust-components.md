@@ -317,11 +317,10 @@ sink and no line callbacks.
 production code does not route stream consumption through it yet. The symbol is
 annotated as "implemented but not yet integrated" in `cuprum/_streams_rs.py`
 and the users' guide so it is not mistaken for a wired bridge. A guard test
-(`cuprum/unittests/test_rust_consume_integration_guard.py`) fails if
-production code starts
-referencing the symbol without revisiting this decision. Phase 2 integration
-should remove that marker only alongside the dispatcher, fallback path, and the
-Python/Rust parity property tests tracked by issue #90.
+(`cuprum/unittests/test_rust_consume_integration_guard.py`) fails if production
+code starts referencing the symbol without revisiting this decision. Phase 2
+integration should remove that marker only alongside the dispatcher, fallback
+path, and the Python/Rust parity property tests tracked by issue #90.
 
 The same profiling baseline records adjacent work that should not be folded
 into the initial `rust_consume_stream()` dispatcher:
@@ -410,8 +409,8 @@ remains the behavioural reference, and users keep the same public API.
 The Python pipeline now makes the native pump's descriptor boundary explicit.
 `_run_rust_pump` retains the descriptor owned by the asyncio writer transport
 and passes `rust_pump_stream` a duplicate, because the native pump consumes and
-closes the descriptor it receives. Ownership of that duplicate remains with
-the executor worker until its future settles, including native-load failure and
+closes the descriptor it receives. Ownership of that duplicate remains with the
+executor worker until its future settles, including native-load failure and
 awaiting-task cancellation. Descriptor-mode restoration and reader transport
 resumption therefore occur at worker settlement, and the duplicate is closed
 after that boundary. This preserves the original Python transport ownership

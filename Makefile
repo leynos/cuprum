@@ -118,12 +118,16 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
+# Existing tracked Markdown files, NUL-delimited for safe transport to the
+# formatter. `pipefail` preserves the check-fmt gate's fail-closed behaviour
+# when Git cannot enumerate its index.
+MD_FILES_FIND = bash -o pipefail -c 'git ls-files -z -- "$$1" | while IFS= read -r -d "" markdown_file; do if [ -e "$$markdown_file" ]; then printf "%s\0" "$$markdown_file"; fi; done' -- '*.md'
 
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling spelling-config spelling-helper-test \
         _run_spelling_gate nixie test test-python test-rust typecheck \
-        test-extension develop \
+        test-extension test-markdown-format develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -190,7 +194,21 @@ fmt: ruff $(MDFORMAT_ALL) ## Format sources
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
-	# mdformat-all doesn't currently do checking
+	@markdown_files="$$(mktemp)" || exit $$?; \
+	trap 'rm -f "$$markdown_files"' 0; \
+	if ! $(MD_FILES_FIND) > "$$markdown_files"; then \
+		exit 1; \
+	fi; \
+	xargs -0 sh -c '\
+		if [ "$$#" -gt 0 ]; then \
+			scripts/check-markdown-format.sh "$$@"; \
+		fi' sh < "$$markdown_files"
+
+test-markdown-format: ## Validate the Markdown formatter checker
+	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \
+		--with pytest==9.0.2 --with hypothesis==6.151.9 \
+		python -m pytest scripts/tests/test_check_markdown_format.py -c /dev/null \
+		--rootdir=. -p no:cacheprovider
 
 lint: python-lint rust-lint ## Run Python and Rust linters
 

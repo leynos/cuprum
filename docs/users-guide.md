@@ -42,10 +42,10 @@ allowlist. It returns a cached, read-only mapping from project name to
 `ProjectSettings`.
 
 Callers upgrading from a release that exposed `visible_settings()` should
-remove the parentheses and adopt `catalogue.visible_settings` in the next
-minor release. The callable form remains a compatibility path during the
-transition; both forms return the same read-only mapping, and attempts to
-mutate it fail as before.
+remove the parentheses and adopt `catalogue.visible_settings` in the next minor
+release. The callable form remains a compatibility path during the transition;
+both forms return the same read-only mapping, and attempts to mutate it fail as
+before.
 
 ### Handling duplicate catalogue entries
 
@@ -810,8 +810,8 @@ once per execution and excludes expected `CancelledError` failures.
 The `capture_eof_grace_expired` event carries the execution's `exec_id` and
 `pid`, `operation` (`"drain"`), `eof_grace_s`, and `pending_readers` (one or
 two). It is emitted only when a capturing drain reaches the fixed grace limit;
-the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only
-the `program` and `project` labels, and tracing adds a
+the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only the
+`program` and `project` labels, and tracing adds a
 `cuprum.capture_eof_grace_expired` event to the matching span. The grace-expiry
 event itself carries no captured stdout or stderr payload.
 
@@ -986,8 +986,8 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_stage_index` / `cuprum_stage_count`: Failing stage position and
   pipeline width (for `pipeline_fail_fast` events)
 - `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
-  and pending-reader count (for `capture_eof_grace_expired` events)
-Event tags are not emitted by this structured logging adapter.
+  and pending-reader count (for `capture_eof_grace_expired` events). Event tags
+  are not emitted by this structured logging adapter.
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -1146,14 +1146,14 @@ Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
 **Ancillary span events.** `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired` are
-recorded as `cuprum.<phase>` events on the execution's open span. They leave it
-neither ended nor marked; a later `exit` closes it normally. `timeout` is
-always followed by `exit`, while `teardown_error` may be the final event.
-Ancillary events carry their set `line`, `operation`, `error_type`, `note`,
-`timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers` fields, and
-correlate by `exec_id`; an event without a matching open span is dropped.
-The grace-expiry event carries no captured stdout or stderr payload.
+`capture_eof_grace_expired` are recorded as `cuprum.<phase>` events on the
+execution's open span. They leave it neither ended nor marked; a later `exit`
+closes it normally. `timeout` is always followed by `exit`, while
+`teardown_error` may be the final event. Ancillary events carry their set
+`line`, `operation`, `error_type`, `note`, `timeout_s`, `timeout_mode`,
+`eof_grace_s`, and `pending_readers` fields, and correlate by `exec_id`; an
+event without a matching open span is dropped. The grace-expiry event carries
+no captured stdout or stderr payload.
 
 **Correlation note:** the hook correlates an execution's `start`, `stdout`,
 `stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
@@ -1164,8 +1164,7 @@ always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
 legacy events that omit `exec_id` are affected: the hook cannot correlate them,
 so it ignores them — a `start` without an `exec_id` creates no span, and
 `stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
-`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are
-dropped.
+`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a
 `cuprum.pipeline_fail_fast` span event on the failing stage's already-open
@@ -1700,8 +1699,8 @@ The channel counts declines, post-cancellation failures, and native-pump
 cleanup. A successful hand-off emits no event, deliberately: there is no
 per-hop counter and no total-hop counter to divide by. So the decline counter
 gives the *number* of hops that left the fast path, not the *fraction* that
-stayed on it. To report that fraction, pair the decline counter with a hop total
-measured independently — for example, a separately maintained counter
+stayed on it. To report that fraction, pair the decline counter with a hop
+total measured independently — for example, a separately maintained counter
 incremented once per submitted inter-stage hop.
 
 Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
@@ -1716,13 +1715,13 @@ the same `TracingHook` with both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For each inter-stage hop, the cleanup
 events reuse the source stage's `ExecId` only to find its existing open span;
 the token is not a trace attribute, and no PID is used for correlation. The
-hook emits `cuprum.cleanup_started` and `cuprum.cleanup_completed`. Both
-events carry the bounded
-attributes `operation="native_pump_cleanup"` and `outcome` (`"started"` or
-`"completed"`); only the completion event carries `duration_s`, in monotonic
-seconds. No descriptor numbers, command arguments, exception text, or other
-unbounded values are emitted. An event without a matching active span is
-dropped safely; cleanup tracing neither changes span status nor ends the span.
+hook emits `cuprum.cleanup_started` and `cuprum.cleanup_completed`. Both events
+carry the bounded attributes `operation="native_pump_cleanup"` and `outcome`
+(`"started"` or `"completed"`); only the completion event carries `duration_s`,
+in monotonic seconds. No descriptor numbers, command arguments, exception text,
+or other unbounded values are emitted. An event without a matching active span
+is dropped safely; cleanup tracing neither changes span status nor ends the
+span.
 
 #### Cleanup DEBUG records
 
@@ -1731,10 +1730,10 @@ Cancellation cleanup also emits `DEBUG` records on the
 `cuprum_action="rust_pump_cleanup"` and
 `cuprum_operation="native_pump_cleanup"`; start records have
 `cuprum_outcome="started"`, while completion records have
-`cuprum_outcome="completed"` and the completion-only
-`cuprum_duration_s` field. A completion record is emitted only after the
-native worker has released descriptor ownership. These logs and pump events
-are emitted during cancellation cleanup.
+`cuprum_outcome="completed"` and the completion-only `cuprum_duration_s` field.
+A completion record is emitted only after the native worker has released
+descriptor ownership. These logs and pump events are emitted during
+cancellation cleanup.
 
 ```python
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -1763,7 +1762,7 @@ with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
 Table 2: counters emitted by `PumpMetricsHook`
 
 | Counter                                      | Labels   | Incremented when                                                 |
-| -------------------------------------------- | -------- | ---------------------------------------------------------------  |
+| -------------------------------------------- | -------- | ---------------------------------------------------------------- |
 | `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump            |
 | `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded  |
 | `cuprum_rust_pump_cleanup_total`             | none     | native cleanup completed after cancellation                      |

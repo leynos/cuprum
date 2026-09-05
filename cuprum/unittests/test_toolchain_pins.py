@@ -53,6 +53,49 @@ _DF12_PYPROJECT_REF_RE = re.compile(
 )
 
 
+class StepInputs(typ.TypedDict, total=False):
+    """Inputs read from a CI workflow step."""
+
+    key: str
+    toolchain: str
+    version: str
+
+
+# `with` is a Python keyword, so declare that TypedDict key functionally.
+_StepWith = typ.TypedDict("_StepWith", {"with": StepInputs}, total=False)
+
+
+class Step(_StepWith, total=False):
+    """Fields read from a CI workflow step."""
+
+    name: str
+    run: str
+    uses: str
+
+
+class Job(typ.TypedDict, total=False):
+    """Fields read from the lint-test CI job."""
+
+    env: dict[str, str]
+    steps: list[Step]
+
+
+class Workflow(typ.TypedDict, total=False):
+    """Fields read from the CI workflow document."""
+
+    env: dict[str, str]
+    jobs: dict[str, Job]
+
+
+def _ci_workflow(root: pth.Path) -> Workflow:
+    """Read the CI workflow after verifying its outer mapping shape."""
+    workflow = yaml.safe_load(
+        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
+    return typ.cast("Workflow", workflow)
+
+
 def _read_makefile_pin(root: pth.Path, name: str) -> str:
     """Read a `NAME ?= value` default from the repository Makefile."""
     makefile = (root / "Makefile").read_text(encoding="utf-8")
@@ -67,14 +110,40 @@ def _read_makefile_pin(root: pth.Path, name: str) -> str:
 
 def _read_workflow_env(root: pth.Path, name: str) -> str:
     """Read a workflow-level env value from ci.yml."""
-    workflow = yaml.safe_load(
-        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    )
+    workflow = _ci_workflow(root)
     env = workflow.get("env")
     assert isinstance(env, dict), "ci.yml must declare a workflow-level env block"
     value = env.get(name)
     assert isinstance(value, str), f"ci.yml env must pin {name} as a string"
     return value
+
+
+def _lint_test_job(root: pth.Path) -> Job:
+    """Read the lint-test job from the CI workflow."""
+    workflow = _ci_workflow(root)
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
+    job = jobs.get("lint-test")
+    assert isinstance(job, dict), "ci.yml must declare the lint-test job"
+    return job
+
+
+def _lint_test_step(job: Job, name: str) -> Step:
+    """Read a named step from the lint-test job."""
+    steps = job.get("steps")
+    assert isinstance(steps, list), "the lint-test job must declare steps"
+    for step in typ.cast("list[object]", steps):
+        if not isinstance(step, dict) or step.get("name") != name:
+            continue
+        return typ.cast("Step", step)
+    pytest.fail(f"the lint-test job must declare an {name!r} step")
+
+
+def _lint_test_step_script(job: Job, name: str) -> str:
+    """Read the named run script from the lint-test job."""
+    script = _lint_test_step(job, name).get("run")
+    assert isinstance(script, str), f"the {name!r} step must run a script"
+    return script
 
 
 def _dev_dependencies(root: pth.Path) -> list[str]:
@@ -158,6 +227,52 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
                 f"{site} pins {tool} as {value!r}, which is not an exact "
                 "dotted release version"
             )
+
+
+def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
+    """The formatter uses a pinned prebuilt installer, not a Rust fallback."""
+    job = _lint_test_job(repo_root())
+    toolchain_setup = _lint_test_step(job, "Install Rust toolchain")
+    toolchain_configuration = toolchain_setup.get("with")
+    assert isinstance(toolchain_configuration, dict), (
+        "the Install Rust toolchain CI mapping must declare a with field"
+    )
+    assert toolchain_configuration.get("toolchain") == "1.85.0", (
+        "the Install Rust toolchain CI mapping must keep with.toolchain at 1.85.0"
+    )
+
+    environment = job.get("env")
+    assert isinstance(environment, dict), "the lint-test job must declare env"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.5.1", (
+        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.5.1"
+    )
+    assert "MDTABLEFIX_RUST_VERSION" not in environment, (
+        "the lint-test CI mapping must not retain the removed formatter source "
+        "toolchain pin"
+    )
+
+    cache = _lint_test_step(job, "Cache mdtablefix")
+    cache_configuration = cache.get("with")
+    assert isinstance(cache_configuration, dict), (
+        "the Cache mdtablefix CI mapping must declare a with field"
+    )
+    cache_key = cache_configuration.get("key")
+    assert isinstance(cache_key, str), (
+        "the Cache mdtablefix CI mapping must declare with.key as a string"
+    )
+    for name in (
+        "MDTABLEFIX_VERSION",
+        "UBUNTU_RELEASE",
+        "CACHE_GENERATION",
+    ):
+        assert f"${{{{ env.{name} }}}}" in cache_key, (
+            f"the Cache mdtablefix CI mapping must include {name} in with.key"
+        )
+
+    whitaker_script = _lint_test_step_script(job, "Install Whitaker")
+    assert "cargo binstall -V >/dev/null 2>&1" in whitaker_script, (
+        "the Install Whitaker CI step must probe cargo binstall with -V"
+    )
 
 
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:

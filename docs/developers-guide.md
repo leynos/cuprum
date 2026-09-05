@@ -727,6 +727,8 @@ interpreters therefore confirm the contracts rather than skipping them.
 
 Pipeline byte movement is split so each module has one reason to change:
 
+Table 1: pipeline stream modules and their responsibilities
+
 | Module                        | Owns                                               |
 | ----------------------------- | -------------------------------------------------- |
 | `_pipeline_streams.py`        | Backend choice and the Python/Rust pump dispatch   |
@@ -829,6 +831,8 @@ break already-registered `MetricsHook` instances that match that closed set.
 `observe_pump` registers synchronous hooks in a `ContextVar`, and
 `PumpMetricsHook` maps the events to bounded counters and a cleanup-duration
 histogram:
+
+Table 1: metrics emitted by `PumpMetricsHook`
 
 | Metric                                       | Labels   |
 | -------------------------------------------- | -------- |
@@ -936,7 +940,7 @@ descriptive:
   `_PipelineSpawnResult.stages.observations`, the immutable `_StageWaitContext`
   snapshot passed to `_PipelineWaitState.from_processes` alongside
   `started_at`. It defaults to an empty tuple, and `_PipelineWaitState.exec_id`
-  then reports `None`, because the pure transition never reads it and the
+  then reports `None` because the pure transition never reads it and the
   symbolic model must not carry it.
 - `cuprum_terminated_stage_count` is what
   `_terminate_pipeline_remaining_stages` returns. Reporting it from the helper
@@ -1078,11 +1082,13 @@ that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
 only on the `Tracer` and `Span` protocols from
 `cuprum.adapters.tracing_protocols`, so any backend that implements them can be
 plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
-integration boundary. `cuprum/adapters/tracing_memory.py` supplies
-`InMemoryTracer` and `InMemorySpan`, the reference doubles used by tests and
-examples: `InMemoryTracer` collects spans in memory and protects its span store
-through the shared `_LockedStore` lock (its mutators, and `reset()`, run under
-that lock), while `InMemorySpan` is a plain mutable record that provides no
+integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
+a compatibility re-export only and does not define a second protocol contract.
+`cuprum/adapters/tracing_memory.py` supplies `InMemoryTracer` and
+`InMemorySpan`, the reference doubles used by tests and examples:
+`InMemoryTracer` collects spans in memory and protects its span store through
+the shared `_LockedStore` lock (its mutators, and `reset()`, run under that
+lock), while `InMemorySpan` is a plain mutable record that provides no
 synchronization of its own.
 
 **Phase dispatch.** `TracingHook.__call__` matches every `ExecEvent.phase` in a
@@ -1328,7 +1334,8 @@ Runtime (`cuprum/`):
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
-  `Tracer` protocols. `tracing_adapter` re-exports both.
+  `Tracer` protocols. `tracing_adapter` re-exports both;
+  `_tracing_protocols.py` remains a compatibility re-export only.
 
 Benchmarks (`benchmarks/`):
 
@@ -2593,6 +2600,37 @@ The short version is:
   `py-version = "3.12"` semantic baseline.
 - `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
   fixture values that resemble secrets belong in `ambrleaks.toml`.
+
+### Markdown formatting
+
+`make fmt` runs `mdformat-all`, which applies `mdtablefix` with
+`--wrap --renumber --breaks --ellipsis --fences --in-place` before applying
+`markdownlint-cli2 --fix`. `mdtablefix` therefore owns table padding and
+paragraph wrapping, while `make markdownlint` verifies the result.
+
+`make check-fmt` passes repository Markdown files to
+`scripts/check-markdown-format.sh`. Because `mdtablefix` has no check-only
+mode, the checker formats temporary copies and compares them with the source
+files; it never modifies the worktree. It accepts exact LF or CRLF output, but
+rejects mixed line endings. Run `make test-markdown-format` after changing the
+checker.
+
+The gate installs the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
+`.github/workflows/ci.yml` through the
+`leynos/shared-actions/.github/actions/install-mdtablefix` action. The action
+requires `mdtablefix` 0.5.1 or later, installs only a matching prebuilt
+release, and fails closed when the runner has no supported archive; it never
+builds the formatter from source. Cuprum's project toolchain remains Rust
+1.85.0.
+
+Install the pinned prebuilt version locally with `cargo-binstall` so formatter
+output matches CI:
+
+```bash
+MDTABLEFIX_VERSION=0.5.1
+cargo binstall --no-confirm --locked --disable-strategies compile \
+  --install-path "$HOME/.local/bin" "mdtablefix@${MDTABLEFIX_VERSION}"
+```
 
 ### Docstring structure
 
