@@ -1056,8 +1056,8 @@ stdout and stderr text when both streams share one sink.
 `cuprum/unittests/test_stream_drain.py` keeps focused direct coverage for the
 canonical helper contract and the two `_consume_stream` variants.
 
-The 65536-byte value is a private, profile-selected Python tuning constant,
-not a public configuration option. It is independent of the Rust extension's
+The 65536-byte value is a private, profile-selected Python tuning constant, not
+a public configuration option. It is independent of the Rust extension's
 `buffer_size`; changes to either value require their own benchmark evidence.
 The selection evidence and raw samples are recorded in
 [`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
