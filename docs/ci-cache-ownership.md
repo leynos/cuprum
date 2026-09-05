@@ -22,11 +22,10 @@ ownership back out of the workflows.
 
 _Table 1: The cache families, what each holds, and what scopes its key._
 
-Every key also carries a generation, the operating system, and the
-architecture.
-`target` trees appear in no family at all: sccache holds the objects a `target`
-archive would preserve, and a `target` archive is invalidated by every source
-change while the objects inside it are not.
+Every key also carries a generation, the operating system, and the architecture.
+`target` trees appear in no family at all: sccache holds the objects a
+`target` archive would preserve, and a `target` archive is invalidated by every
+source change while the objects inside it are not.
 
 ## Why the lane is in every key
 
@@ -53,8 +52,8 @@ The build shape. An unoptimized `maturin develop` build, the same build with
 
 This was measured rather than assumed. Until 2026-09-04 the compiler key named
 neither dimension, so every Ubicloud job read one archive that the instrumented
-Python 3.13 coverage job had written. In two dispatches over an unchanged
-tree[^1][^2], the one reader on the same interpreter took 14 of its 17 cacheable
+Python 3.13 coverage job had written. In two dispatches over an unchanged tree
+[^1][^2], the one reader on the same interpreter took 14 of its 17 cacheable
 compiles and the 3.12, 3.14, and 3.15a readers took none. Read and write errors
 were zero throughout: the archive restored perfectly and simply held nothing
 those jobs could use.
@@ -118,18 +117,17 @@ re-derive it rather than inherit it.
 The worked example is this repository's own split, measured on 2026-09-04
 between the cold writer[^4] and a warm dispatch[^5] over an unchanged tree.
 
-| Job | Compiling step | Cold | Warm | Saved |
-| --- | --- | --- | --- | --- |
-| `typecheck-test` 3.12 | Run tests | 112 s | 101 s | 11 s |
-| `typecheck-test` 3.14 | Run tests | 99 s | 90 s | 9 s |
-| `typecheck-test` 3.15a | Run tests | 98 s | 88 s | 10 s |
-| `extension-tests` | Build the native extension | 13 s | 7 s | 6 s |
-| `benchmark-ratchet` | benchmarks and ratchet | 59 s | 54 s | 5 s |
+| Job                    | Compiling step             | Cold  | Warm  | Saved |
+| ---------------------- | -------------------------- | ----- | ----- | ----- |
+| `typecheck-test` 3.12  | Run tests                  | 112 s | 101 s | 11 s  |
+| `typecheck-test` 3.14  | Run tests                  | 99 s  | 90 s  | 9 s   |
+| `typecheck-test` 3.15a | Run tests                  | 98 s  | 88 s  | 10 s  |
+| `extension-tests`      | Build the native extension | 13 s  | 7 s   | 6 s   |
+| `benchmark-ratchet`    | benchmarks and ratchet     | 59 s  | 54 s  | 5 s   |
 
-_Table 3: What each family saves its reader on a warm run. The
-`typecheck-test` step also runs the Python suite, so its wall time is dominated
-by pytest rather than by compilation; `extension-tests` is the compile-only
-signal._
+_Table 3: What each family saves its reader on a warm run. The `typecheck-test`
+step also runs the Python suite, so its wall time is dominated by pytest rather
+than by compilation; `extension-tests` is the compile-only signal._
 
 The estimate that justified the split was wrong by a factor of seven, which is
 the reason this section exists. Six families were expected to cost about 1 GB
