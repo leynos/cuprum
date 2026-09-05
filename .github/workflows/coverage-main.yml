@@ -185,9 +185,13 @@ jobs:
       # common case, and a measurement run sets it false.
       #
       # A push needs no opt-in, since the action's own guard already admits it;
-      # naming it here keeps the rule readable in one place. The push trigger is
-      # restricted to main, and a contract holds it there, so `always` cannot
-      # reach another ref.
+      # naming it here keeps the rule readable in one place.
+      #
+      # The ref is checked rather than inferred from the trigger. `push` is
+      # restricted to main, but `workflow_dispatch` is not: `gh workflow run
+      # coverage-main.yml --ref some-branch` runs this job against that branch,
+      # and without the check `always` would publish its coverage as the
+      # authoritative baseline.
       - name: Generate coverage
         uses: leynos/shared-actions/.github/actions/generate-coverage@77ea10341249024e22ec5d9069e3caa7596e0d4f
         env:
@@ -203,7 +207,8 @@ jobs:
           cache-provider: external
           with-ratchet: 'true'
           publish-baseline: >-
-            ${{ (github.event_name == 'push' || inputs.publish-baseline)
+            ${{ github.ref == 'refs/heads/main'
+            && (github.event_name == 'push' || inputs.publish-baseline)
             && 'always' || 'auto' }}
           # This job is the only execution of the Rust suite for the event.
           # `language: mixed` and the workspace manifest are what make the

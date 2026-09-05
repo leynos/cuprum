@@ -38,6 +38,9 @@ TRUNK_PUBLISHER = ("coverage-main.yml", "coverage-upload")
 #: turned out to be.
 PULL_REQUEST_LANE = ("ci.yml", "coverage")
 
+#: The only ref from which the baseline may be published.
+MAIN = "refs/heads/main"
+
 
 def _coverage_step(workflow_name: str, job_name: str) -> Step:
     """Return the single shared-coverage step of a job."""
@@ -69,7 +72,7 @@ def _truthy(value: object) -> bool:
     return value not in {False, "", None}
 
 
-def _operand(text: str, *, event_name: str, dispatch_input: object) -> object:
+def _operand(text: str, *, event_name: str, dispatch_input: object, ref: str) -> object:
     """Evaluate one leaf of the publication expression.
 
     Parameters
@@ -80,6 +83,8 @@ def _operand(text: str, *, event_name: str, dispatch_input: object) -> object:
         The event the run was triggered by.
     dispatch_input : object
         The dispatch input's value, or ``""`` when the event supplies none.
+    ref : str
+        The ref the run was triggered against.
 
     Returns
     -------
@@ -99,12 +104,14 @@ def _operand(text: str, *, event_name: str, dispatch_input: object) -> object:
         return dispatch_input
     if text == "github.event_name == 'push'":
         return event_name == "push"
+    if text == "github.ref == 'refs/heads/main'":
+        return ref == "refs/heads/main"
     message = f"unsupported operand in the publication expression: {text!r}"
     raise AssertionError(message)
 
 
 def _resolve_publication(
-    expression: str, *, event_name: str, dispatch_input: object
+    expression: str, *, event_name: str, dispatch_input: object, ref: str
 ) -> object:
     """Evaluate the workflow's publish-baseline expression.
 
@@ -121,6 +128,8 @@ def _resolve_publication(
         The event the run was triggered by.
     dispatch_input : object
         The dispatch input's value, or ``""`` when the event supplies none.
+    ref : str
+        The ref the run was triggered against.
 
     Returns
     -------
@@ -137,13 +146,17 @@ def _resolve_publication(
         before, _, rest = body.partition("(")
         grouped, _, after = rest.partition(")")
         resolved = _resolve_group(
-            grouped, event_name=event_name, dispatch_input=dispatch_input
+            grouped, event_name=event_name, dispatch_input=dispatch_input, ref=ref
         )
         body = f"{before} {'TRUE' if _truthy(resolved) else 'FALSE'} {after}"
-    return _resolve_group(body, event_name=event_name, dispatch_input=dispatch_input)
+    return _resolve_group(
+        body, event_name=event_name, dispatch_input=dispatch_input, ref=ref
+    )
 
 
-def _resolve_group(body: str, *, event_name: str, dispatch_input: object) -> object:
+def _resolve_group(
+    body: str, *, event_name: str, dispatch_input: object, ref: str
+) -> object:
     """Evaluate a bracket-free ``||`` of ``&&`` chains.
 
     Parameters
@@ -154,14 +167,21 @@ def _resolve_group(body: str, *, event_name: str, dispatch_input: object) -> obj
         The event the run was triggered by.
     dispatch_input : object
         The dispatch input's value, or ``""`` when the event supplies none.
+    ref : str
+        The ref the run was triggered against.
 
     Returns
     -------
     object
         The operand the group yields.
     """
+    # Actions yields the last operand it evaluated once every alternative is
+    # falsey, not the first. The shipped expression ends in a literal, so no
+    # case reaches that path today; getting it wrong anyway would make this
+    # evaluator report a mode the workflow does not resolve to, which is
+    # exactly the failure it exists to prevent.
     result: object = ""
-    for index, alternative in enumerate(body.split("||")):
+    for alternative in body.split("||"):
         value: object = True
         for term in alternative.split("&&"):
             term = term.strip()
@@ -169,7 +189,10 @@ def _resolve_group(body: str, *, event_name: str, dispatch_input: object) -> obj
                 candidate: object = term == "TRUE"
             else:
                 candidate = _operand(
-                    term, event_name=event_name, dispatch_input=dispatch_input
+                    term,
+                    event_name=event_name,
+                    dispatch_input=dispatch_input,
+                    ref=ref,
                 )
             if not _truthy(candidate):
                 value = candidate
@@ -177,11 +200,11 @@ def _resolve_group(body: str, *, event_name: str, dispatch_input: object) -> obj
             value = candidate
         if _truthy(value):
             return value
-        result = value if index == 0 else result
+        result = value
     return result
 
 
-def _triggers(workflow_name: str) -> dict[str, typ.Any]:
+def _triggers(workflow_name: str) -> dict[str, object]:
     """Return a workflow's ``on:`` mapping.
 
     Parameters
@@ -191,17 +214,17 @@ def _triggers(workflow_name: str) -> dict[str, typ.Any]:
 
     Returns
     -------
-    dict[str, typ.Any]
+    dict[str, object]
         The declared triggers.
     """
     document = workflow_document(workflow_name)
     # PyYAML parses the bare `on:` key as the boolean True.
     triggers = document.get("on", document.get(True))
     assert isinstance(triggers, dict), "the workflow must declare an on: mapping"
-    return typ.cast("dict[str, typ.Any]", triggers)
+    return typ.cast("dict[str, object]", triggers)
 
 
-def _dispatch_input(workflow_name: str) -> dict[str, typ.Any]:
+def _dispatch_input(workflow_name: str) -> dict[str, object]:
     """Return the workflow's declared ``publish-baseline`` dispatch input.
 
     Parameters
@@ -211,31 +234,40 @@ def _dispatch_input(workflow_name: str) -> dict[str, typ.Any]:
 
     Returns
     -------
-    dict[str, typ.Any]
+    dict[str, object]
         The input's declaration.
     """
     dispatch = _triggers(workflow_name).get("workflow_dispatch")
     assert isinstance(dispatch, dict), "the dispatch trigger must declare inputs"
-    declared = dispatch["inputs"]["publish-baseline"]
+    inputs = dispatch["inputs"]
+    assert isinstance(inputs, dict), "the dispatch trigger must declare a mapping"
+    declared = inputs["publish-baseline"]
     assert isinstance(declared, dict), "publish-baseline must be a mapping"
-    return typ.cast("dict[str, typ.Any]", declared)
+    return typ.cast("dict[str, object]", declared)
 
 
 #: Every way the trunk publisher can be reached, and what it must resolve to.
 #: A dispatch defaults to publishing because carrying an automerged change is
 #: the common case; a measurement run turns it off.
 PUBLICATION_CASES = [
-    pytest.param("push", "", "always", id="push-to-main"),
-    pytest.param("workflow_dispatch", True, "always", id="dispatch-default"),
-    pytest.param("workflow_dispatch", False, "auto", id="dispatch-opted-out"),
+    pytest.param("push", "", MAIN, "always", id="push-to-main"),
+    pytest.param("workflow_dispatch", True, MAIN, "always", id="dispatch-default"),
+    pytest.param("workflow_dispatch", False, MAIN, "auto", id="dispatch-opted-out"),
+    # `push` is restricted to main by its trigger, but `workflow_dispatch` is
+    # not: `gh workflow run coverage-main.yml --ref some-branch` runs this job
+    # against that branch. Publishing there would put a feature branch's
+    # coverage into the baseline every pull request is measured against.
+    pytest.param(
+        "workflow_dispatch", True, "refs/heads/feature", "auto", id="dispatch-off-main"
+    ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("event_name", "dispatch_input", "expected"), PUBLICATION_CASES
+    ("event_name", "dispatch_input", "ref", "expected"), PUBLICATION_CASES
 )
 def test_the_trunk_publisher_resolves_publication_per_event(
-    event_name: str, dispatch_input: object, expected: str
+    event_name: str, dispatch_input: object, ref: str, expected: str
 ) -> None:
     """Each way of reaching the trunk publisher must resolve as documented.
 
@@ -252,12 +284,13 @@ def test_the_trunk_publisher_resolves_publication_per_event(
     expression = str(inputs.get("publish-baseline"))
 
     resolved = _resolve_publication(
-        expression, event_name=event_name, dispatch_input=dispatch_input
+        expression, event_name=event_name, dispatch_input=dispatch_input, ref=ref
     )
 
     assert resolved == expected, (
-        f"{event_name} with publish-baseline={dispatch_input!r} resolves to "
-        f"{resolved!r}, expected {expected!r}; expression was {expression!r}"
+        f"{event_name} on {ref} with publish-baseline={dispatch_input!r} "
+        f"resolves to {resolved!r}, expected {expected!r}; expression was "
+        f"{expression!r}"
     )
 
 
@@ -272,7 +305,11 @@ def test_the_dispatch_input_defaults_to_publishing() -> None:
     assert declared["default"] is True, (
         f"publish-baseline must default to publishing, got {declared['default']!r}"
     )
-    assert "measurement" in declared["description"], (
+    description = declared["description"]
+    assert isinstance(description, str), (
+        f"publish-baseline's description must be text, got {description!r}"
+    )
+    assert "measurement" in description, (
         "the description must say what turning it off is for"
     )
 
