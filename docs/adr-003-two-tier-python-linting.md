@@ -150,8 +150,9 @@ dependency and standalone lint pass use v0.3.0 at commit
   `cuprum/unittests/test_toolchain_pins.py` enforces this parity.
 - `$(RUFF)` invokes `uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`, and
   `$(TY)` invokes `uv tool run --from 'ty==$(TY_VERSION)' ty`, with the shared
-  local tool environment. The `typecheck` target runs `$(TY) check --python
-  .venv` so ty analyses the project virtual environment explicitly.
+  local tool environment. The `typecheck` target runs
+  `$(TY) check --python .venv` so ty analyses the project virtual environment
+  explicitly.
 - `DF12_PYTHON_LINTS_REF` and the development dependency use the same
   immutable df12 commit. The enabled message list includes `R9112`
   (`prefer-type-statement`) so the Python 3.12-compatible codebase uses the
@@ -161,14 +162,16 @@ dependency and standalone lint pass use v0.3.0 at commit
 
 The `df12-python-lints` v0.3.0 release is now selected by its controlled
 `v0.3.0` tag in the project declarations. The tag identifies the named release
-while `uv.lock` records its resolved commit for reproducible environments.
-This supersedes the earlier guidance in this ADR to select an immutable commit
+while `uv.lock` records its resolved commit for reproducible environments. This
+supersedes the earlier guidance in this ADR to select an immutable commit
 directly.
 
 The `df12-python-lints` dependency in `pyproject.toml` and
-`DF12_PYTHON_LINTS_REF` in the Makefile must select the same tag. The dependency
-provides the plugin used by the project lint command, while the Makefile invokes
-the standalone checks; updating only one would run different release contents.
+`DF12_PYTHON_LINTS_REF` in the Makefile must select the same tag. The
+dependency provides the plugin used by the project lint command, while the
+Makefile invokes the standalone checks; updating only one would run different
+release contents.
+
 ## Addendum (2026-09-04): Enforce the df12-python-lints release tag
 
 The lint configuration now enforces the `df12-python-lints` v0.3.0 release tag

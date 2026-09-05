@@ -1386,8 +1386,8 @@ Benchmarks (`benchmarks/`):
   outside this private module.
 - `benchmarks/ratchet_ratio_extraction.py` — extracts within-run Rust/Python
   ratio maps and owns validation that baseline and candidate comparison groups
-  match. `benchmarks/ratchet_rust_performance.py` consumes that validation while
-  orchestrating comparisons; this module owns ratio extraction and its
+  match. `benchmarks/ratchet_rust_performance.py` consumes that validation
+  while orchestrating comparisons; this module owns ratio extraction and its
   comparison-group validation.
 - `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
   hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
@@ -1568,13 +1568,13 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 
 ### The baseline the ratchet compares against
 
-The bar is the median of a rolling window of the last seven `main` runs, held
-in `main-baseline-history.json` inside the `benchmark-ratchet-main-baseline`
+The bar is the median of a rolling window of the last seven `main` runs, held in
+`main-baseline-history.json` inside the `benchmark-ratchet-main-baseline`
 artefact. `benchmarks/ratchet_history.py` owns the window;
 `benchmarks/update_baseline_history.py` appends to it.
 
-It used to be the single latest `main` measurement, and two properties of
-that arrangement combined into a failure that no re-run could clear:
+It used to be the single latest `main` measurement, and two properties of that
+arrangement combined into a failure that no re-run could clear:
 
 - **One sample is not an estimate.** Its noise was the bar's noise.
 - **The sample was only published if its own run passed.** A run passes when
@@ -1592,20 +1592,19 @@ the baseline to within 0.14. Issue #219 has the wider analysis.
 Both properties are fixed, and both fixes are needed:
 
 - The window's **median** is the bar, so one sample cannot be it. The spread
-  of those samples then widens the threshold: a candidate must exceed both
-  the flat 0.30 and three estimated standard deviations of the observed
-  spread. The estimate is `3 * 1.4826 * MAD` relative to the median, because
-  the outlier being tolerated barely moves the median absolute deviation but
-  would inflate a standard deviation in proportion to itself. The band is
-  capped at 1.00 — past that the benchmark indicates that it cannot measure
-  what it gates on, and an uncapped band would disable the ratchet silently
-  instead of saying so.
+  of those samples then widens the threshold: a candidate must exceed both the
+  flat 0.30 and three estimated standard deviations of the observed spread. The
+  estimate is `3 * 1.4826 * MAD` relative to the median, because the outlier
+  being tolerated barely moves the median absolute deviation but would inflate
+  a standard deviation in proportion to itself. The band is capped at 1.00 —
+  past that the benchmark indicates that it cannot measure what it gates on,
+  and an uncapped band would disable the ratchet silently instead of saying so.
 - **Every non-cancelled completed `main` run records its sample and publishes
-  the artefact**, whichever way its own ratchet went. That is why the
-  recording and upload steps are gated on `!cancelled()` rather than on
-  success, and why the fetch passes `--run-status completed`: a run that
-  failed its own ratchet is still part of the compatible history. A cancelled
-  run records no half-finished measurement.
+  the artefact**, whichever way its own ratchet went. That is why the recording
+  and upload steps are gated on `!cancelled()` rather than on success, and why
+  the fetch passes `--run-status completed`: a run that failed its own ratchet
+  is still part of the compatible history. A cancelled run records no
+  half-finished measurement.
 
 The window makes the *bar* robust to one noisy run. It cannot make the
 *candidate* robust: a pull request is measured once, on whichever runner CI
@@ -1624,14 +1623,14 @@ Three properties of that pass are load-bearing:
   did not flag is not failed by the second, or re-measuring would be a second
   chance to fail and would double the false failures it exists to halve.
 - A confirmation that could not compare at all — a skip report — leaves the
-  first verdict standing. The primary comparison succeeded on the same
-  inputs, so an unusable confirmation is a fault in the retry, not evidence
-  about the candidate.
+  first verdict standing. The primary comparison succeeded on the same inputs,
+  so an unusable confirmation is a fault in the retry, not evidence about the
+  candidate.
 - The re-measurement writes under its own prefix, so `candidate-*`, and
-  therefore the sample recorded into the window, stays the primary
-  measurement. Recording the confirming run instead would put a second sample
-  into the window only for the merges that were about to fail — a
-  verdict-dependent bias in the samples, which is the thing being removed.
+  therefore the sample recorded into the window, stays the primary measurement.
+  Recording the confirming run instead would put a second sample into the
+  window only for the merges that were about to fail — a verdict-dependent bias
+  in the samples, which is the thing being removed.
 
 An exit code of 2 from the comparison is malformed input rather than a
 regression, and fails on the spot rather than spending a second benchmark to
@@ -1639,16 +1638,16 @@ reread the same broken file.
 
 Two consequences are worth knowing. A re-run cannot clear a ratchet failure
 caused by the window, because a re-run does not change the window — only a
-merge does. And a regression that survives several merges eventually enters
-the window and raises the bar; the flat threshold still applies to each step,
-but the ratchet measures drift from recent `main`, not from a fixed point.
+merge does. And a regression that survives several merges eventually enters the
+window and raises the bar; the flat threshold still applies to each step, but
+the ratchet measures drift from recent `main`, not from a fixed point.
 
 Samples are pruned to those sharing the candidate's `benchmark_profile_version`
-and `worker_iterations`. A window emptied that way, or absent on a first run
-or after the artefact expires, falls back to comparing against the latest
-completed `main` baseline artefact as a single sample — the pre-window bar,
-reported in `ratchet-report.json` as `baseline_sample_count: 1` so a
-surprising verdict can be read against the evidence behind it.
+and `worker_iterations`. A window emptied that way, or absent on a first run or
+after the artefact expires, falls back to comparing against the latest completed
+`main` baseline artefact as a single sample — the pre-window bar, reported in
+`ratchet-report.json` as `baseline_sample_count: 1` so a surprising verdict can
+be read against the evidence behind it.
 
 Every `ratchet-report.json` carries a bounded decision record.
 `baseline_source` is `history`, `fallback`, or `none`; `baseline_reason` is
@@ -1688,11 +1687,10 @@ invoke it:
   `ratchet_rust_performance.py` consumes that selection during orchestration.
 - `benchmarks/ratchet_rust_performance.py` is the comparison entry point. Its
   `compare_rust_regressions` function consumes the selected baseline and
-  comparison-group validation from
-  `ratchet_ratio_extraction`, and returns the typed report; `main` supplies the
-  CLI exit status and `write_report` serializes the result. A malformed input
-  returns status 2, a regression status 1, and a passing or profile-skipped
-  comparison status 0.
+  comparison-group validation from `ratchet_ratio_extraction`, and returns the
+  typed report; `main` supplies the CLI exit status and `write_report`
+  serializes the result. A malformed input returns status 2, a regression
+  status 1, and a passing or profile-skipped comparison status 0.
 - `benchmarks/ratchet_confirmation.py` is the pure typed retry policy.
   `confirm_regressions` intersects the primary and confirmation regression
   lists, preserving the primary verdict when confirmation has no comparison
@@ -1707,8 +1705,7 @@ invoke it:
 
 Keep these boundaries intact when changing the ratchet: ratio extraction must
 remain shared by comparison and recording, while history compatibility and
-regression policy must not be reimplemented in the workflow or in JSON
-callers.
+regression policy must not be reimplemented in the workflow or in JSON callers.
 
 ## Profiling harness overview
 
