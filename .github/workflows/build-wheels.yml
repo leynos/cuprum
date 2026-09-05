@@ -1,3 +1,4 @@
+---
 name: Build Wheels
 
 on:
@@ -13,7 +14,8 @@ permissions:
 env:
   # Keep in sync with .github/actions/build-wheels/action.yml and pyproject.toml.
   MATURIN_VERSION: "1.13.3"
-  MANYLINUX_AARCH64_CONTAINER: ghcr.io/rust-cross/manylinux_2_28-cross@sha256:4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e # ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
+  MANYLINUX_AARCH64_CONTAINER: >- # ghcr.io/rust-cross/manylinux_2_28-cross:aarch64
+    ghcr.io/rust-cross/manylinux_2_28-cross@sha256:4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e
 
 jobs:
   # Deliberately uncached. Its only work is `uv build`, which resolves the
@@ -86,7 +88,9 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-          key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: >-
+            ${{ format('cuprum-wheel-{0}-{1}-{2}-{3}-{4}', runner.os, runner.arch,
+            matrix.target, env.MATURIN_VERSION, hashFiles('rust/Cargo.lock')) }}
           restore-keys: |
             cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
       - name: Build manylinux wheels (Linux x86_64)
@@ -114,7 +118,9 @@ jobs:
             ~/.cache/pip
             ~/.cargo/registry
             ~/.cargo/git
-          key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: >-
+            ${{ format('cuprum-wheel-{0}-{1}-{2}-{3}-{4}', runner.os, runner.arch,
+            matrix.target, env.MATURIN_VERSION, hashFiles('rust/Cargo.lock')) }}
           restore-keys: |
             cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ env.MATURIN_VERSION }}-
       - name: Build manylinux wheels (Linux aarch64)
@@ -241,7 +247,16 @@ jobs:
           (
             cd "${VERIFY_DIR}"
             echo "=== Listing installed cuprum package ==="
-            python -c "import cuprum; import os; pkg_dir = os.path.dirname(cuprum.__file__); print(f'Package at: {pkg_dir}'); import subprocess; subprocess.run(['ls', '-la', pkg_dir])"
+            python - <<'PY'
+          import os
+          import subprocess
+
+          import cuprum
+
+          pkg_dir = os.path.dirname(cuprum.__file__)
+          print(f"Package at: {pkg_dir}")
+          subprocess.run(["ls", "-la", pkg_dir], check=True)
+          PY
             echo "=== Testing Rust extension import ==="
             python - <<'PY'
           import cuprum as c

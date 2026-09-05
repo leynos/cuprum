@@ -260,6 +260,8 @@
       'cuprum/unittests/test_tracing_span_lifecycle.py',
       'cuprum/unittests/test_tracing_span_stateful.py',
       'cuprum/unittests/test_validation.py',
+      'cuprum/unittests/test_verify_wheel_install.py',
+      'cuprum/unittests/test_workflow_lint.py',
     ]),
     'generator': '1.13.3',
     'metadata': dict({

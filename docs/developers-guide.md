@@ -2872,6 +2872,28 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
+### GitHub Actions workflow linting
+
+`make lint` finishes by running
+`yamllint --config-file .yamllint.yml .github/workflows` and `actionlint`.
+Together they validate YAML policy, GitHub Actions expressions, and shell used
+by workflow `run:` steps. `.yamllint.yml` requires each workflow to start with
+`---`, permits GitHub's unquoted `on` trigger key, and requires quoted `'true'`
+and `'false'` values.
+
+Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
+install actionlint using its
+[upstream installation instructions](https://github.com/rhysd/actionlint/blob/main/README.md#installation).
+Both commands must be available on `PATH` before running `make lint`.
+
+CI caches the `uv` cache, tool environment, and executable directory before
+installing yamllint. It separately caches actionlint 1.7.12; on a cache miss,
+it downloads the archive through actionlint's installer pinned to commit
+`914e7df21a07ef503a81201c76d2b11c789d3fca` and verifies SHA-256
+`8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` before
+extraction. The lint job invokes trusted `/usr/bin/make` and passes actionlint
+by absolute `ACTIONLINT` path, so checkout contents cannot shadow `make`.
+
 ### Spelling policy
 
 The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
