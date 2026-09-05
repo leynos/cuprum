@@ -306,7 +306,7 @@ def test_coverage_delegates_archive_cache_ownership(
     coverage_step = next(
         step
         for step in steps(workflow_name, job_name)
-        if step.get("uses") == GENERATE_COVERAGE
+        if str(step.get("uses", "")).startswith(f"{GENERATE_COVERAGE}@")
     )
     inputs = step_inputs(
         coverage_step, f"{workflow_name}:{job_name} coverage must declare inputs"

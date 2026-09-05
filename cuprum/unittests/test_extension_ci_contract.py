@@ -20,7 +20,7 @@ import re
 
 import pytest
 
-from tests.helpers.ci_workflows import workflow_sources
+from tests.helpers.ci_workflows import workflow_document, workflow_sources
 from tests.helpers.workflow import (
     Workflow,
     first_step_running,
@@ -31,8 +31,81 @@ from tests.helpers.workflow import (
     steps,
 )
 
-SHARED_ACTIONS_SHA = "794e4801babcf68065c660fdf4781ad62be5d061"
-SHARED_ACTIONS_REFERENCE = re.compile(r"leynos/shared-actions/[^\s@]+@([0-9a-f]{40})")
+SHARED_ACTIONS_REFERENCE = re.compile(
+    r"^leynos/shared-actions/(?P<target>[^\s@]+)@(?P<reference>[^\s#]+)$"
+)
+EXPECTED_SHARED_ACTIONS_TARGETS = {
+    "ci.yml": {
+        ".github/actions/generate-coverage",
+        ".github/actions/install-nixie",
+        ".github/actions/install-whitaker",
+        ".github/actions/setup-rust",
+        ".github/actions/upload-codescene-coverage",
+    },
+    "coverage-main.yml": {
+        ".github/actions/generate-coverage",
+        ".github/actions/setup-rust",
+        ".github/actions/upload-codescene-coverage",
+    },
+    "dependabot-automerge.yml": {
+        ".github/workflows/dependabot-automerge.yml",
+    },
+    "mutation-testing.yml": {
+        ".github/workflows/mutation-mutmut.yml",
+    },
+}
+
+
+def _shared_action_uses(value: object) -> list[str]:
+    """Collect shared-actions ``uses`` values from parsed workflow data."""
+    if isinstance(value, dict):
+        uses = value.get("uses")
+        direct_uses = (
+            [uses]
+            if isinstance(uses, str) and uses.startswith("leynos/shared-actions/")
+            else []
+        )
+        return direct_uses + [
+            nested_uses
+            for nested_value in value.values()
+            for nested_uses in _shared_action_uses(nested_value)
+        ]
+    if isinstance(value, list):
+        return [
+            nested_uses
+            for nested_value in value
+            for nested_uses in _shared_action_uses(nested_value)
+        ]
+    return []
+
+
+def _shared_action_target(uses: object, step_name: str) -> str:
+    """Return the shared-action target declared by one named workflow step."""
+    assert isinstance(uses, str), f"the {step_name!r} step must declare uses"
+    reference = SHARED_ACTIONS_REFERENCE.fullmatch(uses)
+    assert reference is not None, (
+        f"the {step_name!r} step must use a shared action with a revision; "
+        f"found {uses!r}"
+    )
+    return reference["target"]
+
+
+@pytest.mark.parametrize(
+    ("uses", "expected_revision"),
+    [
+        ("leynos/shared-actions/.github/actions/setup-rust@main", "main"),
+        ("leynos/shared-actions/.github/actions/setup-rust@v1.2.3", "v1.2.3"),
+        ("leynos/shared-actions/.github/actions/setup-rust@", None),
+        ("leynos/shared-actions/.github/actions/setup-rust@main # comment", None),
+    ],
+)
+def test_shared_actions_reference_captures_any_non_comment_revision(
+    uses: str, expected_revision: str | None
+) -> None:
+    """Shared-action callers may use any revision token that Dependabot manages."""
+    reference = SHARED_ACTIONS_REFERENCE.fullmatch(uses)
+    revision = reference["reference"] if reference is not None else None
+    assert revision == expected_revision
 
 
 def test_the_ci_job_builds_the_extension_before_running_the_gated_tests(
@@ -186,26 +259,17 @@ def test_no_ci_step_invokes_maturin_develop_directly(workflow_data: Workflow) ->
 def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> None:
     """The lint job uses shared tooling setup in the required order."""
     expected_actions = {
-        "Install Rust toolchain for Nixie": (
-            f"leynos/shared-actions/.github/actions/setup-rust@{SHARED_ACTIONS_SHA}"
-        ),
-        "Install Nixie": (
-            f"leynos/shared-actions/.github/actions/install-nixie@{SHARED_ACTIONS_SHA}"
-        ),
-        "Install project Rust toolchain": (
-            f"leynos/shared-actions/.github/actions/setup-rust@{SHARED_ACTIONS_SHA}"
-        ),
-        "Install Whitaker": (
-            "leynos/shared-actions/.github/actions/"
-            f"install-whitaker@{SHARED_ACTIONS_SHA}"
-        ),
+        "Install Rust toolchain for Nixie": ".github/actions/setup-rust",
+        "Install Nixie": ".github/actions/install-nixie",
+        "Install project Rust toolchain": ".github/actions/setup-rust",
+        "Install Whitaker": ".github/actions/install-whitaker",
     }
 
-    for step_name, expected_uses in expected_actions.items():
+    for step_name, expected_target in expected_actions.items():
         step = step_named(workflow_data, "lint-test", step_name)
-        assert step.get("uses") == expected_uses, (
-            f"the {step_name!r} step must use the shared action pinned to "
-            f"{SHARED_ACTIONS_SHA}"
+        assert _shared_action_target(step.get("uses"), step_name) == expected_target, (
+            f"the {step_name!r} step must use shared action {expected_target}; "
+            f"found {step.get('uses')!r}"
         )
 
     nixie_toolchain = step_named(
@@ -259,20 +323,54 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
 
 
 def test_workflows_pin_shared_actions_to_one_revision() -> None:
-    """Every reusable shared-actions consumer must use the contract revision."""
-    references = [
-        f"{workflow_name}:{match.group(0)}"
-        for workflow_name, source in workflow_sources()
-        for match in SHARED_ACTIONS_REFERENCE.finditer(source)
+    """Every shared-actions caller uses one revision without fixing its value."""
+    all_uses_by_workflow = {
+        workflow_name: _shared_action_uses(workflow_document(workflow_name))
+        for workflow_name, _ in workflow_sources()
+    }
+    uses_by_workflow = {
+        workflow_name: uses
+        for workflow_name, uses in all_uses_by_workflow.items()
+        if uses
+    }
+    parsed_references = {
+        workflow_name: [
+            (uses, SHARED_ACTIONS_REFERENCE.fullmatch(uses)) for uses in uses_values
+        ]
+        for workflow_name, uses_values in uses_by_workflow.items()
+    }
+    invalid_references = [
+        f"{workflow_name}:{uses}"
+        for workflow_name, references in parsed_references.items()
+        for uses, reference in references
+        if reference is None
     ]
-    assert references, "the workflow estate must consume shared actions"
+    assert not invalid_references, (
+        "shared-actions references must include a non-whitespace, non-comment "
+        f"revision after '@': {invalid_references}"
+    )
+    valid_references = {
+        workflow_name: [
+            reference for _, reference in references if reference is not None
+        ]
+        for workflow_name, references in parsed_references.items()
+    }
 
-    outdated = [
-        reference
+    targets_by_workflow = {
+        workflow_name: {reference["target"] for reference in references}
+        for workflow_name, references in valid_references.items()
+    }
+    assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
+        "each workflow must call only its expected shared actions or reusable "
+        f"workflows; found {targets_by_workflow}"
+    )
+
+    revisions = {
+        reference["reference"]
+        for references in valid_references.values()
         for reference in references
-        if not reference.endswith(f"@{SHARED_ACTIONS_SHA}")
-    ]
-    assert not outdated, (
-        "every shared-actions workflow reference must use "
-        f"{SHARED_ACTIONS_SHA}; found {outdated}"
+    }
+    assert len(revisions) == 1, (
+        "every shared-actions call must use the same revision; "
+        f"found {sorted(revisions)}"
     )

@@ -3503,35 +3503,37 @@ the purpose of automated dependency updates and turns a routine bump into a
 manual chore.
 
 Contract tests may still verify the *shape* of a reusable-workflow caller. They
-must not verify the specific SHA value, except for a narrowly scoped repository
-policy that deliberately requires every call into one shared-action repository
-to use the same revision. Cuprum's CI has that policy for
-`leynos/shared-actions`: its contract test compares the calls with one shared
-constant so an installer or toolchain action cannot silently drift from the
-others. This exception is about consistency across those calls, not about
-blocking routine Dependabot updates; update the single constant with the
-workflow pins when Dependabot changes the revision.
+must not verify a particular SHA value: Dependabot owns revision updates. A
+repository may still require every call into one shared-action repository to
+use the same revision. Cuprum's CI has that consistency policy for
+`leynos/shared-actions`: its contract test collects every call, checks the
+expected action or workflow path, and verifies that all calls use one common
+revision. This prevents an installer or toolchain action from silently drifting
+from the others without turning a routine Dependabot update into a manual test
+edit.
 
 - Do assert the workflow references the correct reusable workflow path.
-- Do assert the ref is pinned to a full 40-character commit SHA, not a
-  mutable branch such as `main` or `rolling`.
+- Do assert that all calls into a shared-action repository use one common
+  revision, while allowing Dependabot to choose the revision value.
 - Do assert the expected `on:` triggers, least-privilege `permissions:`, and
   the inputs the caller relies on.
-- Do not hard-code the current SHA value as an expected string for ordinary
-  reusable-workflow callers. For the narrowly scoped shared-actions consistency
-  policy above, use one named constant rather than repeating the SHA in each
-  assertion.
+- Do not hard-code a current SHA value as an expected string.
 - Do not fail a test purely because Dependabot bumped the pinned SHA.
 
 ```python
 import re
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHARED_ACTIONS_RE = re.compile(r"^leynos/shared-actions/[^\s@]+@(?P<revision>[^\s#]+)$")
 
 
-def test_uses_pinned_full_sha(caller_step):
-    ref = caller_step["uses"].split("@")[-1]
-    assert SHA_RE.match(ref), f"expected a 40-hex commit SHA, got {ref!r}"
+def test_shared_actions_use_one_revision(caller_steps):
+    matches = [
+        SHARED_ACTIONS_RE.fullmatch(step["uses"])
+        for step in caller_steps
+        if step["uses"].startswith("leynos/shared-actions/")
+    ]
+    assert matches and all(match is not None for match in matches)
+    assert len({match.group("revision") for match in matches}) == 1
 ```
 
 If a workflow's behaviour genuinely depends on a feature only present from a
