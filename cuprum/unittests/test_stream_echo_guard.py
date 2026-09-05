@@ -19,7 +19,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum._streams import _RelayDiagnostics, _drain, _StreamConfig
+from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
 from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 
 if typ.TYPE_CHECKING:

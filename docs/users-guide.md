@@ -413,8 +413,8 @@ added: the already-emitted `EchoEvent` values remain observable through
 ### Lading integration boundary
 
 Lading can consume the new `CommandResult.relay_fallbacks` records for
-per-command diagnostics and the existing `observe_echo` /
-`EchoMetricsHook` channel for structured relay-decision telemetry
+per-command diagnostics and the existing `observe_echo` / `EchoMetricsHook`
+channel for structured relay-decision telemetry
 ([lading#253](https://github.com/leynos/lading/issues/253)). Shipping this
 change alone does not let Lading delete `stream_relay.py`: Lading's helper has
 text-first and broken-pipe semantics that differ from Cuprum's binary-first

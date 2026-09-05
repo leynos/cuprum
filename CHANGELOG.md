@@ -32,12 +32,12 @@
   or cancellation that prevents a result the already-emitted echo events stay
   available through `observe_echo` with no new exception payload fields. The
   `cuprum.stream` warning for this transition now carries only stable
-  categorical extras (`cuprum_operation`, `cuprum_stream`,
-  `cuprum_transition`, `cuprum_error_category`) and no longer attaches the
-  exception object or sink encoding: `UnicodeEncodeError.object` retains the
-  rejected input, so neither the payload nor the original exception may reach
-  the log, the events, or the result records, and metric labels stay bounded.
-  Lading can consume these records and the existing echo observation channel
+  categorical extras (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
+  `cuprum_error_category`) and no longer attaches the exception object or sink
+  encoding: `UnicodeEncodeError.object` retains the rejected input, so neither
+  the payload nor the original exception may reach the log, the events, or the
+  result records, and metric labels stay bounded. Lading can consume these
+  records and the existing echo observation channel
   ([lading#253](https://github.com/leynos/lading/issues/253)); this alone does
   not let Lading delete `stream_relay.py`, whose text-first and broken-pipe
   semantics differ from Cuprum's binary-first policy, so a linked downstream
