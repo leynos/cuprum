@@ -18,7 +18,7 @@ inputs:
     description: Maturin version to install
     required: false
     # Keep in sync with .github/workflows/build-wheels.yml and pyproject.toml.
-    default: "1.13.3"
+    default: "1.15.0"
 runs:
   using: composite
   steps:

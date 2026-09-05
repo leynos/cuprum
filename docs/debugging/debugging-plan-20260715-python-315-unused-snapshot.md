@@ -150,7 +150,7 @@ collection. The owning test skipped all Python 3.15 interpreters through a
 hard-coded version guard. The cited successful job also skipped the test, but
 xdist does not aggregate unused-snapshot reports, so that run masked the issue.
 
-The guard was stale: maturin 1.13.3 with PyO3 0.29 successfully built a CPython
+The guard was stale: maturin 1.15.0 with PyO3 0.29 successfully built a CPython
 3.15 wheel locally. Removing the guard made the serial Python 3.15 unit batch
 pass with seven snapshots matched and no unused snapshots. Strict unused
 snapshot enforcement remains enabled.

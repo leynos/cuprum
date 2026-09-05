@@ -251,7 +251,7 @@
       'cuprum/unittests/test_tracing_span_stateful.py',
       'cuprum/unittests/test_validation.py',
     ]),
-    'generator': '1.13.3',
+    'generator': '1.15.0',
     'metadata': dict({
       'classifiers': list([
       ]),
