@@ -62,6 +62,14 @@ class _NativeBackend(typ.Protocol):
         """Drain ``reader_fd`` and decode it as UTF-8."""
 
 
+class _PreparedRustPumpCall(typ.NamedTuple):
+    """Prepared inputs that leave writer ownership independent."""
+
+    native_pump: cabc.Callable[..., int]
+    reader: int
+    buffer_size: int
+
+
 @functools.lru_cache(maxsize=1)
 def _load_native() -> _NativeBackend:
     """Import the native Rust backend module."""
@@ -112,6 +120,39 @@ def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
         msg = "buffer_size exceeds the maximum permitted size"
         raise ValueError(msg)
     return size
+
+
+def _prepare_rust_pump_call(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+    buffer_size: int,
+) -> _PreparedRustPumpCall:
+    """Prepare native inputs while Python still owns the writer."""
+    try:
+        native_pump = _load_native().rust_pump_stream
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
+        raise
+    try:
+        reader = _convert_fd_for_platform(reader_fd)
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        raise
+    try:
+        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
+            buffer_size
+        )
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
+        raise
+    return _PreparedRustPumpCall(
+        native_pump=native_pump,
+        reader=reader,
+        buffer_size=validated_buffer_size,
+    )
 
 
 def _duplicate_windows_handle(handle: int) -> int:
@@ -212,25 +253,11 @@ def rust_pump_stream(
     extension: ``ImportError`` if the native module cannot be imported and
     ``OSError`` if an I/O error occurs while pumping bytes.
     """
-    try:
-        native_pump = _load_native().rust_pump_stream
-    except BaseException:
-        _close_writer_after_pre_native_failure(writer_fd)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
-        raise
-    try:
-        reader = _convert_fd_for_platform(reader_fd)
-    except BaseException:
-        _close_writer_after_pre_native_failure(writer_fd)
-        raise
-    try:
-        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
-            buffer_size
-        )
-    except BaseException:
-        _close_writer_after_pre_native_failure(writer_fd)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
-        raise
+    prepared = _prepare_rust_pump_call(
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+        buffer_size=buffer_size,
+    )
     try:
         writer = _transfer_writer_fd_for_platform(writer_fd)
     except BaseException:
@@ -240,7 +267,13 @@ def rust_pump_stream(
         )
         raise
     try:
-        return int(native_pump(reader, writer, buffer_size=validated_buffer_size))
+        return int(
+            prepared.native_pump(
+                prepared.reader,
+                writer,
+                buffer_size=prepared.buffer_size,
+            )
+        )
     except OSError:
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
         raise
