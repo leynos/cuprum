@@ -2160,27 +2160,49 @@ The continuous integration (CI) workflows run the following checks:
   - It benchmarks the current checkout in smoke mode with a release build of
     the Rust extension.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio
-    against the latest successful `main` baseline artefact when one exists, so
-    runner-speed differences between CI jobs cancel out.
+    against compatible rolling history from completed `main` runs when it is
+    available, including runs whose own ratchet failed. If no compatible
+    history exists, it falls back to the latest completed `main` baseline
+    artefact, so runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
     command ten times to reduce temporal runner drift and outlier sensitivity.
-  - It skips comparison and writes a skip report when the saved baseline uses an
-    older benchmark profile shape because different sampling protocols and
-    worker timings are not comparable.
+  - It drops recorded samples that use an older benchmark profile shape,
+    because different sampling protocols and worker timings are not
+    comparable. It skips comparison only when no comparable history and no
+    fallback baseline are available; an incompatible history window can be
+    discarded while the fallback baseline still permits comparison.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
     smoke artefacts and appends the same Markdown table to the GitHub Actions
     workflow summary.
   - It uploads candidate JSON artefacts plus `ratchet-report.json` and
-    `comparison-report.json`.
-  - On pushes to `main`, it also publishes the new smoke benchmark JSON as the
-    next baseline artefact for future runs.
+    `comparison-report.json`. When a regression was measured a second time,
+    `ratchet-report-primary.json` and `ratchet-report-confirmation.json`
+    record the two measurements behind the combined verdict, which lists both
+    `confirmed_regressions` and `unconfirmed_regressions`.
+  - On pushes to `main`, it also publishes the new smoke benchmark JSON and
+    the updated `main-baseline-history.json` window as the baseline artefact
+    for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
     report instead of failing the workflow.
-  - It fails when any scenario pair has
-    `(candidate_ratio - baseline_ratio) / baseline_ratio > 0.30`, where each
-    ratio is `rust_mean / python_mean` from the same benchmark run.
+  - It compares against the median of the last seven `main` runs rather than
+    the latest one, so a single noisy measurement cannot become the bar.
+  - It fails when a scenario pair's
+    `(candidate_ratio - baseline_ratio) / baseline_ratio` exceeds both `0.30`
+    and a noise band calculated as `3 * 1.4826 * MAD` from those same samples,
+    expressed relative to their median and capped at `1.00`. Each ratio is
+    `rust_mean / python_mean` from the same benchmark run. Requiring both keeps
+    a runner-to-runner swing from reading as a regression without letting a
+    consistent slowdown through.
+  - When a scenario is flagged, it measures again in the same job and normally
+    fails only if the same scenario is flagged twice, so an unlucky runner does
+    not fail a change a re-run would have passed. A confirmation that cannot
+    perform a comparison leaves the primary verdict standing. The second
+    benchmark runs only on a job that was about to fail.
+  - Every non-cancelled completed `main` run records its sample, including runs
+    whose own ratchet failed. A re-run of a failing benchmark job cannot change
+    the bar: the window only moves when `main` moves.
 
 The workflow summary table is derived from the filtered candidate smoke plan
 and throughput JSON. Rows are matched by the shared scenario label (

@@ -47,7 +47,6 @@ from tests.helpers.workflow import (
     mapping,
     parse_workflow,
     script_of,
-    script_runs_command,
     step_named,
     step_with_id,
     steps,
@@ -55,6 +54,8 @@ from tests.helpers.workflow import (
 
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
 SUMMARY_STEP = "Record the benchmark gate decision"
+CHECKOUT_STEP = "Check out repository"
+THROUGHPUT_STEP = "Run throughput benchmarks and ratchet comparison"
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
 #: `needs.changes.outputs.bench != 'true'` contains every operand the loose
@@ -137,6 +138,68 @@ def test_the_changes_job_runs_on_a_github_hosted_runner(
     )
 
 
+def test_the_changes_job_has_only_the_permissions_its_filter_needs(
+    workflow_data: Workflow,
+) -> None:
+    """Paths-filter needs changed-file read access without write authority."""
+    permissions = mapping(
+        job(workflow_data, CHANGES_JOB).get("permissions"),
+        f"the {CHANGES_JOB!r} job must declare narrow permissions",
+    )
+
+    assert permissions == {"contents": "read", "pull-requests": "read"}, (
+        f"the {CHANGES_JOB!r} job must retain only the filter's read permissions; "
+        f"found {permissions!r}"
+    )
+
+
+def test_the_changes_checkout_does_not_persist_credentials(
+    workflow_data: Workflow,
+) -> None:
+    """The cheap detector must not write its token into Git configuration."""
+    checkout = step_named(workflow_data, CHANGES_JOB, CHECKOUT_STEP)
+    checkout_options = mapping(
+        checkout.get("with"),
+        f"the {CHANGES_JOB!r} checkout must declare explicit options",
+    )
+
+    assert checkout_options.get("persist-credentials") is False, (
+        f"the {CHANGES_JOB!r} checkout must disable credential persistence; "
+        f"found {checkout_options.get('persist-credentials')!r}"
+    )
+
+
+def test_the_paid_benchmark_checkout_does_not_persist_credentials(
+    workflow_data: Workflow,
+) -> None:
+    """The paid job fetches its baseline explicitly instead of retaining a token."""
+    checkout = step_named(workflow_data, BENCHMARK_JOB, CHECKOUT_STEP)
+    checkout_options = mapping(
+        checkout.get("with"),
+        f"the {BENCHMARK_JOB!r} checkout must declare explicit options",
+    )
+
+    assert checkout_options.get("persist-credentials") is False, (
+        f"the {BENCHMARK_JOB!r} checkout must disable credential persistence; "
+        f"found {checkout_options.get('persist-credentials')!r}"
+    )
+
+
+def test_the_paid_benchmark_uses_the_shared_optimized_setup(
+    workflow_data: Workflow,
+) -> None:
+    """The paid runner builds once through the local contributor target."""
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+
+    assert "make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'" in script, (
+        "the benchmark must use the shared optimized extension-build target"
+    )
+    assert "UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python" in script, (
+        "the benchmark scripts must reuse checkout-local uv caches and tools"
+    )
+
+
 def test_the_detector_runs_on_every_event(workflow_data: Workflow) -> None:
     """Require detector execution to be independent of the triggering event."""
     changes_job = job(workflow_data, CHANGES_JOB)
@@ -173,63 +236,6 @@ def test_the_benchmark_job_declares_the_expected_gate(
         "main always benchmark so the baseline artefact stays fresh, and pull "
         f"requests benchmark only on performance-relevant diffs; found {condition!r}"
     )
-
-
-def test_the_benchmark_job_keeps_lint_dependencies_out_of_benchmark_setup(
-    workflow_data: Workflow,
-) -> None:
-    """Keep lint dependencies out of baseline discovery and benchmark setup.
-
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow containing the benchmark setup steps.
-    """
-    checkout = step_named(workflow_data, BENCHMARK_JOB, "Check out repository")
-    checkout_options = mapping(
-        checkout.get("with"),
-        f"the {BENCHMARK_JOB!r} checkout must declare options",
-    )
-    assert checkout_options.get("persist-credentials") is False, (
-        "the benchmark checkout must not persist credentials that later build "
-        "commands do not need"
-    )
-
-    baseline = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Fetch latest main benchmark baseline",
-    )
-    script = script_of(baseline)
-    assert script is not None, "the baseline-fetch step must declare a run script"
-    assert script_runs_command(
-        script,
-        "uv run --no-dev python benchmarks/fetch_main_benchmark_baseline.py",
-    ), "the standard-library baseline client must not resolve the dev dependency group"
-
-    throughput = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Run throughput benchmarks and ratchet comparison",
-    )
-    throughput_script = script_of(throughput)
-    assert throughput_script is not None, "the throughput step must declare a script"
-    assert "MATURIN_DEVELOP_FLAGS='--release --skip-install'" in throughput_script
-    assert "UV_SYNC_FLAGS=--no-install-package=df12-python-lints" in throughput_script
-    assert "UV_RUN_FLAGS=--no-sync" in throughput_script
-    assert throughput_script.count("uv run --no-sync python") == 4, (
-        "every post-build Python command must preserve the environment that omits "
-        "the lint-only Git dependency"
-    )
-
-    report = step_named(
-        workflow_data,
-        BENCHMARK_JOB,
-        "Generate benchmark comparison report",
-    )
-    report_script = script_of(report)
-    assert report_script is not None, "the report step must declare a script"
-    assert "uv run --no-sync python" in report_script
 
 
 def test_a_failed_detector_does_not_benchmark_ungated(
@@ -393,12 +399,10 @@ def test_the_gate_decision_is_recorded_in_the_run_summary(
         for index, step in enumerate(changes_steps)
         if step.get("id") == FILTER_STEP_ID
     )
-    summary_index, script = next(
-        (index, script)
-        for index, step in enumerate(changes_steps)
-        if isinstance(script := step.get("run"), str)
-        and "GITHUB_STEP_SUMMARY" in script
-    )
+    summary_step = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP)
+    summary_index = changes_steps.index(summary_step)
+    script = script_of(summary_step)
+    assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
 
     assert filter_index < summary_index, (
         f"the {FILTER_STEP_ID!r} step must precede {SUMMARY_STEP!r} so the summary "

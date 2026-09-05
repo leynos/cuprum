@@ -307,6 +307,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
 
       # Started before the first cache restore, so the archive downloads and
       # every build below fall inside the measured window. `ubicloud-standard-2`
@@ -943,12 +945,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # paths-filter reads pull-request changed files through GitHub's API.
       pull-requests: read
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          persist-credentials: false
 
       - name: Detect performance-relevant changes
         id: filter
@@ -1034,8 +1039,6 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           fetch-depth: 0
-          # The benchmark does not need repository credentials after checkout.
-          # Keep its scoped token out of later build commands.
           persist-credentials: false
 
       # No resource sampler here, deliberately. This job times commands that
@@ -1145,11 +1148,17 @@ jobs:
           baseline_dir="${artifact_dir}/main-baseline"
           mkdir -p "${artifact_dir}"
 
-          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-dev python \
+          # `--run-status completed` rather than the default `success`: the
+          # baseline artifact records what a main run measured, and a run
+          # that failed its own ratchet is exactly the one whose sample the
+          # window must not lose. Filtering on success is what let a single
+          # anomalously fast measurement stay the bar (issue #219).
+          if UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
             benchmarks/fetch_main_benchmark_baseline.py \
             --repository "${GITHUB_REPOSITORY}" \
             --workflow "ci.yml" \
             --artifact-name "benchmark-ratchet-main-baseline" \
+            --run-status "completed" \
             --output-dir "${baseline_dir}"
           then
             echo "baseline_available=true" >> "${GITHUB_OUTPUT}"
@@ -1157,7 +1166,7 @@ jobs:
             status=$?
             if [[ "${status}" -eq 3 ]]; then
               echo "baseline_available=false" >> "${GITHUB_OUTPUT}"
-              echo "No previous successful main benchmark baseline artifact is available."
+              echo "No previous completed main benchmark baseline artifact is available."
             else
               exit "${status}"
             fi
@@ -1165,6 +1174,8 @@ jobs:
 
       - name: Run throughput benchmarks and ratchet comparison
         shell: bash
+        env:
+          BASELINE_AVAILABLE: ${{ steps.baseline-artifact.outputs.baseline_available }}
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
@@ -1177,26 +1188,22 @@ jobs:
 
             # `make develop` is the one definition of the extension build:
             # `make build`, then `ensurepip --upgrade`, then `maturin
-            # develop`. The ratchet requests an optimized in-place build,
-            # avoiding Maturin's unnecessary editable dependency install,
+            # develop`. The ratchet must measure an optimized build, and that
+            # is the only thing it needs differently, so it passes the flag
             # instead of restating the sequence. This runs after `pushd
             # "${workspace}"`, so the target's relative UV_CACHE_DIR and
             # UV_TOOL_DIR resolve against the same directory the inline
-            # commands used. The benchmark needs maturin, but not the
-            # lint-only df12 plugin; later commands preserve this prepared
-            # environment instead of triggering another sync.
+            # commands used.
             CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
-              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' \
-              UV_SYNC_FLAGS=--no-install-package=df12-python-lints \
-              UV_RUN_FLAGS=--no-sync
+              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
 
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
               --smoke \
               --dry-run \
               --output "${artifact_dir}/${prefix}-full-plan.json"
 
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/ci_benchmark_ratchet_profile.py \
               --full-plan "${artifact_dir}/${prefix}-full-plan.json" \
               --filtered-plan "${artifact_dir}/${prefix}-plan.json" \
@@ -1207,20 +1214,120 @@ jobs:
 
           run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
 
-          if [[ "${{ steps.baseline-artifact.outputs.baseline_available }}" == "true" ]]; then
+          # Stage the files the baseline artifact publishes before the
+          # comparison can fail the step. A main run that measures a
+          # slowdown must still record its sample: dropping it is what
+          # biased the old baseline towards the low tail of the noise.
+          cp "${artifact_dir}/candidate-plan.json" "${artifact_dir}/main-plan.json"
+          cp "${artifact_dir}/candidate-throughput.json" "${artifact_dir}/main-throughput.json"
+
+          run_ratchet() {
+            local prefix="$1"
+            local report="$2"
+            local status=0
             pushd "${GITHUB_WORKSPACE}" >/dev/null
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
+            # The window is the bar; the single-sample baseline is the
+            # fallback for a first run, an expired artifact, or a window
+            # emptied by a benchmark-profile change.
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/ratchet_rust_performance.py \
               --baseline-plan "${artifact_dir}/main-baseline/main-plan.json" \
               --baseline-throughput "${artifact_dir}/main-baseline/main-throughput.json" \
-              --candidate-plan "${artifact_dir}/candidate-plan.json" \
-              --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
+              --baseline-history "${artifact_dir}/main-baseline/main-baseline-history.json" \
+              --candidate-plan "${artifact_dir}/${prefix}-plan.json" \
+              --candidate-throughput "${artifact_dir}/${prefix}-throughput.json" \
               --max-regression 0.30 \
-              --output "${artifact_dir}/ratchet-report.json"
+              --output "${report}" || status=$?
             popd >/dev/null
+            return "${status}"
+          }
+
+          write_unavailable_confirmation_report() {
+            local report="$1"
+            REPORT_PATH="${report}" \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+          import json
+          import os
+          import pathlib as pth
+
+          report_path = pth.Path(os.environ["REPORT_PATH"])
+          report_path.write_text(
+              json.dumps(
+                  {
+                      "comparison_performed": False,
+                      "comparisons": [],
+                      "regressions": [],
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          PY
+          }
+
+          if [[ "${BASELINE_AVAILABLE}" == "true" ]]; then
+            primary_status=0
+            run_ratchet "candidate" \
+              "${artifact_dir}/ratchet-report-primary.json" || primary_status=$?
+
+            if [[ "${primary_status}" -eq 0 ]]; then
+              cp "${artifact_dir}/ratchet-report-primary.json" \
+                "${artifact_dir}/ratchet-report.json"
+            elif [[ "${primary_status}" -ne 1 ]]; then
+              # Exit 2 is malformed input, not a regression. Re-measuring
+              # would spend a second benchmark to reread the same broken
+              # file, so fail on the spot.
+              exit "${primary_status}"
+            else
+              # The window makes the bar robust to one noisy run; it cannot
+              # make the candidate robust, and a single unlucky measurement
+              # otherwise needs a human to press re-run. Measure again and
+              # fail only on a scenario that regressed both times, which a
+              # flake has to hit twice to survive. This costs a second
+              # benchmark only on the runs that were about to fail.
+              #
+              # The re-measurement writes under its own prefix so
+              # `candidate-*` — and therefore the sample recorded into the
+              # main-branch window — stays the primary measurement, one per
+              # merge.
+              echo "::notice::regression reported; re-measuring to confirm"
+              confirmation_ratchet_status=0
+              run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation" || \
+                confirmation_ratchet_status=$?
+              if [[ "${confirmation_ratchet_status}" -eq 0 ]]; then
+                run_ratchet "confirmation" \
+                  "${artifact_dir}/ratchet-report-confirmation.json" || \
+                  confirmation_ratchet_status=$?
+              fi
+              if [[ "${confirmation_ratchet_status}" -ne 0 && \
+                    "${confirmation_ratchet_status}" -ne 1 ]] || \
+                 [[ ! -f "${artifact_dir}/ratchet-report-confirmation.json" ]]; then
+                echo "::warning::confirmation ratchet did not produce usable evidence"
+                write_unavailable_confirmation_report \
+                  "${artifact_dir}/ratchet-report-confirmation.json"
+              fi
+              pushd "${GITHUB_WORKSPACE}" >/dev/null
+              confirmation_status=0
+              UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+                benchmarks/confirm_regression.py \
+                --primary-report "${artifact_dir}/ratchet-report-primary.json" \
+                --confirmation-report "${artifact_dir}/ratchet-report-confirmation.json" \
+                --output "${artifact_dir}/ratchet-report.json" || confirmation_status=$?
+              popd >/dev/null
+              if [[ "${confirmation_status}" -eq 2 ]]; then
+                echo "::warning::confirmation report was malformed; preserving primary verdict"
+                cp "${artifact_dir}/ratchet-report-primary.json" \
+                  "${artifact_dir}/ratchet-report.json"
+                exit 1
+              fi
+              if [[ "${confirmation_status}" -ne 0 ]]; then
+                exit "${confirmation_status}"
+              fi
+            fi
           else
             REPORT_PATH="${artifact_dir}/ratchet-report.json" \
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python - <<'PY'
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
           import json
           import os
           import pathlib as pth
@@ -1230,6 +1337,10 @@ jobs:
               json.dumps(
                   {
                       "baseline_available": False,
+                      "baseline_source": "none",
+                      "baseline_reason": "no_baseline_available",
+                      "compatible_sample_count": 0,
+                      "comparison_state": "skipped_no_baseline",
                       "comparison_performed": False,
                       "passed": True,
                       "reason": "no_previous_main_benchmark_baseline",
@@ -1242,9 +1353,6 @@ jobs:
           PY
           fi
 
-          cp "${artifact_dir}/candidate-plan.json" "${artifact_dir}/main-plan.json"
-          cp "${artifact_dir}/candidate-throughput.json" "${artifact_dir}/main-throughput.json"
-
       - name: Generate benchmark comparison report
         if: always()
         shell: bash
@@ -1256,7 +1364,7 @@ jobs:
           if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
              [[ -f "${artifact_dir}/candidate-throughput.json" ]] && \
              [[ -f "${artifact_dir}/ratchet-report.json" ]]; then
-            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run --no-sync python \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/python_vs_rust_comparison_report.py \
               --plan "${artifact_dir}/candidate-plan.json" \
               --throughput "${artifact_dir}/candidate-throughput.json" \
@@ -1278,6 +1386,41 @@ jobs:
             cat "${artifact_dir}/comparison-summary.md" >> "${GITHUB_STEP_SUMMARY}"
           fi
 
+      - name: Upload benchmark ratchet artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-ratchet
+          path: |
+            ${{ runner.temp }}/benchmark-ratchet/**/*.json
+            ${{ runner.temp }}/benchmark-ratchet/**/*.md
+
+      - name: Check candidate benchmark artefacts
+        id: candidate-artefacts
+        if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: bash
+        run: |
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          if [[ -f "${artifact_dir}/candidate-plan.json" ]] && \
+             [[ -f "${artifact_dir}/candidate-throughput.json" ]] && \
+             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - \
+               "${artifact_dir}/candidate-plan.json" \
+               "${artifact_dir}/candidate-throughput.json" <<'PY'
+          import pathlib as pth
+          import sys
+
+          from benchmarks.ratchet_ratios import load_plan, load_throughput
+
+          load_plan(pth.Path(sys.argv[1]))
+          load_throughput(pth.Path(sys.argv[2]))
+          PY
+          then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::warning::candidate benchmark artefacts are absent or invalid"
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Record compiler-cache effectiveness
         if: always()
         shell: bash
@@ -1292,23 +1435,36 @@ jobs:
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload benchmark ratchet artifacts
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: benchmark-ratchet
-          path: |
-            ${{ runner.temp }}/benchmark-ratchet/**/*.json
-            ${{ runner.temp }}/benchmark-ratchet/**/*.md
+      # Records what this run measured, pass or fail. A window fed only by
+      # passing runs is a window of low-biased samples: a measurement faster
+      # than the bar is always accepted, while the slower measurements that
+      # would correct it are the ones rejected. `!cancelled()` rather than
+      # `always()` so an interrupted, half-measured run records nothing.
+      - name: Record this run's benchmark sample
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
+          UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+            benchmarks/update_baseline_history.py \
+            --history "${artifact_dir}/main-baseline/main-baseline-history.json" \
+            --candidate-plan "${artifact_dir}/candidate-plan.json" \
+            --candidate-throughput "${artifact_dir}/candidate-throughput.json" \
+            --commit "${GITHUB_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --output "${artifact_dir}/main-baseline-history.json"
 
       - name: Upload main benchmark baseline artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet-main-baseline
+          if-no-files-found: error
           path: |
             ${{ runner.temp }}/benchmark-ratchet/main-plan.json
             ${{ runner.temp }}/benchmark-ratchet/main-throughput.json
+            ${{ runner.temp }}/benchmark-ratchet/main-baseline-history.json
 
       - name: Save the compiler cache
         # This is the only job that builds the extension with `--release`, so

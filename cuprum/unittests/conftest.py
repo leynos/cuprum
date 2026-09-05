@@ -7,13 +7,19 @@ declares the matching pytest marker for symbolic helper-property checks.
 
 from __future__ import annotations
 
+import json
 import typing as typ
 
 import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers CrossHair backend provider on import.
+import pytest
 from hypothesis import settings
 
+from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.ratchet_history import BaselineHistory, HistorySample
+
 if typ.TYPE_CHECKING:
-    import pytest
+    import collections.abc as cabc
+    import pathlib as pth
 
 settings.register_profile(
     "crosshair",
@@ -31,6 +37,137 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
     "profile_dir",
     "worker_command",
 })
+
+SCENARIO = "medium-single-nocb"
+WORKER_ITERATIONS = 20
+TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
+
+
+class ScenarioPayload(typ.TypedDict):
+    """One planned backend scenario fixture entry."""
+
+    name: str
+    backend: str
+
+
+class PlanPayload(typ.TypedDict):
+    """Dry-run plan fixture payload."""
+
+    benchmark_profile_version: str
+    worker_iterations: int
+    scenarios: list[ScenarioPayload]
+
+
+class ResultPayload(typ.TypedDict):
+    """One Hyperfine result fixture entry."""
+
+    command: str
+    mean: float
+
+
+class ThroughputPayload(typ.TypedDict):
+    """Hyperfine throughput fixture payload."""
+
+    results: list[ResultPayload]
+
+
+def benchmark_run_payloads(
+    ratios: cabc.Mapping[str, float], *, worker_iterations: int = 20
+) -> tuple[PlanPayload, ThroughputPayload]:
+    """Build matching dry-run and Hyperfine payloads for scenario ratios.
+
+    Parameters
+    ----------
+    ratios : collections.abc.Mapping[str, float]
+        Comparison identifiers and their desired Rust-to-Python mean ratios.
+    worker_iterations : int
+        Positive worker count recorded in the generated plan; defaults to 20.
+
+    Returns
+    -------
+    tuple[PlanPayload, ThroughputPayload]
+        Matching dry-run plan and Hyperfine throughput payloads.
+    """
+    scenarios: list[ScenarioPayload] = []
+    results: list[ResultPayload] = []
+    for scenario, ratio in sorted(ratios.items()):
+        python_scenario: ScenarioPayload = {
+            "name": f"python-{scenario}",
+            "backend": "python",
+        }
+        rust_scenario: ScenarioPayload = {
+            "name": f"rust-{scenario}",
+            "backend": "rust",
+        }
+        scenarios.extend((python_scenario, rust_scenario))
+        python_result: ResultPayload = {
+            "command": f"python-{scenario}",
+            "mean": 1.0,
+        }
+        rust_result: ResultPayload = {
+            "command": f"rust-{scenario}",
+            "mean": ratio,
+        }
+        results.extend((python_result, rust_result))
+    return (
+        {
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "worker_iterations": worker_iterations,
+            "scenarios": scenarios,
+        },
+        {"results": results},
+    )
+
+
+def _write_json(*, tmp_path: pth.Path, filename: str, payload: object) -> pth.Path:
+    """Write one JSON fixture payload."""
+    path = tmp_path / filename
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def candidate_artefacts(tmp_path: pth.Path) -> tuple[pth.Path, pth.Path]:
+    """Write one matching candidate plan and throughput artefact pair."""
+    plan, throughput = benchmark_run_payloads({SCENARIO: 1.0})
+    return (
+        _write_json(
+            tmp_path=tmp_path,
+            filename="candidate-plan.json",
+            payload=plan,
+        ),
+        _write_json(
+            tmp_path=tmp_path,
+            filename="candidate-throughput.json",
+            payload=throughput,
+        ),
+    )
+
+
+def _sample(
+    ratio: float,
+    *,
+    profile_version: str = BENCHMARK_PROFILE_VERSION,
+    worker_iterations: int = WORKER_ITERATIONS,
+    run_id: str = "1",
+) -> HistorySample:
+    """Return one configurable main-branch ratio sample."""
+    return HistorySample(
+        commit="0" * 40,
+        run_id=run_id,
+        benchmark_profile_version=profile_version,
+        worker_iterations=worker_iterations,
+        ratios={SCENARIO: ratio},
+    )
+
+
+def _history(*ratios: float) -> BaselineHistory:
+    """Return an oldest-first baseline history for ``ratios``."""
+    return BaselineHistory(
+        samples=tuple(
+            _sample(ratio, run_id=str(index)) for index, ratio in enumerate(ratios)
+        )
+    )
 
 
 def redact(obj: object, keys: frozenset[str] = _VOLATILE_KEYS) -> object:

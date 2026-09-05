@@ -11,6 +11,7 @@ import pytest
 from benchmarks.fetch_main_benchmark_baseline import (
     GITHUB_TOKEN_ENV_VAR,
     MAIN_BASELINE_NOT_FOUND_EXIT_CODE,
+    ArtefactQuery,
     _parse_args,
     main,
 )
@@ -25,15 +26,22 @@ if typ.TYPE_CHECKING:
 # This literal pins the parser's own ``description``, which is deliberately
 # decoupled from the module docstring so ``--help`` stays a single line.
 EXPECTED_HELP_DESCRIPTION = (
-    "Download the latest successful `main` benchmark baseline artefact."
+    "Download the latest `main` benchmark baseline artefact matching --run-status."
 )
 EXPECTED_CLI_OPTIONS = (
     ("--repository", "GitHub repository in owner/name form."),
     ("--workflow", "Workflow file name or workflow identifier."),
-    ("--artifact-name", "Artefact name to download from the latest successful run."),
+    (
+        "--artifact-name",
+        "Artefact name to download from the latest run matching --run-status.",
+    ),
     ("--output-dir", "Directory that receives the extracted artefact files."),
-    ("--branch", "Branch to query for successful workflow runs."),
-    ("--event", "Workflow event to query for successful runs."),
+    ("--branch", "Branch to query for workflow runs matching --run-status."),
+    ("--event", "Workflow event to query for runs matching --run-status."),
+    (
+        "--run-status",
+        "GitHub run-status filter; use 'completed' for measurement artefacts.",
+    ),
     ("--token-env", "Environment variable containing the GitHub token."),
 )
 REQUIRED_CLI_OPTIONS = ("--repository", "--workflow", "--artifact-name", "--output-dir")
@@ -41,8 +49,8 @@ ARGUMENT_ERROR_EXIT_CODE = 2
 
 
 def _unwrapped(text: str) -> str:
-    """Collapse runs of whitespace so assertions survive argparse rewrapping."""
-    return " ".join(text.split())
+    """Normalize argparse wrapping, including a split long-option spelling."""
+    return " ".join(text.split()).replace("--run- status", "--run-status")
 
 
 def test_cli_help_documents_every_option(
@@ -78,6 +86,9 @@ def test_cli_applies_optional_argument_defaults(tmp_path: pth.Path) -> None:
     )
     assert arguments.event == "push", (
         f"--event must default to 'push', got {arguments.event!r}"
+    )
+    assert arguments.run_status == "success", (
+        f"--run-status must default to 'success', got {arguments.run_status!r}"
     )
     assert arguments.token_env == GITHUB_TOKEN_ENV_VAR, (
         f"--token-env must default to {GITHUB_TOKEN_ENV_VAR!r}, "
@@ -142,6 +153,35 @@ def test_main_returns_not_found_when_no_baseline_available(
     assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
         f"a missing baseline must exit {MAIN_BASELINE_NOT_FOUND_EXIT_CODE} "
         f"so CI can bootstrap, got {exit_code}"
+    )
+
+
+def test_main_forwards_the_requested_run_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pth.Path,
+) -> None:
+    """An explicit status filter must reach the artefact query unchanged."""
+    monkeypatch.setenv(GITHUB_TOKEN_ENV_VAR, "token")
+    captured: list[ArtefactQuery] = []
+
+    def _no_baseline(*, query: ArtefactQuery, token: str) -> None:
+        captured.append(query)
+        _ = token
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline.find_latest_artefact_download_url",
+        _no_baseline,
+    )
+
+    exit_code = main([*main_cli_args(tmp_path), "--run-status", "completed"])
+
+    assert exit_code == MAIN_BASELINE_NOT_FOUND_EXIT_CODE, (
+        "a completed-run query without an artefact must keep the bootstrap exit code"
+    )
+    assert captured, "the CLI must construct an artefact query before returning"
+    assert captured[0].run_status == "completed", (
+        "--run-status must reach ArtefactQuery unchanged; observed "
+        f"{captured[0].run_status!r}"
     )
 
 

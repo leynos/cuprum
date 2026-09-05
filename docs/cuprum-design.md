@@ -2846,30 +2846,77 @@ status and the resulting benchmark decision. The gate and its rationale are
 described under "Gating the paid benchmark job" in the developers' guide. The
 job executes smoke-mode throughput benchmarks for the current checkout (with a
 release build of the Rust extension) and compares each scenario's within-run
-Rust-to-Python mean ratio against the latest successful `main` baseline
-artefact. The CI profile measures ten runs per command and orders matched
-Python/Rust commands adjacently so time-dependent runner load is less likely to
-bias one backend block. On pushes to `main`, the new smoke benchmark output is
-uploaded as the next baseline artefact for future runs. When no prior `main`
-baseline is available yet, or when the existing baseline uses an incompatible
-(older) benchmark profile whose sampling protocol is not comparable, the job
-writes a skip report instead of failing the workflow. The baseline fetch helper
-follows GitHub’s signed archive redirects without forwarding GitHub-only
-authentication headers to the storage host, avoiding cross-origin 401 responses
-during artefact download. The same job also generates a Python-versus-Rust
-comparison report from the candidate smoke artefacts and appends a Markdown
-summary table to `$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend
-speedups even when the Rust ratchet later fails the job.
+Rust-to-Python mean ratio against compatible rolling history from completed
+`main` runs, falling back to the latest completed `main` baseline artefact when
+no compatible history is available. The CI profile measures ten runs per
+command and orders matched Python/Rust commands adjacently so time-dependent
+runner load is less likely to bias one backend block. On pushes to `main`, the
+new smoke benchmark output is uploaded as the next baseline artefact for future
+runs. When no prior `main` baseline is available yet, or when the existing
+baseline uses an incompatible (older) benchmark profile whose sampling protocol
+is not comparable, the job writes a skip report instead of failing the
+workflow. The baseline fetch helper follows GitHub’s signed archive redirects
+without forwarding GitHub-only authentication headers to the storage host,
+avoiding cross-origin 401 responses during artefact download. The same job also
+generates a Python-versus-Rust comparison report from the candidate smoke
+artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
+reviewers can inspect backend speedups even when the Rust ratchet later fails
+the job.
 
 The ratchet rule is:
 
 - scenario ratio = `rust_mean / python_mean` within one benchmark run
+- baseline ratio = the median of the last seven `main` runs' ratios for that
+  scenario
 - regression ratio = `(candidate_ratio - baseline_ratio) / baseline_ratio`
-- fail when regression ratio `> 0.30` for any scenario pair
+- noise band = `3 * 1.4826 * MAD` for those same samples, expressed relative to
+  the median and capped at `1.00`
+- flag a scenario when its regression ratio exceeds both `0.30` and the noise
+  band
+- fail only when a flagged scenario is still flagged by a second measurement
+  taken in the same job
 
 Comparing within-run ratios rather than absolute wall-clock means cancels out
 runner-speed differences and interpreter startup overhead between the two CI
 jobs that produced the baseline and candidate runs.
+
+The median, rather than the latest sample, is the bar because a single run is
+not an estimate of anything: one anomalous measurement on `main` used to become
+the bar and fail every pull request after it until the next merge happened to
+measure low enough to squeeze under the threshold. The spread is measured
+rather than assumed for the same reason the threshold exists at all — `0.30` is
+a guess about how noisy the benchmark is, and the window can simply observe it.
+The two compose as a maximum: the flat threshold is the floor when the samples
+agree, and the noise band widens it when they do not. Spread is estimated from
+the median absolute deviation, which the outlier being tolerated barely moves,
+rather than from a standard deviation, which it would inflate in proportion to
+itself.
+
+The window makes the bar robust to one noisy run but cannot make the candidate
+robust, since a pull request is measured once on whichever runner CI gave it. A
+flagged scenario is therefore measured again in the same job and fails only if
+it is flagged twice, so a flake has to land on the same scenario twice to
+survive. The second benchmark is spent only on runs that were about to fail.
+Confirmation may only turn a failure into a pass — a scenario the first
+measurement did not flag is never failed by the second — and a confirmation
+that could not compare leaves the first verdict standing. The re-measurement
+writes under its own prefix so the sample recorded into the window remains the
+primary measurement, one per merge.
+
+Every non-cancelled completed `main` run records its sample, whatever the
+ratchet decided, and publishes the baseline artefact. Recording only the runs
+that passed is what biased the old baseline: a measurement faster than the bar
+was always accepted, while the slower measurements that would have corrected it
+were exactly the ones rejected. For the same reason CI fetches the baseline with
+`--run-status completed`, so a run that failed its own ratchet is still read.
+A cancelled run publishes nothing.
+
+The window is pruned to samples sharing the current `benchmark_profile_version`
+and `worker_iterations`, because a different sampling protocol measures a
+different question. A window emptied that way — or absent, on a first run or
+after an artefact expires — falls back to comparing against the latest completed
+`main` baseline artefact as a single sample, which is the bar this ratchet
+used before the window existed.
 
 Artefacts uploaded by CI include:
 
@@ -2882,8 +2929,11 @@ Artefacts uploaded by CI include:
 - `comparison-report.json`
 - `comparison-summary.md`
 - `ratchet-report.json`
-- `main-plan.json` and `main-throughput.json` on pushes to `main`, published as
-  the baseline artefact consumed by later ratchet runs
+- `ratchet-report-primary.json` and `ratchet-report-confirmation.json` when a
+  flagged scenario was measured a second time
+- `main-plan.json`, `main-throughput.json` and `main-baseline-history.json` on
+  pushes to `main`, published as the baseline artefact consumed by later
+  ratchet runs
 
 The workflow summary table is generated from matched Python and Rust candidate
 scenarios using the backend-independent scenario label (for example

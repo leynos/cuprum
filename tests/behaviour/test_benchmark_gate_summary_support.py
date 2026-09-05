@@ -6,13 +6,25 @@ import dataclasses as dc
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests run the checked-in workflow script.
 import typing as typ
 
-from tests.helpers.workflow import CHANGES_JOB, Workflow, script_of, step_named
+from tests.helpers.workflow import (
+    CHANGES_JOB,
+    script_of,
+    step_named,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
+    from tests.helpers.workflow import Workflow
+
 SUMMARY_STEP = "Record the benchmark gate decision"
-_COLUMNS = ("event", "detector", "bench", "decision")
+_COLUMNS = (
+    "event",
+    "detector",
+    "performance-relevant changes",
+    "benchmark-ratchet",
+)
+_FIELD_NAMES = ("event", "detector", "bench", "decision")
 _METRIC_PREFIX = "::notice title=benchmark-gate-decision::"
 
 
@@ -86,7 +98,7 @@ def _execute_summary_script(
     workflow_data: Workflow,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the checked-in workflow script is trusted
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - literal vector plus workflow run block; no test input reaches the command line.
         ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
         env={
             "PATH": "/usr/bin:/bin",
@@ -115,6 +127,10 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
     assert len(rows) == 2, (
         f"expected a header row and one data row; the script emitted:\n{emitted}"
     )
+    columns = [cell.strip() for cell in rows[0].strip("|").split("|")]
+    assert columns == list(_COLUMNS), (
+        f"expected columns {_COLUMNS!r}, found {columns!r} in:\n{emitted}"
+    )
     values = [cell.strip() for cell in rows[1].strip("|").split("|")]
     assert len(values) == len(_COLUMNS), (
         f"expected {len(_COLUMNS)} columns, found {values} in:\n{emitted}"
@@ -133,7 +149,7 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
     )
     metric = dict(label.split("=", maxsplit=1) for label in labels)
     return Summary(
-        fields=dict(zip(_COLUMNS, values, strict=True)),
+        fields=dict(zip(_FIELD_NAMES, values, strict=True)),
         table="\n".join(rows),
         metric=metric,
     )
@@ -156,8 +172,8 @@ def run_summary_script(
         Detector status and path verdict exposed to the workflow script.
     tmp_path : pathlib.Path
         Pytest temporary directory in which to capture the step summary.
-    workflow_data : Workflow
-        Parsed workflow containing the summary step.
+    workflow_data : tests.helpers.workflow.Workflow
+        Parsed workflow fixture, supplied at test execution rather than import.
 
     Returns
     -------

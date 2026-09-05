@@ -18,6 +18,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
+    from benchmarks.ratchet_types import RatchetDecision
+
 
 class IncompatibleBenchmarkProfileError(ValueError):
     """Raised when benchmark profiles are not comparable."""
@@ -146,8 +148,20 @@ def _require_profile_metadata(
     return profile_value, worker_iterations
 
 
-def write_incompatible_profile_report(*, reason: str, output_path: pth.Path) -> None:
-    """Write a successful skip report when baseline data is not comparable."""
+def write_incompatible_profile_report(
+    *, reason: str, decision: RatchetDecision, output_path: pth.Path
+) -> None:
+    """Write a successful skip report when baseline data is not comparable.
+
+    Parameters
+    ----------
+    reason : str
+        Existing human-readable profile mismatch detail.
+    decision : RatchetDecision
+        Typed, bounded provenance for the intentionally skipped comparison.
+    output_path : pathlib.Path
+        Destination for the compatible JSON report.
+    """
     _logger.debug(
         "writing incompatible profile report: path=%s, reason=%r",
         output_path,
@@ -155,6 +169,7 @@ def write_incompatible_profile_report(*, reason: str, output_path: pth.Path) -> 
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        **decision.as_dict(),
         "baseline_available": True,
         "comparison_performed": False,
         "passed": True,

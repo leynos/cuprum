@@ -9,12 +9,19 @@ input loading, report writing, and orchestration.
 
 from __future__ import annotations
 
+import typing as typ
+
 from benchmarks._validation import (
     _require_list,
     _require_mapping,
     _require_non_empty_string,
     _require_positive_float,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+__all__ = ["validate_matching_comparison_groups"]
 
 
 def _validate_backend(backend: str, *, index: int) -> None:
@@ -173,12 +180,26 @@ def _extract_rust_python_ratios(
     return _build_ratio_map(context_name=context_name, grouped=grouped)
 
 
-def _validate_matching_comparison_groups(
+def validate_matching_comparison_groups(
     *,
-    baseline_ratios: dict[str, float],
-    candidate_ratios: dict[str, float],
+    baseline_ratios: cabc.Mapping[str, object],
+    candidate_ratios: cabc.Mapping[str, object],
 ) -> None:
-    """Validate that baseline and candidate have the same comparison groups."""
+    """Validate that baseline and candidate have the same comparison groups.
+
+    Parameters
+    ----------
+    baseline_ratios : collections.abc.Mapping[str, object]
+        Baseline ratios keyed by comparison identifier.
+    candidate_ratios : collections.abc.Mapping[str, object]
+        Candidate ratios keyed by comparison identifier.
+
+    Raises
+    ------
+    ValueError
+        If the mappings contain different comparison identifiers. The error
+        reports sorted groups missing from each mapping.
+    """
     baseline_names = set(baseline_ratios)
     candidate_names = set(candidate_ratios)
     if baseline_names != candidate_names:

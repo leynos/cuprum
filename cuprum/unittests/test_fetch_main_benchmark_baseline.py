@@ -145,7 +145,7 @@ def test_load_json_response_retries_transient_urlopen_failures(
 ) -> None:
     """Transient transport failures should be retried with a bounded loop."""
     temporary_outage = "temporary outage"
-    auth_token = "".join(("tok", "en"))
+    credential = "token"
     response = mock.MagicMock()
     response.__enter__.return_value = response
     response.read.side_effect = [b'{"workflow_runs": []}', b""]
@@ -172,7 +172,7 @@ def test_load_json_response_retries_transient_urlopen_failures(
 
     payload = _load_json_response(
         url="https://example.invalid/workflow-runs",
-        token=auth_token,
+        token=credential,
     )
 
     assert payload == {"workflow_runs": []}
@@ -230,6 +230,7 @@ def test_download_bytes_uses_artefact_redirect_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Artefact downloads should use the redirect policy that strips auth."""
+    credential = "token"
 
     class _Response:
         """Minimal stub of an HTTP response context manager."""
@@ -288,7 +289,7 @@ def test_download_bytes_uses_artefact_redirect_handler(
 
     archive_bytes = _download_bytes(
         url="https://api.github.com/repos/leynos/cuprum/actions/artifacts/1/zip",
-        token="".join(("tok", "en")),
+        token=credential,
     )
 
     assert archive_bytes == b"archive-bytes"
@@ -298,7 +299,7 @@ def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Artefact lookup should fetch workflow runs and then per-run artefacts."""
-    auth_token = "".join(("tok", "en"))
+    credential = "token"
     payloads: list[cabc.Mapping[str, object]] = [
         {"workflow_runs": [{"id": 42}]},
         {
@@ -332,7 +333,7 @@ def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
             event="push",
             artefact_name="benchmark-ratchet-main-baseline",
         ),
-        token=auth_token,
+        token=credential,
     )
 
     assert download_url == "https://example.invalid/archive.zip"
@@ -341,3 +342,60 @@ def test_find_latest_artefact_download_url_queries_workflow_and_artefacts(
         "/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&status=success"
     )
     assert requested_urls[1].endswith("/actions/runs/42/artifacts?per_page=100")
+
+
+def test_find_latest_artefact_download_url_honours_the_run_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `completed` query must reach GitHub, not be narrowed to `success`.
+
+    The benchmark baseline records what a run measured rather than endorsing
+    it, so the run that failed its own ratchet is exactly the one whose
+    sample the window must not lose. Hard-coding `success` here is what let
+    one anomalously fast measurement stay the bar.
+    """
+    credential = "token"
+    payloads: list[cabc.Mapping[str, object]] = [
+        {"workflow_runs": [{"id": 42}]},
+        {
+            "artifacts": [
+                {
+                    "name": "benchmark-ratchet-main-baseline",
+                    "expired": False,
+                    "archive_download_url": "https://example.invalid/archive.zip",
+                }
+            ]
+        },
+    ]
+    requested_urls: list[str] = []
+
+    def fake_load_json_response(*, url: str, token: str) -> cabc.Mapping[str, object]:
+        """Record the requested URL and return the next queued payload."""
+        del token
+        requested_urls.append(url)
+        return payloads.pop(0)
+
+    monkeypatch.setattr(
+        "benchmarks.fetch_main_benchmark_baseline._load_json_response",
+        fake_load_json_response,
+    )
+
+    find_latest_artefact_download_url(
+        query=ArtefactQuery(
+            repository="leynos/cuprum",
+            workflow="ci.yml",
+            branch="main",
+            event="push",
+            artefact_name="benchmark-ratchet-main-baseline",
+            run_status="completed",
+        ),
+        token=credential,
+    )
+
+    assert requested_urls[0].endswith(
+        "/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20"
+        "&status=completed"
+    ), (
+        "the run-status filter contract must request completed runs; observed "
+        f"{requested_urls[0]!r}"
+    )

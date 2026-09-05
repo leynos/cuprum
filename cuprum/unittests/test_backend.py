@@ -61,6 +61,7 @@ def backend_env(
         probe: bool | cabc.Callable[[], bool],
         env_value: str | None = None,
     ) -> None:
+        """Set the backend environment and Rust-availability probe."""
         if env_value is None:
             monkeypatch.delenv(_ENV_VAR, raising=False)
         else:

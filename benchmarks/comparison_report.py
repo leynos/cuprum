@@ -11,22 +11,140 @@ from benchmarks.comparison_analysis import (
     RatchetStatus,
     _require_optional_bool,
 )
+from benchmarks.ratchet_types import (
+    BaselineReason,
+    BaselineSource,
+    ComparisonState,
+    ConfirmationStatus,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
 _BOOTSTRAP_SKIP_REASON = "no_previous_main_benchmark_baseline"
+_DECISION_FIELDS = (
+    "baseline_source",
+    "baseline_reason",
+    "compatible_sample_count",
+    "comparison_state",
+)
+
+
+def _complete_decision_fields(
+    report: cabc.Mapping[str, object],
+) -> tuple[object, object, object, object] | None:
+    """Return all decision fields or reject an incomplete decision record."""
+    values = tuple(report.get(field) for field in _DECISION_FIELDS)
+    if values == (None, None, None, None):
+        return None
+    if any(value is None for value in values):
+        msg = "ratchet report must include every decision field"
+        raise TypeError(msg)
+    source, reason, sample_count, state = values
+    return source, reason, sample_count, state
+
+
+def _decision_string(value: object) -> str:
+    """Validate one string-valued decision field."""
+    if not isinstance(value, str):
+        msg = "ratchet report has invalid decision fields"
+        raise TypeError(msg)
+    return value
+
+
+def _compatible_sample_count(value: object) -> int:
+    """Validate one non-negative compatible-sample count."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = "ratchet report has invalid decision fields"
+        raise TypeError(msg)
+    if value < 0:
+        msg = "ratchet report has invalid decision fields"
+        raise ValueError(msg)
+    return value
+
+
+def _decision_enums(
+    *,
+    source: str,
+    reason: str,
+    state: str,
+) -> tuple[BaselineSource, BaselineReason, ComparisonState]:
+    """Convert validated decision strings to bounded enum values."""
+    try:
+        return (
+            BaselineSource(source),
+            BaselineReason(reason),
+            ComparisonState(state),
+        )
+    except ValueError as exc:
+        msg = "ratchet report has unknown decision fields"
+        raise ValueError(msg) from exc
+
+
+def _decision_values(
+    report: cabc.Mapping[str, object],
+) -> tuple[BaselineSource, BaselineReason, int, ComparisonState] | None:
+    """Return validated decision fields when a report includes them."""
+    values = _complete_decision_fields(report)
+    if values is None:
+        return None
+    raw_source, raw_reason, raw_count, raw_state = values
+    source, reason, state = _decision_enums(
+        source=_decision_string(raw_source),
+        reason=_decision_string(raw_reason),
+        state=_decision_string(raw_state),
+    )
+    return source, reason, _compatible_sample_count(raw_count), state
+
+
+def _confirmation_status(
+    report: cabc.Mapping[str, object],
+) -> ConfirmationStatus | None:
+    """Return validated optional confirmation status from a ratchet report."""
+    status = report.get("confirmation_status")
+    if status is None:
+        return None
+    if not isinstance(status, str):
+        msg = "ratchet report has invalid confirmation status"
+        raise TypeError(msg)
+    try:
+        return ConfirmationStatus(status)
+    except ValueError as exc:
+        msg = "ratchet report has unknown confirmation status"
+        raise ValueError(msg) from exc
+
+
+def _decision_table(report: cabc.Mapping[str, object]) -> str:
+    """Render optional durable ratchet-decision fields for workflow Markdown."""
+    decision = _decision_values(report)
+    if decision is None:
+        return ""
+    source, reason, sample_count, state = decision
+    rows = [
+        "| Ratchet decision | Value |\n| --- | --- |",
+        f"| Baseline source | `{source}` |",
+        f"| Baseline reason | `{reason}` |",
+        f"| Compatible samples | {sample_count} |",
+        f"| Comparison state | `{state}` |",
+    ]
+    confirmation = _confirmation_status(report)
+    if confirmation is not None:
+        rows.append(f"| Confirmation status | `{confirmation.value}` |")
+    table = "\n".join(rows)
+    return f"\n\n{table}"
 
 
 def _ratchet_skip_detail(report: cabc.Mapping[str, object]) -> str:
     """Return the human-readable skip-reason string for a skipped ratchet run."""
     if report.get("reason") == _BOOTSTRAP_SKIP_REASON:
-        return (
-            "Rust regression ratchet skipped: no previous successful main "
+        detail = (
+            "Rust regression ratchet skipped: no previous completed main "
             "baseline artefact."
         )
-    return "Rust regression ratchet skipped."
+    else:
+        detail = "Rust regression ratchet skipped."
+    return detail + _decision_table(report)
 
 
 def _ratchet_passed_status(report: cabc.Mapping[str, object]) -> RatchetStatus:
@@ -35,9 +153,15 @@ def _ratchet_passed_status(report: cabc.Mapping[str, object]) -> RatchetStatus:
     if not isinstance(passed_value, bool):
         msg = "ratchet report must include a boolean passed field"
         raise TypeError(msg)
-    if passed_value:
-        return RatchetStatus(status="passed", detail="Rust regression ratchet passed.")
-    return RatchetStatus(status="failed", detail="Rust regression ratchet failed.")
+    detail = (
+        "Rust regression ratchet passed."
+        if passed_value
+        else "Rust regression ratchet failed."
+    )
+    return RatchetStatus(
+        status="passed" if passed_value else "failed",
+        detail=detail + _decision_table(report),
+    )
 
 
 def load_ratchet_report(path: pth.Path) -> RatchetStatus:
