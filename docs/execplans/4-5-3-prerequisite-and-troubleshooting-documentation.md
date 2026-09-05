@@ -239,7 +239,7 @@ Key files for this task:
   `rust/cuprum-rust/Cargo.toml` and module name `cuprum._rust_backend_native`.
 
 - `rust/cuprum-rust/Cargo.toml` — the Rust crate configuration. Uses
-  `edition = "2024"` (requiring Rust 1.85+), PyO3 0.27.2, and `libc 0.2` on
+  `edition = "2024"` (requiring Rust 1.85+), PyO3 0.29.2, and `libc 0.2` on
   Linux.
 
 - `Makefile` — unified Python, Rust, and documentation build targets including
