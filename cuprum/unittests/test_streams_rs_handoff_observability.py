@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import logging
 import typing as typ
 from unittest import mock
@@ -45,6 +46,18 @@ class _MetricsObserverError(RuntimeError):
     def __init__(self) -> None:
         """Initialize the test double's stable diagnostic message."""
         super().__init__("metrics unavailable")
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PreNativeFailureCase:
+    """One bounded pre-native failure that preserves Python writer ownership."""
+
+    target_symbol: str
+    failure: type[OSError]
+    error_match: str
+    expected_outcome: RustPumpHandoffOutcome
+    expected_phase: str
+    expected_error_type: str
 
 
 def _outcomes(events: list[PumpEvent]) -> list[RustPumpHandoffOutcome]:
@@ -149,30 +162,58 @@ def test_native_load_failure_emits_one_bounded_outcome(
     )
 
 
-def test_reader_preparation_failure_emits_one_bounded_outcome(
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            _PreNativeFailureCase(
+                target_symbol="_convert_fd_for_platform",
+                failure=_ReaderPreparationError,
+                error_match="cannot be prepared",
+                expected_outcome=RustPumpHandoffOutcome.READER_PREPARATION_FAILED,
+                expected_phase="reader_preparation",
+                expected_error_type="_ReaderPreparationError",
+            ),
+            id="reader-preparation",
+        ),
+        pytest.param(
+            _PreNativeFailureCase(
+                target_symbol="_transfer_writer_fd_for_platform",
+                failure=_WindowsTransferError,
+                error_match="DuplicateHandle",
+                expected_outcome=RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED,
+                expected_phase="platform_writer_transfer",
+                expected_error_type="_WindowsTransferError",
+            ),
+            id="platform-writer-transfer",
+        ),
+    ],
+)
+def test_pre_native_failure_emits_one_bounded_outcome(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
+    case: _PreNativeFailureCase,
 ) -> None:
-    """Reader conversion failure closes the writer before Rust owns it."""
+    """Pre-native failures close Python's writer before Rust ownership."""
     caplog.set_level(logging.DEBUG, logger="cuprum._streams_rs")
     native_pump = mock.Mock(return_value=0)
     events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
     collector = RecordingCollector()
 
-    def fail_reader_preparation(reader_fd: int) -> typ.NoReturn:
-        """Fail while converting the borrowed reader resource."""
-        del reader_fd
-        raise _ReaderPreparationError
+    def fail_pre_native_operation(resource: int) -> typ.NoReturn:
+        """Fail before transferring the writer resource to Rust."""
+        del resource
+        raise case.failure
 
     monkeypatch.setattr(
         _streams_rs,
-        "_convert_fd_for_platform",
-        fail_reader_preparation,
+        case.target_symbol,
+        fail_pre_native_operation,
     )
     with (
         observe_pump(events.append),
         observe_pump(PumpMetricsHook(collector)),
-        pytest.raises(_ReaderPreparationError, match="cannot be prepared"),
+        pytest.raises(case.failure, match=case.error_match),
     ):
         _streams_rs.rust_pump_stream(11, 12)
 
@@ -180,18 +221,18 @@ def test_reader_preparation_failure_emits_one_bounded_outcome(
     native_pump.assert_not_called()
     _assert_handoff_outcome(
         events,
-        RustPumpHandoffOutcome.READER_PREPARATION_FAILED,
-        "reader preparation failure must emit exactly its closed outcome",
+        case.expected_outcome,
+        f"{case.expected_phase} failure must emit exactly its closed outcome",
     )
     _assert_handoff_metric(
         collector,
-        RustPumpHandoffOutcome.READER_PREPARATION_FAILED,
-        "reader preparation failure must increment one bounded hand-off metric",
+        case.expected_outcome,
+        f"{case.expected_phase} failure must increment one bounded hand-off metric",
     )
     _assert_handoff_failure_record(
         caplog,
-        "reader_preparation",
-        "_ReaderPreparationError",
+        case.expected_phase,
+        case.expected_error_type,
     )
 
 
@@ -210,48 +251,6 @@ def test_invalid_buffer_size_emits_one_bounded_outcome(
         events,
         RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED,
         "invalid buffer size must emit exactly its closed outcome",
-    )
-
-
-def test_windows_writer_transfer_failure_emits_one_bounded_outcome(
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed Windows transfer closes its worker-side writer once."""
-    caplog.set_level(logging.DEBUG, logger="cuprum._streams_rs")
-    native_pump = mock.Mock(return_value=0)
-    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
-    collector = RecordingCollector()
-
-    def fail_transfer(writer_fd: int) -> typ.NoReturn:
-        """Model failure while duplicating a Windows writer handle."""
-        del writer_fd
-        raise _WindowsTransferError
-
-    monkeypatch.setattr(_streams_rs, "_transfer_writer_fd_for_platform", fail_transfer)
-    with (
-        observe_pump(events.append),
-        observe_pump(PumpMetricsHook(collector)),
-        pytest.raises(OSError, match="DuplicateHandle"),
-    ):
-        _streams_rs.rust_pump_stream(11, 12)
-
-    close_writer.assert_called_once_with(12)
-    native_pump.assert_not_called()
-    _assert_handoff_outcome(
-        events,
-        RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED,
-        "Windows transfer failure must emit exactly its closed outcome",
-    )
-    _assert_handoff_metric(
-        collector,
-        RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED,
-        "Windows transfer failure must increment one bounded hand-off metric",
-    )
-    _assert_handoff_failure_record(
-        caplog,
-        "platform_writer_transfer",
-        "_WindowsTransferError",
     )
 
 
