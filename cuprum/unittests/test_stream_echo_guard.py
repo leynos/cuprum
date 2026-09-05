@@ -362,3 +362,12 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
     assert fields["cuprum_stream"] == "stdout"
     assert fields["cuprum_transition"] == "echo_disabled"
     assert fields["cuprum_error_category"] == "unicode_encode"
+    assert fallbacks == (
+        RelayFallback(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.UNICODE_ENCODE,
+        ),
+    ), (
+        "exactly one result record must describe the handled transition for "
+        f"chunks={chunks!r}, failing_write={failing_write!r}, fallbacks={fallbacks!r}"
+    )

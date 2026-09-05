@@ -24,7 +24,6 @@ import typing as typ
 
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _terminate_all_shielded
-from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
 from cuprum._timeout_reporting import (
@@ -35,6 +34,7 @@ from cuprum._timeout_reporting import (
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import ExecutionContext
 

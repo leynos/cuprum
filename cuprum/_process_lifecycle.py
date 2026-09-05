@@ -34,7 +34,6 @@ from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
-from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
@@ -42,6 +41,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_config import _PipelineRunConfig
+    from cuprum._streams import _RelayDiagnostics
     from cuprum.sh import SafeCmd
 
 
@@ -202,12 +202,11 @@ async def _spawn_pipeline_processes(
 
     Returns
     -------
-    tuple[list[asyncio.subprocess.Process], list[asyncio.Task[str | None] | None], asyncio.Task[str | None] | None, list[float], list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]]]
-        The stage processes, per-stage stderr capture tasks, the final stage's
-        stdout capture task, stage start timestamps, and one per-stage
-        ``(stderr, stdout)`` pair of relay diagnostics collectors. The pair is
-        ``(None, None)`` when the stage captured nothing and ``(stderr, None)``
-        for every non-final stage.
+    Tuple of the stage processes, per-stage stderr capture tasks, the
+    final stage's stdout capture task, stage start timestamps, and one
+    per-stage ``(stderr, stdout)`` pair of relay diagnostics collectors.
+    The pair is ``(None, None)`` when the stage captured nothing and
+    ``(stderr, None)`` for every non-final stage.
     """
     from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
 
@@ -242,18 +241,16 @@ async def _spawn_pipeline_processes(
             started_at.append(time.perf_counter())
             observation.emit("start", _EventDetails(pid=process.pid))
 
-            stderr_task, new_stdout_task, stage_relay_diagnostics = (
-                _create_stage_capture_tasks(
-                    process,
-                    config,
-                    is_last_stage=(idx == last_idx),
-                    observation=observation,
-                )
+            stage_tasks = _create_stage_capture_tasks(
+                process,
+                config,
+                is_last_stage=(idx == last_idx),
+                observation=observation,
             )
-            stderr_tasks.append(stderr_task)
-            relay_diagnostics_by_stage.append(stage_relay_diagnostics)
-            if new_stdout_task is not None:
-                stdout_task = new_stdout_task
+            stderr_tasks.append(stage_tasks[0])
+            relay_diagnostics_by_stage.append(stage_tasks[2])
+            if stage_tasks[1] is not None:
+                stdout_task = stage_tasks[1]
     except BaseException:
         await _cleanup_spawned_processes(
             processes,

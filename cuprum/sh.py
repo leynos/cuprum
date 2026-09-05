@@ -47,7 +47,9 @@ from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
-from cuprum.echo_events import RelayFallback as RelayFallback
+from cuprum.echo_events import (
+    RelayFallback as RelayFallback,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+)
 
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.

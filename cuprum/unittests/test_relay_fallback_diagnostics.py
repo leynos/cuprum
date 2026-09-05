@@ -20,7 +20,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RelayFallback, TimeoutExpired, sh
+from cuprum import Program, RelayFallback, TimeoutExpired
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.adapters.echo_metrics import ECHO_ENCODING_FAILURES_TOTAL
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
@@ -141,14 +141,14 @@ class _MetricsProbe:
 
     def __init__(self, collector: MetricsCollector) -> None:
         """Bind the probe to its collector."""
-        self._hook = _EchoMetricsHookShim(collector)
+        self._hook = _echo_metrics_hook(collector)
 
     def __call__(self, event: EchoEvent) -> None:
         """Increment the collector's echo counter for ``event``."""
         self._hook(event)
 
 
-def _EchoMetricsHookShim(
+def _echo_metrics_hook(
     collector: MetricsCollector,
 ) -> cabc.Callable[[EchoEvent], None]:
     """Build the real metrics hook without a module-level import cycle."""
@@ -188,7 +188,7 @@ def test_text_only_failure_records_once_across_all_surfaces(
 ) -> None:
     """One disablement yields one warning with categorical extras only."""
     sink = _Cp1252TextOnlySink()
-    chunks = ("plain ".encode(), "ś".encode(), b" tail")
+    chunks = (b"plain ", "ś".encode(), b" tail")
 
     with caplog.at_level(logging.WARNING, logger="cuprum.stream"):
         captured = asyncio.run(
@@ -218,7 +218,7 @@ def test_text_only_failure_records_once_across_all_surfaces(
     assert record.exc_info is None, (
         "the original exception object must not ride on the record"
     )
-    assert record.args in (None, ()), (
+    assert record.args in {None, ()}, (
         f"positional args must stay empty, got {record.args!r}"
     )
     fields = vars(record)
@@ -287,7 +287,7 @@ def test_metrics_hook_increments_once_per_disablement() -> None:
     with observe_echo(_MetricsProbe(collector)):
         asyncio.run(
             _drain(
-                _reader(("plain ".encode(), "ś".encode(), b" more")),
+                _reader((b"plain ", "ś".encode(), b" more")),
                 _StreamConfig(
                     capture_output=True,
                     echo_output=True,
@@ -637,7 +637,7 @@ def test_command_result_field_order_and_positional_compatibility() -> None:
         "stdout",
         "stderr",
     ], f"existing positional slots must not move: {fields}"
-    positional = CommandResult("echo", (), 0, 4242, "out", "err")
+    positional = CommandResult(Program("echo"), (), 0, 4242, "out", "err")
     assert positional.relay_fallbacks == (), (
         "six-argument positional construction must keep working and default to ()"
     )
@@ -658,7 +658,7 @@ def test_diagnostic_record_is_frozen_with_bounded_fields() -> None:
     assert dc.fields(RelayFallback)[0].name == "stream"
     assert dc.fields(RelayFallback)[1].name == "error_category"
     with pytest.raises(dc.FrozenInstanceError):
-        fallback.stream = EchoStream.STDERR  # type: ignore[misc]
+        fallback.stream = EchoStream.STDERR  # type: ignore[misc]  # ty: ignore[invalid-assignment]
 
 
 def test_no_fallback_record_for_program_without_output(

@@ -3,7 +3,9 @@
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
 run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``.
+consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
+run loop that waits for exit and reconciles the consumer tasks lives in
+``cuprum._subprocess_stream_run``.
 """
 
 from __future__ import annotations
@@ -19,26 +21,21 @@ from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
-    _handle_stream_timeout,
     _handle_subprocess_timeout,
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
 )
-from cuprum._subprocess_wait import (
-    _drain_stream_consumers,
-    _DrainContext,
-    _reconcile_run_tasks,
-    _RunTaskOwnership,
-    _wait_for_exit_code_within_timeout,
-)
+from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.echo_events import RelayFallback
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -88,7 +85,7 @@ def _create_stream_callback(
     return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
 
 
-def _spawn_stream_consumers(
+def _spawn_stream_consumers(  # ruff: ignore[too-many-arguments] - the collector pair stays explicit so the run owns it.  # pylint: disable=too-many-arguments
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     stream_config: _StreamConfig,
@@ -102,6 +99,11 @@ def _spawn_stream_consumers(
     index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
     pair on its ``_RunTaskOwnership`` so its single reconciliation point can
     settle and read them exactly once.
+
+    Returns
+    -------
+    tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
+        The stdout and stderr consumer tasks, in that order.
     """
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
@@ -153,150 +155,6 @@ def _build_stream_config(
     )
 
 
-async def _wait_for_streamed_process_exit(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    tasks: _RunTaskOwnership,
-    pid: int | None,
-) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
-    try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
-        )
-    except TimeoutError as exc:
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired. The
-        # reconciliation is shielded because a caller cancelling now would
-        # otherwise abandon the consumers mid-drain and leak them.
-        stdout_text, stderr_text = await _shielded_cleanup(
-            _reconcile_run_tasks(
-                tasks,
-                _DrainContext(
-                    capture=execution.capture,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
-            timeout=execution.timeout,
-        )
-    except BaseException:
-        # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation. Do not capture
-        # stream text while another error propagates, but settle every task
-        # before re-raising the original failure unchanged.
-        await _shielded_cleanup(
-            _reconcile_run_tasks(
-                tasks,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
-        raise
-
-
-async def _run_subprocess_with_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    *,
-    pid: int | None,
-) -> tuple[
-    int,
-    float,
-    str | None,
-    str | None,
-    tuple[_RelayDiagnostics, _RelayDiagnostics],
-]:
-    """Run subprocess with stream capture, timeout handling, and diagnostics.
-
-    Returns
-    -------
-    tuple[int, float, str | None, str | None, tuple[_RelayDiagnostics, _RelayDiagnostics]]
-        The exit code, exit timestamp, captured stdout, captured stderr, and
-        the per-stream relay diagnostics collectors (stdout first, stderr
-        second) settled by the run's reconciliation.
-    """
-    discard_on_cancel = asyncio.Event()
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
-    tasks = _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
-        ),
-        consumers=_spawn_stream_consumers(
-            process,
-            execution,
-            stream_config,
-            pid=pid,
-            relay_diagnostics=relay_diagnostics,
-        ),
-        discard_on_cancel=discard_on_cancel,
-        relay_diagnostics=relay_diagnostics,
-    )
-    exit_code, exited_at = await _wait_for_streamed_process_exit(
-        process,
-        execution,
-        tasks,
-        pid,
-    )
-    if tasks.stdin_task is not None:
-        try:
-            await tasks.stdin_task
-        except BaseException:
-            # An unexpected stdin-writer failure (or a cancellation landing on
-            # this await) must still reconcile the stdout/stderr consumers,
-            # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates. The writer
-            # has already settled here, so only the consumers need draining.
-            await _shielded_cleanup(
-                _drain_stream_consumers(
-                    tasks.consumers,
-                    _DrainContext(
-                        capture=False,
-                        pid=pid,
-                        observation=execution.observation,
-                        discard_on_cancel=tasks.discard_on_cancel,
-                    ),
-                )
-            )
-            raise
-    try:
-        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
-        for diagnostics in tasks.relay_diagnostics:
-            diagnostics.settle()
-    except BaseException:
-        # `gather` re-raises the first failure and leaves its sibling running,
-        # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
-        # drain absorbs what it finds, which is right while another error is
-        # propagating — and here the consumer failure *is* that error.
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
-        raise
-    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
-
-
 async def _run_subprocess_without_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -342,6 +200,12 @@ def _relay_fallbacks_for_result(
     The order is stdout's records then stderr's; each record carries its own
     stream, and this order does not reconstruct chronological interleaving
     between the two streams.
+
+    Returns
+    -------
+    tuple[RelayFallback, ...]
+        The command's handled echo-disablement records, empty when its
+        diagnostics are absent or recorded nothing.
     """
     if relay_diagnostics is None:
         return ()
@@ -416,7 +280,6 @@ __all__ = [
     "_build_stream_config",
     "_create_stream_callback",
     "_execute_subprocess",
-    "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
     "_spawn_subprocess",

@@ -21,6 +21,11 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from cuprum._streams_lines import (
+    _emit_completed_lines,
+    _split_complete_lines,
+    _strip_line_ending,
+)
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -87,10 +92,6 @@ class _RelayDiagnostics:
     fallbacks: list[RelayFallback] = dc.field(default_factory=list)
     is_settled: bool = False
 
-    def record(self, fallback: RelayFallback) -> None:
-        """Append one handled echo-disablement record."""
-        self.fallbacks.append(fallback)
-
     def settle(self) -> None:
         """Publish the collected records for the owning command's result.
 
@@ -105,6 +106,12 @@ class _RelayDiagnostics:
         A drain that never settled — cancelled or abandoned during teardown —
         leaves its records unread: those diagnostics remain on the echo
         observation channel, so callers on a non-result path see ``()``.
+
+        Returns
+        -------
+        tuple[RelayFallback, ...]
+            The records collected before settlement, empty when the drain
+            never settled or recorded nothing.
         """
         if not self.is_settled:
             return ()
@@ -129,6 +136,11 @@ async def _consume_stream(
 
     ``relay_diagnostics`` defaults to a fresh collector, so a caller that does
     not own result diagnostics still gets a correct drain.
+
+    Returns
+    -------
+    str | None
+        The captured text, or ``None`` when capture is disabled.
     """
     if on_line is None:
         return await _consume_stream_without_lines(
@@ -319,11 +331,11 @@ def _echo_chunk(
         return
     try:
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         state.echo_guard.disabled = True
         # One record per handled transition: the guard above stops any later
         # echo write, so this append runs at most once per drain.
-        state.relay_diagnostics.record(
+        state.relay_diagnostics.fallbacks.append(
             RelayFallback(
                 stream=state.config.stream,
                 error_category=EchoErrorCategory.UNICODE_ENCODE,
@@ -359,60 +371,6 @@ def _flush_echo_decoder(
     """Flush a text-only echo decoder at end of stream."""
     if state.echo_decoder is not None:
         _echo_chunk(state, b"", final=True)
-
-
-def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
-
-    for line in lines:
-        on_line(line)
-
-    return remainder
-
-
-def _split_complete_lines(text: str) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
-
-    Parameters
-    ----------
-    text : str
-        Text to split using Python's universal line boundary rules.
-
-    Returns
-    -------
-    tuple[list[str], str]
-        Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line.
-    """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if not _ends_with_line_ending(lines[-1]):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
-
-
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith(("\n", "\r"))
-
-
-def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith(("\n", "\r")):
-        return line[:-1]
-    return line
 
 
 __all__ = [
