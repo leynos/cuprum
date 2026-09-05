@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+import pytest
+
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.adapters.echo_metrics import (
     ECHO_ENCODING_FAILURES_TOTAL,
@@ -80,38 +82,35 @@ def _echo_reader(chunks: cabc.Sequence[bytes]) -> asyncio.StreamReader:
     return typ.cast("asyncio.StreamReader", _ChunkedReader(chunks))
 
 
-def test_stdout_failure_increments_only_the_stdout_series() -> None:
-    """A stdout drain failure counts once under ``stream=stdout``."""
+@pytest.mark.parametrize(
+    ("stream", "expected_stream_label"),
+    [
+        (EchoStream.STDOUT, "stdout"),
+        (EchoStream.STDERR, "stderr"),
+    ],
+    ids=["stdout", "stderr"],
+)
+def test_stream_failure_increments_only_its_own_series(
+    stream: EchoStream,
+    expected_stream_label: str,
+) -> None:
+    """A drain failure counts once under its own ``stream`` label."""
     collector = RecordingCollector()
 
     with observe_echo(EchoMetricsHook(collector)):
-        _run_drain(EchoStream.STDOUT)
+        _run_drain(stream)
 
     assert len(collector.counters) == 1, (
-        "a stdout failure must increment exactly one counter, "
+        f"a {expected_stream_label} failure must increment exactly one counter, "
         f"found {collector.counters}"
     )
     name, value, labels = collector.counters[0]
     assert name == ECHO_ENCODING_FAILURES_TOTAL
     assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
-    assert labels == {"stream": "stdout", "error_category": "unicode_encode"}
-
-
-def test_stderr_failure_increments_only_the_stderr_series() -> None:
-    """A stderr drain failure counts once under ``stream=stderr``."""
-    collector = RecordingCollector()
-
-    with observe_echo(EchoMetricsHook(collector)):
-        _run_drain(EchoStream.STDERR)
-
-    assert len(collector.counters) == 1, (
-        "a stderr failure must increment exactly one counter, "
-        f"found {collector.counters}"
-    )
-    name, value, labels = collector.counters[0]
-    assert name == ECHO_ENCODING_FAILURES_TOTAL
-    assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
-    assert labels == {"stream": "stderr", "error_category": "unicode_encode"}
+    assert labels == {
+        "stream": expected_stream_label,
+        "error_category": "unicode_encode",
+    }
 
 
 def test_independent_streams_produce_one_increment_each() -> None:
