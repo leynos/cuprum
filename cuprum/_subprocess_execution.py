@@ -16,7 +16,7 @@ import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams import _consume_stream, _StreamConfig, _RelayDiagnostics
 from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
@@ -40,6 +40,17 @@ from cuprum.echo_events import EchoStream
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+
+
+"""Internal subprocess execution machinery.
+Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
+stream consumers, and assembling the ``CommandResult``. The rules for ending a
+run — applying the deadline, terminating the process, and draining the stream
+consumers exactly once — live in ``cuprum._subprocess_wait``.
+"""
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -224,16 +235,32 @@ async def _run_subprocess_with_streams(
     execution: _SubprocessExecution,
     *,
     pid: int | None,
-) -> tuple[int, float, str | None, str | None]:
-    """Run subprocess with stream capture and timeout handling."""
+) -> tuple[
+    int,
+    float,
+    str | None,
+    str | None,
+    tuple[_RelayDiagnostics, _RelayDiagnostics],
+]:
+    """Run subprocess with stream capture, timeout handling, and diagnostics.
+
+    Returns
+    -------
+    tuple[int, float, str | None, str | None, tuple[_RelayDiagnostics, _RelayDiagnostics]]
+        The exit code, exit timestamp, captured stdout, captured stderr, and
+        the per-stream relay diagnostics collectors (stdout first, stderr
+        second) settled by the run's reconciliation.
+    """
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
+    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
         ),
         consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
         discard_on_cancel=discard_on_cancel,
+        relay_diagnostics=relay_diagnostics,
     )
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
@@ -282,7 +309,7 @@ async def _run_subprocess_with_streams(
             )
         )
         raise
-    return exit_code, exited_at, stdout_text, stderr_text
+    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
 
 
 async def _run_subprocess_without_streams(
@@ -321,7 +348,18 @@ async def _run_subprocess_without_streams(
         await stdin_task
     return exit_code, exited_at
 
+def _relay_fallbacks_for_result(
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None,
+) -> tuple[RelayFallback, ...]:
+    """Flatten per-stream diagnostics into one result tuple.
 
+    The order is stdout's records then stderr's; each record carries its own
+    stream, and this order does not reconstruct chronological interleaving
+    between the two streams.
+    """
+    if relay_diagnostics is None:
+        return ()
+    return relay_diagnostics[0].snapshot() + relay_diagnostics[1].snapshot()
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     process = await _spawn_subprocess(execution)
@@ -333,6 +371,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     # overwrites them with whatever it captured before returning.
     stdout_text: str | None = None
     stderr_text: str | None = None
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     try:
         if execution.consumes_any_stream:
             (
@@ -340,6 +379,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
                 exited_at,
                 stdout_text,
                 stderr_text,
+                relay_diagnostics,
             ) = await _run_subprocess_with_streams(
                 process,
                 execution,
@@ -379,6 +419,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         pid=process.pid if process.pid is not None else -1,
         stdout=stdout_text,
         stderr=stderr_text,
+        relay_fallbacks=_relay_fallbacks_for_result(relay_diagnostics),
     )
 
 
