@@ -30,7 +30,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
+from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream, RelayFallback
 from cuprum.echo_observation import _emit_echo_event
 
 if typ.TYPE_CHECKING:
@@ -68,6 +68,27 @@ class _DrainState:
     # disabled, so the same drain shares the flag across its loop and final
     # decoder flush without rebinding this frozen field.
     echo_guard: _EchoGuard
+    # Caller-owned result diagnostics: the collector a command hands to this
+    # drain so a handled echo disablement can be surfaced on that command's
+    # ``CommandResult.relay_fallbacks`` without touching the shared echo-hook
+    # registry, which cannot attribute events to nested or concurrent runs.
+    relay_diagnostics: _RelayDiagnostics
+
+
+@dc.dataclass(slots=True)
+class _RelayDiagnostics:
+    """Per-drain collector for handled echo-disablement records.
+
+    One collector belongs to one command stream. Because the echo guard stops
+    any later echo write after the first handled failure, a drain appends at
+    most one :class:`~cuprum.echo_events.RelayFallback` here.
+    """
+
+    fallbacks: list[RelayFallback] = dc.field(default_factory=list)
+
+    def record(self, fallback: RelayFallback) -> None:
+        """Append one handled echo-disablement record."""
+        self.fallbacks.append(fallback)
 
 
 @dc.dataclass(slots=True)
@@ -82,11 +103,25 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
-    """Read from a subprocess stream, teeing to sink when requested."""
+    """Read from a subprocess stream, teeing to sink when requested.
+
+    ``relay_diagnostics`` defaults to a fresh collector, so a caller that does
+    not own result diagnostics still gets a correct drain.
+    """
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config)
-    return await _consume_stream_with_lines(stream, config, on_line=on_line)
+        return await _consume_stream_without_lines(
+            stream,
+            config,
+            relay_diagnostics=relay_diagnostics,
+        )
+    return await _consume_stream_with_lines(
+        stream,
+        config,
+        on_line=on_line,
+        relay_diagnostics=relay_diagnostics,
+    )
 
 
 async def _drain(
@@ -94,6 +129,7 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
     # This is the single source of truth for the consume mechanics shared by
@@ -107,7 +143,14 @@ async def _drain(
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
     echo_guard = _EchoGuard()
-    state = _DrainState(config, buffer, echo_decoder, on_chunk, echo_guard)
+    state = _DrainState(
+        config,
+        buffer,
+        echo_decoder,
+        on_chunk,
+        echo_guard,
+        relay_diagnostics or _RelayDiagnostics(),
+    )
     reached_eof = await _drain_chunks(stream, state)
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
@@ -150,11 +193,13 @@ async def _drain_chunks(
 async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
+    *,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config)
+    return await _drain(stream, config, relay_diagnostics=relay_diagnostics)
 
 
 async def _consume_stream_with_lines(
@@ -162,6 +207,7 @@ async def _consume_stream_with_lines(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None],
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream while emitting decoded output lines."""
     if stream is None:
@@ -178,7 +224,12 @@ async def _consume_stream_with_lines(
             on_line=on_line,
         )
 
-    captured = await _drain(stream, config, on_chunk=feed_decoder)
+    captured = await _drain(
+        stream,
+        config,
+        on_chunk=feed_decoder,
+        relay_diagnostics=relay_diagnostics,
+    )
 
     pending_text = _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),
@@ -250,9 +301,21 @@ def _echo_chunk(
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
     except UnicodeEncodeError as exc:
         state.echo_guard.disabled = True
+        # One record per handled transition: the guard above stops any later
+        # echo write, so this append runs at most once per drain.
+        state.relay_diagnostics.record(
+            RelayFallback(
+                stream=state.config.stream,
+                error_category=EchoErrorCategory.UNICODE_ENCODE,
+            ),
+        )
         # The warning and the observation are two projections of the same
         # first-failure transition; neither retries after this point because
         # the guard above already disables every later echo write.
+        # Categorical fields only: a UnicodeEncodeError retains the rejected
+        # input on its ``object`` attribute, so neither the exception object
+        # nor its traceback may ride along, and the sink encoding stays off the
+        # record for the same privacy reason.
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
@@ -260,14 +323,12 @@ def _echo_chunk(
             ),
         )
         _LOGGER.warning(
-            "echo_disabled encoding=%s error=%s",
-            state.config.encoding,
-            type(exc).__name__,
-            exc_info=exc,
+            "echo_disabled_stream_rejected_output",
             extra={
-                "cuprum_encoding": state.config.encoding,
-                "cuprum_sink_type": type(state.config.sink).__name__,
-                "cuprum_error_type": type(exc).__name__,
+                "cuprum_operation": "echo_chunk",
+                "cuprum_stream": str(state.config.stream),
+                "cuprum_transition": "echo_disabled",
+                "cuprum_error_category": EchoErrorCategory.UNICODE_ENCODE.value,
             },
         )
 
@@ -337,6 +398,7 @@ def _strip_line_ending(line: str) -> str:
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_RelayDiagnostics",
     "_StreamConfig",
     "_WriteOutcome",
     "_close_stream_writer",
