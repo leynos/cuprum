@@ -56,6 +56,31 @@ def _install_native_pump(
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", lambda fd: fd)
 
 
+def _install_observed_native_pump(
+    monkeypatch: pytest.MonkeyPatch,
+    native_pump: mock.Mock,
+) -> tuple[list[PumpEvent], mock.Mock]:
+    """Install a controlled native pump and capture pre-native cleanup."""
+    events: list[PumpEvent] = []
+    close_writer = mock.Mock()
+    _install_native_pump(monkeypatch, native_pump)
+    monkeypatch.setattr(
+        _streams_rs,
+        "_close_writer_after_pre_native_failure",
+        close_writer,
+    )
+    return events, close_writer
+
+
+def _assert_handoff_outcome(
+    events: list[PumpEvent],
+    expected: RustPumpHandoffOutcome,
+    message: str,
+) -> None:
+    """Assert that one call emitted the expected bounded hand-off outcome."""
+    assert _outcomes(events) == [expected], message
+
+
 def test_native_load_failure_emits_one_bounded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -86,22 +111,17 @@ def test_invalid_buffer_size_emits_one_bounded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Validation failure is recorded before the writer reaches Rust."""
-    events: list[PumpEvent] = []
-    close_writer = mock.Mock()
     native_pump = mock.Mock(return_value=0)
-    _install_native_pump(monkeypatch, native_pump)
-    monkeypatch.setattr(
-        _streams_rs,
-        "_close_writer_after_pre_native_failure",
-        close_writer,
-    )
+    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
     with observe_pump(events.append), pytest.raises(ValueError, match="greater"):
         _streams_rs.rust_pump_stream(11, 12, buffer_size=0)
 
     close_writer.assert_called_once_with(12)
     native_pump.assert_not_called()
-    assert _outcomes(events) == [RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED], (
-        "invalid buffer size must emit exactly its closed outcome"
+    _assert_handoff_outcome(
+        events,
+        RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED,
+        "invalid buffer size must emit exactly its closed outcome",
     )
 
 
@@ -139,21 +159,16 @@ def test_native_io_failure_emits_one_bounded_outcome_without_python_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An I/O failure leaves closure of the transferred writer to Rust."""
-    events: list[PumpEvent] = []
-    close_writer = mock.Mock()
     native_pump = mock.Mock(side_effect=OSError("broken pipe"))
-    _install_native_pump(monkeypatch, native_pump)
-    monkeypatch.setattr(
-        _streams_rs,
-        "_close_writer_after_pre_native_failure",
-        close_writer,
-    )
+    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
     with observe_pump(events.append), pytest.raises(OSError, match="broken pipe"):
         _streams_rs.rust_pump_stream(11, 12)
 
     close_writer.assert_not_called()
-    assert _outcomes(events) == [RustPumpHandoffOutcome.NATIVE_IO_FAILED], (
-        "native I/O failure must emit exactly its closed outcome"
+    _assert_handoff_outcome(
+        events,
+        RustPumpHandoffOutcome.NATIVE_IO_FAILED,
+        "native I/O failure must emit exactly its closed outcome",
     )
 
 
