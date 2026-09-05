@@ -17,6 +17,7 @@ def _run_profile_cli(*args: str) -> int:
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [sys.executable, "-m", "benchmarks.profile_tee_hotpath", *args],
         check=False,
+        timeout=30,
     )
     return completed.returncode
 

@@ -169,18 +169,19 @@ async def _assert_immediate_timeout_reconciles_pumps(
     with pytest.raises(TimeoutExpired):
         await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
 
-    assert created, "the pipeline must create an inter-stage pump to reconcile"
-    for index, task in enumerate(created):
-        assert task.done(), (
-            f"pump {index} was left unsettled after the immediate timeout: "
-            "nothing reconciled the pumps the caller owns"
-        )
-
     # The assertion above deliberately runs while both stages remain alive so
     # their blocked pipe does not hide detached-pump cleanup. Reap them before
     # closing this event loop: asyncio otherwise retains subprocess transport
     # waiter tasks until their 30-second sleeps naturally finish.
-    await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
+    try:
+        assert created, "the pipeline must create an inter-stage pump to reconcile"
+        for index, task in enumerate(created):
+            assert task.done(), (
+                f"pump {index} was left unsettled after the immediate timeout: "
+                "nothing reconciled the pumps the caller owns"
+            )
+    finally:
+        await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
 
 
 def test_zero_timeout_reconciles_pipe_tasks(

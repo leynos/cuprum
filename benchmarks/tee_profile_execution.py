@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import random
 import typing as typ
 
 from benchmarks.tee_profile_configuration import _worker_command
-from benchmarks.tee_profile_driver import _write_json
+from benchmarks.tee_profile_output import _write_json
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -121,18 +120,15 @@ def _run_profile_sweep(
     config: TeeProfileDriverConfig,
     scenario_resolver: cabc.Callable[..., TeeProfileScenario],
     scenario_runner: cabc.Callable[..., cabc.Mapping[str, object]],
+    shuffle: cabc.Callable[[list[int]], None] | None,
 ) -> list[cabc.Mapping[str, object]]:
     """Measure one named scenario across configured sizes and rounds."""
     if config.scenario_name is None:
         msg = "scenario name is required for a read-size sweep"
         raise ValueError(msg)
     samples: list[cabc.Mapping[str, object]] = []
-    randomizer = random.SystemRandom()
     for round_index in range(config.rounds):
-        read_sizes = list(config.read_sizes)
-        if config.randomize_order:
-            randomizer.shuffle(read_sizes)
-        for read_size in read_sizes:
+        for read_size in _round_read_sizes(config, shuffle=shuffle):
             scenario = scenario_resolver(config, read_size=read_size)
             sample_dir = _profile_dir(config, scenario, round_index=round_index + 1)
             samples.append(
@@ -152,3 +148,19 @@ def _run_profile_sweep(
         },
     )
     return samples
+
+
+def _round_read_sizes(
+    config: TeeProfileDriverConfig,
+    *,
+    shuffle: cabc.Callable[[list[int]], None] | None,
+) -> list[int]:
+    """Return the read sizes for one round, applying injected randomization."""
+    read_sizes = list(config.read_sizes)
+    if not config.randomize_order:
+        return read_sizes
+    if shuffle is None:
+        msg = "a shuffle dependency is required when randomize-order is enabled"
+        raise ValueError(msg)
+    shuffle(read_sizes)
+    return read_sizes

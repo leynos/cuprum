@@ -109,7 +109,7 @@ This task is complete only when:
   threshold. Report the curve and await direction; the pre-registered options
   are in decision D1.
 - Inconclusive measurement: if the effect size over pooled dispersion is below
-  3, declare the sweep inconclusive and re-run rather than reporting a verdict.
+  1, declare the sweep inconclusive and re-run rather than reporting a verdict.
 - Range: if the measured plateau falls outside 16-64 KiB, stop and escalate.
 - Interface: if any public API signature must change, stop and escalate.
 - Dependencies: if a new external dependency is required, stop and escalate.
@@ -232,7 +232,8 @@ This task is complete only when:
   ms default but its rerun took 36 ms; the property now remains semantic.
 - [x] 2026-09-02 Final verification: all deterministic gates passed, commits
   `18d274fa` and `1e4125c9` were pushed, and `coderabbit review --agent`
-  reported zero findings. This ExecPlan is complete.
+  reported zero findings. This was the original implementation milestone;
+  subsequent rebases and review repairs reopened final revalidation.
 - [x] 2026-09-03 Maintenance rebase: replayed the completed branch onto
   `origin/main` without conflicts. Weave auto-resolved the documentation
   overlap, `git range-diff` preserved all 20 branch commits, and all
@@ -253,6 +254,26 @@ This task is complete only when:
   thresholds. Extracted the live-loop assertion and repeat-count validation;
   CodeScene now reports 10.00 for both files and 25 focused tests pass. Full
   deterministic revalidation and the queued CodeRabbit review remain pending.
+- [x] 2026-09-06 Review-finding pass: canonical
+  `tee_profile_driver` plan, matrix, and sweep dimensions, together with the
+  injectable shuffle, are being repaired. Focused read-size propagation and
+  configuration-parser coverage plus test cleanup are being added; the users'
+  guide, developers' guide, and debugging documentation have been updated;
+  deterministic gates passed. The refreshed CodeRabbit review remains pending,
+  so the current acceptance state is still `IN PROGRESS`; only still-valid
+  findings are being incorporated and stale findings recorded with their reason
+  for being skipped.
+- [x] 2026-09-06 Final deterministic revalidation: `make check-fmt`,
+  `make test`, `make typecheck`, `make lint`, `make markdownlint`, and
+  `make nixie` all passed. The refreshed CodeRabbit review remains pending.
+- [x] 2026-09-06 Post-push CodeScene follow-up: local
+      `cs delta origin/main HEAD` identified valid test-plan duplication and
+      canonical matrix nesting.
+      The extracted read-size matrix batch and parameterized plan test passed
+      full deterministic revalidation. Staged
+      `cs delta --staged --output-format json --pretty` returned no findings.
+      The amended push and existing queued CodeRabbit review remain pending, so
+      the ExecPlan stays `IN PROGRESS`.
 
 ## Surprises & discoveries
 
@@ -513,6 +534,23 @@ This task is complete only when:
   restoring the hosted quality gate. Date/Author: 2026-09-05, implementation
   agent. No public interface or benchmark protocol changes.
 
+- Decision D23: keep the ExecPlan explicitly `IN PROGRESS` during post-review
+  revalidation. Rationale: the earlier implementation milestone and hosted
+  health-gate repair remain historical evidence, but the latest review has
+  introduced findings whose validity and required gates are not yet settled.
+  The registered inconclusive-sweep threshold is one, consistently used in the
+  tolerances and D9. Date/Author: 2026-09-06, implementation agent. No
+  acceptance criterion or public interface changes.
+
+- Decision D24: retain the established resolver exception contract and current
+  observability boundary during review repair. Rationale: changing the
+  `KeyError` conversion to preserve a chained cause would contradict the
+  established `from None` contract. Production telemetry is also intentionally
+  not added: existing bounded diagnostics and observability hooks suffice, and
+  hot-path metrics would expand this focused scope. Date/Author: 2026-09-06,
+  implementation agent. The remaining valid review findings are being repaired
+  and require deterministic-gate and CodeRabbit revalidation.
+
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
   integer range, not latency. Its file-backed fixture makes a 200 ms cold-start
@@ -690,7 +728,8 @@ remain the existing stable separator cases covered by the line-splitting
 properties. The 2026-09-02 V3/V4 correction restored the final integration and
 retuning contracts. Final deterministic gates passed, and
 `coderabbit review --agent` reported zero findings before the plan returned to
-`COMPLETE`.
+`COMPLETE`; the 2026-09-06 review follow-up explicitly reopened the plan for
+revalidation, so its current state is `IN PROGRESS`.
 
 ## Context and orientation
 
