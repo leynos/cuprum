@@ -189,16 +189,18 @@ This task is complete only when:
 
 - Risk: the branch is behind `origin/main`.
   Severity: low. Likelihood: certain. Mitigation: the branch is two commits
-  behind and does not contain `ba32d3f5`, which changed timeout-path capture
-  behaviour. Rebase before Stage A and re-verify the citations in
-  `Context and orientation`.
+  behind and does not contain
+  [the upstream commit][upstream-timeout-capture-commit], which changed
+  timeout-path capture behaviour. Rebase before Stage A and re-verify the
+  citations in `Context and orientation`.
 
 ## Progress
 
 - [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
-  from parent `41707268` onto `origin/main` (`ba32d3f5`) without conflicts. The
-  existing PR will be retargeted to `main` after the force-with-lease push, so
-  it no longer duplicates the stale #318 stack.
+  from parent `41707268` onto `origin/main` (
+  [the upstream commit][upstream-timeout-capture-commit]) without conflicts.
+  The existing PR will be retargeted to `main` after the force-with-lease push,
+  so it no longer duplicates the stale #318 stack.
 - [x] EP-M1: branch rebased; the line-splitting defect is fixed with a
   red-to-green regression test and BDD scenario. All deterministic gates passed
   and CodeRabbit reported zero findings.
@@ -237,8 +239,8 @@ This task is complete only when:
 - [x] 2026-09-03 Maintenance rebase: replayed the completed branch onto
   `origin/main` without conflicts. Weave auto-resolved the documentation
   overlap, `git range-diff` preserved all 20 branch commits, and all
-  deterministic gates passed. The generated spelling policy now narrowly
-  exempts the historical `ba32d3f5` SHA recorded by this plan.
+  deterministic gates passed. The plan records and links the historical
+  upstream commit [the upstream commit][upstream-timeout-capture-commit].
 - [x] 2026-09-05 Maintenance rebase: replayed the branch onto current
   `origin/main` at `cb8f0348` with three inspected conflicts. The resolutions
   retain upstream drain-guard and timeout-fixture improvements alongside this
@@ -275,7 +277,16 @@ This task is complete only when:
       Amended commit `6b66869a` was pushed, and its hosted CodeScene Code
       Health Review passed. CodeScene coverage and the existing queued
       CodeRabbit review `bbef5e1b` remain pending, so the ExecPlan stays
-      `IN PROGRESS`.
+  `IN PROGRESS`.
+- [x] 2026-09-06 Rebase follow-up: rebased onto `origin/main` at `a8c7a7bd`.
+  One ExecPlan conflict was resolved by retaining the review-repair evidence;
+  the obsolete SHA-exemption-only commit was intentionally omitted. The `sem`
+  range-diff preserved 26 substantive commits. All mandatory rebase gates
+  passed: `make check-fmt`, `make test`, `make typecheck`, `make lint`,
+  `make markdownlint`, and `make nixie`. Current `origin/main` introduced two
+  identical overlong CI workflow guards that blocked lint; they were minimally
+  YAML-folded with semantic expression preservation. CodeRabbit remains
+  pending, so the ExecPlan stays `IN PROGRESS`.
 
 ## Surprises & discoveries
 
@@ -317,7 +328,9 @@ This task is complete only when:
   commits. The parent of the first plan commit, `41707268`, selected exactly
   the four original plan commits plus this progress-record commit; all five
   replayed cleanly. Impact: the completed Stage A rebase is a narrow,
-  conflict-free replay onto `ba32d3f5`, not a merge of the current #318 branch.
+  conflict-free replay onto
+  [the upstream commit][upstream-timeout-capture-commit], not a merge of the
+  current #318 branch.
 
 - Observation: line emission is already read-size dependent, so the change is
   not behaviour-preserving as originally assumed. Evidence: driving
@@ -489,9 +502,10 @@ This task is complete only when:
   this branch, so it was unsuitable as an upstream argument. Commit `41707268`
   is the immediate parent of `8e72b33f`, the first ExecPlan commit, and
   therefore selects the exact independent PR payload. The replay completed
-  without conflicts on `origin/main` at `ba32d3f5`. Date/Author: 2026-08-29,
-  implementation agent. This completes the Stage A stack correction and does
-  not alter functional scope.
+  without conflicts on `origin/main` at
+  [the upstream commit][upstream-timeout-capture-commit]. Date/Author:
+  2026-08-29, implementation agent. This completes the Stage A stack correction
+  and does not alter functional scope.
 
 - Decision D17: restore V3's real-pipeline oracle rather than extending the
   in-process reader helper. Rationale: V3 is specifically the integration proof
@@ -552,6 +566,18 @@ This task is complete only when:
   hot-path metrics would expand this focused scope. Date/Author: 2026-09-06,
   implementation agent. The remaining valid review findings are being repaired
   and require deterministic-gate and CodeRabbit revalidation.
+
+- Decision D25: rebase onto the current `origin/main` while retaining the
+  substantive feature commits and review-repair evidence. Rationale: omit only
+  the obsolete spelling-exception maintenance commit, preserve the 26
+  substantive commits shown by the `sem` range-diff, and make no functional
+  scope change. Date/Author: 2026-09-06, implementation agent.
+
+- Decision D26: minimally fold the two identical overlong CI workflow guards
+  introduced by current `origin/main` so lint can run. Rationale: YAML folding
+  preserves each guard's semantic expression while satisfying the repository's
+  formatting constraint; no workflow behaviour or functional scope changes.
+  Date/Author: 2026-09-06, implementation agent.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
@@ -1240,6 +1266,9 @@ Skills: `execplans` when revising this plan; `python-router` then `hypothesis`
 for the property tests and `python-testing` for the behavioural scenario;
 `en-gb-oxendict` for prose; `nextest` if the Rust portion of `make test` needs
 investigation.
+
+[upstream-timeout-capture-commit]:
+  https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
 
