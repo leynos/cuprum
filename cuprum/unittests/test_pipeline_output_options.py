@@ -12,6 +12,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
     ExecutionContext,
     Pipeline,
@@ -140,6 +141,10 @@ _OUTPUT_OPTIONS = st.one_of(
         RunOutputOptions,
         capture=st.booleans(),
         echo=st.booleans(),
+        max_echo_line_bytes=st.one_of(
+            st.none(),
+            st.integers(min_value=1, max_value=1 << 20),
+        ),
     ),
 )
 
@@ -247,6 +252,21 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         run_sync = typ.cast("cabc.Callable[..., object]", pipeline.run_sync)
         with pytest.raises(TypeError, match="unexpected keyword"):
             run_sync(**unknown_output_kwargs)
+
+
+@pytest.mark.parametrize("invalid_bound", [0, -1])
+def test_run_output_options_rejects_non_positive_echo_bound(
+    invalid_bound: int,
+) -> None:
+    """A non-positive ``max_echo_line_bytes`` is rejected at construction."""
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        RunOutputOptions(max_echo_line_bytes=invalid_bound)
+
+
+def test_run_output_options_default_bound_matches_github_log_limit() -> None:
+    """The default bound mirrors the GitHub Actions 64 KiB per-line limit."""
+    assert RunOutputOptions().max_echo_line_bytes == DEFAULT_ECHO_MAX_LINE_BYTES
+    assert DEFAULT_ECHO_MAX_LINE_BYTES == 64 * 1024
 
 
 @pytest.mark.parametrize(

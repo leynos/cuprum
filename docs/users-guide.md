@@ -362,9 +362,14 @@ when a call needs output behaviour that differs from the default.
 - `echo=False` keeps output out of the parent process streams. Set it to `True`
   to tee stdout and stderr while the command runs. When `capture=True`, echoed
   output is still captured.
+- `max_echo_line_bytes=65536` bounds each line mirrored to the echo sink at
+  64 KiB. A longer line is truncated in the echo, with a
+  `… [truncated N bytes]` marker before its line ending, while capture keeps
+  the complete line. Set it to `None` to restore unbounded mirroring.
 
-`RunOutputOptions(capture=True, echo=False)` is the default; you only need to
-supply it explicitly when overriding either flag.
+`RunOutputOptions(capture=True, echo=False, max_echo_line_bytes=65536)` is the
+default; you only need to supply it explicitly when overriding any of these
+values.
 
 ```python
 from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
@@ -411,6 +416,23 @@ explicitly only when overriding either flag.
 The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
 remain accepted for backwards compatibility but emit a `DeprecationWarning`;
 passing them together with `output` raises `ValueError`.
+
+### Bounded echo lines and CI job logs
+
+GitHub Actions stops accepting job-log output at a 64 KiB single line: when a
+command mirrors one line longer than that limit, the runner's log ends at that
+line and the rest of the job — including any later failure detail — goes
+unrecorded. The `lading` project hit exactly this in leynos/cuprum#251, where a
+`cargo metadata --locked` document of roughly 1.5 MB was mirrored once per
+tracked lockfile and 22 minutes of job output vanished at the first oversized
+line (see leynos/cuprum#254).
+
+`max_echo_line_bytes` guards against that failure mode in the runner itself:
+each echoed line is cut at the bound with a `… [truncated N bytes]` marker, so
+the job log stays within the per-line limit while `CommandResult` capture keeps
+the complete line for programmatic use. The default bound of 64 KiB matches the
+GitHub Actions limit; pass `None` to restore unbounded mirroring when the sink
+is known to handle long lines.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates

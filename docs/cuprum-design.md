@@ -945,6 +945,16 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Echoed lines are byte-bounded by `max_echo_line_bytes` (default 64 KiB, set to
+`None` for the raw chunk-for-chunk echo). The bound protects consumers that
+stop accepting a line past a size limit — GitHub Actions job logs end at a 64
+KiB line, which silently truncated a `lading` CI run (leynos/cuprum#251,
+leynos/cuprum#254). Only the mirrored copy is bounded: each line is cut at the
+bound with an `… [truncated N bytes]` marker before its line ending, a trailing
+partial line is marked at EOF, and the capture buffer keeps every byte so
+`CommandResult` output stays complete. Truncation reporting back to the caller
+(a callback or a result count) is deliberately deferred.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -2537,6 +2547,11 @@ pathway. The following behaviours are only available via the Python backend:
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python
   pathway.
+
+- **Echo line-length capping (`max_echo_line_bytes`):** Bounding the length of
+  each mirrored line is a Python-path echo concern: the Rust pump relays raw
+  inter-stage bytes and never echoes, so no Rust change is needed. Truncation
+  reporting (a callback or a count on the result) is deliberately deferred.
 
 Only pump-side routing has Rust backing today: `_pump_stream_dispatch` can use
 Rust for inter-stage pipe transfer, but final stdout/stderr consumption still

@@ -49,6 +49,7 @@ class _SubprocessExecution:
     ctx: ExecutionContext
     capture: bool
     echo: bool
+    max_echo_line_bytes: int | None
     timeout: float | None
     observation: _StageObservation
     stdin_data: bytes | None
@@ -131,6 +132,7 @@ def _build_stream_config(
     return _StreamConfig(
         capture_output=execution.capture,
         echo_output=execution.echo,
+        echo_max_line_bytes=execution.max_echo_line_bytes,
         sink=(
             execution.ctx.stdout_sink
             if execution.ctx.stdout_sink is not None

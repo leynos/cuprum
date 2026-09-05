@@ -15,6 +15,7 @@ import typing as typ
 import warnings
 from pathlib import Path
 
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -353,10 +354,31 @@ class RunOutputOptions:
         When ``True`` capture stdout/stderr; otherwise discard them.
     echo:
         When ``True`` tee stdout/stderr to the parent process.
+    max_echo_line_bytes:
+        Byte bound applied to each line mirrored to an echo sink. A line
+        longer than the bound is truncated in the echo, with a
+        ``… [truncated N bytes]`` marker added before its line ending, while
+        capture keeps the complete line. ``None`` restores unbounded
+        mirroring. Defaults to 64 KiB, matching the per-line limit at which
+        GitHub Actions job logs stop accepting output.
     """
 
     capture: bool = True
     echo: bool = False
+    max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+
+    def __post_init__(self) -> None:
+        """Reject bounds that would not bound the mirrored line."""
+        if self.max_echo_line_bytes is None:
+            return
+        bound = self.max_echo_line_bytes
+        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
+        if not is_positive_int or bound <= 0:
+            msg = (
+                "RunOutputOptions max_echo_line_bytes must be a positive "
+                f"integer or None, got {bound!r}"
+            )
+            raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -364,12 +386,13 @@ class IOOptions(RunOutputOptions):
     """Deprecated alias for command output stream options."""
 
     def __post_init__(self) -> None:
-        """Emit a ``DeprecationWarning`` when ``IOOptions`` is constructed."""
+        """Warn about the deprecated alias, then validate the inherited bound."""
         warnings.warn(
             "IOOptions is deprecated; use RunOutputOptions instead",
             DeprecationWarning,
             stacklevel=2,
         )
+        RunOutputOptions.__post_init__(self)
 
 
 class _DeprecatedOutputFlags(typ.TypedDict, total=False):
@@ -578,6 +601,7 @@ class SafeCmd:
                 ctx=ctx,
                 capture=out.capture,
                 echo=out.echo,
+                max_echo_line_bytes=out.max_echo_line_bytes,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -704,6 +728,7 @@ class Pipeline:
         config = _prepare_pipeline_config(
             capture=out.capture,
             echo=out.echo,
+            max_echo_line_bytes=out.max_echo_line_bytes,
             timeout=effective_timeout,
             context=context,
         )
