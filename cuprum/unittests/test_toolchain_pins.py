@@ -175,6 +175,20 @@ def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     )
 
 
+def test_python_lint_passes_the_whole_estate_to_interrogate() -> None:
+    """The lint recipe interrogates every Python scope at 100 per cent."""
+    root = repo_root()
+    recipes = _expanded_make_recipes(
+        root,
+        ruff_pin=_read_makefile_pin(root, "RUFF_VERSION"),
+        ty_pin=_read_makefile_pin(root, "TY_VERSION"),
+    )
+    assert (
+        "interrogate --fail-under 100 benchmarks conftest.py cuprum scripts tests"
+        in recipes
+    ), "make lint must pass the whole Python estate to interrogate"
+
+
 def _read_df12_refs(root: pth.Path) -> dict[str, str]:
     """Read the df12-python-lints git ref from both configured locations."""
     df12_deps = [

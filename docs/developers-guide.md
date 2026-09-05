@@ -2632,6 +2632,17 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
+### Markdown linting
+
+The `markdownlint` target lints exactly the Markdown files tracked by Git. The
+recipe feeds `git ls-files -z '*.md'` through `xargs -0` to `markdownlint-cli2`
+with `$(LOCAL_TOOL_ENV)` applied to both pipeline stages, so the tool resolves
+from `~/.local/bin` or `~/.bun/bin` even under a minimal `PATH`, arguments with
+spaces survive intact, and untracked scratch files can never fail the gate.
+The `.vtcode/**` directory is excluded in `.markdownlint-cli2.jsonc` as
+session-scratch content. The target then runs the shared `spelling` recipe, so
+one invocation covers both Markdown structure and en-GB-oxendict spelling.
+
 ### Spelling policy
 
 The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
