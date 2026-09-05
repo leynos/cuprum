@@ -272,8 +272,10 @@ This task is complete only when:
       The extracted read-size matrix batch and parameterized plan test passed
       full deterministic revalidation. Staged
       `cs delta --staged --output-format json --pretty` returned no findings.
-      The amended push and existing queued CodeRabbit review remain pending, so
-      the ExecPlan stays `IN PROGRESS`.
+      Amended commit `6b66869a` was pushed, and its hosted CodeScene Code
+      Health Review passed. CodeScene coverage and the existing queued
+      CodeRabbit review `bbef5e1b` remain pending, so the ExecPlan stays
+      `IN PROGRESS`.
 
 ## Surprises & discoveries
 
