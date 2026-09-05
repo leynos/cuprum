@@ -378,10 +378,49 @@ stream. The metric carries exactly two labels: `stream`, whose value is
 `stdout` or `stderr`, and `error_category`, whose only value is
 `unicode_encode`. No subprocess payload, sink type, encoding, exception text,
 command, path, PID, or execution identifier becomes a metric label; the
-structured `cuprum_*` extras on the `cuprum.stream` warning carry that
-diagnostic detail instead. The hook is opt-in: without it, no observation is
+structured `cuprum_*` extras on the `cuprum.stream` warning carry only stable
+categorical values (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
+`cuprum_error_category`). The hook is opt-in: without it, no observation is
 emitted and no telemetry dependency is added. A failing metrics collector is
 reported and skipped rather than changing the run's capture behaviour.
+
+
+### Echo-fallback diagnostics on `CommandResult`
+
+The same handled disablement is also reported on the result itself. Every
+`CommandResult` — including each stage of a `PipelineResult` — carries a
+`relay_fallbacks` tuple of `RelayFallback(stream=..., error_category=...)`
+records, one per affected drain (a drain contributes at most one). Records list
+stdout's diagnostics before stderr's within a command; that order does not
+reconstruct chronological interleaving between the two streams. Diagnostics are
+collected whether or not an echo observer is registered and whether or not
+capture is enabled; commands with no handled echo failure return `()`. A sink
+exposing a binary `.buffer` keeps receiving the original bytes and never
+produces a record, warning, or metric increment.
+
+The diagnostics carry only closed-set categorical values. The warning, the
+`EchoEvent`, and the `RelayFallback` records never include the rejected
+payload, decoded output, the sink's encoding, the original `UnicodeEncodeError`
+object (whose `object` attribute retains the rejected input), its message or
+traceback, or the command's arguments.
+
+`relay_fallbacks` appears on a returned `CommandResult`. When a timeout or
+cancellation prevents a result from being produced, no new exception payload is
+added: the already-emitted `EchoEvent` values remain observable through
+`observe_echo`, and partial capture is preserved as before.
+
+
+### Lading integration boundary
+
+Lading can consume the new `CommandResult.relay_fallbacks` records for
+per-command diagnostics and the existing `observe_echo` /
+`EchoMetricsHook` channel for structured relay-decision telemetry
+([lading#253](https://github.com/leynos/lading/issues/253)). Shipping this
+change alone does not let Lading delete `stream_relay.py`: Lading's helper has
+text-first and broken-pipe semantics that differ from Cuprum's binary-first
+policy, so a separately linked downstream migration issue owns caller
+migration, any thread-name utility removal, and the final deletion of the
+helper.
 
 `RunOutputOptions(capture=True, echo=False)` is the default; you only need to
 supply it explicitly when overriding either flag.
