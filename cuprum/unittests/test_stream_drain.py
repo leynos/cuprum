@@ -50,11 +50,13 @@ def _config(
     *,
     capture: bool = True,
     echo: bool = False,
+    max_line_bytes: int | None = None,
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
         capture_output=capture,
         echo_output=echo,
+        echo_max_line_bytes=max_line_bytes,
         sink=sink,
         encoding="utf-8",
         errors="replace",
@@ -290,6 +292,132 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
         "buffered echo must preserve original bytes for "
         f"chunks={chunks!r}, received={raw_sink.getvalue()!r}"
     )
+
+
+def test_drain_truncates_oversized_echo_line_for_text_sink() -> None:
+    """A multi-chunk oversized line is bounded in echo but whole in capture."""
+    # The acceptance case: a 2 MiB single line must echo under the bound so a
+    # bounded consumer (GitHub Actions job logs stop at 64 KiB per line) keeps
+    # working, while capture still holds every byte.
+    bound = 65536
+    payload = b"q" * (2 * 1024 * 1024)
+    chunks = tuple(
+        payload[start : start + 8192] for start in range(0, len(payload), 8192)
+    )
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(_reader(chunks), _config(sink, echo=True, max_line_bytes=bound)),
+    )
+
+    echoed = sink.getvalue()
+    assert captured == payload.decode(), (
+        "capture must keep the full oversized line regardless of the echo bound"
+    )
+    assert echoed.endswith("… [truncated 2031616 bytes]"), (
+        f"echo must report the dropped byte count for payload={payload!r}"
+    )
+    assert len(echoed.encode()) < bound + 64, (
+        f"echoed line must stay near the bound={bound}, got {len(echoed.encode())}"
+    )
+
+
+def test_drain_truncates_each_line_independently() -> None:
+    """Each line restarts the bound; markers report per-line dropped bytes."""
+    bound = 50
+    payload = b"a" * 100 + b"\n" + b"b" * 20 + b"\n" + b"c" * 80 + b"\n"
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(
+            _reader((payload,)),
+            _config(sink, echo=True, max_line_bytes=bound),
+        ),
+    )
+
+    assert captured == payload.decode(), "capture must stay byte-for-byte complete"
+    echoed_lines = sink.getvalue().split("\n")
+    assert echoed_lines[0].endswith("… [truncated 50 bytes]"), (
+        "the first oversized line must report 50 dropped bytes"
+    )
+    assert echoed_lines[1] == "b" * 20, "a line under the bound must echo whole"
+    assert echoed_lines[2].endswith("… [truncated 30 bytes]"), (
+        "the bound must restart for each line"
+    )
+
+
+def test_drain_truncates_unterminated_trailing_line_at_eof() -> None:
+    """A trailing partial line is bounded and marked before the drain ends."""
+    bound = 50
+    payload = b"z" * 80
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(_reader((payload,)), _config(sink, echo=True, max_line_bytes=bound)),
+    )
+
+    assert captured == payload.decode(), "capture keeps the unterminated line"
+    echoed = sink.getvalue()
+    assert echoed.endswith("… [truncated 30 bytes]"), (
+        f"EOF finalization must mark the truncated partial line, got={echoed!r}"
+    )
+
+
+def test_drain_truncates_multi_byte_utf8_straddling_the_bound() -> None:
+    """A cut inside a multi-byte sequence keeps the echoed text decodable."""
+    snowman = "☃".encode()
+    # "ab" + the first snowman byte only: the bound falls mid-character.
+    bound = len(b"ab") + 1
+    payload = b"ab" + snowman + b"c" * 8 + b"\n"
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(_reader((payload,)), _config(sink, echo=True, max_line_bytes=bound)),
+    )
+
+    assert captured == payload.decode(), "capture keeps the full line"
+    echoed_line = sink.getvalue().removesuffix("\n")
+    assert echoed_line.endswith("… [truncated 10 bytes]"), (
+        f"the marker must report the ten dropped bytes, got={echoed_line!r}"
+    )
+    assert echoed_line.startswith("ab\ufffd"), (
+        "the cut keeps a byte prefix of the split character, decoded with "
+        f"replacement, got={echoed_line!r}"
+    )
+
+
+def test_drain_echoes_raw_bytes_when_line_bound_is_none() -> None:
+    """``echo_max_line_bytes=None`` restores chunk-for-chunk mirroring."""
+    chunks = (b"a" * 100 + b"\n", b"b" * 80)
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(_reader(chunks), _config(sink, echo=True, max_line_bytes=None)),
+    )
+
+    assert captured == b"".join(chunks).decode(), (
+        "capture must stay complete when echoing is unbounded"
+    )
+    assert sink.getvalue() == b"".join(chunks).decode(), (
+        "unbounded echo must mirror the payload byte-for-byte"
+    )
+
+
+def test_drain_truncates_for_byte_buffered_sink() -> None:
+    """Buffered byte sinks receive raw kept bytes and an encoded marker."""
+    bound = 50
+    payload = b"x" * 80 + b"\n"
+    raw_sink = io.BytesIO()
+    sink = io.TextIOWrapper(raw_sink, encoding="utf-8")
+
+    captured = asyncio.run(
+        _drain(_reader((payload,)), _config(sink, echo=True, max_line_bytes=bound)),
+    )
+
+    assert captured == payload.decode(), "capture must stay byte-for-byte complete"
+    assert (
+        raw_sink.getvalue() == b"x" * bound + "… [truncated 30 bytes]".encode() + b"\n"
+    ), "buffered echo must receive raw bounded bytes plus the encoded marker"
 
 
 @settings(

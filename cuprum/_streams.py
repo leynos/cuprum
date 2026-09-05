@@ -20,6 +20,7 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
+from cuprum._echo_truncation import _EchoLineLimiter
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -43,6 +44,11 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
+    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
+    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
+    # accepting a line past a size limit (GitHub Actions job logs end at a
+    # 64 KiB line) while capture stays byte-for-byte complete.
+    echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
 
 
@@ -54,6 +60,7 @@ class _DrainState:
     buffer: bytearray | None
     echo_decoder: codecs.IncrementalDecoder | None
     on_chunk: cabc.Callable[[bytes], None] | None
+    echo_limiter: _EchoLineLimiter | None = None
 
 
 async def _consume_stream(
@@ -85,16 +92,25 @@ async def _drain(
     # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
-    reached_eof = await _drain_chunks(
-        stream, _DrainState(config, buffer, echo_decoder, on_chunk)
+    echo_limiter = _EchoLineLimiter.from_config(
+        echo_output=config.echo_output,
+        echo_max_line_bytes=config.echo_max_line_bytes,
     )
+    state = _DrainState(
+        config,
+        buffer,
+        echo_decoder,
+        on_chunk,
+        echo_limiter=echo_limiter,
+    )
+    reached_eof = await _drain_chunks(stream, state)
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
-        _flush_echo_decoder(config, echo_decoder)
+        _flush_echo_decoder(config, echo_decoder, state=state)
         return buffer.decode(config.encoding, errors=config.errors)
 
-    _flush_echo_decoder(config, echo_decoder)
+    _flush_echo_decoder(config, echo_decoder, state=state)
 
     if buffer is None:
         return None
@@ -121,7 +137,7 @@ async def _drain_chunks(
         if state.buffer is not None:
             state.buffer.extend(chunk)
         if state.config.echo_output:
-            _write_chunk(state.config, chunk, decoder=state.echo_decoder)
+            _echo_chunk(state, chunk)
         if state.on_chunk is not None:
             state.on_chunk(chunk)
 
@@ -196,6 +212,68 @@ def _write_chunk(
     config.sink.flush()
 
 
+def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
+    """Echo *chunk* to the sink, honouring the per-line byte bound when set."""
+    limiter = state.echo_limiter
+    if limiter is None:
+        _write_chunk(state.config, chunk, decoder=state.echo_decoder)
+        return
+    for body, ending in _split_echo_segments(chunk):
+        kept = limiter.bound_line(body)
+        if kept:
+            _write_echo_bytes(state, kept)
+        if ending is None:
+            continue
+        marker = limiter.finish_line(encoding=state.config.encoding)
+        if marker is not None:
+            _write_echo_bytes(state, marker)
+        _write_echo_bytes(state, ending)
+
+
+def _split_echo_segments(
+    chunk: bytes,
+) -> list[tuple[bytes, bytes | None]]:
+    r"""Split *chunk* into per-line echo writes for the bounded echo path.
+
+    Parameters
+    ----------
+    chunk : bytes
+        Raw bytes just read from the child stream.
+
+    Returns
+    -------
+    list[tuple[bytes, bytes | None]]
+        ``(body, ending)`` pairs in stream order, where ``body`` excludes its
+        ``\\n`` terminator and ``ending`` is the raw line ending (``\\n`` or
+        ``\\r\\n``). ``ending`` is ``None`` for the trailing pair when the
+        chunk ends mid-line; its bytes still reach the limiter so a partial
+        truncated line stays bounded before EOF. Unterminated bytes are
+        re-emitted whole from the next chunk, so the limiter's own counters
+        are the only cross-chunk state.
+    """
+    segments: list[tuple[bytes, bytes | None]] = []
+    start = 0
+    data = chunk
+    while True:
+        end = data.find(b"\n", start)
+        if end == -1:
+            break
+        body = data[start:end]
+        if body.endswith(b"\r"):
+            segments.append((body[:-1], b"\r\n"))
+        else:
+            segments.append((body, b"\n"))
+        start = end + 1
+    if start < len(data):
+        segments.append((data[start:], None))
+    return segments
+
+
+def _write_echo_bytes(state: _DrainState, payload: bytes) -> None:
+    """Write bounded echo bytes, decoding for text-only sinks."""
+    _write_chunk(state.config, payload, decoder=state.echo_decoder)
+
+
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
     """Create an incremental decoder configured for a stream invocation."""
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
@@ -212,8 +290,14 @@ def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
 def _flush_echo_decoder(
     config: _StreamConfig,
     decoder: codecs.IncrementalDecoder | None,
+    *,
+    state: _DrainState | None = None,
 ) -> None:
     """Flush a text-only echo decoder at end of stream."""
+    if state is not None and state.echo_limiter is not None:
+        marker = state.echo_limiter.finish_line(encoding=config.encoding)
+        if marker is not None:
+            _write_echo_bytes(state, marker)
     if decoder is not None:
         _write_chunk(config, b"", decoder=decoder, final=True)
 

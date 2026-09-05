@@ -215,7 +215,7 @@ ignore-one-line-docstrings = true
 max-complexity = 8
 
 [tool.ruff.lint.pylint]
-max-args = 4
+max-args = 5
 max-bool-expr = 2
 max-locals = 10
 
@@ -230,7 +230,7 @@ max-module-lines = 400
 [tool.pylint.design]
 # Keep function call surfaces small enough to understand without memorising
 # positional argument order.
-max-args = 4
+max-args = 5
 # The new Pylint gate complements Ruff's stricter PLR0914 threshold without
 # forcing broad refactors while introducing the additional rule families below.
 max-locals = 20

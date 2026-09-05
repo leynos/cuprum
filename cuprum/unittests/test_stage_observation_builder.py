@@ -137,6 +137,7 @@ def _pipeline_tags(
     config = _prepare_pipeline_config(
         capture=capture,
         echo=echo,
+        max_echo_line_bytes=None,
         timeout=None,
         context=context,
     )
