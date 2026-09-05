@@ -15,6 +15,7 @@ responsible for moving and collecting bytes once those streams exist.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import dataclasses as dc
 import functools
 import logging
@@ -36,8 +37,8 @@ from cuprum._pipeline_stream_fds import (
     _suppressed_teardown_failure,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
-from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
-from cuprum.pump_observation import _emit_pump_event
+from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
+from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -50,12 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record the reason an inter-stage hop falls back to Python pumping."""
-    _LOGGER.debug(
-        "Inter-stage hop declined the Rust pump (%s); using the Python pump",
-        reason.value,
-        extra={"cuprum_action": "rust_pump_declined", "cuprum_reason": reason.value},
-    )
-    _emit_pump_event(PumpEvent(phase="declined", reason=reason))
+    _pump_obs._log_native_pump_declined(_LOGGER, reason)
 
 
 @dc.dataclass(slots=True)
@@ -142,7 +138,7 @@ def _complete_rust_pump(
         if not completed.cancelled():
             error = completed.exception()
             if state.was_cancelled and error is not None:
-                _log_rust_pump_failed_after_cancel(error)
+                _pump_obs._log_native_pump_failed_after_cancel(_LOGGER, error)
     finally:
         try:
             with _suppressed_teardown_failure(
@@ -231,11 +227,14 @@ def _submit_rust_pump(
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return None
 
     try:
-        return loop.run_in_executor(
+        context = contextvars.copy_context()
+        native_pump = loop.run_in_executor(
             None,
+            context.run,
             rust_pump_stream,
             state.reader_fd,
             rust_writer_fd,
@@ -244,17 +243,12 @@ def _submit_rust_pump(
         _pump_obs._log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
+        )
         raise
-
-
-def _log_rust_pump_failed_after_cancel(error: BaseException) -> None:
-    """Record a native-pump failure masked by caller-requested cancellation."""
-    _LOGGER.debug(
-        "Rust pump failed while its hop was being cancelled",
-        exc_info=error,
-        extra={"cuprum_action": "rust_pump_failed_after_cancel"},
-    )
-    _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
+    _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
+    return native_pump
 
 
 async def _run_rust_pump(

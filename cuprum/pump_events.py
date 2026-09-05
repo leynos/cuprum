@@ -47,8 +47,21 @@ class RustPumpDeclineReason(enum.StrEnum):
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
 
 
+class RustPumpHandoffOutcome(enum.StrEnum):
+    """A bounded result of attempting the Rust writer-resource hand-off."""
+
+    SUBMITTED = "submitted"
+    BLOCKING_SETUP_FAILED = "blocking_setup_failed"
+    EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
+    NATIVE_LOAD_FAILED = "native_load_failed"
+    BUFFER_VALIDATION_FAILED = "buffer_validation_failed"
+    PLATFORM_WRITER_TRANSFER_FAILED = "platform_writer_transfer_failed"
+    NATIVE_IO_FAILED = "native_io_failed"
+
+
 type PumpPhase = typ.Literal[
     "declined",
+    "handoff",
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
@@ -57,6 +70,9 @@ type PumpPhase = typ.Literal[
 
 ``declined``
     A hop fell back to the Python pump; ``reason`` names the seam that refused.
+``handoff``
+    A Rust writer-resource hand-off reached one of the closed ``outcome``
+    states.
 ``failed_after_cancel``
     A cancelled hop's Rust worker had failed, and the failure was consumed
     rather than resurfacing detached at garbage collection.
@@ -72,7 +88,7 @@ type PumpPhase = typ.Literal[
 class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
 
-    The event carries the phase, the closed-set reason for a decline, and the
+    The event carries the phase, closed-set reason or hand-off outcome, the
     monotonic wait duration for completed native-pump cleanup, and the source
     stage token needed to correlate cleanup tracing. Descriptor numbers,
     command arguments, exception types, and tracebacks are all either
@@ -87,6 +103,9 @@ class PumpEvent:
     reason:
         For ``declined``, the seam that refused the hand-off. ``None`` for
         every other phase.
+    outcome:
+        For ``handoff``, the closed outcome of the writer-resource hand-off.
+        ``None`` for every other phase.
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
@@ -119,6 +138,7 @@ class PumpEvent:
 
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
+    outcome: RustPumpHandoffOutcome | None = None
     duration_s: float | None = None
     exec_id: ExecId | None = None
 
@@ -139,4 +159,5 @@ __all__ = [
     "PumpHook",
     "PumpPhase",
     "RustPumpDeclineReason",
+    "RustPumpHandoffOutcome",
 ]

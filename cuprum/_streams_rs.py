@@ -26,6 +26,9 @@ import operator
 import os
 import typing as typ
 
+from cuprum.pump_events import RustPumpHandoffOutcome
+from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
@@ -196,6 +199,11 @@ def rust_pump_stream(
     int
         The number of bytes successfully written.
 
+    Raises
+    ------
+    OSError
+        If the Rust pump encounters an I/O error.
+
     Notes
     -----
     The wrapper validates ``buffer_size`` before transferring a Windows writer
@@ -206,17 +214,36 @@ def rust_pump_stream(
     """
     try:
         native_pump = _load_native().rust_pump_stream
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
+        raise
+    try:
         reader = _convert_fd_for_platform(reader_fd)
-        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
-            buffer_size
-        )
-        writer = _transfer_writer_fd_for_platform(writer_fd)
     except BaseException:
         _close_writer_after_pre_native_failure(writer_fd)
         raise
-    return int(
-        native_pump(reader, writer, buffer_size=validated_buffer_size),
-    )
+    try:
+        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
+            buffer_size
+        )
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
+        raise
+    try:
+        writer = _transfer_writer_fd_for_platform(writer_fd)
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED
+        )
+        raise
+    try:
+        return int(native_pump(reader, writer, buffer_size=validated_buffer_size))
+    except OSError:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_IO_FAILED)
+        raise
 
 
 def rust_consume_stream(

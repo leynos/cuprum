@@ -1,11 +1,7 @@
-"""Counters for Rust-pump routing decisions, driven from the real pump paths.
+"""Counters for Rust-pump routing decisions driven from real pump paths.
 
-A decline changes nothing a caller can see, so the only way to prove a counter
-fires is to reach the seam that refuses. Every test here drives
-``_pump_over_raw_fds`` or ``_try_rust_pump`` with the descriptor state that
-provokes a real decline; none calls the recording helper by hand. Removing the
-emission from the pump therefore fails these tests rather than leaving them
-green against a stub.
+Tests drive production seams rather than recording helpers, so removing an
+emission site fails them instead of leaving a stub-covered assertion green.
 """
 
 from __future__ import annotations
@@ -23,13 +19,19 @@ from cuprum.adapters.pump_metrics import (
     RUST_PUMP_CLEANUP_TOTAL,
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
+    RUST_PUMP_HANDOFF_TOTAL,
     UNKNOWN_DECLINE_REASON,
     PumpMetricsHook,
     pump_metrics_hook,
 )
 from cuprum.context import current_context
 from cuprum.events import ExecPhase
-from cuprum.pump_events import PumpEvent, PumpPhase, RustPumpDeclineReason
+from cuprum.pump_events import (
+    PumpEvent,
+    PumpPhase,
+    RustPumpDeclineReason,
+    RustPumpHandoffOutcome,
+)
 from cuprum.pump_observation import current_pump_hooks, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
     DECLINE_PATHS,
@@ -114,22 +116,24 @@ def test_decline_labels_stay_inside_the_closed_reason_set(
         )
 
 
-def test_a_successful_hand_off_counts_nothing(
+def test_a_successful_hand_off_records_submitted_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A hop the Rust pump accepts produces no pump counter at all.
-
-    Without this control, a counter wired to fire on every hop would satisfy
-    every decline assertion above while reporting a fast path that never
-    declined as permanently degraded.
-    """
+    """A hop the Rust pump accepts records one bounded submitted outcome."""
     collector = RecordingCollector()
     with observe_pump(PumpMetricsHook(collector)):
         handled = hand_off_successfully(monkeypatch)
 
     assert handled is True, "the fixture must drive a hop the Rust pump handles"
-    assert collector.counters == [], (
-        f"a successful hand-off must record nothing, found {collector.counters}"
+    assert collector.counters == [
+        (
+            RUST_PUMP_HANDOFF_TOTAL,
+            1.0,
+            {"outcome": RustPumpHandoffOutcome.SUBMITTED},
+        )
+    ], (
+        "a successful hand-off must record only the submitted outcome, found "
+        f"{collector.counters}"
     )
 
 
@@ -141,11 +145,21 @@ def test_a_failure_recovered_after_cancellation_records_failure_and_cleanup(
     with observe_pump(PumpMetricsHook(collector)):
         run_failing_pump_on_a_cancelled_hop(monkeypatch)
 
-    assert len(collector.counters) == 2, (
-        "a pump failure recovered after cancellation must record its failure "
-        f"and cleanup, found {collector.counters}"
+    assert len(collector.counters) == 3, (
+        "a submitted pump failure recovered after cancellation must record its "
+        f"handoff, failure, and cleanup, found {collector.counters}"
     )
-    name, value, labels = collector.counters[0]
+    handoff_name, handoff_value, handoff_labels = collector.counters[0]
+    assert handoff_name == RUST_PUMP_HANDOFF_TOTAL, (
+        f"expected {RUST_PUMP_HANDOFF_TOTAL!r}, found {handoff_name!r}"
+    )
+    assert handoff_value == 1.0, (  # ruff: ignore[float-equality-comparison] - counter increment is exact
+        f"a submitted hand-off counts as one, found {handoff_value}"
+    )
+    assert handoff_labels == {"outcome": RustPumpHandoffOutcome.SUBMITTED}, (
+        f"submitted hand-off must retain its bounded label, found {handoff_labels}"
+    )
+    name, value, labels = collector.counters[1]
     assert name == RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL, (
         f"expected {RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL!r}, found {name!r}"
     )
@@ -156,7 +170,7 @@ def test_a_failure_recovered_after_cancellation_records_failure_and_cleanup(
         "this counter is deliberately unlabelled — an exception type would be "
         f"a series per failure mode — but it carried {labels}"
     )
-    cleanup_name, cleanup_value, cleanup_labels = collector.counters[1]
+    cleanup_name, cleanup_value, cleanup_labels = collector.counters[2]
     assert cleanup_name == RUST_PUMP_CLEANUP_TOTAL, (
         f"expected {RUST_PUMP_CLEANUP_TOTAL!r}, found {cleanup_name!r}"
     )
@@ -187,10 +201,10 @@ def test_a_completed_native_cleanup_records_count_and_duration() -> None:
     )
 
 
-def test_a_cancelled_hop_whose_pump_succeeds_records_only_cleanup(
+def test_a_cancelled_hop_whose_pump_succeeds_records_submission_and_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cancellation alone records cleanup but not a failed pump.
+    """Cancellation records submission and cleanup but not a failed pump.
 
     ``_report_pump_outcome_after_cancel`` runs on every cancelled hop. A
     counter placed before its outcome checks would turn ordinary cancellation
@@ -212,8 +226,15 @@ def test_a_cancelled_hop_whose_pump_succeeds_records_only_cleanup(
     with observe_pump(PumpMetricsHook(collector)):
         asyncio.run(cancel_mid_transfer(worker_started, release))
 
-    assert collector.counters == [(RUST_PUMP_CLEANUP_TOTAL, 1.0, {})], (
-        "a cancelled hop with a healthy pump must record only its cleanup, "
+    assert collector.counters == [
+        (
+            RUST_PUMP_HANDOFF_TOTAL,
+            1.0,
+            {"outcome": RustPumpHandoffOutcome.SUBMITTED},
+        ),
+        (RUST_PUMP_CLEANUP_TOTAL, 1.0, {}),
+    ], (
+        "a cancelled hop with a healthy pump must record submission and cleanup, "
         f"found {collector.counters}"
     )
     assert len(collector.histograms) == 1, (

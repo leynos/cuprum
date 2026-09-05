@@ -19,12 +19,14 @@ import logging
 import typing as typ
 from contextvars import ContextVar
 
+from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from contextvars import Token
 
     from cuprum.events import ExecId
-    from cuprum.pump_events import PumpEvent, PumpHook
+    from cuprum.pump_events import PumpHook
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,6 +185,24 @@ def _emit_pump_event(event: PumpEvent) -> None:
         return
     for hook in hooks:
         _invoke_pump_hook(hook, event)
+
+
+def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
+    """Best-effort delivery of one bounded writer-resource hand-off outcome."""
+    try:
+        _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
+    except BaseException as error:
+        _LOGGER.warning(
+            "pump_handoff_observer_failed outcome=%s error=%s",
+            outcome,
+            type(error).__name__,
+            exc_info=error,
+            extra={
+                "cuprum_action": "pump_handoff_observer_failed",
+                "cuprum_outcome": outcome,
+                "cuprum_error_type": type(error).__name__,
+            },
+        )
 
 
 def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
