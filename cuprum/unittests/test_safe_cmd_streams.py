@@ -114,13 +114,10 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     def _spawn_blocking_consumers(
         process: object,
         execution: object,
-        stream_config: object,
-        *,
-        pid: int | None,
-        relay_diagnostics: object = None,
+        spawn_context: object,
     ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
         """Return two never-completing consumer tasks and record them."""
-        _ = (process, execution, stream_config, pid, relay_diagnostics)
+        _ = (process, execution, spawn_context)
 
         async def _block() -> str | None:
             """Block until cancelled during stdin-failure cleanup."""
