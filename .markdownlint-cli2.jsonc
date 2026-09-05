@@ -11,6 +11,7 @@
     "MD029": { "style": "ordered" }
   },
   "ignores": [
+    ".vtcode/**",
     "**/.venv/**",
     ".node_modules/**",
     "**/node_modules/**",

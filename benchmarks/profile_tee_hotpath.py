@@ -302,6 +302,7 @@ def run_profile_matrix(
     """
 
     def run_matrix() -> list[cabc.Mapping[str, object]]:
+        """Run each scenario in matrix order, stopping at the first failure."""
         results: list[cabc.Mapping[str, object]] = []
         for scenario in default_tee_profile_scenarios(
             fixture_path=config.fixture_path,

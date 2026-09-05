@@ -83,6 +83,7 @@ def test_benchmark_pump_latency(
     pipeline, allowlist, expected = _pump_pipeline(payload_bytes=1024)
 
     def run_once() -> PipelineResult:
+        """Run the pipeline once with capture enabled."""
         with scoped(ScopeConfig(allowlist=allowlist)):
             return pipeline.run_sync(output=RunOutputOptions(capture=True))
 
@@ -106,6 +107,7 @@ def test_benchmark_consume_throughput(
     command, allowlist, payload_bytes = _consume_command(payload_bytes=1024 * 1024)
 
     def run_once() -> int:
+        """Run the consume command once and report its captured byte count."""
         with scoped(ScopeConfig(allowlist=allowlist)):
             result = command.run_sync(output=RunOutputOptions(capture=True))
         assert result.ok, f"command failed with exit_code={result.exit_code}"

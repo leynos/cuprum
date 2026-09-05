@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted on 2026-06-10. Cuprum adds `interrogate` as a third Python lint tier
-that enforces complete docstring coverage across the `cuprum` package. This
-extends the two-tier policy recorded in
+Accepted on 2026-06-10 and amended on 2026-09-05. Cuprum adds `interrogate` as
+a third Python lint tier that enforces complete docstring coverage across the
+Python estate: the `cuprum` package, `tests`, `benchmarks`, `scripts`, and the
+root `conftest.py`. This extends the two-tier policy recorded in
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
 
 ## Date
@@ -74,15 +75,33 @@ documentation, and a percentage ratchet is harder to reason about than a flat
 
 ## Decision Outcome / Proposed Direction
 
-Choose Option B. The `lint` target runs `interrogate --fail-under 100 cuprum`
-immediately after `ruff check` and before the PyPy-backed Pylint tier, using
-the Makefile's `$(UV_RUN_ENV) uv run …` convention. `interrogate` is added to
-the `dev` dependency group in `pyproject.toml`.
+Choose Option B. The `lint` target runs `interrogate --fail-under 100` over
+`benchmarks conftest.py cuprum scripts tests` immediately after `ruff check`
+and before the PyPy-backed Pylint tier, using the Makefile's
+`$(UV_RUN_ENV) uv run …` convention through the `$(INTERROGATE)` variable.
+`interrogate` is added to the `dev` dependency group in `pyproject.toml`.
+
+### Amendment (2026-09-05): coverage beyond the production package
+
+The original decision scoped the gate to `cuprum` alone. The gate now covers
+the whole Python estate. Triaging the 39 undocumented definitions outside
+`cuprum` found every one of them in ordinary need of a one-line docstring:
+nested test hooks and workers, scenario dataclasses, profiler adapters, and
+contract-validation helpers. None warranted extraction, and interrogate's
+`--ignore-nested-functions` or `--ignore-regex` escapes would have hidden
+future undocumented helpers rather than enforced documentation. The gate
+therefore extends as-is: `$(INTERROGATE)` interrogates
+`benchmarks conftest.py cuprum scripts tests` at the same absolute
+`--fail-under 100` bar, with no per-scope exclusions; no interrogate ignore
+flags are used and no `[tool.interrogate]` configuration section exists.
+The deliberate exclusions are none; every documentable node in every scope
+must carry a docstring.
 
 The three tiers now run in this order, each gating the next:
 
 1. `ruff check` — fast, broad rules including docstring *style*.
-2. `interrogate --fail-under 100 cuprum` — docstring *presence* at 100 per cent.
+2. `interrogate --fail-under 100 benchmarks conftest.py cuprum scripts tests` —
+   docstring *presence* at 100 per cent across every Python scope.
 3. PyPy-backed `pylint-pypy` — focused selected messages (see ADR-003).
 
 ## Known Risks and Limitations
@@ -107,6 +126,9 @@ The three tiers now run in this order, each gating the next:
 
 - Docstring coverage is complete and objectively enforced, closing the gap left
   by Ruff's `D` rules.
+- Test doubles, benchmark drivers, and lint scripts document to the same
+  standard as the production package, so the estate's repositories can reuse
+  one definition of "documented".
 - The gate runs inside the existing `make lint` command with predictable
   ordering.
 - Splitting oversized modules to satisfy the ceiling improves cohesion, as with
@@ -119,3 +141,7 @@ The three tiers now run in this order, each gating the next:
   helpers that previously needed no docstring.
 - Documentation-driven growth of a module can force a refactor to stay under the
   400-line ceiling.
+- Extending the gate to tests and scripts demands one-line docstrings on
+  scenario fixtures and helpers. When a nested helper's docstring would only
+  restate the enclosing function, extract or rename it, so the intent is
+  expressible rather than suppressing the gate.
