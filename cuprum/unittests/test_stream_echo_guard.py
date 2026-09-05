@@ -131,13 +131,22 @@ def test_drain_warns_once_per_stream_with_structured_extras(
     )
     record = warnings[0]
     assert record.levelno == logging.WARNING
-    assert record.getMessage() == (
-        "echo_disabled encoding=utf-8 error=UnicodeEncodeError"
+    assert record.getMessage() == "echo_disabled_stream_rejected_output"
+    assert record.exc_info is None, (
+        "the handled sink failure must not carry the original exception: "
+        f"exc_info={record.exc_info!r}"
     )
     fields = vars(record)
-    assert fields["cuprum_encoding"] == "utf-8"
-    assert fields["cuprum_sink_type"] == "_Cp1252TextOnlySink"
-    assert fields["cuprum_error_type"] == "UnicodeEncodeError"
+    assert fields["cuprum_operation"] == "echo_chunk"
+    assert fields["cuprum_stream"] == "stdout"
+    assert fields["cuprum_transition"] == "echo_disabled"
+    assert fields["cuprum_error_category"] == "unicode_encode"
+    assert "cuprum_encoding" not in fields, (
+        "the sink encoding must not reach the warning record"
+    )
+    assert "cuprum_sink_type" not in fields, (
+        "the sink type must not reach the warning record"
+    )
 
 
 def test_drain_propagates_non_encoding_sink_errors() -> None:
@@ -335,10 +344,13 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
     )
     record = warnings[0]
     assert record.levelno == logging.WARNING
-    assert record.getMessage() == (
-        "echo_disabled encoding=utf-8 error=UnicodeEncodeError"
+    assert record.getMessage() == "echo_disabled_stream_rejected_output"
+    assert record.exc_info is None, (
+        "the handled sink failure must not carry the original exception: "
+        f"exc_info={record.exc_info!r}"
     )
     fields = vars(record)
-    assert fields["cuprum_encoding"] == "utf-8"
-    assert fields["cuprum_sink_type"] == "_FailingWriteSink"
-    assert fields["cuprum_error_type"] == "UnicodeEncodeError"
+    assert fields["cuprum_operation"] == "echo_chunk"
+    assert fields["cuprum_stream"] == "stdout"
+    assert fields["cuprum_transition"] == "echo_disabled"
+    assert fields["cuprum_error_category"] == "unicode_encode"
