@@ -301,10 +301,13 @@ cranelift; the coverage gate cannot, because cranelift has no
 
 ### Tool installation
 
-Prebuilt tool installers fail closed, so a missing published binary fails the
-job instead of starting a source build that no cache owns. In this repository
-that means `cargo binstall` running with `--disable-strategies compile` when
-the lint gate installs Whitaker.
+The lint job installs Nixie and Whitaker through the pinned
+`leynos/shared-actions` installers. Nixie's installer also provisions Merman;
+the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
+compiler. The job then restores Rust `1.85.0`, the project's supported
+toolchain, before installing Whitaker and running the project gates. The
+Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the job environment
+(`0.2.7`, the workflow's configured installer version).
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official
@@ -3498,27 +3501,38 @@ the test fails until a human edits the pinned constant to match. That defeats
 the purpose of automated dependency updates and turns a routine bump into a
 manual chore.
 
-Contract tests may still verify the *shape* of a reusable-workflow caller. They
-must not verify the specific SHA value.
+Contract tests may still verify the *shape* of a reusable-workflow caller. Each
+call into `leynos/shared-actions` must use an immutable, lowercase 40-character
+commit SHA. Tests must not prescribe a particular SHA value: Dependabot owns
+revision updates. Calls do not have to share one revision; a workflow may pin
+an action to the commit that provides the behaviour and compatibility that
+workflow needs. For example, the coverage workflow can retain a newer
+`generate-coverage` pin for baseline compatibility while its other shared
+actions use a different validated commit.
 
 - Do assert the workflow references the correct reusable workflow path.
-- Do assert the ref is pinned to a full 40-character commit SHA, not a
-  mutable branch such as `main` or `rolling`.
+- Do assert that every shared-action call uses a full, lowercase 40-character
+  commit SHA, while allowing Dependabot to choose the SHA value.
 - Do assert the expected `on:` triggers, least-privilege `permissions:`, and
   the inputs the caller relies on.
-- Do not hard-code the current SHA value as an expected string. Match it with
-  a pattern instead.
+- Do not hard-code a current SHA value as an expected string.
 - Do not fail a test purely because Dependabot bumped the pinned SHA.
 
 ```python
 import re
 
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHARED_ACTIONS_RE = re.compile(
+    r"^leynos/shared-actions/[^\s@]+@(?P<revision>[0-9a-f]{40})$"
+)
 
 
-def test_uses_pinned_full_sha(caller_step):
-    ref = caller_step["uses"].split("@")[-1]
-    assert SHA_RE.match(ref), f"expected a 40-hex commit SHA, got {ref!r}"
+def test_shared_actions_use_immutable_revisions(caller_steps):
+    matches = [
+        SHARED_ACTIONS_RE.fullmatch(step["uses"])
+        for step in caller_steps
+        if step["uses"].startswith("leynos/shared-actions/")
+    ]
+    assert matches and all(match is not None for match in matches)
 ```
 
 If a workflow's behaviour genuinely depends on a feature only present from a

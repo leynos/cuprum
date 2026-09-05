@@ -208,13 +208,12 @@ jobs:
           uv tool install "mbake==${MBAKE_VERSION}"
           npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
-      # `cache-provider: external`, so the shared action archives neither the
-      # Cargo registry nor `target/${BUILD_PROFILE}`. This job owns the
-      # registry; nothing owns `target`, because sccache owns compiler output.
-      - name: Install Rust toolchain
+      # Merman CLI 0.7.0 needs Rust 1.95+, while the project gates must keep
+      # running with the supported Rust 1.85.0 toolchain below.
+      - name: Install Rust toolchain for Nixie
         uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
-          toolchain: '1.85.0'
+          toolchain: '1.95.0'
           cache-provider: external
           use-sccache: 'false'
 
@@ -238,32 +237,23 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
-      - name: Cache Whitaker installation
-        id: cache-whitaker
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Install Nixie
+        uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+
+      - name: Install project Rust toolchain
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
-          path: |
-            ~/.cargo/bin/whitaker-installer
-            ~/.local/bin/whitaker
-            ~/.dylint_drivers
-            ~/.local/share/whitaker
-          key: whitaker-v5-${{ runner.os }}-${{ env.WHITAKER_INSTALLER_VERSION }}
+          toolchain: '1.85.0'
+          cache-provider: external
+          use-sccache: 'false'
 
       - name: Install Whitaker
-        run: |
-          if [ "${{ steps.cache-whitaker.outputs.cache-hit }}" != "true" ]; then
-            if cargo binstall -V >/dev/null 2>&1; then
-              cargo binstall --no-confirm --locked \
-                --disable-strategies compile \
-                --git https://github.com/leynos/whitaker \
-                --version "${WHITAKER_INSTALLER_VERSION}" \
-                whitaker-installer
-            else
-              echo "cargo-binstall is required for the pinned prebuilt Whitaker installer" >&2
-              exit 1
-            fi
-          fi
-          whitaker-installer --cranelift
+        uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
+
+      - name: Validate Mermaid diagrams
+        run: make nixie
 
       - name: Validate Makefile
         run: mbake validate Makefile
@@ -1512,7 +1502,10 @@ jobs:
       # would correct it are the ones rejected. `!cancelled()` rather than
       # `always()` so an interrupted, half-measured run records nothing.
       - name: Record this run's benchmark sample
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
+        if: >-
+          ${{ !cancelled() && github.event_name == 'push'
+          && github.ref == 'refs/heads/main'
+          && steps.candidate-artefacts.outputs.available == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1527,7 +1520,10 @@ jobs:
             --output "${artifact_dir}/main-baseline-history.json"
 
       - name: Upload main benchmark baseline artifact
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.candidate-artefacts.outputs.available == 'true' }}
+        if: >-
+          ${{ !cancelled() && github.event_name == 'push'
+          && github.ref == 'refs/heads/main'
+          && steps.candidate-artefacts.outputs.available == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-ratchet-main-baseline
