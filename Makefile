@@ -225,7 +225,7 @@ typecheck: build ## Run typechecking
 	$(TY) check --python .venv
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	$(LOCAL_TOOL_ENV) git ls-files -z '*.md' | xargs -0 $(MDLINT)
+	$(LOCAL_TOOL_ENV) git ls-files -z '*.md' | $(LOCAL_TOOL_ENV) xargs -0 $(MDLINT)
 	+$(MAKE) spelling
 
 spelling: $(SPELLING_HELPER_TARGET) _run_spelling_gate ## Enforce en-GB-oxendict spelling in prose and source

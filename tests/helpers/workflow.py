@@ -249,7 +249,18 @@ def _step_matching(
 
 
 def script_of(step: cabc.Mapping[str, object]) -> str | None:
-    """Return a step's ``run:`` script, or ``None`` when it runs no script."""
+    """Return a step's ``run:`` script, or ``None`` when it runs no script.
+
+    Parameters
+    ----------
+    step : collections.abc.Mapping[str, object]
+        Step payload to inspect.
+
+    Returns
+    -------
+    str | None
+        The step's script when ``run`` is a string; otherwise, ``None``.
+    """
     script = step.get("run")
     return script if isinstance(script, str) else None
 
@@ -294,27 +305,15 @@ def first_step_running(
 ) -> tuple[int, str]:
     """Return the first step in a job that runs ``command``.
 
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow containing the job to search.
-    command : str
-        Command whose token sequence must begin a step's script segment.
-    job_name : str
-        Name of the job to search.
-
     Returns
     -------
     tuple[int, str]
         The zero-based step position and its matching shell script.
 
-    Raises
-    ------
-    AssertionError
-        If no step in the named job runs ``command``.
-    ValueError
-        If a step script contains unclosed shell quoting.
-    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
+    The contract failures propagate from ``_require``: an assertion when no
+    step in the named job runs ``command``, and ``ValueError`` when a step
+    script contains unclosed shell quoting.
+    """
     found = next(
         (
             (index, script)
