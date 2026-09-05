@@ -296,13 +296,12 @@ class _Cp1252TextOnlySink:
     """Text-only sink modelling a parent stream too narrow for the output."""
 
     def __init__(self) -> None:
-        """Record attempted non-empty writes."""
-        self.writes = 0
+        """Record each attempted write payload."""
+        self.attempts: list[str] = []
 
     def write(self, payload: str) -> int:
         """Reject payloads the CP1252 codec cannot represent."""
-        if payload:
-            self.writes += 1
+        self.attempts.append(payload)
         payload.encode("cp1252")
         return len(payload)
 
@@ -326,9 +325,9 @@ def test_drain_completes_capture_when_text_sink_cannot_encode() -> None:
         "capture must complete even when the echo sink rejects a chunk for "
         f"chunks={chunks!r}, captured={captured!r}"
     )
-    assert sink.writes == 2, (
+    assert sink.attempts == ["Cargo metadata: ", "ś"], (
         "echo must stop once a chunk is rejected: the first chunk still echoes "
-        f"and the rejecting chunk counts as attempted for writes={sink.writes!r}"
+        f"and the rejecting chunk counts as attempted for attempts={sink.attempts!r}"
     )
 
 
@@ -336,15 +335,6 @@ def test_drain_stops_echo_after_first_encode_failure() -> None:
     """Echo is disabled for the drain after its first UnicodeEncodeError."""
     chunks = (b"plain ", "ś".encode(), b" plain ", "ń".encode())
     sink = _Cp1252TextOnlySink()
-    seen: list[int] = []
-    original_write = sink.write
-
-    def track_writes(payload: str) -> int:
-        """Record each write attempt before delegating to the sink."""
-        seen.append(sink.writes + 1)
-        return original_write(payload)
-
-    sink.write = track_writes  # type: ignore[method-assign]
 
     captured = asyncio.run(
         _drain(
@@ -357,9 +347,9 @@ def test_drain_stops_echo_after_first_encode_failure() -> None:
         "capture must stay complete while echo is disabled for "
         f"chunks={chunks!r}, captured={captured!r}"
     )
-    assert seen == [1, 2], (
+    assert sink.attempts == ["plain ", "ś"], (
         "later chunks must not reach the sink after the first encode failure "
-        f"for writes={seen!r}"
+        f"for attempts={sink.attempts!r}"
     )
 
 
@@ -383,8 +373,8 @@ def test_flush_after_disabled_echo_does_not_raise() -> None:
     assert captured == "\N{REPLACEMENT CHARACTER}", (
         f"capture must flush the decoder tail after echo is disabled for {captured!r}"
     )
-    assert sink.writes == 1, (
-        f"flush must not re-attempt a rejected sink for writes={sink.writes!r}"
+    assert sink.attempts == ["\N{REPLACEMENT CHARACTER}"], (
+        f"flush must not re-attempt a rejected sink for attempts={sink.attempts!r}"
     )
 
 
