@@ -433,13 +433,18 @@ def test_stdout_and_stderr_disable_echo_independently(
     assert result.ok is True
     assert result.stdout == "Cargo metadata: ś ń\n"
     assert result.stderr == "plain stderr text\n"
-    assert stderr_sink.writes == ["plain stderr text\n"], (
+    assert "".join(stderr_sink.writes) == "plain stderr text\n", (
         "the plain-encoding stream must keep echoing for "
         f"stderr writes={stderr_sink.writes!r}"
     )
-    assert stdout_sink.writes == ["Cargo metadata: ś ń\n"], (
-        "the rejected stream must stop after its failing chunk for "
-        f"stdout writes={stdout_sink.writes!r}"
+    assert "ś" in stdout_sink.writes[-1], (
+        "the final stdout attempt must be the chunk carrying the "
+        f"unencodable character for stdout writes={stdout_sink.writes!r}"
+    )
+    preceding = "".join(stdout_sink.writes[:-1])
+    assert preceding.encode().decode("cp1252") in {"", "Cargo metadata: "}, (
+        "preceding encodable stdout chunks must still have echoed for "
+        f"stdout writes={stdout_sink.writes!r}, preceding={preceding!r}"
     )
 
 

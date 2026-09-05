@@ -1014,6 +1014,17 @@ text-only sinks, it owns an incremental decoder configured with
 `config.encoding` and `config.errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
 
+Each `_drain` call builds one frozen `_DrainState` carrying a mutable
+`_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
+independently. Every echo write, including the final decoder flush through
+`_flush_echo_decoder`, routes via `_echo_chunk`. That helper catches
+`UnicodeEncodeError` only: the first failure disables echo for the rest of
+that drain, logs one `WARNING` on the `cuprum.stream` logger with structured
+`cuprum_*` extras, and lets every other error propagate unchanged. Capture
+(`buffer.extend`) always runs before the echo step, so a rejected echo write
+never loses captured bytes, and the binary `.buffer` fast path inside
+`_write_chunk` is unchanged.
+
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
 public-boundary property coverage: Hypothesis generates byte payloads split at

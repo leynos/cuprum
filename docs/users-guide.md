@@ -363,6 +363,13 @@ when a call needs output behaviour that differs from the default.
   to tee stdout and stderr while the command runs. When `capture=True`, echoed
   output is still captured.
 
+If a text-only echo sink cannot represent the subprocess output (for example a
+CP1252 console receiving UTF-8 text), Cuprum no longer aborts the run with
+`UnicodeEncodeError`. It disables echoing for only the affected stream (`stdout`
+or `stderr` independently), capture continues, and the run returns its complete
+captured output. Cuprum logs one `WARNING` on the `cuprum.stream` logger. A sink
+exposing a binary buffer still receives the original bytes.
+
 `RunOutputOptions(capture=True, echo=False)` is the default; you only need to
 supply it explicitly when overriding either flag.
 
