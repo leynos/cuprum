@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 from benchmarks import profile_tee_hotpath
 from benchmarks.profile_tee_hotpath import (
     TeeProfileDriverConfig,
+    TeeProfileScenario,
     default_tee_profile_scenarios,
     run_profile_plan,
 )
@@ -30,6 +31,7 @@ from benchmarks.tee_profile_scenarios import (
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
     from syrupy.assertion import SnapshotAssertion
@@ -56,6 +58,21 @@ _SCENARIO_NAMES_WITHOUT_RUST: list[str] = [
     "echo-devnull-nocb-s4-python",
 ]
 
+_SCENARIO_RESOLVERS = (
+    pytest.param(_scenario_by_name, id="scenario-module"),
+    pytest.param(_legacy_scenario_by_name, id="legacy-module"),
+)
+
+_READ_SIZE_RESOLVERS = (
+    pytest.param(_resolved_read_size, id="scenario-module"),
+    pytest.param(_legacy_resolved_read_size, id="legacy-module"),
+)
+
+_NAMED_SCENARIO_RESOLVERS = (
+    pytest.param(_named_scenario, id="scenario-module"),
+    pytest.param(_legacy_named_scenario, id="legacy-module"),
+)
+
 
 def _scenario_config(
     tmp_path: pth.Path,
@@ -74,11 +91,13 @@ def _scenario_config(
     )
 
 
+@pytest.mark.parametrize("scenario_resolver", _SCENARIO_RESOLVERS)
 def test_scenario_lookup_explicit_read_size_overrides_configured_values(
     tmp_path: pth.Path,
+    scenario_resolver: cabc.Callable[..., TeeProfileScenario],
 ) -> None:
-    """An explicit selection read size overrides a configured sweep."""
-    scenario = _scenario_by_name(
+    """An explicit read size overrides a configured sweep in both modules."""
+    scenario = scenario_resolver(
         _scenario_config(
             tmp_path,
             scenario_name="echo-devnull-nocb-s1",
@@ -90,8 +109,12 @@ def test_scenario_lookup_explicit_read_size_overrides_configured_values(
     assert scenario.read_size == 65536, "explicit read size must win"
 
 
-def test_resolved_read_size_requires_one_configured_value(tmp_path: pth.Path) -> None:
-    """Implicit selection rejects a configuration containing a sweep."""
+@pytest.mark.parametrize("read_size_resolver", _READ_SIZE_RESOLVERS)
+def test_resolved_read_size_requires_one_configured_value(
+    tmp_path: pth.Path,
+    read_size_resolver: cabc.Callable[..., int],
+) -> None:
+    """Implicit selection rejects a configuration containing a sweep in both modules."""
     config = _scenario_config(
         tmp_path,
         scenario_name="echo-devnull-nocb-s1",
@@ -102,17 +125,24 @@ def test_resolved_read_size_requires_one_configured_value(tmp_path: pth.Path) ->
         ValueError,
         match=re.escape("one read size is required outside a sweep"),
     ):
-        _resolved_read_size(config, read_size=None)
+        read_size_resolver(config, read_size=None)
 
 
-def test_named_scenario_requires_name() -> None:
-    """Missing scenario names retain their established error contract."""
+@pytest.mark.parametrize("named_scenario_resolver", _NAMED_SCENARIO_RESOLVERS)
+def test_named_scenario_requires_name(
+    named_scenario_resolver: cabc.Callable[..., TeeProfileScenario],
+) -> None:
+    """Missing scenario names retain their error contract in both modules."""
     with pytest.raises(ValueError, match=re.escape("scenario name is required")):
-        _named_scenario((), scenario_name=None)
+        named_scenario_resolver((), scenario_name=None)
 
 
-def test_named_scenario_reports_ordered_valid_names(tmp_path: pth.Path) -> None:
-    """Unknown names retain the ordered scenario-list error contract."""
+@pytest.mark.parametrize("named_scenario_resolver", _NAMED_SCENARIO_RESOLVERS)
+def test_named_scenario_reports_ordered_valid_names(
+    tmp_path: pth.Path,
+    named_scenario_resolver: cabc.Callable[..., TeeProfileScenario],
+) -> None:
+    """Unknown names retain the ordered scenario-list contract in both modules."""
     config = _scenario_config(
         tmp_path,
         scenario_name="does-not-exist",
@@ -130,72 +160,15 @@ def test_named_scenario_reports_ordered_valid_names(tmp_path: pth.Path) -> None:
         ValueError,
         match=re.escape(expected_message),
     ):
-        _named_scenario(scenarios, scenario_name=config.scenario_name)
+        named_scenario_resolver(scenarios, scenario_name=config.scenario_name)
 
 
-def test_legacy_scenario_lookup_explicit_size_overrides_configured_values(
+@pytest.mark.parametrize("named_scenario_resolver", _NAMED_SCENARIO_RESOLVERS)
+def test_named_scenario_returns_requested_read_size(
     tmp_path: pth.Path,
+    named_scenario_resolver: cabc.Callable[..., TeeProfileScenario],
 ) -> None:
-    """The legacy resolver honours an explicit read size during a sweep."""
-    scenario = _legacy_scenario_by_name(
-        _scenario_config(
-            tmp_path,
-            scenario_name="echo-devnull-nocb-s1",
-            read_sizes=(4096, 16384),
-        ),
-        read_size=65536,
-    )
-
-    assert scenario.read_size == 65536, "explicit read size must win"
-
-
-def test_legacy_resolved_read_size_requires_one_configured_value(
-    tmp_path: pth.Path,
-) -> None:
-    """The legacy helper rejects an implicit selection during a sweep."""
-    config = _scenario_config(
-        tmp_path,
-        scenario_name="echo-devnull-nocb-s1",
-        read_sizes=(4096, 16384),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=re.escape("one read size is required outside a sweep"),
-    ):
-        _legacy_resolved_read_size(config, read_size=None)
-
-
-def test_legacy_named_scenario_requires_name() -> None:
-    """The legacy helper preserves the missing-name error contract."""
-    with pytest.raises(ValueError, match=re.escape("scenario name is required")):
-        _legacy_named_scenario((), scenario_name=None)
-
-
-def test_legacy_named_scenario_reports_ordered_valid_names(tmp_path: pth.Path) -> None:
-    """The legacy helper lists generated scenario names in matrix order."""
-    config = _scenario_config(
-        tmp_path,
-        scenario_name="does-not-exist",
-        read_sizes=(4096,),
-    )
-    scenarios = default_tee_profile_scenarios(
-        fixture_path=config.fixture_path,
-        wrapped_fixture_path=config.wrapped_fixture_path,
-        repeat_count=config.repeat_count,
-    )
-    valid = ", ".join(scenario.name for scenario in scenarios)
-    expected_message = f"unknown scenario 'does-not-exist'; expected one of: {valid}"
-
-    with pytest.raises(
-        ValueError,
-        match=re.escape(expected_message),
-    ):
-        _legacy_named_scenario(scenarios, scenario_name=config.scenario_name)
-
-
-def test_legacy_named_scenario_returns_requested_read_size(tmp_path: pth.Path) -> None:
-    """The legacy helper returns the named scenario from its matrix."""
+    """Known names preserve their selected read size in both modules."""
     scenarios = default_tee_profile_scenarios(
         fixture_path=tmp_path / "fixture.b64",
         wrapped_fixture_path=tmp_path / "fixture-wrap76.b64",
@@ -203,7 +176,7 @@ def test_legacy_named_scenario_returns_requested_read_size(tmp_path: pth.Path) -
         read_size=65536,
     )
 
-    scenario = _legacy_named_scenario(
+    scenario = named_scenario_resolver(
         scenarios,
         scenario_name="tee-devnull-nocb-s1",
     )
