@@ -19,7 +19,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum._streams import _drain, _StreamConfig
+from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -131,13 +132,22 @@ def test_drain_warns_once_per_stream_with_structured_extras(
     )
     record = warnings[0]
     assert record.levelno == logging.WARNING
-    assert record.getMessage() == (
-        "echo_disabled encoding=utf-8 error=UnicodeEncodeError"
+    assert record.getMessage() == "echo_disabled_stream_rejected_output"
+    assert record.exc_info is None, (
+        "the handled sink failure must not carry the original exception: "
+        f"exc_info={record.exc_info!r}"
     )
     fields = vars(record)
-    assert fields["cuprum_encoding"] == "utf-8"
-    assert fields["cuprum_sink_type"] == "_Cp1252TextOnlySink"
-    assert fields["cuprum_error_type"] == "UnicodeEncodeError"
+    assert fields["cuprum_operation"] == "echo_chunk"
+    assert fields["cuprum_stream"] == "stdout"
+    assert fields["cuprum_transition"] == "echo_disabled"
+    assert fields["cuprum_error_category"] == "unicode_encode"
+    assert "cuprum_encoding" not in fields, (
+        "the sink encoding must not reach the warning record"
+    )
+    assert "cuprum_sink_type" not in fields, (
+        "the sink type must not reach the warning record"
+    )
 
 
 def test_drain_propagates_non_encoding_sink_errors() -> None:
@@ -306,14 +316,21 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
     """
     payload, chunks, failing_write = case
     sink = _FailingWriteSink(failing_write)
+    relay_diagnostics = _RelayDiagnostics()
 
     # Hypothesis reuses the fixture across examples, so clear the records the
     # previous example left behind before asserting on this one's drain.
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="cuprum.stream"):
         captured = asyncio.run(
-            _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))),
+            _drain(
+                _reader(chunks),
+                _config(typ.cast("typ.IO[str]", sink)),
+                relay_diagnostics=relay_diagnostics,
+            ),
         )
+    relay_diagnostics.settle()
+    fallbacks = relay_diagnostics.snapshot()
     warnings = [record for record in caplog.records if record.name == "cuprum.stream"]
 
     assert captured == payload.decode("utf-8", errors="replace"), (
@@ -335,10 +352,22 @@ def test_echo_guard_preserves_capture_across_arbitrary_chunks(
     )
     record = warnings[0]
     assert record.levelno == logging.WARNING
-    assert record.getMessage() == (
-        "echo_disabled encoding=utf-8 error=UnicodeEncodeError"
+    assert record.getMessage() == "echo_disabled_stream_rejected_output"
+    assert record.exc_info is None, (
+        "the handled sink failure must not carry the original exception: "
+        f"exc_info={record.exc_info!r}"
     )
     fields = vars(record)
-    assert fields["cuprum_encoding"] == "utf-8"
-    assert fields["cuprum_sink_type"] == "_FailingWriteSink"
-    assert fields["cuprum_error_type"] == "UnicodeEncodeError"
+    assert fields["cuprum_operation"] == "echo_chunk"
+    assert fields["cuprum_stream"] == "stdout"
+    assert fields["cuprum_transition"] == "echo_disabled"
+    assert fields["cuprum_error_category"] == "unicode_encode"
+    assert fallbacks == (
+        RelayFallback(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.UNICODE_ENCODE,
+        ),
+    ), (
+        "exactly one result record must describe the handled transition for "
+        f"chunks={chunks!r}, failing_write={failing_write!r}, fallbacks={fallbacks!r}"
+    )

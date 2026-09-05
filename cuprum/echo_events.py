@@ -84,6 +84,42 @@ class EchoEvent:
     error_category: EchoErrorCategory
 
 
+@dc.dataclass(frozen=True, slots=True)
+class RelayFallback:
+    """One handled echo-disablement recorded on a command's result.
+
+    A text-only echo sink rejected the subprocess output, so the echo for that
+    stream's drain was disabled while the stream itself kept being consumed
+    and, when enabled, captured. One record describes one handled disablement
+    for one stream: later chunks and the final decoder flush never re-enter
+    the failed write, so a drain contributes at most one record.
+
+    Attributes
+    ----------
+    stream:
+        Which output stream the handled echo disablement belonged to. The
+        value is the closed-set :class:`EchoStream`, not free text.
+    error_category:
+        The closed-set :class:`EchoErrorCategory` naming why the echo write
+        failed. It is categorical only: the sink's type, its encoding, any
+        exception text, and the subprocess payload never reach the record.
+
+    Examples
+    --------
+    A stdout echo that could not encode its payload::
+
+        fallback = RelayFallback(
+            stream=EchoStream.STDOUT,
+            error_category=EchoErrorCategory.UNICODE_ENCODE,
+        )
+        assert fallback.stream == "stdout"
+
+    """
+
+    stream: EchoStream
+    error_category: EchoErrorCategory
+
+
 type EchoHook = cabc.Callable[[EchoEvent], None]
 """A synchronous consumer of :class:`EchoEvent` values.
 
@@ -98,4 +134,5 @@ __all__ = [
     "EchoEvent",
     "EchoHook",
     "EchoStream",
+    "RelayFallback",
 ]

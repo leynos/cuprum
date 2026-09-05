@@ -1047,6 +1047,22 @@ unregistered callers pay nothing. Hook failures are reported and skipped,
 mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
 what a run captures.
 
+### Result diagnostics ownership
+
+The same transition also appends one `cuprum.echo_events.RelayFallback` record
+to a caller-owned `cuprum._streams._RelayDiagnostics` collector. Each command
+hands one collector per stream into its `_consume_stream` calls and retains the
+pair on its `_RunTaskOwnership` (single-command) or per-stage spawn state
+(pipeline), so the exactly-once reconciliation point settles each collector and
+its result builder flattens stdout-then-stderr records into that command's
+`CommandResult.relay_fallbacks`. Collectors are never shared between commands,
+stages, or nested runs, and the result diagnostics are not collected by
+registering a public echo observer: context-scoped events carry no execution
+identity, so they cannot attribute nested or concurrent runs. On a timeout or
+cancellation that prevents a result, the records stay on the echo observation
+channel and the collectors are simply never settled; no exception payload
+fields are added.
+
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
 public-boundary property coverage: Hypothesis generates byte payloads split at

@@ -28,7 +28,9 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
+    from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
 
@@ -182,11 +184,18 @@ class _StageObservation:
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineStageResultInputs:
-    """Aggregated wait outcome and captured output for stage results."""
+    """Aggregated wait outcome and captured output for stage results.
+
+    ``relay_fallbacks_by_stage`` holds one tuple per pipeline stage, in stage
+    order. A stage's tuple lists its stdout diagnostics first (final stage
+    only, matching the single-command result order) and then its stderr
+    diagnostics, so every stage result owns the records of its own streams.
+    """
 
     wait_result: _PipelineWaitResult
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
+    relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -228,13 +237,23 @@ class _PipelineSpawnResult:
     processes: list[asyncio.subprocess.Process]
     stderr_tasks: list[asyncio.Task[str | None] | None]
     stdout_task: asyncio.Task[str | None] | None
+    relay_diagnostics_by_stage: tuple[
+        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
+        ...,
+    ]
     stages: _StageWaitContext
 
 
 @dc.dataclass(frozen=True, slots=True)
 class _PipelineOutputs:
-    """Captured outputs from pipeline execution."""
+    """Captured outputs from pipeline execution.
+
+    ``relay_fallbacks_by_stage`` mirrors
+    :class:`_PipelineStageResultInputs` so the timeout path can raise with
+    whatever was already recorded before the wait failed.
+    """
 
     stderr_by_stage: tuple[str | None, ...]
     final_stdout: str | None
     capture: bool
+    relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...] = ()

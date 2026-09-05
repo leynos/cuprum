@@ -47,6 +47,9 @@ from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
+from cuprum.echo_events import (
+    RelayFallback as RelayFallback,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+)
 
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.
@@ -133,6 +136,12 @@ class CommandResult:
         Captured standard output, or ``None`` when capture was disabled.
     stderr:
         Captured standard error, or ``None`` when capture was disabled.
+    relay_fallbacks:
+        Handled echo-disablement records from this command's own streams, one
+        per affected drain in stdout-then-stderr order. The ordering does not
+        reconstruct chronological interleaving between the two streams. Empty
+        when no echo write was handled as failed, and an echo failure does not
+        change ``exit_code`` or ``ok``.
 
     """
 
@@ -142,6 +151,7 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
+    relay_fallbacks: tuple[RelayFallback, ...] = ()
 
     @property
     def ok(self) -> bool:

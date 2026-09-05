@@ -38,9 +38,10 @@ def readers_that_expire_grace_immediately(
         _config: _StreamConfig,
         *,
         on_line: cabc.Callable[[str], None] | None = None,
+        relay_diagnostics: object = None,
     ) -> str | None:
         """Stand in for a reader that cannot observe EOF before cancellation."""
-        del on_line
+        del on_line, relay_diagnostics
         await asyncio.Event().wait()
         return None
 
