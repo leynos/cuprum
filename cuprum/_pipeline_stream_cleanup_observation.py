@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import typing as typ
 
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _current_pump_event_exec_id, _emit_pump_event
 
 if typ.TYPE_CHECKING:
-    import logging
+    import collections.abc as cabc
 
 
 def _log_native_pump_cleanup_started(logger: logging.Logger) -> None:
@@ -62,6 +64,30 @@ def _log_native_pump_cleanup_completed(
         },
     )
     _emit_pump_event(event)
+
+
+async def _await_native_pump_cleanup(
+    cleanup_complete: asyncio.Future[None],
+    *,
+    monotonic_clock: cabc.Callable[[], float],
+    logger: logging.Logger | None = None,
+) -> None:
+    """Wait for worker cleanup despite repeated cancellation requests."""
+    cleanup_logger = logger or logging.getLogger("cuprum._pipeline_streams")
+    started_at = monotonic_clock()
+    _log_native_pump_cleanup_started(cleanup_logger)
+    try:
+        while not cleanup_complete.done():
+            try:
+                await asyncio.shield(cleanup_complete)
+            except asyncio.CancelledError:
+                continue
+    finally:
+        if cleanup_complete.done():
+            _log_native_pump_cleanup_completed(
+                cleanup_logger,
+                monotonic_clock() - started_at,
+            )
 
 
 def _log_native_pump_handoff_failed(
