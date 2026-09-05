@@ -61,6 +61,7 @@ from cuprum.echo_events import (
     EchoEvent,
     EchoHook,
     EchoStream,
+    RelayFallback,
 )
 from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
@@ -129,6 +130,7 @@ __all__ = [
     "ProgramCatalogue",
     "ProgramEntry",
     "ProjectSettings",
+    "RelayFallback",
     "PumpEvent",
     "PumpHook",
     "PumpHookRegistration",
