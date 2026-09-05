@@ -11,12 +11,20 @@ from .workflow_gate import bench_output, benchmark_runs, matches_filter
 from .workflow_shell import script_runs_command
 from .workflow_types import Job, Step, Workflow
 
-# fmt: off
-__all__ = ("Job", "Step", "Workflow", "bench_output", "benchmark_runs",
-           "first_step_running", "matches_filter", "script_runs_command")
-# fmt: on
+__all__ = (
+    "Job",
+    "Step",
+    "Workflow",
+    "bench_output",
+    "benchmark_runs",
+    "first_step_running",
+    "matches_filter",
+    "script_runs_command",
+)
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
 CI_WORKFLOW = ".github/workflows/ci.yml"
 CHANGES_JOB = "changes"
 BENCHMARK_JOB = "benchmark-ratchet"
@@ -231,25 +239,7 @@ def step_named(
 def _step_matching(
     workflow_data: Workflow, job_name: str, field_name: str, requested_value: str
 ) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
-    """Return the matching step and the job's declared steps.
-
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow containing the job to search.
-    job_name : str
-        Name of the job to search.
-    field_name : str
-        Step payload field whose value is matched.
-    requested_value : str
-        Value the field must carry for a step to match.
-
-    Returns
-    -------
-    tuple[dict[str, object] | None, list[dict[str, object]]]
-        The first matching step, or ``None``, alongside every declared step
-        so callers can report the available values on failure.
-    """
+    """Return the matching step plus every declared step for diagnostics."""
     declared_steps = steps(workflow_data, job_name)
     found = next(
         (step for step in declared_steps if step.get(field_name) == requested_value),
@@ -259,18 +249,7 @@ def _step_matching(
 
 
 def script_of(step: cabc.Mapping[str, object]) -> str | None:
-    """Return a step's ``run:`` script, or ``None`` when it runs no script.
-
-    Parameters
-    ----------
-    step : collections.abc.Mapping[str, object]
-        Step payload to inspect.
-
-    Returns
-    -------
-    str | None
-        The step's script when ``run`` is a string; otherwise, ``None``.
-    """
+    """Return a step's ``run:`` script, or ``None`` when it runs no script."""
     script = step.get("run")
     return script if isinstance(script, str) else None
 

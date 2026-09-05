@@ -28,7 +28,7 @@ if typ.TYPE_CHECKING:
 
 
 def _require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold."""  # already documented
+    """Raise a contract failure when ``condition`` does not hold."""
     if not condition:
         raise AssertionError(message)
 
