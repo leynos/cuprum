@@ -51,9 +51,11 @@ class RustPumpHandoffOutcome(enum.StrEnum):
     """A bounded result of attempting the Rust writer-resource hand-off."""
 
     SUBMITTED = "submitted"
+    DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"
+    READER_PREPARATION_FAILED = "reader_preparation_failed"
     BUFFER_VALIDATION_FAILED = "buffer_validation_failed"
     PLATFORM_WRITER_TRANSFER_FAILED = "platform_writer_transfer_failed"
     NATIVE_IO_FAILED = "native_io_failed"

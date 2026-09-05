@@ -22,10 +22,12 @@ from __future__ import annotations
 import contextlib
 import functools
 import importlib
+import logging
 import operator
 import os
 import typing as typ
 
+from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
@@ -38,6 +40,8 @@ _DUPLICATE_SAME_ACCESS = 2
 _I64_MIN = -(1 << 63)
 _I64_MAX = (1 << 63) - 1
 _MAX_BUFFER_SIZE = 1 << 30
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _NativeBackend(typ.Protocol):
@@ -137,8 +141,16 @@ def _prepare_rust_pump_call(
         raise
     try:
         reader = _convert_fd_for_platform(reader_fd)
-    except BaseException:
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "reader_preparation",
+            error,
+        )
         _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.READER_PREPARATION_FAILED
+        )
         raise
     try:
         validated_buffer_size = _validate_buffer_size_before_writer_transfer(
@@ -260,7 +272,12 @@ def rust_pump_stream(
     )
     try:
         writer = _transfer_writer_fd_for_platform(writer_fd)
-    except BaseException:
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "platform_writer_transfer",
+            error,
+        )
         _close_writer_after_pre_native_failure(writer_fd)
         _emit_rust_pump_handoff_outcome(
             RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED

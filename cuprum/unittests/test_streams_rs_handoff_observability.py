@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import typing as typ
 from unittest import mock
 
 import pytest
 
 from cuprum import _streams_rs
+from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
+from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 
 
 class _NativeLoadError(ImportError):
@@ -26,6 +29,14 @@ class _WindowsTransferError(OSError):
     def __init__(self) -> None:
         """Initialize the test double's stable diagnostic message."""
         super().__init__("DuplicateHandle failed")
+
+
+class _ReaderPreparationError(OSError):
+    """Signal a reader descriptor that cannot be prepared."""
+
+    def __init__(self) -> None:
+        """Initialize the test double's stable diagnostic message."""
+        super().__init__("reader descriptor cannot be prepared")
 
 
 class _MetricsObserverError(RuntimeError):
@@ -81,6 +92,37 @@ def _assert_handoff_outcome(
     assert _outcomes(events) == [expected], message
 
 
+def _assert_handoff_metric(
+    collector: RecordingCollector,
+    expected: RustPumpHandoffOutcome,
+    message: str,
+) -> None:
+    """Assert that one call incremented the expected bounded hand-off metric."""
+    assert collector.counters == [
+        (RUST_PUMP_HANDOFF_TOTAL, 1.0, {"outcome": expected})
+    ], message
+
+
+def _assert_handoff_failure_record(
+    caplog: pytest.LogCaptureFixture,
+    expected_phase: str,
+    expected_error_type: str,
+) -> None:
+    """Assert that one bounded diagnostic records the given failure phase."""
+    records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+    ]
+    assert len(records) == 1, "one hand-off failure must produce one diagnostic"
+    assert records[0]["cuprum_phase"] == expected_phase, (
+        "the diagnostic must identify the bounded failed phase"
+    )
+    assert records[0]["cuprum_error_type"] == expected_error_type, (
+        "the diagnostic must preserve the error category"
+    )
+
+
 def test_native_load_failure_emits_one_bounded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -107,6 +149,52 @@ def test_native_load_failure_emits_one_bounded_outcome(
     )
 
 
+def test_reader_preparation_failure_emits_one_bounded_outcome(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reader conversion failure closes the writer before Rust owns it."""
+    caplog.set_level(logging.DEBUG, logger="cuprum._streams_rs")
+    native_pump = mock.Mock(return_value=0)
+    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
+    collector = RecordingCollector()
+
+    def fail_reader_preparation(reader_fd: int) -> typ.NoReturn:
+        """Fail while converting the borrowed reader resource."""
+        del reader_fd
+        raise _ReaderPreparationError
+
+    monkeypatch.setattr(
+        _streams_rs,
+        "_convert_fd_for_platform",
+        fail_reader_preparation,
+    )
+    with (
+        observe_pump(events.append),
+        observe_pump(PumpMetricsHook(collector)),
+        pytest.raises(_ReaderPreparationError, match="cannot be prepared"),
+    ):
+        _streams_rs.rust_pump_stream(11, 12)
+
+    close_writer.assert_called_once_with(12)
+    native_pump.assert_not_called()
+    _assert_handoff_outcome(
+        events,
+        RustPumpHandoffOutcome.READER_PREPARATION_FAILED,
+        "reader preparation failure must emit exactly its closed outcome",
+    )
+    _assert_handoff_metric(
+        collector,
+        RustPumpHandoffOutcome.READER_PREPARATION_FAILED,
+        "reader preparation failure must increment one bounded hand-off metric",
+    )
+    _assert_handoff_failure_record(
+        caplog,
+        "reader_preparation",
+        "_ReaderPreparationError",
+    )
+
+
 def test_invalid_buffer_size_emits_one_bounded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -126,18 +214,14 @@ def test_invalid_buffer_size_emits_one_bounded_outcome(
 
 
 def test_windows_writer_transfer_failure_emits_one_bounded_outcome(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed Windows transfer closes its worker-side writer once."""
-    events: list[PumpEvent] = []
-    close_writer = mock.Mock()
+    caplog.set_level(logging.DEBUG, logger="cuprum._streams_rs")
     native_pump = mock.Mock(return_value=0)
-    _install_native_pump(monkeypatch, native_pump)
-    monkeypatch.setattr(
-        _streams_rs,
-        "_close_writer_after_pre_native_failure",
-        close_writer,
-    )
+    events, close_writer = _install_observed_native_pump(monkeypatch, native_pump)
+    collector = RecordingCollector()
 
     def fail_transfer(writer_fd: int) -> typ.NoReturn:
         """Model failure while duplicating a Windows writer handle."""
@@ -145,14 +229,30 @@ def test_windows_writer_transfer_failure_emits_one_bounded_outcome(
         raise _WindowsTransferError
 
     monkeypatch.setattr(_streams_rs, "_transfer_writer_fd_for_platform", fail_transfer)
-    with observe_pump(events.append), pytest.raises(OSError, match="DuplicateHandle"):
+    with (
+        observe_pump(events.append),
+        observe_pump(PumpMetricsHook(collector)),
+        pytest.raises(OSError, match="DuplicateHandle"),
+    ):
         _streams_rs.rust_pump_stream(11, 12)
 
     close_writer.assert_called_once_with(12)
     native_pump.assert_not_called()
-    assert _outcomes(events) == [
-        RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED
-    ], "Windows transfer failure must emit exactly its closed outcome"
+    _assert_handoff_outcome(
+        events,
+        RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED,
+        "Windows transfer failure must emit exactly its closed outcome",
+    )
+    _assert_handoff_metric(
+        collector,
+        RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED,
+        "Windows transfer failure must increment one bounded hand-off metric",
+    )
+    _assert_handoff_failure_record(
+        caplog,
+        "platform_writer_transfer",
+        "_WindowsTransferError",
+    )
 
 
 def test_native_io_failure_emits_one_bounded_outcome_without_python_close(

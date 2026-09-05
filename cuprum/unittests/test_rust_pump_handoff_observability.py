@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import typing as typ
 from unittest import mock
@@ -11,8 +12,10 @@ from unittest import mock
 import pytest
 
 from cuprum import _pipeline_streams
+from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
+from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -31,6 +34,14 @@ class _BlockingSetupError(OSError):
     def __init__(self) -> None:
         """Initialize the test double's stable diagnostic message."""
         super().__init__("blocking mode is unavailable")
+
+
+class _DuplicateWriterError(OSError):
+    """Signal a writer descriptor that cannot be duplicated."""
+
+    def __init__(self) -> None:
+        """Initialize the test double's stable diagnostic message."""
+        super().__init__("writer descriptor cannot be duplicated")
 
 
 class _ExecutorRejectedError(OSError):
@@ -102,6 +113,71 @@ def test_blocking_setup_failure_emits_one_handoff_outcome(
     assert _handoff_outcomes(events) == [
         RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED
     ], "a blocking decline must emit exactly its matching hand-off outcome"
+
+
+def test_duplicate_writer_failure_emits_one_bounded_outcome(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed duplicate records its outcome without transferring ownership."""
+    caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
+    events: list[PumpEvent] = []
+    collector = RecordingCollector()
+    restore = mock.Mock()
+    resume_reader = mock.Mock()
+
+    def fail_duplicate(writer_fd: int) -> typ.NoReturn:
+        """Fail before a duplicate writer resource exists."""
+        del writer_fd
+        raise _DuplicateWriterError
+
+    monkeypatch.setattr(_pipeline_streams.os, "dup", fail_duplicate)
+    with (
+        _pipe_fds() as (reader_fd, writer_fd),
+        observe_pump(events.append),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        state = _pipeline_streams._RustPumpState(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            blocking_mode_guard=typ.cast(
+                "_pipeline_streams._BlockingModeGuard",
+                restore,
+            ),
+            resume_reader=resume_reader,
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            with pytest.raises(_DuplicateWriterError, match="cannot be duplicated"):
+                _pipeline_streams._submit_rust_pump(loop=loop, state=state)
+        finally:
+            loop.close()
+        os.fstat(writer_fd)
+
+    restore.restore.assert_called_once_with()
+    resume_reader.assert_called_once_with()
+    assert _handoff_outcomes(events) == [
+        RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED
+    ], "duplicate failure must emit exactly its matching hand-off outcome"
+    assert collector.counters == [
+        (
+            RUST_PUMP_HANDOFF_TOTAL,
+            1.0,
+            {"outcome": RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED},
+        )
+    ], "duplicate failure must increment one bounded hand-off metric"
+    records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+    ]
+    assert len(records) == 1, "duplicate failure must produce one hand-off record"
+    assert records[0]["cuprum_phase"] == "duplicate_writer", (
+        "duplicate failure must keep the existing bounded diagnostic phase"
+    )
+    assert records[0]["cuprum_error_type"] == "_DuplicateWriterError", (
+        "duplicate diagnostic must retain the error category"
+    )
 
 
 def test_executor_rejection_emits_no_submitted_outcome(

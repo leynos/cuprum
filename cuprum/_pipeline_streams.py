@@ -219,6 +219,7 @@ def _submit_rust_pump(
     except (OSError, ValueError) as error:
         _pump_obs._log_native_pump_handoff_failed(_LOGGER, "duplicate_writer", error)
         _restore_rust_pump_state(state)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
         raise
 
     try:

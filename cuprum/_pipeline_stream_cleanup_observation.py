@@ -66,7 +66,12 @@ def _log_native_pump_cleanup_completed(
 
 def _log_native_pump_handoff_failed(
     logger: logging.Logger,
-    phase: typ.Literal["duplicate_writer", "executor_submission"],
+    phase: typ.Literal[
+        "duplicate_writer",
+        "executor_submission",
+        "reader_preparation",
+        "platform_writer_transfer",
+    ],
     error: BaseException,
 ) -> None:
     """Record a failure before Rust owns the duplicate writer."""

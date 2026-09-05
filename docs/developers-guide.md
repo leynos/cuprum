@@ -847,13 +847,15 @@ Table 1: metrics emitted by `PumpMetricsHook`
 `RustPumpDeclineReason` bounds the decline label to its four declared values.
 The `outcome` label is also closed: it is exactly `submitted`,
 `blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
-`buffer_validation_failed`, `platform_writer_transfer_failed`, or
-`native_io_failed`. The hand-off counter increments once for each such outcome,
-including a successful submission. Descriptor numbers, Windows handle values,
-exception types, errno values, and error messages are never metric labels.
-Observer failures are logged and do not alter the successful fallback or the
-caller's cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md)
-records the decision.
+`buffer_validation_failed`, `platform_writer_transfer_failed`,
+`native_io_failed`, `duplicate_writer_failed`, or `reader_preparation_failed`.
+The hand-off counter increments once for each such outcome, including a
+successful submission. `outcome` is the only label on the hand-off counter.
+Descriptor numbers, Windows handle values, errno values, exception types,
+exception messages, and tracebacks are never metric labels. Observer failures
+are logged and do not alter the successful fallback or the caller's
+cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md) records the
+decision.
 
 ### `_pipeline_wait` completion command/query seam
 
@@ -2142,13 +2144,16 @@ The reader transport remains paused, and the original descriptor modes are
 restored, until that same completion boundary. This prevents cancellation
 cleanup from racing with native I/O on a descriptor that is still in use.
 
-Failures while creating the duplicate or submitting the executor work are
-re-raised after rollback and recorded at `DEBUG` on the
-`cuprum._pipeline_streams` logger. These records use
+Executor-side failures while creating the duplicate or submitting the executor
+work are re-raised after rollback and recorded at `DEBUG` on the
+`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
+reader or transferring the platform writer are recorded at `DEBUG` on the
+`cuprum._streams_rs` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
-or exception text. A duplicate-creation failure has no hand-off outcome;
-executor rejection emits `executor_submission_rejected` before it is re-raised.
+or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
+and reader-preparation failure emits `reader_preparation_failed`. Executor
+rejection emits `executor_submission_rejected` before it is re-raised.
 Blocking-mode failure selects the Python fallback and emits
 `blocking_setup_failed`. The outcome events are counted by
 `cuprum_rust_pump_handoff_total` as described above.
