@@ -12,12 +12,12 @@
   stream while capture completes, a `cuprum.stream` `WARNING` records the first
   failure, sinks exposing a binary `buffer` keep receiving the original bytes,
   and other I/O errors still propagate
-  ([#348](https://github.com/leynos/cuprum/issues/348)).
-  Registering `EchoMetricsHook` via `cuprum.echo_observation.observe_echo`
-  additionally counts one `cuprum_echo_encoding_failures_total` increment per
-  affected stream, labelled only by the bounded `stream` (`stdout` or
-  `stderr`) and `error_category` (`unicode_encode`) values; the hook is
-  opt-in and no payload or sink metadata becomes a metric label.
+  ([#348](https://github.com/leynos/cuprum/issues/348)). Registering
+  `EchoMetricsHook` via `cuprum.echo_observation.observe_echo` additionally
+  counts one `cuprum_echo_encoding_failures_total` increment per affected
+  stream, labelled only by the bounded `stream` (`stdout` or `stderr`) and
+  `error_category` (`unicode_encode`) values; the hook is opt-in and no payload
+  or sink metadata becomes a metric label.
 
 ### Added
 
