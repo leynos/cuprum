@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import typing as typ
 
@@ -83,11 +84,13 @@ class _DuplicateSetupFailure:
     ids=["dup-oserror", "dup-valueerror", "blocking-oserror", "blocking-valueerror"],
 )
 def test_rust_pump_rolls_back_duplicate_setup_failures(
+    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     duplicate_creation_fails: bool,
     fault_error: type[OSError] | type[ValueError],
 ) -> None:
     """Duplicate failures propagate; blocking failures select the Python fallback."""
+    caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
     failure = _DuplicateSetupFailure(
         duplicate_creation_fails=duplicate_creation_fails,
         fault_error=fault_error,
@@ -132,3 +135,29 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         os.fstat(reader_fd)
         os.fstat(writer_fd)
         failure.assert_duplicate_cleanup()
+    handoff_records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+    ]
+    if duplicate_creation_fails:
+        assert len(handoff_records) == 1, (
+            "a failed duplicate setup must produce one hand-off diagnostic"
+        )
+        fields = handoff_records[0]
+        assert fields["cuprum_phase"] == "duplicate_writer", (
+            "the diagnostic must identify duplicate creation as the failed phase"
+        )
+        assert fields["cuprum_outcome"] == "failed", (
+            "a failed duplicate setup must be recorded as failed"
+        )
+        assert fields["cuprum_error_type"] == fault_error.__name__, (
+            "the diagnostic must preserve the duplicate failure category"
+        )
+        assert fields["cuprum_errno"] is None, (
+            "a duplicate failure without errno must not invent one"
+        )
+    else:
+        assert handoff_records == [], (
+            "a declined blocking setup is not a fatal hand-off"
+        )

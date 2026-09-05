@@ -1823,6 +1823,17 @@ unchanged — the counters supplement them rather than replacing them.
 > absorb the cancellation the caller asked for. Hooks must be synchronous; one
 > that returns an awaitable is reported and discarded.
 
+
+### A pump hand-off failed before submission
+
+If Cuprum cannot duplicate the writer descriptor or submit the Rust worker,
+the hand-off is rolled back and the original exception is re-raised. The
+`cuprum._pipeline_streams` logger records a bounded `DEBUG` diagnostic with
+`cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
+exception class, and `errno` when available. Descriptor numbers and exception
+text are not logged, and these diagnostics do not create pump-observation
+events or metrics.
+
 ### Choosing a stream backend
 
 Most users should leave backend selection on `auto`. This uses the Rust pathway

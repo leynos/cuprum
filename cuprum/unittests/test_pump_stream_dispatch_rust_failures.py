@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import typing as typ
 from unittest import mock
@@ -264,10 +265,12 @@ class TestRustPumpFailures:
 
     def test_run_rust_pump_closes_duplicate_when_executor_rejects_submission(
         self,
+        caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A rejected executor submission should close the duplicate writer FD."""
         _ = self
+        caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
         duplicated_fds: list[int] = []
         original_dup = os.dup
 
@@ -330,3 +333,22 @@ class TestRustPumpFailures:
             close_duplicate.assert_called_once_with(duplicated_fds[0])
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(duplicated_fds[0])
+        records = [
+            record.__dict__
+            for record in caplog.records
+            if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+        ]
+        assert len(records) == 1, "a rejected submission must produce one diagnostic"
+        fields = records[0]
+        assert fields["cuprum_phase"] == "executor_submission", (
+            "the diagnostic must identify executor submission as the failed phase"
+        )
+        assert fields["cuprum_outcome"] == "failed", (
+            "a rejected executor submission must be recorded as failed"
+        )
+        assert fields["cuprum_error_type"] == "RuntimeError", (
+            "the diagnostic must preserve the executor failure category"
+        )
+        assert fields["cuprum_errno"] is None, (
+            "a non-OS executor failure must not invent an errno"
+        )

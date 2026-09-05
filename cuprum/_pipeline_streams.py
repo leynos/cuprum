@@ -22,13 +22,10 @@ import os
 import time
 import typing as typ
 
+from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._pipeline_pipe_tasks import (
     _create_pipe_tasks as _create_pipe_tasks_with_context,
-)
-from cuprum._pipeline_stream_cleanup_observation import (
-    _log_native_pump_cleanup_completed,
-    _log_native_pump_cleanup_started,
 )
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
@@ -167,7 +164,7 @@ async def _await_native_pump_cleanup(
 ) -> None:
     """Wait for native cleanup despite repeated cancellation requests."""
     started_at = monotonic_clock()
-    _log_native_pump_cleanup_started(_LOGGER)
+    _pump_obs._log_native_pump_cleanup_started(_LOGGER)
     try:
         while not cleanup_complete.done():
             try:
@@ -176,7 +173,8 @@ async def _await_native_pump_cleanup(
                 continue
     finally:
         if cleanup_complete.done():
-            _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
+            duration_s = monotonic_clock() - started_at
+            _pump_obs._log_native_pump_cleanup_completed(_LOGGER, duration_s)
 
 
 async def _run_rust_pump_with_blocking_fds(
@@ -222,7 +220,8 @@ def _submit_rust_pump(
 
     try:
         rust_writer_fd = os.dup(state.writer_fd)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        _pump_obs._log_native_pump_handoff_failed(_LOGGER, "duplicate_writer", error)
         _restore_rust_pump_state(state)
         raise
 
@@ -241,7 +240,8 @@ def _submit_rust_pump(
             state.reader_fd,
             rust_writer_fd,
         )
-    except BaseException:
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
         _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
         raise

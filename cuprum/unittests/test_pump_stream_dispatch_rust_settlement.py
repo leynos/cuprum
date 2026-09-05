@@ -108,7 +108,7 @@ class _CleanupOrder:
         )
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class _CancelledPumpSettlement:
     """Values shared by one cancelled native-pump settlement."""
 

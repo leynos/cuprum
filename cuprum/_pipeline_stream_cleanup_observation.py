@@ -49,3 +49,22 @@ def _log_native_pump_cleanup_completed(
         },
     )
     _emit_pump_event(event)
+
+
+def _log_native_pump_handoff_failed(
+    logger: logging.Logger,
+    phase: typ.Literal["duplicate_writer", "executor_submission"],
+    error: BaseException,
+) -> None:
+    """Record a failure before Rust owns the duplicate writer."""
+    logger.debug(
+        "Rust pump hand-off failed during %s",
+        phase,
+        extra={
+            "cuprum_action": "rust_pump_handoff_failed",
+            "cuprum_phase": phase,
+            "cuprum_outcome": "failed",
+            "cuprum_error_type": type(error).__name__,
+            "cuprum_errno": error.errno if isinstance(error, OSError) else None,
+        },
+    )

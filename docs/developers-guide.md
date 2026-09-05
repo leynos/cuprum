@@ -2136,6 +2136,14 @@ descriptor modes are restored, until that same completion boundary. This
 prevents cancellation cleanup from racing with native I/O on a descriptor that
 is still in use.
 
+Failures while creating the duplicate or submitting the executor work are
+re-raised after rollback and recorded at `DEBUG` on the
+`cuprum._pipeline_streams` logger. These records use
+`cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
+exception class, and `errno` when available; they contain no descriptor number
+or exception text. They are diagnostics, not pump-observation events or
+metrics.
+
 ## Rust splice-loop and drain contract
 
 The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
