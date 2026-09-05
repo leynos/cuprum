@@ -21,6 +21,7 @@ from cuprum.pump_span_events import (
     PUMP_HOP_OUTCOME_ATTRIBUTE,
     PUMP_HOP_SPAN_NAME,
     PUMP_HOP_TOTAL_BYTES_ATTRIBUTE,
+    PumpHopOutcome,
 )
 from cuprum.pump_span_observation import observe_pump_span
 from cuprum.unittests._rust_pump_test_helpers import DECLINE_PATHS
@@ -167,19 +168,30 @@ async def _cancel_pump(
                 os.close(fd)
 
 
-def test_cancelled_executor_hop_ends_a_cancelled_span(
+@pytest.mark.parametrize(
+    ("should_fail", "expected_outcome"),
+    [(False, "cancelled"), (True, "failed_after_cancel")],
+    ids=("clean-worker", "failing-worker"),
+)
+def test_cancelled_executor_hop_ends_with_expected_outcome(
+    *,
+    should_fail: bool,
+    expected_outcome: PumpHopOutcome,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A clean worker return after cancellation records ``cancelled``."""
+    """Cancelled hops retain worker ownership until the expected outcome is set."""
     transfer = _Transfer([], threading.Event(), threading.Event())
     tracer = InMemoryTracer()
 
     def pump(reader_fd: int, writer_fd: int) -> int:
-        """Wait for the cancellation harness, then return cleanly."""
+        """Wait for cancellation, then return or fail as configured."""
         del reader_fd, writer_fd
         transfer.started.set()
         assert transfer.release.wait(5.0), "harness did not release the worker"
         transfer.events.append("worker_returned")
+        if should_fail:
+            msg = "worker failed after cancellation"
+            raise OSError(msg)
         return 0
 
     with observe_pump_span(tracer):
@@ -187,40 +199,10 @@ def test_cancelled_executor_hop_ends_a_cancelled_span(
 
     span = tracer.spans[0]
     assert span.ended is True, "cancelled hop span must end"
-    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "cancelled", (
+    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == expected_outcome, (
         f"unexpected cancellation outcome {span.attributes}"
     )
-    assert span.status_ok is None, "only succeeded spans may be marked ok"
-    assert transfer.events.index("worker_returned") < transfer.events.index(
-        "restored"
-    ), f"worker must return before descriptor restore: {transfer.events}"
-
-
-def test_failed_cancelled_executor_hop_ends_without_success_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A worker failure during cancellation records ``failed_after_cancel``."""
-    transfer = _Transfer([], threading.Event(), threading.Event())
-    tracer = InMemoryTracer()
-
-    def pump(reader_fd: int, writer_fd: int) -> int:
-        """Wait for cancellation, then fail while retaining descriptor ownership."""
-        del reader_fd, writer_fd
-        transfer.started.set()
-        assert transfer.release.wait(5.0), "harness did not release the worker"
-        transfer.events.append("worker_returned")
-        msg = "worker failed after cancellation"
-        raise OSError(msg)
-
-    with observe_pump_span(tracer):
-        asyncio.run(_cancel_pump(transfer, pump, monkeypatch=monkeypatch))
-
-    span = tracer.spans[0]
-    assert span.ended is True, "failed cancellation span must end"
-    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "failed_after_cancel", (
-        f"unexpected failed cancellation outcome {span.attributes}"
-    )
-    assert span.status_ok is not True, "failed cancellation must not be marked ok"
+    assert span.status_ok is not True, "cancelled hop must not be marked ok"
     assert transfer.events.index("worker_returned") < transfer.events.index(
         "restored"
     ), f"worker must return before descriptor restore: {transfer.events}"
