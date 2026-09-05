@@ -292,6 +292,44 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
     )
 
 
+class _Cp1252TextOnlySink:
+    """Text-only sink recording writes and rejecting unencodable text."""
+
+    def __init__(self) -> None:
+        """Record each attempted write payload in order."""
+        self.attempts: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Record the write, then reject CP1252-unrepresentable text."""
+        self.attempts.append(payload)
+        payload.encode("cp1252")
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+def test_final_flush_after_disabled_echo_writes_nothing() -> None:
+    """A disabled echo never re-attempts the final decoder flush write."""
+    sink = _Cp1252TextOnlySink()
+    captured = asyncio.run(
+        _drain(
+            _reader(("ś".encode(), b"\xc3")),
+            _config(typ.cast("typ.IO[str]", sink), echo=True),
+        ),
+    )
+    attempts = sink.attempts
+
+    assert captured == "ś\N{REPLACEMENT CHARACTER}", (
+        "capture must keep the rejected character and flush the decoder tail "
+        f"after echo is disabled for captured={captured!r}"
+    )
+    assert attempts == ["ś"], (
+        "exactly one write must be attempted before echo is disabled, and the "
+        f"final decoder flush must stay silent for attempts={attempts!r}"
+    )
+
+
 @settings(
     max_examples=_PROPERTY_MAX_EXAMPLES,
     deadline=None,

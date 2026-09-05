@@ -11,13 +11,12 @@
   an escaping `UnicodeEncodeError`. Echoing is disabled for only the affected
   stream while capture completes, a `cuprum.stream` `WARNING` records the first
   failure, sinks exposing a binary `buffer` keep receiving the original bytes,
-  and other I/O errors still propagate
-  ([#348](https://github.com/leynos/cuprum/issues/348)). Registering
-  `EchoMetricsHook` via `cuprum.echo_observation.observe_echo` additionally
-  counts one `cuprum_echo_encoding_failures_total` increment per affected
-  stream, labelled only by the bounded `stream` (`stdout` or `stderr`) and
-  `error_category` (`unicode_encode`) values; the hook is opt-in and no payload
-  or sink metadata becomes a metric label.
+  and other I/O errors still propagate [^1]. Registering `EchoMetricsHook` via
+  `cuprum.echo_observation.observe_echo` additionally counts one
+  `cuprum_echo_encoding_failures_total` increment per affected stream, labelled
+  only by the bounded `stream` (`stdout` or `stderr`) and `error_category`
+  (`unicode_encode`) values; the hook is opt-in and no payload or sink metadata
+  becomes a metric label.
 
 ### Added
 
@@ -145,6 +144,8 @@
   terminal `teardown_error`); the registry of open spans is now bounded and
   evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
+
+[^1]: <https://github.com/leynos/cuprum/issues/348>
 
 ## [0.2.0] - 2026-06-21
 
