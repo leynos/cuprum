@@ -20,6 +20,7 @@ from benchmarks.ratchet_history import (
     write_history,
 )
 from benchmarks.ratchet_rust_performance import main as ratchet_cli
+from tests.behaviour._benchmark_ratchet_support import _write_json
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -109,11 +110,6 @@ def _candidate_payloads(ratio: float) -> tuple[dict[str, object], dict[str, obje
     )
 
 
-def _write_json(*, path: pth.Path, payload: dict[str, object]) -> None:
-    """Write one CLI fixture as JSON."""
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
 # -- Given steps ---------------------------------------------------------------
 
 
@@ -156,7 +152,7 @@ def given_no_main_baseline_is_available() -> None:
 )
 def when_a_pull_request_measures(
     history: BaselineHistory | None, measurement: float, tmp_path: pth.Path
-) -> cabc.Mapping[str, object]:
+) -> tuple[int, cabc.Mapping[str, object]]:
     """Judge the pull request through the ratchet CLI and persisted report."""
     candidate_plan, candidate_throughput = _candidate_payloads(measurement)
     candidate_plan_path = tmp_path / "candidate-plan.json"
@@ -182,67 +178,87 @@ def when_a_pull_request_measures(
     exit_code = ratchet_cli(argv)
     verdict = typ.cast("dict[str, object]", json.loads(output_path.read_text()))
 
-    assert exit_code == int(not verdict["passed"]), (
-        "the ratchet CLI exit code must match its persisted passed verdict"
-    )
-    if history is None:
-        assert verdict["baseline_source"] == "none", (
-            "a first run must record that no baseline source was selected"
-        )
-        assert verdict["baseline_reason"] == "no_baseline_available", (
-            "a first run must retain its bounded no-baseline reason"
-        )
-        assert verdict["compatible_sample_count"] == 0, (
-            "a first run cannot have compatible history samples"
-        )
-        assert verdict["comparison_state"] == "skipped_no_baseline", (
-            "a first run must persist its intentional skipped comparison"
-        )
-    else:
-        assert verdict["baseline_source"] == "history", (
-            "the behavioural window must be selected from recorded history"
-        )
-        assert verdict["baseline_reason"] == "compatible_history", (
-            "the compatible history selection must be durable evidence"
-        )
-        assert verdict["compatible_sample_count"] == len(history.samples), (
-            "the report must retain every compatible history sample in this scenario"
-        )
-        assert verdict["comparison_state"] == "compared", (
-            "history-backed behavioural scenarios must perform a comparison"
-        )
-    return verdict
+    return exit_code, verdict
 
 
 # -- Then steps ----------------------------------------------------------------
 
 
 @then("the ratchet passes")
-def then_the_ratchet_passes(verdict: cabc.Mapping[str, object]) -> None:
+def then_the_ratchet_passes(
+    verdict: tuple[int, cabc.Mapping[str, object]],
+) -> None:
     """Assert the comparison reported no regression."""
-    assert verdict["passed"] is True, (
-        f"expected the ratchet to pass; report was {verdict}"
+    exit_code, report = verdict
+    assert exit_code == int(not report["passed"]), (
+        "the ratchet CLI exit code must match its persisted passed verdict"
     )
-    assert verdict["regressions"] == [], (
+    assert report["passed"] is True, (
+        f"expected the ratchet to pass; report was {report}"
+    )
+    assert report["regressions"] == [], (
         "a passing report must not retain any regression entries"
     )
 
 
 @then("the ratchet fails")
-def then_the_ratchet_fails(verdict: cabc.Mapping[str, object]) -> None:
+def then_the_ratchet_fails(
+    verdict: tuple[int, cabc.Mapping[str, object]],
+) -> None:
     """Assert the comparison reported a regression."""
-    assert verdict["passed"] is False, (
-        f"expected the ratchet to fail; report was {verdict}"
+    exit_code, report = verdict
+    assert exit_code == int(not report["passed"]), (
+        "the ratchet CLI exit code must match its persisted passed verdict"
     )
-    assert verdict["regressions"], "a failed report must retain a regression entry"
+    assert report["passed"] is False, (
+        f"expected the ratchet to fail; report was {report}"
+    )
+    assert report["regressions"], "a failed report must retain a regression entry"
+
+
+@then("the ratchet records history-backed comparison evidence")
+def then_the_ratchet_records_history_backed_comparison_evidence(
+    verdict: tuple[int, cabc.Mapping[str, object]],
+    history: BaselineHistory,
+) -> None:
+    """Assert a history-backed report records its durable decision evidence."""
+    _exit_code, report = verdict
+    assert report["baseline_source"] == "history", (
+        "the behavioural window must be selected from recorded history"
+    )
+    assert report["baseline_reason"] == "compatible_history", (
+        "the compatible history selection must be durable evidence"
+    )
+    assert report["compatible_sample_count"] == len(history.samples), (
+        "the report must retain every compatible history sample in this scenario"
+    )
+    assert report["comparison_state"] == "compared", (
+        "history-backed behavioural scenarios must perform a comparison"
+    )
 
 
 @then("the ratchet is skipped with no-baseline evidence")
 def then_the_ratchet_is_skipped_with_no_baseline_evidence(
-    verdict: cabc.Mapping[str, object],
+    verdict: tuple[int, cabc.Mapping[str, object]],
 ) -> None:
     """Assert the skipped first-run report remains machine-readable evidence."""
-    assert verdict["passed"] is True, "a missing baseline must intentionally pass"
-    assert verdict["comparison_performed"] is False, (
+    exit_code, report = verdict
+    assert exit_code == int(not report["passed"]), (
+        "the ratchet CLI exit code must match its persisted passed verdict"
+    )
+    assert report["passed"] is True, "a missing baseline must intentionally pass"
+    assert report["comparison_performed"] is False, (
         "a missing baseline must not claim that it performed a comparison"
+    )
+    assert report["baseline_source"] == "none", (
+        "a first run must record that no baseline source was selected"
+    )
+    assert report["baseline_reason"] == "no_baseline_available", (
+        "a first run must retain its bounded no-baseline reason"
+    )
+    assert report["compatible_sample_count"] == 0, (
+        "a first run cannot have compatible history samples"
+    )
+    assert report["comparison_state"] == "skipped_no_baseline", (
+        "a first run must persist its intentional skipped comparison"
     )

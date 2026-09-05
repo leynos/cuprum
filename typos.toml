@@ -39,10 +39,12 @@ extend-ignore-re = [
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\\\brust-analyzer\\\\b",
+    "\\bartifact_dir\\b",
     "\\bbuild_native_wheel_artifact\\b",
     "\\brust-analyzer\\b",
     "`color`",
     "b\"ond\\\\n\"",
+    "baseline-artifact",
     "mappings\\[\"organise\"\\]",
 ]
 

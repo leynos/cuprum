@@ -151,6 +151,31 @@ def test_the_comparison_reads_the_window() -> None:
     )
 
 
+def test_the_comparison_reads_baseline_availability_from_its_environment() -> None:
+    """Keep GitHub expressions out of the benchmark step's shell condition."""
+    step = _step(BENCHMARK_STEP)
+    environment = mapping(
+        step.get("env"),
+        f"the {BENCHMARK_STEP!r} step must declare its baseline environment",
+    )
+    assert environment.get("BASELINE_AVAILABLE") == (
+        "${{ steps.baseline-artifact.outputs.baseline_available }}"
+    ), (
+        "the benchmark shell must receive baseline availability through its "
+        f"environment; found {environment.get('BASELINE_AVAILABLE')!r}"
+    )
+    script = script_of(step)
+    assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
+
+    assert '[[ "${BASELINE_AVAILABLE}" == "true" ]]' in script, (
+        "the benchmark shell must branch on BASELINE_AVAILABLE rather than "
+        "interpolating a GitHub expression directly"
+    )
+    assert "steps.baseline-artifact.outputs.baseline_available" not in script, (
+        "the GitHub expression must remain at the step environment boundary"
+    )
+
+
 def test_the_bootstrap_report_records_the_skipped_decision() -> None:
     """A first run must preserve a durable no-baseline explanation."""
     script = script_of(_step(BENCHMARK_STEP))
@@ -185,6 +210,25 @@ def test_a_reported_regression_is_measured_again_before_it_fails() -> None:
         "the confirming comparison must write its own report, so the "
         "combined verdict has two verdicts to intersect"
     )
+
+
+def test_an_unusable_confirmation_preserves_the_primary_failure() -> None:
+    """Retry faults must fail closed without losing primary evidence."""
+    script = script_of(_step(BENCHMARK_STEP))
+    assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
+
+    for required in (
+        "confirmation_ratchet_status=0",
+        "write_unavailable_confirmation_report",
+        '"comparison_performed": False',
+        '[[ ! -f "${artifact_dir}/ratchet-report-confirmation.json" ]]',
+        "confirmation_status=0",
+        'cp "${artifact_dir}/ratchet-report-primary.json"',
+    ):
+        assert required in script, (
+            "the confirmation workflow must retain primary evidence and fail "
+            f"closed for missing or malformed retry output; missing {required!r}"
+        )
 
 
 def test_the_re_measurement_does_not_overwrite_the_recorded_sample() -> None:

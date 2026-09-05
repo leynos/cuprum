@@ -9,27 +9,32 @@ Feature: Tolerating benchmark noise without tolerating regressions
     And a noisy main run then measured 0.760
     When a pull request measures 1.110
     Then the ratchet passes
+    And the ratchet records history-backed comparison evidence
 
   Scenario: The same pull request fails against that run alone
     Given main has measured 0.760
     When a pull request measures 1.110
     Then the ratchet fails
+    And the ratchet records history-backed comparison evidence
 
   Scenario: A genuine slowdown fails against a settled window
     Given main has measured 1.013, 1.001, 1.069, 0.916 and 1.105
     When a pull request measures 1.600
     Then the ratchet fails
+    And the ratchet records history-backed comparison evidence
 
   Scenario: A slowdown fails even when the window is noisy
     Given main has measured 1.013, 1.001, 1.069, 0.916 and 1.105
     And a noisy main run then measured 0.760
     When a pull request measures 2.000
     Then the ratchet fails
+    And the ratchet records history-backed comparison evidence
 
   Scenario: Measuring what main measures is never a regression
     Given main has measured 1.013, 1.001, 1.069, 0.916 and 1.105
     When a pull request measures 1.013
     Then the ratchet passes
+    And the ratchet records history-backed comparison evidence
 
   Scenario: A missing baseline skips the ratchet with durable evidence
     Given no main baseline is available

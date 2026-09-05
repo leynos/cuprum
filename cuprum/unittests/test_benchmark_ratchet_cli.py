@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import typing as typ
 
 import pytest
@@ -14,10 +13,16 @@ from benchmarks.ratchet_rust_performance import main
 from cuprum.unittests.conftest import SCENARIO, WORKER_ITERATIONS
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
-def _write_history_window(*, path: pth.Path, ratios: tuple[float, ...]) -> None:
+def _write_history_window(
+    *,
+    path: pth.Path,
+    ratios: tuple[float, ...],
+    profile_version: str = BENCHMARK_PROFILE_VERSION,
+) -> None:
     """Write compatible history samples with the specified ratios."""
     write_history(
         history=BaselineHistory(
@@ -25,7 +30,7 @@ def _write_history_window(*, path: pth.Path, ratios: tuple[float, ...]) -> None:
                 HistorySample(
                     commit="0" * 40,
                     run_id=str(index),
-                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+                    benchmark_profile_version=profile_version,
                     worker_iterations=WORKER_ITERATIONS,
                     ratios={SCENARIO: ratio},
                 )
@@ -38,49 +43,30 @@ def _write_history_window(*, path: pth.Path, ratios: tuple[float, ...]) -> None:
 
 def test_history_only_artefact_does_not_require_fallback_files(
     tmp_path: pth.Path,
-    monkeypatch: pytest.MonkeyPatch,
     candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """A compatible history must remain usable after a failed main benchmark."""
     candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history.json"
-    write_history(
-        history=BaselineHistory(
-            samples=(
-                HistorySample(
-                    commit="0" * 40,
-                    run_id="1",
-                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
-                    worker_iterations=WORKER_ITERATIONS,
-                    ratios={SCENARIO: 1.0},
-                ),
-            )
-        ),
-        output_path=history,
-    )
+    _write_history_window(path=history, ratios=(1.0,))
     output = tmp_path / "ratchet-report.json"
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "ratchet_rust_performance.py",
-            "--baseline-plan",
-            str(tmp_path / "missing-main-plan.json"),
-            "--baseline-throughput",
-            str(tmp_path / "missing-main-throughput.json"),
-            "--baseline-history",
-            str(history),
-            "--candidate-plan",
-            str(candidate_plan),
-            "--candidate-throughput",
-            str(candidate_throughput),
-            "--output",
-            str(output),
-        ],
-    )
+    exit_code = main([
+        "--baseline-plan",
+        str(tmp_path / "missing-main-plan.json"),
+        "--baseline-throughput",
+        str(tmp_path / "missing-main-throughput.json"),
+        "--baseline-history",
+        str(history),
+        "--candidate-plan",
+        str(candidate_plan),
+        "--candidate-throughput",
+        str(candidate_throughput),
+        "--output",
+        str(output),
+    ])
 
-    assert main() == 0, "a compatible history must not require fallback files"
+    assert exit_code == 0, "a compatible history must not require fallback files"
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["baseline_sample_count"] == 1, (
         "the compatible history must supply one baseline sample; observed "
@@ -102,7 +88,6 @@ def test_history_only_artefact_does_not_require_fallback_files(
 
 def test_a_directory_baseline_history_returns_an_input_error(
     tmp_path: pth.Path,
-    monkeypatch: pytest.MonkeyPatch,
     candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """Only an absent history falls back; a directory is an invalid input."""
@@ -110,23 +95,18 @@ def test_a_directory_baseline_history_returns_an_input_error(
     history = tmp_path / "main-baseline-history"
     history.mkdir()
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "ratchet_rust_performance.py",
-            "--baseline-history",
-            str(history),
-            "--candidate-plan",
-            str(candidate_plan),
-            "--candidate-throughput",
-            str(candidate_throughput),
-            "--output",
-            str(tmp_path / "ratchet-report.json"),
-        ],
-    )
+    exit_code = main([
+        "--baseline-history",
+        str(history),
+        "--candidate-plan",
+        str(candidate_plan),
+        "--candidate-throughput",
+        str(candidate_throughput),
+        "--output",
+        str(tmp_path / "ratchet-report.json"),
+    ])
 
-    assert main() == 2, "a directory baseline history must return input error 2"
+    assert exit_code == 2, "a directory baseline history must return input error 2"
 
 
 def test_cli_applies_non_default_history_policy_options(
@@ -185,66 +165,46 @@ def test_cli_applies_non_default_history_policy_options(
     )
 
 
-def test_cli_records_fallback_when_history_is_unavailable(
+def _unavailable_history(path: pth.Path) -> pth.Path:
+    """Return an intentionally absent baseline-history path."""
+    return path
+
+
+def _incompatible_history(path: pth.Path) -> pth.Path:
+    """Write a history that profile compatibility must discard."""
+    _write_history_window(
+        path=path,
+        ratios=(1.0,),
+        profile_version="obsolete-profile",
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    ("history_factory", "expected_reason"),
+    [
+        pytest.param(
+            _unavailable_history,
+            "history_unavailable",
+            id="unavailable-history",
+        ),
+        pytest.param(
+            _incompatible_history,
+            "no_compatible_history",
+            id="incompatible-history",
+        ),
+    ],
+)
+def test_cli_records_fallback_when_history_is_unavailable_or_incompatible(
     tmp_path: pth.Path,
     candidate_artefacts: tuple[pth.Path, pth.Path],
+    history_factory: cabc.Callable[[pth.Path], pth.Path],
+    expected_reason: str,
 ) -> None:
     """The legacy baseline must record why it replaced unavailable history."""
     candidate_plan, candidate_throughput = candidate_artefacts
-    output = tmp_path / "ratchet-report.json"
-
-    exit_code = main([
-        "--baseline-history",
-        str(tmp_path / "absent-history.json"),
-        "--baseline-plan",
-        str(candidate_plan),
-        "--baseline-throughput",
-        str(candidate_throughput),
-        "--candidate-plan",
-        str(candidate_plan),
-        "--candidate-throughput",
-        str(candidate_throughput),
-        "--output",
-        str(output),
-    ])
-    report = json.loads(output.read_text(encoding="utf-8"))
-
-    assert exit_code == 0, "a matching fallback baseline must pass"
-    assert report["baseline_source"] == "fallback", (
-        "an unavailable history must select the legacy fallback source"
-    )
-    assert report["baseline_reason"] == "history_unavailable", (
-        "the fallback report must retain the absent-history reason"
-    )
-    assert report["compatible_sample_count"] == 0, (
-        "an unavailable history cannot contribute compatible samples"
-    )
-    assert report["comparison_state"] == "compared", (
-        "a fallback baseline must still compare the candidate"
-    )
-
-
-def test_cli_records_fallback_when_history_has_no_compatible_samples(
-    tmp_path: pth.Path,
-    candidate_artefacts: tuple[pth.Path, pth.Path],
-) -> None:
-    """A profile-pruned history must explain why the fallback was selected."""
-    candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history.json"
-    write_history(
-        history=BaselineHistory(
-            samples=(
-                HistorySample(
-                    commit="0" * 40,
-                    run_id="1",
-                    benchmark_profile_version="obsolete-profile",
-                    worker_iterations=WORKER_ITERATIONS,
-                    ratios={SCENARIO: 1.0},
-                ),
-            )
-        ),
-        output_path=history,
-    )
+    history = history_factory(history)
     output = tmp_path / "ratchet-report.json"
 
     exit_code = main([
@@ -263,18 +223,19 @@ def test_cli_records_fallback_when_history_has_no_compatible_samples(
     ])
     report = json.loads(output.read_text(encoding="utf-8"))
 
-    assert exit_code == 0, "the matching fallback must pass after profile pruning"
+    assert exit_code == 0, "a matching fallback baseline must pass"
     assert report["baseline_source"] == "fallback", (
-        "a profile-pruned history must select the legacy fallback"
+        "unavailable or incompatible history must select the legacy fallback"
     )
-    assert report["baseline_reason"] == "no_compatible_history", (
-        "the fallback report must retain that no history sample was compatible"
+    assert report["baseline_reason"] == expected_reason, (
+        "the fallback report must retain why its history was unavailable; "
+        f"expected {expected_reason!r}, found {report['baseline_reason']!r}"
     )
     assert report["compatible_sample_count"] == 0, (
-        "profile-pruned history must report zero compatible samples"
+        "unavailable or incompatible history cannot supply compatible samples"
     )
     assert report["comparison_state"] == "compared", (
-        "a fallback after history pruning must still compare"
+        "a fallback baseline must still compare the candidate"
     )
 
 
@@ -359,20 +320,7 @@ def test_cli_records_a_history_backed_regression(
     """A comparison failure must retain the same durable decision evidence."""
     candidate_plan, candidate_throughput = candidate_artefacts
     history_path = tmp_path / "main-baseline-history.json"
-    write_history(
-        history=BaselineHistory(
-            samples=(
-                HistorySample(
-                    commit="0" * 40,
-                    run_id="1",
-                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
-                    worker_iterations=WORKER_ITERATIONS,
-                    ratios={SCENARIO: 1.0},
-                ),
-            )
-        ),
-        output_path=history_path,
-    )
+    _write_history_window(path=history_path, ratios=(1.0,))
     regression_throughput = tmp_path / "regression-throughput.json"
     throughput_payload = json.loads(candidate_throughput.read_text(encoding="utf-8"))
     throughput_payload["results"][1]["mean"] = 1.5

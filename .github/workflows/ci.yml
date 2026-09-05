@@ -1174,6 +1174,8 @@ jobs:
 
       - name: Run throughput benchmarks and ratchet comparison
         shell: bash
+        env:
+          BASELINE_AVAILABLE: ${{ steps.baseline-artifact.outputs.baseline_available }}
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
@@ -1240,7 +1242,31 @@ jobs:
             return "${status}"
           }
 
-          if [[ "${{ steps.baseline-artifact.outputs.baseline_available }}" == "true" ]]; then
+          write_unavailable_confirmation_report() {
+            local report="$1"
+            REPORT_PATH="${report}" \
+            UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python - <<'PY'
+          import json
+          import os
+          import pathlib as pth
+
+          report_path = pth.Path(os.environ["REPORT_PATH"])
+          report_path.write_text(
+              json.dumps(
+                  {
+                      "comparison_performed": False,
+                      "comparisons": [],
+                      "regressions": [],
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          PY
+          }
+
+          if [[ "${BASELINE_AVAILABLE}" == "true" ]]; then
             primary_status=0
             run_ratchet "candidate" \
               "${artifact_dir}/ratchet-report-primary.json" || primary_status=$?
@@ -1266,16 +1292,38 @@ jobs:
               # main-branch window — stays the primary measurement, one per
               # merge.
               echo "::notice::regression reported; re-measuring to confirm"
-              run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation"
-              run_ratchet "confirmation" \
-                "${artifact_dir}/ratchet-report-confirmation.json" || true
+              confirmation_ratchet_status=0
+              run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation" || \
+                confirmation_ratchet_status=$?
+              if [[ "${confirmation_ratchet_status}" -eq 0 ]]; then
+                run_ratchet "confirmation" \
+                  "${artifact_dir}/ratchet-report-confirmation.json" || \
+                  confirmation_ratchet_status=$?
+              fi
+              if [[ "${confirmation_ratchet_status}" -ne 0 && \
+                    "${confirmation_ratchet_status}" -ne 1 ]] || \
+                 [[ ! -f "${artifact_dir}/ratchet-report-confirmation.json" ]]; then
+                echo "::warning::confirmation ratchet did not produce usable evidence"
+                write_unavailable_confirmation_report \
+                  "${artifact_dir}/ratchet-report-confirmation.json"
+              fi
               pushd "${GITHUB_WORKSPACE}" >/dev/null
+              confirmation_status=0
               UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
                 benchmarks/confirm_regression.py \
                 --primary-report "${artifact_dir}/ratchet-report-primary.json" \
                 --confirmation-report "${artifact_dir}/ratchet-report-confirmation.json" \
-                --output "${artifact_dir}/ratchet-report.json"
+                --output "${artifact_dir}/ratchet-report.json" || confirmation_status=$?
               popd >/dev/null
+              if [[ "${confirmation_status}" -eq 2 ]]; then
+                echo "::warning::confirmation report was malformed; preserving primary verdict"
+                cp "${artifact_dir}/ratchet-report-primary.json" \
+                  "${artifact_dir}/ratchet-report.json"
+                exit 1
+              fi
+              if [[ "${confirmation_status}" -ne 0 ]]; then
+                exit "${confirmation_status}"
+              fi
             fi
           else
             REPORT_PATH="${artifact_dir}/ratchet-report.json" \

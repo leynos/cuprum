@@ -166,6 +166,22 @@ def confirmation_result_to_payload(
         Existing combined report shape consumed by workflow-report readers.
     """
     primary = _decoded_report_from_payload(primary_payload, require_regressions=True)
+    return _confirmation_result_to_payload(
+        primary=primary,
+        confirmation_payload=confirmation_payload,
+        result=result,
+        confirmation=confirmation,
+    )
+
+
+def _confirmation_result_to_payload(
+    *,
+    primary: _DecodedConfirmationReport,
+    confirmation_payload: cabc.Mapping[str, object],
+    result: ConfirmationResult,
+    confirmation: ConfirmationReport,
+) -> dict[str, object]:
+    """Serialize a confirmation result from an already-decoded primary report."""
     confirmed_names = {entry.scenario_name for entry in result.confirmed_regressions}
     confirmed = [
         entry
@@ -200,7 +216,27 @@ def confirmation_result_to_payload(
 def combine_report_payloads(
     *, primary: cabc.Mapping[str, object], confirmation: cabc.Mapping[str, object]
 ) -> dict[str, object]:
-    """Decode, combine, and serialize two ratchet report payloads."""
+    """Decode, combine, and serialize two ratchet report payloads.
+
+    Parameters
+    ----------
+    primary : collections.abc.Mapping[str, object]
+        Serialized primary ratchet report with validated regression evidence.
+    confirmation : collections.abc.Mapping[str, object]
+        Serialized confirmation report, which may intentionally record no
+        comparison evidence.
+
+    Returns
+    -------
+    dict[str, object]
+        Combined report containing the established `passed`, regression, and
+        confirmation fields consumed by workflow-report readers.
+
+    Raises
+    ------
+    TypeError, ValueError
+        If either payload fails the ratchet-report validation contract.
+    """  # ruff: ignore[docstring-extraneous-exception] - validation errors are part of the adapter contract.
     primary_report = _decoded_report_from_payload(primary, require_regressions=True)
     confirmation_report = _decoded_report_from_payload(
         confirmation, require_regressions=False
@@ -209,8 +245,8 @@ def combine_report_payloads(
         primary=primary_report.report,
         confirmation=confirmation_report.report,
     )
-    return confirmation_result_to_payload(
-        primary_payload=primary_report.payload,
+    return _confirmation_result_to_payload(
+        primary=primary_report,
         confirmation_payload=confirmation_report.payload,
         result=result,
         confirmation=confirmation_report.report,

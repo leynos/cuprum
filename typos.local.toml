@@ -16,6 +16,8 @@ ignore = [
   '"artifacts"',
   '"artifact"',
   'Upload main benchmark baseline artifact',
+  'baseline-artifact',
+  '\bartifact_dir\b',
   '/artifacts(?:[/?#"`]|$)',
   '--artifact-name(?:[=\s"`]|$)',
   # Spelling-policy tests must contain the deliberately invalid input tokens.

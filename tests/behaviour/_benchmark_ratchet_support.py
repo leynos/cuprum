@@ -14,6 +14,7 @@ import typing as typ
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
@@ -161,7 +162,7 @@ def _throughput_payload(*, python_mean: float, rust_mean: float) -> ThroughputPa
 def _write_json(
     *,
     path: pth.Path,
-    payload: PlanPayload | ThroughputPayload,
+    payload: cabc.Mapping[str, object],
 ) -> None:
     """Write JSON payload."""
     path.write_text(json.dumps(payload), encoding="utf-8")
