@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import dataclasses as dc
+import logging
 import typing as typ
 
 from cuprum._streams_pump import (
@@ -34,6 +35,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+_LOGGER = logging.getLogger("cuprum.stream")
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _StreamConfig:
     """Configuration for decoding and echoing a subprocess stream."""
@@ -48,12 +52,23 @@ class _StreamConfig:
 
 @dc.dataclass(frozen=True, slots=True)
 class _DrainState:
-    """Mutable-free state carried through one stream-drain loop."""
+    """State carried through one stream-drain loop."""
 
     config: _StreamConfig
     buffer: bytearray | None
     echo_decoder: codecs.IncrementalDecoder | None
     on_chunk: cabc.Callable[[bytes], None] | None
+    # Payload of the frozen wrapper above: mutated in place once echo is
+    # disabled, so the same drain shares the flag across its loop and final
+    # decoder flush without rebinding this frozen field.
+    echo_guard: _EchoGuard
+
+
+@dc.dataclass(slots=True)
+class _EchoGuard:
+    """Mutable holder tracking whether echo is disabled for one drain."""
+
+    disabled: bool = False
 
 
 async def _consume_stream(
@@ -85,16 +100,16 @@ async def _drain(
     # line-emitting path cannot drift.
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
-    reached_eof = await _drain_chunks(
-        stream, _DrainState(config, buffer, echo_decoder, on_chunk)
-    )
+    echo_guard = _EchoGuard()
+    state = _DrainState(config, buffer, echo_decoder, on_chunk, echo_guard)
+    reached_eof = await _drain_chunks(stream, state)
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
-        _flush_echo_decoder(config, echo_decoder)
+        _flush_echo_decoder(state)
         return buffer.decode(config.encoding, errors=config.errors)
 
-    _flush_echo_decoder(config, echo_decoder)
+    _flush_echo_decoder(state)
 
     if buffer is None:
         return None
@@ -121,7 +136,7 @@ async def _drain_chunks(
         if state.buffer is not None:
             state.buffer.extend(chunk)
         if state.config.echo_output:
-            _write_chunk(state.config, chunk, decoder=state.echo_decoder)
+            _echo_chunk(state, chunk)
         if state.on_chunk is not None:
             state.on_chunk(chunk)
 
@@ -209,13 +224,45 @@ def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
     return _incremental_decoder(config)
 
 
+def _echo_chunk(
+    state: _DrainState,
+    chunk: bytes,
+    *,
+    final: bool = False,
+) -> None:
+    """Echo one chunk to the sink, disabling echo if the sink cannot encode it.
+
+    A text-only sink whose encoding cannot represent the subprocess output
+    raises ``UnicodeEncodeError`` mid-drain. Letting that escape would abort
+    stream consumption and lose the captured output, so the failure disables
+    echoing for the rest of this drain (once per stream) while capture
+    continues. Every other failure still propagates.
+    """
+    if state.echo_guard.disabled:
+        return
+    try:
+        _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
+    except UnicodeEncodeError as exc:
+        state.echo_guard.disabled = True
+        _LOGGER.warning(
+            "echo_disabled encoding=%s error=%s",
+            state.config.encoding,
+            type(exc).__name__,
+            exc_info=exc,
+            extra={
+                "cuprum_encoding": state.config.encoding,
+                "cuprum_sink_type": type(state.config.sink).__name__,
+                "cuprum_error_type": type(exc).__name__,
+            },
+        )
+
+
 def _flush_echo_decoder(
-    config: _StreamConfig,
-    decoder: codecs.IncrementalDecoder | None,
+    state: _DrainState,
 ) -> None:
     """Flush a text-only echo decoder at end of stream."""
-    if decoder is not None:
-        _write_chunk(config, b"", decoder=decoder, final=True)
+    if state.echo_decoder is not None:
+        _echo_chunk(state, b"", final=True)
 
 
 def _emit_completed_lines(
