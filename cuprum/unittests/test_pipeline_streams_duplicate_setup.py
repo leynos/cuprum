@@ -78,6 +78,39 @@ class _DuplicateSetupFailure:
             os.fstat(self.duplicated_fds[0])
 
 
+def _assert_handoff_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    duplicate_creation_fails: bool,
+    fault_error: type[OSError] | type[ValueError],
+) -> None:
+    """Assert diagnostics distinguish fatal duplication from a blocking decline."""
+    handoff_records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+    ]
+    if duplicate_creation_fails:
+        assert len(handoff_records) == 1, (
+            "a failed duplicate setup must produce one hand-off diagnostic"
+        )
+        fields = handoff_records[0]
+        assert fields["cuprum_phase"] == "duplicate_writer", (
+            "the diagnostic must identify duplicate creation as the failed phase"
+        )
+        assert fields["cuprum_outcome"] == "failed", (
+            "a failed duplicate setup must be recorded as failed"
+        )
+        assert fields["cuprum_error_type"] == fault_error.__name__, (
+            "the diagnostic must preserve the duplicate failure category"
+        )
+        assert fields["cuprum_errno"] is None, (
+            "a duplicate failure without errno must not invent one"
+        )
+        return
+    assert handoff_records == [], "a declined blocking setup is not a fatal hand-off"
+
+
 @pytest.mark.parametrize(
     ("duplicate_creation_fails", "fault_error"),
     [(True, OSError), (True, ValueError), (False, OSError), (False, ValueError)],
@@ -135,29 +168,8 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         os.fstat(reader_fd)
         os.fstat(writer_fd)
         failure.assert_duplicate_cleanup()
-    handoff_records = [
-        record.__dict__
-        for record in caplog.records
-        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
-    ]
-    if duplicate_creation_fails:
-        assert len(handoff_records) == 1, (
-            "a failed duplicate setup must produce one hand-off diagnostic"
-        )
-        fields = handoff_records[0]
-        assert fields["cuprum_phase"] == "duplicate_writer", (
-            "the diagnostic must identify duplicate creation as the failed phase"
-        )
-        assert fields["cuprum_outcome"] == "failed", (
-            "a failed duplicate setup must be recorded as failed"
-        )
-        assert fields["cuprum_error_type"] == fault_error.__name__, (
-            "the diagnostic must preserve the duplicate failure category"
-        )
-        assert fields["cuprum_errno"] is None, (
-            "a duplicate failure without errno must not invent one"
-        )
-    else:
-        assert handoff_records == [], (
-            "a declined blocking setup is not a fatal hand-off"
-        )
+    _assert_handoff_diagnostics(
+        caplog,
+        duplicate_creation_fails=duplicate_creation_fails,
+        fault_error=fault_error,
+    )
