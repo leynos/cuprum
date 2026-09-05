@@ -25,6 +25,7 @@ FILTER_NAME = "bench"
 
 
 def _require(*, condition: bool, message: str) -> None:
+    """Raise a contract failure when ``condition`` does not hold."""
     if not condition:
         raise AssertionError(message)
 
@@ -230,6 +231,25 @@ def step_named(
 def _step_matching(
     workflow_data: Workflow, job_name: str, field_name: str, requested_value: str
 ) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return the matching step and the job's declared steps.
+
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed workflow containing the job to search.
+    job_name : str
+        Name of the job to search.
+    field_name : str
+        Step payload field whose value is matched.
+    requested_value : str
+        Value the field must carry for a step to match.
+
+    Returns
+    -------
+    tuple[dict[str, object] | None, list[dict[str, object]]]
+        The first matching step, or ``None``, alongside every declared step
+        so callers can report the available values on failure.
+    """
     declared_steps = steps(workflow_data, job_name)
     found = next(
         (step for step in declared_steps if step.get(field_name) == requested_value),
@@ -256,6 +276,7 @@ def script_of(step: cabc.Mapping[str, object]) -> str | None:
 
 
 def _declared_steps(job_payload: object, *, job_name: str) -> list[dict[str, object]]:
+    """Return a job's steps, tolerating a job payload without any."""
     declared = mapping(job_payload, f"job {job_name!r}").get("steps")
     if not isinstance(declared, list):
         return []

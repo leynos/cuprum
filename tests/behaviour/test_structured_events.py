@@ -73,6 +73,7 @@ def when_run_with_observe_hook(
     events: list[ExecEvent] = []
 
     def hook(ev: ExecEvent) -> None:
+        """Collect execution events emitted during the run."""
         events.append(ev)
 
     with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):

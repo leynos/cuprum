@@ -107,6 +107,7 @@ class TeeProfileDriverConfig:
     scenario_name: str | None = None
 
     def _validate_numeric_bounds(self) -> None:
+        """Validate that run counts and the perf frequency are positive."""
         _validate_iteration_count(
             self.warmup_count,
             name="warmup-count",
@@ -124,6 +125,7 @@ class TeeProfileDriverConfig:
         )
 
     def _validate_string_fields(self) -> None:
+        """Validate that the perf call-graph mode is a non-empty string."""
         if not self.perf_call_graph.strip():
             msg = "perf-call-graph must be a non-empty string"
             raise ValueError(msg)

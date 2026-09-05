@@ -88,6 +88,7 @@ def patch_https_opener_fixture(
     """
 
     def patch(open_response: cabc.Callable[..., object]) -> None:
+        """Install the stub opener for *open_response*."""
         _patch_https_opener(monkeypatch, open_response)
 
     return patch

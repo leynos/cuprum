@@ -51,12 +51,16 @@ def test_fail_fast_cancels_pending() -> None:
 
 @dc.dataclass(frozen=True, slots=True)
 class _ScenarioCommands:
+    """Commands a scenario runs plus the allowlist that scopes them."""
+
     commands: tuple[SafeCmd, ...]
     allowlist: frozenset[Program]
 
 
 @dc.dataclass(frozen=True, slots=True)
 class _ConcurrentExecution:
+    """A concurrent run's result paired with its elapsed wall time."""
+
     result: ConcurrentResult
     elapsed: float
 
