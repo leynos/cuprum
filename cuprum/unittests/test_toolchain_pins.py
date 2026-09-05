@@ -232,13 +232,14 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
 def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     """The formatter uses a pinned prebuilt installer, not a Rust fallback."""
     job = _lint_test_job(repo_root())
-    toolchain_setup = _lint_test_step(job, "Install Rust toolchain")
+    toolchain_setup = _lint_test_step(job, "Install project Rust toolchain")
     toolchain_configuration = toolchain_setup.get("with")
     assert isinstance(toolchain_configuration, dict), (
-        "the Install Rust toolchain CI mapping must declare a with field"
+        "the Install project Rust toolchain CI mapping must declare a with field"
     )
     assert toolchain_configuration.get("toolchain") == "1.85.0", (
-        "the Install Rust toolchain CI mapping must keep with.toolchain at 1.85.0"
+        "the Install project Rust toolchain CI mapping must keep with.toolchain "
+        "at 1.85.0"
     )
 
     environment = job.get("env")
@@ -269,10 +270,17 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
             f"the Cache mdtablefix CI mapping must include {name} in with.key"
         )
 
-    whitaker_script = _lint_test_step_script(job, "Install Whitaker")
-    assert "cargo binstall -V >/dev/null 2>&1" in whitaker_script, (
-        "the Install Whitaker CI step must probe cargo binstall with -V"
+    whitaker_installer = _lint_test_step(job, "Install Whitaker")
+    whitaker_uses = whitaker_installer.get("uses")
+    assert isinstance(whitaker_uses, str), (
+        "the Install Whitaker CI step must declare uses"
     )
+    assert whitaker_uses.startswith(
+        "leynos/shared-actions/.github/actions/install-whitaker@"
+    ), "the Install Whitaker CI step must use the shared installer"
+    assert whitaker_installer.get("with") == {
+        "installer-version": "${{ env.WHITAKER_INSTALLER_VERSION }}"
+    }, "the shared Whitaker installer must receive the configured version"
 
 
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:

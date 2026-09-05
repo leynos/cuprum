@@ -142,18 +142,16 @@ def test_sccache_uses_a_caller_owned_directory_not_the_github_backend() -> None:
 def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
     """Leave one owner per path: this workflow's steps, not the shared action's.
 
-    The shared action's `actions/cache` step covers `target/${BUILD_PROFILE}`
-    as well as the registry, and it is gated on `cache-provider: github`.
-    Selecting `external` is what disables the target archive. The lint job
-    temporarily selects a second toolchain because Nixie's Merman dependency
-    needs newer Rust than the project gate; both setup steps must keep that
-    same external cache policy.
+    Selecting `external` delegates cache ownership to the workflow. The lint
+    job temporarily selects a second toolchain because Nixie's Merman
+    dependency needs newer Rust than the project gate; both setup steps must
+    keep that same external cache policy.
     """
     for workflow_name, job_name in expand(CACHED_JOBS):
         setup_steps = [
             step
             for step in steps(workflow_name, job_name)
-            if str(step.get("uses", "")).startswith(f"{SETUP_RUST}@")
+            if step.get("uses") == SETUP_RUST
         ]
         if not setup_steps:
             continue
@@ -170,7 +168,7 @@ def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
             )
             assert inputs.get("cache-provider") == "external", (
                 f"{workflow_name}:{job_name} must delegate cache ownership to the "
-                "caller, which is also what disables the shared target archive"
+                "workflow"
             )
             assert inputs.get("use-sccache") == "false", (
                 f"{workflow_name}:{job_name} must disable the shared compiler cache"
