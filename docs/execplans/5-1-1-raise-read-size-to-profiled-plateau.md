@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -248,6 +248,11 @@ This task is complete only when:
   canonical planner propagates its configured singleton read size. Focused
   regression tests pass. All deterministic gates passed; a renewed CodeRabbit
   review is queued after this documented state is committed and pushed.
+- [x] 2026-09-05 Hosted health-gate repair: CodeScene found the rebased
+  immediate-timeout test and worker numeric validator above its method-health
+  thresholds. Extracted the live-loop assertion and repeat-count validation;
+  CodeScene now reports 10.00 for both files and 25 focused tests pass. Full
+  deterministic revalidation and the queued CodeRabbit review remain pending.
 
 ## Surprises & discoveries
 
@@ -500,6 +505,13 @@ This task is complete only when:
   callbacks. The legacy resolver remains in its original module because its
   independent compatibility surface is intentional. Date/Author: 2026-09-05,
   implementation agent. No public interface or benchmark protocol changes.
+
+- Decision D22: extract the late CodeScene findings instead of suppressing
+  them. Rationale: the immediate-timeout assertion has a distinct live-loop
+  responsibility, and the repeat-count range is a coherent numeric invariant.
+  Their extraction retains the exact timeout and error-message contracts while
+  restoring the hosted quality gate. Date/Author: 2026-09-05, implementation
+  agent. No public interface or benchmark protocol changes.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
@@ -1195,10 +1207,11 @@ reconciled three conflicts with current `main`, then split benchmark
 configuration and execution responsibilities to restore the 400-line module
 limit. The legacy plan now lists each configured read-size/round measurement,
 and the canonical plan carries its configured singleton to scenario creation.
-Focused regression coverage and all deterministic gates passed: formatter,
-type, lint, 1,446 Python tests (one skipped), behavioural tests, 104 Rust
-tests, Markdown/spelling, and Mermaid validation. A renewed CodeRabbit review
-will validate the published commit.
+Focused regression coverage and all deterministic gates passed for the first
+repair: formatter, type, lint, 1,446 Python tests (one skipped), behavioural
+tests, 104 Rust tests, Markdown/spelling, and Mermaid validation. A subsequent
+hosted CodeScene finding was extracted with focused green coverage; the full
+suite and renewed CodeRabbit review will validate that follow-up commit.
 
 Revision 4, 2026-09-02, after review found two incomplete verification claims:
 V3 now executes the near-64 KiB cases through the real two-process pipeline on
