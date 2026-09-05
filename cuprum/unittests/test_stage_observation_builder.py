@@ -10,8 +10,8 @@ pin the contract:
   scoped/per-call layers (including ``None``, empty, and overlapping keys),
   stays overlay-only, and is immutable;
 - the single-command and pipeline observation tags agree on the shared keys
-  (``project``, ``capture``, ``echo``) for arbitrary inputs, with the
-  pipeline grafting only its stage keys; and
+  (``project``, ``capture``, ``echo``, ``echo_stdout``, ``echo_stderr``) for
+  arbitrary inputs, with the pipeline grafting only its stage keys; and
 - the emitted tag dictionaries are locked with syrupy snapshots.
 """
 
@@ -20,11 +20,13 @@ from __future__ import annotations
 import types
 import typing as typ
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum import ECHO, sh
 from cuprum._observability import _base_stage_tags, _resolve_env_overlay
+from cuprum._pipeline_config import _PipelineStreamOptions
 from cuprum._pipeline_internals import (
     _build_pipeline_observations,
     _collect_hooks,
@@ -136,7 +138,7 @@ def _pipeline_tags(
     """Build pipeline observations and return per-stage tags."""
     config = _prepare_pipeline_config(
         capture=capture,
-        echo=echo,
+        output=_PipelineStreamOptions(echo_stdout=echo, echo_stderr=echo),
         timeout=None,
         context=context,
     )
@@ -177,7 +179,7 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
         _single_command_tags(cmd, context, capture=capture, echo=echo),
     )
     assert single == {
-        **_base_stage_tags(cmd, capture=capture, echo=echo),
+        **_base_stage_tags(cmd, capture=capture, echo_stdout=echo, echo_stderr=echo),
         **(ctx_tags or {}),
     }, "single-command tags should merge caller tags over the base schema"
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
@@ -256,11 +258,38 @@ def test_stage_tag_snapshots_lock_the_wire_contract(
 
 
 def test_base_stage_tags_schema() -> None:
-    """Example: the canonical base schema is exactly project/capture/echo."""
+    """Example: the canonical base schema is project/capture/echo plus per-stream."""
     cmd = sh.make(ECHO)("hello")
-    tags = _base_stage_tags(cmd, capture=True, echo=False)
+    tags = _base_stage_tags(cmd, capture=True, echo_stdout=False, echo_stderr=False)
     assert tags == {
         "project": cmd.project.name,
         "capture": True,
         "echo": False,
+        "echo_stdout": False,
+        "echo_stderr": False,
     }, "base stage tags should contain only the canonical schema"
+
+
+@pytest.mark.parametrize(
+    ("echo_stdout", "echo_stderr", "expected_echo"),
+    [
+        (False, False, False),
+        (True, False, True),
+        (False, True, True),
+        (True, True, True),
+    ],
+)
+def test_base_stage_tags_keep_combined_echo_or_wide(
+    echo_stdout: bool, echo_stderr: bool, *, expected_echo: bool
+) -> None:
+    """Example: the combined ``echo`` tag stays the OR of the per-stream tags."""
+    cmd = sh.make(ECHO)("hello")
+    tags = _base_stage_tags(
+        cmd,
+        capture=True,
+        echo_stdout=echo_stdout,
+        echo_stderr=echo_stderr,
+    )
+    assert tags["echo"] is expected_echo, (
+        "the combined echo tag must stay true when either stream echoes"
+    )

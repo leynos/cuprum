@@ -242,7 +242,8 @@ Notes:
   type with one convention. The flat `capture` / `echo` keyword arguments are
   deprecated and emit a `DeprecationWarning`.
 - `RunOutputOptions(echo=True)` echoes the final stage stdout and all stage
-  stderr streams to their configured sinks.
+  stderr streams to their configured sinks. `echo_stdout` and `echo_stderr`
+  narrow the tee to one stream each, independently of capture.
 - Pipelines fail fast on the *first* non-final stage to exit non-zero when at
   least one other stage remains running: that stage terminates every other
   still-running stage — upstream producers as well as downstream consumers, not
@@ -362,6 +363,11 @@ when a call needs output behaviour that differs from the default.
 - `echo=False` keeps output out of the parent process streams. Set it to `True`
   to tee stdout and stderr while the command runs. When `capture=True`, echoed
   output is still captured.
+- `echo_stdout` and `echo_stderr` override `echo` for one stream each. Pass
+  `echo_stdout=False` to capture stdout silently while stderr still echoes —
+  the use case for probes such as `cargo metadata --locked`, whose JSON
+  document must stay out of a CI log. Capture is independent of echo: a stream
+  that is not echoed is still captured while `capture=True`.
 
 If a text-only echo sink cannot represent the subprocess output (for example a
 CP1252 console receiving UTF-8 text), Cuprum no longer aborts the run with
@@ -385,6 +391,21 @@ reported and skipped rather than changing the run's capture behaviour.
 
 `RunOutputOptions(capture=True, echo=False)` is the default; you only need to
 supply it explicitly when overriding either flag.
+
+```python
+from cuprum import ECHO, RunOutputOptions, sh
+
+
+async def probe() -> str:
+    cmd = sh.make(ECHO)("-n", "metadata document")
+    # Capture stdout silently, mirror stderr to the log.
+    result = await cmd.run(
+        output=RunOutputOptions(capture=True, echo_stdout=False, echo_stderr=True),
+    )
+    if not result.ok:
+        raise RuntimeError(f"probe failed: {result.exit_code}")
+    return result.stdout or ""
+```
 
 ```python
 from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
@@ -417,6 +438,9 @@ from cuprum import RunOutputOptions
 result = await cmd.run(output=RunOutputOptions(capture=True, echo=False))
 result = cmd.run_sync(output=RunOutputOptions(capture=False))
 result = pipeline.run_sync(output=RunOutputOptions(capture=False, echo=True))
+result = cmd.run_sync(
+    output=RunOutputOptions(capture=True, echo_stdout=False, echo_stderr=True),
+)
 ```
 
 If existing code constructs `IOOptions`, replace it with `RunOutputOptions`.
@@ -427,6 +451,11 @@ and emits a `DeprecationWarning` on construction. Migrate by replacing
 
 `RunOutputOptions(capture=True, echo=False)` is the default. Supply it
 explicitly only when overriding either flag.
+
+`echo` is shorthand that sets both `echo_stdout` and `echo_stderr`; an explicit
+per-stream value takes precedence for that stream alone. Existing callers that
+pass only `echo=True` are unaffected: both streams resolve to `True` exactly as
+before, and capture continues for a stream that is not echoed.
 
 The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
 remain accepted for backwards compatibility but emit a `DeprecationWarning`;
@@ -1322,6 +1351,8 @@ Configuration attributes:
   parallel; `1` runs sequentially.
 - `capture`: When `True` (default), capture stdout/stderr into results.
 - `echo`: When `True`, tee output to configured sinks.
+- `echo_stdout`: When set, overrides `echo` for stdout alone. Keyword-only.
+- `echo_stderr`: When set, overrides `echo` for stderr alone. Keyword-only.
 - `context`: Shared `ExecutionContext` for all commands.
 - `fail_fast`: When `True`, cancel remaining commands after first failure.
 

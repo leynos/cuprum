@@ -227,6 +227,41 @@ def test_observe_tags_reflect_run_output_options(
         assert event.tags["echo"] is output.echo
 
 
+@pytest.mark.parametrize(
+    ("echo_stdout", "echo_stderr"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_observe_tags_expose_per_stream_echo(
+    echo_stdout: bool,
+    echo_stderr: bool,
+) -> None:
+    """Observation tags carry per-stream echo and their combined ``echo`` OR."""
+    builder, catalogue = _python_builder(project_name="observe-per-stream-echo")
+    cmd = builder("-c", "pass")
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        """Record an emitted execution event."""
+        events.append(ev)
+
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        result = cmd.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo_stdout=echo_stdout,
+                echo_stderr=echo_stderr,
+            ),
+        )
+
+    assert result.exit_code == 0
+    start_event = next(ev for ev in events if ev.phase == "start")
+    assert start_event.tags["echo_stdout"] is echo_stdout
+    assert start_event.tags["echo_stderr"] is echo_stderr
+    assert start_event.tags["echo"] is (echo_stdout or echo_stderr), (
+        "the combined echo tag must stay the OR of the per-stream tags"
+    )
+
+
 def test_pipeline_awaits_scheduled_observe_tasks_before_return() -> None:
     """Pipeline execution awaits async observe hooks before returning."""
     builder, catalogue = _python_builder(project_name="observe-async-pipeline")
