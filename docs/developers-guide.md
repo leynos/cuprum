@@ -2109,10 +2109,17 @@ leaf, not the inclusive tally of every caller on the path.
 
 ## Makefile tooling changes
 
-`LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to `PATH` for `uv`
-and tool-discovery recipes only. This supports non-interactive Continuous
-Integration/Continuous Delivery (CI/CD) hook environments without globally
-shadowing system tools for unrelated Makefile workflows.
+On POSIX platforms, `LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to
+`PATH` for `uv` and tool-discovery recipes only. This supports non-interactive
+Continuous Integration/Continuous Delivery (CI/CD) hook environments without
+globally shadowing system tools for unrelated Makefile workflows.
+
+On Windows, `make` sees `OS=Windows_NT` and leaves `LOCAL_TOOL_ENV` empty. Git
+Bash discovers commands with colon-separated paths, whereas the Windows PATH
+installed by `setup-uv` uses semicolons; reconstructing it with the POSIX
+prefix would hide `uv`. Leaving the environment untouched preserves the path
+that `setup-uv` supplied. `UV_RUN_ENV` still adds the repository-local `uv`
+cache and tool directories on both platforms.
 
 ## Rust error taxonomy (`PumpError`)
 
@@ -2598,6 +2605,13 @@ present in the environment. CI's `extension-tests` and
 the extension identically. The Makefile keeps only a pointer to this section
 rather than repeating the reasoning.
 
+The Windows job provisions Python 3.13, `uv`, Rust 1.85.0, and GNU Make before
+it runs those targets in Git Bash. To reproduce it from a Windows checkout,
+make those tools available in Git Bash, let `setup-uv` (or an equivalent
+installation) add `uv` to PATH, then run `make develop` and
+`make test-extension`. `LOCAL_TOOL_ENV` deliberately leaves that PATH unchanged
+on `Windows_NT`; see [Makefile tooling changes](#makefile-tooling-changes).
+
 Every CI job that installs the extension and then runs against it goes through
 this target — `extension-tests`, `extension-tests-windows`, and
 `benchmark-ratchet`, and no others. The wheel build is not one of them:
@@ -2995,7 +3009,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
 | `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
-| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools.                                                  |
+| `LOCAL_TOOL_ENV`        | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
