@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import tomllib
 
+import pytest
+
 from tests.helpers.docs import repo_root
 
 #: Loose root-level files that mutmut must copy into its mutants/ tree. Each
@@ -28,11 +30,16 @@ def _also_copy_entries() -> list[str]:
     pyproject = tomllib.loads(
         (repo_root() / "pyproject.toml").read_text(encoding="utf-8")
     )
-    mutmut = pyproject["tool"]["mutmut"]
-    assert isinstance(mutmut, dict), "pyproject.toml must declare [tool.mutmut]"
-    entries = mutmut.get("also_copy")
-    assert isinstance(entries, list), "[tool.mutmut] must declare an also_copy list"
-    return entries
+    match pyproject["tool"]["mutmut"]:
+        case dict() as mutmut:
+            entries = mutmut.get("also_copy")
+        case _:
+            pytest.fail("pyproject.toml must declare [tool.mutmut]")
+    match entries:
+        case list() as entries:
+            return entries
+        case _:
+            pytest.fail("[tool.mutmut] must declare an also_copy list")
 
 
 def test_also_copy_copies_loose_files_read_from_the_repository_root() -> None:
