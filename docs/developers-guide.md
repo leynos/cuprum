@@ -21,6 +21,8 @@ Everything else runs on GitHub-hosted runners. Ubicloud offers Linux only, and
 a job that sleeps, calls an API, or publishes an artefact somebody else built
 gains nothing from a metered build slot.
 
+Table 1: GitHub Actions jobs, workflows, and runners
+
 | Job                       | Workflow                 | Runner                |
 | ------------------------- | ------------------------ | --------------------- |
 | `typecheck-test`          | `ci.yml`                 | `ubicloud-standard-2` |
@@ -232,6 +234,8 @@ Each suite runs once per event. The coverage job is the only place the Rust
 suite executes, and no interpreter runs the Python suite both there and in the
 matrix. A suite that runs twice costs runner minutes twice and gates nothing
 extra.
+
+Table 2: CI suite execution by job and interpreter
 
 | Job                                | Python | Rust suite                     | Python suite           | Extension |
 | ---------------------------------- | ------ | ------------------------------ | ---------------------- | --------- |
