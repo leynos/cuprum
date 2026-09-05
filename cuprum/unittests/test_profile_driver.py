@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import typing as typ
 
 import pytest
@@ -14,6 +15,7 @@ from benchmarks.profile_tee_hotpath import (
     default_tee_profile_scenarios,
     run_profile_plan,
 )
+from benchmarks.tee_profile_driver import _parse_read_sizes
 from cuprum.unittests.conftest import _VOLATILE_KEYS, redact
 
 if typ.TYPE_CHECKING:
@@ -242,6 +244,21 @@ def test_profile_matrix_stops_after_first_worker_failure(
             "perf-call-graph must be a non-empty string",
             id="blank-call-graph",
         ),
+        pytest.param(
+            {"read_sizes": ()},
+            "read-sizes must contain at least one positive integer",
+            id="read-sizes-empty",
+        ),
+        pytest.param(
+            {"read_sizes": (0,)},
+            "read-size must be >= 1",
+            id="read-size-zero",
+        ),
+        pytest.param(
+            {"read_sizes": (-1,)},
+            "read-size must be >= 1",
+            id="read-size-negative",
+        ),
     ],
 )
 def test_driver_config_rejects_invalid_fields(
@@ -253,17 +270,67 @@ def test_driver_config_rejects_invalid_fields(
     repeat_count = kwargs.get("repeat_count", 3)
     perf_frequency = kwargs.get("perf_frequency", 999)
     perf_call_graph = kwargs.get("perf_call_graph", "dwarf,16384")
+    read_sizes = kwargs.get("read_sizes", (65536,))
     assert isinstance(warmup_count, int)
     assert isinstance(repeat_count, int)
     assert isinstance(perf_frequency, int)
     assert isinstance(perf_call_graph, str)
+    assert isinstance(read_sizes, tuple)
     with pytest.raises(ValueError, match=fragment):
         TeeProfileDriverConfig(
             warmup_count=warmup_count,
             repeat_count=repeat_count,
             perf_frequency=perf_frequency,
             perf_call_graph=perf_call_graph,
+            read_sizes=read_sizes,
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param("4096,65536", (4096, 65536), id="two-positive-sizes"),
+    ],
+)
+def test_parse_read_sizes_accepts_comma_separated_positive_integers(
+    value: str,
+    expected: tuple[int, ...],
+) -> None:
+    """The CLI parser preserves every requested positive read size."""
+    assert _parse_read_sizes(value) == expected, (
+        f"expected parsed sizes {expected!r} for {value!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        pytest.param(
+            "not-an-integer",
+            "read-sizes must be comma-separated integers",
+            id="non-integer",
+        ),
+        pytest.param(
+            "",
+            "read-sizes must be comma-separated integers",
+            id="empty",
+        ),
+        pytest.param(
+            "0",
+            "read-sizes must contain at least one positive integer",
+            id="zero",
+        ),
+        pytest.param(
+            "-1",
+            "read-sizes must contain at least one positive integer",
+            id="negative",
+        ),
+    ],
+)
+def test_parse_read_sizes_rejects_invalid_values(value: str, message: str) -> None:
+    """The CLI parser rejects empty, non-numeric, and non-positive sizes."""
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        _parse_read_sizes(value)
 
 
 def test_worker_command_uses_module_invocation(tmp_path: pth.Path) -> None:

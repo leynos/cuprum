@@ -1,4 +1,4 @@
-# Debugging Plan: pipeline timeout gate failure
+# Debugging plan: pipeline timeout gate failure
 
 **Generated**: 2026-09-02 **Issue ID**: post-V3/V4 deterministic-gate
 precondition **Severity**: medium **Falsification sub-agent**: alchemist
@@ -6,7 +6,7 @@ precondition **Severity**: medium **Falsification sub-agent**: alchemist
 Falsification must be executed by the named sub-agent, not by the planning
 agent.
 
-## Problem Statement
+## Problem statement
 
 The pre-correction full test gate failed only
 `test_zero_timeout_reconciles_pipe_tasks` after 30 seconds in the selector
@@ -15,7 +15,7 @@ processes before `asyncio.run` closes. The V3/V4 correction has no production
 timeout changes. The gate must be made reproducibly green before a CodeRabbit
 review can be requested.
 
-## Context Summary
+## Context summary
 
 | Aspect              | Details                                                                        |
 | ------------------- | ------------------------------------------------------------------------------ |
@@ -24,7 +24,7 @@ review can be requested.
 | Affected components | `test_pipeline_timeouts`, pipeline teardown, subprocess waiters                |
 | Recent changes      | Rebase preserved the test cleanup from `03a81c09`; V3/V4 only alter tests/docs |
 
-### Error Artefacts
+### Error artefacts
 
 ```plaintext
 FAILED cuprum/unittests/test_pipeline_timeouts.py::test_zero_timeout_reconciles_pipe_tasks
@@ -32,7 +32,7 @@ Failed: Timeout (>30.0s) from pytest-timeout
 ============ 1 failed, 1346 passed, 1 skipped in 134.29s ============
 ```
 
-### Information Gaps
+### Information gaps
 
 The first run did not retain the timed-out test's local process identifiers or
 its exact predecessor ordering. It is unknown whether the test fails in
@@ -42,7 +42,7 @@ ______________________________________________________________________
 
 ## Hypotheses
 
-### H1: the test is order-dependent
+### H1: The test is order-dependent
 
 **Claim**: an earlier unit test leaves pipeline state or child processes that
 make this test's `asyncio.run` shutdown wait for 30 seconds.
@@ -53,7 +53,7 @@ the focused V3/V4 run.
 **Prediction**: the test passes alone but fails when preceded by its immediate
 neighbourhood from the full batch.
 
-#### H1 Falsification Plan
+#### H1 falsification plan
 
 | Step | Action                                                      | Expected Negative Result                          |
 | ---- | ----------------------------------------------------------- | ------------------------------------------------- |
@@ -67,7 +67,7 @@ test suite is serial.
 
 ______________________________________________________________________
 
-### H2: the no-termination stub does not always capture the spawned processes
+### H2: The no-termination stub does not always capture the spawned processes
 
 **Claim**: the immediate timeout can unwind before the patched termination
 function records the processes, so the cleanup call receives an empty tuple and
@@ -80,7 +80,7 @@ and depends on its patched seam being reached.
 `_terminate_all_shielded` finds an empty `timed_out_processes` tuple on a
 failing path.
 
-#### H2 Falsification Plan
+#### H2 falsification plan
 
 | Step | Action                                                                | Expected Negative Result                                   |
 | ---- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -94,7 +94,7 @@ input without altering production timing.
 
 ______________________________________________________________________
 
-### H3: cleanup is correct but the child has not started when termination runs
+### H3: Cleanup is correct but the child has not started when termination runs
 
 **Claim**: process startup races with the zero timeout, causing the normal
 termination helper to return before the subprocess transport has a waiter that
@@ -106,7 +106,7 @@ PID kill is intended as a backstop.
 **Prediction**: instrumentation shows both recorded processes have no PID or
 remain alive after `_terminate_all_shielded` completes.
 
-#### H3 Falsification Plan
+#### H3 falsification plan
 
 | Step | Action                                                                     | Expected Negative Result                       |
 | ---- | -------------------------------------------------------------------------- | ---------------------------------------------- |
@@ -119,20 +119,20 @@ the H1 ordering experiment.
 
 ______________________________________________________________________
 
-## Recommended Execution Order
+## Recommended execution order
 
 1. **H1** — cheapest and distinguishes an order interaction from this test.
 2. **H2** — directly tests the cleanup premise changed by the mock.
 3. **H3** — only if H2 is falsified and the test fails alone.
 
-## Termination Criteria
+## Termination criteria
 
 - **Root cause identified**: one hypothesis survives while the others are
   falsified by its stated negative result.
 - **Escalation trigger**: all three hypotheses are falsified, or fixing the
   issue requires a production interface/lifecycle change beyond the ExecPlan.
 
-## Notes for Executing Agent
+## Notes for executing agent
 
 Do not run repository-wide gates and do not edit production code. Report each
 falsification verdict with the command, exit status, and whether the temporary

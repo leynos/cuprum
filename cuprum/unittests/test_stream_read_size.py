@@ -9,6 +9,22 @@ from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
 
 
+class _RecordingReader(asyncio.StreamReader):
+    """Stream reader recording each requested read size."""
+
+    def __init__(self, payload: bytes) -> None:
+        """Buffer the payload and mark its end of file."""
+        super().__init__()
+        self.read_sizes: list[int] = []
+        self.feed_data(payload)
+        self.feed_eof()
+
+    async def read(self, n: int = -1) -> bytes:
+        """Record the requested size before reading buffered bytes."""
+        self.read_sizes.append(n)
+        return await super().read(n)
+
+
 async def _consume_lines(payload: bytes) -> tuple[str | None, list[str]]:
     """Consume *payload* and return its capture and emitted lines."""
     reader = asyncio.StreamReader()
@@ -17,7 +33,6 @@ async def _consume_lines(payload: bytes) -> tuple[str | None, list[str]]:
     lines: list[str] = []
     captured = await _consume_stream(reader, _config(), on_line=lines.append)
     return captured, lines
-    return reader
 
 
 def _config() -> _StreamConfig:
@@ -39,6 +54,24 @@ def test_crlf_split_at_read_boundary_emits_no_empty_line() -> None:
 
     assert captured == f"{first_line}\r\nb"
     assert lines == [first_line, "b"]
+
+
+def test_consume_stream_forwards_explicit_read_size_to_every_reader_call() -> None:
+    """The final stream consumer retains the injected benchmark read size."""
+
+    async def consume() -> tuple[str | None, list[int]]:
+        """Consume a recording reader with a deliberately non-default size."""
+        reader = _RecordingReader(b"firstsecond")
+        captured = await _consume_stream(reader, _config(), read_size=17)
+        return captured, reader.read_sizes
+
+    captured, read_sizes = asyncio.run(consume())
+
+    assert captured == "firstsecond", f"expected complete capture, got {captured!r}"
+    assert read_sizes == [17, 17], (
+        "every consumer reader call must retain the explicit read size, got "
+        f"{read_sizes}"
+    )
 
 
 def test_default_read_size_is_profiled_plateau() -> None:

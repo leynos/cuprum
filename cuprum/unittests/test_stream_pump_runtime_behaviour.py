@@ -29,10 +29,12 @@ class _StubPumpReader:
         self._chunks = list(chunks)
         self._delay_s = delay_s
         self.read_calls = 0
+        self.read_sizes: list[int] = []
 
-    async def read(self, _: int) -> bytes:
+    async def read(self, size: int) -> bytes:
         """Return the next queued chunk after a delay, or empty bytes at EOF."""
         self.read_calls += 1
+        self.read_sizes.append(size)
         await asyncio.sleep(self._delay_s)
         if not self._chunks:
             return b""
@@ -175,6 +177,31 @@ def test_pump_stream_omits_downstream_close_log_without_writer(
     ]
     assert reader.read_calls == 3, "pump should drain all chunks plus EOF"
     assert not close_records, "missing writer should not log downstream closure"
+
+
+def test_pump_stream_forwards_explicit_read_size_to_every_reader_call() -> None:
+    """The pipeline pump retains the injected benchmark read size."""
+
+    async def exercise() -> tuple[_StubPumpReader, _StubPumpWriter]:
+        """Pump through recording stream endpoints."""
+        reader = _StubPumpReader([b"first", b"second"])
+        writer = _StubPumpWriter()
+        await _pump_stream(
+            typ.cast("asyncio.StreamReader", reader),
+            typ.cast("asyncio.StreamWriter", writer),
+            read_size=17,
+        )
+        return reader, writer
+
+    reader, writer = asyncio.run(exercise())
+
+    assert reader.read_sizes == [17, 17, 17], (
+        "every pump reader call must retain the explicit read size, got "
+        f"{reader.read_sizes}"
+    )
+    assert bytes(writer.data) == b"firstsecond", (
+        f"the writer must receive the complete payload, got {writer.data!r}"
+    )
 
 
 def test_pump_stream_drains_slow_reader_until_eof_without_writer() -> None:

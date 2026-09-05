@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses as dc
 import json
 import pathlib as pth
+import random
 import typing as typ
 
 from benchmarks.tee_profile_configuration import (
     _config_from_args,
     _scenario_by_name,
-    _worker_command,
 )
+from benchmarks.tee_profile_execution import (
+    _build_profile_plan,
+    _profile_dir,
+    _ProfilePlan,
+    _round_read_sizes,
+    _run_profile_sweep,
+)
+from benchmarks.tee_profile_output import _write_json
 from benchmarks.tee_profile_scenarios import (
     _DEFAULT_FIXTURE,
     _DEFAULT_OUTPUT_DIR,
     _DEFAULT_WRAPPED_FIXTURE,
     TeeProfileDriverConfig,
+    TeeProfileScenario,
     default_tee_profile_scenarios,
 )
 from cuprum._streams_pump import _READ_SIZE
@@ -26,7 +34,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
-def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
+def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     """Generate a serial, auditable profiling plan.
 
     Parameters
@@ -44,36 +52,16 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> dict[str, object]:
         ``perf_call_graph``, and ``scenarios`` (list of dicts, each containing
         ``worker_command`` and ``profile_dir``).
     """
-    scenarios = default_tee_profile_scenarios(
-        fixture_path=config.fixture_path,
-        wrapped_fixture_path=config.wrapped_fixture_path,
-        repeat_count=config.repeat_count,
-        read_size=config.read_sizes[0],
+    scenario_matrices = tuple(
+        default_tee_profile_scenarios(
+            fixture_path=config.fixture_path,
+            wrapped_fixture_path=config.wrapped_fixture_path,
+            repeat_count=config.repeat_count,
+            read_size=read_size,
+        )
+        for read_size in config.read_sizes
     )
-    return {
-        "fixture_path": str(config.fixture_path),
-        "wrapped_fixture_path": str(config.wrapped_fixture_path),
-        "output_dir": str(config.output_dir),
-        "profiler": config.profiler,
-        "warmup_count": config.warmup_count,
-        "repeat_count": config.repeat_count,
-        "perf_frequency": config.perf_frequency,
-        "perf_call_graph": config.perf_call_graph,
-        "scenarios": [
-            {
-                **scenario.as_dict(),
-                "worker_command": _worker_command(scenario),
-                "profile_dir": str(config.output_dir / scenario.name),
-            }
-            for scenario in scenarios
-        ],
-    }
-
-
-def _write_json(path: pth.Path, payload: cabc.Mapping[str, object]) -> None:
-    """Write stable JSON output."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return _build_profile_plan(config=config, scenario_matrices=scenario_matrices)
 
 
 def run_profile_scenario(
@@ -92,10 +80,23 @@ def run_profile_scenario(
     Mapping[str, object]
         Worker result mapping as produced by ``run_tee_profile_worker``.
     """
+    scenario = _scenario_by_name(config)
+    return _run_profile_scenario(
+        scenario,
+        config=config,
+        scenario_dir=config.output_dir / scenario.name,
+    )
+
+
+def _run_profile_scenario(
+    scenario: TeeProfileScenario,
+    *,
+    config: TeeProfileDriverConfig,
+    scenario_dir: pth.Path,
+) -> cabc.Mapping[str, object]:
+    """Run one resolved scenario into its dedicated artefact directory."""
     from benchmarks.tee_profile_profilers import _profiler_for, _run_warmup
 
-    scenario = _scenario_by_name(config)
-    scenario_dir = config.output_dir / scenario.name
     scenario_dir.mkdir(parents=True, exist_ok=True)
     _write_json(scenario_dir / "scenario.json", scenario.as_dict())
     _run_warmup(scenario, warmup_count=config.warmup_count)
@@ -103,6 +104,18 @@ def run_profile_scenario(
         scenario,
         scenario_dir=scenario_dir,
         config=config,
+    )
+
+
+def run_profile_sweep(
+    *, config: TeeProfileDriverConfig
+) -> list[cabc.Mapping[str, object]]:
+    """Measure one named scenario across configured sizes and rounds."""
+    return _run_profile_sweep(
+        config=config,
+        scenario_resolver=_scenario_by_name,
+        scenario_runner=_run_profile_scenario,
+        shuffle=_shuffle_for(config),
     )
 
 
@@ -125,17 +138,54 @@ def run_profile_matrix(
         non-zero exit code.
     """
     results: list[cabc.Mapping[str, object]] = []
+    shuffle = _shuffle_for(config)
+    for round_index in range(1, config.rounds + 1):
+        for read_size in _round_read_sizes(config, shuffle=shuffle):
+            batch_results, failed = _run_matrix_batch(
+                config=config,
+                read_size=read_size,
+                round_index=round_index,
+            )
+            results.extend(batch_results)
+            if failed:
+                return results
+    return results
+
+
+def _run_matrix_batch(
+    *,
+    config: TeeProfileDriverConfig,
+    read_size: int,
+    round_index: int,
+) -> tuple[list[cabc.Mapping[str, object]], bool]:
+    """Run one read-size matrix and report whether a scenario failed."""
+    results: list[cabc.Mapping[str, object]] = []
     for scenario in default_tee_profile_scenarios(
         fixture_path=config.fixture_path,
         wrapped_fixture_path=config.wrapped_fixture_path,
         repeat_count=config.repeat_count,
+        read_size=read_size,
     ):
-        scenario_config = dc.replace(config, scenario_name=scenario.name)
-        result = run_profile_scenario(config=scenario_config)
+        result = _run_profile_scenario(
+            scenario,
+            config=config,
+            scenario_dir=_profile_dir(
+                config,
+                scenario,
+                round_index=round_index,
+            ),
+        )
         results.append(result)
         if _worker_result_exit_status(result) != 0:
-            break
-    return results
+            return results, True
+    return results, False
+
+
+def _shuffle_for(
+    config: TeeProfileDriverConfig,
+) -> cabc.Callable[[list[int]], None] | None:
+    """Construct the optional source of randomized read-size order."""
+    return random.SystemRandom().shuffle if config.randomize_order else None
 
 
 def _worker_result_exit_status(result: cabc.Mapping[str, object]) -> int:
@@ -228,6 +278,8 @@ def main() -> int:
         print(json.dumps(run_profile_plan(config=config), indent=2, sort_keys=True))
         return 0
     if args.command == "run-scenario":
+        if len(config.read_sizes) != 1 or config.rounds != 1:
+            return _matrix_exit_status(run_profile_sweep(config=config))
         result = run_profile_scenario(config=config)
         return _worker_result_exit_status(result)
     if args.command == "run":
