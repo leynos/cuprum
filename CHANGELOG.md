@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+<!-- markdownlint-disable-next-line MD024 -->
+### Fixed
+
+- **Capture preserved when echo sinks reject unicode:** A text-only echo sink
+  whose encoding cannot represent the subprocess output (for example a Windows
+  CP1252 console echoing UTF-8 `ś`/`ń`) no longer aborts stream draining with
+  an escaping `UnicodeEncodeError`. Echoing is disabled for only the affected
+  stream while capture completes, a `cuprum.stream` `WARNING` records the first
+  failure, sinks exposing a binary `buffer` keep receiving the original bytes,
+  and other I/O errors still propagate
+  ([#348](https://github.com/leynos/cuprum/issues/348)).
+
 ### Added
 
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
@@ -100,6 +112,7 @@
   contributor changes can now fail the spelling gate on source-code drift
   ([#259](https://github.com/leynos/cuprum/pull/259)).
 
+<!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
 - **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
