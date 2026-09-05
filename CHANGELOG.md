@@ -20,6 +20,15 @@
 
 ### Added
 
+- **Per-stream echo control while capturing:** `RunOutputOptions` accepts
+  `echo_stdout` and `echo_stderr`, each defaulting to the existing `echo`
+  shorthand, so a caller can capture a stream silently while the other still
+  mirrors to the parent — for example, capturing the `cargo metadata --locked`
+  JSON document without printing it to a CI log. Capture stays a single joint
+  boolean and continues for a stream that is not echoed; `ConcurrentConfig`
+  forwards the same per-stream fields. The change is additive: existing
+  `echo=True` callers resolve both streams to `True` exactly as before.
+
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
   non-final stage is the first to fail and at least one other stage is still

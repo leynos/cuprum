@@ -158,7 +158,109 @@ def test_echoes_when_requested(
     assert "hello runtime" in captured.out
     assert result.stdout.strip() == "hello runtime"
 
+@pytest.mark.usefixtures("execution_strategy")
+def test_captures_stdout_silently(
+    python_builder: cabc.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Captured-but-not-echoed stdout writes nothing and is fully returned.
 
+    This is the lading `cargo metadata` probe case: the document must stay out
+    of the CI log (parent stdout) while remaining complete on the result.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", 'import sys; sys.stdout.write("doc")')
+
+    result = execute(
+        command,
+        {"output": RunOutputOptions(capture=True, echo_stdout=False)},
+    )
+
+    captured = capsys.readouterr()
+
+    assert captured.out == "", (
+        "a non-echoed stream must not write to the parent's stdout"
+    )
+    assert result.stdout == "doc", (
+        "a non-echoed stream must still be captured in full on the result"
+    )
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_per_stream_echo_is_independent(
+    python_builder: cabc.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+    execution_strategy: tuple[str, ExecuteFn],
+    *,
+    stream: str,
+) -> None:
+    """Echoing one stream leaves the other stream out of the parent process.
+
+    Parameters
+    ----------
+    stream : str
+        The stream selected for echo; the other stream must stay silent.
+    """
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        'import sys; print("out"); print("err", file=sys.stderr)',
+    )
+    echo_stdout = stream == "stdout"
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=True,
+                echo_stdout=echo_stdout,
+                echo_stderr=not echo_stdout,
+            ),
+        },
+    )
+    captured = capsys.readouterr()
+
+    assert result.stdout == "out\n"
+    assert result.stderr == "err\n"
+    assert captured.out.strip() == ("out" if echo_stdout else ""), (
+        f"stdout echo must follow echo_stdout={echo_stdout}"
+    )
+    assert captured.err.strip() == ("" if echo_stdout else "err"), (
+        f"stderr echo must follow echo_stderr={not echo_stdout}"
+    )
+
+def test_stderr_echo_is_unaffected_by_stdout_setting(
+    python_builder: cabc.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Muting stdout echo leaves stderr echo working, and vice versa."""
+    _, execute = execution_strategy
+    command = python_builder(
+        "-c",
+        'import sys; print("out"); print("err", file=sys.stderr)',
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=True,
+                echo_stdout=False,
+                echo_stderr=True,
+            ),
+            "context": ExecutionContext(
+                stdout_sink=io.StringIO(),
+                stderr_sink=io.StringIO(),
+            ),
+        },
+    )
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == "", "injected sinks must keep both streams off capsys"
+    assert result.stdout == "out\n"
+    assert result.stderr == "err\n"
 def test_applies_env_overrides(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
