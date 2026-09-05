@@ -92,9 +92,10 @@ contract-validation helpers. None warranted extraction, and interrogate's
 future undocumented helpers rather than enforced documentation. The gate
 therefore extends as-is: `$(INTERROGATE)` interrogates
 `benchmarks conftest.py cuprum scripts tests` at the same absolute
-`--fail-under 100` bar, with no per-scope exclusions and no configuration
-section. The deliberate exclusions are none; every documentable node in
-every scope must carry a docstring.
+`--fail-under 100` bar, with no per-scope exclusions; no interrogate ignore
+flags are used and no `[tool.interrogate]` configuration section exists.
+The deliberate exclusions are none; every documentable node in every scope
+must carry a docstring.
 
 The three tiers now run in this order, each gating the next:
 
@@ -142,5 +143,5 @@ The three tiers now run in this order, each gating the next:
   400-line ceiling.
 - Extending the gate to tests and scripts demands one-line docstrings on
   scenario fixtures and helpers. When a nested helper's docstring would only
-  restate the enclosing function, extract or rename it so the intent is
-  expressible, rather than suppressing the gate.
+  restate the enclosing function, extract or rename it, so the intent is
+  expressible rather than suppressing the gate.
