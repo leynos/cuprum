@@ -81,6 +81,35 @@ def _shared_action_uses(value: object) -> list[str]:
     return []
 
 
+def _shared_action_references(workflow_name: str) -> list[re.Match[str]]:
+    """Return validated shared-actions references from one workflow."""
+    uses_values = _shared_action_uses(workflow_document(workflow_name))
+    references = [SHARED_ACTIONS_REFERENCE.fullmatch(uses) for uses in uses_values]
+    invalid_values = [
+        uses
+        for uses, reference in zip(uses_values, references, strict=True)
+        if reference is None
+    ]
+    assert not invalid_values, (
+        f"{workflow_name}: shared-actions references must use a full lowercase "
+        f"40-character commit SHA after '@': {invalid_values}"
+    )
+    return [reference for reference in references if reference is not None]
+
+
+def _shared_action_targets_by_workflow() -> dict[str, set[str]]:
+    """Collect expected shared-actions targets for workflows that use them."""
+    references_by_workflow = {
+        workflow_name: _shared_action_references(workflow_name)
+        for workflow_name, _ in workflow_sources()
+    }
+    return {
+        workflow_name: {reference["target"] for reference in references}
+        for workflow_name, references in references_by_workflow.items()
+        if references
+    }
+
+
 def _shared_action_target(uses: object, step_name: str) -> str:
     """Return the shared-action target declared by one named workflow step."""
     assert isinstance(uses, str), f"the {step_name!r} step must declare uses"
@@ -348,42 +377,7 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
 
 def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
     """Every shared-actions caller uses an immutable revision without fixing it."""
-    all_uses_by_workflow = {
-        workflow_name: _shared_action_uses(workflow_document(workflow_name))
-        for workflow_name, _ in workflow_sources()
-    }
-    uses_by_workflow = {
-        workflow_name: uses
-        for workflow_name, uses in all_uses_by_workflow.items()
-        if uses
-    }
-    parsed_references = {
-        workflow_name: [
-            (uses, SHARED_ACTIONS_REFERENCE.fullmatch(uses)) for uses in uses_values
-        ]
-        for workflow_name, uses_values in uses_by_workflow.items()
-    }
-    invalid_references = [
-        f"{workflow_name}:{uses}"
-        for workflow_name, references in parsed_references.items()
-        for uses, reference in references
-        if reference is None
-    ]
-    assert not invalid_references, (
-        "shared-actions references must use a full lowercase 40-character "
-        f"commit SHA after '@': {invalid_references}"
-    )
-    valid_references = {
-        workflow_name: [
-            reference for _, reference in references if reference is not None
-        ]
-        for workflow_name, references in parsed_references.items()
-    }
-
-    targets_by_workflow = {
-        workflow_name: {reference["target"] for reference in references}
-        for workflow_name, references in valid_references.items()
-    }
+    targets_by_workflow = _shared_action_targets_by_workflow()
     assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
         "each workflow must call only its expected shared actions or reusable "
         f"workflows; found {targets_by_workflow}"
