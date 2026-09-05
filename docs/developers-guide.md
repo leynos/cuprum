@@ -836,14 +836,21 @@ histogram:
 
 Table 1: metrics emitted by `PumpMetricsHook`
 
-| Metric                                       | Labels   |
-| -------------------------------------------- | -------- |
-| `cuprum_rust_pump_declined_total`            | `reason` |
-| `cuprum_rust_pump_failed_after_cancel_total` | none     |
-| `cuprum_rust_pump_cleanup_total`             | none     |
-| `cuprum_rust_pump_cleanup_duration_seconds`  | none     |
+| Metric                                       | Labels    |
+| -------------------------------------------- | --------- |
+| `cuprum_rust_pump_declined_total`            | `reason`  |
+| `cuprum_rust_pump_failed_after_cancel_total` | none      |
+| `cuprum_rust_pump_cleanup_total`             | none      |
+| `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
+| `cuprum_rust_pump_handoff_total`             | `outcome` |
 
 `RustPumpDeclineReason` bounds the decline label to its three declared values.
+The `outcome` label is also closed: it is exactly `submitted`,
+`blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
+`buffer_validation_failed`, `platform_writer_transfer_failed`, or
+`native_io_failed`. The hand-off counter increments once for each such outcome,
+including a successful submission. Descriptor numbers, Windows handle values,
+exception types, errno values, and error messages are never metric labels.
 Observer failures are logged and do not alter the successful fallback or the
 caller's cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md)
 records the decision.
@@ -2140,7 +2147,11 @@ re-raised after rollback and recorded at `DEBUG` on the
 `cuprum._pipeline_streams` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
-or exception text. They are diagnostics, not pump-observation events or metrics.
+or exception text. A duplicate-creation failure has no hand-off outcome;
+executor rejection emits `executor_submission_rejected` before it is re-raised.
+Blocking-mode failure selects the Python fallback and emits
+`blocking_setup_failed`. The outcome events are counted by
+`cuprum_rust_pump_handoff_total` as described above.
 
 ## Rust splice-loop and drain contract
 

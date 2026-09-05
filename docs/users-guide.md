@@ -1700,13 +1700,12 @@ decision rather than a command's lifecycle, so they are not `ExecEvent` values
 and never reach an observe hook. An `ExecEvent` consumer registered elsewhere
 in the process is unaffected.
 
-The channel counts declines, post-cancellation failures, and native-pump
-cleanup. A successful hand-off emits no event, deliberately: there is no
-per-hop counter and no total-hop counter to divide by. So the decline counter
-gives the *number* of hops that left the fast path, not the *fraction* that
-stayed on it. To report that fraction, pair the decline counter with a hop
-total measured independently — for example, a separately maintained counter
-incremented once per submitted inter-stage hop.
+The channel counts declines, Rust writer-resource hand-off outcomes,
+post-cancellation failures, and native-pump cleanup. A successful hand-off
+emits a `handoff` event and increments
+`cuprum_rust_pump_handoff_total{outcome="submitted"}` once. The same counter
+records each failed hand-off outcome once, so it can show both the number of
+hops that stayed on the fast path and the number that left it.
 
 Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
 for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when
@@ -1766,12 +1765,13 @@ with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
 
 Table 2: counters emitted by `PumpMetricsHook`
 
-| Counter                                      | Labels   | Incremented when                                                 |
-| -------------------------------------------- | -------- | ---------------------------------------------------------------- |
-| `cuprum_rust_pump_declined_total`            | `reason` | a hop fell back from the Rust pump to the Python pump            |
-| `cuprum_rust_pump_failed_after_cancel_total` | none     | a cancelled hop's Rust worker failure was consumed and recorded  |
-| `cuprum_rust_pump_cleanup_total`             | none     | native cleanup completed after cancellation                      |
-| `cuprum_rust_pump_cleanup_duration_seconds`  | none     | one monotonic duration was observed for completed native cleanup |
+| Counter                                      | Labels    | Incremented when                                                 |
+| -------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| `cuprum_rust_pump_declined_total`            | `reason`  | a hop fell back from the Rust pump to the Python pump            |
+| `cuprum_rust_pump_failed_after_cancel_total` | none      | a cancelled hop's Rust worker failure was consumed and recorded  |
+| `cuprum_rust_pump_cleanup_total`             | none      | native cleanup completed after cancellation                      |
+| `cuprum_rust_pump_cleanup_duration_seconds`  | none      | one monotonic duration was observed for completed native cleanup |
+| `cuprum_rust_pump_handoff_total`             | `outcome` | a Rust writer-resource hand-off outcome was reached              |
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -1779,6 +1779,13 @@ incremented once for every completed native cleanup, and
 `cuprum_rust_pump_cleanup_duration_seconds` records one duration observation
 for each such cleanup. Both metrics are unlabelled. The `reason` label on the
 decline counter retains the bounded cardinality described below.
+
+The `outcome` label on `cuprum_rust_pump_handoff_total` is closed to exactly
+`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
+`native_load_failed`, `buffer_validation_failed`,
+`platform_writer_transfer_failed`, and `native_io_failed`. Descriptor numbers,
+Windows handle values, exception types, errno values, and error messages never
+become metric labels.
 
 The `reason` label takes exactly the values in Table 1, plus `unknown`, and
 nothing else. Table 1's values are published as the `RustPumpDeclineReason`
@@ -1804,8 +1811,8 @@ degrades anything else to `unknown`; a hand-built event cannot widen the label
 domain.
 
 Nothing derived from a descriptor, an argument vector, or an exception reaches
-a label, so the series count is fixed. A successful hand-off increments
-nothing; success is the absence of a decline. The `DEBUG` records above are
+a label, so the series count is fixed. A successful hand-off increments the
+handoff counter once with `outcome="submitted"`. The `DEBUG` records above are
 unchanged — the counters supplement them rather than replacing them.
 
 > **Note**
@@ -1824,13 +1831,14 @@ unchanged — the counters supplement them rather than replacing them.
 
 ### A pump hand-off failed before submission
 
-If Cuprum cannot duplicate the writer descriptor or submit the Rust worker, the
-hand-off is rolled back and the original exception is re-raised. The
-`cuprum._pipeline_streams` logger records a bounded `DEBUG` diagnostic with
-`cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
-exception class, and `errno` when available. Descriptor numbers and exception
-text are not logged, and these diagnostics do not create pump-observation
-events or metrics.
+If Cuprum cannot duplicate the writer descriptor, the hand-off is rolled back
+and the original exception is re-raised without a hand-off outcome. If executor
+submission is rejected, Cuprum emits `executor_submission_rejected` and
+re-raises after rollback. A blocking-mode failure selects the Python fallback
+and emits `blocking_setup_failed`. The `cuprum._pipeline_streams` logger
+records a bounded `DEBUG` diagnostic for these setup failures with
+`cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
+when available. Descriptor numbers and exception text are not logged.
 
 ### Choosing a stream backend
 
