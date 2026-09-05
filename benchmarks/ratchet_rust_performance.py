@@ -296,6 +296,49 @@ def _load_optional_history(path: pth.Path | None) -> BaselineHistory | None:
     return None
 
 
+def _evaluate_ratchet(args: argparse.Namespace) -> ComparisonReport:
+    """Evaluate CLI inputs and return the resulting ratchet report."""
+    candidate = BenchmarkRunPayload(
+        plan=load_plan(args.candidate_plan),
+        throughput=load_throughput(args.candidate_throughput),
+        context_name="candidate",
+    )
+    history = _load_optional_history(args.baseline_history)
+    compatible_history = _compatible_history_window(
+        candidate=candidate,
+        history=history,
+        window_size=args.history_window,
+    )
+    baseline = None if compatible_history.samples else _load_baseline(args)
+    if baseline is None and not compatible_history.samples:
+        return ComparisonReport(
+            max_regression=args.max_regression,
+            comparisons=(),
+            decision=RatchetDecision(
+                baseline_source=BaselineSource.NONE,
+                baseline_reason=(
+                    BaselineReason.NO_BASELINE_AVAILABLE
+                    if history is None
+                    else BaselineReason.NO_COMPATIBLE_HISTORY
+                ),
+                compatible_sample_count=0,
+                comparison_state=ComparisonState.SKIPPED_NO_BASELINE,
+            ),
+            baseline_available=False,
+            comparison_performed=False,
+        )
+    return compare_rust_regressions(
+        baseline=baseline,
+        candidate=candidate,
+        history=history,
+        policy=RatchetPolicy(
+            max_regression=args.max_regression,
+            noise_sigmas=args.noise_sigmas,
+            window_size=args.history_window,
+        ),
+    )
+
+
 def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Execute the benchmark ratchet comparison.
 
@@ -315,49 +358,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     )
     args = _parse_args(argv)
     try:
-        candidate = BenchmarkRunPayload(
-            plan=load_plan(args.candidate_plan),
-            throughput=load_throughput(args.candidate_throughput),
-            context_name="candidate",
-        )
-        history = _load_optional_history(args.baseline_history)
-        compatible_history = _compatible_history_window(
-            candidate=candidate,
-            history=history,
-            window_size=args.history_window,
-        )
-        baseline = None if compatible_history.samples else _load_baseline(args)
-        if baseline is None and not compatible_history.samples:
-            write_report(
-                report=ComparisonReport(
-                    max_regression=args.max_regression,
-                    comparisons=(),
-                    decision=RatchetDecision(
-                        baseline_source=BaselineSource.NONE,
-                        baseline_reason=(
-                            BaselineReason.NO_BASELINE_AVAILABLE
-                            if history is None
-                            else BaselineReason.NO_COMPATIBLE_HISTORY
-                        ),
-                        compatible_sample_count=0,
-                        comparison_state=ComparisonState.SKIPPED_NO_BASELINE,
-                    ),
-                    baseline_available=False,
-                    comparison_performed=False,
-                ),
-                output_path=args.output,
-            )
-            return 0
-        report = compare_rust_regressions(
-            baseline=baseline,
-            candidate=candidate,
-            history=history,
-            policy=RatchetPolicy(
-                max_regression=args.max_regression,
-                noise_sigmas=args.noise_sigmas,
-                window_size=args.history_window,
-            ),
-        )
+        report = _evaluate_ratchet(args)
         write_report(report=report, output_path=args.output)
     except IncompatibleBenchmarkProfileError as exc:
         write_incompatible_profile_report(
