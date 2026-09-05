@@ -2168,8 +2168,9 @@ The continuous integration (CI) workflows run the following checks:
     command ten times to reduce temporal runner drift and outlier sensitivity.
   - It drops recorded samples that use an older benchmark profile shape,
     because different sampling protocols and worker timings are not
-    comparable, and skips the comparison entirely when nothing comparable
-    remains.
+    comparable. It skips comparison only when no comparable history and no
+    fallback baseline are available; an incompatible history window can be
+    discarded while the fallback baseline still permits comparison.
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate

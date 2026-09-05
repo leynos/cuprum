@@ -60,7 +60,7 @@ def _compatible_sample_count(value: object) -> int:
         raise TypeError(msg)
     if value < 0:
         msg = "ratchet report has invalid decision fields"
-        raise TypeError(msg)
+        raise ValueError(msg)
     return value
 
 

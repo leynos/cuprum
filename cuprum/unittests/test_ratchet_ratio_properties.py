@@ -17,7 +17,7 @@ from hypothesis import strategies as st
 
 from benchmarks.ratchet_ratio_extraction import (
     _extract_rust_python_ratios,
-    _validate_matching_comparison_groups,
+    validate_matching_comparison_groups,
 )
 
 _comparison_ids = st.sets(
@@ -161,7 +161,7 @@ def test_group_matching_accepts_exactly_equal_key_sets(
     baseline = dict.fromkeys(shared, ratio)
     candidate = dict.fromkeys(shared, ratio)
 
-    _validate_matching_comparison_groups(
+    validate_matching_comparison_groups(
         baseline_ratios=baseline,
         candidate_ratios=candidate,
     )
@@ -169,7 +169,7 @@ def test_group_matching_accepts_exactly_equal_key_sets(
     if extra:
         candidate |= dict.fromkeys(extra, ratio)
         with pytest.raises(ValueError, match="comparison groups must match"):
-            _validate_matching_comparison_groups(
+            validate_matching_comparison_groups(
                 baseline_ratios=baseline,
                 candidate_ratios=candidate,
             )

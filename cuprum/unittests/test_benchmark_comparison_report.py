@@ -234,6 +234,28 @@ def test_load_ratchet_report_rejects_non_boolean_field(
         load_ratchet_report(ratchet_path)
 
 
+def test_load_ratchet_report_rejects_negative_compatible_sample_count(
+    tmp_path: pth.Path,
+) -> None:
+    """A negative compatible-sample count violates the value contract."""
+    ratchet_path = _write_json(
+        tmp_path=tmp_path,
+        filename="ratchet-report.json",
+        payload={
+            "passed": True,
+            "comparison_performed": True,
+            "baseline_available": True,
+            "baseline_source": "history",
+            "baseline_reason": "compatible_history",
+            "compatible_sample_count": -1,
+            "comparison_state": "compared",
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid decision fields"):
+        load_ratchet_report(ratchet_path)
+
+
 @pytest.mark.parametrize(
     ("ratchet_payload", "expected_status", "expected_fragment"),
     [

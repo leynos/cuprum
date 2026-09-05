@@ -34,7 +34,7 @@ ignore = [
   '\bbuild_native_wheel_artifact\b',
   '--artifact-server-path(?:[=\s"`]|$)',
   '`color`',
-  '\\brust-analyzer\\b',
+  '\brust-analyzer\b',
 ]
 
 [files]

@@ -17,16 +17,41 @@ from benchmarks.ratchet_types import (
 
 _logger = logging.getLogger(__name__)
 
+__all__ = ["baseline_window", "compatible_history_window"]
 
-def _baseline_window(
+
+def baseline_window(
     *,
     baseline: BenchmarkRunPayload | None,
     candidate: BenchmarkRunPayload,
     history: BaselineHistory | None,
     window_size: int,
 ) -> tuple[dict[str, tuple[float, ...]], RatchetDecision]:
-    """Return baseline ratios and their durable selection decision."""
-    recent = _compatible_history_window(
+    """Return baseline ratios and their durable selection decision.
+
+    Parameters
+    ----------
+    baseline : BenchmarkRunPayload | None
+        Single-sample fallback to use when no compatible history is available.
+    candidate : BenchmarkRunPayload
+        Candidate benchmark payload whose profile selects compatible history.
+    history : BaselineHistory | None
+        Main-branch samples to consider before using ``baseline``.
+    window_size : int
+        Maximum number of recent compatible samples to use.
+
+    Returns
+    -------
+    tuple[dict[str, tuple[float, ...]], RatchetDecision]
+        Baseline ratios grouped by comparison identifier and the durable
+        decision describing the selected evidence source.
+
+    Raises
+    ------
+    ValueError
+        If neither compatible history nor a fallback baseline is available.
+    """
+    recent = compatible_history_window(
         candidate=candidate, history=history, window_size=window_size
     )
     if recent.samples:
@@ -62,13 +87,29 @@ def _baseline_window(
     )
 
 
-def _compatible_history_window(
+def compatible_history_window(
     *,
     candidate: BenchmarkRunPayload,
     history: BaselineHistory | None,
     window_size: int,
 ) -> BaselineHistory:
-    """Return recent history samples compatible with the candidate's profile."""
+    """Return recent history samples compatible with the candidate's profile.
+
+    Parameters
+    ----------
+    candidate : BenchmarkRunPayload
+        Candidate benchmark payload whose profile metadata is required.
+    history : BaselineHistory | None
+        Main-branch history to filter, or ``None`` when no history was found.
+    window_size : int
+        Number of most recent compatible samples to retain.
+
+    Returns
+    -------
+    BaselineHistory
+        The compatible history suffix, or an empty history when ``history`` is
+        ``None``.
+    """
     if history is None:
         return BaselineHistory()
     version, worker_iterations = profile_metadata(candidate.plan)

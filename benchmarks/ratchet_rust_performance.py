@@ -25,7 +25,7 @@ from benchmarks.benchmark_profile import (
     IncompatibleBenchmarkProfileError,
     write_incompatible_profile_report,
 )
-from benchmarks.ratchet_baseline import _baseline_window, _compatible_history_window
+from benchmarks.ratchet_baseline import baseline_window, compatible_history_window
 from benchmarks.ratchet_history import (
     DEFAULT_NOISE_SIGMAS,
     DEFAULT_WINDOW_SIZE,
@@ -36,7 +36,7 @@ from benchmarks.ratchet_history import (
     median_ratio,
     noise_tolerance,
 )
-from benchmarks.ratchet_ratio_extraction import _validate_matching_comparison_groups
+from benchmarks.ratchet_ratio_extraction import validate_matching_comparison_groups
 from benchmarks.ratchet_ratios import (
     load_plan,
     load_throughput,
@@ -173,14 +173,14 @@ def compare_rust_regressions(
         If the policy, baseline, or comparison groups are invalid.
     """  # ruff: ignore[docstring-extraneous-exception] - policy and payload validation intentionally propagate their contract errors.
     resolved = _comparison_policy(options)
-    window, decision = _baseline_window(
+    window, decision = baseline_window(
         baseline=baseline,
         candidate=candidate,
         history=history,
         window_size=resolved.window_size,
     )
     candidate_ratios = run_ratios(candidate)
-    _validate_matching_comparison_groups(
+    validate_matching_comparison_groups(
         baseline_ratios=window, candidate_ratios=candidate_ratios
     )
 
@@ -304,7 +304,7 @@ def _evaluate_ratchet(args: argparse.Namespace) -> ComparisonReport:
         context_name="candidate",
     )
     history = _load_optional_history(args.baseline_history)
-    compatible_history = _compatible_history_window(
+    compatible_history = compatible_history_window(
         candidate=candidate,
         history=history,
         window_size=args.history_window,
