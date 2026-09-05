@@ -1,29 +1,16 @@
-"""Unit tests for benchmark-ratchet history models and persistence."""
+"""Unit tests for pure benchmark-ratchet history models and statistics."""
 
 from __future__ import annotations
 
-import json
 import typing as typ
 
 import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
-from benchmarks.ratchet_history import (
-    BaselineHistory,
-    BaselineHistoryNotFoundError,
-    BaselineHistoryReadError,
-    HistorySample,
-    history_from_payload,
-    load_history,
-    write_history,
-)
-
-if typ.TYPE_CHECKING:
-    import pathlib as pth
+from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
 SCENARIO = "medium-single-nocb"
 WORKER_ITERATIONS = 20
-TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 
 
 def _sample(
@@ -113,122 +100,21 @@ class TestWindowMechanics:
         )
 
 
-class TestPersistence:
-    """Persisted history stays immutable, validated, and atomically replaceable."""
-
-    def test_history_round_trips_through_json(self, tmp_path: pth.Path) -> None:
-        """A written window reads back identically."""
-        history = _history(*TYPICAL_RATIOS)
-        path = tmp_path / "main-baseline-history.json"
-        write_history(history=history, output_path=path)
-        assert load_history(path) == history, "written history must round-trip exactly"
-
-    def test_history_sample_copies_and_freezes_its_ratios(self) -> None:
-        """A caller cannot mutate a sample through its input mapping."""
-        ratios = {SCENARIO: 1.0}
-        sample = _sample(1.0)
-        sample_from_ratios = HistorySample(
-            commit="0" * 40,
-            run_id="immutable",
-            benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
-            worker_iterations=WORKER_ITERATIONS,
-            ratios=ratios,
-        )
-        ratios[SCENARIO] = 2.0
-        assert sample_from_ratios.ratios[SCENARIO] == pytest.approx(1.0), (
-            "a history sample must copy rather than retain caller-owned ratios"
-        )
-        with pytest.raises(TypeError):
-            typ.cast("dict[str, float]", sample_from_ratios.ratios)[SCENARIO] = 2.0
-        assert isinstance(hash(sample), int), "a frozen sample must remain hashable"
-
-    @pytest.mark.parametrize(
-        ("content", "reason"),
-        [
-            ("not json at all", "could not read"),
-            ('["not", "an", "object"]', "must contain a JSON object"),
-            ('{"schema": 99, "samples": []}', "schema must be"),
-        ],
+def test_history_sample_copies_and_freezes_its_ratios() -> None:
+    """A caller cannot mutate a sample through its input mapping."""
+    ratios = {SCENARIO: 1.0}
+    sample = _sample(1.0)
+    sample_from_ratios = HistorySample(
+        commit="0" * 40,
+        run_id="immutable",
+        benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+        worker_iterations=WORKER_ITERATIONS,
+        ratios=ratios,
     )
-    def test_an_unusable_history_raises_a_typed_error(
-        self, tmp_path: pth.Path, content: str, reason: str
-    ) -> None:
-        """Corrupt persisted state is distinct from an intentionally absent file."""
-        path = tmp_path / "main-baseline-history.json"
-        path.write_text(content, encoding="utf-8")
-        with pytest.raises(BaselineHistoryReadError, match=reason) as error:
-            load_history(path)
-        assert error.value.path == path, "the typed error must retain its source path"
-        assert reason in error.value.reason, "the typed error must retain its reason"
-
-    def test_a_malformed_sample_is_an_error_not_a_silent_drop(self) -> None:
-        """A recognized schema with a broken sample is not read as empty."""
-        payload = json.loads(
-            """{
-            "schema": 1,
-            "samples": [{
-                "commit": "abc",
-                "benchmark_profile_version": "profile",
-                "worker_iterations": 1,
-                "ratios": {"medium-single-nocb": 1.0}
-            }]
-            }"""
-        )
-        with pytest.raises(TypeError, match=r"samples\[0\]\.run_id"):
-            history_from_payload(payload)
-
-    def test_a_missing_history_has_a_distinct_typed_error(
-        self, tmp_path: pth.Path
-    ) -> None:
-        """An absent optional artefact has a distinct error."""
-        path = tmp_path / "main-baseline-history.json"
-        with pytest.raises(BaselineHistoryNotFoundError) as error:
-            load_history(path)
-        assert error.value.path == path, "the not-found error must retain its path"
-        assert error.value.reason == "does not exist", (
-            "the not-found error must expose its stable reason"
-        )
-
-    def test_a_failed_history_replacement_preserves_the_previous_file(
-        self, tmp_path: pth.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Failed publication cannot truncate the last complete history."""
-        path = tmp_path / "main-baseline-history.json"
-        existing = _history(1.0)
-        write_history(history=existing, output_path=path)
-
-        class _ReplaceError(OSError):
-            """A simulated failure replacing the published history."""
-
-        def _replace_fails(source: pth.Path, destination: pth.Path) -> None:
-            """Simulate a failure after the temporary history is fully written."""
-            del source, destination
-            raise _ReplaceError
-
-        monkeypatch.setattr(type(path), "replace", _replace_fails)
-        with pytest.raises(_ReplaceError):
-            write_history(history=_history(2.0), output_path=path)
-        assert load_history(path) == existing, (
-            "a failed replacement must preserve the last complete history"
-        )
-        assert not list(tmp_path.glob(".main-baseline-history.json.*")), (
-            "a failed replacement must remove its unpublished temporary history"
-        )
-
-    def test_a_failed_history_sync_removes_the_temporary_file(
-        self, tmp_path: pth.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A write-stage failure leaves no temporary history file."""
-        path = tmp_path / "main-baseline-history.json"
-
-        def _sync_fails(_: int) -> None:
-            """Simulate storage refusing to persist the temporary payload."""
-            message = "simulated fsync failure"
-            raise OSError(message)
-
-        monkeypatch.setattr("benchmarks.ratchet_history.os.fsync", _sync_fails)
-        with pytest.raises(OSError, match="simulated fsync failure"):
-            write_history(history=_history(2.0), output_path=path)
-        assert not list(tmp_path.glob(".main-baseline-history.json.*")), (
-            "a failed temporary-file sync must remove the unpublished history file"
-        )
+    ratios[SCENARIO] = 2.0
+    assert sample_from_ratios.ratios[SCENARIO] == pytest.approx(1.0), (
+        "a history sample must copy rather than retain caller-owned ratios"
+    )
+    with pytest.raises(TypeError):
+        typ.cast("dict[str, float]", sample_from_ratios.ratios)[SCENARIO] = 2.0
+    assert isinstance(hash(sample), int), "a frozen sample must remain hashable"

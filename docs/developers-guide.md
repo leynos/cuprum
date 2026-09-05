@@ -1570,8 +1570,11 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 
 The bar is the median of a rolling window of the last seven `main` runs, held in
 `main-baseline-history.json` inside the `benchmark-ratchet-main-baseline`
-artefact. `benchmarks/ratchet_history.py` owns the window;
-`benchmarks/update_baseline_history.py` appends to it.
+artefact. `benchmarks/ratchet_history.py` owns the pure rolling-window domain
+and statistics, while `benchmarks/ratchet_history_persistence.py` owns the
+history JSON and filesystem persistence.
+`benchmarks/update_baseline_history.py` appends samples through that
+persistence adapter.
 
 It used to be the single latest `main` measurement, and two properties of that
 arrangement combined into a failure that no re-run could clear:
@@ -1673,9 +1676,9 @@ invoke it:
   `HistorySample` records ratios and provenance, `BaselineHistory` filters and
   appends samples, and `RatchetPolicy` holds the flat and noise thresholds.
   `median_ratio` and `noise_tolerance` are the statistics used by the policy.
-  `history_from_payload` validates the JSON shape; `load_history` and
-  `write_history` are the file adapter, with the latter replacing the output
-  atomically. `load_history` distinguishes an absent history
+- `benchmarks/ratchet_history_persistence.py` owns the history JSON schema,
+  domain-to-payload conversion, typed read errors, file loading, and atomic
+  persistence. `load_history` distinguishes an absent history
   (`BaselineHistoryNotFoundError`, the only empty-window fallback) from
   unreadable or invalid data (`BaselineHistoryReadError`).
 - `benchmarks/ratchet_ratios.py` is the benchmark-data adapter. `load_plan`
@@ -1688,9 +1691,11 @@ invoke it:
 - `benchmarks/ratchet_rust_performance.py` is the comparison entry point. Its
   `compare_rust_regressions` function consumes the selected baseline and
   comparison-group validation from `ratchet_ratio_extraction`, and returns the
-  typed report; `main` supplies the CLI exit status and `write_report`
-  serializes the result. A malformed input returns status 2, a regression
-  status 1, and a passing or profile-skipped comparison status 0.
+  typed report. It loads optional history through `ratchet_history_persistence`
+  before evaluating the pure ratchet domain; `main` supplies the CLI exit
+  status and `write_report` serializes the result. A malformed input returns
+  status 2, a regression status 1, and a passing or profile-skipped comparison
+  status 0.
 - `benchmarks/ratchet_confirmation.py` is the pure typed retry policy.
   `confirm_regressions` intersects the primary and confirmation regression
   lists, preserving the primary verdict when confirmation has no comparison
@@ -1698,10 +1703,11 @@ invoke it:
   writes the combined report and returns status 1 only for a reproduced
   regression.
 - `benchmarks/update_baseline_history.py` is the `main`-run recorder. It loads
-  the previous history, derives one sample from the candidate plan and
-  throughput, appends it when valid, and always writes the resulting history
-  file. Missing or malformed candidate measurements carry the existing window
-  forward; an unreadable history or failed write returns status 2.
+  the previous history through `ratchet_history_persistence`, derives one
+  sample from the candidate plan and throughput, appends it when valid, and
+  always writes the resulting history file through the same adapter. Missing or
+  malformed candidate measurements carry the existing window forward; an
+  unreadable history or failed write returns status 2.
 
 Keep these boundaries intact when changing the ratchet: ratio extraction must
 remain shared by comparison and recording, while history compatibility and

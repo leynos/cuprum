@@ -1,30 +1,19 @@
-"""Rolling main-branch benchmark samples used by the ratchet.
+"""Pure rolling-window history and statistics for benchmark ratcheting.
 
 The median resists one outlier. A MAD-derived noise band and the flat threshold
-must both be exceeded before a candidate regresses; every completed main run
-contributes a sample, avoiding low-tail bias.
+must both be exceeded before a candidate regresses. Persistence lives in
+``benchmarks.ratchet_history_persistence`` so these domain values remain
+independent of JSON and filesystems.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
-import json
-import os
-import pathlib as pth
 import statistics
-import tempfile
 import typing as typ
 from types import MappingProxyType
 
-from benchmarks._validation import (
-    _require_list,
-    _require_mapping,
-    _require_non_empty_string,
-    _require_non_negative_float,
-    _require_positive_float,
-)
-from benchmarks.benchmark_profile import require_worker_iterations
-from benchmarks.errors import BenchmarkError
+from benchmarks._validation import _require_non_negative_float
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -41,50 +30,8 @@ _MAD_TO_SIGMA = 1.4826
 #: Widest noise band; at the cap, only a candidate slower than twice the median fails.
 MAX_NOISE_TOLERANCE = 1.0
 
-#: Schema version; later shapes fail rather than silently becoming empty history.
-HISTORY_SCHEMA = 1
-
 #: Fewest samples that can exhibit a spread. One measurement has none.
 _MIN_SPREAD_SAMPLES = 2
-
-
-class BaselineHistoryReadError(ValueError, BenchmarkError):
-    """A persisted baseline-history payload could not be read or validated.
-
-    Parameters
-    ----------
-    reason : str
-        Stable explanation of the failed read or validation operation.
-    path : pathlib.Path | None
-        History file involved in the failure, when one was being read.
-
-    Attributes
-    ----------
-    reason : str
-        Stable explanation supplied to the constructor.
-    path : pathlib.Path | None
-        File supplied to the constructor, if the failure involved one.
-    """
-
-    def __init__(self, reason: str, *, path: pth.Path | None = None) -> None:
-        self.path = path
-        self.reason = reason
-        subject = f"baseline history {path}" if path is not None else "baseline history"
-        super().__init__(f"{subject}: {reason}")
-
-
-class BaselineHistoryNotFoundError(BaselineHistoryReadError):
-    """The optional baseline-history file was not present.
-
-    Parameters
-    ----------
-    path : pathlib.Path
-        Missing history file, exposed through ``path``; ``reason`` is
-        ``"does not exist"``.
-    """
-
-    def __init__(self, path: pth.Path) -> None:
-        super().__init__("does not exist", path=path)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -124,16 +71,15 @@ class HistorySample:
     Attributes
     ----------
     commit : str
-        Commit provenance, serialized unchanged; payload loading requires it.
+        Commit provenance supplied by the completed benchmark run.
     run_id : str
-        Workflow-run provenance, serialized unchanged; payload loading requires it.
+        Workflow-run provenance supplied by the completed benchmark run.
     benchmark_profile_version : str
-        Benchmark protocol version; payload loading requires it for compatibility.
+        Benchmark protocol version used to select compatible samples.
     worker_iterations : int
-        Per-scenario worker count; payload loading requires a positive value.
+        Per-scenario worker count used to select compatible samples.
     ratios : collections.abc.Mapping[str, float]
-        Scenario ratios copied into an immutable mapping proxy; payload loading
-        requires non-empty names and finite positive values.
+        Scenario ratios copied into an immutable mapping proxy.
     """
 
     commit: str
@@ -155,44 +101,6 @@ class HistorySample:
             self.worker_iterations,
             tuple(sorted(self.ratios.items())),
         ))
-
-    def as_dict(self) -> dict[str, object]:
-        """Serialize the sample for JSON output."""
-        return {
-            "commit": self.commit,
-            "run_id": self.run_id,
-            "benchmark_profile_version": self.benchmark_profile_version,
-            "worker_iterations": self.worker_iterations,
-            "ratios": dict(sorted(self.ratios.items())),
-        }
-
-
-def _sample_from_payload(value: object, *, index: int) -> HistorySample:
-    """Build one `HistorySample` from its JSON payload."""
-    payload = _require_mapping(value, name=f"samples[{index}]")
-    ratios_payload = _require_mapping(
-        payload.get("ratios"), name=f"samples[{index}].ratios"
-    )
-    ratios = {
-        _require_non_empty_string(name, name=f"samples[{index}].ratios key"): (
-            _require_positive_float(ratio, name=f"samples[{index}].ratios[{name!r}]")
-        )
-        for name, ratio in ratios_payload.items()
-    }
-    return HistorySample(
-        commit=_require_non_empty_string(
-            payload.get("commit"), name=f"samples[{index}].commit"
-        ),
-        run_id=_require_non_empty_string(
-            payload.get("run_id"), name=f"samples[{index}].run_id"
-        ),
-        benchmark_profile_version=_require_non_empty_string(
-            payload.get("benchmark_profile_version"),
-            name=f"samples[{index}].benchmark_profile_version",
-        ),
-        worker_iterations=require_worker_iterations(payload),
-        ratios=ratios,
-    )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -254,96 +162,6 @@ class BaselineHistory:
             msg = f"window_size must be >= 1, got {window_size}"
             raise ValueError(msg)
         return BaselineHistory(samples=(*self.samples, sample)[-window_size:])
-
-    def as_dict(self) -> dict[str, object]:
-        """Serialize the history for JSON output."""
-        return {
-            "schema": HISTORY_SCHEMA,
-            "samples": [sample.as_dict() for sample in self.samples],
-        }
-
-
-def history_from_payload(payload: cabc.Mapping[str, object]) -> BaselineHistory:
-    """Build a `BaselineHistory` from a recognized, validated JSON payload."""
-    schema = payload.get("schema")
-    if schema != HISTORY_SCHEMA:
-        msg = f"baseline history schema must be {HISTORY_SCHEMA!r}, got {schema!r}"
-        raise BaselineHistoryReadError(msg)
-    samples = _require_list(payload.get("samples"), name="samples")
-    return BaselineHistory(
-        samples=tuple(
-            _sample_from_payload(value, index=index)
-            for index, value in enumerate(samples)
-        )
-    )
-
-
-def _read_history_payload(path: pth.Path) -> object:
-    """Read and JSON-decode a persisted history payload."""
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise BaselineHistoryNotFoundError(path) from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        msg = f"could not read: {exc}"
-        raise BaselineHistoryReadError(msg, path=path) from exc
-
-
-def _history_from_payload_at_path(
-    *, payload: object, path: pth.Path
-) -> BaselineHistory:
-    """Validate a decoded history payload while retaining its source path."""
-    if not isinstance(payload, dict):
-        msg = "must contain a JSON object"
-        raise BaselineHistoryReadError(msg, path=path)
-    try:
-        return history_from_payload(typ.cast("dict[str, object]", payload))
-    except BaselineHistoryReadError as exc:
-        raise BaselineHistoryReadError(exc.reason, path=path) from exc
-    except (TypeError, ValueError) as exc:
-        msg = f"invalid payload: {exc}"
-        raise BaselineHistoryReadError(msg, path=path) from exc
-
-
-def load_history(path: pth.Path) -> BaselineHistory:
-    """Load history, distinguishing an absent file from unreadable content.
-
-    Returns
-    -------
-    BaselineHistory
-        The validated persisted history.
-
-    Raises
-    ------
-    BaselineHistoryNotFoundError
-        If ``path`` does not exist.
-    BaselineHistoryReadError
-        If the path cannot be read or its JSON payload is invalid.
-    """  # ruff: ignore[docstring-extraneous-exception] - helpers raise the documented typed errors.
-    payload = _read_history_payload(path)
-    return _history_from_payload_at_path(payload=payload, path=path)
-
-
-def write_history(*, history: BaselineHistory, output_path: pth.Path) -> None:
-    """Atomically replace ``output_path`` with the serialized history payload."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: pth.Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=output_path.parent,
-            prefix=f".{output_path.name}.",
-            delete=False,
-        ) as temporary:
-            temporary_path = pth.Path(temporary.name)
-            temporary.write(json.dumps(history.as_dict(), indent=2, sort_keys=True))
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        temporary_path.replace(output_path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
 
 
 def median_ratio(values: cabc.Sequence[float]) -> float:

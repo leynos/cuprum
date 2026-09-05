@@ -21,7 +21,8 @@ import pytest
 
 import benchmarks.update_baseline_history as history_recorder
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
-from benchmarks.ratchet_history import BaselineHistory, HistorySample, load_history
+from benchmarks.ratchet_history import BaselineHistory, HistorySample
+from benchmarks.ratchet_history_persistence import load_history, write_history
 from benchmarks.update_baseline_history import main as record_sample
 from cuprum.unittests.conftest import benchmark_run_payloads
 
@@ -66,9 +67,7 @@ def _existing_history(path: pth.Path, *ratios: float) -> BaselineHistory:
             for index, ratio in enumerate(ratios)
         )
     )
-    path.write_text(
-        json.dumps(history.as_dict(), indent=2, sort_keys=True), encoding="utf-8"
-    )
+    write_history(history=history, output_path=path)
     return history
 
 

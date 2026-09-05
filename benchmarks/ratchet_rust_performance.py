@@ -30,18 +30,16 @@ from benchmarks.ratchet_history import (
     DEFAULT_NOISE_SIGMAS,
     DEFAULT_WINDOW_SIZE,
     BaselineHistory,
-    BaselineHistoryNotFoundError,
     RatchetPolicy,
-    load_history,
     median_ratio,
     noise_tolerance,
 )
-from benchmarks.ratchet_ratio_extraction import validate_matching_comparison_groups
-from benchmarks.ratchet_ratios import (
-    load_plan,
-    load_throughput,
-    run_ratios,
+from benchmarks.ratchet_history_persistence import (
+    BaselineHistoryNotFoundError,
+    load_history,
 )
+from benchmarks.ratchet_ratio_extraction import validate_matching_comparison_groups
+from benchmarks.ratchet_ratios import load_plan, load_throughput, run_ratios
 from benchmarks.ratchet_ratios import profile_metadata as profile_metadata
 from benchmarks.ratchet_types import (
     BaselineReason,

@@ -8,7 +8,8 @@ import typing as typ
 import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
-from benchmarks.ratchet_history import BaselineHistory, HistorySample, write_history
+from benchmarks.ratchet_history import BaselineHistory, HistorySample
+from benchmarks.ratchet_history_persistence import write_history
 from benchmarks.ratchet_rust_performance import main
 from cuprum.unittests.conftest import SCENARIO, WORKER_ITERATIONS
 

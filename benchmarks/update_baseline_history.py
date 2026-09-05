@@ -25,9 +25,11 @@ from benchmarks.benchmark_profile import IncompatibleBenchmarkProfileError
 from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
     BaselineHistory,
+    HistorySample,
+)
+from benchmarks.ratchet_history_persistence import (
     BaselineHistoryNotFoundError,
     BaselineHistoryReadError,
-    HistorySample,
     load_history,
     write_history,
 )
