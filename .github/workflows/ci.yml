@@ -58,8 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MBAKE_VERSION: '1.4.6'
-      MDTABLEFIX_VERSION: '0.5.0'
-      MDTABLEFIX_RUST_VERSION: '1.89.0'
+      MDTABLEFIX_VERSION: '0.5.1'
       WHITAKER_INSTALLER_VERSION: '0.2.7'
     steps:
       - name: Check out repository
@@ -152,7 +151,7 @@ jobs:
       # Cargo registry nor `target/${BUILD_PROFILE}`. This job owns the
       # registry; nothing owns `target`, because sccache owns compiler output.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -162,32 +161,16 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
-            ~/.cargo/bin/mdtablefix
-            ~/.cargo/bin/mdtablefix.exe
-          key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.UBUNTU_RELEASE }}-${{ env.CACHE_GENERATION }}-${{ env.MDTABLEFIX_VERSION }}-${{ env.MDTABLEFIX_RUST_VERSION }}
+            ~/.local/bin/mdtablefix
+            ~/.local/bin/mdtablefix.exe
+          key: mdtablefix-${{ runner.os }}-${{ runner.arch }}-${{ env.UBUNTU_RELEASE }}-${{ env.CACHE_GENERATION }}-${{ env.MDTABLEFIX_VERSION }}
 
       - name: Install mdtablefix
-        run: |
-          expected_mdtablefix_version="mdtablefix ${MDTABLEFIX_VERSION}"
-          installed_mdtablefix_version=""
-          if command -v mdtablefix >/dev/null 2>&1; then
-          installed_mdtablefix_version=$(mdtablefix --version 2>/dev/null | tr -d '\r')
-          fi
-          if [[ "${installed_mdtablefix_version}" != "${expected_mdtablefix_version}" ]]; then
-            if cargo binstall -V >/dev/null 2>&1; then
-              cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"
-            else
-              echo "cargo-binstall unavailable; building mdtablefix from crates.io"
-              rustup toolchain install --profile minimal "${MDTABLEFIX_RUST_VERSION}"
-              cargo +"${MDTABLEFIX_RUST_VERSION}" install --locked mdtablefix \
-                --version "${MDTABLEFIX_VERSION}"
-            fi
-          fi
-          installed_mdtablefix_version=$(mdtablefix --version | tr -d '\r')
-          if [[ "${installed_mdtablefix_version}" != "${expected_mdtablefix_version}" ]]; then
-            echo "expected ${expected_mdtablefix_version}, got ${installed_mdtablefix_version}" >&2
-            exit 1
-          fi
+        # The shared action accepts only releases with correct multi-platform
+        # metadata and fails closed instead of compiling a formatter in CI.
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Cache Whitaker installation
         id: cache-whitaker
@@ -426,7 +409,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -626,7 +609,7 @@ jobs:
       # pinned toolchain the other Rust-touching jobs use rather than whatever
       # the runner image happens to ship.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -836,7 +819,7 @@ jobs:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -860,7 +843,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@f6d4d5f549655c118f86f371b8d55c200d3efa50
+        uses: leynos/shared-actions/.github/actions/generate-coverage@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
@@ -892,7 +875,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@18bed1ca49a6de3d8882bd72635a32ae3f023d57
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           format: cobertura
           mode: check

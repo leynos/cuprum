@@ -63,7 +63,7 @@ CACHE_KEYS_ACTION_FILE = ROOT / ".github" / "actions" / "cache-keys" / "action.y
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "f6d4d5f549655c118f86f371b8d55c200d3efa50"
+    "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
 )
 #: Both shared actions are pinned to the same revision. It drops `target` from
 #: their own caches, so the no-target-archive rule holds even if a caller ever
@@ -77,7 +77,7 @@ SETUP_RUST = (
 #: previous pin. Holding one SHA across the estate is the point.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "f6d4d5f549655c118f86f371b8d55c200d3efa50"
+    "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
 )
 OBSERVATION_STEP = "Record cache observations"
 

@@ -2615,21 +2615,21 @@ files; it never modifies the worktree. It accepts exact LF or CRLF output, but
 rejects mixed line endings. Run `make test-markdown-format` after changing the
 checker.
 
-The gate requires the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
-`.github/workflows/ci.yml`. Install that version locally so formatter output
-matches CI:
+The gate installs the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
+`.github/workflows/ci.yml` through the
+`leynos/shared-actions/.github/actions/install-mdtablefix` action. The action
+requires `mdtablefix` 0.5.1 or later, installs only a matching prebuilt
+release, and fails closed when the runner has no supported archive; it never
+builds the formatter from source. Cuprum's project toolchain remains Rust
+1.85.0.
 
-`mdtablefix` 0.5.0 requires Rust 1.89.0 when built from source. Cuprum's
-project toolchain remains Rust 1.85.0; CI uses `MDTABLEFIX_RUST_VERSION` to
-select Rust 1.89.0 only for this formatter fallback.
+Install the pinned prebuilt version locally with `cargo-binstall` so formatter
+output matches CI:
 
 ```bash
-MDTABLEFIX_VERSION="$(sed -n "s/.*MDTABLEFIX_VERSION: '\(.*\)'.*/\1/p" \
-  .github/workflows/ci.yml)"
-MDTABLEFIX_RUST_VERSION="$(sed -n "s/.*MDTABLEFIX_RUST_VERSION: '\(.*\)'.*/\1/p" \
-  .github/workflows/ci.yml)"
-cargo +"$MDTABLEFIX_RUST_VERSION" install --locked mdtablefix \
-  --version "$MDTABLEFIX_VERSION"
+MDTABLEFIX_VERSION=0.5.1
+cargo binstall --no-confirm --locked --disable-strategies compile \
+  --install-path "$HOME/.local/bin" "mdtablefix@${MDTABLEFIX_VERSION}"
 ```
 
 ### Docstring structure

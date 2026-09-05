@@ -58,6 +58,7 @@ class StepInputs(typ.TypedDict, total=False):
 
     key: str
     toolchain: str
+    version: str
 
 
 # `with` is a Python keyword, so declare that TypedDict key functionally.
@@ -69,6 +70,7 @@ class Step(_StepWith, total=False):
 
     name: str
     run: str
+    uses: str
 
 
 class Job(typ.TypedDict, total=False):
@@ -227,8 +229,8 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
             )
 
 
-def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
-    """The formatter source fallback uses its required Rust toolchain only."""
+def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
+    """The formatter uses a pinned prebuilt installer, not a Rust fallback."""
     job = _lint_test_job(repo_root())
     toolchain_setup = _lint_test_step(job, "Install Rust toolchain")
     toolchain_configuration = toolchain_setup.get("with")
@@ -241,25 +243,13 @@ def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
 
     environment = job.get("env")
     assert isinstance(environment, dict), "the lint-test job must declare env"
-    assert environment.get("MDTABLEFIX_RUST_VERSION") == "1.89.0", (
-        "the lint-test CI mapping must set env.MDTABLEFIX_RUST_VERSION to 1.89.0"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.5.1", (
+        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.5.1"
     )
-
-    script = _lint_test_step_script(job, "Install mdtablefix")
-    assert (
-        'cargo binstall --no-confirm --locked "mdtablefix@${MDTABLEFIX_VERSION}"'
-        in script
-    ), "the Install mdtablefix CI step must retain the cargo binstall fast path"
-    assert "cargo binstall -V >/dev/null 2>&1" in script, (
-        "the Install mdtablefix CI step must probe cargo binstall with -V"
+    assert "MDTABLEFIX_RUST_VERSION" not in environment, (
+        "the lint-test CI mapping must not retain the removed formatter source "
+        "toolchain pin"
     )
-    assert (
-        'rustup toolchain install --profile minimal "${MDTABLEFIX_RUST_VERSION}"'
-        in script
-    ), "the Install mdtablefix CI step must install the dedicated formatter toolchain"
-    assert (
-        'cargo +"${MDTABLEFIX_RUST_VERSION}" install --locked mdtablefix' in script
-    ), "the Install mdtablefix CI step must build with the formatter toolchain"
 
     cache = _lint_test_step(job, "Cache mdtablefix")
     cache_configuration = cache.get("with")
@@ -272,7 +262,6 @@ def test_mdtablefix_installs_with_its_pinned_rust_toolchain() -> None:
     )
     for name in (
         "MDTABLEFIX_VERSION",
-        "MDTABLEFIX_RUST_VERSION",
         "UBUNTU_RELEASE",
         "CACHE_GENERATION",
     ):
