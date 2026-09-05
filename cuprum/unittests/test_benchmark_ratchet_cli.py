@@ -17,6 +17,25 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
+def _write_history_window(*, path: pth.Path, ratios: tuple[float, ...]) -> None:
+    """Write compatible history samples with the specified ratios."""
+    write_history(
+        history=BaselineHistory(
+            samples=tuple(
+                HistorySample(
+                    commit="0" * 40,
+                    run_id=str(index),
+                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
+                    worker_iterations=WORKER_ITERATIONS,
+                    ratios={SCENARIO: ratio},
+                )
+                for index, ratio in enumerate(ratios)
+            )
+        ),
+        output_path=path,
+    )
+
+
 def test_history_only_artefact_does_not_require_fallback_files(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -112,51 +131,31 @@ def test_a_directory_baseline_history_returns_an_input_error(
 
 def test_cli_applies_non_default_history_policy_options(
     tmp_path: pth.Path,
-    monkeypatch: pytest.MonkeyPatch,
     candidate_artefacts: tuple[pth.Path, pth.Path],
 ) -> None:
     """The CLI must serialize policy values supplied through history options."""
     candidate_plan, candidate_throughput = candidate_artefacts
     history = tmp_path / "main-baseline-history.json"
-    write_history(
-        history=BaselineHistory(
-            samples=tuple(
-                HistorySample(
-                    commit="0" * 40,
-                    run_id=str(index),
-                    benchmark_profile_version=BENCHMARK_PROFILE_VERSION,
-                    worker_iterations=WORKER_ITERATIONS,
-                    ratios={SCENARIO: ratio},
-                )
-                for index, ratio in enumerate((1.0, 1.2, 0.8, 1.0))
-            )
-        ),
-        output_path=history,
-    )
+    _write_history_window(path=history, ratios=(1.0, 1.2, 0.8, 1.0))
     output = tmp_path / "ratchet-report.json"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "ratchet_rust_performance.py",
-            "--baseline-history",
-            str(history),
-            "--candidate-plan",
-            str(candidate_plan),
-            "--candidate-throughput",
-            str(candidate_throughput),
-            "--history-window",
-            "3",
-            "--noise-sigmas",
-            "2.0",
-            "--max-regression",
-            "0.4",
-            "--output",
-            str(output),
-        ],
-    )
+    exit_code = main([
+        "--baseline-history",
+        str(history),
+        "--candidate-plan",
+        str(candidate_plan),
+        "--candidate-throughput",
+        str(candidate_throughput),
+        "--history-window",
+        "3",
+        "--noise-sigmas",
+        "2.0",
+        "--max-regression",
+        "0.4",
+        "--output",
+        str(output),
+    ])
 
-    assert main() == 0, "the candidate at the median must pass the configured policy"
+    assert exit_code == 0, "the candidate at the median must pass the configured policy"
     report = json.loads(output.read_text(encoding="utf-8"))
     comparison = report["comparisons"][0]
     assert comparison["baseline_sample_count"] == 3, (
