@@ -184,21 +184,31 @@ def when_a_pull_request_measures(
 # -- Then steps ----------------------------------------------------------------
 
 
+def _assert_ratchet_verdict(
+    verdict: tuple[int, cabc.Mapping[str, object]], passed: bool
+) -> None:
+    """Assert the ratchet CLI status and persisted verdict agree."""
+    exit_code, report = verdict
+    assert exit_code == int(not report["passed"]), (
+        "the ratchet CLI exit code must match its persisted passed verdict"
+    )
+    assert report["passed"] is passed, (
+        f"expected the ratchet to {'pass' if passed else 'fail'}; report was {report}"
+    )
+    if passed:
+        assert report["regressions"] == [], (
+            "a passing report must not retain any regression entries"
+        )
+    else:
+        assert report["regressions"], "a failed report must retain a regression entry"
+
+
 @then("the ratchet passes")
 def then_the_ratchet_passes(
     verdict: tuple[int, cabc.Mapping[str, object]],
 ) -> None:
     """Assert the comparison reported no regression."""
-    exit_code, report = verdict
-    assert exit_code == int(not report["passed"]), (
-        "the ratchet CLI exit code must match its persisted passed verdict"
-    )
-    assert report["passed"] is True, (
-        f"expected the ratchet to pass; report was {report}"
-    )
-    assert report["regressions"] == [], (
-        "a passing report must not retain any regression entries"
-    )
+    _assert_ratchet_verdict(verdict, passed=True)
 
 
 @then("the ratchet fails")
@@ -206,14 +216,7 @@ def then_the_ratchet_fails(
     verdict: tuple[int, cabc.Mapping[str, object]],
 ) -> None:
     """Assert the comparison reported a regression."""
-    exit_code, report = verdict
-    assert exit_code == int(not report["passed"]), (
-        "the ratchet CLI exit code must match its persisted passed verdict"
-    )
-    assert report["passed"] is False, (
-        f"expected the ratchet to fail; report was {report}"
-    )
-    assert report["regressions"], "a failed report must retain a regression entry"
+    _assert_ratchet_verdict(verdict, passed=False)
 
 
 @then("the ratchet records history-backed comparison evidence")
