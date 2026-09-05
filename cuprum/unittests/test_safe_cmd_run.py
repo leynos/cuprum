@@ -307,6 +307,142 @@ def test_decodes_with_configured_encoding(
     assert result.stderr == ""
 
 
+class _Cp1252TextOnlySink:
+    """Text-only sink modelling a parent stream too narrow for the output."""
+
+    def __init__(self) -> None:
+        """Record write attempts."""
+        self.writes: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Reject payloads the CP1252 codec cannot represent."""
+        self.writes.append(payload)
+        payload.encode("cp1252")
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+class _Cp1252BufferedSink:
+    """Text sink exposing a binary ``buffer`` for the echo fast path."""
+
+    def __init__(self) -> None:
+        """Pair a narrow text wrapper with its own binary buffer."""
+        self.buffer = io.BytesIO()
+        self.writes: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Reject payloads the CP1252 codec cannot represent."""
+        self.writes.append(payload)
+        payload.encode("cp1252")
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+_UNICODE_PAYLOAD = "print('Cargo metadata: ś ń')"
+
+
+def test_capture_survives_text_sink_encode_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A UnicodeEncodeError from a text sink must not abort the run."""
+    _, execute = execution_strategy
+    sink = _Cp1252TextOnlySink()
+    command = python_builder("-c", _UNICODE_PAYLOAD)
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=True, echo=True),
+            "context": ExecutionContext(
+                stdout_sink=typ.cast("typ.IO[str]", sink),
+            ),
+        },
+    )
+
+    assert result.ok is True
+    assert result.stdout == "Cargo metadata: ś ń\n"
+    assert sink.writes == ["Cargo metadata: ś ń\n"], (
+        "the rejected chunk must be the only attempted write for "
+        f"writes={sink.writes!r}"
+    )
+
+
+def test_buffered_sink_receives_exact_bytes_despite_narrow_text_encoding(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A sink with a binary ``buffer`` keeps receiving original bytes."""
+    _, execute = execution_strategy
+    sink = _Cp1252BufferedSink()
+    command = python_builder("-c", _UNICODE_PAYLOAD)
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=True, echo=True),
+            "context": ExecutionContext(
+                stdout_sink=typ.cast("typ.IO[str]", sink),
+            ),
+        },
+    )
+
+    assert result.ok is True
+    assert result.stdout == "Cargo metadata: ś ń\n"
+    assert sink.buffer.getvalue() == "Cargo metadata: ś ń\n".encode(), (
+        "buffered sinks must receive original bytes without transliteration for "
+        f"received={sink.buffer.getvalue()!r}"
+    )
+    assert sink.writes == [], (
+        "text write must not be used when a binary buffer exists for "
+        f"writes={sink.writes!r}"
+    )
+
+
+def test_stdout_and_stderr_disable_echo_independently(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A failing stream stops echoing while the other stream keeps echoing."""
+    _, execute = execution_strategy
+    stdout_sink = _Cp1252TextOnlySink()
+    stderr_sink = _Cp1252TextOnlySink()
+    command = python_builder(
+        "-c",
+        (
+            "import sys; print('Cargo metadata: ś ń'); "
+            "print('plain stderr text', file=sys.stderr)"
+        ),
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(capture=True, echo=True),
+            "context": ExecutionContext(
+                stdout_sink=typ.cast("typ.IO[str]", stdout_sink),
+                stderr_sink=typ.cast("typ.IO[str]", stderr_sink),
+            ),
+        },
+    )
+
+    assert result.ok is True
+    assert result.stdout == "Cargo metadata: ś ń\n"
+    assert result.stderr == "plain stderr text\n"
+    assert stderr_sink.writes == ["plain stderr text\n"], (
+        "the plain-encoding stream must keep echoing for "
+        f"stderr writes={stderr_sink.writes!r}"
+    )
+    assert stdout_sink.writes == ["Cargo metadata: ś ń\n"], (
+        "the rejected stream must stop after its failing chunk for "
+        f"stdout writes={stdout_sink.writes!r}"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Async-only tests (cancellation semantics)
 # -----------------------------------------------------------------------------
