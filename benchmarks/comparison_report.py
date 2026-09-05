@@ -31,36 +31,71 @@ _DECISION_FIELDS = (
 )
 
 
-def _decision_values(
+def _complete_decision_fields(
     report: cabc.Mapping[str, object],
-) -> tuple[BaselineSource, BaselineReason, int, ComparisonState] | None:
-    """Return validated decision fields when a report includes them."""
-    values = [report.get(field) for field in _DECISION_FIELDS]
-    if all(value is None for value in values):
+) -> tuple[object, object, object, object] | None:
+    """Return all decision fields or reject an incomplete decision record."""
+    values = tuple(report.get(field) for field in _DECISION_FIELDS)
+    if values == (None, None, None, None):
         return None
     if any(value is None for value in values):
         msg = "ratchet report must include every decision field"
         raise TypeError(msg)
     source, reason, sample_count, state = values
-    if not isinstance(source, str) or not isinstance(reason, str):
+    return source, reason, sample_count, state
+
+
+def _decision_string(value: object) -> str:
+    """Validate one string-valued decision field."""
+    if not isinstance(value, str):
         msg = "ratchet report has invalid decision fields"
         raise TypeError(msg)
-    if isinstance(sample_count, bool) or not isinstance(sample_count, int):
+    return value
+
+
+def _compatible_sample_count(value: object) -> int:
+    """Validate one non-negative compatible-sample count."""
+    if isinstance(value, bool) or not isinstance(value, int):
         msg = "ratchet report has invalid decision fields"
         raise TypeError(msg)
-    if not isinstance(state, str) or sample_count < 0:
+    if value < 0:
         msg = "ratchet report has invalid decision fields"
         raise TypeError(msg)
+    return value
+
+
+def _decision_enums(
+    *,
+    source: str,
+    reason: str,
+    state: str,
+) -> tuple[BaselineSource, BaselineReason, ComparisonState]:
+    """Convert validated decision strings to bounded enum values."""
     try:
         return (
             BaselineSource(source),
             BaselineReason(reason),
-            sample_count,
             ComparisonState(state),
         )
     except ValueError as exc:
         msg = "ratchet report has unknown decision fields"
         raise ValueError(msg) from exc
+
+
+def _decision_values(
+    report: cabc.Mapping[str, object],
+) -> tuple[BaselineSource, BaselineReason, int, ComparisonState] | None:
+    """Return validated decision fields when a report includes them."""
+    values = _complete_decision_fields(report)
+    if values is None:
+        return None
+    raw_source, raw_reason, raw_count, raw_state = values
+    source, reason, state = _decision_enums(
+        source=_decision_string(raw_source),
+        reason=_decision_string(raw_reason),
+        state=_decision_string(raw_state),
+    )
+    return source, reason, _compatible_sample_count(raw_count), state
 
 
 def _confirmation_status(
