@@ -20,6 +20,30 @@
 
 ### Added
 
+- **Per-command echo-fallback diagnostics:** Every `CommandResult` — including
+  each pipeline stage's result — now carries `relay_fallbacks`, a defaulted
+  trailing tuple of frozen `RelayFallback` records (`stream` and
+  `error_category`, reusing the existing echo vocabulary) describing the
+  handled echo-disablement transitions of that command's own streams: one
+  record per affected drain, ordered stdout-then-stderr, empty when nothing was
+  handled, and never affecting `exit_code` or `ok` [^2]. Diagnostics are
+  collected without a registered observer and with capture disabled, are
+  isolated per command, stage, and nested or concurrent run, and on a timeout
+  or cancellation that prevents a result the already-emitted echo events stay
+  available through `observe_echo` with no new exception payload fields. The
+  `cuprum.stream` warning for this transition now carries only stable
+  categorical extras (`cuprum_operation`, `cuprum_stream`,
+  `cuprum_transition`, `cuprum_error_category`) and no longer attaches the
+  exception object or sink encoding: `UnicodeEncodeError.object` retains the
+  rejected input, so neither the payload nor the original exception may reach
+  the log, the events, or the result records, and metric labels stay bounded.
+  Lading can consume these records and the existing echo observation channel
+  ([lading#253](https://github.com/leynos/lading/issues/253)); this alone does
+  not let Lading delete `stream_relay.py`, whose text-first and broken-pipe
+  semantics differ from Cuprum's binary-first policy, so a linked downstream
+  migration issue owns caller migration, thread-name utility removal, and the
+  helper's final deletion.
+
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
   non-final stage is the first to fail and at least one other stage is still
@@ -146,6 +170,8 @@
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
 [^1]: <https://github.com/leynos/cuprum/issues/348>
+
+[^2]: <https://github.com/leynos/cuprum/issues/356>
 
 ## [0.2.0] - 2026-06-21
 
