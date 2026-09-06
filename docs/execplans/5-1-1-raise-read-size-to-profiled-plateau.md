@@ -297,8 +297,11 @@ This task is complete only when:
   passed), `make typecheck`, `make lint`, `make markdownlint`, and
   `make nixie`. Production stream metrics remain intentionally out of scope
   because the relevant observability is an opt-in adapter boundary; the
-  existing bounded diagnostics are retained. CodeRabbit remains pending, so the
-  ExecPlan stays `IN PROGRESS`.
+  existing bounded diagnostics are retained. The prior CodeRabbit review
+  `bbef5e1b` posted, its valid inline findings were repaired or evidenced as
+  stale, and all review threads were resolved. Follow-up review `7f92da2e` is
+  queued against the current branch head. The ExecPlan stays `IN PROGRESS`
+  pending that external revalidation.
 
 ## Surprises & discoveries
 
