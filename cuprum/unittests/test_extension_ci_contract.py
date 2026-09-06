@@ -1,22 +1,27 @@
-"""Contract tests for how CI builds the extension before testing against it.
+"""Contract tests for CI extension builds and shared-action wiring.
 
 `make develop` is the one definition of the extension build, and nothing else
 in the suite notices when a CI job stops going through it: remove the build
 step from `extension-tests` and the gated modules quietly skip, drop
 `--release` from `benchmark-ratchet` and the ratchet compares debug builds
-against optimized baselines. Both are declarative configuration, so
-these tests parse `ci.yml` and assert the contract it must uphold.
+against optimized baselines. These tests parse `.github/workflows/ci.yml` and
+related workflows to assert that declarative contract.
+
+They also verify that `lint-test` provisions its Nixie and Whitaker installers
+in the required toolchain order, and that every `leynos/shared-actions` caller
+uses an immutable reference to an expected action or reusable workflow.
 
 The Makefile half of the same contract — the guard variable the recipe sets
 and the module list it hands to pytest — lives in
 `test_extension_build_contract.py`. The parsing lives in
-`tests.helpers.workflow`, shared with the tests that assert the path gate in
-front of the same workflow's benchmark job.
+`tests.helpers.ci_workflows`, shared with the tests that assert the path gate
+in front of the same workflow's benchmark job.
 """
 
 from __future__ import annotations
 
 import re
+import typing as typ
 
 import pytest
 
@@ -30,6 +35,9 @@ from tests.helpers.workflow import (
     step_named,
     steps,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 SHARED_ACTIONS_REFERENCE = re.compile(
     r"^leynos/shared-actions/(?P<target>[^\s@]+)@(?P<reference>[0-9a-f]{40})$"
@@ -293,14 +301,22 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
 
 def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
     """Every shared-actions caller uses an immutable revision without fixing it."""
-    targets_by_workflow = _shared_action_targets_by_workflow()
+    workflow_documents = {
+        workflow_name: workflow_document(workflow_name)
+        for workflow_name, _ in workflow_sources()
+    }
+    targets_by_workflow = _shared_action_targets_by_workflow(workflow_documents)
     assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
         "each workflow must call only its expected shared actions or reusable "
         f"workflows; found {targets_by_workflow}"
     )
 def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
     """Every shared-actions caller uses an immutable revision without fixing it."""
-    targets_by_workflow = _shared_action_targets_by_workflow()
+    workflow_documents = {
+        workflow_name: workflow_document(workflow_name)
+        for workflow_name, _ in workflow_sources()
+    }
+    targets_by_workflow = _shared_action_targets_by_workflow(workflow_documents)
     assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
         "each workflow must call only its expected shared actions or reusable "
         f"workflows; found {targets_by_workflow}"
@@ -328,9 +344,11 @@ def _shared_action_uses(value: object) -> list[str]:
         ]
     return []
 
-def _shared_action_references(workflow_name: str) -> list[re.Match[str]]:
-    """Return validated shared-actions references from one workflow."""
-    uses_values = _shared_action_uses(workflow_document(workflow_name))
+def _shared_action_references(
+    workflow_name: str, workflow_data: object
+) -> list[re.Match[str]]:
+    """Return validated shared-actions references from parsed workflow data."""
+    uses_values = _shared_action_uses(workflow_data)
     references = [SHARED_ACTIONS_REFERENCE.fullmatch(uses) for uses in uses_values]
     invalid_values = [
         uses
@@ -343,11 +361,13 @@ def _shared_action_references(workflow_name: str) -> list[re.Match[str]]:
     )
     return [reference for reference in references if reference is not None]
 
-def _shared_action_targets_by_workflow() -> dict[str, set[str]]:
-    """Collect expected shared-actions targets for workflows that use them."""
+def _shared_action_targets_by_workflow(
+    workflow_documents: cabc.Mapping[str, object],
+) -> dict[str, set[str]]:
+    """Collect expected shared-actions targets from parsed workflow documents."""
     references_by_workflow = {
-        workflow_name: _shared_action_references(workflow_name)
-        for workflow_name, _ in workflow_sources()
+        workflow_name: _shared_action_references(workflow_name, workflow_data)
+        for workflow_name, workflow_data in workflow_documents.items()
     }
     return {
         workflow_name: {reference["target"] for reference in references}
