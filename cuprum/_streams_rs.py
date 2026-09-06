@@ -167,11 +167,33 @@ def _prepare_rust_pump_call(
     )
 
 
+def _kernel32_handle_api() -> ModuleType:
+    """Load Kernel32 with the handle signatures required by this module."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    kernel32.GetCurrentProcess.argtypes = ()
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.DuplicateHandle.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.c_uint32,
+    )
+    kernel32.DuplicateHandle.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.restype = ctypes.c_int
+    return kernel32
+
+
 def _duplicate_windows_handle(handle: int) -> int:
     """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
     import ctypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    kernel32 = _kernel32_handle_api()
     current_process = kernel32.GetCurrentProcess()
     duplicated_handle = ctypes.c_void_p()
     should_inherit_handle = False
@@ -196,7 +218,7 @@ def _close_windows_handle(handle: int) -> None:
     """Close a duplicated Win32 handle that was not handed to Rust."""
     import ctypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+    kernel32 = _kernel32_handle_api()
     if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
         raise _windows_error(ctypes)
 
