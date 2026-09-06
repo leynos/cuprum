@@ -2808,8 +2808,8 @@ the fast, broad lint pass for formatting-adjacent checks, import order,
 docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
 *presence* at 100 per cent across every Python scope: `benchmarks`,
-`conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks
-run third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
+`conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks run
+third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
 `df12-python-lints` plugin runs fourth under CPython 3.14, and `ambrleaks`
 scans Syrupy snapshots fifth under the same interpreter.
 
@@ -2905,15 +2905,14 @@ fix findings in execution order, then rerun `make lint` to reach the next
 stage. Do not disable df12 messages to absorb existing findings; repair the
 assertion, alias, suppression rationale, or dispatch structure instead.
 
-
 ### Markdown linting
 
 The `markdownlint` target lints exactly the Markdown files tracked by Git. The
 recipe feeds `git ls-files -z '*.md'` through `xargs -0` to `markdownlint-cli2`
 with `$(LOCAL_TOOL_ENV)` applied to both pipeline stages, so the tool resolves
 from `~/.local/bin` or `~/.bun/bin` even under a minimal `PATH`, arguments with
-spaces survive intact, and untracked scratch files can never fail the gate.
-The `.vtcode/**` directory is excluded in `.markdownlint-cli2.jsonc` as
+spaces survive intact, and untracked scratch files can never fail the gate. The
+`.vtcode/**` directory is excluded in `.markdownlint-cli2.jsonc` as
 session-scratch content. The target then runs the shared `spelling` recipe, so
 one invocation covers both Markdown structure and en-GB-oxendict spelling.
 
@@ -2999,13 +2998,13 @@ documenting a large module can take it over the project's 400-line ceiling
 enforced by Pylint's `too-many-lines`. Split the module by feature rather than
 suppressing the limit; this is why the pipeline dataclasses live in
 `cuprum/_pipeline_types.py` (re-exported from `cuprum/_pipeline_internals.py`)
-rather than inline. The coverage gate applies to tests, benchmarks, and
-scripts as well as the production package. Most gaps there are nested helpers
-whose docstring would merely restate the enclosing fixture; when that happens,
-give the helper a name and a one-line docstring that states its intent, and
-keep single-line docstrings on scenario dataclasses and adapters. Do not
-exclude a scope or a name pattern from the gate; an exclusion only hides the
-next undocumented helper.
+rather than inline. The coverage gate applies to tests, benchmarks, and scripts
+as well as the production package. Most gaps there are nested helpers whose
+docstring would merely restate the enclosing fixture; when that happens, give
+the helper a name and a one-line docstring that states its intent, and keep
+single-line docstrings on scenario dataclasses and adapters. Do not exclude a
+scope or a name pattern from the gate; an exclusion only hides the next
+undocumented helper.
 
 ### Lint Makefile variables
 
