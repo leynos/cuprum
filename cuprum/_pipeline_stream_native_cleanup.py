@@ -1,13 +1,15 @@
 """Own native-pump executor cleanup and deferred descriptor hand-back.
 
-This module is the sole owner of descriptors duplicated for a Rust pump.  Its
-completion callback closes worker and callback duplicates, restores blocking
-mode, and resumes the paused reader only after native I/O has settled.
+This module owns callback-managed native-pump descriptors. Rust owns a
+submitted writer duplicate; the completion callback closes its borrowed reader
+and callback duplicates, restores blocking mode, and resumes the paused reader
+only after native I/O has settled.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import dataclasses as dc
 import functools
 import logging
@@ -20,6 +22,7 @@ from cuprum._pipeline_stream_cleanup_observation import (
     _log_native_pump_cleanup_deferred,
     _log_native_pump_cleanup_grace_expired,
     _log_native_pump_cleanup_started,
+    _log_native_pump_handoff_failed,
 )
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
@@ -29,8 +32,8 @@ from cuprum._pipeline_stream_fds import (
     _resume_reader_transport,
     _suppressed_teardown_failure,
 )
-from cuprum.pump_events import PumpEvent
-from cuprum.pump_observation import _emit_pump_event
+from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+from cuprum.pump_observation import _emit_pump_event, _emit_rust_pump_handoff_outcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -73,6 +76,24 @@ class _RustPumpHandoff:
     cleanup_grace_s: float
 
 
+class _RustPumpStateDuplicationError(Exception):
+    """Retain a state-duplication failure for the caller to re-raise."""
+
+    def __init__(self, error: OSError | ValueError) -> None:
+        """Store the original descriptor duplication failure."""
+        super().__init__(str(error))
+        self.error = error
+
+
+class _RustPumpBlockingModeError(Exception):
+    """Retain a blocking-mode refusal for the caller to turn into fallback."""
+
+    def __init__(self, error: OSError | ValueError) -> None:
+        """Store the original blocking-mode refusal."""
+        super().__init__(str(error))
+        self.error = error
+
+
 def _restore_rust_pump_state(state: _RustPumpState) -> None:
     """Restore pipe state before returning reader transport control to asyncio."""
     state.blocking_mode_guard.restore()
@@ -101,14 +122,25 @@ def _create_rust_pump_state(
     resume_reader: cabc.Callable[[], None] | None,
 ) -> _RustPumpState:
     """Duplicate a hand-off's descriptor state for completion-owned cleanup."""
-    reader_fd = os.dup(handoff.reader_fd)
+    try:
+        reader_fd = os.dup(handoff.reader_fd)
+    except (OSError, ValueError) as error:
+        raise _RustPumpStateDuplicationError(error) from error
     writer_fd: int | None = None
     try:
         writer_fd = os.dup(handoff.writer_fd)
+    except (OSError, ValueError) as error:
+        _close_rust_reader_fd(reader_fd)
+        raise _RustPumpStateDuplicationError(error) from error
+    try:
         blocking_mode_guard = _BlockingModeGuard.engage(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
+    except (OSError, ValueError) as error:
+        _close_rust_reader_fd(reader_fd)
+        _close_rust_writer_fd(writer_fd)
+        raise _RustPumpBlockingModeError(error) from error
     except BaseException:
         _close_rust_reader_fd(reader_fd)
         if writer_fd is not None:
@@ -141,7 +173,6 @@ def _complete_rust_pump(
                 _log_rust_pump_failed_after_cancel(error)
     finally:
         _close_rust_reader_fd(native_fds.reader_fd)
-        _close_rust_writer_fd(native_fds.writer_fd)
         try:
             with _suppressed_teardown_failure(
                 _LOGGER,
@@ -224,25 +255,33 @@ def _start_rust_pump_with_cleanup(
     # reuse a descriptor native I/O still needs.
     loop = asyncio.get_running_loop()
     cleanup_complete = loop.create_future()
-    native_fds: _NativePumpFds | None = None
     try:
         native_fds = _duplicate_native_pump_fds(state)
+    except BaseException as error:
+        _log_native_pump_handoff_failed(_LOGGER, "duplicate_writer", error)
+        _restore_rust_pump_state(state)
+        _close_rust_pump_state_fds(state)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
+        raise
+    try:
+        context = contextvars.copy_context()
         native_pump = loop.run_in_executor(
             None,
+            context.run,
             rust_pump_stream,
             native_fds.reader_fd,
             native_fds.writer_fd,
         )
-    except BaseException:
-        if native_fds is not None:
-            _close_rust_reader_fd(native_fds.reader_fd)
-            _close_rust_writer_fd(native_fds.writer_fd)
+    except BaseException as error:
+        _log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
+        _close_rust_reader_fd(native_fds.reader_fd)
+        _close_rust_writer_fd(native_fds.writer_fd)
         _restore_rust_pump_state(state)
         _close_rust_pump_state_fds(state)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
+        )
         raise
-    if native_fds is None:
-        msg = "native descriptor duplication unexpectedly produced no descriptors"
-        raise RuntimeError(msg)
     _NATIVE_PUMP_FUTURES.add(native_pump)
     native_pump.add_done_callback(
         functools.partial(
@@ -252,6 +291,7 @@ def _start_rust_pump_with_cleanup(
             state=state,
         )
     )
+    _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
     return native_pump, cleanup_complete
 
 

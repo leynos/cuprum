@@ -9,7 +9,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.unittests._rust_pump_test_helpers import owned_fds
 
 
@@ -28,7 +32,6 @@ class _DuplicateSetupFailure:
         self.duplicated_fds: list[int] = []
         self.resume_calls = 0
         self._original_dup = os.dup
-        self._original_set_blocking = os.set_blocking
 
     def pause_reader(
         self,
@@ -60,12 +63,16 @@ class _DuplicateSetupFailure:
         self.duplicated_fds.append(duplicate)
         return duplicate
 
-    def set_blocking(self, fd: int, is_blocking: bool) -> None:
-        """Fail only while configuring the created duplicate."""
-        if self.duplicated_fds and fd == self.duplicated_fds[0]:
-            msg = "cannot configure duplicated writer descriptor"
-            raise self.fault_error(msg)
-        self._original_set_blocking(fd, is_blocking)
+    def engage_blocking_mode(
+        self,
+        *,
+        reader_fd: int,
+        writer_fd: int,
+    ) -> _pipeline_stream_fds._BlockingModeGuard:
+        """Fail while configuring the duplicated descriptor state."""
+        del reader_fd, writer_fd
+        msg = "cannot configure duplicated writer descriptor"
+        raise self.fault_error(msg)
 
     def assert_duplicate_cleanup(self) -> None:
         """Assert rollback closed only a duplicate that was actually created."""
@@ -74,8 +81,9 @@ class _DuplicateSetupFailure:
                 "failed duplication creates no writer descriptor to clean up"
             )
             return
-        with pytest.raises(OSError, match="Bad file descriptor"):
-            os.fstat(self.duplicated_fds[0])
+        for duplicate_fd in self.duplicated_fds:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(duplicate_fd)
 
 
 def _assert_handoff_diagnostics(
@@ -138,8 +146,13 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         "_drain_reader_buffer",
         failure.drain_reader,
     )
-    monkeypatch.setattr(_pipeline_streams.os, "dup", failure.duplicate)
-    monkeypatch.setattr(_pipeline_streams.os, "set_blocking", failure.set_blocking)
+    monkeypatch.setattr(_pipeline_stream_native_cleanup.os, "dup", failure.duplicate)
+    if not duplicate_creation_fails:
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup._BlockingModeGuard,
+            "engage",
+            failure.engage_blocking_mode,
+        )
 
     reader = typ.cast("asyncio.StreamReader", object())
     with owned_fds() as (reader_fd, writer_fd):
@@ -149,8 +162,11 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
                     _pipeline_streams._run_rust_pump(
                         reader=reader,
                         writer=None,
-                        reader_fd=reader_fd,
-                        writer_fd=writer_fd,
+                        handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
+                            reader_fd=reader_fd,
+                            writer_fd=writer_fd,
+                            cleanup_grace_s=0.5,
+                        ),
                     )
                 )
         else:
@@ -158,8 +174,11 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
                 _pipeline_streams._run_rust_pump(
                     reader=reader,
                     writer=None,
-                    reader_fd=reader_fd,
-                    writer_fd=writer_fd,
+                    handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
+                        reader_fd=reader_fd,
+                        writer_fd=writer_fd,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
 

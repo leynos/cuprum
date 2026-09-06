@@ -34,10 +34,13 @@ from cuprum._pipeline_stream_native_cleanup import (
     _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
     _create_rust_pump_state,
     _run_rust_pump_with_blocking_fds,
+    _RustPumpBlockingModeError,
     _RustPumpHandoff,
+    _RustPumpStateDuplicationError,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
-from cuprum.pump_events import RustPumpDeclineReason
+from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
+from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -156,7 +159,16 @@ async def _pump_over_raw_fds(
         # blocking-mode state that only the completion callback may restore
         # after native I/O has stopped.
         state = _create_rust_pump_state(handoff, reader_pause.resume)
-    except (OSError, ValueError):
+    except _RustPumpStateDuplicationError as failure:
+        _resume_reader_transport(reader_pause.resume)
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "duplicate_writer",
+            failure.error,
+        )
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
+        raise failure.error from failure
+    except _RustPumpBlockingModeError:
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False

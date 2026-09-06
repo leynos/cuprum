@@ -118,6 +118,8 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
 
 
 class PumpMetricsHook:
+    """Collect bounded metrics from Rust-pump routing events."""
+
     def __init__(self, collector: MetricsCollector) -> None:
         """Initialize the pump metrics hook with a collector."""
         self._collector = collector

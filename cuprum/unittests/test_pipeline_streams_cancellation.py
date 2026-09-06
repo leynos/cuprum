@@ -25,8 +25,8 @@ import pytest
 from cuprum import (
     _pipeline_stream_cleanup_observation,
     _pipeline_stream_fds,
-    _pipeline_streams,
     _pipeline_stream_native_cleanup,
+    _pipeline_streams,
 )
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
@@ -46,6 +46,7 @@ consumed rather than left to resurface later.
 """
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
     from cuprum.pump_events import PumpEvent
 """Cancelling an inter-stage hop while the Rust pump owns the descriptors.
 ``run_in_executor`` cannot interrupt the worker thread, so cancellation is the
@@ -69,6 +70,7 @@ class _RecordingGuard:
     def restore(self) -> None:
         """Record the restore so its ordering can be asserted."""
         self.events.append("restored")
+
 
 class _FailingDeferredGuard:
     """Guard double that records a deferred restore failure."""
@@ -286,6 +288,7 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
         for record in cleanup_records
     ), f"cleanup logs must name their operation, found {cleanup_records}"
 
+
 async def _cancel_until_cleanup_grace_expires(
     context: _MidTransferContext,
     *,
@@ -313,6 +316,7 @@ async def _cancel_until_cleanup_grace_expires(
     )
     return state, task
 
+
 async def _release_deferred_worker(
     context: _MidTransferContext,
     *,
@@ -328,6 +332,7 @@ async def _release_deferred_worker(
         os.close(reader_fd)
     with contextlib.suppress(OSError):
         os.close(writer_fd)
+
 
 def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
     monkeypatch: pytest.MonkeyPatch,
@@ -377,13 +382,15 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
         f"late completion must restore descriptor state exactly once, found {events}"
     )
     assert [event.phase for event in pump_events] == [
+        "handoff",
         "cleanup_started",
         "cleanup_grace_expired",
         "cleanup_deferred",
     ], f"grace expiry must defer the terminal callback, found {pump_events}"
-    assert pump_events[1].elapsed_s is not None, (
+    assert pump_events[2].elapsed_s is not None, (
         "grace expiry must report the bounded monotonic elapsed time"
     )
+
 
 def test_deferred_callback_suppresses_descriptor_restore_failure(
     monkeypatch: pytest.MonkeyPatch,
