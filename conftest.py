@@ -19,6 +19,7 @@ import os
 import typing as typ
 
 import pytest
+from hypothesis import settings
 
 from cuprum import _rust_backend
 from cuprum._backend import _check_rust_available, get_stream_backend
@@ -26,6 +27,11 @@ from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
+
+# Property tests assert behaviour, while pytest-timeout retains the suite-wide
+# bound for tests that hang. Hypothesis's per-example runtime is host-sensitive.
+settings.register_profile("cuprum-test-suite", deadline=None)
+settings.load_profile("cuprum-test-suite")
 
 if typ.TYPE_CHECKING:
     from types import ModuleType

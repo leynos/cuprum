@@ -2035,6 +2035,11 @@ tests keep the observable states aligned with the model such tools would verify.
 [Hypothesis](https://hypothesis.readthedocs.io/) generates the input domains
 that fixed examples cannot cover exhaustively:
 
+The root `conftest.py` disables Hypothesis's per-example deadline because these
+properties assert correctness under shared-host scheduling. The suite-wide
+pytest timeout remains the bound for hung tests; use an explicit marker only
+when a generated test's bounded workload needs a longer whole-test budget.
+
 - `test_nested_selector_rejects_generated_backend_pairs` draws an outer and an
   inner backend from the available set and asserts that same-thread nested
   entry always raises `ReentrantBackendSelectorError` before mutating backend
@@ -3378,7 +3383,6 @@ building, need only the checks they already use and should **not** adopt this
 probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
 extend `maturin_script_locatable()` in place if maturin changes how it locates
 its binary.
-
 
 ## Mutation-testing harness
 

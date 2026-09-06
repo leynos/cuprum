@@ -43,6 +43,7 @@ def test_concurrent_workers_do_not_race(
     _assert_backend_pair_completes(backends, fixture)
 
 
+@pytest.mark.timeout(90)
 @settings(
     max_examples=20,
     deadline=None,
