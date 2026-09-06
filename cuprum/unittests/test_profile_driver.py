@@ -235,6 +235,16 @@ def test_profile_matrix_stops_after_first_worker_failure(
             id="repeat-too-large",
         ),
         pytest.param(
+            {"rounds": 0},
+            "rounds must be >= 1",
+            id="rounds-zero",
+        ),
+        pytest.param(
+            {"rounds": 1001},
+            "rounds must be <= 1000",
+            id="rounds-too-large",
+        ),
+        pytest.param(
             {"perf_frequency": 0},
             "perf-frequency must be >= 1",
             id="perf-freq-zero",
@@ -259,6 +269,11 @@ def test_profile_matrix_stops_after_first_worker_failure(
             "read-size must be >= 1",
             id="read-size-negative",
         ),
+        pytest.param(
+            {"read_sizes": (4096, 4096)},
+            "read-sizes must not contain duplicate values",
+            id="read-sizes-duplicate",
+        ),
     ],
 )
 def test_driver_config_rejects_invalid_fields(
@@ -268,11 +283,13 @@ def test_driver_config_rejects_invalid_fields(
     """TeeProfileDriverConfig raises ValueError for invalid numeric/string fields."""
     warmup_count = kwargs.get("warmup_count", 1)
     repeat_count = kwargs.get("repeat_count", 3)
+    rounds = kwargs.get("rounds", 1)
     perf_frequency = kwargs.get("perf_frequency", 999)
     perf_call_graph = kwargs.get("perf_call_graph", "dwarf,16384")
     read_sizes = kwargs.get("read_sizes", (65536,))
     assert isinstance(warmup_count, int)
     assert isinstance(repeat_count, int)
+    assert isinstance(rounds, int)
     assert isinstance(perf_frequency, int)
     assert isinstance(perf_call_graph, str)
     assert isinstance(read_sizes, tuple)
@@ -280,6 +297,7 @@ def test_driver_config_rejects_invalid_fields(
         TeeProfileDriverConfig(
             warmup_count=warmup_count,
             repeat_count=repeat_count,
+            rounds=rounds,
             perf_frequency=perf_frequency,
             perf_call_graph=perf_call_graph,
             read_sizes=read_sizes,

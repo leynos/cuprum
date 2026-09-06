@@ -1014,11 +1014,16 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 
 ## Canonical stream-drain loop
 
-`cuprum._streams._drain(stream, config, *, on_chunk=None)` is the single
-read/echo/buffer loop behind both consume variants. It reads in the tuned
-`_READ_SIZE` of 65536 bytes, extends the capture buffer when capturing, echoes
-each chunk to the configured sink when echoing, and hands the chunk to the
-optional `on_chunk` callback for variant-specific processing:
+`_StreamConfig.read_size` carries the active private read size for one stream;
+its default is `_READ_SIZE`, currently 65536 bytes. The private
+`cuprum._streams._consume_stream(stream, config, *, on_line=None,
+read_size=_READ_SIZE)`
+and `_drain(stream, config, *, on_chunk=None, read_size=_READ_SIZE)` functions
+accept an explicit keyword-only override. `_drain` is the single
+read/echo/buffer loop behind both consume variants. It reads in the selected
+size, extends the capture buffer when capturing, echoes each chunk to the
+configured sink when echoing, and hands the chunk to the optional `on_chunk`
+callback for variant-specific processing:
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -1030,6 +1035,15 @@ dispatches between the two variants on whether an `on_line` callback was
 supplied. Any fix to the read/echo/capture mechanics belongs in `_drain` so the
 capture path and the line-emitting path cannot silently diverge; new consume
 variants must layer behaviour through `on_chunk` rather than copying the loop.
+
+The pipeline side uses the same keyword-only contract: `_pump_stream` and its
+`_relay_chunks`, `_drain_stream_reader`, and `_drain_stream_reader_bounded`
+helpers accept `read_size` overrides. The `_pump_stream_dispatch` adapter
+accepts an optional override and otherwise falls back to the execution-local
+read size held by the private `ContextVar`. Profiling scopes each worker with
+`_override_read_size`, so every value supplied through `--read-sizes` reaches
+the consume and pipeline pump paths without changing public runtime
+configuration.
 
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
