@@ -19,6 +19,12 @@ from cuprum.events import ExecHook, new_exec_id
 """Unit tests for cuprum public exports."""
 
 
+import pytest
+
+"""Unit tests for cuprum public exports."""
+"""Unit tests for cuprum public exports."""
+
+
 def test_public_exports_are_available() -> None:
     """Top-level cuprum exports the catalogue and pump observation symbols."""
     assert c.DEFAULT_CATALOGUE is not None, "DEFAULT_CATALOGUE must be exported"
@@ -179,3 +185,18 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         f"{hints['relay_fallbacks']!r}"
     )
     assert hints["stdout"] == str | None
+
+def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
+    """RelayFallback is immutable and carries only closed-set vocabulary."""
+    from cuprum.echo_events import EchoErrorCategory, EchoStream
+
+    fallback = c.RelayFallback(
+        stream=EchoStream.STDOUT,
+        error_category=EchoErrorCategory.UNICODE_ENCODE,
+    )
+    fields = [f.name for f in dc.fields(c.RelayFallback)]
+    assert fields == ["stream", "error_category"], (
+        f"the record must stay bounded to the echo vocabulary, got {fields}"
+    )
+    with pytest.raises(dc.FrozenInstanceError):
+        fallback.stream = EchoStream.STDERR  # type: ignore[misc]  # ty: ignore[invalid-assignment]
