@@ -83,6 +83,33 @@ def _patch_windows_pump(
     monkeypatch.setattr(_streams_rs.os, "close", closed_fds.append)
 
 
+def test_kernel32_handle_api_declares_pointer_sized_handle_abi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kernel32 handle calls must retain pointer-sized values on Windows."""
+    kernel32 = mock.Mock()
+    windll = mock.Mock(return_value=kernel32)
+    monkeypatch.setattr(ctypes, "WinDLL", windll, raising=False)
+
+    assert _streams_rs._kernel32_handle_api() is kernel32
+
+    windll.assert_called_once_with("kernel32", use_last_error=True)
+    assert kernel32.GetCurrentProcess.argtypes == ()
+    assert kernel32.GetCurrentProcess.restype is ctypes.c_void_p
+    assert kernel32.DuplicateHandle.argtypes == (
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.c_uint32,
+    )
+    assert kernel32.DuplicateHandle.restype is ctypes.c_int
+    assert kernel32.CloseHandle.argtypes == (ctypes.c_void_p,)
+    assert kernel32.CloseHandle.restype is ctypes.c_int
+
+
 def test_windows_writer_transfer_releases_the_crt_duplicate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

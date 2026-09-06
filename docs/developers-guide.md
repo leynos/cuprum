@@ -21,21 +21,24 @@ Everything else runs on GitHub-hosted runners. Ubicloud offers Linux only, and
 a job that sleeps, calls an API, or publishes an artefact somebody else built
 gains nothing from a metered build slot.
 
-| Job                    | Workflow                 | Runner                |
-| ---------------------- | ------------------------ | --------------------- |
-| `typecheck-test`       | `ci.yml`                 | `ubicloud-standard-2` |
-| `extension-tests`      | `ci.yml`                 | `ubicloud-standard-2` |
-| `coverage`             | `ci.yml`                 | `ubicloud-standard-2` |
-| `benchmark-ratchet`    | `ci.yml`                 | `ubicloud-standard-2` |
-| `build-pure-wheel`     | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `verify-wheel-install` | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `coverage-upload`      | `coverage-main.yml`      | `ubicloud-standard-2` |
-| `lint-test`            | `ci.yml`                 | `ubuntu-latest`       |
-| `changes`              | `ci.yml`                 | `ubuntu-latest`       |
-| `refresh-sha`          | `get-codescene-sha.yml`  | `ubuntu-latest`       |
-| `publish`              | `release.yml`            | `ubuntu-latest`       |
-| `delay_and_comment`    | `delayed-pr-comment.yml` | `ubuntu-latest`       |
-| `build-native-wheels`  | `build-wheels.yml`       | `${{ matrix.os }}`    |
+Table 1: GitHub Actions jobs, workflows, and runners
+
+| Job                       | Workflow                 | Runner                |
+| ------------------------- | ------------------------ | --------------------- |
+| `typecheck-test`          | `ci.yml`                 | `ubicloud-standard-2` |
+| `extension-tests`         | `ci.yml`                 | `ubicloud-standard-2` |
+| `coverage`                | `ci.yml`                 | `ubicloud-standard-2` |
+| `benchmark-ratchet`       | `ci.yml`                 | `ubicloud-standard-2` |
+| `build-pure-wheel`        | `build-wheels.yml`       | `ubicloud-standard-2` |
+| `verify-wheel-install`    | `build-wheels.yml`       | `ubicloud-standard-2` |
+| `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
+| `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
+| `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
+| `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
+| `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
+| `publish`                 | `release.yml`            | `ubuntu-latest`       |
+| `delay_and_comment`       | `delayed-pr-comment.yml` | `ubuntu-latest`       |
+| `build-native-wheels`     | `build-wheels.yml`       | `${{ matrix.os }}`    |
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -232,6 +235,8 @@ suite executes, and no interpreter runs the Python suite both there and in the
 matrix. A suite that runs twice costs runner minutes twice and gates nothing
 extra.
 
+Table 2: CI suite execution by job and interpreter
+
 | Job                                | Python | Rust suite                     | Python suite           | Extension |
 | ---------------------------------- | ------ | ------------------------------ | ---------------------- | --------- |
 | `coverage` (pull requests)         | 3.13   | **the only run**, instrumented | full collection        | absent    |
@@ -239,6 +244,7 @@ extra.
 | `typecheck-test` 3.12, 3.14, 3.15a | each   | none                           | `make test-python`     | absent    |
 | `typecheck-test` 3.13              | 3.13   | none                           | none, coverage runs it | absent    |
 | `extension-tests`                  | 3.13   | none                           | 12 gated modules       | **built** |
+| `extension-tests-windows`          | 3.13   | none                           | 12 gated modules       | **built** |
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
@@ -271,7 +277,9 @@ Two jobs survive that look like duplicates and are not:
 - **`extension-tests`** runs the same interpreter as the coverage job, but with
   the compiled extension present. Coverage runs without it and the gated
   modules skip there; run 33752095108 logged its `rust-backend` cases as
-  `SKIPPED`. The two runs execute different code.
+  `SKIPPED`. The two runs execute different code. Its Windows counterpart,
+  `extension-tests-windows`, runs the same gated modules against the native
+  Windows boundary rather than duplicating the Linux run.
 - **`typecheck-test` on 3.13** keeps the typechecker and its required check
   name while running neither suite. Dropping its pytest run is only safe
   because the typechecker stands alone: `make typecheck` depends on `build`,
@@ -2105,10 +2113,17 @@ leaf, not the inclusive tally of every caller on the path.
 
 ## Makefile tooling changes
 
-`LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to `PATH` for `uv`
-and tool-discovery recipes only. This supports non-interactive Continuous
-Integration/Continuous Delivery (CI/CD) hook environments without globally
-shadowing system tools for unrelated Makefile workflows.
+On POSIX platforms, `LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to
+`PATH` for `uv` and tool-discovery recipes only. This supports non-interactive
+Continuous Integration/Continuous Delivery (CI/CD) hook environments without
+globally shadowing system tools for unrelated Makefile workflows.
+
+On Windows, `make` sees `OS=Windows_NT` and leaves `LOCAL_TOOL_ENV` empty. Git
+Bash discovers commands with colon-separated paths, whereas the Windows PATH
+installed by `setup-uv` uses semicolons; reconstructing it with the POSIX
+prefix would hide `uv`. Leaving the environment untouched preserves the path
+that `setup-uv` supplied. `UV_RUN_ENV` still adds the repository-local `uv`
+cache and tool directories on both platforms.
 
 ## Rust error taxonomy (`PumpError`)
 
@@ -2187,14 +2202,19 @@ run as coverage of both arms:
   so CI's `extension-tests` job runs them with
   `CUPRUM_REQUIRE_RUST_EXTENSION=1`: a build that never produced the extension
   fails rather than skipping quietly (`#258`).
-- **Windows** — the `#[cfg(windows)]` arm is compiled natively on
-  `windows-2022` by the wheel build (`.github/workflows/build-wheels.yml`,
-  reached unconditionally from `ci.yml`, so it runs on every pull request),
-  which catches a Windows arm that does not build or type-check. No job runs
-  the Python suite on Windows, so nothing executes the `winerror` assertions;
-  that gap is tracked by `#277`.
+- **Windows** — the `CI` workflow's `extension-tests-windows` job builds the
+  extension and runs the extension-gated modules on `windows-2022`. This is
+  deliberately not the full suite because of the `#124` interpreter-abort
+  constraint; it does execute `test_rust_errno_windows.py`, including the
+  `winerror`, derived `errno`, exception-subclass, and message-formatting
+  assertions. Reproduce the native check from a Windows checkout with:
 
-That wheel build is a plain `maturin build`, so it compiles the Windows arm
+  ```bash
+  make develop
+  make test-extension
+  ```
+
+The wheel build is a plain `maturin build`, so it compiles the Windows arm
 without `-D warnings`. It therefore catches a Windows arm that fails to
 compile, and only that. Warn-level regressions pass it — and the cheapest way
 to introduce one is to gate a helper on `#[cfg(unix)]` incorrectly, which makes
@@ -2584,15 +2604,24 @@ make develop
 That runs `maturin develop` against `rust/cuprum-rust/Cargo.toml` in the
 project virtual environment, preceded by `ensurepip` because maturin resolves
 its own script through the interpreter's `sysconfig` scheme, which needs pip
-present in the environment. CI's `extension-tests` job runs the same target, so
-a local run and a CI run build the extension identically. The Makefile keeps
-only a pointer to this section rather than repeating the reasoning.
+present in the environment. CI's `extension-tests` and
+`extension-tests-windows` jobs run the same target, so local and CI runs build
+the extension identically. The Makefile keeps only a pointer to this section
+rather than repeating the reasoning.
+
+The Windows job provisions Python 3.13, `uv`, Rust 1.85.0, and GNU Make before
+it runs those targets in Git Bash. To reproduce it from a Windows checkout,
+make those tools available in Git Bash, let `setup-uv` (or an equivalent
+installation) add `uv` to PATH, then run `make develop` and
+`make test-extension`. `LOCAL_TOOL_ENV` deliberately leaves that PATH unchanged
+on `Windows_NT`; see [Makefile tooling changes](#makefile-tooling-changes).
 
 Every CI job that installs the extension and then runs against it goes through
-this target — `extension-tests` and `benchmark-ratchet`, and no others. The
-wheel build is not one of them: `.github/workflows/build-wheels.yml` runs
-`maturin build` to produce a distributable artefact rather than installing it
-into a virtual environment, so it neither uses nor needs this target.
+this target — `extension-tests`, `extension-tests-windows`, and
+`benchmark-ratchet`, and no others. The wheel build is not one of them:
+`.github/workflows/build-wheels.yml` runs `maturin build` to produce a
+distributable artefact rather than installing it into a virtual environment, so
+it neither uses nor needs this target.
 
 The `benchmark-ratchet` job needs an optimized, in-place build of the mixed
 Python/Rust project. It passes
@@ -2638,8 +2667,8 @@ invoked it rather than on the repository — passing or failing according to the
 command line rather than the wiring. Stripping `MAKEFLAGS` alone does not
 prevent that, because the override travels under its own name as well.
 
-`test_extension_ci_contract.py` covers `ci.yml`: that the `extension-tests` job
-runs `make develop` before `make test-extension`, that `benchmark-ratchet`
+`test_extension_ci_contract.py` covers `ci.yml`: that both extension-test jobs
+run `make develop` before `make test-extension`, that `benchmark-ratchet`
 builds through the same target with `--release`, and that no job reintroduces a
 second copy of the build sequence.
 
@@ -2984,7 +3013,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
 | `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
 | `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
-| `LOCAL_TOOL_ENV`        | Derived `PATH`                                                               | Adds local binary directories before invoking host and `uv`-managed tools.                                                  |
+| `LOCAL_TOOL_ENV`        | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
 | `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
 | `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 

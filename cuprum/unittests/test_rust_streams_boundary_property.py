@@ -51,6 +51,14 @@ _unix_only = pytest.mark.skipif(
     reason="asserts the Unix i32 file-descriptor conversion contract",
 )
 
+# Windows resolves a CRT descriptor to a file handle in the Python wrapper
+# before Rust receives ``buffer_size``. The throwaway descriptor this property
+# uses consequently fails there before the buffer-validation boundary can run.
+_buffer_validation_before_descriptor = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows resolves the descriptor before Rust validates buffer_size",
+)
+
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
     max_examples=50,
@@ -100,6 +108,7 @@ _OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
         pytest.param(_pump_with_buffer_size, id="pump"),
     ],
 )
+@_buffer_validation_before_descriptor
 @_SUPPRESS_FIXTURE
 @given(bad_size=_OUT_OF_RANGE_BUFFER_SIZES)
 def test_rejects_out_of_range_buffer(
@@ -109,8 +118,8 @@ def test_rejects_out_of_range_buffer(
 ) -> None:
     """Both entry points reject any ``buffer_size`` outside ``1..=1 GiB``.
 
-    Validation precedes descriptor conversion, so a throwaway descriptor is
-    enough and no I/O is performed.
+    On the POSIX path, validation precedes descriptor conversion, so a
+    throwaway descriptor is enough and no I/O is performed.
     """
     with pytest.raises(ValueError, match="buffer_size"):
         entry_point(rust_streams, buffer_size=bad_size)

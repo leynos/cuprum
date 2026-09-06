@@ -57,6 +57,7 @@ UBICLOUD_LABEL = "ubicloud-standard-2"
 #: this number because the job is billed for exactly these cores.
 UBICLOUD_VCPUS = 2
 GITHUB_LABEL = "ubuntu-latest"
+WINDOWS_LABEL = "windows-2022"
 
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 CACHE_KEYS_ACTION_FILE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
@@ -104,6 +105,11 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),
+}
+#: Windows-native validation needs GitHub's hosted Windows image; Ubicloud
+#: offers Linux capacity only.
+WINDOWS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
+    "ci.yml": ("extension-tests-windows",),
 }
 #: Jobs that restore at least one cache through the shared renderer.
 CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
