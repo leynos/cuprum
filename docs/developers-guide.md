@@ -463,9 +463,12 @@ configuration.
 Line callbacks in the Python stream backend use two pure helpers from
 `cuprum/_streams.py`:
 
-- `_split_complete_lines(text)` splits text into completed lines, strips each
-  recognized line ending, and returns `(lines, remainder)`. The `remainder` is
-  the final partial line and never ends in `"\n"` or `"\r"`.
+- `_split_complete_lines(text, *, final=True)` splits text into completed
+  lines, strips each recognized line ending, and returns `(lines, remainder)`.
+  With `final=False`, a trailing `"\r"` remains in `remainder` so a following
+  `"\n"` can complete the CRLF pair; the default final call strips that
+  boundary. The line consumer flushes its incremental decoder before making
+  that final call.
 - `_strip_line_ending(line)` removes at most one trailing `"\r\n"`, `"\n"`, or
   `"\r"` sequence. It does not normalize or edit interior text.
 
@@ -1044,6 +1047,48 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 `_override_read_size`, so every value supplied through `--read-sizes` reaches
 the consume and pipeline pump paths without changing public runtime
 configuration.
+
+
+### Aggregate Python stream-operation observation
+
+The pure-Python stream paths expose opt-in aggregate completion telemetry
+through `cuprum.stream_observation.observe_stream_operation`. Registration is
+context-local, so an unregistered drain or pipeline transfer performs no
+measurement or event dispatch. A completed operation emits at most one
+`cuprum.stream_events.StreamOperationEvent`, after the operation (including any
+bounded post-close drain) has finished. No event is emitted per read or per
+chunk.
+
+`StreamOperationEvent` has these fields:
+
+- `operation`: `stream_drain` for `_drain` and `pipeline_transfer` for
+  `_pump_stream`.
+- `outcome`: one of the closed values `eof`, `cancelled`, `downstream_closed`,
+  or `post_close_drain_timeout`.
+- `bytes_consumed`: the aggregate number of bytes returned by the reader,
+  including bytes discarded after downstream closure.
+- `read_operations`: the aggregate number of completed reader calls, including
+  the call that returns EOF.
+- `duration_s`: monotonic elapsed duration in seconds.
+- `exec_id`: an existing pipeline-stage execution token when it can be safely
+  inherited; direct drains carry `None`.
+
+`observe_stream_operation` accepts synchronous hooks. Hook failures are logged
+and suppressed, so an observer or metrics collector cannot change stream
+execution. `cuprum.adapters.stream_metrics.stream_operation_metrics_hook`
+adapts events to the established `MetricsCollector` protocol:
+
+| Metric                                          | Type and unit       | Labels                 |
+| ----------------------------------------------- | ------------------- | ---------------------- |
+| `cuprum_stream_operation_bytes_total`           | counter, bytes      | `operation`, `outcome` |
+| `cuprum_stream_operation_read_operations_total` | counter, operations | `operation`, `outcome` |
+| `cuprum_stream_operation_duration_seconds`      | histogram, seconds  | `operation`, `outcome` |
+
+*Table: aggregate metrics emitted for completed Python stream operations.*
+
+Both labels use only the closed `StreamOperation` and `StreamOperationOutcome`
+vocabularies. Payloads, read sizes, paths, PIDs, descriptors, command
+arguments, exception text, and other unbounded values are not metric labels.
 
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
@@ -1904,15 +1949,16 @@ supporting modules: scenario composition in
 `benchmarks/tee_profile_scenarios.py`, configuration resolution and worker
 command construction in `benchmarks/tee_profile_configuration.py`, plan and
 sweep execution in `benchmarks/tee_profile_execution.py`, profiler
-orchestration in `benchmarks/tee_profile_profilers.py`, and command-line
-interface and JSON output helpers in `benchmarks/tee_profile_driver.py`.
-`TeeProfileScenario` records a resolved scenario: name, fixture path, stage
-count, mode, sink kind, line-callback flag, backend, repeat count, read size,
-encoding, and error handling. `TeeProfileDriverConfig` records fixture paths,
-output directory, profiler choice, warm-up count, measured repeat count, `perf`
-frequency, call-graph configuration, read sizes, sweep rounds, randomization
-order, and an optional scenario name. `read_sizes` must be a non-empty tuple of
-positive integers and `rounds` must be at least one; the configuration also
+orchestration in `benchmarks/tee_profile_profilers.py`, stable JSON artefact
+writing in `benchmarks/tee_profile_output.py`, and command-line interface
+helpers in `benchmarks/tee_profile_driver.py`. `TeeProfileScenario` records a
+resolved scenario: name, fixture path, stage count, mode, sink kind,
+line-callback flag, backend, repeat count, read size, encoding, and error
+handling. `TeeProfileDriverConfig` records fixture paths, output directory,
+profiler choice, warm-up count, measured repeat count, `perf` frequency,
+call-graph configuration, read sizes, sweep rounds, randomization order, and an
+optional scenario name. `read_sizes` must be a non-empty tuple of positive,
+unique integers and `rounds` must be at least one; the configuration also
 validates the run counts, `perf` frequency, and non-blank `perf` call-graph
 setting.
 
@@ -1922,9 +1968,10 @@ The default matrix is stable and ordered:
 2. `echo-textblackhole-nocb-s1`
 3. `echo-pty-nocb-s1`
 4. `tee-devnull-nocb-s1`
-5. `echo-devnull-cb-s1`
-6. `echo-devnull-nocb-s4-python`
-7. `echo-devnull-nocb-s4-rust`
+5. `capture-devnull-nocb-s1`
+6. `echo-devnull-cb-s1`
+7. `echo-devnull-nocb-s4-python`
+8. `echo-devnull-nocb-s4-rust`
 
 The Rust scenario is conditional on `can_use_rust_backend()`, so pure-Python
 installs omit `echo-devnull-nocb-s4-rust` from the plan before execution.
@@ -1933,8 +1980,9 @@ The driver exposes three CLI subcommands:
 
 - `plan` emits a JSON plan with the resolved `worker_command` for each
   scenario.
-- `run-scenario` runs one named scenario with warm-up executions followed by one
-  measured run.
+- `run-scenario` runs the named scenario with warm-up executions followed by
+  one measured run for each configured read size in each round, emitting
+  `len(read_sizes) * rounds` result mappings.
 - `run` executes the full matrix serially.
 
 The profiling sweep controls are `--read-sizes`, a comma-separated list of

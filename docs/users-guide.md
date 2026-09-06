@@ -852,6 +852,44 @@ rather than `pid`, which the operating system can recycle across executions.
 Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 (such as the tracing adapter) drop them.
 
+
+#### Aggregate Python stream-operation events
+
+For opt-in aggregate telemetry from the pure-Python stream paths, register a
+hook with `cuprum.stream_observation.observe_stream_operation`:
+
+```python
+from cuprum import ECHO, sh
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.stream_metrics import stream_operation_metrics_hook
+from cuprum.stream_observation import observe_stream_operation
+
+metrics = InMemoryMetrics()
+with observe_stream_operation(stream_operation_metrics_hook(metrics)):
+    sh.make(ECHO)("hello").run_sync()
+```
+
+One `StreamOperationEvent` is emitted when each completed stream drain or
+pipeline transfer finishes. It reports aggregate `bytes_consumed`, completed
+`read_operations` (including EOF), and monotonic `duration_s`. Its closed
+`operation` values are `stream_drain` and `pipeline_transfer`; its closed
+`outcome` values are `eof`, `cancelled`, `downstream_closed`, and
+`post_close_drain_timeout`. No event is emitted per read or per chunk, and no
+payload is included. Observer failures are best-effort and do not alter stream
+execution. `exec_id` is present only when an existing pipeline-stage
+correlation context safely provides it; direct drains carry `None`.
+
+The optional `stream_operation_metrics_hook` records these metrics, all in the
+units named by their metric:
+
+- `cuprum_stream_operation_bytes_total` (bytes counter)
+- `cuprum_stream_operation_read_operations_total` (read-operation counter)
+- `cuprum_stream_operation_duration_seconds` (seconds histogram)
+
+Metrics use only the bounded `operation` and `outcome` labels. They never label
+payload, read size, path, PID, descriptor, command argument, exception text, or
+another unbounded value.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 

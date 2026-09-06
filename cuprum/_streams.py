@@ -21,6 +21,7 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -32,9 +33,17 @@ from cuprum._streams_pump import (
 )
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import _emit_echo_event
+from cuprum.stream_events import StreamOperation, StreamOperationOutcome
+from cuprum.stream_observation import (
+    _complete_stream_operation,
+    _record_stream_read,
+    _start_stream_operation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.stream_observation import _StreamOperationMeasurement
 
 
 _LOGGER = logging.getLogger("cuprum.stream")
@@ -123,18 +132,22 @@ async def _drain(
     echo_decoder = _echo_decoder(config)
     echo_guard = _EchoGuard()
     state = _DrainState(config, buffer, echo_decoder, on_chunk, echo_guard)
+    measurement = _start_stream_operation(StreamOperation.DRAIN)
     reached_eof = await _drain_chunks(
         stream,
         state,
         read_size=read_size,
+        measurement=measurement,
     )
     if not reached_eof:
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(state)
+    _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
 
     if buffer is None:
         return None
@@ -151,6 +164,7 @@ async def _drain_chunks(
     state: _DrainState,
     *,
     read_size: int,
+    measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
@@ -158,6 +172,7 @@ async def _drain_chunks(
             chunk = await stream.read(read_size)
         except asyncio.CancelledError:
             return False
+        _record_stream_read(measurement, chunk)
         if not chunk:
             return True
         if state.buffer is not None:
@@ -323,61 +338,6 @@ def _emit_completed_lines(
         on_line(line)
 
     return remainder
-
-
-def _split_complete_lines(
-    text: str,
-    *,
-    final: bool = True,
-) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
-
-    Parameters
-    ----------
-    text : str
-        Text to split using Python's universal line boundary rules.
-    final : bool
-        Whether no more decoded text will arrive. A non-final trailing carriage
-        return remains pending because it may prefix a following line feed.
-
-    Returns
-    -------
-    tuple[list[str], str]
-        Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line. A
-        non-final trailing carriage return remains pending.
-    """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if _should_hold_trailing_line(lines[-1], final=final):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
-
-
-def _should_hold_trailing_line(line: str, *, final: bool) -> bool:
-    """Return whether a trailing line needs the next decoded chunk."""
-    if not _ends_with_line_ending(line):
-        return True
-    return not final and line.endswith("\r")
-
-
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith(("\n", "\r"))
-
-
-def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith(("\n", "\r")):
-        return line[:-1]
-    return line
 
 
 __all__ = [

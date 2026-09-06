@@ -295,13 +295,31 @@ This task is complete only when:
   randomized-order coverage were already present. Validation passed with
   `make check-fmt`, focused `cuprum/unittests/test_profile_driver.py` (24
   passed), `make typecheck`, `make lint`, `make markdownlint`, and
-  `make nixie`. Production stream metrics remain intentionally out of scope
-  because the relevant observability is an opt-in adapter boundary; the
-  existing bounded diagnostics are retained. The prior CodeRabbit review
-  `bbef5e1b` posted, its valid inline findings were repaired or evidenced as
-  stale, and all review threads were resolved. Follow-up review `7f92da2e` is
-  queued against the current branch head. The ExecPlan stays `IN PROGRESS`
-  pending that external revalidation.
+  `make nixie`. Per-read stream telemetry remains intentionally out of scope;
+  completed-operation aggregate telemetry is provided through the opt-in
+  stream-operation observer and metrics adapter, with bounded labels. The prior
+  CodeRabbit review `bbef5e1b` posted, its valid inline findings were repaired
+  or evidenced as stale, and all review threads were resolved. Follow-up review
+  `7f92da2e` is queued against the current branch head. The ExecPlan stays
+  `IN PROGRESS` pending that external revalidation.
+
+- [x] 2026-09-06 Observability and review remediation: the aggregate
+  stream-operation observer and bounded metrics adapter were verified as
+  satisfying the Observability finding, so no duplicate telemetry was added.
+  Focused JSON artefact coverage, sweep-artefact assertions, and a Hypothesis
+  property now cover the still-valid profiling findings; documentation records
+  the stream-line and profiling contracts. The wheel snapshot was regenerated
+  for the new tracked modules. Fresh validation passed: 30 focused tests,
+  `make check-fmt`, `make test` (1602 Python tests, 28 behavioural tests, and
+  104 Rust tests), `make typecheck`, `make lint`, `make markdownlint`, and
+  `make nixie`. A new CodeRabbit review is required after this commit and push;
+  the ExecPlan remains `IN PROGRESS` until external revalidation completes.
+
+- Follow-up issue [#367](https://github.com/leynos/cuprum/issues/367): add
+  aggregate stream bytes, read-operation counts, and duration to profiling
+  reports. This is intentionally scoped to benchmark artefact/report output; it
+  is separate from the completed-operation aggregate telemetry now emitted by
+  the opt-in production stream observer and metrics adapter.
 
 ## Surprises & discoveries
 
@@ -573,14 +591,17 @@ This task is complete only when:
   tolerances and D9. Date/Author: 2026-09-06, implementation agent. No
   acceptance criterion or public interface changes.
 
-- Decision D24: retain the established resolver exception contract and current
-  observability boundary during review repair. Rationale: changing the
-  `KeyError` conversion to preserve a chained cause would contradict the
-  established `from None` contract. Production telemetry is also intentionally
-  not added: existing bounded diagnostics and observability hooks suffice, and
-  hot-path metrics would expand this focused scope. Date/Author: 2026-09-06,
-  implementation agent. The remaining valid review findings are being repaired
-  and require deterministic-gate and CodeRabbit revalidation.
+- Decision D24: retain the established resolver exception contract and reject
+  per-read throughput telemetry while permitting completed-operation aggregate
+  stream telemetry during review repair. Rationale: changing the `KeyError`
+  conversion to preserve a chained cause would contradict the established
+  `from None` contract. Per-read events, payload detail, and unbounded labels
+  would add hot-path overhead and cardinality without a stable operational
+  contract. The opt-in stream-operation observer instead emits one completed
+  aggregate event for each drain or pipeline transfer, with bounded operation
+  and outcome labels; observer failures remain best-effort. Date/Author:
+  2026-09-06, implementation agent. The remaining valid review findings are
+  being repaired and require deterministic-gate and CodeRabbit revalidation.
 
 - Decision D25: rebase onto the current `origin/main` while retaining the
   substantive feature commits and review-repair evidence. Rationale: omit only
@@ -597,11 +618,14 @@ This task is complete only when:
 - Decision D27: keep this review pass focused on benchmark configuration
   validation and its direct tests. Rationale: the resolver extraction and
   randomized sweep-order coverage already exist; the remaining valid testing
-  gap is duplicate-read-size and invalid-round validation. Production stream
-  metrics are not added because the observability contract is an opt-in adapter
-  boundary, and adding hot-path metrics would expand this plan's runtime scope.
-  Date/Author: 2026-09-06, implementation agent. No public interface or
-  benchmark protocol changes.
+  gap is duplicate-read-size and invalid-round validation. Per-read production
+  hot-path metrics remain out of scope, but the opt-in adapter boundary now
+  provides one aggregate completion event per stream operation. Benchmark
+  report integration for those aggregate bytes, read-operation counts, and
+  durations is separately tracked in
+  [issue #367](https://github.com/leynos/cuprum/issues/367). Date/Author:
+  2026-09-06, implementation agent. No public runtime interface or stream
+  read-size protocol changes.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
