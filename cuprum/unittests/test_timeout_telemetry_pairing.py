@@ -16,7 +16,7 @@ import contextlib
 import logging
 import typing as typ
 
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum._timeout_reporting import (
@@ -94,6 +94,9 @@ def _sole_record(records: list[logging.LogRecord]) -> logging.LogRecord:
     return records[0]
 
 
+# These properties exercise logging handlers, whose wall time follows host load
+# rather than the cross-channel contract under test.
+@settings(deadline=None)
 @given(pid=_PIDS, configured_timeout=_TIMEOUTS, mode=_MODES)
 def test_timeout_expiry_reports_agree_across_channels(
     pid: int | None,
@@ -136,6 +139,7 @@ def test_timeout_expiry_reports_agree_across_channels(
         )
 
 
+@settings(deadline=None)
 @given(pid=_PIDS, error_types=_ERROR_TYPES)
 def test_teardown_drain_reports_agree_across_channels(
     pid: int | None,

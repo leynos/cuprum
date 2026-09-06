@@ -43,6 +43,8 @@ def test_concurrent_workers_do_not_race(
     _assert_backend_pair_completes(backends, fixture)
 
 
+# Each generated group serializes up to eight real subprocess workers under the
+# backend lock. The helper still bounds a stalled group at 15 seconds.
 @pytest.mark.timeout(90)
 @settings(
     max_examples=20,
