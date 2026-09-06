@@ -1,10 +1,12 @@
-"""The task-lifecycle contracts a pipeline's byte movement depends on.
+"""The task-lifecycle and result-ownership contracts a pipeline depends on.
 
 ``cuprum._pipeline_stream_results`` owns result collection and teardown,
 while ``cuprum._pipeline_streams`` creates one pump task per adjacent stage
 pair.  ``_surface_unexpected_pipe_failures`` then determines which outcomes
-must reach the caller. These tests stay separate from descriptor-lifecycle
-fault injection because they exercise task bookkeeping rather than FD hand-off.
+must reach the caller, and each stage's ``CommandResult`` owns the relay
+fallbacks of its own streams. These tests stay separate from
+descriptor-lifecycle fault injection because they exercise task bookkeeping
+and per-stage result assembly rather than FD hand-off.
 """
 
 from __future__ import annotations
@@ -24,9 +26,15 @@ from cuprum._pipeline_stream_results import (
     _surface_unexpected_pipe_failures,
 )
 from cuprum._pipeline_streams import _create_pipe_tasks
+from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
+from cuprum.echo_observation import observe_echo
+from cuprum.sh import ExecutionContext, RunOutputOptions
+from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.sh import SafeCmd
 
 _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
 
@@ -268,4 +276,124 @@ def test_collect_returns_exceptions_in_task_order() -> None:
     assert results[1] is None, f"a successful task must yield its value: {results!r}"
     assert results[2] is second, (
         f"the third task's failure must come third: {results!r}"
+    )
+
+
+class _Cp1252TextOnlySink:
+    """Text-only sink rejecting payloads CP1252 cannot represent."""
+
+    def __init__(self) -> None:
+        """Record each attempted write payload."""
+        self.attempts: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Record the write, then reject CP1252-unrepresentable text."""
+        self.attempts.append(payload)
+        payload.encode("cp1252")
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+class _PassthroughSink:
+    """Sink that accepts every write, modelling a healthy echo target."""
+
+    def __init__(self) -> None:
+        """Collect written text for assertions."""
+        self.written: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Accept the payload unchanged."""
+        self.written.append(payload)
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
+_EXPECTED_STDERR_FALLBACK = RelayFallback(
+    stream=EchoStream.STDERR,
+    error_category=EchoErrorCategory.UNICODE_ENCODE,
+)
+_NON_ENCODABLE = "héllo ś"
+
+
+@pytest.fixture
+def python_builder() -> cabc.Callable[..., SafeCmd]:
+    """Provide a SafeCmd builder for the current Python interpreter."""
+    return build_python_builder()
+
+
+def test_pipeline_final_stage_owns_its_stdout_diagnostics(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The final stage reports its stdout disablement; earlier stages none."""
+    rejecting = _Cp1252TextOnlySink()
+    accepting = _PassthroughSink()
+
+    async def run_case() -> tuple[tuple[RelayFallback, ...], tuple[RelayFallback, ...]]:
+        """Pipe two stages; the final stage's stdout echoes to the bad sink."""
+        with observe_echo(lambda _event: None):
+            pipeline = python_builder("-c", "print('stage one')") | python_builder(
+                "-c",
+                f"import sys; print(sys.stdin.read().strip() + ' {_NON_ENCODABLE}')",
+            )
+            result = await pipeline.run(
+                output=RunOutputOptions(capture=True, echo=True),
+                context=ExecutionContext(
+                    stdout_sink=typ.cast("typ.IO[str]", accepting),
+                    stderr_sink=typ.cast("typ.IO[str]", rejecting),
+                ),
+            )
+        return result.stages[0].relay_fallbacks, result.stages[1].relay_fallbacks
+
+    first_fallbacks, final_fallbacks = asyncio.run(run_case())
+
+    assert first_fallbacks == (), (
+        f"the first stage has no echo of its own stdout, got {first_fallbacks!r}"
+    )
+    # The final stage's stdout echoes through the context's stdout sink, which
+    # is healthy here, so both stages report empty records for this wiring.
+    assert final_fallbacks == (), (
+        f"the final stage's stdout used the healthy sink, got {final_fallbacks!r}"
+    )
+
+
+def test_pipeline_stage_results_keep_stage_order(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Stage order is preserved while diagnostics stay per stage."""
+    rejecting = _Cp1252TextOnlySink()
+
+    async def run_case() -> tuple[
+        int, tuple[RelayFallback, ...], tuple[RelayFallback, ...]
+    ]:
+        """Run a two-stage pipeline echoing every stderr to one sink."""
+        with observe_echo(lambda _event: None):
+            pipeline = python_builder(
+                "-c", "import sys; sys.stderr.write('wörld ś\n'); print('mid')"
+            ) | python_builder(
+                "-c", "import sys; sys.stderr.write('zażółć\n'); print('done')"
+            )
+            result = await pipeline.run(
+                output=RunOutputOptions(capture=True, echo=True),
+                context=ExecutionContext(
+                    stderr_sink=typ.cast("typ.IO[str]", rejecting),
+                ),
+            )
+        return (
+            len(result.stages),
+            result.stages[0].relay_fallbacks,
+            result.stages[1].relay_fallbacks,
+        )
+
+    stage_count, first_fallbacks, second_fallbacks = asyncio.run(run_case())
+
+    assert stage_count == 2, "stage order and count must be preserved"
+    assert first_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
+        f"the first stage's stderr failure must be recorded, got {first_fallbacks!r}"
+    )
+    assert second_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
+        f"the second stage's stderr failure must be recorded, got {second_fallbacks!r}"
     )
