@@ -142,9 +142,10 @@ def test_sccache_uses_a_caller_owned_directory_not_the_github_backend() -> None:
 def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
     """Leave one owner per path: this workflow's steps, not the shared action's.
 
-    The shared action's `actions/cache` step covers `target/${BUILD_PROFILE}`
-    as well as the registry, and it is gated on `cache-provider: github`.
-    Selecting `external` is what disables the target archive.
+    Selecting `external` delegates cache ownership to the workflow. The lint
+    job temporarily selects a second toolchain because Nixie's Merman
+    dependency needs newer Rust than the project gate; both setup steps must
+    keep that same external cache policy.
     """
     for workflow_name, job_name in expand(CACHED_JOBS):
         setup_steps = [
@@ -154,19 +155,24 @@ def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
         ]
         if not setup_steps:
             continue
-        assert len(setup_steps) == 1, (
-            f"{workflow_name}:{job_name} must use shared setup-rust once"
+        expected_count = (
+            2 if (workflow_name, job_name) == ("ci.yml", "lint-test") else 1
         )
-        inputs = step_inputs(
-            setup_steps[0], f"{workflow_name}:{job_name} setup-rust inputs"
+        assert len(setup_steps) == expected_count, (
+            f"{workflow_name}:{job_name} must use shared setup-rust "
+            f"{expected_count} time(s)"
         )
-        assert inputs.get("cache-provider") == "external", (
-            f"{workflow_name}:{job_name} must delegate cache ownership to the "
-            "caller, which is also what disables the shared target archive"
-        )
-        assert inputs.get("use-sccache") == "false", (
-            f"{workflow_name}:{job_name} must disable the shared compiler cache"
-        )
+        for setup_step in setup_steps:
+            inputs = step_inputs(
+                setup_step, f"{workflow_name}:{job_name} setup-rust inputs"
+            )
+            assert inputs.get("cache-provider") == "external", (
+                f"{workflow_name}:{job_name} must delegate cache ownership to the "
+                "workflow"
+            )
+            assert inputs.get("use-sccache") == "false", (
+                f"{workflow_name}:{job_name} must disable the shared compiler cache"
+            )
 
 
 def test_every_key_names_the_runner_lane_that_wrote_it() -> None:

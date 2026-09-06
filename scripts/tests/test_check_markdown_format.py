@@ -7,6 +7,7 @@ preservation, formatter errors, and argument validation.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ FORMATTER_FLAGS = (
     "--fences",
 )
 LINE_ALPHABET = tuple("abcdefghijklmnopqrstuvwxyz0123456789 -_[]*")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_fake_formatter(directory: Path) -> tuple[Path, Path]:
@@ -122,6 +124,22 @@ def test_requires_at_least_one_markdown_file(formatter: tuple[Path, Path]) -> No
     assert result.returncode == 64, result.stderr
     assert "Usage:" in result.stderr, result.stderr
     assert not call_log.exists(), "the formatter must not run for an empty file list"
+
+
+def test_root_conftest_defers_workflow_helper_imports() -> None:
+    """Keep isolated script-test collection free of workflow dependencies."""
+    source = (REPOSITORY_ROOT / "conftest.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    workflow_imports = [
+        node
+        for node in module.body
+        if isinstance(node, ast.ImportFrom) and node.module == "tests.helpers.workflow"
+    ]
+
+    assert not workflow_imports, (
+        "root conftest.py must not require workflow-parser dependencies during "
+        "collection of isolated script tests"
+    )
 
 
 def test_reports_a_missing_formatter(tmp_path: Path) -> None:
