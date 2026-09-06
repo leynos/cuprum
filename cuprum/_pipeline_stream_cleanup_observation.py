@@ -68,6 +68,7 @@ def _log_native_pump_cleanup_completed(
     )
     _emit_pump_event(event)
 
+
 def _log_native_pump_cleanup_grace_expired(
     logger: logging.Logger,
     elapsed_s: float,
@@ -89,6 +90,7 @@ def _log_native_pump_cleanup_grace_expired(
         },
     )
     _emit_pump_event(event)
+
 
 def _log_native_pump_cleanup_deferred(logger: logging.Logger) -> None:
     """Record completion of cleanup deferred beyond the caller grace."""

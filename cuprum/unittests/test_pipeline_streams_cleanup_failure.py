@@ -50,7 +50,7 @@ async def _cancel_pump_with_failing_restore(
     state: _CancellationState,
 ) -> None:
     """Cancel a hop and prove it settles within the default grace period."""
-    task: asyncio.Task[bool] | None = None
+    task: asyncio.Task[None] | None = None
     try:
         with owned_fds() as (reader_fd, writer_fd):
             pump_state = _pipeline_stream_native_cleanup._RustPumpState(
@@ -67,6 +67,7 @@ async def _cancel_pump_with_failing_restore(
             )
             started = await asyncio.to_thread(state.worker_started.wait, 5.0)
             assert started, "the native-pump stand-in must start before cancellation"
+            assert task is not None, "the cancellation helper must create the pump task"
             task.cancel()
             await asyncio.sleep(0)
             state.release.set()

@@ -15,7 +15,9 @@ import pytest
 from cuprum import observe
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
     RUST_PUMP_CLEANUP_DURATION_SECONDS,
+    RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
     RUST_PUMP_CLEANUP_TOTAL,
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
@@ -23,8 +25,6 @@ from cuprum.adapters.pump_metrics import (
     UNKNOWN_DECLINE_REASON,
     PumpMetricsHook,
     pump_metrics_hook,
-    RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
-    RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
 )
 from cuprum.context import current_context
 from cuprum.events import ExecPhase
@@ -53,6 +53,7 @@ if typ.TYPE_CHECKING:
 _BOUNDED_REASONS = frozenset(
     {reason.value for reason in RustPumpDeclineReason} | {UNKNOWN_DECLINE_REASON},
 )
+
 
 @pytest.mark.parametrize(
     ("trigger", "expected_reason"),
@@ -200,6 +201,7 @@ def test_a_completed_native_cleanup_records_count_and_duration() -> None:
     assert collector.histograms == [(RUST_PUMP_CLEANUP_DURATION_SECONDS, 0.25, {})], (
         f"completed cleanup must observe its duration, found {collector.histograms}"
     )
+
 
 def test_expired_and_deferred_cleanup_metrics_stay_unlabelled() -> None:
     """New cleanup outcomes add fixed-cardinality counters only."""
