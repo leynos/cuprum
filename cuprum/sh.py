@@ -582,7 +582,7 @@ async def _iter_line_events(
     coordinator = asyncio.create_task(drive())
     try:
         while True:
-            item = await queue.get()
+            item = await _next_queue_item(queue, result_future)
             if isinstance(item, LineEvent):
                 yield item
             else:
@@ -596,6 +596,36 @@ async def _iter_line_events(
         if not result_future.done():
             coordinator.cancel()
         await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
+
+
+async def _next_queue_item(
+    queue: asyncio.Queue[LineEvent | CommandResult],
+    result_future: asyncio.Future[CommandResult],
+) -> LineEvent | CommandResult:
+    """Get the next queue item, failing fast when the run has already failed.
+
+    The coordinator publishes errors on the future rather than the queue, so
+    the queue alone would block forever after a timeout or a spawn failure.
+    Racing the two, and preferring the future's outcome, turns a published
+    failure into an immediate raise.
+
+    Returns
+    -------
+    LineEvent | CommandResult
+        The next line event, or the terminal result that ends iteration.
+    """
+    getter = asyncio.ensure_future(queue.get())
+    failure = asyncio.ensure_future(result_future)
+    await asyncio.wait(
+        {getter, failure},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if failure.done() and not failure.cancelled():
+        error = failure.exception()
+        if error is not None:
+            getter.cancel()
+            raise error
+    return await getter
 
 
 async def _absorb_coordinator(
@@ -706,6 +736,7 @@ class SafeCmd:
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
+                on_line=out.on_line,
             ),
             tracking,
         )
@@ -988,6 +1019,7 @@ __all__ = [
     "CommandResult",
     "ExecutionContext",
     "IOOptions",
+    "LineStream",
     "Pipeline",
     "PipelineResult",
     "RunOutputOptions",

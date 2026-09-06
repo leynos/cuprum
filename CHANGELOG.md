@@ -20,6 +20,28 @@
 
 ### Added
 
+- **`SafeCmd.lines()`:** Iterate a command's decoded output lines as they
+  arrive. Each yielded `LineEvent` carries the stream it arrived on (`stdout` or
+  `stderr`), monotonic seconds since the command started (`at`), and the
+  decoded text without its line terminator. Lines preserve arrival order within
+  each stream; capture and echo stay governed by the usual `RunOutputOptions`
+  and are not disabled by iterating. After iteration completes, the returned
+  `LineStream` exposes the run's `CommandResult` on its `result` attribute.
+  Cancelling a task iterating `lines()`, breaking out of the loop, or closing
+  the stream tears the subprocess down the same way a cancelled `run()` does:
+  `SIGTERM`, the cancel grace wait, then `SIGKILL`. Timeouts behave identically
+  to `run()`.
+- **`LineEvent`:** The frozen payload a line observer receives, carrying
+  `stream`, `at`, and `text`.
+- **`LineHook`:** The synchronous callable type a line observer must satisfy.
+- **`LineStream`:** The async iterator `SafeCmd.lines()` returns, exposing
+  the final `CommandResult` once iteration completes.
+- **`LineStreamName`:** The closed literal type of a line event's stream
+  name (`"stdout"` or `"stderr"`).
+- **`RunOutputOptions.on_line`:** Register a synchronous line callback that
+  receives the same `LineEvent` values while `run()` executes. Independent of
+  `capture` and `echo`; registering it keeps the stream on the Python pathway.
+
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
   non-final stage is the first to fail and at least one other stage is still

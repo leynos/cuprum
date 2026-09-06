@@ -2098,6 +2098,10 @@ operations. Both pathways remain available and are treated as first-class:
 - The existing asyncio-based implementation;
 - Used when the Rust extension is unavailable or explicitly disabled;
 - Remains the reference implementation for behavioural correctness.
+- Owns line-level observation: `SafeCmd.lines()` and the `on_line` option
+  deliver decoded `LineEvent` values stamped with a monotonic arrival time, and
+  any registered line callback keeps a stream on the Python pathway because the
+  incremental decoder and per-line fan-out have no Rust counterpart.
 
 **Rust pathway (`cuprum._streams_rs`):**
 
