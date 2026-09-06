@@ -39,25 +39,7 @@ def _require(*, condition: bool, message: str) -> None:
 
 
 def mapping(value: object, message: str) -> dict[str, object]:
-    """Narrow a workflow value to a string-keyed mapping.
-
-    Parameters
-    ----------
-    value : object
-        Value read from the workflow document.
-    message : str
-        Diagnostic message to include when ``value`` is not a mapping.
-
-    Returns
-    -------
-    dict[str, object]
-        The narrowed mapping.
-
-    Raises
-    ------
-    AssertionError
-        If ``value`` is not a mapping with only string keys.
-    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
+    """Narrow ``value`` to a string-keyed mapping, or fail with ``message``."""
     _require(
         condition=isinstance(value, dict)
         and all(isinstance(key, str) for key in value),
@@ -305,15 +287,27 @@ def first_step_running(
 ) -> tuple[int, str]:
     """Return the first step in a job that runs ``command``.
 
+    Parameters
+    ----------
+    workflow_data : Workflow
+        Parsed workflow containing the job to search.
+    command : str
+        Command whose token sequence must begin a step's script segment.
+    job_name : str
+        Name of the job to search.
+
     Returns
     -------
     tuple[int, str]
         The zero-based step position and its matching shell script.
 
-    The contract failures propagate from ``_require``: an assertion when no
-    step in the named job runs ``command``, and ``ValueError`` when a step
-    script contains unclosed shell quoting.
-    """
+    Raises
+    ------
+    AssertionError
+        If no step in the named job runs ``command``.
+    ValueError
+        If a step script contains unclosed shell quoting.
+    """  # ruff: ignore[docstring-extraneous-exception] - exceptions propagate from _require and script_runs_command.
     found = next(
         (
             (index, script)

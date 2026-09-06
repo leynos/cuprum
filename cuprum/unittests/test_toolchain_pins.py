@@ -178,8 +178,13 @@ def _read_pin_sites(root: pth.Path, tool: str, env_name: str) -> dict[str, str]:
     }
 
 
-def _expanded_make_recipes(root: pth.Path, *, ruff_pin: str, ty_pin: str) -> str:
-    """Return the dry-run expansion of the lint and typecheck recipes."""
+def _expanded_make_recipes(
+    root: pth.Path,
+    *,
+    targets: tuple[str, ...] = ("lint", "typecheck"),
+    extra_variables: dict[str, str] | None = None,
+) -> str:
+    """Return the dry-run expansion of the requested Makefile recipes."""
     make_executable = shutil.which("make")
     assert make_executable is not None, "make must be available to expand recipes"
     # The fixed local Makefile command only expands recipes; it runs no target.
@@ -187,10 +192,8 @@ def _expanded_make_recipes(root: pth.Path, *, ruff_pin: str, ty_pin: str) -> str
         [
             make_executable,
             "--dry-run",
-            f"RUFF_VERSION={ruff_pin}",
-            f"TY_VERSION={ty_pin}",
-            "lint",
-            "typecheck",
+            *(f"{name}={value}" for name, value in (extra_variables or {}).items()),
+            *targets,
         ],
         check=True,
         shell=False,
@@ -278,9 +281,9 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()
+    recipes = _expanded_make_recipes(root)
     ruff_pin = _read_makefile_pin(root, "RUFF_VERSION")
     ty_pin = _read_makefile_pin(root, "TY_VERSION")
-    recipes = _expanded_make_recipes(root, ruff_pin=ruff_pin, ty_pin=ty_pin)
 
     assert f"uv tool run --from 'ruff=={ruff_pin}' ruff check" in recipes, (
         "make lint must run Ruff through the pinned uv tool command"
@@ -289,18 +292,48 @@ def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
         "make typecheck must run ty through its pin against the project venv"
     )
 
+
 def test_python_lint_passes_the_whole_estate_to_interrogate() -> None:
     """The lint recipe interrogates every Python scope at 100 per cent."""
     root = repo_root()
-    recipes = _expanded_make_recipes(
-        root,
-        ruff_pin=_read_makefile_pin(root, "RUFF_VERSION"),
-        ty_pin=_read_makefile_pin(root, "TY_VERSION"),
-    )
+    recipes = _expanded_make_recipes(root)
     assert (
         "interrogate --fail-under 100 benchmarks conftest.py cuprum scripts tests"
         in recipes
     ), "make lint must pass the whole Python estate to interrogate"
+
+
+def test_interrogate_targets_override_reaches_the_lint_recipe() -> None:
+    """An INTERROGATE_TARGETS override substitutes into the interrogate recipe."""
+    recipes = _expanded_make_recipes(
+        repo_root(),
+        extra_variables={"INTERROGATE_TARGETS": "cuprum tests"},
+    )
+    assert "interrogate --fail-under 100 cuprum tests" in recipes, (
+        "make lint must honour the INTERROGATE_TARGETS override"
+    )
+    assert "interrogate --fail-under 100 benchmarks" not in recipes, (
+        "the default estate scopes must not survive an explicit override"
+    )
+
+
+def test_markdownlint_lints_tracked_files_through_the_local_tool_path() -> None:
+    """The markdownlint recipe pipes tracked files with the local tool PATH."""
+    recipes = _expanded_make_recipes(repo_root(), targets=("markdownlint",))
+    assert "git ls-files -z '*.md'" in recipes, (
+        "make markdownlint must lint exactly the tracked Markdown files"
+    )
+    assert re.search(r'PATH="[^"]+" git ls-files', recipes) is not None, (
+        "LOCAL_TOOL_ENV must reach the git side of the pipeline"
+    )
+    assert "| PATH=" in recipes, (
+        "LOCAL_TOOL_ENV must reach the xargs side so a clean PATH resolves the tool"
+    )
+    assert "xargs -0 markdownlint-cli2" in recipes, (
+        "the pipeline must run markdownlint-cli2 over the null-delimited file list"
+    )
+
+
 def _read_df12_refs(root: pth.Path) -> dict[str, str]:
     """Read the df12-python-lints git ref from both configured locations."""
     df12_deps = [

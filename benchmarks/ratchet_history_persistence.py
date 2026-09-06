@@ -44,6 +44,7 @@ class BaselineHistoryReadError(ValueError, BenchmarkError):
     """
 
     def __init__(self, reason: str, *, path: pth.Path | None = None) -> None:
+        """Store the failure reason and optional history path."""
         self.path = path
         self.reason = reason
         subject = f"baseline history {path}" if path is not None else "baseline history"
@@ -61,6 +62,7 @@ class BaselineHistoryNotFoundError(BaselineHistoryReadError):
     """
 
     def __init__(self, path: pth.Path) -> None:
+        """Report the missing history file at ``path``."""
         super().__init__("does not exist", path=path)
 
 

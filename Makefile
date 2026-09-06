@@ -100,7 +100,8 @@ TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
 # Interrogate the whole Python estate, not only the production package: tests,
 # benchmarks, scripts, and the root conftest document their definitions too.
-# Per-scope tuning lives in [tool.interrogate] in pyproject.toml.
+# Per-scope tuning may be added under a [tool.interrogate] section in
+# pyproject.toml; none is configured today.
 INTERROGATE_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 INTERROGATE = $(UV_RUN_ENV) uv run interrogate --fail-under 100 $(INTERROGATE_TARGETS)
 PYLINT_PYTHON ?= pypy

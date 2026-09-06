@@ -75,11 +75,10 @@ documentation, and a percentage ratchet is harder to reason about than a flat
 
 ## Decision Outcome / Proposed Direction
 
-Choose Option B. The `lint` target runs `interrogate --fail-under 100` over
-`benchmarks conftest.py cuprum scripts tests` immediately after `ruff check`
-and before the PyPy-backed Pylint tier, using the Makefile's
-`$(UV_RUN_ENV) uv run …` convention through the `$(INTERROGATE)` variable.
-`interrogate` is added to the `dev` dependency group in `pyproject.toml`.
+Choose Option B. The `lint` target runs `interrogate --fail-under 100 cuprum`
+immediately after `ruff check` and before the PyPy-backed Pylint tier, using
+the Makefile's `$(UV_RUN_ENV) uv run …` convention. `interrogate` is added to
+the `dev` dependency group in `pyproject.toml`.
 
 ### Amendment (2026-09-05): coverage beyond the production package
 
@@ -93,9 +92,9 @@ future undocumented helpers rather than enforced documentation. The gate
 therefore extends as-is: `$(INTERROGATE)` interrogates
 `benchmarks conftest.py cuprum scripts tests` at the same absolute
 `--fail-under 100` bar, with no per-scope exclusions; no interrogate ignore
-flags are used and no `[tool.interrogate]` configuration section exists.
-The deliberate exclusions are none; every documentable node in every scope
-must carry a docstring.
+flags are used and no `[tool.interrogate]` configuration section exists. The
+deliberate exclusions are none; every documentable node in every scope must
+carry a docstring.
 
 The three tiers now run in this order, each gating the next:
 

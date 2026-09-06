@@ -165,6 +165,7 @@ def test_main_forwards_the_requested_run_status(
     captured: list[ArtefactQuery] = []
 
     def _no_baseline(*, query: ArtefactQuery, token: str) -> None:
+        """Record the artefact query while pretending no baseline exists."""
         captured.append(query)
         _ = token
 
