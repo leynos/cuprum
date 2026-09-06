@@ -58,6 +58,8 @@ def test_pipeline_surfaces_failure_on_final_stage_failure() -> None:
 
 @dc.dataclass(frozen=True, slots=True)
 class _ScenarioPipeline:
+    """A scenario pipeline paired with the allowlist that scopes it."""
+
     pipeline: Pipeline
     allowlist: frozenset[Program]
 
@@ -224,6 +226,7 @@ def when_run_pipeline_async(pipeline_under_test: _ScenarioPipeline) -> PipelineR
     """
 
     async def run() -> PipelineResult:
+        """Execute the scenario pipeline inside its scoped allowlist."""
         with scoped(ScopeConfig(allowlist=pipeline_under_test.allowlist)):
             return await pipeline_under_test.pipeline.run()
 

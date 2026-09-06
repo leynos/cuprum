@@ -114,6 +114,7 @@ def _cancel_command_with_grace(
     """Run a command, cancel it, and return the recorded child PID."""
 
     async def orchestrate() -> int:
+        """Run the command as a task, then cancel it after the PID appears."""
         grace = (
             cancel_grace
             if cancel_grace is not None

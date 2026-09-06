@@ -125,6 +125,7 @@ def test_degradation_counters_survive_concurrent_increments(
     barrier = threading.Barrier(workers, timeout=5.0)
 
     def record() -> None:
+        """Record one worker's share of increments after the barrier."""
         barrier.wait()
         for _ in range(per_worker):
             degradation_module._record_degradation("stale_cache")

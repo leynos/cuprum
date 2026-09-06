@@ -267,6 +267,7 @@ def given_context_with_hook(
     """
 
     def my_hook(cmd: object) -> None:
+        """Accept a command invocation without recording it."""
         _ = cmd  # Unused
 
     behaviour_state["test_hook"] = my_hook

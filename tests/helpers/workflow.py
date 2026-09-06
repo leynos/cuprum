@@ -11,12 +11,20 @@ from .workflow_gate import bench_output, benchmark_runs, matches_filter
 from .workflow_shell import script_runs_command
 from .workflow_types import Job, Step, Workflow
 
-# fmt: off
-__all__ = ("Job", "Step", "Workflow", "bench_output", "benchmark_runs",
-           "first_step_running", "matches_filter", "script_runs_command")
-# fmt: on
+__all__ = (
+    "Job",
+    "Step",
+    "Workflow",
+    "bench_output",
+    "benchmark_runs",
+    "first_step_running",
+    "matches_filter",
+    "script_runs_command",
+)
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
 CI_WORKFLOW = ".github/workflows/ci.yml"
 CHANGES_JOB = "changes"
 BENCHMARK_JOB = "benchmark-ratchet"
@@ -25,30 +33,13 @@ FILTER_NAME = "bench"
 
 
 def _require(*, condition: bool, message: str) -> None:
+    """Raise a contract failure when ``condition`` does not hold."""
     if not condition:
         raise AssertionError(message)
 
 
 def mapping(value: object, message: str) -> dict[str, object]:
-    """Narrow a workflow value to a string-keyed mapping.
-
-    Parameters
-    ----------
-    value : object
-        Value read from the workflow document.
-    message : str
-        Diagnostic message to include when ``value`` is not a mapping.
-
-    Returns
-    -------
-    dict[str, object]
-        The narrowed mapping.
-
-    Raises
-    ------
-    AssertionError
-        If ``value`` is not a mapping with only string keys.
-    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
+    """Narrow ``value`` to a string-keyed mapping, or fail with ``message``."""
     _require(
         condition=isinstance(value, dict)
         and all(isinstance(key, str) for key in value),
@@ -230,6 +221,7 @@ def step_named(
 def _step_matching(
     workflow_data: Workflow, job_name: str, field_name: str, requested_value: str
 ) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
+    """Return the matching step plus every declared step for diagnostics."""
     declared_steps = steps(workflow_data, job_name)
     found = next(
         (step for step in declared_steps if step.get(field_name) == requested_value),
@@ -256,6 +248,7 @@ def script_of(step: cabc.Mapping[str, object]) -> str | None:
 
 
 def _declared_steps(job_payload: object, *, job_name: str) -> list[dict[str, object]]:
+    """Return a job's steps, tolerating a job payload without any."""
     declared = mapping(job_payload, f"job {job_name!r}").get("steps")
     if not isinstance(declared, list):
         return []
@@ -314,7 +307,7 @@ def first_step_running(
         If no step in the named job runs ``command``.
     ValueError
         If a step script contains unclosed shell quoting.
-    """  # ruff: ignore[docstring-extraneous-exception] - contract validation delegates to _require.
+    """  # ruff: ignore[docstring-extraneous-exception] - exceptions propagate from _require and script_runs_command.
     found = next(
         (
             (index, script)

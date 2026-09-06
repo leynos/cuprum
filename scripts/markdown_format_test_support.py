@@ -25,9 +25,11 @@ class _UnavailableTestDependencyError(RuntimeError):
     """Report a missing external dependency for the integration test setup."""
 
     def __init__(self, dependency: str) -> None:
+        """Record which dependency the integration test could not find."""
         self._dependency = dependency
 
     def __str__(self) -> str:
+        """Name the missing dependency in the failure message."""
         return f"the gate integration test requires {self._dependency}"
 
 

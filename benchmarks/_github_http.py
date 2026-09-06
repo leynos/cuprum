@@ -141,6 +141,7 @@ class _ArtefactArchiveRedirectHandler(urllib.request.HTTPRedirectHandler):
         *args: object,
         **kwargs: object,
     ) -> urllib.request.Request | None:
+        """Delegate to urllib, stripping sensitive headers on cross-origin hops."""
         fp, code, msg, headers, newurl = _redirect_request_arguments(args, kwargs)
         redirected_request = super().redirect_request(
             req,
@@ -185,6 +186,7 @@ def _load_bounded_response_bytes(
     opener = urllib.request.build_opener(_ArtefactArchiveRedirectHandler())
 
     def _read_bounded_body() -> bytes:
+        """Read the response body, raising when it exceeds the byte ceiling."""
         with opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             chunks: list[bytes] = []
             body_size = 0

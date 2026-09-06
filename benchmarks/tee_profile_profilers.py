@@ -198,6 +198,8 @@ class ProfilerAdapter(typ.Protocol):
 
 
 class _NoneProfiler:
+    """Profiler adapter that runs the worker without any sampling."""
+
     @staticmethod
     def run(
         scenario: TeeProfileScenario,
@@ -216,6 +218,8 @@ class _NoneProfiler:
 
 
 class _PerfProfiler:
+    """Profiler adapter that records the scenario under Linux ``perf``."""
+
     @staticmethod
     def run(
         scenario: TeeProfileScenario,
@@ -228,6 +232,8 @@ class _PerfProfiler:
 
 
 class _PySpyProfiler:
+    """Profiler adapter that records the scenario under ``py-spy``."""
+
     @staticmethod
     def run(
         scenario: TeeProfileScenario,

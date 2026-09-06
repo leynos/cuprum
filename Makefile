@@ -98,6 +98,12 @@ RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ruff==$(R
 TY_VERSION ?= 0.0.74
 TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
+# Interrogate the whole Python estate, not only the production package: tests,
+# benchmarks, scripts, and the root conftest document their definitions too.
+# Per-scope tuning may be added under a [tool.interrogate] section in
+# pyproject.toml; none is configured today.
+INTERROGATE_TARGETS ?= benchmarks conftest.py cuprum scripts tests
+INTERROGATE = $(UV_RUN_ENV) uv run interrogate --fail-under 100 $(INTERROGATE_TARGETS)
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
@@ -220,7 +226,7 @@ test-markdown-format: ## Validate the Markdown formatter checker
 lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
 
 python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
-	$(RUFF) check && $(UV_RUN_ENV) uv run interrogate --fail-under 100 cuprum && $(PYLINT) $(PYLINT_TARGETS)
+	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests tests
 
@@ -249,7 +255,7 @@ typecheck: build ## Run typechecking
 	$(TY) check --python .venv
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	$(LOCAL_TOOL_ENV) $(MDLINT) '**/*.md'
+	$(LOCAL_TOOL_ENV) git ls-files -z '*.md' | $(LOCAL_TOOL_ENV) xargs -0 $(MDLINT)
 	+$(MAKE) spelling
 
 spelling: $(SPELLING_HELPER_TARGET) _run_spelling_gate ## Enforce en-GB-oxendict spelling in prose and source

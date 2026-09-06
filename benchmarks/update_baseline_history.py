@@ -51,6 +51,7 @@ class _PositiveWindowArgumentError(argparse.ArgumentTypeError):
     """Argparse error for a non-positive history window."""
 
     def __init__(self) -> None:
+        """Report the minimum accepted window size."""
         super().__init__("window must be at least 1")
 
 

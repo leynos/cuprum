@@ -144,11 +144,15 @@ def given_structured_logging_hook(
     logger.handlers.clear()
 
     class RecordCapture(logging.Handler):
+        """Logging handler capturing emitted records for later inspection."""
+
         def __init__(self) -> None:
+            """Start the handler with an empty captured-record list."""
             super().__init__()
             self.records: list[logging.LogRecord] = []
 
         def emit(self, record: logging.LogRecord) -> None:
+            """Append one emitted record to the capture list."""
             self.records = [*self.records, record]
 
     handler = RecordCapture()

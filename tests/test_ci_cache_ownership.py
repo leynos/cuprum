@@ -57,6 +57,7 @@ MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
 
 
 def _key_of(step: Step, message: str) -> str:
+    """Return a cache step's ``key`` input, asserting it is a string."""
     key = step_inputs(step, message).get("key")
     assert isinstance(key, str), f"{message}: key must be a string"
     return key
