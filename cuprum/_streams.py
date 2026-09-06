@@ -42,9 +42,17 @@ from cuprum._streams_pump import (
 )
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import _emit_echo_event
+from cuprum.stream_events import StreamOperation, StreamOperationOutcome
+from cuprum.stream_observation import (
+    _complete_stream_operation,
+    _record_stream_read,
+    _start_stream_operation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.stream_observation import _StreamOperationMeasurement
 
 
 _LOGGER = logging.getLogger("cuprum.stream")
@@ -152,14 +160,22 @@ async def _drain(
         echo_guard,
         echo_limiter=echo_limiter,
     )
-    reached_eof = await _drain_chunks(stream, state, read_size=read_size)
+    measurement = _start_stream_operation(StreamOperation.DRAIN)
+    reached_eof = await _drain_chunks(
+        stream,
+        state,
+        read_size=read_size,
+        measurement=measurement,
+    )
     if not reached_eof:
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(state)
+    _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
 
     if buffer is None:
         return None
@@ -176,6 +192,7 @@ async def _drain_chunks(
     state: _DrainState,
     *,
     read_size: int,
+    measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
@@ -183,6 +200,7 @@ async def _drain_chunks(
             chunk = await stream.read(read_size)
         except asyncio.CancelledError:
             return False
+        _record_stream_read(measurement, chunk)
         if not chunk:
             return True
         if state.buffer is not None:

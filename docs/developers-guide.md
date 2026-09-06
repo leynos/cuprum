@@ -1152,6 +1152,24 @@ a public configuration option. It is independent of the Rust extension's
 The selection evidence and raw samples are recorded in
 [`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
 
+### Aggregate Python stream-operation observation
+
+The pure-Python drain and pipeline-transfer paths expose opt-in aggregate
+completion telemetry through `cuprum.stream_observation.observe_stream_operation`.
+Registration is context-local: an unregistered operation performs no measurement
+or event dispatch, and a registered operation emits at most one completion event.
+There is no event per read or chunk.
+
+`StreamOperationEvent` records the closed `operation` and `outcome` vocabularies,
+aggregate `bytes_consumed` and `read_operations` (including EOF reads), monotonic
+`duration_s`, and an existing `exec_id` only where safely inherited. Observer
+failures are logged and suppressed. The metrics adapter emits
+`cuprum_stream_operation_bytes_total`,
+`cuprum_stream_operation_read_operations_total`, and
+`cuprum_stream_operation_duration_seconds`, with only closed `operation` and
+`outcome` labels. Read sizes, payloads, paths, PIDs, descriptors, arguments, and
+exception text are never labels.
+
 ### Concurrency model
 
 Each `_drain()` invocation is self-contained. It owns its capture buffer

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import json
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from benchmarks import profile_tee_hotpath, tee_profile_driver, tee_profile_scenarios
 from benchmarks.profile_tee_hotpath import TeeProfileDriverConfig
@@ -112,6 +115,18 @@ def test_profile_sweep_runs_every_size_in_each_round(
     )
     assert set(observed[2:]) == {4096, 16384}, (
         f"second round must visit each size exactly once, got {observed}"
+    )
+    assert config.scenario_name is not None
+    sweep_path = config.output_dir / config.scenario_name / "read-size-sweep.json"
+    sweep = json.loads(sweep_path.read_text())
+    assert sweep == {
+        "randomize_order": True,
+        "read_sizes": [4096, 16384],
+        "rounds": 2,
+        "samples": results,
+    }, f"sweep artefact must serialize its metadata and every sample, got {sweep}"
+    assert {sample["read_size"] for sample in sweep["samples"]} == {4096, 16384}, (
+        "serialized sweep samples must cover every requested read size"
     )
 
 
@@ -227,4 +242,98 @@ def test_profile_sweep_uses_injected_shuffle_dependency(
 
     assert observed == [16384, 4096, 16384, 4096], (
         f"the sweep must use the injected read-size order in each round, got {observed}"
+    )
+
+
+_READ_SIZE_SWEEPS = st.lists(
+    st.integers(min_value=1, max_value=131072),
+    min_size=1,
+    max_size=4,
+    unique=True,
+).map(tuple)
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    derandomize=True,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    read_sizes=_READ_SIZE_SWEEPS,
+    rounds=st.integers(min_value=1, max_value=4),
+    data=st.data(),
+)
+def test_profile_sweep_covers_every_generated_measurement(
+    tmp_path: pth.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    read_sizes: tuple[int, ...],
+    rounds: int,
+    data: st.DataObject,
+) -> None:
+    """Every injected round permutation covers each read size exactly once."""
+    config = dc.replace(_config(tmp_path, read_sizes=read_sizes), rounds=rounds)
+    assert config.scenario_name is not None
+    expected = {
+        (round_index, read_size, config.scenario_name)
+        for round_index in range(1, rounds + 1)
+        for read_size in read_sizes
+    }
+    plan = profile_tee_hotpath.run_profile_plan(config=config)
+    matching_plan_entries = [
+        entry for entry in plan["scenarios"] if entry["name"] == config.scenario_name
+    ]
+    planned = {
+        (entry_index // len(read_sizes) + 1, entry["read_size"], entry["name"])
+        for entry_index, entry in enumerate(matching_plan_entries)
+    }
+    assert planned == expected, (
+        "the generated plan must contain one entry for every round, read size, "
+        f"and scenario, got {matching_plan_entries}"
+    )
+    orders = [
+        tuple(data.draw(st.permutations(read_sizes), label=f"round-{round_index}"))
+        for round_index in range(rounds)
+    ]
+    observed: list[tuple[int, int, str]] = []
+    shuffle_calls = 0
+
+    def shuffle(values: list[int]) -> None:
+        """Apply the generated permutation for the current sweep round."""
+        nonlocal shuffle_calls
+        values[:] = orders[shuffle_calls]
+        shuffle_calls += 1
+
+    def fake_run(
+        scenario: profile_tee_hotpath.TeeProfileScenario,
+        *,
+        config: TeeProfileDriverConfig,
+        scenario_dir: pth.Path,
+    ) -> dict[str, object]:
+        """Record the generated measurement without launching a worker."""
+        del config
+        observed.append((
+            len(observed) // len(read_sizes) + 1,
+            scenario.read_size,
+            scenario.name,
+        ))
+        return {"read_size": scenario.read_size}
+
+    monkeypatch.setattr(profile_tee_hotpath, "_shuffle_for", lambda _config: shuffle)
+    monkeypatch.setattr(profile_tee_hotpath, "_run_profile_scenario", fake_run)
+
+    results = profile_tee_hotpath.run_profile_sweep(config=config)
+
+    assert set(observed) == expected, (
+        "each generated sweep must plan one measurement for every round, read "
+        f"size, and scenario, got {observed}"
+    )
+    assert len(observed) == len(read_sizes) * rounds, (
+        f"sweep must execute every generated measurement exactly once, got {observed}"
+    )
+    assert len(results) == len(observed), (
+        "each planned measurement must yield one result"
+    )
+    assert shuffle_calls == rounds, (
+        "each generated round must use its injected permutation"
     )
