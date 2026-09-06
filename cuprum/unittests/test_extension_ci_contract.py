@@ -1,21 +1,8 @@
 """Contract tests for CI extension builds and shared-action wiring.
 
-`make develop` is the one definition of the extension build, and nothing else
-in the suite notices when a CI job stops going through it: remove the build
-step from `extension-tests` and the gated modules quietly skip, drop
-`--release` from `benchmark-ratchet` and the ratchet compares debug builds
-against optimized baselines. These tests parse `.github/workflows/ci.yml` and
-related workflows to assert that declarative contract.
-
-They also verify that `lint-test` provisions its Nixie and Whitaker installers
-in the required toolchain order, and that every `leynos/shared-actions` caller
-uses an immutable reference to an expected action or reusable workflow.
-
-The Makefile half of the same contract — the guard variable the recipe sets
-and the module list it hands to pytest — lives in
-`test_extension_build_contract.py`. The parsing lives in
-`tests.helpers.ci_workflows`, shared with the tests that assert the path gate
-in front of the same workflow's benchmark job.
+The tests parse `.github/workflows/ci.yml` and related workflows. They verify
+`make develop` ordering for extension jobs, `lint-test` Nixie and Whitaker
+toolchain ordering, and immutable expected `leynos/shared-actions` targets.
 """
 
 from __future__ import annotations
@@ -70,18 +57,7 @@ def _assert_extension_job_builds_before_gated_tests(
     workflow_data: Workflow,
     job_name: str,
 ) -> None:
-    """Assert that an extension-test job runs `make develop` first.
-
-    `make build` only syncs dependencies, so this ordering is the whole reason
-    the job can pass at all, and nothing else asserts it.
-
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed ``ci.yml`` model used to inspect the job.
-    job_name : str
-        CI job identifier whose build and test step ordering is asserted.
-    """
+    """Assert an extension-test job builds before its gated tests run."""
     build, _ = first_step_running(workflow_data, "make develop", job_name=job_name)
     tests, _ = first_step_running(
         workflow_data, "make test-extension", job_name=job_name
@@ -234,6 +210,7 @@ def test_no_ci_step_invokes_maturin_develop_directly(workflow_data: Workflow) ->
         f"through `make develop`: {offenders}"
     )
 
+
 def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> None:
     """The lint job uses shared tooling setup in the required order."""
     expected_actions = {
@@ -299,6 +276,7 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
         f"manual commands: {legacy_whitaker_commands}"
     )
 
+
 def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
     """Every shared-actions caller uses an immutable revision without fixing it."""
     workflow_documents = {
@@ -310,17 +288,7 @@ def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
         "each workflow must call only its expected shared actions or reusable "
         f"workflows; found {targets_by_workflow}"
     )
-def test_workflows_pin_shared_actions_to_immutable_revisions() -> None:
-    """Every shared-actions caller uses an immutable revision without fixing it."""
-    workflow_documents = {
-        workflow_name: workflow_document(workflow_name)
-        for workflow_name, _ in workflow_sources()
-    }
-    targets_by_workflow = _shared_action_targets_by_workflow(workflow_documents)
-    assert targets_by_workflow == EXPECTED_SHARED_ACTIONS_TARGETS, (
-        "each workflow must call only its expected shared actions or reusable "
-        f"workflows; found {targets_by_workflow}"
-    )
+
 
 def _shared_action_uses(value: object) -> list[str]:
     """Collect shared-actions ``uses`` values from parsed workflow data."""
@@ -344,6 +312,7 @@ def _shared_action_uses(value: object) -> list[str]:
         ]
     return []
 
+
 def _shared_action_references(
     workflow_name: str, workflow_data: object
 ) -> list[re.Match[str]]:
@@ -361,6 +330,7 @@ def _shared_action_references(
     )
     return [reference for reference in references if reference is not None]
 
+
 def _shared_action_targets_by_workflow(
     workflow_documents: cabc.Mapping[str, object],
 ) -> dict[str, set[str]]:
@@ -374,6 +344,8 @@ def _shared_action_targets_by_workflow(
         for workflow_name, references in references_by_workflow.items()
         if references
     }
+
+
 def _shared_action_target(uses: object, step_name: str) -> str:
     """Return the shared-action target declared by one named workflow step."""
     assert isinstance(uses, str), f"the {step_name!r} step must declare uses"
@@ -383,6 +355,7 @@ def _shared_action_target(uses: object, step_name: str) -> str:
         f"found {uses!r}"
     )
     return reference["target"]
+
 
 @pytest.mark.parametrize(
     ("uses", "expected_revision"),

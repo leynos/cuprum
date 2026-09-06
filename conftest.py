@@ -26,15 +26,11 @@ from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
-from tests.helpers.workflow import (
-    Workflow,
-    filter_paths,
-    parse_workflow,
-    read_workflow_source,
-)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+    from tests.helpers.workflow import Workflow
 
 
 """Shared pytest fixtures for workflow contract and optional Rust stream tests.
@@ -255,6 +251,8 @@ def workflow_data() -> Workflow:
     Workflow
         Parsed ``ci.yml`` model shared by workflow contract tests.
     """
+    from tests.helpers.workflow import parse_workflow, read_workflow_source
+
     return parse_workflow(read_workflow_source())
 
 
@@ -272,4 +270,6 @@ def filter_path_patterns(workflow_data: Workflow) -> frozenset[str]:
     frozenset[str]
         Performance-relevant filter patterns in declaration order.
     """
+    from tests.helpers.workflow import filter_paths
+
     return filter_paths(workflow_data)
