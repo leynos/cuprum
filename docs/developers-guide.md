@@ -2912,11 +2912,12 @@ assertion, alias, suppression rationale, or dispatch structure instead.
 ### GitHub Actions workflow linting
 
 `make lint` finishes by running
-`yamllint --config-file .yamllint.yml .github/workflows` and `actionlint`.
-Together they validate YAML policy, GitHub Actions expressions, and shell used
-by workflow `run:` steps. `.yamllint.yml` requires each workflow to start with
-`---`, permits GitHub's unquoted `on` trigger key, and requires quoted `'true'`
-and `'false'` values.
+`yamllint --strict --config-file .yamllint.yml .github/workflows`, followed by
+`actionlint -config-file .github/actionlint.yaml`. Together they validate YAML
+policy, GitHub Actions expressions, and shell used by workflow `run:` steps.
+The actionlint command reads `.github/actionlint.yaml` from the repository root.
+`.yamllint.yml` requires each workflow to start with `---`, permits GitHub's
+unquoted `on` trigger key, and requires quoted `'true'` and `'false'` values.
 
 Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
 install actionlint using its
