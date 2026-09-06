@@ -209,6 +209,7 @@ target/
 .typos-oxendict-base.json
 .typos-oxendict-base.toml
 .vtcode/
+memories/
 .claude/
 .memdb/
 .grepai/

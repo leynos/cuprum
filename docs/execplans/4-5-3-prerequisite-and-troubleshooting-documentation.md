@@ -535,3 +535,13 @@ Test dependencies (already available in the project):
 - `pytest` for unit tests
 - `pytest-bdd` for behavioural tests
 - `pathlib.Path` for reading documentation files in tests
+
+## Addendum (2026-09-06): toolchain version update
+
+This plan is complete and records the toolchain as it stood at execution time.
+Issue `#334` later raised the maturin pin to 1.15.0 in `pyproject.toml`, the
+wheel workflow, and the composite action, with the resolved PyO3 family moving
+to 0.29.2 in `rust/Cargo.lock`. The references above describe the versions this
+ExecPlan ran with, not the current pins; the live guidance in
+`docs/users-guide.md` and `docs/developers-guide.md` carries the up-to-date
+versions.
