@@ -253,10 +253,14 @@ def test_observe_tags_expose_per_stream_echo(
             ),
         )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, "the observed command must exit cleanly"
     start_event = next(ev for ev in events if ev.phase == "start")
-    assert start_event.tags["echo_stdout"] is echo_stdout
-    assert start_event.tags["echo_stderr"] is echo_stderr
+    assert start_event.tags["echo_stdout"] is echo_stdout, (
+        f"the start event must tag echo_stdout={echo_stdout}"
+    )
+    assert start_event.tags["echo_stderr"] is echo_stderr, (
+        f"the start event must tag echo_stderr={echo_stderr}"
+    )
     assert start_event.tags["echo"] is (echo_stdout or echo_stderr), (
         "the combined echo tag must stay the OR of the per-stream tags"
     )

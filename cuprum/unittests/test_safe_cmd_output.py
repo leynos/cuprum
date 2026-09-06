@@ -225,6 +225,8 @@ def test_stderr_echo_is_unaffected_by_stdout_setting(
 ) -> None:
     """Muting stdout echo leaves stderr echo working, and vice versa."""
     _, execute = execution_strategy
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
     command = python_builder(
         "-c",
         'import sys; print("out"); print("err", file=sys.stderr)',
@@ -239,8 +241,8 @@ def test_stderr_echo_is_unaffected_by_stdout_setting(
                 echo_stderr=True,
             ),
             "context": ExecutionContext(
-                stdout_sink=io.StringIO(),
-                stderr_sink=io.StringIO(),
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
             ),
         },
     )
@@ -250,6 +252,12 @@ def test_stderr_echo_is_unaffected_by_stdout_setting(
     assert captured.err == "", "injected sinks must keep both streams off capsys"
     assert result.stdout == "out\n"
     assert result.stderr == "err\n"
+    assert stdout_sink.getvalue() == "", (
+        "the muted stdout stream must write nothing to its selected sink"
+    )
+    assert stderr_sink.getvalue() == "err\n", (
+        "the echoed stderr stream must land on its selected sink, not capsys"
+    )
 
 
 def test_allows_disabling_capture(
