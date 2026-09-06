@@ -312,8 +312,9 @@ This task is complete only when:
   for the new tracked modules. Fresh validation passed: 30 focused tests,
   `make check-fmt`, `make test` (1602 Python tests, 28 behavioural tests, and
   104 Rust tests), `make typecheck`, `make lint`, `make markdownlint`, and
-  `make nixie`. A new CodeRabbit review is required after this commit and push;
-  the ExecPlan remains `IN PROGRESS` until external revalidation completes.
+  `make nixie`. CodeRabbit follow-up `a84e0640` was queued after the commit and
+  push (approximately 15 hours 36 minutes at registration); the ExecPlan remains
+  `IN PROGRESS` until external revalidation completes.
 
 - Follow-up issue [#367](https://github.com/leynos/cuprum/issues/367): add
   aggregate stream bytes, read-operation counts, and duration to profiling
