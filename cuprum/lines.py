@@ -14,6 +14,9 @@ from __future__ import annotations
 import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
+from time import (
+    perf_counter as perf_counter,
+)
 
 type LineStreamName = typ.Literal["stdout", "stderr"]
 type LineHook = cabc.Callable[[LineEvent], None]

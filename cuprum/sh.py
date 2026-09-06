@@ -47,6 +47,7 @@ from cuprum.catalogue import UnknownProgramError as UnknownProgramError
 from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
+from cuprum.lines import LineEvent
 
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.
@@ -156,6 +157,51 @@ class CommandResult:
             ``True`` exactly when ``exit_code`` is zero.
         """
         return self.exit_code == 0
+
+
+class LineStream:
+    """Async iterator of ``LineEvent`` and the run's final ``CommandResult``.
+
+    Returned by :meth:`SafeCmd.lines`. Iteration yields every decoded output
+    line as it arrives; after the run completes, :attr:`result` holds the
+    same ``CommandResult`` a ``run()`` call would have returned, including
+    captured output when ``capture=True``.
+
+    Breaking out of iteration (``break``, generator close, or task
+    cancellation) terminates the subprocess through the same teardown a
+    cancelled ``run()`` uses: ``SIGTERM``, the cancel grace wait, then
+    ``SIGKILL``.
+    """
+
+    __slots__ = ("_iterator", "result")
+
+    def __init__(
+        self,
+        iterator: cabc.AsyncGenerator[LineEvent | CommandResult, None],
+    ) -> None:
+        """Wrap the driver's event generator."""
+        self._iterator = iterator
+        self.result: CommandResult | None = None
+
+    def __aiter__(self) -> LineStream:
+        """Return self as the async iterator."""
+        return self
+
+    async def __anext__(self) -> LineEvent:
+        """Yield the next line, or set ``result`` and stop at the end."""
+        item = await self._iterator.__anext__()
+        if isinstance(item, LineEvent):
+            return item
+        self.result = item
+        # The driver generator is finished; closing it here releases the
+        # coordinator's waiters deterministically instead of at garbage
+        # collection.
+        await self._iterator.aclose()
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        """Close the underlying generator, tearing the run down."""
+        await self._iterator.aclose()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -496,6 +542,74 @@ async def _execute_with_hooks(
     return result
 
 
+async def _iter_line_events(
+    execution: _SubprocessExecution,
+    tracking: _ExecutionTracking,
+) -> cabc.AsyncGenerator[LineEvent | CommandResult, None]:
+    """Yield each ``LineEvent``, then the run's ``CommandResult``.
+
+    The driver coroutine owns the subprocess; this generator only drains the
+    queue it feeds. On any generator exit short of the sentinel — ``break``,
+    a generator close, or task cancellation — the driver task is cancelled,
+    which runs the shared reconciliation so the child gets ``SIGTERM``, the
+    cancel grace wait, then ``SIGKILL``, and the consumers drain exactly once.
+
+    Yields
+    ------
+    LineEvent | CommandResult
+        One ``LineEvent`` per decoded output line, then the run's
+        ``CommandResult`` once the subprocess has exited.
+    """
+    from cuprum._line_stream import (
+        _coordinate_line_stream,
+        _start_line_stream_run,
+    )
+
+    queue: asyncio.Queue[LineEvent | CommandResult] = asyncio.Queue()
+    result_future: asyncio.Future[CommandResult] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    async def drive() -> None:
+        """Spawn, coordinate to completion, and publish the result."""
+        try:
+            run = await _start_line_stream_run(execution, queue)
+            await _coordinate_line_stream(run, execution, queue, result_future)
+        except BaseException as error:  # ruff: ignore[blind-except] - any failure reaches the iterator
+            if not result_future.done():
+                result_future.set_exception(error)
+
+    coordinator = asyncio.create_task(drive())
+    try:
+        while True:
+            item = await queue.get()
+            if isinstance(item, LineEvent):
+                yield item
+            else:
+                break
+        result = await result_future
+        for hook in tracking.execution_hooks.after_hooks:
+            hook(execution.cmd, result)
+        await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
+        yield result
+    finally:
+        if not result_future.done():
+            coordinator.cancel()
+        await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
+
+
+async def _absorb_coordinator(
+    coordinator: asyncio.Task[None],
+    result_future: asyncio.Future[CommandResult],
+) -> None:
+    """Wait the coordinator out, re-raising a published failure."""
+    await asyncio.gather(coordinator, return_exceptions=True)
+    if result_future.done() and not result_future.cancelled():
+        error = result_future.exception()
+        if error is not None:
+            raise error
+
+
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -594,6 +708,78 @@ class SafeCmd:
                 stdin_data=stdin_data,
             ),
             tracking,
+        )
+
+    def lines(
+        self,
+        *,
+        output: RunOutputOptions | None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> LineStream:
+        """Iterate the command's output lines as they arrive.
+
+        Line events are delivered in arrival order per stream, stamped with
+        monotonic seconds since the command started. Capture and echo stay
+        governed by *output* independently: iterating lines does not disable
+        either unless the caller asks.
+
+        Parameters
+        ----------
+        output:
+            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
+            Expiry terminates the subprocess exactly as ``run()`` does.
+        context:
+            Optional execution settings such as env, cwd, and cancel grace.
+        stdin:
+            Optional ``StdinInput`` data to feed to the subprocess.
+
+        Returns
+        -------
+        LineStream
+            An async iterator of ``LineEvent`` whose ``result`` attribute
+            holds the final ``CommandResult`` once iteration completes.
+
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not permitted by the active context allowlist.
+        TimeoutExpired
+            If *timeout* elapses before the command completes.
+        UnicodeEncodeError
+            If ``stdin`` text cannot be encoded with the context's encoding.
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+        out = output or RunOutputOptions()
+        ctx = context or ExecutionContext()
+        _enforce_allowlist(self)
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        tracking = _ExecutionTracking(
+            execution_hooks=_collect_hooks(current_context()),
+            pending_tasks=[],
+        )
+        observation = _prepare_execution_observation(self, ctx, tracking, out)
+
+        observation.emit("plan", _EventDetails(pid=None))
+        for hook in tracking.execution_hooks.before_hooks:
+            hook(self)
+
+        return LineStream(
+            _iter_line_events(
+                _SubprocessExecution(
+                    cmd=self,
+                    ctx=ctx,
+                    capture=out.capture,
+                    echo=out.echo,
+                    timeout=effective_timeout,
+                    observation=observation,
+                    stdin_data=stdin_data,
+                ),
+                tracking,
+            ),
         )
 
     def run_sync(
