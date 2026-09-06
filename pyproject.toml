@@ -391,7 +391,10 @@ also_copy = [
     "benchmarks/",
     "docs/",
     ".github/",
-    # test_toolchain_pins.py reads the Makefile's tool-version defaults.
+    # test_changelog_records_cleanup_telemetry_contract reads the loose
+    # root-level CHANGELOG.md, and test_toolchain_pins.py reads the
+    # Makefile's tool-version defaults.
+    "CHANGELOG.md",
     "Makefile",
     "rust/cuprum-rust/",
     "rust/Cargo.toml",

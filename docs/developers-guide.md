@@ -2035,6 +2035,11 @@ tests keep the observable states aligned with the model such tools would verify.
 [Hypothesis](https://hypothesis.readthedocs.io/) generates the input domains
 that fixed examples cannot cover exhaustively:
 
+The root `conftest.py` disables Hypothesis's per-example deadline because these
+properties assert correctness under shared-host scheduling. The suite-wide
+pytest timeout remains the bound for hung tests; use an explicit marker only
+when a generated test's bounded workload needs a longer whole-test budget.
+
 - `test_nested_selector_rejects_generated_backend_pairs` draws an outer and an
   inner backend from the available set and asserts that same-thread nested
   entry always raises `ReentrantBackendSelectorError` before mutating backend
@@ -2907,11 +2912,12 @@ assertion, alias, suppression rationale, or dispatch structure instead.
 ### GitHub Actions workflow linting
 
 `make lint` finishes by running
-`yamllint --config-file .yamllint.yml .github/workflows` and `actionlint`.
-Together they validate YAML policy, GitHub Actions expressions, and shell used
-by workflow `run:` steps. `.yamllint.yml` requires each workflow to start with
-`---`, permits GitHub's unquoted `on` trigger key, and requires quoted `'true'`
-and `'false'` values.
+`yamllint --strict --config-file .yamllint.yml .github/workflows`, followed by
+`actionlint -config-file .github/actionlint.yaml`. Together they validate YAML
+policy, GitHub Actions expressions, and shell used by workflow `run:` steps.
+The actionlint command reads `.github/actionlint.yaml` from the repository root.
+`.yamllint.yml` requires each workflow to start with `---`, permits GitHub's
+unquoted `on` trigger key, and requires quoted `'true'` and `'false'` values.
 
 Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
 install actionlint using its
@@ -3378,6 +3384,27 @@ building, need only the checks they already use and should **not** adopt this
 probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
 extend `maturin_script_locatable()` in place if maturin changes how it locates
 its binary.
+
+## Mutation-testing harness
+
+The mutmut mutation-testing workflow runs the selected test suite from its
+`mutants/` working tree. Files at the repository root that those tests read
+must therefore be listed in `[tool.mutmut].also_copy` in `pyproject.toml`:
+
+- `CHANGELOG.md`, read by
+  `test_changelog_records_cleanup_telemetry_contract` in
+  `cuprum/unittests/test_tracing_native_pump_cleanup.py`.
+- `Makefile`, read by `test_toolchain_pins` in
+  `cuprum/unittests/test_toolchain_pins.py`.
+
+`cuprum/unittests/test_mutmut_config_contract.py` checks this list and names
+the reader for each required root-level file. Update the configuration and this
+contract's fixture map together when a test gains another repository-root file
+dependency. Run the focused check with:
+
+```bash
+uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
+```
 
 ## Rust stream buffer-size validation
 

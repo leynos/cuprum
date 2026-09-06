@@ -247,8 +247,8 @@ def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
-        f"yamllint\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint",
+        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
+        "actionlint\t-config-file\t.github/actionlint.yaml",
     ]
 
 
@@ -272,8 +272,8 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
         "uv\trun\twhich\truff",
-        f"yamllint\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint",
+        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
+        "actionlint\t-config-file\t.github/actionlint.yaml",
     ]
 
 
@@ -304,8 +304,8 @@ def test_the_workflow_lint_target_rejects_actionlint_failure(
     assert completed.returncode == 2
     assert "Error 31" in completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
-        f"yamllint\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint",
+        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
+        "actionlint\t-config-file\t.github/actionlint.yaml",
     ]
 
 
