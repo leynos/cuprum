@@ -30,7 +30,10 @@ back. This plan banks that win.
 After this change, a user running any Cuprum command or pipeline that captures
 or echoes subprocess output gets faster execution for large outputs, with
 byte-identical captured text. Nothing in the public API changes and no new
-configuration is introduced.
+public runtime configuration is introduced. The private profiling CLI does have
+benchmark controls for `--read-sizes`, `--rounds`, and `--randomize-order`;
+these controls reproduce measurements and do not configure ordinary runtime
+execution.
 
 Two things discovered during planning enlarge the picture, and both are
 addressed here rather than deferred.
@@ -287,6 +290,15 @@ This task is complete only when:
   identical overlong CI workflow guards that blocked lint; they were minimally
   YAML-folded with semantic expression preservation. CodeRabbit remains
   pending, so the ExecPlan stays `IN PROGRESS`.
+- [x] 2026-09-06 Review follow-up: duplicate `read_sizes` validation and
+  invalid-`rounds` coverage were repaired. The resolver refactor and
+  randomized-order coverage were already present. Validation passed with
+  `make check-fmt`, focused `cuprum/unittests/test_profile_driver.py` (24
+  passed), `make typecheck`, `make lint`, `make markdownlint`, and
+  `make nixie`. Production stream metrics remain intentionally out of scope
+  because the relevant observability is an opt-in adapter boundary; the
+  existing bounded diagnostics are retained. CodeRabbit remains pending, so the
+  ExecPlan stays `IN PROGRESS`.
 
 ## Surprises & discoveries
 
@@ -578,6 +590,15 @@ This task is complete only when:
   preserves each guard's semantic expression while satisfying the repository's
   formatting constraint; no workflow behaviour or functional scope changes.
   Date/Author: 2026-09-06, implementation agent.
+
+- Decision D27: keep this review pass focused on benchmark configuration
+  validation and its direct tests. Rationale: the resolver extraction and
+  randomized sweep-order coverage already exist; the remaining valid testing
+  gap is duplicate-read-size and invalid-round validation. Production stream
+  metrics are not added because the observability contract is an opt-in adapter
+  boundary, and adding hot-path metrics would expand this plan's runtime scope.
+  Date/Author: 2026-09-06, implementation agent. No public interface or
+  benchmark protocol changes.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small

@@ -14,7 +14,7 @@ if typ.TYPE_CHECKING:
 
 def _run_profile_cli(*args: str) -> int:
     """Invoke the profile driver module and return its exit code."""
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv needs no shell.
         [sys.executable, "-m", "benchmarks.profile_tee_hotpath", *args],
         check=False,
         timeout=30,

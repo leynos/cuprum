@@ -1061,6 +1061,13 @@ chunk to the optional `on_chunk` callback for variant-specific processing. When
 into logical lines and passes their bodies to the per-drain `_EchoLineLimiter` in
 `cuprum/_echo_truncation.py`:
 
+`_StreamConfig.read_size` records the active private value for one stream.
+`_consume_stream` and `_drain` accept the same keyword-only override; the
+pipeline-side `_pump_stream`, relay, and reader-drain helpers do likewise.
+`_pump_stream_dispatch` uses an explicit override when supplied and otherwise
+uses the execution-local `ContextVar`, so profiling `--read-sizes` values reach
+both paths without adding public runtime configuration.
+
 - the limiter keeps its byte count and dropped-byte count across reader chunks,
   then resets both at each completed line;
 - it reserves room for the configured sink's encoded marker and line ending,

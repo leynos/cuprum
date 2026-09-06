@@ -137,6 +137,9 @@ class TeeProfileDriverConfig:
             raise ValueError(msg)
         for read_size in self.read_sizes:
             _validate_minimum_int(read_size, name="read-size", min_value=1)
+        if len(set(self.read_sizes)) != len(self.read_sizes):
+            msg = "read-sizes must not contain duplicate values"
+            raise ValueError(msg)
 
     def _validate_string_fields(self) -> None:
         """Validate that the perf call-graph mode is a non-blank string."""

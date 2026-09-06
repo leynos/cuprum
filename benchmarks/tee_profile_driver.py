@@ -110,7 +110,20 @@ def _run_profile_scenario(
 def run_profile_sweep(
     *, config: TeeProfileDriverConfig
 ) -> list[cabc.Mapping[str, object]]:
-    """Measure one named scenario across configured sizes and rounds."""
+    """Measure one named scenario across configured sizes and rounds.
+
+    Parameters
+    ----------
+    config:
+        Sweep configuration. Each round visits every configured read size in
+        its configured order, or the configured randomized order.
+
+    Returns
+    -------
+    list[Mapping[str, object]]
+        One worker-result mapping for every configured read size in every
+        round: ``len(config.read_sizes) * config.rounds`` mappings.
+    """
     return _run_profile_sweep(
         config=config,
         scenario_resolver=_scenario_by_name,
