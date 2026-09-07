@@ -569,6 +569,64 @@ def test_each_coverage_lane_carries_the_condition_it_is_meant_to() -> None:
 REQUIRED_CARGO_MANIFEST: typ.Final[str] = "rust/Cargo.toml"
 
 
+def _jobs_of(workflow: Workflow) -> list[tuple[str, Job]]:
+    """Return one workflow's jobs, or nothing when it declares none.
+
+    Parameters
+    ----------
+    workflow : Workflow
+        The parsed document.
+
+    Returns
+    -------
+    list of tuple
+        The job identifier and its body, in file order.
+    """
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        return []
+    return [(str(name), job) for name, job in jobs.items()]
+
+
+def _coverage_steps() -> list[tuple[str, str, int, Step]]:
+    """Return every step that invokes the coverage action.
+
+    Flattened into one comprehension rather than three nested loops, so
+    the assertions below read the steps rather than walking the
+    document to find them.
+
+    Returns
+    -------
+    list of tuple
+        The workflow path, the job identifier, the step's one-based
+        position in its job, and the step.
+    """
+    return [
+        (path, name, index + 1, step)
+        for path in COVERAGE_WORKFLOWS
+        for name, job in _jobs_of(_workflow(path))
+        for index, step in enumerate(job.get("steps") or [])
+        if COVERAGE_ACTION in str(step.get("uses", ""))
+    ]
+
+
+def _cargo_manifest_of(step: Step) -> object:
+    """Return the ``cargo-manifest`` input a step passes, or None.
+
+    Parameters
+    ----------
+    step : Step
+        The coverage step.
+
+    Returns
+    -------
+    object
+        The input's value, or None when the step passes none.
+    """
+    inputs = typ.cast("dict[str, object]", step).get("with")
+    return inputs.get("cargo-manifest") if isinstance(inputs, dict) else None
+
+
 def test_every_coverage_step_names_the_manifest_this_repository_keeps() -> None:
     """The Rust crate is under `rust/`, not at the repository root.
 
@@ -581,24 +639,11 @@ def test_every_coverage_step_names_the_manifest_this_repository_keeps() -> None:
     Proved by mutation: removing the input from either step, and
     pointing it at a manifest that does not exist, each fail this test.
     """
-    offenders: list[str] = []
-    for path in COVERAGE_WORKFLOWS:
-        workflow = _workflow(path)
-        jobs = workflow.get("jobs")
-        if not isinstance(jobs, dict):
-            continue
-        for name, job in jobs.items():
-            for index, step in enumerate(job.get("steps") or []):
-                if COVERAGE_ACTION not in str(step.get("uses", "")):
-                    continue
-                inputs = typ.cast("dict[str, object]", step).get("with")
-                manifest = (
-                    inputs.get("cargo-manifest") if isinstance(inputs, dict) else None
-                )
-                if manifest != REQUIRED_CARGO_MANIFEST:
-                    offenders.append(
-                        f"{path}:{name} step {index + 1} passes {manifest!r}"
-                    )
+    offenders = [
+        f"{path}:{job} step {position} passes {_cargo_manifest_of(step)!r}"
+        for path, job, position, step in _coverage_steps()
+        if _cargo_manifest_of(step) != REQUIRED_CARGO_MANIFEST
+    ]
     assert not offenders, (
         f"these coverage steps do not pass cargo-manifest="
         f"{REQUIRED_CARGO_MANIFEST!r}: {offenders}; the action would fall "
