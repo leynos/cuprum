@@ -16,6 +16,7 @@ import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
+from cuprum._rusage import capture_child_rusage, child_rusage_delta
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
@@ -303,8 +304,10 @@ async def _run_subprocess_without_streams(
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
+    rusage_before = capture_child_rusage()
     process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
+    wall_clock_started_at = time.time()
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 
@@ -341,6 +344,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             exc,
         )
 
+    rusage = child_rusage_delta(rusage_before, capture_child_rusage())
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(
@@ -350,7 +354,6 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             exited_at=exited_at,
         ),
     )
-
     return _sh_module().CommandResult(
         program=execution.cmd.program,
         argv=execution.cmd.argv,
@@ -358,6 +361,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         pid=process.pid if process.pid is not None else -1,
         stdout=stdout_text,
         stderr=stderr_text,
+        started_at=wall_clock_started_at,
+        duration=max(0.0, exited_at - started_at),
+        max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
+        user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
+        system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
     )
 
 

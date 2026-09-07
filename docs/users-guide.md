@@ -348,7 +348,14 @@ and echo semantics and returns a structured `CommandResult`:
     The same settings are used when `StdinInput.text` is encoded for
     subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
-  success.
+  success. `started_at` records the wall-clock start time and `duration`
+  records elapsed monotonic seconds.
+- `max_rss_bytes`, `user_cpu_seconds`, and `system_cpu_seconds` are populated
+  from POSIX child-resource accounting for an isolated command. They are `None`
+  on Windows and platforms that cannot provide them. They are approximate under
+  `run_concurrent` because the underlying counter is process-global;
+  `max_rss_bytes` is a maximum-based delta. Pipeline-stage resource fields are
+  always `None`, as concurrently reaped stages cannot be attributed safely.
 
 ### Output options
 

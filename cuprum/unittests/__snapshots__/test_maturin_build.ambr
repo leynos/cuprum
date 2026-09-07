@@ -27,6 +27,7 @@
       'cuprum/_pipeline_wait_records.py',
       'cuprum/_process_exit.py',
       'cuprum/_process_lifecycle.py',
+      'cuprum/_rusage.py',
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.cpython-<platform>.so',
       'cuprum/_streams.py',

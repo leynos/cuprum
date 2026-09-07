@@ -135,6 +135,7 @@ def make_wait_state(
         exit_codes=[None] * stage_count,
         started_at=[0.0] * stage_count,
         ended_at=[None] * stage_count,
+        wall_clock_started_at=[0.0] * stage_count,
         observations=observations,
     )
 

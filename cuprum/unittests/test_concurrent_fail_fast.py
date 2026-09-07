@@ -210,7 +210,7 @@ class TestFailFastExecution:
                 submission_index,
                 None
                 if code is None
-                else CommandResult(Program("x"), (), code, 1, None, None),
+                else CommandResult(Program("x"), (), code, 1, None, None, 0.0, 0.0),
             )
             for submission_index, code in enumerate(items)
         ]

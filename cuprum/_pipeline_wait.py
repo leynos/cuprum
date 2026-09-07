@@ -55,6 +55,7 @@ from cuprum._pipeline_stream_results import (
     _collect_pipe_results,
     _surface_unexpected_pipe_failures,
 )
+from cuprum._pipeline_types import _PipelineWaitResult
 from cuprum._pipeline_wait_records import (
     _completion_log_fields,
     _CompletionLogFields,
@@ -73,16 +74,6 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation, _StageWaitContext
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineWaitResult:
-    """Exit codes and timing captured once a pipeline finishes waiting."""
-
-    exit_codes: tuple[int, ...]
-    failure_index: int | None
-    started_at: tuple[float, ...]
-    ended_at: tuple[float | None, ...]
-
-
 @dc.dataclass(slots=True)
 class _PipelineWaitState:
     """Mutable bookkeeping for awaiting all stages of a pipeline."""
@@ -92,6 +83,7 @@ class _PipelineWaitState:
     exit_codes: list[int | None]
     started_at: list[float]
     ended_at: list[float | None]
+    wall_clock_started_at: list[float]
     failure_index: int | None = None
     # Reporting only: the completion transition never reads this, which is why
     # it defaults to empty and the symbolic model leaves it so. Observations
@@ -117,6 +109,7 @@ class _PipelineWaitState:
             # `stages` is meant to stay the immutable snapshot it declares.
             started_at=list(stages.started_at),
             ended_at=[None] * len(processes),
+            wall_clock_started_at=list(stages.wall_clock_started_at),
             observations=stages.observations,
         )
 
@@ -171,7 +164,7 @@ class _PipelineWaitState:
                 wait_tasks=[],
                 task_to_index={},
                 exit_codes=[None] * 3,
-                started_at=[0.0] * 3,
+                started_at=[0.0] * 3, wall_clock_started_at=[0.0] * 3,
                 ended_at=[None] * 3,
             )
             state.record_completion(2, 0, ended_at=1.0)
@@ -181,7 +174,6 @@ class _PipelineWaitState:
             assert state.failure_index == 0
             assert state.exit_codes == [1, 7, 0]
             assert state.ended_at == [2.0, 3.0, 1.0]
-
         """
         is_first_failure = self.failure_index is None and exit_code != 0
         self.exit_codes[completed_idx] = exit_code
@@ -223,7 +215,7 @@ class _PipelineWaitState:
                 wait_tasks=[],
                 task_to_index={},
                 exit_codes=[None] * 3,
-                started_at=[0.0] * 3,
+                started_at=[0.0] * 3, wall_clock_started_at=[0.0] * 3,
                 ended_at=[None] * 3,
             )
 
@@ -386,6 +378,7 @@ async def _wait_for_pipeline(
             failure_index=state.failure_index,
             started_at=tuple(state.started_at),
             ended_at=tuple(state.ended_at),
+            wall_clock_started_at=tuple(state.wall_clock_started_at),
         )
     except BaseException as exc:
         caught = exc

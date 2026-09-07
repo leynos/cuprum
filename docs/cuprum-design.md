@@ -974,7 +974,16 @@ Cancellation behaviour:
 Implementation notes (current state):
 
 - `SafeCmd.run` yields a `CommandResult` containing `stdout`, `stderr`,
-  `exit_code`, and `pid`, plus an `ok` helper for convenience.
+  `exit_code`, `pid`, `started_at`, `duration`, `max_rss_bytes`,
+  `user_cpu_seconds`, and `system_cpu_seconds`, plus an `ok` helper for
+  convenience.
+- `started_at` is a wall-clock timestamp and `duration` is a monotonic duration
+  in seconds. The resource fields are `None` on Windows and any platform that
+  cannot expose child resource accounting. For an isolated command, their POSIX
+  values derive from `RUSAGE_CHILDREN` snapshots; concurrent commands are an
+  approximation because the counter is process-global, and the RSS figure is a
+  maximum-based delta. Pipeline-stage resource fields are always `None` because
+  concurrent reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
 - Environment overrides are supplied via an `ExecutionContext` and merged on top
