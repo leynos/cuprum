@@ -302,6 +302,31 @@ This task is complete only when:
   or evidenced as stale, and all review threads were resolved. Follow-up review
   `7f92da2e` is queued against the current branch head. The ExecPlan stays
   `IN PROGRESS` pending that external revalidation.
+- [x] 2026-09-07 Maintenance rebase: replayed the branch onto `origin/main`
+  at `e1bc0e20`. The sole `CHANGELOG.md` conflict retained both the upstream
+  Maturin 1.15 release note and this plan's read-size plateau note. Upstream's
+  Maturin snapshot-generator convention is retained in the branch snapshot; it
+  does not change stream semantics. No package lockfile conflicted, so no
+  lockfile rebuild was needed. `make check-fmt`, `make typecheck`, and
+  `make lint` passed; the initially timed-out pipeline test passed focused and
+  the complete rerun passed with 1,616 Python, 70 behavioural, and 104 Rust
+  tests. The ExecPlan remains `IN PROGRESS` pending external review.
+- [x] 2026-09-07 Rebase documentation validation: repository formatting removed
+  two surplus blank lines from the existing observation documentation. The
+  spelling-helper rendering property then raised two `FlakyFailure` reports:
+  cold examples took 716 ms and 277 ms, then passed their immediate retries
+  against Hypothesis's 200 ms deadline. Its oracle verifies deterministic
+  rendering rather than latency, so it now uses `deadline=None` without
+  reducing generated-input coverage.
+- [x] 2026-09-07 Rebase test-fixture repair: the full retry demonstrated that
+  the zero-timeout pump-ownership test could leave its cleanup list empty when
+  the immediate cancellation bypassed the stubbed termination helper. The test
+  now records its spawned stages when it creates the pumps, so its existing
+  live-loop `finally` reliably reaps the deliberately long-running children.
+  This is test isolation only; production timeout behaviour is unchanged. Five
+  focused repetitions passed in 0.07–0.35 seconds; the final full validation
+  passed 1,616 Python tests (one skipped), 28 behavioural tests, and 104 Rust
+  tests, plus every formatter, type, lint, Markdown, and Mermaid gate.
 
 - [x] 2026-09-06 Observability and review remediation: the aggregate
   stream-operation observer and bounded metrics adapter were verified as
@@ -627,6 +652,30 @@ This task is complete only when:
   [issue #367](https://github.com/leynos/cuprum/issues/367). Date/Author:
   2026-09-06, implementation agent. No public runtime interface or stream
   read-size protocol changes.
+
+- Decision D28: retain `origin/main`'s Maturin 1.15 snapshot-generator
+  convention during the 2026-09-07 rebase. Rationale: the feature branch's
+  Maturin build snapshot must continue to use the upstream `<maturin-version>`
+  placeholder, while retaining the feature's expected generated artefacts. This
+  is a test-fixture convention only: it changes no stream, benchmark, or
+  package-lock behaviour. Date/Author: 2026-09-07, implementation agent.
+
+- Decision D29: disable Hypothesis's deadline for the inherited typos-render
+  property. Rationale: two rebase-validation runs demonstrated cold-import
+  timing variance while each retry satisfied the byte-exact rendering oracle.
+  The property has no latency requirement, so `deadline=None` removes an
+  unrelated scheduling assertion without reducing generated-input coverage.
+  Date/Author: 2026-09-07, implementation agent. No stream, benchmark, or
+  public interface behaviour changes.
+
+- Decision D30: make the immediate-timeout fixture own its spawned stages at
+  pump creation. Rationale: a non-positive deadline can bypass the stubbed
+  `_terminate_timed_out_stages` call, so collecting process handles only in
+  that stub leaves `asyncio.run` to wait for the fixture's 30-second children.
+  The existing `try`/`finally` still calls `_terminate_all_shielded` with the
+  same `timed_out_processes` collection; it is now populated on every route.
+  Date/Author: 2026-09-07, implementation agent. No production behaviour or
+  public interface change.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
@@ -1320,6 +1369,31 @@ investigation.
   https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
+
+Revision 6, 2026-09-07, after the maintenance rebase: incorporated current
+`main` through `e1bc0e20`, retaining the upstream Maturin 1.15 snapshot
+convention and the branch's profiled-read-size release note. The sole conflict
+was `CHANGELOG.md`; no package lockfile conflicted or required rebuilding. The
+first complete test pass reported a non-reproducible timeout in the
+deliberately blocked pipeline fixture. Its focused rerun passed, and the
+subsequent full rerun passed 1,616 Python, 70 behavioural, and 104 Rust tests.
+Formatter, type, and lint gates also passed. The plan remains `IN PROGRESS`
+until the pending external review completes.
+
+The documentation validation then removed two surplus blank lines and exposed
+an inherited, load-sensitive 200 ms Hypothesis deadline in the deterministic
+typos-render property. Two cold examples exceeded the deadline before passing
+immediate retries, so the property now sets `deadline=None`; its byte-exact
+oracle and 50 generated examples remain unchanged. Full deterministic
+revalidation passed for that test-only stability repair.
+
+The full retry exposed a distinct fixture-cleanup race in
+`test_zero_timeout_reconciles_pipe_tasks`: cancellation can avoid its stubbed
+termination helper, leaving the test's intentional 30-second children alive
+while `asyncio.run` closes. The fixture now records those child handles when it
+creates its pumps, guaranteeing the existing live-loop `finally` reaps them.
+Five focused repetitions and full deterministic revalidation passed before
+commit.
 
 Revision 5, 2026-09-05, after the maintenance rebase and review repair:
 reconciled three conflicts with current `main`, then split benchmark

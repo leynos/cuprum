@@ -166,10 +166,14 @@ async def _assert_immediate_timeout_reconciles_pumps(
     timed_out_processes: list[asyncio.subprocess.Process],
 ) -> None:
     """Assert the immediate timeout settles pumps before reaping its stages."""
-    try:
-        with pytest.raises(TimeoutExpired):
-            await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
+    with pytest.raises(TimeoutExpired):
+        await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
 
+    # The assertion above deliberately runs while both stages remain alive so
+    # their blocked pipe does not hide detached-pump cleanup. Reap them before
+    # closing this event loop: asyncio otherwise retains subprocess transport
+    # waiter tasks until their 30-second sleeps naturally finish.
+    try:
         assert created, "the pipeline must create an inter-stage pump to reconcile"
         for index, task in enumerate(created):
             assert task.done(), (
@@ -177,9 +181,6 @@ async def _assert_immediate_timeout_reconciles_pumps(
                 "nothing reconciled the pumps the caller owns"
             )
     finally:
-        # The assertions deliberately run while both stages remain alive so
-        # their blocked pipe cannot hide detached-pump cleanup. Reap them
-        # before closing the loop even when an assertion fails.
         await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
 
 
@@ -213,13 +214,14 @@ def test_zero_timeout_reconciles_pipe_tasks(
         observations: tuple[_StageObservation, ...],
         native_pump_cleanup_grace: float,
     ) -> list[asyncio.Task[None]]:
-        """Record the pumps the pipeline creates so they can be inspected."""
+        """Record the created pumps and stages for assertions and local cleanup."""
         tasks = real_create(
             processes,
             observations=observations,
             native_pump_cleanup_grace=native_pump_cleanup_grace,
         )
         created.extend(tasks)
+        timed_out_processes.extend(processes)
         return tasks
 
     async def no_termination(
@@ -227,8 +229,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
         cancel_grace: float,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        timed_out_processes.extend(processes)
-        del cancel_grace
+        del processes, cancel_grace
         await asyncio.sleep(0)
 
     pipeline = python(
