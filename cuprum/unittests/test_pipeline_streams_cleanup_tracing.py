@@ -133,11 +133,13 @@ def test_pipe_task_carries_its_source_stage_token(
         """Emit cleanup facts from the task's inherited context."""
         del reader, writer, cleanup_grace_s
         await asyncio.sleep(0)
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_started(
-            logging.getLogger(__name__)
-        )
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_completed(
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
             logging.getLogger(__name__),
+            "cleanup_started",
+        )
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
+            logging.getLogger(__name__),
+            "cleanup_completed",
             0.25,
         )
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import typing as typ
 from pathlib import Path
+
+import pytest
 
 from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.events import ExecEvent, ExecId, new_exec_id
@@ -15,6 +18,9 @@ from cuprum.unittests._adapter_test_support import (
     tracing_hook,
 )
 from tests.helpers import read_doc, read_users_guide
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = ["tracing_hook"]
 
@@ -59,11 +65,58 @@ def _record_deferred_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -
 class TestNativePumpCleanupTracing:
     """The pump channel records cleanup facts on their matching execution span."""
 
-    def test_completed_cleanup_events_attach_only_to_the_source_stage_span(
+    @pytest.mark.parametrize(
+        ("record_events", "expected_events"),
+        [
+            pytest.param(
+                _record_completed_cleanup_events,
+                [
+                    (
+                        "cuprum.cleanup_started",
+                        {"operation": "native_pump_cleanup", "outcome": "started"},
+                    ),
+                    (
+                        "cuprum.cleanup_completed",
+                        {
+                            "operation": "native_pump_cleanup",
+                            "outcome": "completed",
+                            "duration_s": 2.5,
+                        },
+                    ),
+                ],
+                id="completed",
+            ),
+            pytest.param(
+                _record_deferred_cleanup_events,
+                [
+                    (
+                        "cuprum.cleanup_started",
+                        {"operation": "native_pump_cleanup", "outcome": "started"},
+                    ),
+                    (
+                        "cuprum.cleanup_grace_expired",
+                        {
+                            "operation": "native_pump_cleanup",
+                            "outcome": "grace_expired",
+                            "elapsed_s": 0.5,
+                        },
+                    ),
+                    (
+                        "cuprum.cleanup_deferred",
+                        {"operation": "native_pump_cleanup", "outcome": "deferred"},
+                    ),
+                ],
+                id="deferred",
+            ),
+        ],
+    )
+    def test_cleanup_events_attach_only_to_the_source_stage_span(
         self,
         tracing_hook: Traced,
+        record_events: cabc.Callable[[TracingHook, ExecId], None],
+        expected_events: list[tuple[str, dict[str, object]]],
     ) -> None:
-        """Normal cleanup selects its source span without ending it."""
+        """A cleanup lifecycle selects its source span without ending it."""
         tracer, hook = tracing_hook
         source_exec_id, downstream_exec_id = new_exec_id(), new_exec_id()
         hook(
@@ -87,80 +140,12 @@ class TestNativePumpCleanupTracing:
         )
         downstream_span = tracer.spans[1]
 
-        _record_completed_cleanup_events(hook, source_exec_id)
+        record_events(hook, source_exec_id)
 
-        assert source_span.events == [
-            (
-                "cuprum.cleanup_started",
-                {"operation": "native_pump_cleanup", "outcome": "started"},
-            ),
-            (
-                "cuprum.cleanup_completed",
-                {
-                    "operation": "native_pump_cleanup",
-                    "outcome": "completed",
-                    "duration_s": 2.5,
-                },
-            ),
-        ], f"cleanup events must attach to the source stage, found {source_span.events}"
-        assert downstream_span.events == [], (
-            "cleanup events must not attach to the downstream stage span"
+        assert source_span.events == expected_events, (
+            "cleanup events must attach to the source stage, "
+            f"found {source_span.events}"
         )
-        assert source_span.ended is False, (
-            "cleanup tracing must not end the source span"
-        )
-        assert source_span.status_ok is None, (
-            "cleanup tracing must not mark the source span's status"
-        )
-
-    def test_deferred_cleanup_events_attach_only_to_the_source_stage_span(
-        self,
-        tracing_hook: Traced,
-    ) -> None:
-        """Deferred cleanup selects its source span without ending it."""
-        tracer, hook = tracing_hook
-        source_exec_id, downstream_exec_id = new_exec_id(), new_exec_id()
-        hook(
-            _make_exec_event(
-                phase="start",
-                overrides={
-                    **_cat_overrides(source_exec_id),
-                    "tags": {"pipeline_stage_index": 0, "pipeline_stages": 2},
-                },
-            )
-        )
-        source_span = tracer.spans[0]
-        hook(
-            _make_exec_event(
-                phase="start",
-                overrides={
-                    **_cat_overrides(downstream_exec_id),
-                    "tags": {"pipeline_stage_index": 1, "pipeline_stages": 2},
-                },
-            )
-        )
-        downstream_span = tracer.spans[1]
-
-        _record_deferred_cleanup_events(hook, source_exec_id)
-
-        assert source_span.events == [
-            (
-                "cuprum.cleanup_started",
-                {"operation": "native_pump_cleanup", "outcome": "started"},
-            ),
-            (
-                "cuprum.cleanup_grace_expired",
-                {
-                    "operation": "native_pump_cleanup",
-                    "outcome": "grace_expired",
-                    "elapsed_s": 0.5,
-                },
-            ),
-            (
-                "cuprum.cleanup_deferred",
-                {"operation": "native_pump_cleanup", "outcome": "deferred"},
-            ),
-        ], f"cleanup events must attach to the source stage, found {source_span.events}"
         assert downstream_span.events == [], (
             "cleanup events must not attach to the downstream stage span"
         )

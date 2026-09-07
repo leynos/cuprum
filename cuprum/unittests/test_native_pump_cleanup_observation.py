@@ -18,16 +18,24 @@ def test_cleanup_observations_keep_phase_specific_debug_fields(
 ) -> None:
     """Each cleanup phase adds only its documented bounded DEBUG fields."""
     with caplog.at_level(logging.DEBUG, logger=_LOGGER.name):
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_started(_LOGGER)
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_completed(
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
             _LOGGER,
+            "cleanup_started",
+        )
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
+            _LOGGER,
+            "cleanup_completed",
             0.25,
         )
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_grace_expired(
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
             _LOGGER,
+            "cleanup_grace_expired",
             0.5,
         )
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_deferred(_LOGGER)
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
+            _LOGGER,
+            "cleanup_deferred",
+        )
 
     records = [
         record.__dict__
