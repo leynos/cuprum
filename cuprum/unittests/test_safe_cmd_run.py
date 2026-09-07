@@ -26,6 +26,12 @@ if typ.TYPE_CHECKING:
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
 
+_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="asserts POSIX child resource accounting",
+)
+
+
 def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
     """Execute a SafeCmd using the async run() method."""
     return asyncio.run(cmd.run(**kwargs))
@@ -75,6 +81,32 @@ def test_captures_output_and_exit_code(
     assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
+    assert result.started_at > 0
+    assert result.duration >= 0
+    if sys.platform == "win32":
+        assert result.max_rss_bytes is None
+        assert result.user_cpu_seconds is None
+        assert result.system_cpu_seconds is None
+
+
+@_posix_only
+def test_records_child_resource_usage(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """An isolated child allocation populates POSIX resource accounting."""
+    command = python_builder(
+        "-c",
+        "payload = bytearray(512 * 1024 * 1024); print(len(payload))",
+    )
+
+    result = command.run_sync()
+
+    assert result.max_rss_bytes is not None
+    assert result.max_rss_bytes > 0
+    assert result.user_cpu_seconds is not None
+    assert result.user_cpu_seconds >= 0
+    assert result.system_cpu_seconds is not None
+    assert result.system_cpu_seconds >= 0
 
 
 def test_applies_env_overrides(

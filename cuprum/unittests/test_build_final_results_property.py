@@ -69,6 +69,8 @@ def command_results(draw: st.DrawFn) -> CommandResult:
         pid=draw(st.one_of(st.just(-1), st.integers(min_value=0, max_value=4096))),
         stdout=draw(st.one_of(st.none(), st.text(max_size=_MAX_TEXT_SIZE))),
         stderr=draw(st.one_of(st.none(), st.text(max_size=_MAX_TEXT_SIZE))),
+        started_at=draw(st.floats(min_value=0.0, max_value=1_000_000.0)),
+        duration=draw(st.floats(min_value=0.0, max_value=60.0)),
     )
 
 
