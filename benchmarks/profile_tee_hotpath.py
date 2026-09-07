@@ -182,6 +182,7 @@ def _scenario_by_name(
     )
     return _named_scenario(scenarios, scenario_name=config.scenario_name)
 
+
 def _resolved_read_size(
     config: TeeProfileDriverConfig,
     *,
@@ -194,6 +195,7 @@ def _resolved_read_size(
         msg = "one read size is required outside a sweep"
         raise ValueError(msg)
     return config.read_sizes[0]
+
 
 def _named_scenario(
     scenarios: tuple[TeeProfileScenario, ...],
@@ -211,6 +213,8 @@ def _named_scenario(
         valid = ", ".join(scenario.name for scenario in scenarios)
         msg = f"unknown scenario {scenario_name!r}; expected one of: {valid}"
         raise ValueError(msg) from None
+
+
 def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     """Generate a serial, auditable profiling plan.
 
@@ -240,6 +244,7 @@ def run_profile_plan(*, config: TeeProfileDriverConfig) -> _ProfilePlan:
     )
     return _build_profile_plan(config=config, scenario_matrices=scenario_matrices)
 
+
 def _run_profile_scenario(
     scenario: TeeProfileScenario,
     *,
@@ -255,6 +260,8 @@ def _run_profile_scenario(
         scenario_dir=scenario_dir,
         config=config,
     )
+
+
 def run_profile_scenario(
     *, config: TeeProfileDriverConfig
 ) -> cabc.Mapping[str, object]:
@@ -277,6 +284,7 @@ def run_profile_scenario(
         config=config,
         scenario_dir=config.output_dir / scenario.name,
     )
+
 
 def run_profile_sweep(
     *, config: TeeProfileDriverConfig
@@ -302,11 +310,14 @@ def run_profile_sweep(
         shuffle=_shuffle_for(config),
     )
 
+
 def _shuffle_for(
     config: TeeProfileDriverConfig,
 ) -> cabc.Callable[[list[int]], None] | None:
     """Construct the optional source of randomized read-size order."""
     return random.SystemRandom().shuffle if config.randomize_order else None
+
+
 def run_profile_matrix(
     *,
     config: TeeProfileDriverConfig,

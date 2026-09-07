@@ -327,6 +327,17 @@ This task is complete only when:
   focused repetitions passed in 0.07–0.35 seconds; the final full validation
   passed 1,616 Python tests (one skipped), 28 behavioural tests, and 104 Rust
   tests, plus every formatter, type, lint, Markdown, and Mermaid gate.
+- [x] 2026-09-07 Second maintenance rebase: replayed the branch onto
+  `origin/main` at `66d43c20`. The predicted
+  `benchmarks/profile_tee_hotpath.py::run_profile_matrix` conflict retained
+  main's matrix-helper extraction and this branch's singleton read-size guard
+  and forwarding. A `sem` range-diff confirmed the replayed 32 commits; no
+  package lockfile conflicted or required rebuilding. Current main's expanded
+  `interrogate` coverage now includes the branch's test and script helpers;
+  their existing docstrings meet that shared convention. `make test` and
+  `make typecheck` passed before the formatter's mechanical blank-line repair,
+  then `make check-fmt` and `make lint` passed. The ExecPlan remains
+  `IN PROGRESS` pending refreshed external review.
 
 - [x] 2026-09-06 Observability and review remediation: the aggregate
   stream-operation observer and bounded metrics adapter were verified as
@@ -676,6 +687,16 @@ This task is complete only when:
   same `timed_out_processes` collection; it is now populated on every route.
   Date/Author: 2026-09-07, implementation agent. No production behaviour or
   public interface change.
+
+- Decision D31: retain main's extracted matrix helper and widened
+  `interrogate` target coverage during the 2026-09-07 rebase. Rationale: the
+  helper keeps main's linear execution structure while the branch's guard and
+  explicit singleton read size retain the historical `run-matrix` contract.
+  Including test and script helpers in docstring coverage is a compatible
+  shared quality convention; the replayed branch code already meets it. The
+  unrelated upstream mutmut changelog-copying change is preserved without
+  modification. Date/Author: 2026-09-07, implementation agent. No production
+  stream, benchmark, or public-interface behaviour changes.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small
@@ -1369,6 +1390,16 @@ investigation.
   https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
+
+Revision 7, 2026-09-07, after the second maintenance rebase: incorporated
+current `main` through `66d43c20`. The one predicted `run_profile_matrix`
+conflict retained both main's extracted helper and the branch's read-size
+validation and forwarding. No package lockfile conflicted, so no rebuild was
+needed. The full test suite and type check passed before the formatter repaired
+only required blank lines in the affected profiling module; the formatter and
+linter then passed. Main's expanded `interrogate` coverage accepts the branch's
+existing test and script docstrings. The plan remains `IN PROGRESS` until
+refreshed external review completes.
 
 Revision 6, 2026-09-07, after the maintenance rebase: incorporated current
 `main` through `e1bc0e20`, retaining the upstream Maturin 1.15 snapshot
