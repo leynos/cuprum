@@ -75,7 +75,21 @@ OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
 
 
 class Step(typ.TypedDict, total=False):
-    """One step of a job, declaring only the keys these tests read."""
+    """One step of a job, declaring only the keys these tests read.
+
+    Every key is optional: a step that neither uses an action nor sets
+    an environment declares none of them.
+
+    Attributes
+    ----------
+    name : object
+        The step's declared name, used to locate it in a failure.
+    uses : object
+        The action the step invokes, when it invokes one.
+    env : dict[str, object]
+        The step-level environment, the innermost scope the watchdog is
+        resolved from.
+    """
 
     name: object
     uses: object
@@ -83,14 +97,32 @@ class Step(typ.TypedDict, total=False):
 
 
 class Job(typ.TypedDict, total=False):
-    """One job of a workflow, declaring only the keys these tests read."""
+    """One job of a workflow, declaring only the keys these tests read.
+
+    Attributes
+    ----------
+    steps : list[Step]
+        The job's steps, in the order it runs them.
+    env : dict[str, object]
+        The job-level environment, consulted for the watchdog when the
+        step names none.
+    """
 
     steps: list[Step]
     env: dict[str, object]
 
 
 class Workflow(typ.TypedDict, total=False):
-    """A parsed workflow file, declaring only the keys these tests read."""
+    """A parsed workflow file, declaring only the keys these tests read.
+
+    Attributes
+    ----------
+    jobs : dict[str, Job]
+        The workflow's jobs, keyed by identifier.
+    env : dict[str, object]
+        The workflow-level environment, the outermost scope the watchdog
+        is resolved from.
+    """
 
     jobs: dict[str, Job]
     env: dict[str, object]

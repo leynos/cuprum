@@ -4079,7 +4079,7 @@ process, preserving the pre-feature behaviour.
 
 Four independent timers can end a test run, and the canonical statement of how
 they must be ordered lives in the `generate-coverage` README in
-[`leynos/shared-actions`][shared-actions-coverage]. Two of them apply here.
+`leynos/shared-actions`.[^1] Two of them apply here.
 
 | Tier                     | What it bounds                     | Where it is set                               | Current value  |
 | ------------------------ | ---------------------------------- | --------------------------------------------- | -------------- |
@@ -4164,4 +4164,5 @@ that job, so a second invocation added later cannot silently exceed it.
 Both lanes are held to the same watchdog value. They move together or the
 pull-request lane stops predicting the trunk lane it exists to protect.
 
-[shared-actions-coverage]: https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md
+[^1]: [`generate-coverage`: test timeouts](
+    https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md)
