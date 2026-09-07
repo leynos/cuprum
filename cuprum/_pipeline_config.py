@@ -74,7 +74,7 @@ def _prepare_pipeline_config(
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
-    """Normalize runtime options for pipeline execution."""
+    """Normalize runtime options for pipeline execution from one options object."""
     # Deferred, unlike the module-scope import in ``_pipeline_results``: this
     # module is imported by ``_pipeline_streams``, which ``_pipeline_collect``
     # imports, so hoisting the import would close the cycle rather than avoid
