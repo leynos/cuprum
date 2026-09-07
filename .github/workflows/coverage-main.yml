@@ -44,9 +44,10 @@ jobs:
   coverage-upload:
     runs-on: ubicloud-standard-2
     # Kept in step with ci.yml's coverage lane: above the 2,700 s cargo
-    # watchdog plus the work either side. This job's own worst outside the
+    # watchdog plus the work either side, and fifteen minutes above that
+    # sum rather than equal to it. This job's own worst outside the
     # coverage step was 51 s, on run 34067223641.
-    timeout-minutes: 60
+    timeout-minutes: 65
     env:
       # See ci.yml's coverage job for how this was sized. Written down
       # rather than inherited: the action's 1,800 s default is mentioned

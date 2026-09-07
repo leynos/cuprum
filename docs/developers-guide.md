@@ -4164,5 +4164,21 @@ that job, so a second invocation added later cannot silently exceed it.
 Both lanes are held to the same watchdog value. They move together or the
 pull-request lane stops predicting the trunk lane it exists to protect.
 
+The ceiling requirement sums each coverage step's own watchdog rather than
+multiplying one of them by the step count. Both lanes run the action once, so
+the two readings agree today and this tree cannot tell them apart; they stop
+agreeing the moment a lane raises the budget for one step, which the variable
+allows because it resolves per step. It also carries fifteen minutes above that
+sum, because a ceiling equal to it cancels the job at the moment the watchdog
+would have reported the overrun. The ceilings are 65, up from 60, which was ten
+above the requirement rather than fifteen.
+
+This repository is also the estate's live example of the second route to a
+`cargo` run. It has no root `Cargo.toml`; both coverage lanes pass
+`cargo-manifest: rust/Cargo.toml`, and the shared action falls back to that
+input when no root manifest exists. So these tiers are not inert here, and a
+contract that concluded otherwise from the missing root manifest would skip
+them at exactly the moment they became real.
+
 [^1]: [`generate-coverage`: test timeouts](
     https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md)

@@ -27,6 +27,9 @@ from __future__ import annotations
 import functools
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 import pytest
 import yaml
 
@@ -72,6 +75,12 @@ EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
 #: Five minutes is six times the worse of those, matching the margin the
 #: watchdog itself carries.
 OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
+
+#: How far a ceiling must sit above the sum it contains, rather than
+#: merely reaching it. A ceiling equal to that sum cancels the job at
+#: the moment the watchdog would have reported the overrun, and the
+#: report is the only thing that makes an overrun actionable.
+CEILING_MARGIN_SECONDS: typ.Final[int] = 15 * 60
 
 
 class Step(typ.TypedDict, total=False):
@@ -137,20 +146,23 @@ class CoverageLane(typ.NamedTuple):
         The workflow file's path.
     job : str
         The job's identifier.
-    steps : int
-        How many coverage steps the job runs. Each gets its own watchdog,
-        so the job must contain all of their budgets.
-    watchdog : int or None
-        The budget in force, or None when no level sets one and the lane
+    watchdogs : tuple[int | None, ...]
+        The budget in force for each coverage step the job runs, in
+        order, or None for a step where no level sets one and it
         inherits the action's default.
+
+        A tuple rather than one value and a count, because the budgets
+        need not agree: the variable resolves per step, so a job running
+        the action twice can raise it for the feature set that builds
+        more. Multiplying one step's budget by the number of steps
+        describes such a job only when they happen to match.
     ceiling : int or None
         The job's ``timeout-minutes``, or None when it declares none.
     """
 
     workflow: str
     job: str
-    steps: int
-    watchdog: int | None
+    watchdogs: tuple[int | None, ...]
     ceiling: int | None
 
     def __str__(self) -> str:
@@ -181,6 +193,30 @@ def _workflow(path: str) -> Workflow:
     parsed = yaml.safe_load((repo_root() / path).read_text(encoding="utf-8"))
     assert isinstance(parsed, dict), f"{path} must parse to a mapping"
     return typ.cast("Workflow", parsed)
+
+
+def required_ceiling(budgets: cabc.Sequence[int]) -> int:
+    """Return the smallest acceptable ceiling for one job, in seconds.
+
+    Three terms. Each coverage step may legitimately spend its whole
+    watchdog, so the sum is the floor, and it is a sum rather than a
+    multiple because the budgets need not agree. The measured work
+    outside those windows is added because the job timer covers it and
+    the watchdogs do not. The margin is added because a ceiling equal to
+    that sum cancels the job at the moment the watchdog would have
+    reported the overrun.
+
+    Parameters
+    ----------
+    budgets : cabc.Sequence[int]
+        One watchdog budget per coverage step in the job.
+
+    Returns
+    -------
+    int
+        The smallest acceptable ceiling, in seconds.
+    """
+    return sum(budgets) + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
 
 
 def _watchdog_of(workflow: Workflow, job: Job, step: Step) -> int | None:
@@ -231,6 +267,33 @@ def _lanes() -> tuple[CoverageLane, ...]:
         workflow = _workflow(path)
         jobs = workflow.get("jobs")
         assert isinstance(jobs, dict), f"{path} must declare a jobs mapping"
+        found.extend(lanes_in(path, workflow))
+    return tuple(found)
+
+
+def lanes_in(path: str, workflow: Workflow) -> list[CoverageLane]:
+    """Return one lane per coverage-invoking job in one workflow.
+
+    Separated from :func:`_lanes` so the reading can be driven with a
+    workflow written for a case. Both lanes in this repository run the
+    action once, so a reading that took the first step's budget and
+    repeated it would agree with a correct one against the tree.
+
+    Parameters
+    ----------
+    path : str
+        The workflow file's path, for the failure message.
+    workflow : Workflow
+        The parsed document.
+
+    Returns
+    -------
+    list[CoverageLane]
+        One entry per coverage-invoking job.
+    """
+    found: list[CoverageLane] = []
+    jobs = workflow.get("jobs")
+    if isinstance(jobs, dict):
         for name, job in jobs.items():
             steps = [
                 step
@@ -244,12 +307,13 @@ def _lanes() -> tuple[CoverageLane, ...]:
                 CoverageLane(
                     workflow=path,
                     job=str(name),
-                    steps=len(steps),
-                    watchdog=_watchdog_of(workflow, job, steps[0]),
+                    watchdogs=tuple(
+                        _watchdog_of(workflow, job, step) for step in steps
+                    ),
                     ceiling=None if raw_ceiling is None else int(str(raw_ceiling)),
                 )
             )
-    return tuple(found)
+    return found
 
 
 def test_both_workflows_carry_a_coverage_lane() -> None:
@@ -279,13 +343,17 @@ def test_every_lane_sets_the_watchdog_rather_than_inheriting_it(
     down. The failure it produces names `cargo` rather than the test that
     hung, so the run reads as an infrastructure fault.
     """
-    assert lane.watchdog is not None, (
-        f"{lane} does not set {WATCHDOG_VARIABLE} at step, job or workflow "
-        f"level, so it inherits the shared action's undocumented 1,800 s "
-        f"default"
+    unstated = [
+        index + 1 for index, budget in enumerate(lane.watchdogs) if budget is None
+    ]
+    assert not unstated, (
+        f"{lane} leaves step(s) {unstated} of {len(lane.watchdogs)} without "
+        f"{WATCHDOG_VARIABLE} at step, job or workflow level, so they inherit "
+        f"the shared action's undocumented 1,800 s default"
     )
-    assert lane.watchdog == EXPECTED_WATCHDOG_SECONDS, (
-        f"{lane} sets {WATCHDOG_VARIABLE}={lane.watchdog}, not the "
+    wrong = [budget for budget in lane.watchdogs if budget != EXPECTED_WATCHDOG_SECONDS]
+    assert not wrong, (
+        f"{lane} sets {WATCHDOG_VARIABLE}={wrong}, not the "
         f"{EXPECTED_WATCHDOG_SECONDS} sized in the developers' guide; both "
         f"lanes move together or the pull-request lane stops predicting the "
         f"trunk lane it exists to protect"
@@ -306,23 +374,28 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
     overrun, and a cancellation discards the log that would have
     explained it.
 
-    The requirement multiplies the watchdog by the number of coverage
-    steps in the job. Each invocation gets its own, so a job that gained
-    a second one could legitimately spend both budgets.
+    The requirement sums each coverage step's own watchdog rather than
+    multiplying one of them by the step count. Each invocation gets its
+    own budget and they need not agree, so the multiplication describes
+    a job only while its steps happen to match. It also carries a margin
+    above that sum, because a ceiling equal to it cancels the job at the
+    moment the watchdog would have reported the overrun.
     """
-    assert lane.watchdog is not None, str(lane)
-    required_seconds = lane.watchdog * lane.steps + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS
+    budgets = [budget for budget in lane.watchdogs if budget is not None]
+    assert len(budgets) == len(lane.watchdogs), str(lane)
+    required_seconds = required_ceiling(budgets)
     assert lane.ceiling is not None, (
-        f"{lane} runs {lane.steps} watchdog-bounded cargo invocation(s) in a "
-        f"job with no timeout-minutes; the outermost tier is missing and "
+        f"{lane} runs {len(budgets)} watchdog-bounded cargo invocation(s) in "
+        f"a job with no timeout-minutes; the outermost tier is missing and "
         f"GitHub's six-hour default applies"
     )
     assert lane.ceiling * 60 >= required_seconds, (
         f"{lane} has a ceiling of {lane.ceiling} minutes, below the "
-        f"{required_seconds / 60:.0f} needed to contain {lane.steps} "
-        f"watchdog(s) of {lane.watchdog}s plus "
+        f"{required_seconds / 60:.0f} needed to contain {len(budgets)} "
+        f"watchdog(s) totalling {sum(budgets)}s, "
         f"{OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS}s of measured work outside "
-        f"them; an overrun would be cancelled rather than reported"
+        f"them, and a {CEILING_MARGIN_SECONDS}s margin above that sum; an "
+        f"overrun would be cancelled rather than reported"
     )
 
 
@@ -346,4 +419,60 @@ def test_the_nextest_tiers_are_absent_rather_than_unset() -> None:
         "largest per-test allowance (period multiplied by terminate-after) "
         "and inside the cargo watchdog, and update the developers' guide's "
         "timeout section in the same change"
+    )
+
+
+def test_the_required_ceiling_sums_the_watchdogs_and_adds_the_margin() -> None:
+    """Two coverage steps need both budgets, plus the margin.
+
+    Both lanes here run the action once, so the sum and a multiple of
+    the first agree, and both ceilings clear the smaller requirement
+    too. Neither the sum nor the margin is therefore visible to the
+    assertion over the workflows, so both are driven with controlled
+    numbers.
+    """
+    assert required_ceiling([2700, 1800]) == (
+        4500 + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
+    ), "two steps need the sum of their budgets, not a multiple of one"
+    assert required_ceiling([2700]) == (
+        2700 + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
+    ), "one step needs its own budget, the allowance and the margin"
+    assert required_ceiling([]) == (
+        OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
+    ), "the margin is a term of its own, not a fraction of the others"
+
+
+def test_every_coverage_step_carries_its_own_budget() -> None:
+    """A job's steps are read individually, not through the first.
+
+    Reading `steps[0]` and multiplying gives the same answer while the
+    budgets agree, which they do here. It stops giving the same answer
+    the moment a lane raises one of them, which is the change this
+    reading exists to survive.
+    """
+    document = typ.cast(
+        "Workflow",
+        {
+            "jobs": {
+                "coverage": {
+                    "timeout-minutes": 120,
+                    "steps": [
+                        {
+                            "uses": f"{COVERAGE_ACTION}@abc",
+                            "env": {WATCHDOG_VARIABLE: "2700"},
+                        },
+                        {
+                            "uses": f"{COVERAGE_ACTION}@abc",
+                            "env": {WATCHDOG_VARIABLE: "1800"},
+                        },
+                    ],
+                }
+            }
+        },
+    )
+    (lane,) = lanes_in("synthetic.yml", document)
+
+    assert lane.watchdogs == (2700, 1800), (
+        f"each step's own budget must be read, got {lane.watchdogs}; reading "
+        f"the first and repeating it would give (2700, 2700)"
     )

@@ -817,11 +817,12 @@ jobs:
     runs-on: ubicloud-standard-2
     # Above the 2,700 s cargo watchdog set below plus the work either side
     # of the coverage step, which reached 43 s on run 34071469378. Fifty
-    # minutes is the requirement; sixty leaves the lane ten above it,
-    # because a ceiling sitting on its requirement is cancelled by the job
-    # timer on the first run that spends the full watchdog, and a
-    # cancellation discards the log that would have explained it.
-    timeout-minutes: 60
+    # minutes is the requirement, and the estate's rule is fifteen above
+    # it rather than merely reaching it, because a ceiling sitting on its
+    # requirement is cancelled by the job timer on the first run that
+    # spends the full watchdog, and a cancellation discards the log that
+    # would have explained it. This was 60, which is ten above.
+    timeout-minutes: 65
     needs:
       - lint-test
       - typecheck-test
