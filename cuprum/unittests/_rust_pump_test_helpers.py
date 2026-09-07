@@ -12,18 +12,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import os
 import sys
 import threading
 import types
 import typing as typ
 
+import pytest
+
 from cuprum import _pipeline_stream_fds, _pipeline_streams
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
 
     from cuprum.pump_events import RustPumpDeclineReason
 
@@ -222,6 +223,77 @@ class _NoopGuard:
 
     def restore(self) -> None:
         """Restore nothing; the descriptors here are placeholders."""
+
+
+class RecordingGuard:
+    """Blocking-mode guard double that records restoration ordering."""
+
+    def __init__(self, events: list[str]) -> None:
+        """Store the shared ordering log."""
+        self.events = events
+
+    def restore(self) -> None:
+        """Record restoration after worker settlement."""
+        self.events.append("restored")
+
+
+@dc.dataclass
+class PumpTransfer:
+    """Synchronization state for a cancellation transfer."""
+
+    events: list[str]
+    started: threading.Event
+    release: threading.Event
+
+
+async def run_fake_pump(
+    pump: cabc.Callable[[int, int], int],
+    *,
+    events: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run a fake Rust pump over descriptors owned by this helper."""
+    install_fake_pump(monkeypatch, pump)
+    with owned_fds() as (reader_fd, writer_fd):
+        state = _pipeline_streams._RustPumpState(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            blocking_mode_guard=typ.cast(
+                "_pipeline_stream_fds._BlockingModeGuard", RecordingGuard(events)
+            ),
+            resume_reader=None,
+        )
+        await _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
+
+
+async def cancel_fake_pump(
+    transfer: PumpTransfer,
+    pump: cabc.Callable[[int, int], int],
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancel a live fake worker, then release it for callback cleanup."""
+    install_fake_pump(monkeypatch, pump)
+    with owned_fds() as (reader_fd, writer_fd):
+        state = _pipeline_streams._RustPumpState(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            blocking_mode_guard=typ.cast(
+                "_pipeline_stream_fds._BlockingModeGuard",
+                RecordingGuard(transfer.events),
+            ),
+            resume_reader=None,
+        )
+        task = asyncio.create_task(
+            _pipeline_streams._run_rust_pump_with_blocking_fds(state=state),
+        )
+        started = await asyncio.to_thread(transfer.started.wait, 5.0)
+        assert started, "the worker did not start, so cancellation was not mid-transfer"
+        task.cancel()
+        await asyncio.sleep(0)
+        transfer.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:

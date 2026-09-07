@@ -12,15 +12,7 @@ from cuprum import sh
 from cuprum.adapters.logging_adapter import structured_logging_hook
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
-from cuprum.pump_span_events import (
-    PUMP_HOP_OUTCOME_ATTRIBUTE,
-    PUMP_HOP_TOTAL_BYTES_ATTRIBUTE,
-)
 from tests.behaviour import _telemetry_adapter_tracing_steps as _tracing_steps
-from tests.behaviour._rust_pump_span_support import (
-    run_cancelled_hop,
-    run_successful_hop,
-)
 from tests.behaviour._telemetry_adapter_support import (
     _FAILURE_SCRIPT,
     _OUTPUT_SCRIPT,
@@ -37,6 +29,18 @@ then("the span has program and exit code attributes")(
 )
 then("the span records output as events")(_tracing_steps.assert_span_events)
 then("the span status indicates an error")(_tracing_steps.assert_span_error_status)
+when("I run a successful Rust-pump executor hop")(
+    _tracing_steps.when_run_successful_rust_pump_hop
+)
+when("I cancel a Rust-pump executor hop while its worker owns descriptors")(
+    _tracing_steps.when_cancel_rust_pump_hop
+)
+then("the pump-hop span is successful and records transferred bytes")(
+    _tracing_steps.then_successful_pump_hop_span
+)
+then("the pump-hop span is cancelled after the worker returns")(
+    _tracing_steps.then_cancelled_pump_hop_span
+)
 
 
 @scenario(
@@ -78,6 +82,7 @@ def test_tracing_hook_creates_spans() -> None:
 def test_tracing_hook_error_status() -> None:
     """Behavioural coverage for tracing adapter failure path."""
 
+
 @scenario(
     "../features/telemetry_adapters.feature",
     "Rust-pump hop tracing records a successful executor hop",
@@ -85,12 +90,15 @@ def test_tracing_hook_error_status() -> None:
 def test_rust_pump_hop_span_success() -> None:
     """Behavioural coverage for successful executor-hop tracing."""
 
+
 @scenario(
     "../features/telemetry_adapters.feature",
     "Rust-pump hop tracing records cancellation cleanup",
 )
 def test_rust_pump_hop_span_cancellation() -> None:
     """Behavioural coverage for cancellation executor-hop tracing."""
+
+
 @pytest.fixture
 def behaviour_state() -> dict[str, object]:
     """Shared mutable state for behaviour scenarios.
@@ -206,13 +214,17 @@ def given_tracer(behaviour_state: dict[str, object]) -> dict[str, object]:
     """
     tracer = InMemoryTracer()
     hook = TracingHook(tracer, record_output=True)
-    behaviour_state["tracer"] = tracer
+    tracing_state: _tracing_steps.TracingBehaviourState = {"tracer": tracer}
+    behaviour_state.update(tracing_state)
     return {"tracer": tracer, "hook": hook}
+
 
 @given("an in-memory pump-hop tracer")
 def given_pump_hop_tracer(behaviour_state: dict[str, object]) -> None:
     """Install an in-memory tracer for the executor-hop span scenarios."""
     behaviour_state["pump_hop_tracer"] = InMemoryTracer()
+
+
 @when("I run a command that writes to stdout and stderr")
 def when_run_stdout_stderr(
     behaviour_state: dict[str, object],
@@ -272,23 +284,7 @@ def when_run_with_output(
         behaviour_state, python_cmd_fixture, tracer_fixture, _OUTPUT_SCRIPT
     )
 
-@when("I run a successful Rust-pump executor hop")
-def when_run_successful_rust_pump_hop(
-    behaviour_state: dict[str, object],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Run the Rust-pump executor seam with a successful worker double."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
-    run_successful_hop(tracer, monkeypatch)
 
-@when("I cancel a Rust-pump executor hop while its worker owns descriptors")
-def when_cancel_rust_pump_hop(
-    behaviour_state: dict[str, object],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Cancel the executor task before its worker returns its descriptors."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
-    behaviour_state["pump_hop_order"] = run_cancelled_hop(tracer, monkeypatch)
 @then("the logger receives records for all execution phases")
 def then_all_phases_logged(
     behaviour_state: dict[str, object],
@@ -351,38 +347,7 @@ def then_failure_counter_incremented(behaviour_state: dict[str, object]) -> None
 @then("a span is created and ended")
 def then_span_created(behaviour_state: dict[str, object]) -> None:
     """Verify a span was created and properly ended."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["tracer"])
+    tracer = _tracing_steps.tracing_state_from(behaviour_state)["tracer"]
     assert len(tracer.spans) == 1, "Expected exactly one span"
     span = tracer.spans[0]
     assert span.ended is True, "Span should be ended"
-
-@then("the pump-hop span is successful and records transferred bytes")
-def then_successful_pump_hop_span(behaviour_state: dict[str, object]) -> None:
-    """Assert the successful span's bounded terminal data."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
-    assert len(tracer.spans) == 1, f"expected one hop span, found {tracer.spans}"
-    span = tracer.spans[0]
-    assert span.ended is True, "successful hop span must end"
-    assert span.status_ok is True, "successful hop span must be marked ok"
-    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "succeeded", (
-        f"unexpected hop outcome {span.attributes}"
-    )
-    assert span.attributes[PUMP_HOP_TOTAL_BYTES_ATTRIBUTE] == 29, (
-        f"unexpected transferred-byte count {span.attributes}"
-    )
-
-@then("the pump-hop span is cancelled after the worker returns")
-def then_cancelled_pump_hop_span(behaviour_state: dict[str, object]) -> None:
-    """Assert cancellation spans include the worker-owned cleanup window."""
-    tracer = typ.cast("InMemoryTracer", behaviour_state["pump_hop_tracer"])
-    order = typ.cast("list[str]", behaviour_state["pump_hop_order"])
-    assert len(tracer.spans) == 1, f"expected one hop span, found {tracer.spans}"
-    span = tracer.spans[0]
-    assert span.ended is True, "cancelled hop span must end"
-    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == "cancelled", (
-        f"unexpected hop outcome {span.attributes}"
-    )
-    assert span.status_ok is None, "only successful spans may be marked ok"
-    assert order.index("worker_returned") < order.index("restored"), (
-        f"worker must return before descriptors restore: {order}"
-    )

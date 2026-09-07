@@ -50,7 +50,10 @@ def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
         """Return the next controlled cleanup timestamp."""
         return next(clock_values)
 
-    caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
+    caplog.set_level(
+        logging.DEBUG,
+        logger=_pipeline_stream_cleanup_observation.__name__,
+    )
     with (
         _correlate_pump_events(exec_id),
         observe_pump(pump_events.append),

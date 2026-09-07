@@ -62,7 +62,7 @@ non-`Exception` control-flow signals still propagate.
 The span opens only after the Rust fast path has passed its decline checks. Its
 callback sets one bounded outcome: `succeeded`, `failed`, `cancelled`, or
 `failed_after_cancel`. Only successful spans receive `total_bytes` and status
-`ok`. Every carrier span ends in the callback, after the worker has settled and
+`OK`. Every carrier span ends in the callback, after the worker has settled and
 before descriptor restoration signals completion to the awaiting task.
 
 The Rust-internal `stream_pump` span remains parentless. Passing Python trace
@@ -74,13 +74,14 @@ as acceptable; parentage remains a separately evaluated follow-up.
 
 ### Goals
 
-- Provide one opt-in span per actual Rust-pump executor hop.
+- Provide one span per registered tracer for each actual Rust-pump executor
+  hop.
 - Include the cancellation-drain lifetime and final bounded outcome.
 - Keep descriptor and command payloads out of hop-span attributes.
 
 ### Non-goals
 
-- Changing `PumpEvent`, `PumpPhase`, `ExecPhase`, or existing hooks.
+- Changing `PumpEvent`, `PumpPhase`, `ExecEvent`, or existing hooks.
 - Opening spans for fast-path declines.
 - Parenting the Rust `stream_pump` span, or crossing trace context through
   PyO3.

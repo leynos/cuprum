@@ -45,8 +45,10 @@ from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 from cuprum.pump_span_events import (
+    NATIVE_PUMP_BUFFER_SIZE,
     PUMP_HOP_BUFFER_SIZE_ATTRIBUTE,
     PUMP_HOP_OPERATION_ATTRIBUTE,
+    PumpHopOutcome,
 )
 from cuprum.pump_span_observation import (
     _close_pump_hop_spans,
@@ -204,7 +206,7 @@ def _submit_rust_pump(
     try:
         pump_hop_spans = _open_pump_hop_spans({
             PUMP_HOP_OPERATION_ATTRIBUTE: "rust_pump",
-            PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: 65_536,
+            PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: NATIVE_PUMP_BUFFER_SIZE,
         })
         context = contextvars.copy_context()
         native_pump = loop.run_in_executor(
@@ -217,7 +219,7 @@ def _submit_rust_pump(
     except BaseException as error:
         _close_pump_hop_spans(
             pump_hop_spans,
-            outcome="failed",
+            outcome=PumpHopOutcome.FAILED,
             total_bytes=None,
         )
         _pump_obs._log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
@@ -230,15 +232,13 @@ def _submit_rust_pump(
     native_pump.add_done_callback(
         functools.partial(
             _complete_rust_pump,
-            completion=_RustPumpCompletion(
+            completion=_RustPumpCompletion[_RustPumpState](
                 cleanup_complete=cleanup_complete,
                 pump_hop_spans=pump_hop_spans,
                 state=state,
+                restore_state=_restore_rust_pump_state,
             ),
             logger=_LOGGER,
-            restore_state=lambda completion_state: _restore_rust_pump_state(
-                typ.cast("_RustPumpState", completion_state)
-            ),
         )
     )
     _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)

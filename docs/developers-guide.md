@@ -13,6 +13,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 
 ## GitHub Actions runners
 
@@ -1222,6 +1223,37 @@ guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
 `stderr`/`stdin_error`/`timeout`/`teardown_error`/ `capture_eof_grace_expired`/
 `pipeline_fail_fast`/`exit` without one are dropped. Every event Cuprum itself
 emits carries an `exec_id`, so this only affects hand-built event streams.
+
+## Rust-pump executor-hop span boundary
+
+[ADR-010](adr-010-rust-pump-hop-span.md) defines the separate, opt-in tracing
+surface for Rust-pump executor hops. Keep it separate from the `PumpEvent`
+channel: pump events describe routing and cleanup observations, while hop spans
+cover the lifetime of one scheduled native transfer.
+
+The implementation is split by responsibility:
+
+- `cuprum/pump_span_events.py` owns the stable span name, bounded attribute
+  names, and the closed `PumpHopOutcome` vocabulary.
+- `cuprum/pump_span_observation.py` owns the context-local tracer registry,
+  registration handles, observer-failure policy, and opening or closing the
+  spans held by one hop.
+- `cuprum/_pipeline_streams.py` owns Rust-pump dispatch. It opens spans only
+  after the fast path accepts the hop and attaches the carrier to the native
+  executor future.
+- `cuprum/_pipeline_rust_pump_completion.py` owns the completion callback. It
+  determines the terminal outcome, closes the hop spans, restores asyncio
+  stream state, and signals that cleanup is complete.
+- `cuprum/_pipeline_stream_cleanup_observation.py` owns the cancellation drain
+  that waits for native worker settlement and emits the existing cleanup
+  observations.
+
+The completion callback is the lifetime boundary: it must settle the native
+worker before restoration is reported complete, and the cancellation drain must
+remain covered by the hop span. Do not pass trace context through the PyO3
+boundary; the Rust-internal span remains parentless. Keep hop attributes
+bounded and avoid adding command payloads, descriptor values, exception text,
+or identifiers to this surface.
 
 ## Canonical `_TokenRegistration` handle base
 

@@ -1236,6 +1236,41 @@ otel_tracer = trace.get_tracer("cuprum")
 hook = TracingHook(OTelTracer(otel_tracer))
 ```
 
+### Rust-pump executor-hop spans
+
+Rust-backed pipelines can expose the executor hop that moves bytes between
+stages as an opt-in span. Register a `Tracer` with `observe_pump_span` in the
+context where the pipeline runs. The registration is context-local and can be
+used as a context manager:
+
+```python
+from cuprum import observe_pump_span
+from cuprum.adapters.tracing_memory import InMemoryTracer
+
+tracer = InMemoryTracer()
+with observe_pump_span(tracer):
+    pipeline.run_sync()
+
+span = tracer.spans[0]
+print(span.name)  # 'cuprum.rust_pump_hop'
+print(span.attributes["cuprum.outcome"])  # 'succeeded'
+```
+
+One span is opened for each registered tracer and each Rust-pump hop that is
+actually scheduled. A fast-path decline creates no hop span. The span starts
+immediately before executor scheduling and ends from the completion callback,
+after the native worker has settled; cancellation therefore includes the
+cleanup drain. The Rust-internal pump span remains parentless across PyO3.
+
+Hop spans contain only bounded attributes: `cuprum.operation` (currently
+`rust_pump`), `cuprum.buffer_size`, and `cuprum.outcome`, whose values are
+`succeeded`, `failed`, `cancelled`, or `failed_after_cancel`. Successful hops
+also include `cuprum.total_bytes` and receive status `OK`; other outcomes do
+not receive a success status. The existing `PumpEvent` channel and
+`observe_pump` registrations are unchanged. Ordinary tracer observer failures
+are contained so they do not alter pump execution, while control-flow
+exceptions continue to propagate.
+
 ### Design principles for adapters
 
 The adapters follow these design principles:

@@ -177,6 +177,7 @@
       'cuprum/unittests/test_pipeline_output_options.py',
       'cuprum/unittests/test_pipeline_process_exit.py',
       'cuprum/unittests/test_pipeline_process_lifecycle.py',
+      'cuprum/unittests/test_pipeline_rust_pump_completion.py',
       'cuprum/unittests/test_pipeline_stream_results.py',
       'cuprum/unittests/test_pipeline_streams_blocking_mode.py',
       'cuprum/unittests/test_pipeline_streams_cancellation.py',

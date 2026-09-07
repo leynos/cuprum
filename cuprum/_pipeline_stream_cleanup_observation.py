@@ -13,6 +13,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 def _log_native_pump_cleanup_started(logger: logging.Logger) -> None:
     """Record that cancellation is waiting for native-pump cleanup."""
     event = PumpEvent(
@@ -73,7 +76,7 @@ async def _await_native_pump_cleanup(
     logger: logging.Logger | None = None,
 ) -> None:
     """Wait for worker cleanup despite repeated cancellation requests."""
-    cleanup_logger = logger or logging.getLogger("cuprum._pipeline_streams")
+    cleanup_logger = logger or _LOGGER
     started_at = monotonic_clock()
     _log_native_pump_cleanup_started(cleanup_logger)
     try:

@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import dataclasses as dc
-import os
-import sys
 import threading
-import types
 import typing as typ
+from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum.adapters.tracing_memory import InMemoryTracer
 from cuprum.pump_span_events import (
+    NATIVE_PUMP_BUFFER_SIZE,
     PUMP_HOP_BUFFER_SIZE_ATTRIBUTE,
     PUMP_HOP_OPERATION_ATTRIBUTE,
     PUMP_HOP_OUTCOME_ATTRIBUTE,
@@ -24,67 +20,15 @@ from cuprum.pump_span_events import (
     PumpHopOutcome,
 )
 from cuprum.pump_span_observation import observe_pump_span
-from cuprum.unittests._rust_pump_test_helpers import DECLINE_PATHS
+from cuprum.unittests._rust_pump_test_helpers import (
+    DECLINE_PATHS,
+    PumpTransfer,
+    cancel_fake_pump,
+    run_fake_pump,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-
-class _RecordingGuard:
-    """Blocking-mode guard double that records restoration ordering."""
-
-    def __init__(self, events: list[str]) -> None:
-        """Store the shared ordering log."""
-        self.events = events
-
-    def restore(self) -> None:
-        """Record restoration after worker settlement."""
-        self.events.append("restored")
-
-
-@dc.dataclass
-class _Transfer:
-    """Synchronization state for a cancellation transfer."""
-
-    events: list[str]
-    started: threading.Event
-    release: threading.Event
-
-
-def _install_fake_pump(
-    monkeypatch: pytest.MonkeyPatch,
-    pump: cabc.Callable[[int, int], int],
-) -> None:
-    """Install a local Rust-pump double without loading the extension."""
-    module = types.ModuleType("cuprum._streams_rs")
-    module.__dict__["rust_pump_stream"] = pump
-    monkeypatch.setitem(sys.modules, "cuprum._streams_rs", module)
-
-
-async def _run_pump(
-    pump: cabc.Callable[[int, int], int],
-    *,
-    events: list[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Run a fake Rust pump over owned descriptors."""
-    _install_fake_pump(monkeypatch, pump)
-    reader_fd, writer_fd = os.pipe()
-    try:
-        state = _pipeline_streams._RustPumpState(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            blocking_mode_guard=typ.cast(
-                "_pipeline_stream_fds._BlockingModeGuard",
-                _RecordingGuard(events),
-            ),
-            resume_reader=None,
-        )
-        await _pipeline_streams._run_rust_pump_with_blocking_fds(state=state)
-    finally:
-        for fd in (reader_fd, writer_fd):
-            with contextlib.suppress(OSError):
-                os.close(fd)
 
 
 def test_successful_executor_hop_opens_and_ends_one_span(
@@ -99,7 +43,7 @@ def test_successful_executor_hop_opens_and_ends_one_span(
         return 23
 
     with observe_pump_span(tracer):
-        asyncio.run(_run_pump(pump, events=[], monkeypatch=monkeypatch))
+        asyncio.run(run_fake_pump(pump, events=[], monkeypatch=monkeypatch))
 
     assert len(tracer.spans) == 1, f"expected one hop span, found {tracer.spans}"
     span = tracer.spans[0]
@@ -108,8 +52,8 @@ def test_successful_executor_hop_opens_and_ends_one_span(
     assert span.status_ok is True, "successful hop span must be marked ok"
     assert span.attributes == {
         PUMP_HOP_OPERATION_ATTRIBUTE: "rust_pump",
-        PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: 65_536,
-        PUMP_HOP_OUTCOME_ATTRIBUTE: "succeeded",
+        PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: NATIVE_PUMP_BUFFER_SIZE,
+        PUMP_HOP_OUTCOME_ATTRIBUTE: PumpHopOutcome.SUCCEEDED,
         PUMP_HOP_TOTAL_BYTES_ATTRIBUTE: 23,
     }, f"unexpected bounded span attributes {span.attributes}"
 
@@ -132,45 +76,67 @@ def test_declined_paths_open_no_executor_hop_span(
     assert tracer.spans == [], f"declined path must not open a span: {tracer.spans}"
 
 
-async def _cancel_pump(
-    transfer: _Transfer,
-    pump: cabc.Callable[[int, int], int],
-    *,
+def test_failed_executor_hop_ends_without_success_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cancel a live worker, then release it so callback cleanup can finish."""
-    _install_fake_pump(monkeypatch, pump)
-    reader_fd, writer_fd = os.pipe()
-    try:
-        state = _pipeline_streams._RustPumpState(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            blocking_mode_guard=typ.cast(
-                "_pipeline_stream_fds._BlockingModeGuard",
-                _RecordingGuard(transfer.events),
+    """An uncancelled worker failure closes one failed span without byte data."""
+    tracer = InMemoryTracer()
+
+    def pump(reader_fd: int, writer_fd: int) -> int:
+        """Fail after executor submission."""
+        del reader_fd, writer_fd
+        msg = "worker failed"
+        raise OSError(msg)
+
+    with observe_pump_span(tracer), pytest.raises(OSError, match="worker failed"):
+        asyncio.run(run_fake_pump(pump, events=[], monkeypatch=monkeypatch))
+
+    span = tracer.spans[0]
+    assert span.ended is True, "failed hop span must end"
+    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] is PumpHopOutcome.FAILED
+    assert PUMP_HOP_TOTAL_BYTES_ATTRIBUTE not in span.attributes
+    assert span.status_ok is None, "failed hop span must not be marked ok"
+
+
+def test_rejected_executor_submission_ends_failed_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected submission closes the already-open hop span as failed."""
+    tracer = InMemoryTracer()
+
+    def pump(_reader_fd: int, _writer_fd: int) -> int:
+        """Provide the worker entry point that submission rejects."""
+        return 0
+
+    async def reject_submission() -> None:
+        """Reject executor acceptance after the hop span opens."""
+        loop = asyncio.get_running_loop()
+        with (
+            mock.patch.object(
+                loop,
+                "run_in_executor",
+                side_effect=RuntimeError("executor rejected the worker"),
             ),
-            resume_reader=None,
-        )
-        task = asyncio.create_task(
-            _pipeline_streams._run_rust_pump_with_blocking_fds(state=state),
-        )
-        assert await asyncio.to_thread(transfer.started.wait, 5.0), (
-            "the worker did not start, so the task was not cancelled mid-transfer"
-        )
-        task.cancel()
-        await asyncio.sleep(0)
-        transfer.release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    finally:
-        for fd in (reader_fd, writer_fd):
-            with contextlib.suppress(OSError):
-                os.close(fd)
+            pytest.raises(RuntimeError, match="executor rejected"),
+        ):
+            await run_fake_pump(pump, events=[], monkeypatch=monkeypatch)
+
+    with observe_pump_span(tracer):
+        asyncio.run(reject_submission())
+
+    span = tracer.spans[0]
+    assert span.ended is True, "rejected hop span must end"
+    assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] is PumpHopOutcome.FAILED
+    assert PUMP_HOP_TOTAL_BYTES_ATTRIBUTE not in span.attributes
+    assert span.status_ok is None, "rejected hop span must not be marked ok"
 
 
 @pytest.mark.parametrize(
     ("should_fail", "expected_outcome"),
-    [(False, "cancelled"), (True, "failed_after_cancel")],
+    [
+        (False, PumpHopOutcome.CANCELLED),
+        (True, PumpHopOutcome.FAILED_AFTER_CANCEL),
+    ],
     ids=("clean-worker", "failing-worker"),
 )
 def test_cancelled_executor_hop_ends_with_expected_outcome(
@@ -180,7 +146,7 @@ def test_cancelled_executor_hop_ends_with_expected_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancelled hops retain worker ownership until the expected outcome is set."""
-    transfer = _Transfer([], threading.Event(), threading.Event())
+    transfer = PumpTransfer([], threading.Event(), threading.Event())
     tracer = InMemoryTracer()
 
     def pump(reader_fd: int, writer_fd: int) -> int:
@@ -195,14 +161,14 @@ def test_cancelled_executor_hop_ends_with_expected_outcome(
         return 0
 
     with observe_pump_span(tracer):
-        asyncio.run(_cancel_pump(transfer, pump, monkeypatch=monkeypatch))
+        asyncio.run(cancel_fake_pump(transfer, pump, monkeypatch=monkeypatch))
 
     span = tracer.spans[0]
     assert span.ended is True, "cancelled hop span must end"
     assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] == expected_outcome, (
         f"unexpected cancellation outcome {span.attributes}"
     )
-    assert span.status_ok is not True, "cancelled hop must not be marked ok"
+    assert span.status_ok is None, "cancelled hop must not be marked ok"
     assert transfer.events.index("worker_returned") < transfer.events.index(
         "restored"
     ), f"worker must return before descriptor restore: {transfer.events}"

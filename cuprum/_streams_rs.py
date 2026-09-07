@@ -30,6 +30,7 @@ import typing as typ
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_span_events import NATIVE_PUMP_BUFFER_SIZE
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -254,7 +255,7 @@ def rust_pump_stream(
     reader_fd: int,
     writer_fd: int,
     *,
-    buffer_size: int = 65536,
+    buffer_size: int = NATIVE_PUMP_BUFFER_SIZE,
 ) -> int:
     """Pump bytes between file descriptors using the Rust extension.
 
