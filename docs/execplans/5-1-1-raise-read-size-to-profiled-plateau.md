@@ -5,13 +5,14 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
-Reopened 2026-09-07: Linux AUTO pipeline revalidation exposed that the native
-pump received an asyncio-owned reader descriptor. The corrective milestone gave
-Rust worker-owned descriptors while keeping asyncio ownership intact. A final
-CodeScene size follow-up then extracted two focused test helpers; deterministic
-revalidation passed and the refreshed committed review remains pending.
+Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
+that the native pump received an asyncio-owned reader descriptor. The
+corrective milestone gave Rust worker-owned descriptors while keeping asyncio
+ownership intact. A final CodeScene size follow-up extracted two focused test
+helpers; deterministic revalidation and the refreshed committed review passed
+without findings.
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -220,7 +221,9 @@ This task is complete only when:
   native-settlement double installation. This keeps the two distinct
   cancellation contracts explicit while reducing the two reported test methods
   below CodeScene's size threshold. Focused coverage (13 passed) and every
-  deterministic gate passed; refreshed committed review remains pending.
+  deterministic gate passed.
+  `coderabbit review --agent --committed --base origin/main` then reported zero
+  findings across 72 files, returning this plan to `COMPLETE`.
 - [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
   from parent `41707268` onto `origin/main` (
   [the upstream commit][upstream-timeout-capture-commit]) without conflicts.
@@ -1436,8 +1439,8 @@ investigation.
 Revision 10, 2026-09-07, after the CodeScene test-structure follow-up: reused
 the worker-FD spy and extracted settlement-double installation to reduce two
 oversized test methods without weakening ownership or cancellation checks. All
-deterministic gates passed; the plan remains `IN PROGRESS` only for the
-refreshed committed review.
+deterministic gates passed, and the refreshed committed CodeRabbit review
+reported zero findings across 72 files. The plan is `COMPLETE`.
 
 Revision 9, 2026-09-07, after the Linux native-pump hand-off correction: native
 workers now receive worker-owned reader and writer descriptors, while asyncio
