@@ -60,14 +60,36 @@ from cuprum.echo_events import (
 from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
+from cuprum.sinks import base as sinks
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
+_DEFAULT_LABEL_SEPARATOR = ": "
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
+
+
+def _run_label(cmd: SafeCmd, override: str | None) -> str:
+    """Build the bounded display label for one run.
+
+    Prefers the caller's explicit ``title`` override; otherwise falls back to
+    ``"<project>: <program>"`` from catalogue metadata. Never includes argv:
+    catalogue membership does not make arguments safe to print, so secrets
+    cannot leak into the label here.
+
+    Returns
+    -------
+    str
+        The bounded display label for the run.
+    """
+    if override is not None:
+        return override
+    return f"{cmd.project.name}{_DEFAULT_LABEL_SEPARATOR}{cmd.program}"
+
+
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
@@ -338,6 +360,7 @@ class _ExecutionTracking:
 
     execution_hooks: _ExecutionHooks
     pending_tasks: list[asyncio.Task[None]]
+    sink_session: sinks.OutputSession | None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -417,6 +440,12 @@ class RunOutputOptions:
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
         loop. Requires ``idle_after``.
+    sink : sinks.OutputSink | None, default=None
+        Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
+        given, it may reframe the parent-facing output of this run (for
+        example, a GitHub Actions group); the default ``None`` keeps the
+        plain two-stream behaviour. An adapter is inactive for a run when it
+        declines activation, in which case output is unchanged.
 
     Examples
     --------
@@ -436,6 +465,7 @@ class RunOutputOptions:
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
+    sink: sinks.OutputSink | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -569,7 +599,97 @@ def _prepare_execution_observation(
     )
 
 
-# ruff: ignore[too-many-arguments]  # the six inputs are one run's resolved state, carried together rather than derived
+def _prepare_sink_session(
+    cmd: SafeCmd,
+    out: RunOutputOptions,
+) -> sinks.OutputSession | None:
+    """Open the presentation sink's session for this run, if any.
+
+    Called once per invocation before the subprocess starts. An adapter that
+    declines activation returns ``None`` and the run keeps the plain
+    destinations; there is no state to unwind in that case.
+
+    Returns
+    -------
+    sinks.OutputSession | None
+        The active session, or ``None`` when no sink is configured or the
+        adapter declines activation.
+    """
+    if out.sink is None:
+        return None
+    session = out.sink.open_session(
+        sinks.SessionStart(
+            label=_run_label(cmd, getattr(out.sink, "title", None)),
+            argv=cmd.argv_with_program,
+        ),
+    )
+    # Framing brackets the whole run: the adapter that supports eager framing
+    # (GitHub Actions groups) opens before the subprocess starts so child
+    # output can never appear above the group opening. Adapters without an
+    # eager open frame lazily on first write through ``log``.
+    open_group = getattr(session, "open_group", None)
+    if open_group is not None:
+        open_group()
+    return session
+
+
+def _close_sink_session(
+    session: sinks.OutputSession | None,
+    *,
+    outcome: sinks.SessionOutcome,
+) -> None:
+    """Finalize a presentation-sink session on any terminal path.
+
+    Called during shielded cleanup so cancellation cannot abandon the close
+    part-way. The adapter's ``close`` is idempotent by protocol, so a caller
+    that inspects the result after the run cannot double-finalize the session.
+
+    Parameters
+    ----------
+    session : sinks.OutputSession | None
+        The active session, or ``None`` when no sink was configured.
+    outcome : sinks.SessionOutcome
+        The terminal report for the run.
+    """
+    if session is None:
+        return
+    session.close(outcome)
+
+
+def _outcome_for_result(result: CommandResult) -> sinks.SessionOutcome:
+    """Map a completed command's result onto the terminal-outcome set."""
+    outcome = (
+        sinks.TerminalOutcome.EXIT_ZERO
+        if result.exit_code == 0
+        else sinks.TerminalOutcome.EXIT_NONZERO
+    )
+    return sinks.SessionOutcome(outcome=outcome, exit_code=result.exit_code)
+
+
+def _outcome_for_error(error: BaseException) -> sinks.SessionOutcome:
+    """Map a run's terminal error onto the terminal-outcome set.
+
+    The execution layer never passes exception text as the detail: only the
+    bounded categorical categories below reach the adapter, so exception
+    messages and argv cannot leak into workflow-log annotations.
+
+    Returns
+    -------
+    sinks.SessionOutcome
+        The terminal report for the run.
+    """
+    match error:
+        case TimeoutExpired():
+            return sinks.SessionOutcome(
+                outcome=sinks.TerminalOutcome.TIMEOUT,
+                exit_code=None,
+                detail="timeout",
+            )
+        case asyncio.CancelledError():
+            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.CANCELLED)
+        case _:
+            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.ERROR)
+# ruff: ignore[too-many-arguments]  # the seven inputs are one run's resolved state, carried together rather than derived
 def _build_subprocess_execution(
     cmd: SafeCmd,
     context: ExecutionContext,
@@ -578,13 +698,17 @@ def _build_subprocess_execution(
     timeout: float | None,
     observation: _StageObservation,
     stdin_data: bytes | None,
+    sink_session: sinks.OutputSession | None,
 ) -> _SubprocessExecution:
     """Bundle everything one command's execution needs, before it spawns.
 
     The idle monitor is part of the bundle rather than an execution-time
     argument because its presence is what decides whether the child's stdout
     and stderr are piped for activity observation. Deferring it would leave
-    the spawn unable to make that choice.
+    the spawn unable to make that choice. The sink session travels with it
+    for the same reason: stream wiring routes mirrored output through the
+    session's log, so it has to be part of the bundle before the consumers
+    are built.
 
     Returns
     -------
@@ -598,6 +722,7 @@ def _build_subprocess_execution(
         echo_stdout=output.resolved_echo[0],
         echo_stderr=output.resolved_echo[1],
         max_echo_line_bytes=output.max_echo_line_bytes,
+        sink_session=sink_session,
         timeout=timeout,
         observation=observation,
         stdin_data=stdin_data,
@@ -654,7 +779,15 @@ async def _execute_with_hooks(
                 message=_COMMAND_FINALIZATION_ERROR,
             )
         )
+        _close_sink_session(
+            execution.sink_session,
+            outcome=_outcome_for_error(run_error),
+        )
         raise
+    _close_sink_session(
+        execution.sink_session,
+        outcome=_outcome_for_result(result),
+    )
     await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
     return result
 
@@ -738,6 +871,7 @@ class SafeCmd:
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
+            sink_session=_prepare_sink_session(self, out),
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
         observation.emit("plan", _EventDetails(pid=None))
@@ -752,6 +886,7 @@ class SafeCmd:
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
+                sink_session=tracking.sink_session,
             ),
             tracking,
         )

@@ -54,6 +54,9 @@ open each document.
   opt-in executor-hop tracing without extending the pump event channel.
 - [ADR-011: Audited Rust safety boundaries][adr-011] - accepted decision to
   isolate native resource operations from safe stream policy.
+- [ADR-012: Opt-in GitHub Actions presentation sink][adr-012] - accepted
+  decision to frame runs in Actions log groups and annotate failures through an
+  opt-in presentation sink.
 
 ## Planning and validation references
 
@@ -82,6 +85,7 @@ open each document.
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [adr-010]: adr-010-rust-pump-hop-span.md
 [adr-011]: adr-011-audited-rust-boundaries.md
+[adr-012]: adr-012-opt-in-github-actions-presentation-sink.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [rust-boundary-verification]: rust-boundary-verification.md

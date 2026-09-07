@@ -117,6 +117,7 @@ def _single_command_tags(
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
+        sink_session=None,
     )
     observation = _prepare_execution_observation(
         cmd,
