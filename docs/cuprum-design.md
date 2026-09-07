@@ -2194,8 +2194,8 @@ For screen readers: The following sequence diagram shows one full
 `SafeCmd.lines()`, each `__anext__()` call drives a coordinator that spawns the
 subprocess and starts the stdout and stderr consumers, decoded `LineEvent`
 values are enqueued and yielded as they arrive, and after the process exits the
-consumers are drained, the `CommandResult` is published, and iteration ends
-with `StopAsyncIteration` before the caller reads the `result` attribute.
+consumers are drained, the `CommandResult` is published, and iteration ends with
+`StopAsyncIteration` before the caller reads the `result` attribute.
 
 Figure 11: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
