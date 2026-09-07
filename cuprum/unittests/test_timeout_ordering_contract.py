@@ -98,6 +98,9 @@ class Step(typ.TypedDict, total=False):
     env : dict[str, object]
         The step-level environment, the innermost scope the watchdog is
         resolved from.
+    with : dict[str, object]
+        The step's inputs, read for the coverage action's
+        ``cargo-manifest``.
 
     The step's ``if`` is read through a cast rather than declared here:
     ``if`` is a keyword, so a class-syntax TypedDict cannot carry it as
@@ -552,4 +555,53 @@ def test_each_coverage_lane_carries_the_condition_it_is_meant_to() -> None:
         f"these coverage lanes do not carry the conditions the developers' "
         f"guide records, as expected versus found: {wrong}; a lane that is "
         f"skipped runs no cargo, so its watchdog never arms"
+    )
+
+
+#: The manifest every coverage step must hand the shared action, because
+#: this repository has no root ``Cargo.toml``.
+#:
+#: The action decides whether to run `cargo` at all from the manifest it
+#: is given, falling back to the repository root. Here that fallback
+#: finds nothing, so a step that lost this input would measure no Rust
+#: and the watchdog above it would bound an invocation that never
+#: happened. Every budget in this contract would still pass.
+REQUIRED_CARGO_MANIFEST: typ.Final[str] = "rust/Cargo.toml"
+
+
+def test_every_coverage_step_names_the_manifest_this_repository_keeps() -> None:
+    """The Rust crate is under `rust/`, not at the repository root.
+
+    The shared action resolves `cargo` from the manifest it is handed
+    and falls back to the root, which here holds no `Cargo.toml`. A
+    coverage step that dropped `cargo-manifest` would therefore run no
+    Rust while every timer above it still read as correctly ordered, so
+    the input is pinned by value rather than left to the workflow.
+
+    Proved by mutation: removing the input from either step, and
+    pointing it at a manifest that does not exist, each fail this test.
+    """
+    offenders: list[str] = []
+    for path in COVERAGE_WORKFLOWS:
+        workflow = _workflow(path)
+        jobs = workflow.get("jobs")
+        if not isinstance(jobs, dict):
+            continue
+        for name, job in jobs.items():
+            for index, step in enumerate(job.get("steps") or []):
+                if COVERAGE_ACTION not in str(step.get("uses", "")):
+                    continue
+                inputs = typ.cast("dict[str, object]", step).get("with")
+                manifest = (
+                    inputs.get("cargo-manifest") if isinstance(inputs, dict) else None
+                )
+                if manifest != REQUIRED_CARGO_MANIFEST:
+                    offenders.append(
+                        f"{path}:{name} step {index + 1} passes {manifest!r}"
+                    )
+    assert not offenders, (
+        f"these coverage steps do not pass cargo-manifest="
+        f"{REQUIRED_CARGO_MANIFEST!r}: {offenders}; the action would fall "
+        f"back to a repository root that holds no Cargo.toml and measure no "
+        f"Rust, while every timer above it still read as correctly ordered"
     )

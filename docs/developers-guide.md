@@ -4166,6 +4166,13 @@ understate what the ceiling has to hold.
 Both lanes are held to the same watchdog value. They move together or the
 pull-request lane stops predicting the trunk lane it exists to protect.
 
+It pins the manifest each coverage step hands the shared action. This
+repository has no root `Cargo.toml`; the crate is under `rust/`. The action
+decides whether to run `cargo` from the manifest it is given and falls back to
+the repository root, which here holds nothing, so a step that lost
+`cargo-manifest` would measure no Rust while every timer above it still read as
+correctly ordered.
+
 The contract also pins the condition each lane carries. A skipped step runs no
 `cargo`, so its watchdog never arms and the tiers say nothing about it:
 `if: false` on the step or on its job would leave a lane that looks bounded and
