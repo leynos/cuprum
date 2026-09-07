@@ -4148,6 +4148,11 @@ says what to check: that the whole-run budget sits above the largest per-test
 allowance, which is `period` multiplied by `terminate-after` rather than the
 period alone, and inside the watchdog.
 
+[Issue 373](https://github.com/leynos/cuprum/issues/373) holds the measurements
+a later pass needs to choose both values, and notes that the coverage step is
+`language: mixed`, so the Python half of the suite is not bounded by nextest at
+all and needs thinking about separately.
+
 ### The contract
 
 The same file asserts the two tiers that do exist, by value, over every job
