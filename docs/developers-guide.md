@@ -4148,21 +4148,33 @@ says what to check: that the whole-run budget sits above the largest per-test
 allowance, which is `period` multiplied by `terminate-after` rather than the
 period alone, and inside the watchdog.
 
-[Issue 373](https://github.com/leynos/cuprum/issues/373) holds the measurements
-a later pass needs to choose both values, and notes that the coverage step is
-`language: mixed`, so the Python half of the suite is not bounded by nextest at
-all and needs thinking about separately.
+Issue 373[^2] holds the measurements a later pass needs to choose both values,
+and notes that the coverage step is `language: mixed`, so the Python half of
+the suite is not bounded by nextest at all and needs thinking about separately.
 
 ### The contract
 
 The same file asserts the two tiers that do exist, by value, over every job
 invoking the coverage action in both workflows. It resolves the watchdog from
 the step, then the job, then the workflow, as GitHub does, and it requires the
-ceiling to contain the watchdog multiplied by the number of coverage steps in
-that job, so a second invocation added later cannot silently exceed it.
+ceiling to contain the sum of the watchdogs of the coverage steps in that job,
+so a second invocation added later cannot silently exceed it. The steps are
+summed rather than the watchdog multiplied by their count, because a job may
+give two coverage steps different budgets and multiplying the first would
+understate what the ceiling has to hold.
 
 Both lanes are held to the same watchdog value. They move together or the
 pull-request lane stops predicting the trunk lane it exists to protect.
+
+The contract also pins the condition each lane carries. A skipped step runs no
+`cargo`, so its watchdog never arms and the tiers say nothing about it:
+`if: false` on the step or on its job would leave a lane that looks bounded and
+is not, and so would a plausible condition that quietly excluded the event the
+lane exists for. The conditions are pinned rather than forbidden, because the
+one here is legitimate: `ci.yml`'s coverage job runs on pull requests only,
+because the trunk lane covers pushes. A lane gaining, losing or changing a
+condition has to change this section with it, and a lane appearing without an
+entry fails the contract too.
 
 The ceiling requirement sums each coverage step's own watchdog rather than
 multiplying one of them by the step count. Both lanes run the action once, so
@@ -4182,3 +4194,6 @@ them at exactly the moment they became real.
 
 [^1]: [`generate-coverage`: test timeouts](
     https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md)
+
+[^2]: [Issue 373: size the nextest budgets](
+    https://github.com/leynos/cuprum/issues/373)

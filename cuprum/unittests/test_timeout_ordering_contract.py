@@ -98,6 +98,10 @@ class Step(typ.TypedDict, total=False):
     env : dict[str, object]
         The step-level environment, the innermost scope the watchdog is
         resolved from.
+
+    The step's ``if`` is read through a cast rather than declared here:
+    ``if`` is a keyword, so a class-syntax TypedDict cannot carry it as
+    a field.
     """
 
     name: object
@@ -115,6 +119,8 @@ class Job(typ.TypedDict, total=False):
     env : dict[str, object]
         The job-level environment, consulted for the watchdog when the
         step names none.
+
+    The job's ``if`` is read through a cast, as on :class:`Step`.
     """
 
     steps: list[Step]
@@ -135,6 +141,26 @@ class Workflow(typ.TypedDict, total=False):
 
     jobs: dict[str, Job]
     env: dict[str, object]
+
+
+#: The condition each coverage lane legitimately carries, keyed by
+#: workflow path and job, as the step's ``if`` and its job's.
+#:
+#: A skipped step runs no `cargo`, so its watchdog never arms and every
+#: assertion below says nothing about it. `if: false` on either would
+#: leave a lane that looks bounded and is not. The values are pinned
+#: rather than merely tolerated, because a lane gaining, losing or
+#: changing a condition changes when it runs at all.
+#:
+#: `ci.yml`'s coverage job runs on pull requests only; the trunk lane
+#: covers pushes and carries no condition.
+REQUIRED_CONDITIONS: typ.Final[dict[tuple[str, str], tuple[object, object]]] = {
+    (".github/workflows/ci.yml", "coverage"): (
+        None,
+        "github.event_name == 'pull_request'",
+    ),
+    (".github/workflows/coverage-main.yml", "coverage-upload"): (None, None),
+}
 
 
 class CoverageLane(typ.NamedTuple):
@@ -158,12 +184,17 @@ class CoverageLane(typ.NamedTuple):
         describes such a job only when they happen to match.
     ceiling : int or None
         The job's ``timeout-minutes``, or None when it declares none.
+    conditions : tuple[tuple[object, object], ...]
+        The ``if`` on each coverage step and on its job, in step order.
+        A skipped step runs no ``cargo``, so its watchdog never arms and
+        every budget above says nothing about it.
     """
 
     workflow: str
     job: str
     watchdogs: tuple[int | None, ...]
     ceiling: int | None
+    conditions: tuple[tuple[object, object], ...] = ()
 
     def __str__(self) -> str:
         """Return a location suitable for a failure message.
@@ -311,6 +342,13 @@ def lanes_in(path: str, workflow: Workflow) -> list[CoverageLane]:
                         _watchdog_of(workflow, job, step) for step in steps
                     ),
                     ceiling=None if raw_ceiling is None else int(str(raw_ceiling)),
+                    conditions=tuple(
+                        (
+                            typ.cast("dict[str, object]", step).get("if"),
+                            typ.cast("dict[str, object]", job).get("if"),
+                        )
+                        for step in steps
+                    ),
                 )
             )
     return found
@@ -475,4 +513,43 @@ def test_every_coverage_step_carries_its_own_budget() -> None:
     assert lane.watchdogs == (2700, 1800), (
         f"each step's own budget must be read, got {lane.watchdogs}; reading "
         f"the first and repeating it would give (2700, 2700)"
+    )
+
+
+def test_each_coverage_lane_carries_the_condition_it_is_meant_to() -> None:
+    """A skipped step runs no `cargo`, so its watchdog never arms.
+
+    Every assertion above reads a lane's declared budgets and says
+    nothing about whether the step runs. `if: false` on the step or on
+    its job would leave a lane that looks bounded and is not, and this
+    contract would certify it. So would a plausible condition that
+    quietly excluded the event the lane exists for.
+
+    The conditions are pinned by value rather than tested for falsity,
+    because YAML parses `false` to a boolean and enumerating falsy
+    spellings would miss the plausible ones anyway. The coordinates are
+    compared both ways first, so a new lane with no entry here fails
+    rather than passing unexamined.
+
+    Proved by mutation: `if: false` on the coverage step, the same on
+    its job, the pull-request condition changed to a push-only one, and
+    a coordinate dropped from ``REQUIRED_CONDITIONS`` each fail this
+    test.
+    """
+    found = {(lane.workflow, lane.job): lane.conditions for lane in _lanes()}
+    assert set(found) == set(REQUIRED_CONDITIONS), (
+        f"the coverage lanes are not the ones this contract pins: "
+        f"unlisted {sorted(set(found) - set(REQUIRED_CONDITIONS))}, missing "
+        f"{sorted(set(REQUIRED_CONDITIONS) - set(found))}; a lane with no "
+        f"entry here is a lane whose condition nobody has judged"
+    )
+    wrong = {
+        coordinate: (expected, found[coordinate])
+        for coordinate, expected in REQUIRED_CONDITIONS.items()
+        if set(found[coordinate]) != {expected}
+    }
+    assert not wrong, (
+        f"these coverage lanes do not carry the conditions the developers' "
+        f"guide records, as expected versus found: {wrong}; a lane that is "
+        f"skipped runs no cargo, so its watchdog never arms"
     )
