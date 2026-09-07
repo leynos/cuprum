@@ -102,6 +102,37 @@ def _install_recording_native_failure(
     monkeypatch.setattr(streams_rs, "rust_pump_stream", fail_rust_pump)
 
 
+class _NativeLoadFailureExecutor:
+    """Publish import failures through the native-worker future."""
+
+    def submit(
+        self,
+        function: cabc.Callable[..., object],
+        *args: object,
+    ) -> cf.Future[object]:
+        """Run native loading and settle its concurrent future."""
+        future: cf.Future[object] = cf.Future()
+        try:
+            result = function(*args)
+        except ImportError as error:
+            future.set_exception(error)
+        else:
+            future.set_result(result)
+        return future
+
+
+async def _run_with_native_load_failure(
+    awaitable: cabc.Awaitable[object],
+) -> None:
+    """Run an awaitable with native-load failures published by the executor."""
+    with mock.patch.object(
+        _pipeline_stream_native_cleanup,
+        "_NATIVE_PUMP_EXECUTOR",
+        _NativeLoadFailureExecutor(),
+    ):
+        await awaitable
+
+
 class TestRustPumpFailures:
     """Regression tests for Rust-pump cleanup paths."""
 
@@ -218,36 +249,6 @@ class TestRustPumpFailures:
             """Model an unavailable native extension import."""
             raise ImportError(_NATIVE_LOAD_FAILURE_MESSAGE)
 
-        async def run_with_native_load_failure(
-            awaitable: cabc.Awaitable[object],
-        ) -> None:
-            """Publish a native-load failure through the submitted future."""
-
-            class _NativeLoadFailureExecutor:
-                """Publish only import failures through the worker future."""
-
-                def submit(
-                    self,
-                    function: cabc.Callable[..., object],
-                    *args: object,
-                ) -> cf.Future[object]:
-                    """Execute native loading and settle the submitted future."""
-                    future: cf.Future[object] = cf.Future()
-                    try:
-                        result = function(*args)
-                    except ImportError as error:
-                        future.set_exception(error)
-                    else:
-                        future.set_result(result)
-                    return future
-
-            with mock.patch.object(
-                _pipeline_stream_native_cleanup,
-                "_NATIVE_PUMP_EXECUTOR",
-                _NativeLoadFailureExecutor(),
-            ):
-                await awaitable
-
         monkeypatch.setattr(streams_rs, "_load_native", fail_native_load)
 
         with _nonblocking_pipe_pair() as (
@@ -259,7 +260,7 @@ class TestRustPumpFailures:
             del read_write_fd, write_read_fd
             with pytest.raises(ImportError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
                 asyncio.run(
-                    run_with_native_load_failure(
+                    _run_with_native_load_failure(
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,

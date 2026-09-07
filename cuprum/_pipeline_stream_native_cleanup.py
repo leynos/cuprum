@@ -20,10 +20,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_stream_cleanup_observation import (
-    _log_native_pump_cleanup_completed,
-    _log_native_pump_cleanup_deferred,
-    _log_native_pump_cleanup_grace_expired,
-    _log_native_pump_cleanup_started,
+    _log_native_pump_cleanup,
     _log_native_pump_handoff_failed,
 )
 from cuprum._pipeline_stream_fds import (
@@ -234,7 +231,7 @@ def _finalize_rust_pump_cleanup(
         finally:
             _close_rust_pump_state_fds(cleanup.state)
             if cleanup.state.was_deferred:
-                _log_native_pump_cleanup_deferred(_LOGGER)
+                _log_native_pump_cleanup(_LOGGER, "cleanup_deferred")
             _NATIVE_PUMP_FUTURES.discard(completed)
     loop = cleanup.cleanup_complete.get_loop()
     # The loop may close after the caller receives cancellation. Descriptor
@@ -254,8 +251,9 @@ def _defer_native_pump_cleanup(
     """Mark callback-owned cleanup deferred and report its caller-bound expiry."""
     if state is not None:
         state.was_deferred = True
-    _log_native_pump_cleanup_grace_expired(
+    _log_native_pump_cleanup(
         _LOGGER,
+        "cleanup_grace_expired",
         max(0.0, monotonic_clock() - started_at),
     )
 
@@ -270,7 +268,7 @@ async def _await_native_pump_cleanup(
     """Wait for cleanup or defer it when its caller grace expires."""
     started_at = monotonic_clock()
     deadline = started_at + cleanup_grace_s
-    _log_native_pump_cleanup_started(_LOGGER)
+    _log_native_pump_cleanup(_LOGGER, "cleanup_started")
     try:
         while not cleanup_complete.done():
             remaining_s = deadline - monotonic_clock()
@@ -296,7 +294,11 @@ async def _await_native_pump_cleanup(
                     return
     finally:
         if cleanup_complete.done():
-            _log_native_pump_cleanup_completed(_LOGGER, monotonic_clock() - started_at)
+            _log_native_pump_cleanup(
+                _LOGGER,
+                "cleanup_completed",
+                monotonic_clock() - started_at,
+            )
 
 
 def _start_rust_pump_with_cleanup(
