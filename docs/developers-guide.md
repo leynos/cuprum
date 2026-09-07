@@ -4086,7 +4086,7 @@ they must be ordered lives in the `generate-coverage` README in
 | Per-test `slow-timeout`  | one test                           | nextest, not configured here                  | absent         |
 | nextest `global-timeout` | the whole test run                 | nextest, not configured here                  | absent         |
 | Cargo watchdog           | one `cargo` invocation, wall clock | `RUN_RUST_CARGO_WAIT_TIMEOUT` at job level    | 2,700 s (45 m) |
-| Job `timeout-minutes`    | the whole job                      | job level in `ci.yml` and `coverage-main.yml` | 60 m           |
+| Job `timeout-minutes`    | the whole job                      | job level in `ci.yml` and `coverage-main.yml` | 65 m           |
 
 *Table: the timers that can end a run, innermost first.*
 
@@ -4129,11 +4129,14 @@ ceiling merely above the watchdog still cancels the job before the watchdog can
 report an overrun, and a cancellation discards the log that would have
 explained it.
 
-The requirement is the watchdog plus the work outside its window, which
-measured 43 s and 51 s on the two lanes. Five minutes is six times the worse of
-those, matching the margin the watchdog itself carries, making the requirement
-50 minutes. The ceilings are 60, ten above it: a ceiling sitting exactly on its
-requirement is cancelled on the first run that spends the full watchdog.
+The requirement has three terms: the 2,700 s watchdog, the work outside its
+window, and a margin. The work outside measured 43 s and 51 s on the two lanes,
+and 300 s is six times the worse of those, matching the margin the watchdog
+itself carries. The third term is 900 s, because a ceiling equal to the first
+two is cancelled on the first run that spends the full watchdog, and a
+cancellation discards the log that would have explained it. That makes the
+requirement 65 minutes, which is what both ceilings are: the margin is a term
+of the requirement rather than slack above it.
 
 ### The two nextest tiers are a gap, not a decision
 
