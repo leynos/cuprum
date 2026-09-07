@@ -253,55 +253,84 @@ _READ_SIZE_SWEEPS = st.lists(
 ).map(tuple)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _GeneratedSweepCase:
+    """Generated input for one randomized read-size sweep."""
+
+    read_sizes: tuple[int, ...]
+    rounds: int
+    orders: tuple[tuple[int, ...], ...]
+
+
+@st.composite
+def _generated_sweep_cases(
+    draw: st.DrawFn,
+) -> _GeneratedSweepCase:
+    """Generate valid read sizes and one permutation for each round."""
+    read_sizes = draw(_READ_SIZE_SWEEPS)
+    rounds = draw(st.integers(min_value=1, max_value=4))
+    orders = tuple(
+        tuple(
+            draw(
+                st.permutations(read_sizes),
+                label=f"round-{round_index}",
+            )
+        )
+        for round_index in range(rounds)
+    )
+    return _GeneratedSweepCase(
+        read_sizes=read_sizes,
+        rounds=rounds,
+        orders=orders,
+    )
+
+
 @settings(
     max_examples=30,
     deadline=None,
     derandomize=True,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(
-    read_sizes=_READ_SIZE_SWEEPS,
-    rounds=st.integers(min_value=1, max_value=4),
-    data=st.data(),
-)
+@given(sweep_case=_generated_sweep_cases())
 def test_profile_sweep_covers_every_generated_measurement(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
-    read_sizes: tuple[int, ...],
-    rounds: int,
-    data: st.DataObject,
+    sweep_case: _GeneratedSweepCase,
 ) -> None:
     """Every injected round permutation covers each read size exactly once."""
-    config = dc.replace(_config(tmp_path, read_sizes=read_sizes), rounds=rounds)
+    config = dc.replace(
+        _config(tmp_path, read_sizes=sweep_case.read_sizes),
+        rounds=sweep_case.rounds,
+    )
     assert config.scenario_name is not None
     expected = {
         (round_index, read_size, config.scenario_name)
-        for round_index in range(1, rounds + 1)
-        for read_size in read_sizes
+        for round_index in range(1, sweep_case.rounds + 1)
+        for read_size in sweep_case.read_sizes
     }
     plan = profile_tee_hotpath.run_profile_plan(config=config)
     matching_plan_entries = [
         entry for entry in plan["scenarios"] if entry["name"] == config.scenario_name
     ]
     planned = {
-        (entry_index // len(read_sizes) + 1, entry["read_size"], entry["name"])
+        (
+            entry_index // len(sweep_case.read_sizes) + 1,
+            entry["read_size"],
+            entry["name"],
+        )
         for entry_index, entry in enumerate(matching_plan_entries)
     }
     assert planned == expected, (
         "the generated plan must contain one entry for every round, read size, "
         f"and scenario, got {matching_plan_entries}"
     )
-    orders = [
-        tuple(data.draw(st.permutations(read_sizes), label=f"round-{round_index}"))
-        for round_index in range(rounds)
-    ]
     observed: list[tuple[int, int, str]] = []
     shuffle_calls = 0
 
     def shuffle(values: list[int]) -> None:
         """Apply the generated permutation for the current sweep round."""
         nonlocal shuffle_calls
-        values[:] = orders[shuffle_calls]
+        values[:] = sweep_case.orders[shuffle_calls]
         shuffle_calls += 1
 
     def fake_run(
@@ -313,7 +342,7 @@ def test_profile_sweep_covers_every_generated_measurement(
         """Record the generated measurement without launching a worker."""
         del config
         observed.append((
-            len(observed) // len(read_sizes) + 1,
+            len(observed) // len(sweep_case.read_sizes) + 1,
             scenario.read_size,
             scenario.name,
         ))
@@ -328,12 +357,12 @@ def test_profile_sweep_covers_every_generated_measurement(
         "each generated sweep must plan one measurement for every round, read "
         f"size, and scenario, got {observed}"
     )
-    assert len(observed) == len(read_sizes) * rounds, (
+    assert len(observed) == len(sweep_case.read_sizes) * sweep_case.rounds, (
         f"sweep must execute every generated measurement exactly once, got {observed}"
     )
     assert len(results) == len(observed), (
         "each planned measurement must yield one result"
     )
-    assert shuffle_calls == rounds, (
+    assert shuffle_calls == sweep_case.rounds, (
         "each generated round must use its injected permutation"
     )
