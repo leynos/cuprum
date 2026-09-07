@@ -44,6 +44,7 @@ if typ.TYPE_CHECKING:
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+    from cuprum.sinks.base import OutputSession
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -61,6 +62,8 @@ class _SubprocessExecution:
     echo_stderr: bool
 
     max_echo_line_bytes: int | None
+
+    sink_session: OutputSession | None
 
     timeout: float | None
 

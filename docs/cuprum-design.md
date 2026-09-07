@@ -1090,6 +1090,20 @@ flowchart TD
     L --> M
 ```
 
+Beyond the tee sinks above, a run may opt into a *presentation sink* through
+`RunOutputOptions.sink` (see ADR-013). A presentation sink reshapes the
+parent-facing output — framing it in a GitHub Actions log group and annotating
+failures — without changing capture, success semantics, or the returned result.
+The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
+one session before the subprocess starts, route echoed output through the
+session's `log` writer, and close the session exactly once per terminal path
+with a bounded categorical outcome. All presentation knowledge
+(workflow-command syntax, escaping, injection shielding) stays inside the
+adapter; runs without a sink are unchanged. The single-command and pipeline
+runners share this contract, and both close the session through the same
+shielded finalization that reconciles observe-hook tasks, so cancellation
+cannot abandon the framing part-way.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model

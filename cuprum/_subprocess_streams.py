@@ -1,11 +1,14 @@
-"""Stream-consumer construction for a single subprocess run.
+"""Wire a spawned subprocess's stdout and stderr to their destinations.
 
-``cuprum._subprocess_stream_run`` drives the run — waiting for exit,
-reconciling its tasks, and settling the per-stream relay diagnostics — while
-this module owns the pair of stream consumers that drain the child's pipes once
-it is running, plus the configuration they drain with. It is split out to keep
-the execution module's line budget and its concern — the run's lifecycle —
-intact.
+The wiring half of single-command stream handling: this module decides *where*
+each mirrored stream goes — a live presentation-sink session's log writer, the
+execution context's configured sink, or the parent process's own stream — and
+spawns the consumer tasks that drain the child's pipes into those destinations.
+``cuprum._streams`` owns the consumption machinery those tasks run; this module
+only picks the destination and starts them. ``cuprum._subprocess_stream_run``
+drives the run — waiting for exit, reconciling its tasks, and settling the
+per-stream relay diagnostics — and is what consumes these helpers, which the
+execution module re-exports for the runs it drives.
 
 The stderr config always carries the keepalive cursor, and the stdout config
 picks it up only when both resolved sinks are the same object, because that is
@@ -38,6 +41,29 @@ if typ.TYPE_CHECKING:
 
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import LineStreamName, _LineHookOutcome
+    from cuprum.sinks.base import OutputSession
+
+
+def _resolve_stream_sink(
+    session: OutputSession | None,
+    configured: typ.IO[str] | None,
+    fallback: typ.IO[str],
+) -> typ.IO[str]:
+    """Return the sink echoed output for one stream is written to.
+
+    A live presentation-sink session owns the destination, so mirrored output
+    lands inside the adapter's framing — the GitHub Actions group, say — in the
+    order the adapter received it. Without a session the caller-configured sink
+    wins, and the process's own stream is the last resort.
+
+    Returns
+    -------
+    typ.IO[str]
+        The destination for this stream's echoed output.
+    """
+    if session is not None:
+        return session.log
+    return fallback if configured is None else configured
 
 
 def _create_stream_callback(
@@ -55,28 +81,6 @@ def _create_stream_callback(
     return _compose_line_callbacks(
         execution.observation,
         dc.replace(emission, stream=event_type),
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context."""
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        sink=(
-            execution.ctx.stdout_sink
-            if execution.ctx.stdout_sink is not None
-            else sys.stdout
-        ),
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        read_size=_current_read_size(),
-        activity=execution.idle.note_activity if execution.idle is not None else None,
     )
 
 
@@ -118,14 +122,13 @@ def _spawn_stream_consumers(
     relay_diagnostics = spawn_context.relay_diagnostics
     stdout_on_line = _create_stream_callback(execution, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution, "stderr", pid)
+    stderr_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
+    )
     stderr_config = dc.replace(
         stream_config,
         echo_output=execution.echo_stderr,
-        sink=(
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        ),
+        sink=stderr_sink,
         stream=EchoStream.STDERR,
         mirror=execution.idle.mirror if execution.idle is not None else None,
     )
@@ -155,9 +158,42 @@ def _spawn_stream_consumers(
     )
 
 
+def _build_stream_config(
+    execution: _SubprocessExecution,
+    discard_on_cancel: asyncio.Event,
+) -> _StreamConfig:
+    """Build the stdout _StreamConfig for an execution context.
+
+    When a presentation-sink session is active, mirrored stdout is routed
+    through the session's log destination so it lands inside the adapter's
+    framing (for example, inside the GitHub Actions group) in the order the
+    adapter received it.
+
+    Returns
+    -------
+    _StreamConfig
+        The stream configuration for the run's stdout drain.
+    """
+    stdout_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
+    )
+    return _StreamConfig(
+        capture_output=execution.capture,
+        echo_output=execution.echo_stdout,
+        echo_max_line_bytes=execution.max_echo_line_bytes,
+        sink=stdout_sink,
+        encoding=execution.ctx.encoding,
+        errors=execution.ctx.errors,
+        discard_on_cancel=discard_on_cancel,
+        read_size=_current_read_size(),
+        activity=execution.idle.note_activity if execution.idle is not None else None,
+    )
+
+
 __all__ = [
     "_StreamConsumerSpawnContext",
     "_build_stream_config",
     "_create_stream_callback",
+    "_resolve_stream_sink",
     "_spawn_stream_consumers",
 ]
