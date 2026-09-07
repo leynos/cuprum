@@ -213,9 +213,10 @@ def test_zero_timeout_reconciles_pipe_tasks(
         *,
         observations: tuple[_StageObservation, ...],
     ) -> list[asyncio.Task[None]]:
-        """Record the pumps the pipeline creates so they can be inspected."""
+        """Record the created pumps and stages for assertions and local cleanup."""
         tasks = real_create(processes, observations=observations)
         created.extend(tasks)
+        timed_out_processes.extend(processes)
         return tasks
 
     async def no_termination(
@@ -223,8 +224,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
         cancel_grace: float,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        timed_out_processes.extend(processes)
-        del cancel_grace
+        del processes, cancel_grace
         await asyncio.sleep(0)
 
     pipeline = python(

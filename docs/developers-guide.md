@@ -1048,7 +1048,6 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 the consume and pipeline pump paths without changing public runtime
 configuration.
 
-
 ### Aggregate Python stream-operation observation
 
 The pure-Python stream paths expose opt-in aggregate completion telemetry

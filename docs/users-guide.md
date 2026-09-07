@@ -852,7 +852,6 @@ rather than `pid`, which the operating system can recycle across executions.
 Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 (such as the tracing adapter) drop them.
 
-
 #### Aggregate Python stream-operation events
 
 For opt-in aggregate telemetry from the pure-Python stream paths, register a
