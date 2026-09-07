@@ -959,6 +959,12 @@ runners share this contract, and both close the session through the same
 shielded finalization that reconciles observe-hook tasks, so cancellation
 cannot abandon the framing part-way.
 
+Activation policy is also adapter-local: `GitHubActionsSink` reads
+`GITHUB_ACTIONS` from the parent environment at `open_session` time and
+declines activation (returning `None`) unless it holds the runner's `true`
+value, unless the caller passes `force=True`; the execution layer itself never
+inspects the environment.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model

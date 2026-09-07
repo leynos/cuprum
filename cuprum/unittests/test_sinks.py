@@ -228,10 +228,11 @@ def test_stop_tokens_are_unique_and_hex() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _gha_sink(*, title: str | None = None) -> GitHubActionsSink:
-    """Build a GitHub Actions sink writing to an in-memory buffer."""
+def _gha_sink(*, force: bool = False) -> tuple[GitHubActionsSink, io.StringIO]:
+    """Build a GitHub Actions sink over an in-memory buffer."""
     buffer = io.StringIO()
-    return GitHubActionsSink(typ.cast("typ.IO[str]", buffer), title=title)
+    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer), force=force)
+    return sink, buffer
 
 
 def _open_session(argv: tuple[str, ...]) -> tuple[GitHubActionsSink, io.StringIO]:
@@ -246,12 +247,101 @@ def _open_session(argv: tuple[str, ...]) -> tuple[GitHubActionsSink, io.StringIO
 
 def _open_gha_session(
     argv: tuple[str, ...],
+    *,
+    force: bool = True,
 ) -> tuple[GitHubActionsSession, io.StringIO]:
-    """Open one adapter session and return it with its buffer."""
+    """Open one forced-active adapter session and return it with its buffer."""
     buffer = io.StringIO()
-    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer))
+    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer), force=force)
     session = sink.open_session(SessionStart(label="project: program", argv=argv))
+    assert session is not None, "a forced sink must return an active session"
     return session, buffer
+
+
+# ---------------------------------------------------------------------------
+# GitHub Actions adapter: environment-gated activation
+# ---------------------------------------------------------------------------
+
+
+def test_unsetting_github_actions_keeps_sink_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside Actions, a non-forced sink declines and writes nothing."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    sink, buffer = _gha_sink()
+
+    session = sink.open_session(SessionStart(label="project: program", argv=("cmd",)))
+
+    assert session is None
+    assert buffer.getvalue() == ""
+
+
+def test_github_actions_true_activates_the_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GITHUB_ACTIONS=true activates the sink without force."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    sink, buffer = _gha_sink()
+
+    session = sink.open_session(SessionStart(label="project: program", argv=("hi",)))
+
+    assert session is not None
+    session.open_group()
+    token = session.stop_token
+    assert buffer.getvalue() == f"::group::hi\n::stop-commands::{token}\n"
+
+
+def test_force_activates_the_sink_outside_github_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force=True activates the sink even with GITHUB_ACTIONS unset."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    sink, buffer = _gha_sink(force=True)
+
+    session = sink.open_session(SessionStart(label="project: program", argv=("hi",)))
+
+    assert session is not None
+    session.open_group()
+    token = session.stop_token
+    assert buffer.getvalue() == f"::group::hi\n::stop-commands::{token}\n"
+
+
+@pytest.mark.parametrize("value", ["1", "TRUE", "True", "false", ""])
+def test_non_enabling_environment_values_keep_sink_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    """Only the runner's exact 'true' value activates; others decline."""
+    monkeypatch.setenv("GITHUB_ACTIONS", value)
+    sink, buffer = _gha_sink()
+
+    session = sink.open_session(SessionStart(label="project: program", argv=("cmd",)))
+
+    assert session is None
+    assert buffer.getvalue() == ""
+
+
+def test_inactive_sink_leaves_runner_output_unframed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An inactive sink keeps echoed output unframed and results intact."""
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    command = _python_builder()("-c", "print('unframed')")
+
+    result = command.run_sync(
+        output=RunOutputOptions(echo=True, sink=_gha_sink()[0]),
+    )
+
+    captured = capsys.readouterr()
+    assert result.ok is True
+    assert result.stdout == "unframed\n"
+    assert "::group::" not in captured.out
+    assert "::group::" not in captured.err
+    assert "::stop-commands::" not in captured.err
+    assert "::endgroup::" not in captured.err
+    assert "::error" not in captured.err
+    assert captured.out.strip() == "unframed"
 
 
 def test_group_opens_with_title_then_lease() -> None:

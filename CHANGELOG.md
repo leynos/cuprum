@@ -64,13 +64,18 @@
 
 - **GitHub Actions presentation sink:** Add opt-in
   `cuprum.sinks.GitHubActionsSink`, passed via `RunOutputOptions(sink=...)` on
-  command and pipeline runs. A framed run writes `::group::<program args>`
-  before the subprocess starts, shields the group with a random stop-commands
-  lease so child output cannot inject workflow commands, and writes
-  `::endgroup::` at teardown; a run that ends in a non-zero exit, timeout, or
-  error emits exactly one `::error::` annotation carrying only the bounded run
-  label and a categorical detail. Capture, exit codes, and returned results are
-  unchanged, runs without a sink are byte-for-byte identical to before
+  command and pipeline runs. The sink activates only where workflow commands
+  are meaningful: `open_session` reads `GITHUB_ACTIONS` from the parent
+  environment per run and frames only on the runner's `true` value, passing
+  `force=True` overrides the check for local reproduction or non-standard
+  runners, and outside Actions an inactive sink writes nothing. A framed run
+  writes `::group::<program args>` before the subprocess starts, shields the
+  group with a random stop-commands lease so child output cannot inject
+  workflow commands, and writes `::endgroup::` at teardown; a run that ends in
+  a non-zero exit, timeout, or error emits exactly one `::error::` annotation
+  carrying only the bounded run label and a categorical detail. Capture, exit
+  codes, and returned results are unchanged, runs without a sink are
+  byte-for-byte identical to before
   ([#360](https://github.com/leynos/cuprum/issues/360)).
 
 - **Timeout and teardown telemetry:** Emit `timeout` and `teardown_error`

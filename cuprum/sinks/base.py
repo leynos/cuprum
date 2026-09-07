@@ -20,7 +20,7 @@ Lifecycle contract for implementations:
 3. :meth:`OutputSession.close` is called exactly once, on every terminal
    path — success, non-zero exit, timeout, cancellation, or an earlier
    failure — through the execution layer's shielded finalization. It must be
-   idempotent in case a caller-inspected run is finalised twice.
+   idempotent in case a caller-inspected run is finalized twice.
 
 An adapter is inactive for a run when it returns ``None`` from
 ``open_session``; the run then uses the plain destinations unchanged.
@@ -85,7 +85,7 @@ class SessionOutcome:
         The closed-set terminal category.
     exit_code:
         The actual exit code when the run produced one, otherwise ``None``.
-        Adapters must not synthesise shell-style codes.
+        Adapters must not synthesize shell-style codes.
     detail:
         Optional bounded, categorical detail (for example ``"timeout"``).
         The execution layer never passes exception text or argv here.

@@ -409,7 +409,24 @@ unchanged.
 
 `GitHubActionsSink` from `cuprum.sinks` frames one run's echoed output in a
 GitHub Actions collapsible log group and turns a failed run into an error
-annotation:
+annotation. The sink is inactive by default outside GitHub Actions: it reads
+`GITHUB_ACTIONS` from the parent process environment each time a run opens a
+session, and frames only when it holds the runner's value `true`. On any other
+value — including `1` or `TRUE` — or when the variable is unset, the sink
+declines activation, writes nothing, and the run keeps its plain output exactly
+as if no sink had been passed.
+
+To reproduce the CI framing locally, or on a non-standard runner that does not
+export the variable, force activation explicitly:
+
+```python
+GitHubActionsSink(force=True)
+```
+
+Passing a sink does not by itself guarantee workflow-command output outside
+GitHub Actions; callers who need the framing there must pass `force=True`.
+
+Inside GitHub Actions the default is sufficient:
 
 ```python
 from cuprum import RunOutputOptions

@@ -25,10 +25,16 @@ The sink never changes capture, success semantics, or the returned result: it
 is a presentation adapter over the same destinations a run already uses. A
 caller opts in per invocation with ``RunOutputOptions(sink=GitHubActionsSink())``
 and opt-out is simply omitting the sink.
+
+Activation is environment-gated to honour that opt-in outside CI: a sink
+passed without ``force`` stays inactive unless the parent process runs on
+GitHub Actions (``GITHUB_ACTIONS=true``, read at :meth:`open_session` time).
+Pass ``force=True`` to frame local or non-standard-runner runs deliberately.
 """
 
 from __future__ import annotations
 
+import os
 import secrets
 import sys
 import typing as typ
@@ -46,6 +52,8 @@ _ENDGROUP = "::endgroup::"
 _ERROR_PREFIX = "::error "
 _STOP_PREFIX = "::stop-commands::"
 _STOP_TOKEN_LENGTH = 16
+_GITHUB_ACTIONS_ENV = "GITHUB_ACTIONS"
+_GITHUB_ACTIONS_TRUE = "true"
 
 
 def _escape_data(value: str) -> str:
@@ -193,6 +201,11 @@ class GitHubActionsSink:
     title:
         Optional display label overriding the derived
         ``"<project>: <program>"`` label.
+    force:
+        Activate the sink even when the parent process does not run on
+        GitHub Actions. Intended for local reproduction of CI framing and
+        non-standard runners; when ``False`` (the default) the sink defers
+        to the environment check.
     """
 
     def __init__(
@@ -200,12 +213,14 @@ class GitHubActionsSink:
         destination: typ.IO[str] | None = None,
         *,
         title: str | None = None,
+        force: bool = False,
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
         self.destination = destination
         self.title = title
+        self.force = force
 
-    def open_session(self, start: SessionStart) -> GitHubActionsSession:
+    def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
 
         Parameters
@@ -216,10 +231,14 @@ class GitHubActionsSink:
 
         Returns
         -------
-        GitHubActionsSession
-            The active session. This adapter never declines activation: a
-            caller that opts in wants the framing on every run.
+        GitHubActionsSession | None
+            The active session, or ``None`` when the sink stays inactive: the
+            parent process is not GitHub Actions (``GITHUB_ACTIONS`` unset or
+            not ``true``) and ``force`` was not requested. An inactive sink
+            writes nothing and the run keeps its plain destinations.
         """
+        if not self._is_active():
+            return None
         if self.title is not None:
             label = self.title
         elif start.argv:
@@ -228,3 +247,22 @@ class GitHubActionsSink:
             label = start.label
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(log=log, label=label)
+
+    def _is_active(self) -> bool:
+        """Return whether this run's environment demands Actions framing.
+
+        The environment value is read per run, not cached at import or
+        construction time, so a run started after the variable is set (or
+        removed) sees the current environment. ``GITHUB_ACTIONS=true`` is the
+        runner's own signal; any other value — including ``1`` or ``TRUE`` —
+        keeps the sink inactive because only the documented runner value may
+        trigger framing.
+
+        Returns
+        -------
+        bool
+            ``True`` when the sink should open a framed session this run.
+        """
+        return self.force or (
+            os.environ.get(_GITHUB_ACTIONS_ENV) == _GITHUB_ACTIONS_TRUE
+        )

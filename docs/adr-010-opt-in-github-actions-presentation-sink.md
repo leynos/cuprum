@@ -50,9 +50,10 @@ asynchronous, so the framing close must survive cancellation and be idempotent.
 Detect GitHub Actions through the environment and always emit group framing.
 
 This surprises callers whose child output is itself parsed, doubles the cost of
-every echo write, and makes local reproduction of CI behaviour implicit. An
-environment-triggered presentation change also breaks the contract that the
-same call produces the same parent-facing output regardless of where it runs.
+every echo write, and makes local reproduction of CI behaviour implicit. It
+also changes behaviour for every caller the moment the environment variable
+appears, with no per-invocation opt-in and no way to reproduce or suppress the
+framing deliberately.
 
 ### Option B: add `group`/`annotate` flags to `RunOutputOptions`
 
@@ -112,11 +113,32 @@ overlapping terminal paths cannot double-annotate.
 Echoed output reaches the adapter only when a run echoes (`echo=True` or a
 pipeline's stage streams); capture is unaffected in every configuration.
 
+### Activation: environment-gated, adapter-local
+
+Per issue #360, `GitHubActionsSink` is inactive by default outside GitHub
+Actions. `open_session` reads `GITHUB_ACTIONS` from the parent process
+environment on every run — never cached at import or construction time — and
+declines activation unless it holds the runner's exact value `true`; any other
+value, including `1` or `TRUE`, keeps the sink inactive. An inactive sink
+writes nothing: no `::group::`, no stop-commands bracket, no `::endgroup::`,
+and no `::error` annotation, so the run keeps its plain destinations and
+parent-facing output byte-for-byte.
+
+This gate is adapter-local behaviour, not global auto-configuration: the
+execution layer never inspects the environment, and other adapters (or a custom
+`OutputSink`) keep whatever activation policy they define. Passing a sink does
+not by itself guarantee workflow-command output outside GitHub Actions.
+`GitHubActionsSink(force=True)` overrides the check deliberately, for local
+reproduction of CI framing and non-standard runners; it is an explicit opt-in,
+not an environment-triggered default.
+
 ## Goals and non-goals
 
 ### Goals
 
 - One opt-in line opts a command or pipeline into Actions framing.
+- A sink without an explicit `force` request stays inactive outside GitHub
+  Actions, so runs keep their plain parent-facing output there.
 - Child output cannot forge workflow commands while a group is open.
 - Every terminal path closes the session exactly once, cancellation-safely.
 - Failure annotations carry bounded, categorical information only.
@@ -124,7 +146,9 @@ pipeline's stage streams); capture is unaffected in every configuration.
 ### Non-goals
 
 - Changing capture, exit codes, or the returned result types.
-- Auto-detecting CI environments or adding global configuration.
+- Auto-enabling framing for callers who pass no sink, or adding global
+  configuration; the `GITHUB_ACTIONS` gate lives inside the adapter and applies
+  only to runs that opt in.
 - Supporting other CI vendors' log formats through the same adapter (new
   adapters implement the protocol instead).
 - Making annotations available for commands that do not run (plan-only paths).
