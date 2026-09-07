@@ -50,6 +50,9 @@ open each document.
   govern identifiers and source prose with the repository spelling gate.
 - [ADR-010: Rust-pump executor-hop spans][adr-010] - accepted decision to add
   opt-in executor-hop tracing without extending the pump event channel.
+- [ADR-011: Opt-in GitHub Actions presentation sink][adr-011] - accepted
+  decision to frame runs in Actions log groups and annotate failures through an
+  opt-in presentation sink.
 
 ## Planning and validation references
 
@@ -73,6 +76,7 @@ open each document.
 [adr-008]: adr-008-rust-pump-observation-channel.md
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [adr-010]: adr-010-rust-pump-hop-span.md
+[adr-011]: adr-011-opt-in-github-actions-presentation-sink.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md

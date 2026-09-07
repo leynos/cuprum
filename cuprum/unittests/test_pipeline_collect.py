@@ -70,6 +70,7 @@ def _timeout_free_config() -> _PipelineRunConfig:
         timeout=None,
         stdout_sink=io.StringIO(),
         stderr_sink=io.StringIO(),
+        sink_session=None,
     )
 
 
