@@ -7,6 +7,7 @@ import concurrent.futures as cf
 import contextlib
 import logging
 import os
+import sys
 import typing as typ
 from unittest import mock
 
@@ -69,7 +70,7 @@ class _InlineNativePumpExecutor:
         future: cf.Future[int] = cf.Future()
         try:
             future.set_result(function(*args))
-        except OSError as error:
+        except BaseException as error:  # ruff: ignore[blind-except] - the double publishes every worker failure through its Future
             future.set_exception(error)
         return future
 
@@ -243,6 +244,39 @@ def test_executor_rejection_emits_no_submitted_outcome(
     assert _handoff_outcomes(events) == [
         RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
     ], "rejection must emit no submitted outcome"
+
+
+def test_module_import_failure_restores_and_closes_state_before_emitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing native shim reconciles paused state before its hand-off event."""
+    events: list[PumpEvent] = []
+    restore = mock.Mock()
+    resume_reader = mock.Mock()
+
+    with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
+        state = _state(reader_fd, writer_fd)
+        state.blocking_mode_guard = typ.cast(
+            "_pipeline_stream_fds._BlockingModeGuard",
+            restore,
+        )
+        state.resume_reader = resume_reader
+        monkeypatch.setitem(sys.modules, "cuprum._streams_rs", None)
+
+        with pytest.raises(ModuleNotFoundError):
+            _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(state)
+
+        for state_fd in (state.reader_fd, state.writer_fd):
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(state_fd)
+        os.fstat(reader_fd)
+        os.fstat(writer_fd)
+
+    restore.restore.assert_called_once_with()
+    resume_reader.assert_called_once_with()
+    assert _handoff_outcomes(events) == [RustPumpHandoffOutcome.NATIVE_LOAD_FAILED], (
+        "module import failure must emit its bounded hand-off outcome after cleanup"
+    )
 
 
 def test_accepted_submission_emits_submitted_after_the_worker_accepts(

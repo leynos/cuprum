@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import threading
@@ -78,19 +77,12 @@ async def _cancel_until_cleanup_grace_expires(
 
 async def _release_deferred_worker(
     context: _MidTransferContext,
-    *,
-    reader_fd: int,
-    writer_fd: int,
 ) -> None:
     """Release a deferred worker and wait for its callback to finalize cleanup."""
     context.release.set()
     finished = await asyncio.to_thread(context.worker_finished.wait, 5.0)
     assert finished, "the test must release the native worker after caller return"
     await _wait_for_native_pump_cleanup()
-    with contextlib.suppress(OSError):
-        os.close(reader_fd)
-    with contextlib.suppress(OSError):
-        os.close(writer_fd)
 
 
 async def _wait_for_native_pump_cleanup() -> None:
@@ -138,35 +130,49 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
     close_native_reader = mock.Mock(
         wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
     )
+    close_state_fd = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
+    )
     _install_fake_pump(monkeypatch, _blocking_pump(context, native_fds))
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup,
         "_close_rust_reader_fd",
         close_native_reader,
     )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_state_fd",
+        close_state_fd,
+    )
 
     async def exercise() -> None:
         """Assert the bounded result and deferred descriptor ownership."""
         guard = _RecordingGuard(events)
-        state, _task = await _cancel_until_cleanup_grace_expires(context, guard=guard)
+        state, _task = await _cancel_until_cleanup_grace_expires(
+            context,
+            guard=guard,
+        )
         assert state.was_deferred, "grace expiry must mark cleanup as deferred"
         assert events == [], "worker-owned descriptors must not restore early"
         assert len(native_fds) == 1, "the worker must receive both native FDs"
         native_reader_fd, native_writer_fd = native_fds[0]
         os.fstat(native_reader_fd)
         os.fstat(native_writer_fd)
-        await _release_deferred_worker(
-            context,
-            reader_fd=state.reader_fd,
-            writer_fd=state.writer_fd,
-        )
+        await _release_deferred_worker(context)
         with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(native_reader_fd)
         with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(native_writer_fd)
+        for state_fd in (state.reader_fd, state.writer_fd):
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(state_fd)
         assert close_native_reader.call_args_list == [mock.call(native_reader_fd)], (
             "the callback must close its borrowed native reader exactly once"
         )
+        assert close_state_fd.call_args_list == [
+            mock.call(state.reader_fd),
+            mock.call(state.writer_fd),
+        ], "the callback must close both callback-owned state descriptors exactly once"
 
     with observe_pump(pump_events.append):
         asyncio.run(exercise())
@@ -199,12 +205,11 @@ def test_deferred_callback_suppresses_descriptor_restore_failure(
     async def exercise() -> None:
         """Run the deferred cleanup through a restore failure."""
         guard = _FailingDeferredGuard(events, context.worker_finished)
-        state, _task = await _cancel_until_cleanup_grace_expires(context, guard=guard)
-        await _release_deferred_worker(
+        _state, _task = await _cancel_until_cleanup_grace_expires(
             context,
-            reader_fd=state.reader_fd,
-            writer_fd=state.writer_fd,
+            guard=guard,
         )
+        await _release_deferred_worker(context)
 
     with caplog.at_level(logging.DEBUG, logger=_pipeline_streams.__name__):
         asyncio.run(exercise())
