@@ -2189,6 +2189,43 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+For screen readers: The following sequence diagram shows one full
+`SafeCmd.lines()` iteration. The caller receives a `LineStream` from
+`SafeCmd.lines()`, each `__anext__()` call drives a coordinator that spawns the
+subprocess and starts the stdout and stderr consumers, decoded `LineEvent`
+values are enqueued and yielded as they arrive, and after the process exits the
+consumers are drained, the `CommandResult` is published, and iteration ends
+with `StopAsyncIteration` before the caller reads the `result` attribute.
+
+Figure 11: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+per-line events to the published `CommandResult` and `StopAsyncIteration`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant LineStream
+    participant Coordinator
+    participant Process
+    participant Consumers
+
+    Caller->>SafeCmd: lines(output, timeout, context, stdin)
+    SafeCmd-->>Caller: LineStream
+    Caller->>LineStream: __anext__()
+    LineStream->>Coordinator: start line stream
+    Coordinator->>Process: spawn subprocess
+    Coordinator->>Consumers: consume stdout and stderr
+    loop decoded lines
+        Consumers->>LineStream: enqueue LineEvent(stream, at, text)
+        LineStream-->>Caller: LineEvent
+    end
+    Process-->>Coordinator: exit
+    Coordinator->>Consumers: drain consumers
+    Coordinator->>LineStream: publish CommandResult
+    LineStream-->>Caller: StopAsyncIteration
+    Caller->>LineStream: result
+```
+
 ### 13.3 API Boundary
 
 The Rust extension exposes three functions via PyO3. As of 4.2.2,
