@@ -237,7 +237,7 @@ class RecordingGuard:
         self.events.append("restored")
 
 
-@dc.dataclass
+@dc.dataclass(slots=True)
 class PumpTransfer:
     """Synchronization state for a cancellation transfer."""
 

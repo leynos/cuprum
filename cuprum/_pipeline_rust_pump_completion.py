@@ -27,7 +27,10 @@ if typ.TYPE_CHECKING:
 class _CancellationAwarePumpState(typ.Protocol):
     """State contract needed to determine a terminal span outcome."""
 
-    was_cancelled: bool
+    @property
+    def was_cancelled(self) -> bool:
+        """Whether cancellation reached the awaiting pump task."""
+        raise NotImplementedError
 
 
 @dc.dataclass(frozen=True, slots=True)

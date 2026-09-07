@@ -1239,17 +1239,46 @@ hook = TracingHook(OTelTracer(otel_tracer))
 ### Rust-pump executor-hop spans
 
 Rust-backed pipelines can expose the executor hop that moves bytes between
-stages as an opt-in span. Register a `Tracer` with `observe_pump_span` in the
-context where the pipeline runs. The registration is context-local and can be
-used as a context manager:
+stages as an opt-in span. The example below requires the Rust backend; run it
+with `CUPRUM_STREAM_BACKEND=rust uv run python my_script.py`. Register a
+`Tracer` with `observe_pump_span` in the context where the pipeline runs. The
+registration is context-local and can be used as a context manager:
 
 ```python
-from cuprum import observe_pump_span
+import sys
+from pathlib import Path
+
+from cuprum import (
+    ECHO,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    observe_pump_span,
+    scoped,
+    sh,
+)
 from cuprum.adapters.tracing_memory import InMemoryTracer
 
+PYTHON = Program(str(Path(sys.executable)))
+project = ProjectSettings(
+    name="pipeline-example",
+    programs=(ECHO, PYTHON),
+    documentation_locations=(),
+    noise_rules=(),
+)
+catalogue = ProgramCatalogue(projects=(project,))
+echo = sh.make(ECHO, catalogue=catalogue)
+python = sh.make(PYTHON, catalogue=catalogue)
+pipeline = echo("-n", "hello") | python(
+    "-c",
+    "import sys; sys.stdout.write(sys.stdin.read().upper())",
+)
+
 tracer = InMemoryTracer()
-with observe_pump_span(tracer):
-    pipeline.run_sync()
+with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+    with observe_pump_span(tracer):
+        pipeline.run_sync()
 
 span = tracer.spans[0]
 print(span.name)  # 'cuprum.rust_pump_hop'

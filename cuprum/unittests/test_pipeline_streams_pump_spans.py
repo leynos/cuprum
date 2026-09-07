@@ -91,6 +91,7 @@ def test_failed_executor_hop_ends_without_success_fields(
     with observe_pump_span(tracer), pytest.raises(OSError, match="worker failed"):
         asyncio.run(run_fake_pump(pump, events=[], monkeypatch=monkeypatch))
 
+    assert len(tracer.spans) == 1, f"failed hop must create one span: {tracer.spans}"
     span = tracer.spans[0]
     assert span.ended is True, "failed hop span must end"
     assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] is PumpHopOutcome.FAILED
@@ -124,6 +125,7 @@ def test_rejected_executor_submission_ends_failed_span(
     with observe_pump_span(tracer):
         asyncio.run(reject_submission())
 
+    assert len(tracer.spans) == 1, f"rejected hop must create one span: {tracer.spans}"
     span = tracer.spans[0]
     assert span.ended is True, "rejected hop span must end"
     assert span.attributes[PUMP_HOP_OUTCOME_ATTRIBUTE] is PumpHopOutcome.FAILED

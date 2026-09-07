@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -20,12 +21,11 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+@dc.dataclass(frozen=True, slots=True)
 class _CompletionState:
     """Minimal state for completion outcome and restoration tests."""
 
-    def __init__(self, *, was_cancelled: bool) -> None:
-        """Record whether cancellation reached the awaiting pump task."""
-        self.was_cancelled = was_cancelled
+    was_cancelled: bool
 
 
 class _InterruptingSpan:

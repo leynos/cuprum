@@ -55,7 +55,7 @@ is created, then close it from that future's done callback.
 Option B. `observe_pump_span` supplies token-restoring registration handles, and
 `current_pump_span_tracers` exposes the context-local tuple for inspection.
 With no tracer registered, opening returns an empty carrier and changes no
-execution behaviour. A tracer failure is reported at `WARNING` with
+execution behaviour. A tracer failure is reported at `ERROR` with
 `cuprum_action="pump_span_observer_failed"`; remaining tracers continue, while
 non-`Exception` control-flow signals still propagate.
 
