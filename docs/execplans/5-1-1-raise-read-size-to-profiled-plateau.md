@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -338,6 +338,13 @@ This task is complete only when:
   `make typecheck` passed before the formatter's mechanical blank-line repair,
   then `make check-fmt` and `make lint` passed. The ExecPlan remains
   `IN PROGRESS` pending refreshed external review.
+- [x] 2026-09-07 External revalidation:
+      `coderabbit review --agent --committed --base origin/main` completed
+      against the rebased committed branch with zero
+      findings. The existing queued PR review `a84e0640` was retained rather
+      than duplicated. All deterministic rebase, documentation, and
+      external-review acceptance criteria are satisfied; the ExecPlan is
+      complete.
 
 - [x] 2026-09-06 Observability and review remediation: the aggregate
   stream-operation observer and bounded metrics adapter were verified as
@@ -1390,6 +1397,11 @@ investigation.
   https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
+
+Revision 8, 2026-09-07, after external revalidation: CodeRabbit's committed
+agent review against `origin/main` completed with zero findings after every
+deterministic rebase gate passed. The pre-existing queued PR review `a84e0640`
+was retained without creating a duplicate request. The plan is now `COMPLETE`.
 
 Revision 7, 2026-09-07, after the second maintenance rebase: incorporated
 current `main` through `66d43c20`. The one predicted `run_profile_matrix`
