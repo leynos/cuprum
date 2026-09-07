@@ -228,7 +228,7 @@ async def _run_with_inline_executor_returning(
             future: cf.Future[object] = cf.Future()
             try:
                 future.set_result(function(*args))
-            except Exception as error:  # ruff: ignore[blind-except] - the double must publish every worker failure
+            except BaseException as error:  # ruff: ignore[blind-except] - the double publishes every worker failure through its Future
                 future.set_exception(error)
             return future
 

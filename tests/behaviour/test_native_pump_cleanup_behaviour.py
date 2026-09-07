@@ -159,13 +159,23 @@ async def _cancel_public_pipeline_after_grace_expiry(
         scenario.release_worker.set()
         released = await asyncio.to_thread(scenario.worker_released.wait, 5.0)
         assert released, "the test must release the deferred native worker"
-        await asyncio.sleep(0)
+        await _wait_for_deferred_native_pump_cleanup()
     finally:
         scenario.release_worker.set()
         if not task.done():
             task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+
+async def _wait_for_deferred_native_pump_cleanup() -> None:
+    """Wait for the deferred worker callback to complete descriptor cleanup."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while _pipeline_stream_native_cleanup._NATIVE_PUMP_FUTURES:
+        if loop.time() >= deadline:
+            pytest.fail("the deferred native-pump cleanup callback did not finish")
+        await asyncio.sleep(0.01)
 
 
 def _install_blocked_native_pump(

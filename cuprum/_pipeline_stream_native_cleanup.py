@@ -305,11 +305,13 @@ def _start_rust_pump_with_cleanup(
     state: _RustPumpState,
 ) -> tuple[cf.Future[int], asyncio.Future[None]]:
     """Start the native pump and register its completion-owned cleanup."""
-    from cuprum._streams_rs import rust_pump_stream
-
-    # The worker borrows its reader and consumes its writer. Both are separate
-    # from the paused asyncio transport, so a deferred caller cannot close or
-    # reuse a descriptor native I/O still needs.
+    try:
+        from cuprum._streams_rs import rust_pump_stream
+    except BaseException:
+        _restore_rust_pump_state(state)
+        _close_rust_pump_state_fds(state)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
+        raise
     loop = asyncio.get_running_loop()
     cleanup_complete = typ.cast("asyncio.Future[None]", loop.create_future())
     try:

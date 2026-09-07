@@ -2653,6 +2653,44 @@ skipped; descriptor finalization is already complete. The callback must not
 close the writer transferred to Rust. No descriptor is restored, closed,
 reused, or resumed while native code can still use it.
 
+For screen readers: The following sequence diagram shows bounded cancellation
+cleanup, including the quarantine of worker-owned descriptors until the Rust
+worker completes and the callback restores the asyncio transport state.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Pump as RustPumpTask
+    participant Executor as ExecutorWorker
+    participant Callback as CompletionCallback
+    participant Transport as AsyncioTransport
+
+    Caller->>Pump: Cancel task
+    Pump->>Executor: Retain shielded native_pump future
+    Pump->>Pump: _await_native_pump_cleanup(cleanup_grace_s)
+    alt Worker settles within grace
+        Executor->>Executor: Rust closes submitted writer duplicate
+        Executor-->>Callback: Future completion
+        Callback->>Callback: _close_rust_reader_fd()
+        Callback->>Transport: _restore_rust_pump_state()
+        Callback->>Callback: Close callback-owned state descriptors
+        Callback->>Transport: _resume_reader_transport()
+        Callback-->>Pump: cleanup_complete
+        Pump-->>Caller: Original CancelledError
+    else Grace expires first
+        Pump-->>Caller: Original CancelledError
+        Pump->>Pump: _log_native_pump_cleanup_grace_expired()
+        Note over Executor,Callback: Duplicated descriptors remain quarantined
+        Executor->>Executor: Rust closes submitted writer duplicate
+        Executor-->>Callback: Late future completion
+        Callback->>Callback: _close_rust_reader_fd()
+        Callback->>Transport: _restore_rust_pump_state()
+        Callback->>Callback: Close callback-owned state descriptors
+        Callback->>Transport: _resume_reader_transport()
+        Callback->>Pump: _log_native_pump_cleanup_deferred()
+    end
+```
+
 The original writer descriptor remains asyncio-owned throughout. Native code
 receives its own writer resource; the shim closes it only before transfer, and
 Rust owns it thereafter. Restoring or resuming earlier would hand the reader or
