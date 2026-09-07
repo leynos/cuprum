@@ -125,3 +125,42 @@ class _EchoLineLimiter:
         self.emitted_line_bytes = 0
         self.dropped_line_bytes = 0
         return marker
+
+
+def _split_echo_segments(
+    chunk: bytes,
+) -> list[tuple[bytes, bytes | None]]:
+    r"""Split *chunk* into per-line echo writes for the bounded echo path.
+
+    Parameters
+    ----------
+    chunk : bytes
+        Raw bytes just read from the child stream.
+
+    Returns
+    -------
+    list[tuple[bytes, bytes | None]]
+        ``(body, ending)`` pairs in stream order, where ``body`` excludes its
+        ``\\n`` terminator and ``ending`` is the raw line ending (``\\n`` or
+        ``\\r\\n``). ``ending`` is ``None`` for the trailing pair when the
+        chunk ends mid-line; its bytes still reach the limiter so a partial
+        truncated line stays bounded before EOF. Unterminated bytes are
+        re-emitted whole from the next chunk, so the limiter's own counters
+        are the only cross-chunk state.
+    """
+    segments: list[tuple[bytes, bytes | None]] = []
+    start = 0
+    data = chunk
+    while True:
+        end = data.find(b"\n", start)
+        if end == -1:
+            break
+        body = data[start:end]
+        if body.endswith(b"\r"):
+            segments.append((body[:-1], b"\r\n"))
+        else:
+            segments.append((body, b"\n"))
+        start = end + 1
+    if start < len(data):
+        segments.append((data[start:], None))
+    return segments

@@ -437,7 +437,6 @@ The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
 remain accepted for backwards compatibility but emit a `DeprecationWarning`;
 passing them together with `output` raises `ValueError`.
 
-
 ### Bounded echo lines and CI job logs
 
 GitHub Actions stops accepting job-log output at a 64 KiB single line: when a

@@ -293,6 +293,7 @@ def test_drain_echoes_original_bytes_to_buffered_sink() -> None:
         f"chunks={chunks!r}, received={raw_sink.getvalue()!r}"
     )
 
+
 def test_drain_truncates_oversized_echo_line_for_text_sink() -> None:
     """A multi-chunk oversized line is bounded in echo but whole in capture."""
     # The acceptance case: a 2 MiB single line must echo under the bound so a
@@ -320,6 +321,7 @@ def test_drain_truncates_oversized_echo_line_for_text_sink() -> None:
         f"echoed line must stay near the bound={bound}, got {len(echoed.encode())}"
     )
 
+
 def test_drain_truncates_each_line_independently() -> None:
     """Each line restarts the bound; markers report per-line dropped bytes."""
     bound = 50
@@ -343,6 +345,7 @@ def test_drain_truncates_each_line_independently() -> None:
         "the bound must restart for each line"
     )
 
+
 def test_drain_truncates_unterminated_trailing_line_at_eof() -> None:
     """A trailing partial line is bounded and marked before the drain ends."""
     bound = 50
@@ -358,6 +361,7 @@ def test_drain_truncates_unterminated_trailing_line_at_eof() -> None:
     assert echoed.endswith("… [truncated 30 bytes]"), (
         f"EOF finalization must mark the truncated partial line, got={echoed!r}"
     )
+
 
 def test_drain_truncates_multi_byte_utf8_straddling_the_bound() -> None:
     """A cut inside a multi-byte sequence keeps the echoed text decodable."""
@@ -381,6 +385,7 @@ def test_drain_truncates_multi_byte_utf8_straddling_the_bound() -> None:
         f"replacement, got={echoed_line!r}"
     )
 
+
 def test_drain_echoes_raw_bytes_when_line_bound_is_none() -> None:
     """``echo_max_line_bytes=None`` restores chunk-for-chunk mirroring."""
     chunks = (b"a" * 100 + b"\n", b"b" * 80)
@@ -396,6 +401,7 @@ def test_drain_echoes_raw_bytes_when_line_bound_is_none() -> None:
     assert sink.getvalue() == b"".join(chunks).decode(), (
         "unbounded echo must mirror the payload byte-for-byte"
     )
+
 
 def test_drain_truncates_for_byte_buffered_sink() -> None:
     """Buffered byte sinks receive raw kept bytes and an encoded marker."""

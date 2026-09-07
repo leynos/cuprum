@@ -21,6 +21,12 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from cuprum._echo_truncation import _EchoLineLimiter, _split_echo_segments
+from cuprum._line_splitting import (
+    _emit_completed_lines,
+    _split_complete_lines,
+    _strip_line_ending,
+)
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -32,7 +38,6 @@ from cuprum._streams_pump import (
 )
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import _emit_echo_event
-from cuprum._echo_truncation import _EchoLineLimiter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -238,6 +243,8 @@ def _write_chunk(
     if text:
         config.sink.write(text)
     config.sink.flush()
+
+
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
     """Create an incremental decoder configured for a stream invocation."""
     decoder_factory = codecs.getincrementaldecoder(config.encoding)
@@ -261,6 +268,17 @@ def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
         return
     for body, ending in _split_echo_segments(chunk):
         kept = limiter.bound_line(body)
+        untruncated = kept == body and limiter.dropped_line_bytes == 0
+        if untruncated and ending is not None:
+            # Untruncated line: mirror body and terminator in the single
+            # write an unbounded echo would have made. Text sinks rely on
+            # one write per line (#348); a sink that rejects the payload
+            # must see exactly the line it cannot encode, not a fragment
+            # without its terminator.
+            _echo_write(state, kept + ending)
+            # *dropped* is zero here, so the reset cannot emit a marker.
+            limiter.finish_line(encoding=state.config.encoding)
+            continue
         if kept:
             _echo_write(state, kept)
         if ending is None:
@@ -313,45 +331,6 @@ def _echo_write(
         )
 
 
-def _split_echo_segments(
-    chunk: bytes,
-) -> list[tuple[bytes, bytes | None]]:
-    r"""Split *chunk* into per-line echo writes for the bounded echo path.
-
-    Parameters
-    ----------
-    chunk : bytes
-        Raw bytes just read from the child stream.
-
-    Returns
-    -------
-    list[tuple[bytes, bytes | None]]
-        ``(body, ending)`` pairs in stream order, where ``body`` excludes its
-        ``\\n`` terminator and ``ending`` is the raw line ending (``\\n`` or
-        ``\\r\\n``). ``ending`` is ``None`` for the trailing pair when the
-        chunk ends mid-line; its bytes still reach the limiter so a partial
-        truncated line stays bounded before EOF. Unterminated bytes are
-        re-emitted whole from the next chunk, so the limiter's own counters
-        are the only cross-chunk state.
-    """
-    segments: list[tuple[bytes, bytes | None]] = []
-    start = 0
-    data = chunk
-    while True:
-        end = data.find(b"\n", start)
-        if end == -1:
-            break
-        body = data[start:end]
-        if body.endswith(b"\r"):
-            segments.append((body[:-1], b"\r\n"))
-        else:
-            segments.append((body, b"\n"))
-        start = end + 1
-    if start < len(data):
-        segments.append((data[start:], None))
-    return segments
-
-
 def _flush_echo_decoder(
     state: _DrainState,
 ) -> None:
@@ -362,60 +341,6 @@ def _flush_echo_decoder(
             _echo_write(state, marker)
     if state.echo_decoder is not None:
         _echo_write(state, b"", final=True)
-
-
-def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
-
-    for line in lines:
-        on_line(line)
-
-    return remainder
-
-
-def _split_complete_lines(text: str) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
-
-    Parameters
-    ----------
-    text : str
-        Text to split using Python's universal line boundary rules.
-
-    Returns
-    -------
-    tuple[list[str], str]
-        Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line.
-    """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if not _ends_with_line_ending(lines[-1]):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
-
-
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith(("\n", "\r"))
-
-
-def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith(("\n", "\r")):
-        return line[:-1]
-    return line
 
 
 __all__ = [

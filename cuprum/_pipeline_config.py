@@ -9,7 +9,7 @@ import typing as typ
 from cuprum._streams import _StreamConfig
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import ExecutionContext
+    from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -44,17 +44,15 @@ class _PipelineRunConfig:
 
 def _prepare_pipeline_config(
     *,
-    capture: bool,
-    echo: bool,
-    max_echo_line_bytes: int | None,
+    output: RunOutputOptions,
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
     """Normalize runtime options for pipeline execution.
 
-    ``max_echo_line_bytes`` rides along as a keyword parameter rather than a
-    position on ``ExecutionContext`` because it is an output contract, not a
-    runtime environment knob.
+    Output settings — capture, echo, and the echo line bound — come from the
+    caller's ``RunOutputOptions`` rather than separate keywords, so the helper
+    mirrors one options object instead of restating its fields.
 
     Returns
     -------
@@ -77,9 +75,9 @@ def _prepare_pipeline_config(
     # ``sys.stderr`` at call time.
     return _PipelineRunConfig(
         ctx=ctx,
-        capture=capture,
-        echo=echo,
-        max_echo_line_bytes=max_echo_line_bytes,
+        capture=output.capture,
+        echo=output.echo,
+        max_echo_line_bytes=output.max_echo_line_bytes,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

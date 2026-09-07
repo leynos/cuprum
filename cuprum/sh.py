@@ -726,9 +726,7 @@ class Pipeline:
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
-            capture=out.capture,
-            echo=out.echo,
-            max_echo_line_bytes=out.max_echo_line_bytes,
+            output=out,
             timeout=effective_timeout,
             context=context,
         )

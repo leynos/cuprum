@@ -8,6 +8,7 @@ import pytest
 
 from cuprum import ECHO, sh
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
+from cuprum.sh import RunOutputOptions
 
 
 class _StubSpawnProcess:
@@ -49,9 +50,7 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
     first = echo("-n", "hello")
     second = echo("-n", "world")
     config = _prepare_pipeline_config(
-        capture=True,
-        echo=False,
-        max_echo_line_bytes=None,
+        output=RunOutputOptions(capture=True, echo=False, max_echo_line_bytes=None),
         timeout=None,
         context=None,
     )

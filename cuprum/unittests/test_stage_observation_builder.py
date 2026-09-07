@@ -135,9 +135,7 @@ def _pipeline_tags(
 ) -> list[cabc.Mapping[str, object]]:
     """Build pipeline observations and return per-stage tags."""
     config = _prepare_pipeline_config(
-        capture=capture,
-        echo=echo,
-        max_echo_line_bytes=None,
+        output=RunOutputOptions(capture=capture, echo=echo, max_echo_line_bytes=None),
         timeout=None,
         context=context,
     )
