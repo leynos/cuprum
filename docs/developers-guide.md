@@ -2790,6 +2790,24 @@ make check-fmt
 make lint
 ```
 
+The Rust tracing capture harness also supports parallel `cargo test` execution
+within one process. Its `FilterCapture` subscriber returns
+`Interest::sometimes()` from `register_callsite`, so each event and span checks
+the active capture's level through `enabled()`.
+
+The harness retains one dormant dispatch before registering a capture. This
+private guard keeps registration on tracing-core's synchronized registry path:
+its single-dispatch fast path can otherwise cache `never` from a thread without
+a default subscriber, bypassing the active capture's interest entirely. The
+guard reports `LevelFilter::OFF` to prevent that same race during
+initialization and is never installed as a default subscriber. Together with
+dynamic interest, it prevents another thread's verdict from disabling a
+captured event. Reuse the guard only through the capture harness; it is not a
+production tracing setup. Capture correctness does not depend on nextest's
+process isolation; nextest remains the project's test runner. The
+[tracing investigation](debugging/debugging-plan-20260907-tracing-interest-race.md)
+records the deterministic regression and the rejected override-only fix.
+
 Run Kani separately because it is a bounded model checker rather than a normal
 unit-test runner. The Kani installer places the verifier under `~/.kani`; the
 dynamic library path is required when invoking the crate harnesses. Resolve the

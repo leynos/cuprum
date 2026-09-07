@@ -10,11 +10,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use tracing::field::{Field, Visit};
+use tracing::level_filters::LevelFilter;
 use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use tracing::subscriber::{Interest, NoSubscriber};
+use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
 
 /// A captured event: its level, the field names reachable from the active span
 /// stack when it was emitted, and the values it carried itself.
@@ -124,6 +126,10 @@ fn lock(state: &Arc<Mutex<CaptureState>>) -> MutexGuard<'_, CaptureState> {
 }
 
 impl Subscriber for FilterCapture {
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         // `Level` orders ERROR < WARN < INFO < DEBUG < TRACE, so an item is
         // enabled when its level is at or below the configured verbosity.
@@ -183,14 +189,55 @@ impl Subscriber for FilterCapture {
     }
 }
 
+/// Keep registration on tracing's synchronized registry path for all threads.
+///
+/// Each capture registers beside this retained dispatch, avoiding the
+/// single-dispatch fast path that consults only the registering thread's
+/// default subscriber. The guard is never installed as a default subscriber.
+static REGISTRY_GUARD: LazyLock<Dispatch> = LazyLock::new(|| Dispatch::new(DormantSubscriber));
+
+/// Disable tracing until the first capture has joined the shared registry.
+struct DormantSubscriber;
+
+impl Subscriber for DormantSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        false
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        // NoSubscriber alone reports no hint, enabling callsite registration
+        // while this guard is still the only dispatch in the registry.
+        Some(LevelFilter::OFF)
+    }
+
+    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
+        NoSubscriber::new().new_span(attrs)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+}
+
 /// Run `body` under a subscriber limited to `max_level` and return what it
 /// captured.
 ///
-/// Tests using this must run under `cargo nextest` (the project's test
-/// runner), which isolates each test in its own process. That isolation keeps
-/// tracing's process-global callsite `Interest` cache from being shared across
-/// tests that install different subscribers.
+/// `FilterCapture` returns `Interest::sometimes()` from `register_callsite`,
+/// so tracing re-evaluates `enabled()` for every event and span. A retained,
+/// dormant dispatch also makes registration consult tracing's synchronized
+/// registry rather than only the registering thread's default subscriber.
+/// Together these prevent the process-global callsite cache from retaining
+/// another capture's max-level verdict or an uncaptured thread's `never`.
+/// Correctness no longer depends on process isolation, although `cargo nextest`
+/// remains the project's test runner.
 pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
+    let _ = LazyLock::force(&REGISTRY_GUARD);
     let state = Arc::new(Mutex::new(CaptureState::default()));
     let subscriber = FilterCapture {
         max_level,
@@ -206,7 +253,7 @@ pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
 
 #[cfg(test)]
 mod tests {
-    //! Tests for the capture harness's own matchers.
+    //! Tests for capture isolation and the harness's own matchers.
     //!
     //! `event_matches` is what other modules assert their diagnostics with, so
     //! a predicate it quietly ignores would weaken every one of those tests at
@@ -215,6 +262,7 @@ mod tests {
 
     use rstest::rstest;
     use tracing::Level;
+    use tracing::callsite::Callsite;
 
     use super::capture;
 
@@ -223,6 +271,67 @@ mod tests {
         capture(Level::DEBUG, || {
             tracing::debug!(bytes_transferred = 0_u64, "probe event");
         })
+    }
+
+    #[rstest]
+    fn warn_capture_records_the_same_callsite_after_error_capture() {
+        let emit_warning = || tracing::warn!(attempt = 1_u64, "warning probe");
+
+        let error_capture = capture(Level::ERROR, emit_warning);
+        assert!(
+            error_capture.events.is_empty(),
+            "ERROR must filter out WARN"
+        );
+
+        let warn_capture = capture(Level::WARN, emit_warning);
+        assert!(
+            warn_capture.event_matches(Level::WARN, "warning probe", &[("attempt", "1")]),
+            "WARN must capture the warning after ERROR used the same callsite",
+        );
+    }
+
+    #[rstest]
+    fn warn_capture_records_callsite_first_seen_without_subscriber() {
+        let emit_warning = || tracing::warn!(attempt = 1_u64, "cross-thread warning probe");
+        let captured = capture(Level::WARN, || {
+            // The new thread has no default subscriber, but shares the
+            // process-global callsite with this thread's active capture.
+            let child_result = std::thread::spawn(emit_warning).join();
+            assert!(child_result.is_ok(), "the warning probe thread must finish");
+            emit_warning();
+        });
+        assert!(
+            captured.event_matches(
+                Level::WARN,
+                "cross-thread warning probe",
+                &[("attempt", "1")],
+            ),
+            "registration on an uncaptured thread must not disable this capture",
+        );
+        assert_eq!(captured.events.len(), 1, "only this thread is captured");
+    }
+
+    #[rstest]
+    #[case::disabled(Level::ERROR)]
+    #[case::enabled(Level::WARN)]
+    fn callsite_registration_keeps_level_filter_dynamic(#[case] max_level: Level) {
+        let callsite = tracing::callsite! {
+            name: "registration probe",
+            kind: tracing::metadata::Kind::EVENT,
+            level: Level::WARN,
+            fields:
+        };
+        capture(max_level, || {
+            let interest = tracing::dispatcher::get_default(|dispatch| {
+                dispatch.register_callsite(callsite.metadata())
+            });
+            // Dispatch creation rebuilds interest, so sequential captures alone
+            // cannot detect a stale registration overwriting a concurrent one.
+            assert!(
+                interest.is_sometimes(),
+                "registration must defer to each capture's enabled check",
+            );
+        });
     }
 
     #[rstest]
