@@ -31,8 +31,8 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset({
 })
 
 
-def _record_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
-    """Record every cleanup phase on the source stage span."""
+def _record_completed_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
+    """Record the normal native-pump cleanup lifecycle."""
     hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=source_exec_id))
     hook.record_pump_event(
         PumpEvent(
@@ -41,6 +41,11 @@ def _record_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
             exec_id=source_exec_id,
         )
     )
+
+
+def _record_deferred_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
+    """Record the grace-expired native-pump cleanup lifecycle."""
+    hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=source_exec_id))
     hook.record_pump_event(
         PumpEvent(
             phase="cleanup_grace_expired",
@@ -54,11 +59,11 @@ def _record_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
 class TestNativePumpCleanupTracing:
     """The pump channel records cleanup facts on their matching execution span."""
 
-    def test_cleanup_events_attach_only_to_the_source_stage_span(
+    def test_completed_cleanup_events_attach_only_to_the_source_stage_span(
         self,
         tracing_hook: Traced,
     ) -> None:
-        """A source token selects its open stage span without ending it."""
+        """Normal cleanup selects its source span without ending it."""
         tracer, hook = tracing_hook
         source_exec_id, downstream_exec_id = new_exec_id(), new_exec_id()
         hook(
@@ -82,7 +87,7 @@ class TestNativePumpCleanupTracing:
         )
         downstream_span = tracer.spans[1]
 
-        _record_cleanup_events(hook, source_exec_id)
+        _record_completed_cleanup_events(hook, source_exec_id)
 
         assert source_span.events == [
             (
@@ -96,6 +101,52 @@ class TestNativePumpCleanupTracing:
                     "outcome": "completed",
                     "duration_s": 2.5,
                 },
+            ),
+        ], f"cleanup events must attach to the source stage, found {source_span.events}"
+        assert downstream_span.events == [], (
+            "cleanup events must not attach to the downstream stage span"
+        )
+        assert source_span.ended is False, (
+            "cleanup tracing must not end the source span"
+        )
+        assert source_span.status_ok is None, (
+            "cleanup tracing must not mark the source span's status"
+        )
+
+    def test_deferred_cleanup_events_attach_only_to_the_source_stage_span(
+        self,
+        tracing_hook: Traced,
+    ) -> None:
+        """Deferred cleanup selects its source span without ending it."""
+        tracer, hook = tracing_hook
+        source_exec_id, downstream_exec_id = new_exec_id(), new_exec_id()
+        hook(
+            _make_exec_event(
+                phase="start",
+                overrides={
+                    **_cat_overrides(source_exec_id),
+                    "tags": {"pipeline_stage_index": 0, "pipeline_stages": 2},
+                },
+            )
+        )
+        source_span = tracer.spans[0]
+        hook(
+            _make_exec_event(
+                phase="start",
+                overrides={
+                    **_cat_overrides(downstream_exec_id),
+                    "tags": {"pipeline_stage_index": 1, "pipeline_stages": 2},
+                },
+            )
+        )
+        downstream_span = tracer.spans[1]
+
+        _record_deferred_cleanup_events(hook, source_exec_id)
+
+        assert source_span.events == [
+            (
+                "cuprum.cleanup_started",
+                {"operation": "native_pump_cleanup", "outcome": "started"},
             ),
             (
                 "cuprum.cleanup_grace_expired",

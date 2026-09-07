@@ -216,6 +216,12 @@ def test_execution_context_rejects_invalid_native_pump_cleanup_grace(
         ExecutionContext(native_pump_cleanup_grace=cleanup_grace)
 
 
+def test_execution_context_rejects_none_native_pump_cleanup_grace() -> None:
+    """Native cleanup must receive a concrete finite grace value."""
+    with pytest.raises(ValueError, match="native_pump_cleanup_grace must not be None"):
+        ExecutionContext(native_pump_cleanup_grace=typ.cast("float", None))
+
+
 @pytest.mark.crosshair
 @cuprum_st.PROPERTY_SETTINGS
 @given(parent=cuprum_st.timeouts())

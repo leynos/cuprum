@@ -1,5 +1,4 @@
 """Observability emissions for native pipeline-pump cleanup."""
-
 from __future__ import annotations
 
 import asyncio
@@ -8,11 +7,10 @@ import typing as typ
 
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _current_pump_event_exec_id, _emit_pump_event
+import dataclasses as dc
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -22,15 +20,16 @@ def _log_native_pump_cleanup_started(logger: logging.Logger) -> None:
         phase="cleanup_started",
         exec_id=_current_pump_event_exec_id(),
     )
-    logger.debug(
-        "Native pump cleanup started after cancellation",
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "started",
-        },
+    _emit_native_pump_cleanup_observation(
+        logger,
+        event,
+        _NativePumpCleanupLog(
+            "Native pump cleanup started after cancellation",
+            (),
+            "started",
+            {},
+        ),
     )
-    _emit_pump_event(event)
 
 
 def _log_native_pump_declined(
@@ -56,17 +55,16 @@ def _log_native_pump_cleanup_completed(
         duration_s=duration_s,
         exec_id=_current_pump_event_exec_id(),
     )
-    logger.debug(
-        "Native pump cleanup completed after cancellation in %.6fs",
-        duration_s,
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "completed",
-            "cuprum_duration_s": duration_s,
-        },
+    _emit_native_pump_cleanup_observation(
+        logger,
+        event,
+        _NativePumpCleanupLog(
+            "Native pump cleanup completed after cancellation in %.6fs",
+            (duration_s,),
+            "completed",
+            {"cuprum_duration_s": duration_s},
+        ),
     )
-    _emit_pump_event(event)
 
 
 def _log_native_pump_cleanup_grace_expired(
@@ -79,17 +77,16 @@ def _log_native_pump_cleanup_grace_expired(
         elapsed_s=elapsed_s,
         exec_id=_current_pump_event_exec_id(),
     )
-    logger.debug(
-        "Native pump cleanup grace expired after %.6fs",
-        elapsed_s,
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "grace_expired",
-            "cuprum_elapsed_s": elapsed_s,
-        },
+    _emit_native_pump_cleanup_observation(
+        logger,
+        event,
+        _NativePumpCleanupLog(
+            "Native pump cleanup grace expired after %.6fs",
+            (elapsed_s,),
+            "grace_expired",
+            {"cuprum_elapsed_s": elapsed_s},
+        ),
     )
-    _emit_pump_event(event)
 
 
 def _log_native_pump_cleanup_deferred(logger: logging.Logger) -> None:
@@ -98,15 +95,16 @@ def _log_native_pump_cleanup_deferred(logger: logging.Logger) -> None:
         phase="cleanup_deferred",
         exec_id=_current_pump_event_exec_id(),
     )
-    logger.debug(
-        "Native pump deferred cleanup completed",
-        extra={
-            "cuprum_action": "rust_pump_cleanup",
-            "cuprum_operation": "native_pump_cleanup",
-            "cuprum_outcome": "deferred",
-        },
+    _emit_native_pump_cleanup_observation(
+        logger,
+        event,
+        _NativePumpCleanupLog(
+            "Native pump deferred cleanup completed",
+            (),
+            "deferred",
+            {},
+        ),
     )
-    _emit_pump_event(event)
 
 
 async def _await_native_pump_cleanup(
@@ -168,3 +166,27 @@ def _log_native_pump_failed_after_cancel(
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
     _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
+
+@dc.dataclass(frozen=True, slots=True)
+class _NativePumpCleanupLog:
+    """Phase-specific fields used to record one cleanup observation."""
+
+    message: str
+    formatting_args: tuple[object, ...]
+    outcome: str
+    phase_fields: dict[str, object]
+
+def _emit_native_pump_cleanup_observation(
+    logger: logging.Logger,
+    event: PumpEvent,
+    log: _NativePumpCleanupLog,
+) -> None:
+    """Log and emit one native-pump cleanup observation."""
+    extra = {
+        "cuprum_action": "rust_pump_cleanup",
+        "cuprum_operation": "native_pump_cleanup",
+        "cuprum_outcome": log.outcome,
+    }
+    extra.update(log.phase_fields)
+    logger.debug(log.message, *log.formatting_args, extra=extra)
+    _emit_pump_event(event)

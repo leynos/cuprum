@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures as cf
 import os
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor,
@@ -195,7 +200,7 @@ class TestRustPumpFailures:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A native-load failure should close the duplicate writer descriptor."""
+        """A native-load failure should close every state and native duplicate."""
         duplicated_fds: list[int] = []
         original_dup = os.dup
 
@@ -217,26 +222,29 @@ class TestRustPumpFailures:
             awaitable: cabc.Awaitable[object],
         ) -> None:
             """Publish a native-load failure through the submitted future."""
-            loop = asyncio.get_running_loop()
 
-            def submit_native_load_failure(
-                executor: object,
-                function: cabc.Callable[..., object],
-                *args: object,
-            ) -> asyncio.Future[object]:
-                """Execute the worker and publish its import failure to a future."""
-                del executor
-                future = loop.create_future()
-                try:
-                    function(*args)
-                except ImportError as exc:
-                    future.set_exception(exc)
-                return future
+            class _NativeLoadFailureExecutor:
+                """Publish only import failures through the worker future."""
+
+                def submit(
+                    self,
+                    function: cabc.Callable[..., object],
+                    *args: object,
+                ) -> cf.Future[object]:
+                    """Execute native loading and settle the submitted future."""
+                    future: cf.Future[object] = cf.Future()
+                    try:
+                        result = function(*args)
+                    except ImportError as error:
+                        future.set_exception(error)
+                    else:
+                        future.set_result(result)
+                    return future
 
             with mock.patch.object(
-                loop,
-                "run_in_executor",
-                side_effect=submit_native_load_failure,
+                _pipeline_stream_native_cleanup,
+                "_NATIVE_PUMP_EXECUTOR",
+                _NativeLoadFailureExecutor(),
             ):
                 await awaitable
 
@@ -264,6 +272,9 @@ class TestRustPumpFailures:
                     )
                 )
 
-            assert duplicated_fds, "native pumping should create a writer duplicate"
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicated_fds[0])
+            assert duplicated_fds, (
+                "native pumping should create state and native duplicates"
+            )
+            for duplicated_fd in duplicated_fds:
+                with pytest.raises(OSError, match="Bad file descriptor"):
+                    os.fstat(duplicated_fd)

@@ -82,6 +82,27 @@ def _pipeline_timeout_sync(
     return exc_info.value, set()
 
 
+async def _run_zero_timeout_case(
+    pipeline: Pipeline,
+    created: list[asyncio.Task[None]],
+) -> None:
+    """Time out immediately, then inspect pumps before the loop closes.
+
+    ``asyncio.run`` cancels everything still pending during shutdown, so a
+    stranded pump looks settled from outside. The assertion has to happen
+    while the loop is still live.
+    """
+    with pytest.raises(TimeoutExpired):
+        await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
+
+    assert created, "the pipeline must create an inter-stage pump to reconcile"
+    for index, task in enumerate(created):
+        assert task.done(), (
+            f"pump {index} was left unsettled after the immediate timeout: "
+            "nothing reconciled the pumps the caller owns"
+        )
+
+
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
 def pipeline_timeout_strategy(
     request: pytest.FixtureRequest,
@@ -206,23 +227,6 @@ def test_zero_timeout_reconciles_pipe_tasks(
         "-c", "import sys, time; sys.stdout.write('x' * 10_000_000); time.sleep(30)"
     ) | python("-c", "import time; time.sleep(30)")
 
-    async def run_case() -> None:
-        """Time out immediately, then inspect the pumps before the loop closes.
-
-        ``asyncio.run`` cancels everything still pending during shutdown, so a
-        stranded pump looks settled from outside. The assertion has to happen
-        while the loop is still live.
-        """
-        with pytest.raises(TimeoutExpired):
-            await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
-
-        assert created, "the pipeline must create an inter-stage pump to reconcile"
-        for index, task in enumerate(created):
-            assert task.done(), (
-                f"pump {index} was left unsettled after the immediate timeout: "
-                "nothing reconciled the pumps the caller owns"
-            )
-
     try:
         with (
             mock.patch.object(_pipeline_collect, "_create_pipe_tasks", spy),
@@ -232,7 +236,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),
         ):
-            asyncio.run(run_case())
+            asyncio.run(_run_zero_timeout_case(pipeline, created))
     finally:
         get_stream_backend.cache_clear()
         for pid in started_pids(events):

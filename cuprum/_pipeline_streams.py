@@ -171,6 +171,7 @@ async def _pump_over_raw_fds(
     except _RustPumpBlockingModeError:
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return False
 
     await _run_rust_pump_with_blocking_fds(state=state)

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import typing as typ
+from unittest import mock
 
 import pytest
 
@@ -156,17 +157,18 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
 
     reader = typ.cast("asyncio.StreamReader", object())
     with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
         if duplicate_creation_fails:
             with pytest.raises(fault_error):
                 asyncio.run(
                     _pipeline_streams._run_rust_pump(
                         reader=reader,
                         writer=None,
-                        handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
-                            reader_fd=reader_fd,
-                            writer_fd=writer_fd,
-                            cleanup_grace_s=0.5,
-                        ),
+                        handoff=handoff,
                     )
                 )
         else:
@@ -174,11 +176,7 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
                 _pipeline_streams._run_rust_pump(
                     reader=reader,
                     writer=None,
-                    handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
-                        reader_fd=reader_fd,
-                        writer_fd=writer_fd,
-                        cleanup_grace_s=0.5,
-                    ),
+                    handoff=handoff,
                 )
             )
 
@@ -192,3 +190,143 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         duplicate_creation_fails=duplicate_creation_fails,
         fault_error=fault_error,
     )
+
+
+def test_reader_duplication_failure_retains_its_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader-duplication failure leaves no callback-owned descriptor open."""
+    error = OSError("reader cannot be duplicated")
+
+    def fail_reader_duplication(_fd: int) -> typ.NoReturn:
+        """Fail before a reader duplicate exists."""
+        raise error
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup.os, "dup", fail_reader_duplication
+    )
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        with pytest.raises(
+            _pipeline_stream_native_cleanup._RustPumpStateDuplicationError
+        ) as exc_info:
+            _pipeline_stream_native_cleanup._duplicate_rust_pump_state_fds(handoff)
+
+    assert exc_info.value.error is error, "the wrapper must retain the reader error"
+
+
+def test_writer_duplication_failure_closes_the_reader_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A writer-duplication failure rolls back the already-created reader FD."""
+    original_dup = os.dup
+    duplicated_readers: list[int] = []
+    error = OSError("writer cannot be duplicated")
+
+    def duplicate_reader_then_fail_writer(fd: int) -> int:
+        """Create the first duplicate and fail the second call."""
+        if duplicated_readers:
+            raise error
+        duplicate = original_dup(fd)
+        duplicated_readers.append(duplicate)
+        return duplicate
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup.os,
+        "dup",
+        duplicate_reader_then_fail_writer,
+    )
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        with pytest.raises(
+            _pipeline_stream_native_cleanup._RustPumpStateDuplicationError
+        ) as exc_info:
+            _pipeline_stream_native_cleanup._duplicate_rust_pump_state_fds(handoff)
+
+    assert exc_info.value.error is error, "the wrapper must retain the writer error"
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(duplicated_readers[0])
+
+
+@pytest.mark.parametrize("error", [OSError("unavailable"), ValueError("closed")])
+def test_blocking_mode_failure_closes_both_state_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+    error: OSError | ValueError,
+) -> None:
+    """Expected blocking failures wrap their original error after both closes."""
+    close_reader = mock.Mock()
+    close_writer = mock.Mock()
+
+    def fail_engage(**_kwargs: object) -> typ.NoReturn:
+        """Raise the parametrized expected blocking failure."""
+        raise error
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup._BlockingModeGuard,
+        "engage",
+        fail_engage,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_reader_fd",
+        close_reader,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_writer_fd",
+        close_writer,
+    )
+
+    with pytest.raises(
+        _pipeline_stream_native_cleanup._RustPumpBlockingModeError
+    ) as exc_info:
+        _pipeline_stream_native_cleanup._engage_rust_pump_blocking_mode(11, 12)
+
+    assert exc_info.value.error is error, "the wrapper must retain the blocking error"
+    close_reader.assert_called_once_with(11)
+    close_writer.assert_called_once_with(12)
+
+
+def test_unexpected_blocking_mode_failure_closes_both_state_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected blocking failures preserve their type after both closes."""
+    close_reader = mock.Mock()
+    close_writer = mock.Mock()
+
+    class _UnexpectedBlockingFailure(BaseException):
+        """Sentinel exception outside the expected blocking failure contract."""
+
+    def fail_engage(**_kwargs: object) -> typ.NoReturn:
+        """Raise the unexpected failure without changing its identity."""
+        raise _UnexpectedBlockingFailure
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup._BlockingModeGuard,
+        "engage",
+        fail_engage,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_reader_fd",
+        close_reader,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_writer_fd",
+        close_writer,
+    )
+
+    with pytest.raises(_UnexpectedBlockingFailure):
+        _pipeline_stream_native_cleanup._engage_rust_pump_blocking_mode(11, 12)
+
+    close_reader.assert_called_once_with(11)
+    close_writer.assert_called_once_with(12)

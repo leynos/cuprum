@@ -754,18 +754,23 @@ Pipeline byte movement is split so each module has one reason to change:
 
 Table 1: pipeline stream modules and their responsibilities
 
-| Module                        | Owns                                               |
-| ----------------------------- | -------------------------------------------------- |
-| `_pipeline_streams.py`        | Backend choice and the Python/Rust pump dispatch   |
-| `_pipeline_stream_results.py` | Stream-task collection, cancellation, and outcomes |
-| `_pipeline_stream_fds.py`     | Raw-descriptor hand-off for the Rust pump          |
+| Module                               | Owns                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------- |
+| `_pipeline_streams.py`               | Backend choice and the Python/Rust pump dispatch                           |
+| `_pipeline_stream_results.py`        | Stream-task collection, cancellation, and outcomes                         |
+| `_pipeline_stream_fds.py`            | Descriptor extraction, pause/resume, and blocking mode                     |
+| `_pipeline_stream_native_cleanup.py` | Native-pump executor ownership, cancellation grace, and deferred hand-back |
 
 ### Rust pump raw-descriptor lifecycle
 
 Routing an inter-stage hop through the Rust pump means taking the raw pipe
 descriptors back from asyncio for the duration of the transfer.
-`cuprum/_pipeline_stream_fds.py` owns that hand-off, keeping its
-partial-failure paths in one place rather than inlined in the pump:
+`cuprum/_pipeline_stream_fds.py` owns descriptor extraction, asyncio
+pause/resume, and the blocking-mode guard. The native-pump cleanup module owns
+the duplicated descriptors that outlive the caller task, executor submission,
+the cancellation grace wait, and completion callback. Keeping those
+responsibilities separate leaves the partial-failure paths in one place rather
+than inlined in the pump:
 
 - `_extract_stream_fd` pulls the raw descriptor out of an asyncio transport,
   returning `None` when the transport does not expose one.
@@ -782,15 +787,20 @@ partial-failure paths in one place rather than inlined in the pump:
   there are no callbacks to suspend. A transport with `pause_reading()` but no
   `resume_reading()` answers `False`: pausing it could not be undone.
 
-Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
-worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` gives
-native I/O and its completion callback duplicated FDs, so pipeline teardown
-cannot close or reuse a worker-owned descriptor. It shields cleanup only until
-`ExecutionContext.native_pump_cleanup_grace`; expiry re-raises the caller's
-original `CancelledError` and retains the executor future. Its one completion
-callback later closes the worker writer, restores callback-owned descriptor
-state, closes those duplicates, and resumes the reader. This ordering preserves
-the no-double-close and no-premature-reader-resumption invariants.
+Cancellation is handled explicitly. The dedicated native-pump executor cannot
+interrupt the worker thread running the Rust pump, but it is kept outside
+`asyncio.run()`'s default-executor shutdown. `_run_rust_pump_with_blocking_fds`
+gives native I/O a reader duplicate and a writer duplicate, so pipeline
+teardown cannot close or reuse a worker-owned descriptor. Once submission
+succeeds, Rust owns the submitted writer duplicate; the completion callback
+owns the native reader duplicate and the callback-state duplicates. It shields
+cleanup only until `ExecutionContext.native_pump_cleanup_grace`; expiry
+re-raises the caller's original `CancelledError` and retains the executor
+future. The worker's completion callback finalizes callback-owned descriptors
+independently of the originating loop, then requests reader resumption there.
+If that loop has closed, reader resumption is skipped, but descriptor
+finalization is not lost. This ordering preserves the no-double-close and
+no-premature-reader-resumption invariants.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start, normal completion, grace expiry, and deferred
@@ -2380,10 +2390,13 @@ beyond the Kani model once that model is complete, lives in issue `#89`.
 
 `_run_rust_pump` keeps asyncio transport descriptors separate from the
 duplicates supplied to `rust_pump_stream`. Callback-owned duplicates retain the
-blocking-mode state and survive a caller whose cleanup grace expires. The
-executor future is strongly retained until its done callback closes the native
-writer, restores and closes callback-owned state, and resumes the reader. The
-Rust worker is uninterruptible; the caller receives `CancelledError` at the
+blocking-mode state and survive a caller whose cleanup grace expires. After
+submission, Rust owns the native writer duplicate; the completion callback owns
+the native reader and callback-state duplicates. The dedicated executor future
+is strongly retained until that callback closes its borrowed reader and state
+duplicates and restores the state, even if the originating event loop is
+closed. It resumes the reader only when that loop can still accept the request.
+The Rust worker is uninterruptible; the caller receives `CancelledError` at the
 grace boundary, never a premature descriptor hand-back.
 
 The native worker owns the handed-off writer resource after submission. Before

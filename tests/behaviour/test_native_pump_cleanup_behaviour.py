@@ -50,15 +50,6 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import Pipeline
 
 
-"""Public pipeline cancellation coverage for native-pump cleanup telemetry."""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum.program import Program
-    from cuprum.pump_events import PumpEvent
-    from cuprum.sh import Pipeline
-
-
 @dataclasses.dataclass(slots=True)
 class _CleanupScenario:
     """State and observability captured during one public pipeline cancellation."""

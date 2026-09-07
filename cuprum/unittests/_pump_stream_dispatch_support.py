@@ -9,6 +9,7 @@ home shared by the selection and FD-blocking test modules.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures as cf
 import contextlib
 import os
 import typing as typ
@@ -16,7 +17,11 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum._testing import (
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -41,6 +46,27 @@ class PumpCallCounts(typ.TypedDict, total=False):
 
     rust_pump: int
     python_pump: int
+
+
+def _make_writer_toggle_failure(
+    reader_fd: int,
+    error_class: type[OSError] | type[ValueError],
+) -> cabc.Callable[[int, object], None]:
+    """Return a blocking-mode double that rejects the writer descriptor."""
+    original_set_blocking = os.set_blocking
+    reader_inode = os.fstat(reader_fd).st_ino
+
+    def fail_writer_toggle(fd: int, is_blocking: object) -> None:
+        """Change the reader mode then reject the writer mode change."""
+        is_reader = os.fstat(fd).st_ino == reader_inode
+        if is_reader and is_blocking is True:
+            original_set_blocking(fd, bool(is_blocking))
+            return
+        if not is_reader and is_blocking is True:
+            raise error_class(_WRITER_TOGGLE_FAILURE)
+        original_set_blocking(fd, bool(is_blocking))
+
+    return fail_writer_toggle
 
 
 @contextlib.contextmanager
@@ -189,20 +215,28 @@ async def _run_with_inline_executor_returning(
     object
         Whatever the awaited coroutine produced.
     """
-    loop = asyncio.get_running_loop()
 
-    def run_inline(
-        executor: object,
-        function: cabc.Callable[..., object],
-        *args: object,
-    ) -> asyncio.Future[object]:
-        """Execute a submitted test double and publish its result immediately."""
-        del executor
-        future = loop.create_future()
-        future.set_result(function(*args))
-        return future
+    class _InlineExecutor:
+        """Submit native work synchronously while retaining Future semantics."""
 
-    with mock.patch.object(loop, "run_in_executor", side_effect=run_inline):
+        def submit(
+            self,
+            function: cabc.Callable[..., object],
+            *args: object,
+        ) -> cf.Future[object]:
+            """Run a submitted callable and settle its concurrent future."""
+            future: cf.Future[object] = cf.Future()
+            try:
+                future.set_result(function(*args))
+            except Exception as error:  # ruff: ignore[blind-except] - the double must publish every worker failure
+                future.set_exception(error)
+            return future
+
+    with mock.patch.object(
+        _pipeline_stream_native_cleanup,
+        "_NATIVE_PUMP_EXECUTOR",
+        _InlineExecutor(),
+    ):
         return await awaitable
 
 

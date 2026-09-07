@@ -2552,8 +2552,9 @@ explicitly.
 ### 13.6 Thread Safety and Asyncio Integration
 
 The Rust extension releases the GIL during I/O operations, allowing other
-Python threads and asyncio tasks to proceed. Integration with asyncio uses
-`loop.run_in_executor()`.
+Python threads and asyncio tasks to proceed. Integration with asyncio uses the
+dedicated native-pump executor, which is kept outside `asyncio.run()`'s
+default-executor shutdown.
 
 The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
 reports whether it succeeded, so the caller never runs the native pump itself:
@@ -2637,14 +2638,19 @@ each path is testable without a live pump:
   undone, and the Python fallback reads the same stream and would wait forever
   on a reader nothing can restart.
 
-Cancellation is handled explicitly rather than implicitly. `run_in_executor`
-cannot interrupt the worker thread running the Rust pump. The hand-off gives
+Cancellation is handled explicitly rather than implicitly. The dedicated
+executor cannot interrupt the worker thread running the Rust pump, but it is
+kept outside `asyncio.run()`'s default-executor shutdown. The hand-off gives
 native I/O and its callback their own duplicates, leaving asyncio transport
 descriptors safe for pipeline teardown. Cancelling the awaiting task waits only
 until `native_pump_cleanup_grace`; on expiry it re-raises `CancelledError` and
-retains the executor future. The one completion callback later closes the
-worker duplicate, restores the callback-owned blocking state, closes those
-state duplicates, then resumes the reader. No descriptor is restored, closed,
+retains the executor future. Once submission succeeds, Rust owns the submitted
+writer duplicate. The completion callback runs on worker completion and
+independently closes the callback-owned native reader and state duplicates,
+restores the callback-owned blocking state, and requests reader resumption on
+the originating loop. If that loop has closed, only reader resumption is
+skipped; descriptor finalization is already complete. The callback must not
+close the writer transferred to Rust. No descriptor is restored, closed,
 reused, or resumed while native code can still use it.
 
 The original writer descriptor remains asyncio-owned throughout. Native code

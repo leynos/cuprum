@@ -1803,7 +1803,11 @@ completion callback. Grace expiry emits `cleanup_grace_expired` with
 `PumpEvent.elapsed_s`; eventual callback cleanup emits `cleanup_deferred`. That
 callback closes its borrowed reader and restores callback-owned state. Rust
 owns the submitted writer duplicate, so the callback neither double closes it
-nor resumes a reader while native I/O can still use it.
+nor resumes a reader while native I/O can still use it. The native-pump
+executor is independent of `asyncio.run()` shutdown, so this caller-facing
+bound also holds for `run_sync()`. If the worker completes after the
+originating event loop has closed, the completion callback still closes and
+restores its descriptors; the closed loop's reader transport is not resumed.
 
 Cleanup can also be correlated with the active pipeline-stage span. Register
 the same `TracingHook` with both `sh.observe(hook)` and
@@ -1854,9 +1858,9 @@ with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
     pipeline.run_sync()
 ```
 
-Table 2: counters emitted by `PumpMetricsHook`
+Table 2: metrics emitted by `PumpMetricsHook`
 
-| Counter                                        | Labels    | Incremented when                                                 |
+| Metric                                         | Labels    | Incremented when                                                 |
 | ---------------------------------------------- | --------- | ---------------------------------------------------------------- |
 | `cuprum_rust_pump_declined_total`              | `reason`  | a hop fell back from the Rust pump to the Python pump            |
 | `cuprum_rust_pump_failed_after_cancel_total`   | none      | a cancelled hop's Rust worker failure was consumed and recorded  |

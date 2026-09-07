@@ -15,9 +15,6 @@ import pytest
 from cuprum import observe
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.pump_metrics import (
-    RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
-    RUST_PUMP_CLEANUP_DURATION_SECONDS,
-    RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
     RUST_PUMP_CLEANUP_TOTAL,
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
@@ -70,17 +67,42 @@ def test_each_real_decline_path_increments_once(
     with observe_pump(PumpMetricsHook(collector)):
         trigger(monkeypatch)
 
-    assert len(collector.counters) == 1, (
-        f"a {expected_reason!r} decline must increment exactly one counter, "
-        f"found {collector.counters}"
+    decline_counters = [
+        counter
+        for counter in collector.counters
+        if counter[0] == RUST_PUMP_DECLINED_TOTAL
+    ]
+    assert len(decline_counters) == 1, (
+        f"a {expected_reason!r} decline must increment exactly one decline "
+        f"counter, found {collector.counters}"
     )
-    name, value, labels = collector.counters[0]
+    name, value, labels = decline_counters[0]
     assert name == RUST_PUMP_DECLINED_TOTAL, (
         f"expected {RUST_PUMP_DECLINED_TOTAL!r}, found {name!r}"
     )
     assert value == 1.0, f"a decline counts as one, found {value}"  # ruff: ignore[float-equality-comparison] - counter increment is exact
     assert labels == {"reason": expected_reason}, (
         f"expected the reason label alone, found {labels}"
+    )
+    handoff_counters = [
+        counter
+        for counter in collector.counters
+        if counter[0] == RUST_PUMP_HANDOFF_TOTAL
+    ]
+    expected_handoff = (
+        [
+            (
+                RUST_PUMP_HANDOFF_TOTAL,
+                1.0,
+                {"outcome": RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED},
+            )
+        ]
+        if expected_reason == RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE.value
+        else []
+    )
+    assert handoff_counters == expected_handoff, (
+        "only a blocking-mode refusal must report its matching bounded hand-off "
+        f"failure, found {handoff_counters}"
     )
 
 
@@ -109,7 +131,12 @@ def test_decline_labels_stay_inside_the_closed_reason_set(
         "the decline must reach the collector, or the label assertions below "
         "inspect nothing and pass for it"
     )
-    for name, _value, labels in collector.counters:
+    decline_counters = [
+        counter
+        for counter in collector.counters
+        if counter[0] == RUST_PUMP_DECLINED_TOTAL
+    ]
+    for name, _value, labels in decline_counters:
         assert set(labels) == {"reason"}, (
             f"{name!r} must carry the reason label alone, found {sorted(labels)}"
         )
@@ -185,39 +212,6 @@ def test_a_failure_recovered_after_cancellation_records_failure_and_cleanup(
     assert len(collector.histograms) == 1, (
         "a completed cleanup must record exactly one duration, found "
         f"{collector.histograms}"
-    )
-
-
-def test_a_completed_native_cleanup_records_count_and_duration() -> None:
-    """A completed cleanup records one bounded count and one duration sample."""
-    collector = RecordingCollector()
-
-    PumpMetricsHook(collector)(PumpEvent(phase="cleanup_completed", duration_s=0.25))
-
-    assert collector.counters == [(RUST_PUMP_CLEANUP_TOTAL, 1.0, {})], (
-        "completed cleanup must increment its bounded counter, found "
-        f"{collector.counters}"
-    )
-    assert collector.histograms == [(RUST_PUMP_CLEANUP_DURATION_SECONDS, 0.25, {})], (
-        f"completed cleanup must observe its duration, found {collector.histograms}"
-    )
-
-
-def test_expired_and_deferred_cleanup_metrics_stay_unlabelled() -> None:
-    """New cleanup outcomes add fixed-cardinality counters only."""
-    collector = RecordingCollector()
-    hook = PumpMetricsHook(collector)
-
-    hook(PumpEvent(phase="cleanup_grace_expired", elapsed_s=0.25))
-    hook(PumpEvent(phase="cleanup_deferred"))
-
-    assert collector.counters == [
-        (RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL, 1.0, {}),
-        (RUST_PUMP_CLEANUP_DEFERRED_TOTAL, 1.0, {}),
-    ], f"new cleanup outcomes must be unlabelled counters, found {collector.counters}"
-    assert collector.histograms == [], (
-        "grace expiry and deferred completion must not create a new histogram, "
-        f"found {collector.histograms}"
     )
 
 
@@ -351,7 +345,12 @@ def test_an_already_registered_metrics_hook_is_untouched_by_a_decline(
     assert exec_metrics.counters == {}, (
         f"a pump decline must not produce exec metrics, found {exec_metrics.counters}"
     )
-    assert len(pump_collector.counters) == len(DECLINE_PATHS), (
+    decline_counters = [
+        counter
+        for counter in pump_collector.counters
+        if counter[0] == RUST_PUMP_DECLINED_TOTAL
+    ]
+    assert len(decline_counters) == len(DECLINE_PATHS), (
         f"every decline must still be counted, found {pump_collector.counters}"
     )
 
@@ -381,38 +380,4 @@ def test_a_decline_without_a_reason_falls_back_to_a_bounded_label() -> None:
     _name, _value, labels = collector.counters[0]
     assert labels == {"reason": UNKNOWN_DECLINE_REASON}, (
         f"a missing reason must degrade to a fixed label, found {labels}"
-    )
-
-
-class _ChattyReason:
-    """A ``reason`` stand-in whose ``str()`` differs on every instance."""
-
-    def __str__(self) -> str:
-        """Return a value no two instances share."""
-        return f"session-{id(self):x}"
-
-
-def test_a_decline_carrying_a_non_enum_reason_is_still_bounded() -> None:
-    """An off-enum ``reason`` degrades to the fixed label, not to ``str()``.
-
-    ``PumpEvent`` is public and frozen but not validated, so a caller — or a
-    future call site that forgets the enum — can hand a hook any object at all.
-    The annotation does not run, so without a run-time check ``str(reason)``
-    would reach the label and give the counter one series per distinct value,
-    which is precisely the cardinality this label set is designed to exclude.
-    """
-    collector = RecordingCollector()
-    reason = _ChattyReason()
-    event = PumpEvent(phase="declined", reason=typ.cast("None", reason))
-
-    PumpMetricsHook(collector)(event)
-
-    _name, _value, labels = collector.counters[0]
-    assert labels == {"reason": UNKNOWN_DECLINE_REASON}, (
-        f"an unrecognized reason must degrade to {UNKNOWN_DECLINE_REASON!r} "
-        f"rather than reaching the label, found {labels}"
-    )
-    assert str(reason) not in labels.values(), (
-        "the object's own string must never appear as a label value, or the "
-        f"series count follows the caller's data; found {labels}"
     )

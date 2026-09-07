@@ -17,6 +17,7 @@ from cuprum._testing import (
 from cuprum.unittests._pump_stream_dispatch_support import (
     PumpCallCounts,
     _fake_python_fallback,
+    _make_writer_toggle_failure,
     _nonblocking_pipe_pair,
     clear_backend_caches,
 )
@@ -24,8 +25,6 @@ from cuprum.unittests._pump_stream_dispatch_support import (
 __all__ = ["clear_backend_caches"]
 
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
-
-_WRITER_TOGGLE_VALUE_ERROR = "writer toggle value invalid"
 
 
 @dc.dataclass(slots=True)
@@ -69,19 +68,6 @@ def _install_value_error_recovery_doubles(
         del drain_reader, drain_writer
         await asyncio.sleep(0)
 
-    original_set_blocking = os.set_blocking
-    reader_inode = os.fstat(scenario.read_fd).st_ino
-
-    def fail_writer_toggle(fd: int, is_blocking: object) -> None:
-        """Change the reader mode then reject the writer mode change."""
-        is_reader = os.fstat(fd).st_ino == reader_inode
-        if is_reader and is_blocking is True:
-            original_set_blocking(fd, bool(is_blocking))
-            return
-        if not is_reader and is_blocking is True:
-            raise ValueError(_WRITER_TOGGLE_VALUE_ERROR)
-        original_set_blocking(fd, bool(is_blocking))
-
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", no_drain)
     monkeypatch.setattr(
@@ -91,7 +77,11 @@ def _install_value_error_recovery_doubles(
             scenario.read_fd if stream is scenario.reader else scenario.write_fd
         ),
     )
-    monkeypatch.setattr(os, "set_blocking", fail_writer_toggle)
+    monkeypatch.setattr(
+        os,
+        "set_blocking",
+        _make_writer_toggle_failure(scenario.read_fd, ValueError),
+    )
     configure_pump_stream_dispatch_for_testing(
         python_pump=lambda fallback_reader, fallback_writer: _fake_python_fallback(
             fallback_reader,
