@@ -106,7 +106,8 @@ class HeldNativePump:
         """Hold native descriptor ownership until ``release`` is set."""
         del reader_fd, writer_fd
         self.started.set()
-        self.release.wait(timeout=5.0)
+        if not self.release.wait(timeout=5.0):
+            self.release.wait()
         self.finished.set()
         return 0
 def fail_engage(**_kwargs: object) -> object:

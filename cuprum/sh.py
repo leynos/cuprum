@@ -273,6 +273,9 @@ class ExecutionContext:
             self.native_pump_cleanup_grace,
             "ExecutionContext native_pump_cleanup_grace",
         )
+        if cleanup_grace is None:
+            msg = "ExecutionContext native_pump_cleanup_grace must not be None"
+            raise ValueError(msg)
         object.__setattr__(self, "native_pump_cleanup_grace", cleanup_grace)
 
 

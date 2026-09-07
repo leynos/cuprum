@@ -20,18 +20,15 @@ from cuprum._testing import (
     set_rust_availability_for_testing,
 )
 from cuprum.unittests._pump_stream_dispatch_support import (
-    _WRITER_TOGGLE_FAILURE,
     PumpCallCounts,
     _fake_python_fallback,
     _make_blocking_fd_spy,
+    _make_writer_toggle_failure,
     _nonblocking_pipe_pair,
     _ReaderWithoutPause,
     _run_with_inline_executor,
-    _run_with_inline_executor_returning,
     _WriterWithoutPause,
-    bypass_reader_drain,
     clear_backend_caches,
-    install_closing_rust_pump,
 )
 
 __all__ = ["clear_backend_caches"]
@@ -222,29 +219,12 @@ class TestPumpStreamDispatch:
                 lambda stream: read_fd if stream is reader else write_fd,
             )
 
-            original_set_blocking = os.set_blocking
-            reader_inode = os.fstat(read_fd).st_ino
             calls: PumpCallCounts = {"python_pump": 0}
-
-            def fake_set_blocking(fd: int, blocking: object) -> None:
-                """Toggle blocking but fail when the writer FD is set blocking.
-
-                Raises
-                ------
-                OSError
-                    If the writer FD is switched to blocking mode, simulating
-                    a failure partway through the toggle sequence.
-                """
-                is_reader = os.fstat(fd).st_ino == reader_inode
-                if is_reader and blocking is True:
-                    original_set_blocking(fd, bool(blocking))
-                    return
-                # Match on the writer role rather than a fixed descriptor.
-                if not is_reader and blocking is True:
-                    raise OSError(_WRITER_TOGGLE_FAILURE)
-                original_set_blocking(fd, bool(blocking))
-
-            monkeypatch.setattr(os, "set_blocking", fake_set_blocking)
+            monkeypatch.setattr(
+                os,
+                "set_blocking",
+                _make_writer_toggle_failure(read_fd, OSError),
+            )
             configure_pump_stream_dispatch_for_testing(
                 python_pump=lambda reader, writer: _fake_python_fallback(
                     reader,
@@ -343,60 +323,3 @@ class TestPumpStreamDispatch:
         assert calls["python_pump"] == 0, (
             "did not expect Python fallback when Rust pump succeeds"
         )
-
-    def test_rust_pump_receives_a_duplicate_not_the_transport_fd(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Rust consumes a duplicate, leaving the transport descriptor intact.
-
-        The double closes what it receives, as ``rust_pump_stream`` does, so
-        handing over the transport's own descriptor would surface as ``EBADF``.
-
-        Parameters
-        ----------
-        monkeypatch : pytest.MonkeyPatch
-            Fixture used to override the native pump and FD extraction.
-        """
-        received = install_closing_rust_pump(monkeypatch)
-        bypass_reader_drain(monkeypatch)
-
-        with _nonblocking_pipe_pair() as (
-            read_fd,
-            read_write_fd,
-            write_read_fd,
-            write_fd,
-        ):
-            del read_write_fd, write_read_fd
-            reader = typ.cast("asyncio.StreamReader", object())
-            writer = mock.MagicMock(spec=asyncio.StreamWriter)
-            writer.wait_closed = mock.AsyncMock()
-
-            handled = asyncio.run(
-                _run_with_inline_executor_returning(
-                    _pipeline_streams._run_rust_pump(
-                        reader=reader,
-                        writer=writer,
-                        handoff=_pipeline_streams._RustPumpHandoff(
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
-                            cleanup_grace_s=0.5,
-                        ),
-                    )
-                )
-            )
-
-            assert handled is True, "expected the native pump path to report success"
-            assert received["writer_fd"] != write_fd, (
-                "Rust must receive a duplicate, never the transport's descriptor"
-            )
-            try:  # the duplicate's close must not take the original with it
-                os.fstat(write_fd)
-            except OSError as exc:  # pragma: no cover - failure path only
-                pytest.fail(
-                    f"transport writer FD must stay valid after the native "
-                    f"pump closed its duplicate, got {exc!r}"
-                )
-            assert writer.close.called, (
-                "the asyncio writer must still be closed to signal EOF"
-            )

@@ -118,7 +118,46 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
 
 
 class PumpMetricsHook:
-    """Collect bounded metrics from Rust-pump routing events."""
+    """Collect bounded metrics from Rust-pump routing events.
+
+    The hook emits the following metrics:
+
+    - ``cuprum_rust_pump_declined_total``: a counter labelled ``reason`` by
+      the closed :class:`~cuprum.pump_events.RustPumpDeclineReason` vocabulary,
+      plus ``unknown`` for an unrecognized hand-built event.
+    - ``cuprum_rust_pump_failed_after_cancel_total``: an unlabelled counter for
+      worker failures observed after cancellation.
+    - ``cuprum_rust_pump_cleanup_total``: an unlabelled counter for completed
+      native-pump cleanup.
+    - ``cuprum_rust_pump_cleanup_duration_seconds``: an unlabelled histogram
+      of normal cleanup durations.
+    - ``cuprum_rust_pump_cleanup_grace_expired_total``: an unlabelled counter
+      for cleanup waits that reach their configured grace limit.
+    - ``cuprum_rust_pump_cleanup_deferred_total``: an unlabelled counter for
+      deferred cleanup completed by the worker's callback.
+    - ``cuprum_rust_pump_handoff_total``: a counter labelled ``outcome`` by
+      the closed :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary.
+
+    All labels are closed and bounded; descriptor values, exception details,
+    and other event data are never labels. Unknown phases are ignored so a
+    newer producer cannot make an existing observer fail. The collector must
+    be thread-safe because pump events may be emitted from worker threads.
+
+    Parameters
+    ----------
+    collector:
+        Thread-safe metrics backend receiving counters and histograms.
+
+    Examples
+    --------
+    ::
+
+        metrics = InMemoryMetrics()
+
+        with observe_pump(PumpMetricsHook(metrics)):
+            pipeline.run_sync()
+
+    """
 
     def __init__(self, collector: MetricsCollector) -> None:
         """Initialize the pump metrics hook with a collector."""
