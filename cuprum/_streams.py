@@ -267,26 +267,49 @@ def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
         _echo_write(state, chunk)
         return
     for body, ending in _split_echo_segments(chunk):
-        kept = limiter.bound_line(body)
-        untruncated = kept == body and limiter.dropped_line_bytes == 0
-        if untruncated and ending is not None:
-            # Untruncated line: mirror body and terminator in the single
-            # write an unbounded echo would have made. Text sinks rely on
-            # one write per line (#348); a sink that rejects the payload
-            # must see exactly the line it cannot encode, not a fragment
-            # without its terminator.
-            _echo_write(state, kept + ending)
-            # *dropped* is zero here, so the reset cannot emit a marker.
-            limiter.finish_line(encoding=state.config.encoding)
-            continue
-        if kept:
-            _echo_write(state, kept)
-        if ending is None:
-            continue
-        marker = limiter.finish_line(encoding=state.config.encoding)
-        if marker is not None:
-            _echo_write(state, marker)
-        _echo_write(state, ending)
+        _echo_bounded_segment(state, limiter, body, ending)
+
+
+def _echo_bounded_segment(
+    state: _DrainState,
+    limiter: _EchoLineLimiter,
+    body: bytes,
+    ending: bytes | None,
+) -> None:
+    """Mirror one bounded segment, truncating it at the configured bound.
+
+    Parameters
+    ----------
+    state : _DrainState
+        State carried through the stream-drain loop.
+    limiter : _EchoLineLimiter
+        Per-line byte accounting shared by the segments of one stream.
+    body : bytes
+        Raw line body without its terminator.
+    ending : bytes | None
+        The raw line ending, or ``None`` for the trailing pair when the
+        chunk ends mid-line.
+    """
+    kept = limiter.bound_line(body)
+    untruncated = kept == body and limiter.dropped_line_bytes == 0
+    if untruncated and ending is not None:
+        # Untruncated line: mirror body and terminator in the single
+        # write an unbounded echo would have made. Text sinks rely on
+        # one write per line (#348); a sink that rejects the payload
+        # must see exactly the line it cannot encode, not a fragment
+        # without its terminator.
+        _echo_write(state, kept + ending)
+        # *dropped* is zero here, so the reset cannot emit a marker.
+        limiter.finish_line(encoding=state.config.encoding)
+        return
+    if kept:
+        _echo_write(state, kept)
+    if ending is None:
+        return
+    marker = limiter.finish_line(encoding=state.config.encoding)
+    if marker is not None:
+        _echo_write(state, marker)
+    _echo_write(state, ending)
 
 
 def _echo_write(
