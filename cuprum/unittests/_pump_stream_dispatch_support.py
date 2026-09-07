@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import pathlib as pth
 import typing as typ
 from unittest import mock
 
@@ -50,14 +51,14 @@ def _nonblocking_pipe_pair() -> cabc.Iterator[tuple[int, int, int, int]]:
         # Register each descriptor as soon as it exists: a failure part-way
         # through setup — the second ``os.pipe`` or either ``set_blocking`` —
         # must still close everything already acquired.
-        read_fd, read_write_fd = _pipeline_streams.os.pipe()
-        stack.callback(_pipeline_streams.os.close, read_fd)
-        stack.callback(_pipeline_streams.os.close, read_write_fd)
-        write_read_fd, write_fd = _pipeline_streams.os.pipe()
-        stack.callback(_pipeline_streams.os.close, write_read_fd)
-        stack.callback(_pipeline_streams.os.close, write_fd)
-        _pipeline_streams.os.set_blocking(read_fd, False)
-        _pipeline_streams.os.set_blocking(write_fd, False)
+        read_fd, read_write_fd = os.pipe()
+        stack.callback(os.close, read_fd)
+        stack.callback(os.close, read_write_fd)
+        write_read_fd, write_fd = os.pipe()
+        stack.callback(os.close, write_read_fd)
+        stack.callback(os.close, write_fd)
+        os.set_blocking(read_fd, False)
+        os.set_blocking(write_fd, False)
         yield read_fd, read_write_fd, write_read_fd, write_fd
 
 
@@ -132,27 +133,36 @@ def _make_blocking_fd_spy(
 
     def _spy(reader_fd: int, writer_fd: int) -> int:
         """Assert both descriptors are blocking, then record the call."""
-        assert _pipeline_streams.os.get_blocking(reader_fd), (
+        assert os.get_blocking(reader_fd), (
             "expected reader FD to be switched to blocking mode"
         )
-        assert _pipeline_streams.os.get_blocking(writer_fd), (
+        assert os.get_blocking(writer_fd), (
             "expected writer FD to be switched to blocking mode"
         )
-        assert reader_fd == expected_reader_fd, (
-            "expected Rust path to use extracted reader FD"
+        if pth.Path(f"/proc/self/fd/{expected_reader_fd}").exists():
+            assert not os.get_blocking(expected_reader_fd), (
+                "Linux worker blocking must not change the transport reader mode"
+            )
+            assert not os.get_blocking(expected_writer_fd), (
+                "Linux worker blocking must not change the transport writer mode"
+            )
+        assert reader_fd != expected_reader_fd, (
+            "expected Rust path to receive a worker reader, not the transport FD"
+        )
+        assert os.fstat(reader_fd).st_ino == os.fstat(expected_reader_fd).st_ino, (
+            "expected the worker reader to refer to the transport pipe"
         )
         # The native pump consumes its writer descriptor, so it must be handed
         # a duplicate rather than the descriptor asyncio's transport owns.
         assert writer_fd != expected_writer_fd, (
             "expected Rust path to receive a duplicate, not the transport FD"
         )
-        assert (
-            _pipeline_streams.os.fstat(writer_fd).st_ino
-            == _pipeline_streams.os.fstat(expected_writer_fd).st_ino
-        ), "expected the duplicate to refer to the same pipe as the writer FD"
+        assert os.fstat(writer_fd).st_ino == os.fstat(expected_writer_fd).st_ino, (
+            "expected the duplicate to refer to the same pipe as the writer FD"
+        )
         calls["rust_pump"] += 1
         # Model Rust's ownership: the duplicate is closed by the native pump.
-        _pipeline_streams.os.close(writer_fd)
+        os.close(writer_fd)
         return 0
 
     return _spy
@@ -226,13 +236,13 @@ def install_closing_rust_pump(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]
     Returns
     -------
     dict[str, int]
-        Populated with ``writer_fd``, the descriptor the pump received.
+        Populated with the worker descriptors the pump received.
     """
     received: dict[str, int] = {}
 
     def closing_rust_pump(reader_fd: int, writer_fd: int) -> int:
         """Record the writer descriptor and close it, mirroring ``OwnedFd``."""
-        del reader_fd
+        received["reader_fd"] = reader_fd
         received["writer_fd"] = writer_fd
         os.close(writer_fd)
         return 0

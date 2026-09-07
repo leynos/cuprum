@@ -576,6 +576,9 @@ isolation across threads and async tasks.
 argument instead of keyword parameters. Update calls like
 `with scoped(allowlist=...)` to `with scoped(ScopeConfig(allowlist=...))`.
 
+See the [0.2.0 migration guide](migration-0.2.0.md) for the optional aggregate
+Python stream-operation observation API.
+
 When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
 
 1. Checks the current context's allowlist and raises `ForbiddenProgramError` if
@@ -794,16 +797,22 @@ For richer observability, register an observe hook with `sh.observe()`. Observe
 hooks receive `ExecEvent` values describing:
 
 - `plan` — intent to execute the program (argv/cwd/env resolved).
+
 - `start` — subprocess spawned (pid available).
+
 - `stdout` / `stderr` — decoded output emitted as lines.
+
 - `exit` — subprocess finished (exit code and duration).
+
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
 
 - `teardown_error` — a stream consumer drained with an unexpected error during
   cleanup (ancillary; the error is absorbed to preserve the primary exception).
+
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).
+
 - `pipeline_fail_fast` — a pipeline is being torn down early because a
   non-final stage was the first to fail. Emitted at most once per pipeline,
   before every other still-running stage — upstream producers and downstream
@@ -851,43 +860,6 @@ same token. Hooks that track per-execution state should correlate by `exec_id`
 rather than `pid`, which the operating system can recycle across executions.
 Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 (such as the tracing adapter) drop them.
-
-#### Aggregate Python stream-operation events
-
-For opt-in aggregate telemetry from the pure-Python stream paths, register a
-hook with `cuprum.stream_observation.observe_stream_operation`:
-
-```python
-from cuprum import ECHO, sh
-from cuprum.adapters.metrics_adapter import InMemoryMetrics
-from cuprum.adapters.stream_metrics import stream_operation_metrics_hook
-from cuprum.stream_observation import observe_stream_operation
-
-metrics = InMemoryMetrics()
-with observe_stream_operation(stream_operation_metrics_hook(metrics)):
-    sh.make(ECHO)("hello").run_sync()
-```
-
-One `StreamOperationEvent` is emitted when each completed stream drain or
-pipeline transfer finishes. It reports aggregate `bytes_consumed`, completed
-`read_operations` (including EOF), and monotonic `duration_s`. Its closed
-`operation` values are `stream_drain` and `pipeline_transfer`; its closed
-`outcome` values are `eof`, `cancelled`, `downstream_closed`, and
-`post_close_drain_timeout`. No event is emitted per read or per chunk, and no
-payload is included. Observer failures are best-effort and do not alter stream
-execution. `exec_id` is present only when an existing pipeline-stage
-correlation context safely provides it; direct drains carry `None`.
-
-The optional `stream_operation_metrics_hook` records these metrics, all in the
-units named by their metric:
-
-- `cuprum_stream_operation_bytes_total` (bytes counter)
-- `cuprum_stream_operation_read_operations_total` (read-operation counter)
-- `cuprum_stream_operation_duration_seconds` (seconds histogram)
-
-Metrics use only the bounded `operation` and `outcome` labels. They never label
-payload, read size, path, PID, descriptor, command argument, exception text, or
-another unbounded value.
 
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
@@ -944,6 +916,43 @@ update that import without changing the hook implementation.
 
 `ExecutionContext.tags` is merged into each event's `tags` mapping. Cuprum also
 adds default tags such as the project name and pipeline stage metadata.
+
+#### Aggregate Python stream-operation events
+
+For opt-in aggregate telemetry from the pure-Python stream paths, register a
+hook with `cuprum.stream_observation.observe_stream_operation`:
+
+```python
+from cuprum import ECHO, sh
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.stream_metrics import stream_operation_metrics_hook
+from cuprum.stream_observation import observe_stream_operation
+
+metrics = InMemoryMetrics()
+with observe_stream_operation(stream_operation_metrics_hook(metrics)):
+    sh.make(ECHO)("hello").run_sync()
+```
+
+One `StreamOperationEvent` is emitted when each completed stream drain or
+pipeline transfer finishes. It reports aggregate `bytes_consumed`, completed
+`read_operations` (including EOF), and monotonic `duration_s`. Its closed
+`operation` values are `stream_drain` and `pipeline_transfer`; its closed
+`outcome` values are `eof`, `cancelled`, `failed`, `downstream_closed`, and
+`post_close_drain_timeout`. No event is emitted per read or per chunk, and no
+payload is included. Observer failures are best-effort and do not alter stream
+execution. `exec_id` is present only when an existing pipeline-stage
+correlation context safely provides it; direct drains carry `None`.
+
+The optional `stream_operation_metrics_hook` records these metrics, all in the
+units named by their metric:
+
+- `cuprum_stream_operation_bytes_total` (bytes counter)
+- `cuprum_stream_operation_read_operations_total` (read-operation counter)
+- `cuprum_stream_operation_duration_seconds` (seconds histogram)
+
+Metrics use only the bounded `operation` and `outcome` labels. They never label
+payload, read size, path, PID, descriptor, command argument, exception text, or
+another unbounded value.
 
 ### Thread and async task isolation
 
@@ -1733,15 +1742,15 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 
 ### A teardown step that failed and was ignored
 
-Handing the descriptors back is best-effort: resuming the reader transport,
-restoring the descriptors' blocking mode, and closing the writer after the pump
-has settled all run while the hop is unwinding, so an error there is suppressed
-rather than raised. The asyncio transport owns the original writer descriptor.
-Rust owns and closes only the separate resource derived from the duplicate
-after the native call begins; the native shim closes the duplicate itself if
-native loading or platform preparation fails. Python closes that duplicate only
-when setup or executor submission fails. No descriptor number is closed by both
-owners. Each suppression records a `DEBUG` event with a `cuprum_action` of
+Handing the descriptors back is best-effort: closing worker-owned duplicates,
+restoring their blocking mode, and resuming the reader transport occur only
+after the pump has settled, so an error there is suppressed rather than raised.
+The asyncio transports retain ownership of their original reader and writer
+descriptors, which remain non-blocking. Rust borrows the worker reader
+duplicate and consumes and closes the worker writer duplicate; Python closes
+the reader duplicate after settlement and closes either duplicate when setup or
+executor submission fails. No descriptor number is closed by both owners. Each
+suppression records a `DEBUG` event with a `cuprum_action` of
 `rust_pump_teardown_failed`, a `cuprum_site` naming the step — `resume`,
 `restore_blocking`, or `writer_close` — and the exception class and errno. The
 record carries nothing drawn from the transfer itself.
@@ -1895,12 +1904,12 @@ unchanged — the counters supplement them rather than replacing them.
 
 ### A pump hand-off failed before submission
 
-If Cuprum cannot duplicate the writer descriptor, the hand-off is rolled back
-and the original exception is re-raised without a hand-off outcome. If executor
-submission is rejected, Cuprum emits `executor_submission_rejected` and
-re-raises after rollback. A blocking-mode failure selects the Python fallback
-and emits `blocking_setup_failed`. The `cuprum._pipeline_streams` logger
-records a bounded `DEBUG` diagnostic for these setup failures with
+If Cuprum cannot prepare either worker-owned descriptor, the hand-off is rolled
+back and the original exception is re-raised without a hand-off outcome. If
+executor submission is rejected, Cuprum emits `executor_submission_rejected`
+and re-raises after rollback. A blocking-mode failure selects the Python
+fallback and emits `blocking_setup_failed`. The `cuprum._pipeline_streams`
+logger records a bounded `DEBUG` diagnostic for these setup failures with
 `cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
 when available. Descriptor numbers and exception text are not logged.
 
@@ -2259,7 +2268,9 @@ Interpretation:
 
 - `2.00x` means the Python run took twice as long as the Rust run, so Rust was
   faster.
+
 - `1.00x` means the two backends were effectively tied for that scenario.
+
 - `0.80x` means Python was faster for that scenario.
 
 - Pure Python wheel:

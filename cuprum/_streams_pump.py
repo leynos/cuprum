@@ -98,6 +98,11 @@ async def _pump_stream(
     When the downstream stdin closes early (for example because the next stage
     terminates), this helper continues draining stdout to avoid deadlocking
     upstream stages.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the active task is cancelled while pumping.
     """
     measurement = _start_stream_operation(
         StreamOperation.PIPELINE_TRANSFER,
@@ -106,17 +111,25 @@ async def _pump_stream(
     outcome = StreamOperationOutcome.EOF
 
     try:
-        if reader is not None:
-            outcome = await _relay_chunks(
-                reader,
-                writer,
-                read_size=read_size,
-                measurement=measurement,
-            )
+        try:
+            if reader is not None:
+                outcome = await _relay_chunks(
+                    reader,
+                    writer,
+                    read_size=read_size,
+                    measurement=measurement,
+                )
+        finally:
+            _LOGGER.debug("stream_writer_close_start")
+            await _close_stream_writer(writer)
+    except asyncio.CancelledError:
+        outcome = StreamOperationOutcome.CANCELLED
+        raise
+    except BaseException:
+        outcome = StreamOperationOutcome.FAILED
+        raise
     finally:
-        _LOGGER.debug("stream_writer_close_start")
-        await _close_stream_writer(writer)
-    _complete_stream_operation(measurement, outcome)
+        _complete_stream_operation(measurement, outcome)
 
 
 async def _relay_chunks(

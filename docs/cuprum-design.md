@@ -83,18 +83,21 @@ Python’s `subprocess` module is powerful but low-level. In practice, code
 frequently runs into the following issues:
 
 1. **Stringly APIs and shell injection risk**
+
    - Ad‑hoc calls like `subprocess.run(f"rm -rf {user_input}", shell=True)` are
      compact but fragile and dangerous.
    - Even when `shell=False` is used, `argv` strings are manually constructed
      across the codebase with little centralization or validation.
 
 2. **No compile‑time structure**
+
    - Every command is just a `list[str]` or a bare `str`; type checkers cannot
      distinguish `"git"` from `"rm"`, or a path from a ref.
    - There is no way to encode at the type level “this function can only run
      `git status`, not arbitrary commands”.
 
 3. **Awkward output handling**
+
    - The standard APIs force a choice between
      `check_output`/`run(..., capture_io=True)` (capture but no streaming)
      and letting the process inherit `stdout`/`stderr` (streaming but no
@@ -102,18 +105,21 @@ frequently runs into the following issues:
    - Implementing tee‑like behaviour requires manual threads or async loops.
 
 4. **Limited observability**
+
    - There is no standard way to log or trace *which commands* are executed and
      *how* (arguments, cwd, env diffs, timings).
    - Bash’s `set -x` has no direct analogue; developers often print commands
      manually, inconsistently.
 
 5. **Async and structured concurrency are tedious**
+
    - `asyncio.create_subprocess_exec` exists but requires significant plumbing
      to handle I/O, cancellation, and error propagation.
    - Spawning multiple commands concurrently and tying them into an
      application’s lifecycle is repetitive and error‑prone.
 
 6. **Globals and hidden state**
+
    - Many wrappers (including innocent ones) rely on module‑global
      configuration and side effects that are hard to reason about in concurrent
      or test scenarios.
@@ -842,6 +848,29 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
+#### Aggregate Python stream-operation observation
+
+The pure-Python stream paths have a separate, opt-in completion channel for
+aggregate operation telemetry. `observe_stream_operation` stores synchronous
+hooks in a context-local `ContextVar`; without a registration, stream drains
+and pipeline transfers do not emit events or collect metrics. The channel is
+independent of both `ExecEvent` and the Rust-pump routing channel.
+
+One `StreamOperationEvent` is emitted after each completed operation, including
+any bounded post-close drain. It distinguishes `stream_drain` from
+`pipeline_transfer`, reports one of the closed outcomes `eof`, `cancelled`,
+`failed`, `downstream_closed`, or `post_close_drain_timeout`, and carries
+aggregate bytes consumed, completed reader-operation count (including EOF),
+monotonic duration, and existing execution correlation only when it can be
+inherited safely. No event is emitted per read or per chunk.
+
+The optional metrics adapter records byte and reader-operation counters and a
+duration histogram. Its labels are limited to the closed operation and outcome
+vocabularies; read sizes, descriptors, paths, process identifiers, command
+arguments, payloads, and exception text are excluded. Hook and collector
+failures are logged and suppressed so observation remains fail-open and cannot
+alter stream execution.
+
 #### Rust-pump routing events
 
 Rust-pump declines, failures recovered after cancellation, and native cleanup
@@ -1036,9 +1065,9 @@ The following design decisions were made during implementation:
 - Exit events include program, pid, exit code, duration (measured with
   `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
   zero when capture is disabled.
-- Start times are tracked in a thread-safe ``WeakKeyDictionary[SafeCmd, float]``
-  guarded by a ``threading.Lock`` so entries are reclaimed even when after
-  hooks are skipped (for example, on cancellation).
+- Start times are tracked in a thread-safe `WeakKeyDictionary[SafeCmd, float]`
+  guarded by a `threading.Lock` so entries are reclaimed even when after hooks
+  are skipped (for example, on cancellation).
 - Detaching the logging hook unregisters the after hook ahead of the start hook
   to respect `ContextVar` token order.
 
@@ -1932,26 +1961,31 @@ A phased implementation helps ensure a solid core before advanced features.
 Focus:
 
 - **Core command representation:**
+
   - `Program` NewType;
   - `SafeCmd[str]` representing a single command with text output;
   - `sh.make(program)` returning callables that create `SafeCmd`.
 
 - **Execution context and allowlists:**
+
   - `CuprumContext` stored in a `ContextVar`;
   - `sh.allow` / `AllowRegistration` with `.detach()` and context manager
     support;
   - semantics for narrowing/deriving allowlists.
 
 - **Basic hooks:**
+
   - `sh.before` / `sh.after` with registration and scoping as described;
   - per‑command hooks on `SafeCmd`.
 
 - **Single command execution:**
+
   - async `run()` and sync `run_sync()` for `SafeCmd`;
   - optional tee behaviour (echo + capture) for stdout/stderr;
   - cancellation behaviour that terminates the subprocess.
 
 - **Minimal observability:**
+
   - basic execution events for `start` and `exit` exposed to hooks;
   - a simple logging hook implementation as example.
 
@@ -1963,15 +1997,18 @@ single commands with good safety and observability.
 Focus:
 
 - **Pipeline support:**
+
   - `Pipeline[str]` as composition of `SafeCmd`;
   - full streaming behaviour between stages;
   - defined error propagation and cancellation semantics.
 
 - **Parallel execution helpers:**
+
   - convenience APIs for running multiple commands concurrently (or
     documentation for how to do it with `asyncio.gather`).
 
 - **Extended observability:**
+
   - richer `ExecEvent` shapes (stdout/stderr lines, tags);
   - example integrations with OpenTelemetry (spans) and metrics libraries.
 
@@ -2354,17 +2391,20 @@ after logging a warning. The cached resolver in
 Cuprum selects the stream backend at runtime using the following precedence:
 
 1. **Environment variable (`CUPRUM_STREAM_BACKEND`):**
+
    - `rust` – force Rust pathway; raise `ImportError` if unavailable;
    - `python` – force pure Python pathway;
    - `auto` (default) – use Rust when the availability probe reports it is
      available, fall back to Python otherwise.
 
 2. **Availability resolution:**
+
    - `get_stream_backend()` resolves the backend through three seams:
      `_parse_backend_value(raw)` parses the `CUPRUM_STREAM_BACKEND` value (pure),
      `_probe_rust_availability(requested)` performs the impure availability probe
-     honouring each mode's failure policy, and `_resolve_backend(requested, *,
-     rust_available)` is the pure decision core that never returns `AUTO`;
+     honouring each mode's failure policy, and
+     `_resolve_backend(requested, *, rust_available)` is the pure decision core
+     that never returns `AUTO`;
    - `_probe_rust_availability()` wraps the cached
      `cuprum._backend._check_rust_available()`, so the cached availability answer
      still drives dispatch. `_check_rust_available()` is
@@ -2379,6 +2419,7 @@ Cuprum selects the stream backend at runtime using the following precedence:
      guide for details.
 
 3. **Pipeline pump feasibility check (dispatch-time):**
+
    - For inter-stage pumping, Rust requires extractable raw file descriptors
      for both reader and writer transports;
    - if extraction fails for either side, dispatch falls back to Python
@@ -2500,7 +2541,7 @@ The following table summarizes when each pathway is recommended:
 
 | Scenario                       | Recommended pathway | Rationale                               |
 | ------------------------------ | ------------------- | --------------------------------------- |
-| Small commands (<1 MB output)  | Either              | Overhead difference is often negligible |
+| Small commands (\<1 MB output) | Either              | Overhead difference is often negligible |
 | Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips           |
 | Many concurrent pipelines      | Rust                | Reduced GIL contention                  |
 | Debugging/tracing output lines | Python              | Capture path remains Python-based       |
@@ -2603,33 +2644,42 @@ Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
 
-The Python pipeline keeps ownership of the writer descriptor held by the
-asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate.
-Python closes that duplicate if blocking-mode setup or executor submission
-fails. Once submission succeeds, the `_streams_rs` shim owns the hand-off: it
-closes the duplicate if native loading or platform preparation fails, otherwise
-the native call transfers it to Rust, which closes the received resource. On
-Windows the shim converts the duplicate to an independently owned Win32 handle
-and closes the duplicate CRT descriptor before invoking Rust. The completion
-callback never closes the writer resource. Restoration of the original
-descriptor modes and reader transport resumption remain tied to worker
-settlement, so cancellation of the awaiting task cannot close or reuse a
-descriptor while native I/O is still running.
+The Python pipeline retains ownership of the original reader and writer
+descriptors held by the asyncio transports. Before native I/O starts, it pauses
+the reader transport, completes the hand-off of bytes already buffered in the
+`StreamReader`, and creates worker-owned duplicates for both descriptors. The
+buffer is not cleared until its transfer outcome is known. Rust borrows the
+worker reader duplicate without closing it; it consumes the worker writer
+duplicate and closes it on every exit path. The Python hand-off owner closes
+the reader duplicate after the worker settles, and closes either duplicate
+itself when preparation or executor submission fails. On Windows the shim
+converts the worker duplicates to independently owned Win32 handles and closes
+the temporary CRT descriptors at the native boundary. No descriptor number is
+shared between asyncio and the worker.
+
+Blocking mode is applied only to worker-owned duplicates. After the native
+worker settles, Python closes the remaining reader duplicate, restores the
+worker descriptor modes, and resumes the reader transport in that order. Rust
+has already closed the consumed writer duplicate. Cancellation therefore cannot
+close or reuse a descriptor while native I/O is still running. If any safe
+hand-off preparation step fails, the dispatcher keeps the original asyncio
+descriptors with the Python fallback.
 
 #### Raw descriptor lifecycle
 
-Handing a descriptor to the Rust pump means taking it back from asyncio for the
-duration of the transfer, and that hand-off has several partial-failure paths:
-the descriptor may not be extractable from the transport, the reader transport
-may refuse to pause, and either descriptor may refuse to switch to blocking
-mode. `cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so
-each path is testable without a live pump:
+Handing descriptors to the Rust pump requires a safe hand-off from asyncio for
+the duration of the transfer, and that hand-off has several partial-failure
+paths: a descriptor may not be extractable from the transport, the reader
+transport may refuse to pause, buffered reader data may not be transferable, or
+a worker duplicate may refuse to switch to blocking mode.
+`cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so each
+path is testable without a live pump:
 
 - `_BlockingModeGuard` — the FD-state object. `engage()` switches the reader and
-  writer to blocking mode while capturing their prior modes, rolling back a
-  partial change if the second switch fails; `restore()` returns both to the
-  captured modes. This is what stops a descriptor being left blocking after the
-  transfer.
+  writer *worker duplicates* to blocking mode while capturing their prior
+  modes, rolling back a partial change if the second switch fails; `restore()`
+  returns both worker descriptors to their captured modes. The original asyncio
+  transport descriptors are never changed to blocking mode.
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
   resume can never be skipped. Exactly one resume fires per pause attempt, but
@@ -2652,11 +2702,12 @@ each path is testable without a live pump:
 
 Cancellation is handled explicitly rather than implicitly. `run_in_executor`
 cannot interrupt the worker thread running the Rust pump, and that thread still
-operates with the borrowed reader and Rust-owned writer resource, so cancelling
-the awaiting task waits for the worker to return before the blocking mode is
-restored and the transport resumed. The original writer descriptor remains
-asyncio-owned throughout. Restoring or resuming earlier would hand the reader
-or writer state back to asyncio while native code was still mid-transfer.
+operates with the borrowed reader duplicate and consumed writer duplicate, so
+cancelling the awaiting task waits for the worker to return before its
+duplicates are closed, blocking mode is restored, and the transport resumed.
+The original reader and writer descriptors remain asyncio-owned throughout.
+Restoring or resuming earlier would hand reader or writer state back to asyncio
+while native code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code
@@ -2819,9 +2870,9 @@ Both pathways are tested as first-class implementations:
   output through real pipeline execution under both backends;
 - pure line-splitting property tests in
   `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
-  `_strip_line_ending()` from `cuprum/_streams.py`, proving that line-callback
-  text is not dropped, that recognized line endings are stripped consistently,
-  and that trailing partial lines remain buffered;
+  `_strip_line_ending()` from `cuprum/_stream_line_boundaries.py`, proving that
+  line-callback text is not dropped, that recognized line endings are stripped
+  consistently, and that trailing partial lines remain buffered;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.

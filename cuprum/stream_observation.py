@@ -17,7 +17,7 @@ from cuprum.stream_events import (
 )
 
 if typ.TYPE_CHECKING:
-    from contextvars import Token
+    import collections.abc as cabc
 
     from cuprum.events import ExecId
 
@@ -34,6 +34,7 @@ class _StreamOperationMeasurement:
 
     operation: StreamOperation
     hooks: tuple[StreamOperationHook, ...]
+    monotonic_clock: cabc.Callable[[], float]
     started_s: float
     exec_id: ExecId | None
     bytes_consumed: int = 0
@@ -52,7 +53,7 @@ class _StreamOperationMeasurement:
                 outcome=outcome,
                 bytes_consumed=self.bytes_consumed,
                 read_operations=self.read_operations,
-                duration_s=time.monotonic() - self.started_s,
+                duration_s=self.monotonic_clock() - self.started_s,
                 exec_id=self.exec_id,
             ),
             hooks=self.hooks,
@@ -67,20 +68,24 @@ def current_stream_operation_hooks() -> tuple[StreamOperationHook, ...]:
 class StreamOperationHookRegistration:
     """Registration handle for a stream-operation observation hook."""
 
-    __slots__ = ("_detached", "_token")
+    __slots__ = ("_detached", "_hook")
 
     def __init__(self, hook: StreamOperationHook) -> None:
         """Append ``hook`` to the current context's stream-operation hooks."""
         self._detached = False
-        self._token: Token[tuple[StreamOperationHook, ...]] = (
-            _stream_operation_hooks.set((*_stream_operation_hooks.get(), hook))
-        )
+        self._hook = hook
+        _stream_operation_hooks.set((*_stream_operation_hooks.get(), hook))
 
     def detach(self) -> None:
-        """Restore the stream-operation hooks that preceded this registration."""
+        """Remove this registration without restoring stale hook state."""
         if self._detached:
             return
-        _stream_operation_hooks.reset(self._token)
+        hooks = list(_stream_operation_hooks.get())
+        for index in range(len(hooks) - 1, -1, -1):
+            if hooks[index] is self._hook:
+                del hooks[index]
+                break
+        _stream_operation_hooks.set(tuple(hooks))
         self._detached = True
 
     def __enter__(self) -> typ.Self:
@@ -122,6 +127,7 @@ def _start_stream_operation(
     operation: StreamOperation,
     *,
     exec_id: ExecId | None = None,
+    monotonic_clock: cabc.Callable[[], float] = time.monotonic,
 ) -> _StreamOperationMeasurement | None:
     """Start aggregate measurement only when a hook has opted in."""
     hooks = current_stream_operation_hooks()
@@ -130,7 +136,8 @@ def _start_stream_operation(
     return _StreamOperationMeasurement(
         operation=operation,
         hooks=hooks,
-        started_s=time.monotonic(),
+        monotonic_clock=monotonic_clock,
+        started_s=monotonic_clock(),
         exec_id=exec_id,
     )
 

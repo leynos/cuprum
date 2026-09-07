@@ -11,6 +11,8 @@ open each document.
   impact summaries.
 - [Users' guide](users-guide.md) - user-facing command-building, catalogue,
   runtime, pipeline, and Rust backend behaviour.
+- [0.2.0 migration guide][migration-020] - upgrade guidance for the optional
+  aggregate Python stream-operation observation API.
 - [Developers' guide](developers-guide.md) - maintainer workflows for profiling,
   linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and
@@ -69,5 +71,6 @@ open each document.
 [adr-008]: adr-008-rust-pump-observation-channel.md
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
+[migration-020]: migration-0.2.0.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md

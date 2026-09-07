@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 import typing as typ
 from unittest import mock
 
@@ -28,6 +29,10 @@ pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 _DRAIN_FAILURE_MESSAGE = "drain failed"
 _NATIVE_LOAD_FAILURE_MESSAGE = "native extension unavailable"
 _NATIVE_FAILURE_MESSAGE = "native pump failed"
+_LINUX_ONLY = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux opens independent worker descriptor descriptions",
+)
 
 
 class _DrainBaseException(BaseException):
@@ -38,6 +43,7 @@ def _install_recording_native_failure(
     monkeypatch: pytest.MonkeyPatch,
     call_order: list[str],
     close_writer: mock.AsyncMock,
+    worker_reader_fds: list[int],
 ) -> None:
     """Install native-pump failure doubles that record cleanup ordering."""
 
@@ -63,7 +69,7 @@ def _install_recording_native_failure(
 
     def fail_rust_pump(reader_fd: int, writer_fd: int) -> None:
         """Consume the duplicate descriptor before surfacing a pump error."""
-        del reader_fd
+        worker_reader_fds.append(reader_fd)
         os.close(writer_fd)
         raise RuntimeError(_NATIVE_FAILURE_MESSAGE)
 
@@ -154,7 +160,13 @@ class TestRustPumpFailures:
         """A native failure should restore modes, resume, and skip close."""
         call_order: list[str] = []
         close_writer = mock.AsyncMock()
-        _install_recording_native_failure(monkeypatch, call_order, close_writer)
+        worker_reader_fds: list[int] = []
+        _install_recording_native_failure(
+            monkeypatch,
+            call_order,
+            close_writer,
+            worker_reader_fds,
+        )
 
         with _nonblocking_pipe_pair() as (
             read_fd,
@@ -181,26 +193,30 @@ class TestRustPumpFailures:
             assert not os.get_blocking(write_fd), (
                 "native failures must restore the writer's original blocking mode"
             )
+            assert worker_reader_fds, "native work must receive a worker reader"
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(worker_reader_fds[0])
 
         assert call_order == ["pause", "drain", "restore", "resume"], (
             "expected native failure cleanup to restore modes before resuming"
         )
         close_writer.assert_not_awaited()
 
+    @_LINUX_ONLY
     def test_run_rust_pump_closes_duplicate_when_native_load_fails(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A submitted shim failure should close its writer duplicate once."""
+        """A submitted shim failure should close both worker descriptors once."""
         _ = self
-        duplicated_fds: list[int] = []
-        original_dup = os.dup
+        worker_fds: list[int] = []
+        original_open = os.open
 
-        def record_dup(fd: int) -> int:
-            """Record the duplicate passed across the submitted worker boundary."""
-            duplicate = original_dup(fd)
-            duplicated_fds.append(duplicate)
-            return duplicate
+        def record_open(path: str, flags: int) -> int:
+            """Record each worker descriptor prepared for native pumping."""
+            worker_fd = original_open(path, flags)
+            worker_fds.append(worker_fd)
+            return worker_fd
 
         import cuprum._streams_rs as streams_rs
 
@@ -235,7 +251,7 @@ class TestRustPumpFailures:
             ):
                 await awaitable
 
-        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
+        monkeypatch.setattr(_pipeline_stream_fds.os, "open", record_open)
         monkeypatch.setattr(streams_rs, "_load_native", fail_native_load)
         bypass_reader_drain(monkeypatch)
 
@@ -258,29 +274,33 @@ class TestRustPumpFailures:
                     )
                 )
 
-            assert duplicated_fds, "native pumping should create a writer duplicate"
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicated_fds[0])
+            assert len(worker_fds) == 2, (
+                "native pumping should create reader and writer worker descriptors"
+            )
+            for worker_fd in worker_fds:
+                with pytest.raises(OSError, match="Bad file descriptor"):
+                    os.fstat(worker_fd)
             os.fstat(write_fd)
 
+    @_LINUX_ONLY
     def test_run_rust_pump_closes_duplicate_when_executor_rejects_submission(
         self,
         caplog: pytest.LogCaptureFixture,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A rejected executor submission should close the duplicate writer FD."""
+        """A rejected executor submission should close both worker descriptors."""
         _ = self
         caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
-        duplicated_fds: list[int] = []
-        original_dup = os.dup
+        worker_fds: list[int] = []
+        original_open = os.open
 
-        def record_dup(fd: int) -> int:
-            """Duplicate an FD while retaining its value for the assertion."""
-            duplicate = original_dup(fd)
-            duplicated_fds.append(duplicate)
-            return duplicate
+        def record_open(path: str, flags: int) -> int:
+            """Record worker descriptors while retaining them for assertions."""
+            worker_fd = original_open(path, flags)
+            worker_fds.append(worker_fd)
+            return worker_fd
 
-        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
+        monkeypatch.setattr(_pipeline_stream_fds.os, "open", record_open)
         close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
         monkeypatch.setattr(
             _pipeline_streams,
@@ -329,10 +349,13 @@ class TestRustPumpFailures:
                     )
                 )
 
-            assert duplicated_fds, "native pumping should create a writer duplicate"
-            close_duplicate.assert_called_once_with(duplicated_fds[0])
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicated_fds[0])
+            assert len(worker_fds) == 2, (
+                "native pumping should create reader and writer worker descriptors"
+            )
+            close_duplicate.assert_called_once_with(worker_fds[1])
+            for worker_fd in worker_fds:
+                with pytest.raises(OSError, match="Bad file descriptor"):
+                    os.fstat(worker_fd)
         records = [
             record.__dict__
             for record in caplog.records

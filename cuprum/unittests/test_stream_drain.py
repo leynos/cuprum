@@ -23,6 +23,18 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _PROPERTY_MAX_EXAMPLES = 24
+_LINE_BOUNDARY_CHARACTERS = (
+    "\n",
+    "\r",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
 
 
 class _ChunkedReader:
@@ -99,20 +111,20 @@ def _decode_chunks(chunks: cabc.Sequence[bytes]) -> str:
 
 
 def _expected_emitted_lines(payload: bytes) -> list[str]:
-    """Model stream line emission while preserving non-CR/LF boundaries."""
+    """Model ``str.splitlines()`` stream-line emission independently."""
     lines = payload.decode("utf-8", errors="replace").splitlines(keepends=True)
     if not lines:
         return []
 
     remainder = ""
-    if not lines[-1].endswith(("\n", "\r")):
+    if not lines[-1].endswith(_LINE_BOUNDARY_CHARACTERS):
         remainder = lines.pop()
 
     def strip_ending(line: str) -> str:
-        """Strip the CR/LF endings recognized by stream line callbacks."""
+        """Strip one trailing ``str.splitlines()`` boundary."""
         if line.endswith("\r\n"):
             return line[:-2]
-        if line.endswith(("\n", "\r")):
+        if line.endswith(_LINE_BOUNDARY_CHARACTERS):
             return line[:-1]
         return line
 

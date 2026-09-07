@@ -133,17 +133,21 @@ async def _drain(
     echo_guard = _EchoGuard()
     state = _DrainState(config, buffer, echo_decoder, on_chunk, echo_guard)
     measurement = _start_stream_operation(StreamOperation.DRAIN)
-    reached_eof = await _drain_chunks(
-        stream,
-        state,
-        read_size=read_size,
-        measurement=measurement,
-    )
+    try:
+        reached_eof = await _drain_chunks(
+            stream,
+            state,
+            read_size=read_size,
+            measurement=measurement,
+        )
+    except BaseException:
+        _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
+        raise
     if not reached_eof:
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
-        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(state)

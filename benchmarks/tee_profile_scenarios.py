@@ -292,6 +292,9 @@ def default_tee_profile_scenarios(
         Path to the wrap-76 fixture used by line-callback scenarios.
     repeat_count:
         Measured repeat count applied to every scenario.
+    read_size:
+        Read size applied to every returned scenario. Defaults to ``_READ_SIZE``;
+        sweep callers invoke this factory once for each configured read size.
 
     Returns
     -------

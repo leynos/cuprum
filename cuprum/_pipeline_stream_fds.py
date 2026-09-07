@@ -1,8 +1,8 @@
 """File-descriptor and transport controls for native pipeline pumping.
 
-The Rust inter-stage pump temporarily owns asyncio's pipe descriptors.  The
-blocking-mode guard and paused-reader scope make the two reversible parts of
-that hand-off independently fault-injectable.
+Asyncio retains its transport descriptors. Linux native workers receive
+separately opened descriptors, while the blocking guard and paused-reader
+scope make that reversible hand-off independently fault-injectable.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import contextlib
 import dataclasses as dc
 import logging
 import os
+import sys
 import typing as typ
 
 from cuprum.pump_events import RustPumpDeclineReason
@@ -23,6 +24,63 @@ _LOGGER = logging.getLogger(__name__)
 
 RUST_PUMP_TEARDOWN_FAILED_ACTION = "rust_pump_teardown_failed"
 """``cuprum_action`` for a Rust-pump teardown step that failed and was ignored."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _NativePumpWorkerFds:
+    """Worker descriptors prepared for native pipeline pumping."""
+
+    reader_fd: int
+    writer_fd: int
+
+
+def _open_native_pump_worker_fds(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> _NativePumpWorkerFds | None:
+    """Open worker descriptors without sharing Linux transport status flags."""
+    if sys.platform != "linux":
+        return _duplicate_native_pump_worker_fds(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+        )
+    reader_path = f"/proc/self/fd/{reader_fd}"
+    writer_path = f"/proc/self/fd/{writer_fd}"
+    try:
+        worker_reader_fd = os.open(reader_path, os.O_RDONLY)
+    except (OSError, ValueError):
+        return None
+    try:
+        worker_writer_fd = os.open(writer_path, os.O_WRONLY)
+    except (OSError, ValueError):
+        _close_native_pump_worker_fd(worker_reader_fd)
+        return None
+    return _NativePumpWorkerFds(
+        reader_fd=worker_reader_fd,
+        writer_fd=worker_writer_fd,
+    )
+
+
+def _duplicate_native_pump_worker_fds(
+    *,
+    reader_fd: int,
+    writer_fd: int,
+) -> _NativePumpWorkerFds | None:
+    """Preserve the pre-existing non-Linux duplicate hand-off."""
+    try:
+        worker_reader_fd = os.dup(reader_fd)
+    except (OSError, ValueError):
+        return None
+    try:
+        worker_writer_fd = os.dup(writer_fd)
+    except (OSError, ValueError):
+        _close_native_pump_worker_fd(worker_reader_fd)
+        return None
+    return _NativePumpWorkerFds(
+        reader_fd=worker_reader_fd,
+        writer_fd=worker_writer_fd,
+    )
 
 
 def _fd_from_transport(transport: object | None) -> int | None:
@@ -111,7 +169,7 @@ class _ReaderPause:
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
 ) -> _ReaderPause:
-    """Pause reader transport callbacks while Rust pump owns the raw FD."""
+    """Pause reader callbacks while a duplicate-backed native worker pumps."""
     transport = _stream_transport(reader)
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
@@ -237,9 +295,21 @@ def _resume_reader_transport(
 
 
 def _close_rust_writer_fd(writer_fd: int) -> None:
-    """Close a native-pump writer descriptor after its worker has settled."""
+    """Close a worker writer that has not crossed Rust's ownership boundary."""
     with contextlib.suppress(OSError):
         os.close(writer_fd)
+
+
+def _close_native_pump_worker_fd(worker_fd: int) -> None:
+    """Close a worker-owned reader descriptor after native pumping settles."""
+    with contextlib.suppress(OSError):
+        os.close(worker_fd)
+
+
+def _close_native_pump_worker_fds(worker_fds: _NativePumpWorkerFds) -> None:
+    """Close both worker descriptors before abandoning native preparation."""
+    _close_native_pump_worker_fd(worker_fds.reader_fd)
+    _close_rust_writer_fd(worker_fds.writer_fd)
 
 
 @contextlib.contextmanager

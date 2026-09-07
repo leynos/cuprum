@@ -1,16 +1,4 @@
-"""Pipeline stream pumping, capture collection, and backend dispatch.
-
-This module handles data movement after ``cuprum._process_lifecycle`` has
-spawned each subprocess with the canonical stdio handles from
-``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
-stdout and per-stage stderr, pumps stdout from one stage into the next stage's
-stdin, and chooses between the Python and Rust stream backends for that pump.
-
-The module intentionally consumes the canonical stage stream policy instead of
-recomputing it. That keeps lifecycle code responsible for process ownership,
-``_pipeline_stage_streams`` responsible for stdio shape, and this module
-responsible for moving and collecting bytes once those streams exist.
-"""
+"""Pipeline stream pumping, capture collection, and backend dispatch."""
 
 from __future__ import annotations
 
@@ -18,7 +6,6 @@ import asyncio
 import contextvars
 import dataclasses as dc
 import logging
-import os
 import time
 import typing as typ
 from functools import partial
@@ -30,8 +17,11 @@ from cuprum._pipeline_pipe_tasks import (
 )
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
+    _close_native_pump_worker_fd,
+    _close_native_pump_worker_fds,
     _close_rust_writer_fd,
     _extract_stream_fd,
+    _open_native_pump_worker_fds,
     _pause_reader_transport,
     _resume_reader_transport,
     _suppressed_teardown_failure,
@@ -78,6 +68,8 @@ class _RustPumpState:
     writer_fd: int
     blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
+    close_reader_fd: bool = False
+    close_writer_fd: bool = False
     was_cancelled: bool = False
     monotonic_clock: cabc.Callable[[], float] = time.monotonic
 
@@ -120,8 +112,23 @@ def reset_pump_stream_dispatch_for_testing() -> None:
 
 def _restore_rust_pump_state(state: _RustPumpState) -> None:
     """Restore pipe state before returning reader transport control to asyncio."""
-    state.blocking_mode_guard.restore()
-    _resume_reader_transport(state.resume_reader)
+    try:
+        _close_native_worker_fds(state)
+    finally:
+        try:
+            state.blocking_mode_guard.restore()
+        finally:
+            _resume_reader_transport(state.resume_reader)
+
+
+def _close_native_worker_fds(state: _RustPumpState) -> None:
+    """Close worker descriptors that have not crossed Rust's ownership boundary."""
+    if state.close_reader_fd:
+        _close_native_pump_worker_fd(state.reader_fd)
+        state.close_reader_fd = False
+    if state.close_writer_fd:
+        _close_rust_writer_fd(state.writer_fd)
+        state.close_writer_fd = False
 
 
 def _complete_rust_pump(
@@ -212,39 +219,22 @@ def _submit_rust_pump(
     from cuprum._streams_rs import rust_pump_stream
 
     try:
-        rust_writer_fd = os.dup(state.writer_fd)
-    except (OSError, ValueError) as error:
-        _pump_obs._log_native_pump_handoff_failed(_LOGGER, "duplicate_writer", error)
-        _restore_rust_pump_state(state)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
-        raise
-
-    try:
-        os.set_blocking(rust_writer_fd, True)
-    except (OSError, ValueError):
-        _close_rust_writer_fd(rust_writer_fd)
-        _restore_rust_pump_state(state)
-        _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
-        return None
-
-    try:
         context = contextvars.copy_context()
         native_pump = loop.run_in_executor(
             None,
             context.run,
             rust_pump_stream,
             state.reader_fd,
-            rust_writer_fd,
+            state.writer_fd,
         )
     except BaseException as error:
         _pump_obs._log_native_pump_handoff_failed(_LOGGER, "executor_submission", error)
-        _close_rust_writer_fd(rust_writer_fd)
         _restore_rust_pump_state(state)
         _emit_rust_pump_handoff_outcome(
             RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
         )
         raise
+    state.close_writer_fd = False
     _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
     return native_pump
 
@@ -279,7 +269,6 @@ async def _pump_over_raw_fds(
     writer_fd: int,
 ) -> bool:
     """Transfer a hop after acquiring the reader and descriptor hand-off."""
-    # Flush asyncio-buffered bytes before Rust reads from the raw descriptor.
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
         _log_rust_pump_declined(
@@ -287,24 +276,36 @@ async def _pump_over_raw_fds(
         )
         return False
     try:
+        # The paused transport cannot refill while buffered bytes transfer.
         await _drain_reader_buffer(reader, writer)
     except BaseException:
         _resume_reader_transport(reader_pause.resume)
         raise
+    worker_fds = _open_native_pump_worker_fds(
+        reader_fd=reader_fd,
+        writer_fd=writer_fd,
+    )
+    if worker_fds is None:
+        _resume_reader_transport(reader_pause.resume)
+        _log_rust_pump_declined(RustPumpDeclineReason.RAW_FD_UNAVAILABLE)
+        return False
     try:
         blocking_mode_guard = _BlockingModeGuard.engage(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
+            reader_fd=worker_fds.reader_fd,
+            writer_fd=worker_fds.writer_fd,
         )
     except (OSError, ValueError):
+        _close_native_pump_worker_fds(worker_fds)
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         return False
     state = _RustPumpState(
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
+        reader_fd=worker_fds.reader_fd,
+        writer_fd=worker_fds.writer_fd,
         blocking_mode_guard=blocking_mode_guard,
         resume_reader=reader_pause.resume,
+        close_reader_fd=True,
+        close_writer_fd=True,
     )
     return await _run_rust_pump_with_blocking_fds(state=state)
 
@@ -314,8 +315,7 @@ async def _drain_reader_buffer(
     writer: asyncio.StreamWriter | None,
 ) -> None:
     """Flush bytes already buffered in *reader* to *writer*."""
-    # Rust reads the raw FD, so flush CPython's pending buffer first. getattr
-    # safely degrades when PyPy or a future CPython lacks this implementation detail.
+    # ``getattr`` degrades safely when an implementation lacks this CPython buffer.
     buffered: bytearray | None = getattr(reader, "_buffer", None)
     if not buffered:
         return
@@ -325,7 +325,8 @@ async def _drain_reader_buffer(
             await writer.drain()
         except (BrokenPipeError, ConnectionResetError):
             pass
-    # Clear unconditionally so the Rust pump does not re-read stale data.
+    # Either delivery or a closed downstream is now known; a different error
+    # propagates with the buffer intact for its caller to handle.
     buffered.clear()
 
 
