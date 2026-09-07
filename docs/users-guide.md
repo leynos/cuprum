@@ -451,7 +451,6 @@ async def greet() -> None:
     print(result.stdout)
 ```
 
-
 ### Line-level output
 
 `SafeCmd.lines()` iterates a command's decoded output lines as they arrive
