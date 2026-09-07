@@ -23,6 +23,7 @@ class StreamOperationOutcome(enum.StrEnum):
 
     EOF = "eof"
     CANCELLED = "cancelled"
+    FAILED = "failed"
     DOWNSTREAM_CLOSED = "downstream_closed"
     POST_CLOSE_DRAIN_TIMEOUT = "post_close_drain_timeout"
 

@@ -9,19 +9,15 @@ home shared by the selection and FD-blocking test modules.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures as cf
 import contextlib
 import os
+import pathlib as pth
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from cuprum import (
-    _pipeline_native_pump_runtime,
-    _pipeline_stream_fds,
-    _pipeline_streams,
-)
+from cuprum import _pipeline_stream_fds, _pipeline_streams
 from cuprum._testing import (
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -46,27 +42,6 @@ class PumpCallCounts(typ.TypedDict, total=False):
 
     rust_pump: int
     python_pump: int
-
-
-def _make_writer_toggle_failure(
-    reader_fd: int,
-    error_class: type[OSError] | type[ValueError],
-) -> cabc.Callable[[int, object], None]:
-    """Return a blocking-mode double that rejects the writer descriptor."""
-    original_set_blocking = os.set_blocking
-    reader_inode = os.fstat(reader_fd).st_ino
-
-    def fail_writer_toggle(fd: int, is_blocking: object) -> None:
-        """Change the reader mode then reject the writer mode change."""
-        is_reader = os.fstat(fd).st_ino == reader_inode
-        if is_reader and is_blocking is True:
-            original_set_blocking(fd, bool(is_blocking))
-            return
-        if not is_reader and is_blocking is True:
-            raise error_class(_WRITER_TOGGLE_FAILURE)
-        original_set_blocking(fd, bool(is_blocking))
-
-    return fail_writer_toggle
 
 
 @contextlib.contextmanager
@@ -164,11 +139,18 @@ def _make_blocking_fd_spy(
         assert os.get_blocking(writer_fd), (
             "expected writer FD to be switched to blocking mode"
         )
+        if pth.Path(f"/proc/self/fd/{expected_reader_fd}").exists():
+            assert not os.get_blocking(expected_reader_fd), (
+                "Linux worker blocking must not change the transport reader mode"
+            )
+            assert not os.get_blocking(expected_writer_fd), (
+                "Linux worker blocking must not change the transport writer mode"
+            )
         assert reader_fd != expected_reader_fd, (
-            "expected Rust path to receive a duplicate, not the transport FD"
+            "expected Rust path to receive a worker reader, not the transport FD"
         )
         assert os.fstat(reader_fd).st_ino == os.fstat(expected_reader_fd).st_ino, (
-            "expected the duplicate to refer to the same pipe as the reader FD"
+            "expected the worker reader to refer to the transport pipe"
         )
         # The native pump consumes its writer descriptor, so it must be handed
         # a duplicate rather than the descriptor asyncio's transport owns.
@@ -215,28 +197,20 @@ async def _run_with_inline_executor_returning(
     object
         Whatever the awaited coroutine produced.
     """
+    loop = asyncio.get_running_loop()
 
-    class _InlineExecutor:
-        """Submit native work synchronously while retaining Future semantics."""
+    def run_inline(
+        executor: object,
+        function: cabc.Callable[..., object],
+        *args: object,
+    ) -> asyncio.Future[object]:
+        """Execute a submitted test double and publish its result immediately."""
+        del executor
+        future = loop.create_future()
+        future.set_result(function(*args))
+        return future
 
-        def submit(
-            self,
-            function: cabc.Callable[..., object],
-            *args: object,
-        ) -> cf.Future[object]:
-            """Run a submitted callable and settle its concurrent future."""
-            future: cf.Future[object] = cf.Future()
-            try:
-                future.set_result(function(*args))
-            except BaseException as error:  # ruff: ignore[blind-except] - the double publishes every worker failure through its Future
-                future.set_exception(error)
-            return future
-
-    with mock.patch.object(
-        _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME,
-        "executor",
-        _InlineExecutor(),
-    ):
+    with mock.patch.object(loop, "run_in_executor", side_effect=run_inline):
         return await awaitable
 
 
@@ -262,13 +236,13 @@ def install_closing_rust_pump(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]
     Returns
     -------
     dict[str, int]
-        Populated with ``writer_fd``, the descriptor the pump received.
+        Populated with the worker descriptors the pump received.
     """
     received: dict[str, int] = {}
 
     def closing_rust_pump(reader_fd: int, writer_fd: int) -> int:
         """Record the writer descriptor and close it, mirroring ``OwnedFd``."""
-        del reader_fd
+        received["reader_fd"] = reader_fd
         received["writer_fd"] = writer_fd
         os.close(writer_fd)
         return 0

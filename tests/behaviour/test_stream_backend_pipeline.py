@@ -6,13 +6,14 @@ of which stream backend (Python or Rust) handles inter-stage data pumping.
 
 from __future__ import annotations
 
+import sys
 import typing as typ
 
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
-from cuprum._backend import _check_rust_available, get_stream_backend
+from cuprum import ECHO, ScopeConfig, TimeoutExpired, _rust_backend, scoped, sh
+from cuprum._backend import StreamBackend, _check_rust_available, get_stream_backend
 from cuprum._testing import (
     force_python_pump_fallback,
     reset_pump_stream_dispatch_for_testing,
@@ -74,6 +75,43 @@ def test_pipeline_rust_backend() -> None:
 )
 def test_pipeline_auto_backend() -> None:
     """Pipeline produces correct output with the auto backend."""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux raw-FD hand-off")
+@pytest.mark.usefixtures("requires_rust_backend")
+def test_auto_backend_repeated_native_pipeline_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUTO native pumping settles repeated real two-stage pipelines."""
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "auto")
+    _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
+
+    active_backend = get_stream_backend()
+    assert active_backend is StreamBackend.RUST, (
+        "the Linux hand-off regression requires AUTO to resolve to Rust"
+    )
+    for attempt in range(16):
+        pipeline, allowlist = _make_echo_python_pipeline(
+            "import sys; sys.stdout.write(sys.stdin.read().upper())",
+        )
+        with scoped(ScopeConfig(allowlist=allowlist)):
+            try:
+                result = pipeline.run_sync(timeout=2.0)
+            except TimeoutExpired as error:
+                pytest.fail(
+                    "AUTO native pipeline hand-off exceeded its local deadline "
+                    f"(attempt={attempt}, backend={active_backend.value}, "
+                    f"task={pipeline!r}, error={error!r})",
+                )
+        assert result.stdout == "HELLO", (
+            f"attempt {attempt} with backend={active_backend.value} lost "
+            "pipeline output"
+        )
+        assert result.ok, (
+            f"attempt {attempt} with backend={active_backend.value} had a "
+            "non-zero stage"
+        )
 
 
 @scenario(

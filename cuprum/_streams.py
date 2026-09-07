@@ -161,12 +161,16 @@ async def _drain(
         echo_limiter=echo_limiter,
     )
     measurement = _start_stream_operation(StreamOperation.DRAIN)
-    reached_eof = await _drain_chunks(
-        stream,
-        state,
-        read_size=read_size,
-        measurement=measurement,
-    )
+    try:
+        reached_eof = await _drain_chunks(
+            stream,
+            state,
+            read_size=read_size,
+            measurement=measurement,
+        )
+    except BaseException:
+        _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
+        raise
     if not reached_eof:
         _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         if buffer is None or _discard_on_cancel(config):

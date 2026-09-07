@@ -5,7 +5,12 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
+
+Reopened 2026-09-07: Linux AUTO pipeline revalidation exposed that the native
+pump received an asyncio-owned reader descriptor. The corrective milestone
+keeps asyncio ownership intact by handing the worker independent descriptors;
+focused and full deterministic revalidation remain pending.
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -199,6 +204,12 @@ This task is complete only when:
 
 ## Progress
 
+- [ ] 2026-09-07 Native-pump ownership correction: replace the unsafe raw
+  reader-descriptor hand-off with worker-owned duplicates, preserve buffered
+  reader bytes and Python fallback, and prove cleanup across completion, native
+  failure, executor-submission failure, and cancellation. Re-run the Linux AUTO
+  pipeline repeatedly with a bounded local deadline before final deterministic
+  validation.
 - [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
   from parent `41707268` onto `origin/main` (
   [the upstream commit][upstream-timeout-capture-commit]) without conflicts.
@@ -704,6 +715,19 @@ This task is complete only when:
   unrelated upstream mutmut changelog-copying change is preserved without
   modification. Date/Author: 2026-09-07, implementation agent. No production
   stream, benchmark, or public-interface behaviour changes.
+
+- Decision D32: repair the Linux native reader hand-off with worker-owned
+  descriptors. Rationale: pausing an asyncio reader transport does not transfer
+  ownership of its descriptor, so passing that descriptor to a blocking Rust
+  worker leaves two owners racing to consume and close the same pipe. The
+  worker instead receives independently opened Linux descriptors (or the
+  pre-existing duplicate mechanism on other platforms); only those worker
+  descriptors may become blocking. Asyncio retains its original descriptors and
+  resumes only after the native worker has settled, the remaining worker-owned
+  reader is closed, and worker descriptor mode is restored. Rust continues to
+  borrow its reader and consume its writer. Date/Author: 2026-09-07,
+  implementation agent. This is a private ownership correction; it adds no
+  public configuration or dependency.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small

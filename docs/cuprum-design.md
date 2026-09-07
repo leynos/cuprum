@@ -83,18 +83,21 @@ Python’s `subprocess` module is powerful but low-level. In practice, code
 frequently runs into the following issues:
 
 1. **Stringly APIs and shell injection risk**
+
    - Ad‑hoc calls like `subprocess.run(f"rm -rf {user_input}", shell=True)` are
      compact but fragile and dangerous.
    - Even when `shell=False` is used, `argv` strings are manually constructed
      across the codebase with little centralization or validation.
 
 2. **No compile‑time structure**
+
    - Every command is just a `list[str]` or a bare `str`; type checkers cannot
      distinguish `"git"` from `"rm"`, or a path from a ref.
    - There is no way to encode at the type level “this function can only run
      `git status`, not arbitrary commands”.
 
 3. **Awkward output handling**
+
    - The standard APIs force a choice between
      `check_output`/`run(..., capture_io=True)` (capture but no streaming)
      and letting the process inherit `stdout`/`stderr` (streaming but no
@@ -102,18 +105,21 @@ frequently runs into the following issues:
    - Implementing tee‑like behaviour requires manual threads or async loops.
 
 4. **Limited observability**
+
    - There is no standard way to log or trace *which commands* are executed and
      *how* (arguments, cwd, env diffs, timings).
    - Bash’s `set -x` has no direct analogue; developers often print commands
      manually, inconsistently.
 
 5. **Async and structured concurrency are tedious**
+
    - `asyncio.create_subprocess_exec` exists but requires significant plumbing
      to handle I/O, cancellation, and error propagation.
    - Spawning multiple commands concurrently and tying them into an
      application’s lifecycle is repetitive and error‑prone.
 
 6. **Globals and hidden state**
+
    - Many wrappers (including innocent ones) rely on module‑global
      configuration and side effects that are hard to reason about in concurrent
      or test scenarios.
@@ -386,7 +392,6 @@ class Pipeline(Generic[Out]):
         self,
         *,
         # capture: final stage stdout and all stderr; echo: tee to sinks.
-        # echo_stdout/echo_stderr narrow the tee per stream; capture stays joint.
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
@@ -608,9 +613,7 @@ processes concurrently, and streams data between them.
   per-stage exit metadata (`result.stages`) without relying on side channels.
 - Only the final stage's stdout is captured. Intermediate stage stdout is
   streamed into the next stage and represented as `None` on its stage result.
-- `echo=True` tees the final stage stdout and all stage stderr streams;
-  `echo_stdout` / `echo_stderr` narrow the tee to one stream each. Capture
-  remains a single joint switch and is unaffected by the per-stream echo gates.
+- `echo=True` tees the final stage stdout and all stage stderr streams.
 - Pipelines apply fail-fast semantics: the first stage to exit non-zero
   terminates every other still-running stage — upstream producers and
   downstream consumers alike — unless it is the final stage, in which case
@@ -845,25 +848,46 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
+#### Aggregate Python stream-operation observation
+
+The pure-Python stream paths have a separate, opt-in completion channel for
+aggregate operation telemetry. `observe_stream_operation` stores synchronous
+hooks in a context-local `ContextVar`; without a registration, stream drains
+and pipeline transfers do not emit events or collect metrics. The channel is
+independent of both `ExecEvent` and the Rust-pump routing channel.
+
+One `StreamOperationEvent` is emitted after each completed operation, including
+any bounded post-close drain. It distinguishes `stream_drain` from
+`pipeline_transfer`, reports one of the closed outcomes `eof`, `cancelled`,
+`failed`, `downstream_closed`, or `post_close_drain_timeout`, and carries
+aggregate bytes consumed, completed reader-operation count (including EOF),
+monotonic duration, and existing execution correlation only when it can be
+inherited safely. No event is emitted per read or per chunk.
+
+The optional metrics adapter records byte and reader-operation counters and a
+duration histogram. Its labels are limited to the closed operation and outcome
+vocabularies; read sizes, descriptors, paths, process identifiers, command
+arguments, payloads, and exception text are excluded. Hook and collector
+failures are logged and suppressed so observation remains fail-open and cannot
+alter stream execution.
+
 #### Rust-pump routing events
 
 Rust-pump declines, failures recovered after cancellation, and native cleanup
 are routing facts, not command lifecycle phases. They are therefore represented
-by `PumpEvent` on the separate `observe_pump` channel. `cleanup_started` marks
-cancellation beginning to wait for the native worker, while `cleanup_completed`
-marks normal release of descriptor ownership and carries
-`PumpEvent.duration_s`. If `ExecutionContext.native_pump_cleanup_grace` expires
-first, `cleanup_grace_expired` carries `PumpEvent.elapsed_s`, the caller
-receives its original `CancelledError`, and `cleanup_deferred` reports eventual
-callback cleanup after the uninterruptible worker settles.
+by `PumpEvent` on the separate `observe_pump` channel. Its
+`phase="cleanup_started"` event marks cancellation beginning to wait for the
+native worker, while `phase="cleanup_completed"` marks the worker releasing
+descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
+cleanup wait duration; other phases leave it unset. Cleanup is required because
+the executor worker retains descriptor ownership until it settles.
 
-`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each normal
-cleanup and one observation of `cuprum_rust_pump_cleanup_duration_seconds`. The
-unlabelled `cuprum_rust_pump_cleanup_grace_expired_total` and
-`cuprum_rust_pump_cleanup_deferred_total` count the bounded and eventual sides
-of deferred cleanup. `RustPumpDeclineReason` bounds the `reason` label on the
-decline metric, and `PumpMetricsHook` emits counters without extending the
-closed `ExecPhase` contract. See
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each
+completed native cleanup and one observation of
+`cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
+metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
+bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
+counters without extending the closed `ExecPhase` contract. See
 [ADR-008](adr-008-rust-pump-observation-channel.md).
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
@@ -872,15 +896,13 @@ same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
 open pipeline-stage span; it is not a trace attribute, and the correlation does
-not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins,
-`cuprum.cleanup_completed` on normal completion, `cuprum.cleanup_grace_expired`
-when the caller returns, and `cuprum.cleanup_deferred` when the callback later
-completes. Every event has `operation="native_pump_cleanup"` and a bounded
-`outcome`; normal completion carries `duration_s`, while grace expiry carries
-`elapsed_s`, both in monotonic seconds. Descriptor numbers, command arguments,
-exception text, and other unbounded values are excluded. Events without a
-matching active span are dropped, and cleanup events neither set span status
-nor end the span.
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins and
+`cuprum.cleanup_completed` when descriptor ownership is released. Both events
+have `operation="native_pump_cleanup"` and a bounded `outcome` (`"started"` or
+`"completed"`); only completion has `duration_s`, the monotonic cleanup wait in
+seconds. Descriptor numbers, command arguments, exception text, and other
+unbounded values are excluded. Events without a matching active span are
+dropped, and cleanup events neither set span status nor end the span.
 
 ### 7.2 Logging via `logging`
 
@@ -951,56 +973,6 @@ Users should be able to choose:
 - `echo=True, capture=True` – tee behaviour;
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
-
-Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
-shorthand independently, so a command can capture stdout silently while stderr
-still mirrors to the log. Capture stays a single joint switch — `capture=True`
-keeps both streams captured even when neither echoes.
-
-`RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
-default is 64 KiB, and the bound includes retained child bytes, the encoded
-`… [truncated N bytes]` marker (or its ASCII-compatible fallback), and the `\n`/
-`\r\n` ending. `capture=True` still retains the complete stream, and
-`max_echo_line_bytes=None` restores chunk-for-chunk mirroring. CRLF recognition
-is independent of read boundaries, so a `\r` held at the end of one read is
-accounted as part of the ending when the following read supplies `\n`.
-
-Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
-stream consumers
-
-For screen readers: The following flowchart shows how per-stream echo
-resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
-`RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
-independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
-consume those gates: `_spawn_subprocess` for a single command and
-`_get_stage_stream_fds` for a pipeline. For a single command, each stream
-independently becomes a `PIPE` or `DEVNULL` according to its own
-capture-or-echo gate. For a pipeline, the stdout of a non-final stage is always
-a `PIPE` so that it can relay into the next stage, while the stdout of the
-final stage and the stderr of every stage follow their own independent gates.
-`capture` remains a single joint switch, so both streams are still captured when
-`capture=True` even if neither echoes. The flow ends at the stream consumers:
-`_spawn_stream_consumers` for a single command and
-`_create_stage_capture_tasks` for pipeline stages.
-
-```mermaid
-flowchart TD
-    A[RunOutputOptions] --> B[__post_init__ resolves echo_stdout and echo_stderr from echo]
-    B --> C{Execution path}
-    C -->|single command| D[_spawn_subprocess]
-    C -->|pipeline| E[_get_stage_stream_fds]
-    D --> F{capture or stream echo enabled}
-    F -->|stdout gate| G[stdout PIPE or DEVNULL]
-    F -->|stderr gate| H[stderr PIPE or DEVNULL]
-    G --> I[_spawn_stream_consumers]
-    H --> I
-    E --> J[non-final stdout always PIPE for relay]
-    E --> K[final stdout and every stderr use independent gates]
-    J --> L[_create_stage_capture_tasks]
-    K --> L
-    I --> M[Capture remains joint when capture is true]
-    L --> M
-```
 
 ______________________________________________________________________
 
@@ -1093,9 +1065,9 @@ The following design decisions were made during implementation:
 - Exit events include program, pid, exit code, duration (measured with
   `time.perf_counter()`), and lengths of captured stdout/stderr; lengths are
   zero when capture is disabled.
-- Start times are tracked in a thread-safe ``WeakKeyDictionary[SafeCmd, float]``
-  guarded by a ``threading.Lock`` so entries are reclaimed even when after
-  hooks are skipped (for example, on cancellation).
+- Start times are tracked in a thread-safe `WeakKeyDictionary[SafeCmd, float]`
+  guarded by a `threading.Lock` so entries are reclaimed even when after hooks
+  are skipped (for example, on cancellation).
 - Detaching the logging hook unregisters the after hook ahead of the start hook
   to respect `ContextVar` token order.
 
@@ -1140,10 +1112,8 @@ implemented with the following decisions:
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
 - **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
-  `capture`/`echo` plus the per-stream `echo_stdout`/`echo_stderr`; the combined
-  `echo` tag stays the OR of the per-stream tags. Callers can attach
-  additional tags via `ExecutionContext.tags`; caller tags take precedence when
-  keys overlap.
+  `capture`/`echo`. Callers can attach additional tags via
+  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.
@@ -1225,7 +1195,7 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 4: Sequence of start/exit logging hook execution
+Figure 3: Sequence of start/exit logging hook execution
 
 ```mermaid
 sequenceDiagram
@@ -1280,7 +1250,7 @@ stderr, and the exit time. It then reads the process exit code through
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
 
-Figure 5: Subprocess timeout handling, from payload resolution to
+Figure 4: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
 
 ```mermaid
@@ -1351,7 +1321,7 @@ grace, captured text is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 6: Capturing drain EOF-grace sequence
+Figure 5: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -1450,7 +1420,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 7: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1637,7 +1607,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 8: Concurrent execution flow with allowlist validation and semaphore
+Figure 7: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1683,7 +1653,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 9: Fail-fast mode cancellation behaviour
+Figure 8: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -1841,7 +1811,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 10: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -1991,26 +1961,31 @@ A phased implementation helps ensure a solid core before advanced features.
 Focus:
 
 - **Core command representation:**
+
   - `Program` NewType;
   - `SafeCmd[str]` representing a single command with text output;
   - `sh.make(program)` returning callables that create `SafeCmd`.
 
 - **Execution context and allowlists:**
+
   - `CuprumContext` stored in a `ContextVar`;
   - `sh.allow` / `AllowRegistration` with `.detach()` and context manager
     support;
   - semantics for narrowing/deriving allowlists.
 
 - **Basic hooks:**
+
   - `sh.before` / `sh.after` with registration and scoping as described;
   - per‑command hooks on `SafeCmd`.
 
 - **Single command execution:**
+
   - async `run()` and sync `run_sync()` for `SafeCmd`;
   - optional tee behaviour (echo + capture) for stdout/stderr;
   - cancellation behaviour that terminates the subprocess.
 
 - **Minimal observability:**
+
   - basic execution events for `start` and `exit` exposed to hooks;
   - a simple logging hook implementation as example.
 
@@ -2022,15 +1997,18 @@ single commands with good safety and observability.
 Focus:
 
 - **Pipeline support:**
+
   - `Pipeline[str]` as composition of `SafeCmd`;
   - full streaming behaviour between stages;
   - defined error propagation and cancellation semantics.
 
 - **Parallel execution helpers:**
+
   - convenience APIs for running multiple commands concurrently (or
     documentation for how to do it with `asyncio.gather`).
 
 - **Extended observability:**
+
   - richer `ExecEvent` shapes (stdout/stderr lines, tags);
   - example integrations with OpenTelemetry (spans) and metrics libraries.
 
@@ -2101,12 +2079,12 @@ behavioural guarantees.
 
 ### 13.1 Motivation
 
-The pure-Python implementation reads and writes data in 64 KiB chunks (defined
-by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The previous 4 KiB value
-was the original profiling baseline. A fresh interleaved 15-round sweep
-selected 64 KiB: the tee scenario improved by 22.9997% (95% paired-bootstrap
-interval 22.5508% to 23.2037%) against its same-session 4 KiB control. The
-complete measurements are in
+The pure-Python implementation now reads and writes data in 64 KiB chunks
+(defined by `_READ_SIZE = 65536` in `cuprum/_streams_pump.py`). The previous 4
+KiB value was the subject of the original profiling baseline. A fresh,
+interleaved 15-round sweep selected 64 KiB: the tee scenario improved by
+22.9997% (95% paired-bootstrap interval 22.5508% to 23.2037%) against its
+same-session 4 KiB control. The complete measurements are in
 [`tee-hotpath-read-size-sweep-2026-08-29.md`](tee-hotpath-read-size-sweep-2026-08-29.md).
 
 The read size is a Python-side slice size; it does not change the asyncio
@@ -2140,30 +2118,11 @@ and `config.errors`, and `_drain()` applies the same error policy when decoding
 captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
 
-The bounded echo path is deliberately a Python consumer concern. When
-`RunOutputOptions.max_echo_line_bytes` is set, `_streams.py` splits raw reads
-with `_echo_truncation.py` and keeps a per-stream limiter across chunks. The
-limiter reserves space for the encoded truncation marker and line ending, so
-each mirrored line stays within the inclusive byte bound; it resets its body
-and dropped-byte counters at every line boundary. A carriage return is held
-until the next byte identifies CRLF, which keeps a CRLF ending equivalent when
-reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
-remains line data. The limiter never sees the capture buffer: complete child
-output remains owned by `_drain()`'s capture path. Text sinks receive complete
-characters through the configured incremental decoder, while sinks exposing
-`.buffer` receive the kept raw bytes and marker bytes. The marker follows the
-configured encoding and error policy, using an ASCII-compatible fallback when
-the preferred ellipsis cannot be represented; `None` leaves the existing
-unbounded echo path unchanged. For a positive bound too small for a complete
-marker or CRLF terminator, it abbreviates the marker or omits the terminator to
-preserve the inclusive bound.
-
-At the former 4 KiB setting, a 1 GiB data stream required approximately
-262,000 parent-side read iterations. At the tuned setting, the same stream
-requires approximately 16,000 iterations. Each iteration still allocates and
-processes a returned `bytes` object, so this tuning reduces fixed event-loop
-overhead but does not remove the Python implementation's allocation or GIL
-costs:
+At the former 4 KiB setting, a 1 GiB data stream required approximately 262,000
+parent-side read iterations. At the tuned setting, the same stream requires
+approximately 16,000 iterations. Each iteration still allocates and processes a
+returned `bytes` object, so this tuning reduces fixed event-loop overhead but
+does not remove the Python implementation's allocation or GIL costs:
 
 - approximately 16,000 round-trips through the Python event loop;
 - approximately 16,000 `bytes` object allocations;
@@ -2199,14 +2158,9 @@ operations. Both pathways remain available and are treated as first-class:
 
 The native Rust functions are exported from `cuprum._rust_backend_native`. A
 thin Python shim module `cuprum._streams_rs` re-exports the stream functions
-and performs any platform-specific conversion required by direct extension
-calls. This keeps the native module name stable while allowing Python-only
-adaptations. The pipeline dispatcher does not pass Windows asyncio
-subprocess-pipe handles to the native pump: ProactorEventLoop supplies
-overlapped handles, whilst the Rust implementation currently performs
-synchronous `std::fs::File` I/O and does not provide the required `OVERLAPPED`
-state. Native Windows wheels and direct Rust extension calls remain available;
-only the asyncio subprocess-pipe pumping path is restricted.
+and performs any platform-specific file descriptor conversion (for example,
+translating Windows file descriptors into OS handles). This keeps the native
+module name stable while allowing Python-only adaptations.
 
 The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
@@ -2437,17 +2391,20 @@ after logging a warning. The cached resolver in
 Cuprum selects the stream backend at runtime using the following precedence:
 
 1. **Environment variable (`CUPRUM_STREAM_BACKEND`):**
+
    - `rust` – force Rust pathway; raise `ImportError` if unavailable;
    - `python` – force pure Python pathway;
    - `auto` (default) – use Rust when the availability probe reports it is
      available, fall back to Python otherwise.
 
 2. **Availability resolution:**
+
    - `get_stream_backend()` resolves the backend through three seams:
      `_parse_backend_value(raw)` parses the `CUPRUM_STREAM_BACKEND` value (pure),
      `_probe_rust_availability(requested)` performs the impure availability probe
-     honouring each mode's failure policy, and `_resolve_backend(requested, *,
-     rust_available)` is the pure decision core that never returns `AUTO`;
+     honouring each mode's failure policy, and
+     `_resolve_backend(requested, *, rust_available)` is the pure decision core
+     that never returns `AUTO`;
    - `_probe_rust_availability()` wraps the cached
      `cuprum._backend._check_rust_available()`, so the cached availability answer
      still drives dispatch. `_check_rust_available()` is
@@ -2462,15 +2419,11 @@ Cuprum selects the stream backend at runtime using the following precedence:
      guide for details.
 
 3. **Pipeline pump feasibility check (dispatch-time):**
+
    - For inter-stage pumping, Rust requires extractable raw file descriptors
      for both reader and writer transports;
    - if extraction fails for either side, dispatch falls back to Python
      `_pump_stream()` for that transfer;
-   - on Windows, dispatch declines the native pump with
-     `platform_unsupported` before touching the asyncio transport, because
-     ProactorEventLoop subprocess pipes use overlapped handles that the
-     synchronous Rust I/O path cannot safely use; the Python pump preserves
-     pipeline correctness;
    - the Rust pump implementation itself lives in `cuprum._streams_rs` and is
      only entered after `get_stream_backend()` resolves `StreamBackend.RUST`.
 
@@ -2588,7 +2541,7 @@ The following table summarizes when each pathway is recommended:
 
 | Scenario                       | Recommended pathway | Rationale                               |
 | ------------------------------ | ------------------- | --------------------------------------- |
-| Small commands (<1 MB output)  | Either              | Overhead difference is often negligible |
+| Small commands (\<1 MB output) | Either              | Overhead difference is often negligible |
 | Large data pipelines (>100 MB) | Rust                | Avoids event loop round-trips           |
 | Many concurrent pipelines      | Rust                | Reduced GIL contention                  |
 | Debugging/tracing output lines | Python              | Capture path remains Python-based       |
@@ -2596,6 +2549,10 @@ The following table summarizes when each pathway is recommended:
 
 Current Rust acceleration applies to inter-stage pipeline pumping, not
 stdout/stderr capture.
+
+The Python 64 KiB setting is an independently measured baseline for later
+consume-path work. It is not coupled to the Rust extension's separate
+`buffer_size` default, even though both currently use the same numeric value.
 
 The `rust_consume_stream()` helper targets a measured capture-only hotspot but
 is not yet integrated. The tee profiling baseline found that capture plus echo
@@ -2633,9 +2590,7 @@ pathway. The following behaviours are only available via the Python backend:
 - **Teeing to sinks (`echo=True`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
   extension does not support this; `echo=True` keeps consumption on the Python
-  path. The per-stream `echo_stdout` / `echo_stderr` gates resolve before
-  dispatch, so any stream whose resolved gate is `True` keeps the Python path
-  while capture stays joint.
+  path.
 
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python
@@ -2651,9 +2606,8 @@ explicitly.
 ### 13.6 Thread Safety and Asyncio Integration
 
 The Rust extension releases the GIL during I/O operations, allowing other
-Python threads and asyncio tasks to proceed. Integration with asyncio uses the
-dedicated native-pump executor, which is kept outside `asyncio.run()`'s
-default-executor shutdown.
+Python threads and asyncio tasks to proceed. Integration with asyncio uses
+`loop.run_in_executor()`.
 
 The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
 reports whether it succeeded, so the caller never runs the native pump itself:
@@ -2690,34 +2644,42 @@ Error propagation from Rust to Python uses standard exception mechanisms. The
 Rust extension raises `OSError` for I/O failures, matching the behaviour of
 Python's built-in I/O operations.
 
-The Python pipeline keeps ownership of the writer descriptor held by the
-asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate.
-Python closes that duplicate if blocking-mode setup or executor submission
-fails. Once submission succeeds, the `_streams_rs` shim owns the hand-off: it
-closes the duplicate if native loading or platform preparation fails, otherwise
-the native call transfers it to Rust, which closes the received resource. The
-pipeline declines before this hand-off on Windows, so the shim's direct-call
-conversion of Windows descriptors does not make asyncio Proactor handles safe
-for the synchronous native pump. The completion callback never closes the
-writer resource. Restoration of the original descriptor modes and reader
-transport resumption remain tied to worker settlement, so cancellation of the
-awaiting task cannot close or reuse a descriptor while native I/O is still
-running.
+The Python pipeline retains ownership of the original reader and writer
+descriptors held by the asyncio transports. Before native I/O starts, it pauses
+the reader transport, completes the hand-off of bytes already buffered in the
+`StreamReader`, and creates worker-owned duplicates for both descriptors. The
+buffer is not cleared until its transfer outcome is known. Rust borrows the
+worker reader duplicate without closing it; it consumes the worker writer
+duplicate and closes it on every exit path. The Python hand-off owner closes
+the reader duplicate after the worker settles, and closes either duplicate
+itself when preparation or executor submission fails. On Windows the shim
+converts the worker duplicates to independently owned Win32 handles and closes
+the temporary CRT descriptors at the native boundary. No descriptor number is
+shared between asyncio and the worker.
+
+Blocking mode is applied only to worker-owned duplicates. After the native
+worker settles, Python closes the remaining reader duplicate, restores the
+worker descriptor modes, and resumes the reader transport in that order. Rust
+has already closed the consumed writer duplicate. Cancellation therefore cannot
+close or reuse a descriptor while native I/O is still running. If any safe
+hand-off preparation step fails, the dispatcher keeps the original asyncio
+descriptors with the Python fallback.
 
 #### Raw descriptor lifecycle
 
-Handing a descriptor to the Rust pump means taking it back from asyncio for the
-duration of the transfer, and that hand-off has several partial-failure paths:
-the descriptor may not be extractable from the transport, the reader transport
-may refuse to pause, and either descriptor may refuse to switch to blocking
-mode. `cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so
-each path is testable without a live pump:
+Handing descriptors to the Rust pump requires a safe hand-off from asyncio for
+the duration of the transfer, and that hand-off has several partial-failure
+paths: a descriptor may not be extractable from the transport, the reader
+transport may refuse to pause, buffered reader data may not be transferable, or
+a worker duplicate may refuse to switch to blocking mode.
+`cuprum/_pipeline_stream_fds.py` owns that lifecycle behind two seams so each
+path is testable without a live pump:
 
 - `_BlockingModeGuard` — the FD-state object. `engage()` switches the reader and
-  writer to blocking mode while capturing their prior modes, rolling back a
-  partial change if the second switch fails; `restore()` returns both to the
-  captured modes. This is what stops a descriptor being left blocking after the
-  transfer.
+  writer *worker duplicates* to blocking mode while capturing their prior
+  modes, rolling back a partial change if the second switch fails; `restore()`
+  returns both worker descriptors to their captured modes. The original asyncio
+  transport descriptors are never changed to blocking mode.
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
   resume can never be skipped. Exactly one resume fires per pause attempt, but
@@ -2738,66 +2700,14 @@ each path is testable without a live pump:
   undone, and the Python fallback reads the same stream and would wait forever
   on a reader nothing can restart.
 
-Cancellation is handled explicitly rather than implicitly. The dedicated
-executor cannot interrupt the worker thread running the Rust pump, but it is
-kept outside `asyncio.run()`'s default-executor shutdown. The hand-off gives
-native I/O and its callback their own duplicates, leaving asyncio transport
-descriptors safe for pipeline teardown. Cancelling the awaiting task waits only
-until `native_pump_cleanup_grace`; on expiry it re-raises `CancelledError` and
-retains the executor future. Once submission succeeds, Rust owns the submitted
-writer duplicate. The completion callback runs on worker completion and
-independently closes the callback-owned native reader and state duplicates,
-restores the callback-owned blocking state, and requests reader resumption on
-the originating loop. If that loop has closed, only reader resumption is
-skipped; descriptor finalization is already complete. The callback must not
-close the writer transferred to Rust. No descriptor is restored, closed,
-reused, or resumed while native code can still use it.
-
-For screen readers: The following sequence diagram shows bounded cancellation
-cleanup, including the quarantine of worker-owned descriptors until the Rust
-worker completes and the callback restores the asyncio transport state.
-
-Figure 11: Native-pump cancellation cleanup, including
-`blocking_mode_guard.restore()`
-
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant Pump as RustPumpTask
-    participant Executor as ExecutorWorker
-    participant Callback as CompletionCallback
-    participant Transport as AsyncioTransport
-
-    Caller->>Pump: Cancel task
-    Pump->>Executor: Retain shielded native_pump future
-    Pump->>Pump: _await_native_pump_cleanup(cleanup_grace_s)
-    alt Worker settles within grace
-        Executor->>Executor: Rust closes submitted writer duplicate
-        Executor-->>Callback: Future completion
-        Callback->>Callback: _close_rust_reader_fd()
-        Callback->>Transport: blocking_mode_guard.restore()
-        Callback->>Callback: Close callback-owned state descriptors
-        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
-        Callback-->>Pump: cleanup_complete
-        Pump-->>Caller: Original CancelledError
-    else Grace expires first
-        Pump-->>Caller: Original CancelledError
-        Pump->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_grace_expired")
-        Note over Executor,Callback: Duplicated descriptors remain quarantined
-        Executor->>Executor: Rust closes submitted writer duplicate
-        Executor-->>Callback: Late future completion
-        Callback->>Callback: _close_rust_reader_fd()
-        Callback->>Transport: blocking_mode_guard.restore()
-        Callback->>Callback: Close callback-owned state descriptors
-        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
-        Callback->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_deferred")
-    end
-```
-
-The original writer descriptor remains asyncio-owned throughout. Native code
-receives its own writer resource; the shim closes it only before transfer, and
-Rust owns it thereafter. Restoring or resuming earlier would hand the reader or
-writer state back to asyncio while native code was still mid-transfer.
+Cancellation is handled explicitly rather than implicitly. `run_in_executor`
+cannot interrupt the worker thread running the Rust pump, and that thread still
+operates with the borrowed reader duplicate and consumed writer duplicate, so
+cancelling the awaiting task waits for the worker to return before its
+duplicates are closed, blocking mode is restored, and the transport resumed.
+The original reader and writer descriptors remain asyncio-owned throughout.
+Restoring or resuming earlier would hand reader or writer state back to asyncio
+while native code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code
@@ -2960,9 +2870,9 @@ Both pathways are tested as first-class implementations:
   output through real pipeline execution under both backends;
 - pure line-splitting property tests in
   `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
-  `_strip_line_ending()` from `cuprum/_streams.py`, proving that line-callback
-  text is not dropped, that recognized line endings are stripped consistently,
-  and that trailing partial lines remain buffered;
+  `_strip_line_ending()` from `cuprum/_stream_line_boundaries.py`, proving that
+  line-callback text is not dropped, that recognized line endings are stripped
+  consistently, and that trailing partial lines remain buffered;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.

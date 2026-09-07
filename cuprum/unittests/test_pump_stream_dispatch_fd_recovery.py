@@ -17,7 +17,6 @@ from cuprum._testing import (
 from cuprum.unittests._pump_stream_dispatch_support import (
     PumpCallCounts,
     _fake_python_fallback,
-    _make_writer_toggle_failure,
     _nonblocking_pipe_pair,
     clear_backend_caches,
 )
@@ -25,6 +24,8 @@ from cuprum.unittests._pump_stream_dispatch_support import (
 __all__ = ["clear_backend_caches"]
 
 pytestmark = pytest.mark.usefixtures("clear_backend_caches")
+
+_WRITER_TOGGLE_VALUE_ERROR = "writer toggle value invalid"
 
 
 @dc.dataclass(slots=True)
@@ -68,6 +69,10 @@ def _install_value_error_recovery_doubles(
         del drain_reader, drain_writer
         await asyncio.sleep(0)
 
+    def fail_worker_toggle(**_kwargs: object) -> typ.NoReturn:
+        """Reject worker blocking setup before native work is submitted."""
+        raise ValueError(_WRITER_TOGGLE_VALUE_ERROR)
+
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", pause_reader)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", no_drain)
     monkeypatch.setattr(
@@ -78,9 +83,9 @@ def _install_value_error_recovery_doubles(
         ),
     )
     monkeypatch.setattr(
-        os,
-        "set_blocking",
-        _make_writer_toggle_failure(scenario.read_fd, ValueError),
+        _pipeline_stream_fds._BlockingModeGuard,
+        "engage",
+        fail_worker_toggle,
     )
     configure_pump_stream_dispatch_for_testing(
         python_pump=lambda fallback_reader, fallback_writer: _fake_python_fallback(

@@ -7,10 +7,10 @@ contract rather than at process I/O.
 
 ``_split_complete_lines`` returns completed lines with their recognized line
 endings removed plus the final partial line, if any. ``_strip_line_ending``
-removes one trailing ``"\r\n"``, ``"\n"``, or ``"\r"`` sequence and leaves the
-rest of the text untouched.  The Hypothesis tests exercise generated text with
-mixed line endings to prove preservation, stable remainder handling, and
-idempotent stripping.  The CrossHair contracts symbolically check bounded
+removes one trailing ``str.splitlines()`` boundary and leaves the rest of the
+text untouched. The Hypothesis tests exercise generated text with mixed line
+endings to prove preservation, stable remainder handling, and idempotent
+stripping. The CrossHair contracts symbolically check bounded
 versions of the same invariants; a confirmed result means the contract held for
 the explored symbolic state space, while a failure should be treated as a
 minimal counterexample for the pure helper rather than as stream-backend drift.
@@ -82,7 +82,19 @@ except _CROSSHAIR_PROBE_EXCEPTIONS as _crosshair_exc:
 else:
     _CROSSHAIR_UNAVAILABLE_REASON = "CrossHair available"
 
-_LINE_ENDINGS: tuple[str, str, str] = ("\r\n", "\n", "\r")
+_LINE_ENDINGS = (
+    "\r\n",
+    "\n",
+    "\r",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
 _PYTHON_LINE_BOUNDARIES: str = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 _PROPERTY_SETTINGS: settings = settings(
     deadline=None,
@@ -95,7 +107,9 @@ _PROPERTY_SETTINGS: settings = settings(
 
 def _normalize_line_endings(text: str) -> str:
     """Normalize recognized line endings to line-feed characters."""
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    for ending in _LINE_ENDINGS:
+        text = text.replace(ending, "\n")
+    return text
 
 
 def _rebuild_normalized_text(lines: list[str], remainder: str) -> str:
@@ -107,10 +121,8 @@ def _line_ending_suffix(line: str) -> str:
     """Return the single trailing line-ending sequence, if present."""
     if line.endswith("\r\n"):
         return "\r\n"
-    if line.endswith("\n"):
-        return "\n"
-    if line.endswith("\r"):
-        return "\r"
+    if line.endswith(_LINE_ENDINGS):
+        return line[-1:]
     return ""
 
 
@@ -519,10 +531,8 @@ def test_split_complete_lines_preserves_all_text(text: str) -> None:
 
 @_PROPERTY_SETTINGS
 @given(text=_text_with_line_endings())
-def test_split_complete_lines_remainder_keeps_only_a_pending_carriage_return(
-    text: str,
-) -> None:
-    """Property: a remainder retains CR only while its next byte is unknown.
+def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
+    """Property: the returned remainder is never a completed line.
 
     Parameters
     ----------
@@ -531,10 +541,10 @@ def test_split_complete_lines_remainder_keeps_only_a_pending_carriage_return(
     """
     _lines, remainder = _split_complete_lines(text)
 
-    assert not remainder.endswith("\n"), (
-        "_split_complete_lines must never retain a completed LF line ending"
+    assert not remainder.endswith(_LINE_ENDINGS), (
+        "_split_complete_lines remainder must not end with a recognized line ending"
     )
-    if text.endswith(_LINE_ENDINGS) and not text.endswith("\r"):
+    if text.endswith(_LINE_ENDINGS):
         assert remainder == "", (
             "_split_complete_lines remainder must be empty when input ends with a "
             "recognized line ending"
@@ -542,12 +552,16 @@ def test_split_complete_lines_remainder_keeps_only_a_pending_carriage_return(
 
 
 @pytest.mark.parametrize("text", ["a\vb", "a\x85b", "a\u2028b"])
-def test_split_complete_lines_preserves_non_crlf_separators(text: str) -> None:
-    """Example: non-CR/LF separators remain ordinary text."""
+def test_split_complete_lines_handles_python_line_boundaries(text: str) -> None:
+    """Example: Python-recognized line boundaries delimit completed lines."""
+    split_lines = text.splitlines(keepends=True)
+    expected_lines = [_strip_line_ending(line) for line in split_lines[:-1]]
+    expected_remainder = split_lines[-1]
+
     lines, remainder = _split_complete_lines(text)
 
-    assert lines == [], f"only CR/LF must delimit lines for text={text!r}"
-    assert remainder == text, f"non-CR/LF text must remain buffered: {text!r}"
+    assert lines == expected_lines
+    assert remainder == expected_remainder
 
 
 @_PROPERTY_SETTINGS
