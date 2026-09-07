@@ -5,12 +5,13 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
-Reopened 2026-09-07: Linux AUTO pipeline revalidation exposed that the native
-pump received an asyncio-owned reader descriptor. The corrective milestone
-keeps asyncio ownership intact by handing the worker independent descriptors;
-focused and full deterministic revalidation remain pending.
+Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
+that the native pump received an asyncio-owned reader descriptor. The
+corrective milestone gives Rust worker-owned descriptors while keeping asyncio
+ownership intact. Focused tests, the extension suite, full deterministic gates,
+and a committed CodeRabbit review completed without findings.
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -204,12 +205,16 @@ This task is complete only when:
 
 ## Progress
 
-- [ ] 2026-09-07 Native-pump ownership correction: replace the unsafe raw
-  reader-descriptor hand-off with worker-owned duplicates, preserve buffered
-  reader bytes and Python fallback, and prove cleanup across completion, native
-  failure, executor-submission failure, and cancellation. Re-run the Linux AUTO
-  pipeline repeatedly with a bounded local deadline before final deterministic
-  validation.
+- [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
+  reader-descriptor hand-off with worker-owned duplicates, preserved buffered
+  reader bytes and Python fallback, and proved cleanup across completion,
+  native failure, executor-submission failure, and cancellation. The Linux AUTO
+  regression repeats 16 real pipelines with a 2-second local deadline and
+  backend/task context on failure. Focused coverage, `make test-extension` (81
+  passed, 1 skipped), `make check-fmt`, `make test` (1,639 Python and 104 Rust
+  tests), `make typecheck`, `make lint`, `make markdownlint`, and `make nixie`
+  passed. `coderabbit review --agent --committed --base origin/main` reported
+  zero findings across 72 files, so this plan returns to `COMPLETE`.
 - [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
   from parent `41707268` onto `origin/main` (
   [the upstream commit][upstream-timeout-capture-commit]) without conflicts.
@@ -1421,6 +1426,13 @@ investigation.
   https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
+
+Revision 9, 2026-09-07, after the Linux native-pump hand-off correction: native
+workers now receive worker-owned reader and writer descriptors, while asyncio
+retains its transport descriptors. The correction preserves buffered bytes and
+fallback behaviour, closes worker descriptors on every ownership path, and has
+a repeated real AUTO regression. The full deterministic suite and the committed
+CodeRabbit review both passed with no findings; the plan is again `COMPLETE`.
 
 Revision 8, 2026-09-07, after external revalidation: CodeRabbit's committed
 agent review against `origin/main` completed with zero findings after every
