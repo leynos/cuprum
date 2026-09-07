@@ -437,6 +437,41 @@ class _Cp1252TextOnlySink:
         """Model the flush call on a text stream."""
 
 
+def test_bounded_echo_writes_untruncated_line_in_one_payload() -> None:
+    """An untruncated line on the bounded path is mirrored in a single write."""
+    bound = 50
+    payload = b"well within the bound\n"
+    sink = _RecordingSink()
+
+    captured = asyncio.run(
+        _drain(
+            _reader((payload,)),
+            _config(typ.cast("typ.IO[str]", sink), echo=True, max_line_bytes=bound),
+        ),
+    )
+
+    assert captured == payload.decode(), "capture must stay byte-for-byte complete"
+    assert sink.writes == ["well within the bound\n"], (
+        "an untruncated line must arrive as one write including its terminator"
+    )
+
+
+class _RecordingSink:
+    """Text sink that records each write payload in order."""
+
+    def __init__(self) -> None:
+        """Start with an empty write log."""
+        self.writes: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Record and accept the payload."""
+        self.writes.append(payload)
+        return len(payload)
+
+    def flush(self) -> None:
+        """Model the flush call on a text stream."""
+
+
 def test_final_flush_after_disabled_echo_writes_nothing() -> None:
     """A disabled echo never re-attempts the final decoder flush write."""
     sink = _Cp1252TextOnlySink()
