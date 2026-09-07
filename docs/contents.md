@@ -46,6 +46,9 @@ open each document.
   report Rust-pump routing decisions on a channel separate from `ExecEvent`.
 - [ADR-009: Enforce Oxford spelling in source][adr-009] - accepted decision to
   govern identifiers and source prose with the repository spelling gate.
+- [ADR-010: Opt-in GitHub Actions presentation sink][adr-010] - accepted
+  decision to frame runs in Actions log groups and annotate failures through an
+  opt-in presentation sink.
 
 ## Planning and validation references
 
@@ -65,5 +68,6 @@ open each document.
 [adr-007]: adr-007-subprocess-execution-module-boundaries.md
 [adr-008]: adr-008-rust-pump-observation-channel.md
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
+[adr-010]: adr-010-opt-in-github-actions-presentation-sink.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md

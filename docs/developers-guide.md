@@ -13,6 +13,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Opt-in GitHub Actions presentation sink](adr-010-opt-in-github-actions-presentation-sink.md)
 
 ## GitHub Actions runners
 
@@ -562,6 +563,34 @@ the same asyncio event loop.  Appending a task is synchronous Python bytecode
 and the event loop does not pre-empt an `emit()` call halfway through the list
 append, so no explicit lock is required.  Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
+
+### Presentation-sink session lifecycle
+
+When `RunOutputOptions.sink` is set, both runners owe the sink's session a
+close on every terminal path. The contract (see
+[ADR-010](adr-010-opt-in-github-actions-presentation-sink.md)):
+
+- `_prepare_sink_session` (single command) and `_prepare_pipeline_config`
+  (pipeline) open the session *before* any subprocess starts and immediately
+  call its eager `open_group` when the adapter exposes one, so child output can
+  never appear above the group opening. A declined activation (`None`) leaves
+  the run unchanged with nothing to unwind.
+- Stream configuration routes echoed stdout and stderr through
+  `sink_session.log` when a session is active, replacing the default
+  destinations for that run only.
+- Every terminal path closes the session through `_close_sink_session` /
+  `_close_pipeline_sink_session` with a bounded `SessionOutcome`: result-mapped
+  on success or non-zero exit (pipelines report the first failing stage's exit
+  code), and `_outcome_for_error` / `_pipeline_error_outcome` for timeout,
+  cancellation, and earlier failures. Only categorical detail reaches the
+  adapter; exception text and argv never do.
+- The close runs before the shielded task drain but is itself a non-blocking
+  buffered write; the adapter's `close` is idempotent, so overlapping terminal
+  paths cannot double-annotate.
+
+When adding an exit path to `_execute_with_hooks` or the pipeline runner, add
+its sink close in the same change. A path that skips the close leaks the
+stop-commands lease and leaves the group open for the rest of the job log.
 
 Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend.  Hook scheduling and hook failures use the

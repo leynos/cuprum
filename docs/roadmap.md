@@ -76,6 +76,14 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
   timings, and tag metadata; add `sh.observe` (or equivalent) registration.
 - [x] 2.2.2. Provide example adapters for `logging`, Prometheus-style metrics,
   and OpenTelemetry traces, ensuring hooks remain optional and non-blocking.
+- [x] 2.2.3. Add the opt-in `cuprum.sinks.GitHubActionsSink` presentation
+  adapter (issue `#360`): a `RunOutputOptions.sink` protocol in
+  `cuprum.sinks.base`, Actions group framing with a stop-commands lease, one
+  `::error::` annotation per failed run, session lifecycle integration on every
+  command and pipeline terminal path, and users'-guide plus ADR-010
+  documentation.
+  - [x] Document the sink in the users' guide and record the decision in
+    `docs/adr-010-opt-in-github-actions-presentation-sink.md`.
 
 ### 2.3. Concurrency helpers
 

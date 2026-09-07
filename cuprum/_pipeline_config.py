@@ -9,7 +9,9 @@ import typing as typ
 from cuprum._streams import _StreamConfig
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import ExecutionContext
+    from cuprum.sh import ExecutionContext, RunOutputOptions
+
+from cuprum.sinks import base as sinks
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -22,6 +24,7 @@ class _PipelineRunConfig:
     timeout: float | None
     stdout_sink: typ.IO[str]
     stderr_sink: typ.IO[str]
+    sink_session: sinks.OutputSession | None
 
     @property
     def capture_or_echo(self) -> bool:
@@ -30,11 +33,20 @@ class _PipelineRunConfig:
 
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stream configuration for the final pipeline stage."""
+        """Build the stream configuration for the final pipeline stage.
+
+        When a presentation-sink session is active, mirrored stdout routes
+        through the session's log destination so it lands inside the
+        adapter's framing in the order the adapter received it.
+        """
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo,
-            sink=self.stdout_sink,
+            sink=(
+                self.sink_session.log
+                if self.sink_session is not None
+                else self.stdout_sink
+            ),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
         )
@@ -42,8 +54,7 @@ class _PipelineRunConfig:
 
 def _prepare_pipeline_config(
     *,
-    capture: bool,
-    echo: bool,
+    output: RunOutputOptions,
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
@@ -56,8 +67,25 @@ def _prepare_pipeline_config(
 
     sh = _sh_module()
     ctx = context or sh.ExecutionContext()
+    capture = output.capture
+    echo = output.echo
+    sink = output.sink
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
+    sink_session = (
+        None
+        if sink is None
+        else sink.open_session(
+            sinks.SessionStart(
+                label="pipeline",
+                argv=(),
+            ),
+        )
+    )
+    if sink_session is not None:
+        open_group = getattr(sink_session, "open_group", None)
+        if open_group is not None:
+            open_group()
     return _PipelineRunConfig(
         ctx=ctx,
         capture=capture,
@@ -65,4 +93,5 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        sink_session=sink_session,
     )

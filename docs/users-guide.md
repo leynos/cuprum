@@ -399,6 +399,52 @@ async def greet() -> None:
     print(result.stdout)
 ```
 
+### Presentation sinks
+
+A presentation sink reframes a run's parent-facing output without changing
+capture, success semantics, or the returned result. Sinks are opt-in: pass one
+via `RunOutputOptions(sink=...)` on `SafeCmd.run`, `SafeCmd.run_sync`,
+`Pipeline.run`, or `Pipeline.run_sync`. A run without a sink is byte-for-byte
+unchanged.
+
+`GitHubActionsSink` from `cuprum.sinks` frames one run's echoed output in a
+GitHub Actions collapsible log group and turns a failed run into an error
+annotation:
+
+```python
+from cuprum import RunOutputOptions
+from cuprum.sinks import GitHubActionsSink
+
+result = cmd.run_sync(
+    output=RunOutputOptions(echo=True, sink=GitHubActionsSink()),
+)
+```
+
+Per run the adapter writes, in order:
+
+1. `::group::<program args>` before the subprocess starts, titled with the
+   program arguments so the collapsed log entry reads as the command;
+2. a random stop-commands bracket, so child output cannot inject workflow
+   commands while the group is open;
+3. the run's echoed stdout and stderr;
+4. `::endgroup::` at teardown, after the stop-commands bracket is released so
+   the runner processes the endgroup command;
+5. one `::error::` annotation when the run ends in a non-zero exit, a timeout,
+   or an error. The annotation title is the derived label (or the sink's
+   `title` override) and the message is a categorical detail (`timeout`) —
+   never exception text or argument values.
+
+Workflow commands are written to the parent's stderr by default; pass
+`destination=` to route them to another text stream. The sink never changes
+capture or the exit code: a failing framed command still returns the same
+`CommandResult` a caller would see without the sink.
+
+`GitHubActionsSink(title="Build and test")` overrides the derived group title.
+By default the title is the joined program arguments for single commands and
+`pipeline` for pipelines. A sink that declines activation (returns `None` from
+its `open_session`) leaves the run unchanged; see `cuprum.sinks.base` for the
+adapter protocol if you need a custom presentation sink.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
