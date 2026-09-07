@@ -211,22 +211,10 @@ async def _cancel_before_native_worker_settles(
     loop = asyncio.get_running_loop()
     native_pump = _HeldNativePump(loop)
     cleanup = _CleanupOrder()
-    close_reader = mock.Mock(wraps=_pipeline_streams._close_native_pump_worker_fd)
-    close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
-
-    import cuprum._streams_rs as streams_rs
-
-    monkeypatch.setattr(streams_rs, "rust_pump_stream", native_pump.retain_writer)
-    monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
-    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
-    monkeypatch.setattr(_pipeline_streams, "_close_native_pump_worker_fd", close_reader)
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_close_rust_writer_fd",
-        close_duplicate,
-    )
-    monkeypatch.setattr(
-        _pipeline_stream_fds, "_restore_stream_fd_blocking", cleanup.restore
+    close_reader, close_duplicate = _install_settlement_doubles(
+        monkeypatch,
+        native_pump=native_pump,
+        cleanup=cleanup,
     )
 
     with _nonblocking_pipe_pair() as (
@@ -280,3 +268,26 @@ async def _cancel_before_native_worker_settles(
                     task=task,
                 )
             )
+
+
+def _install_settlement_doubles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    native_pump: _HeldNativePump,
+    cleanup: _CleanupOrder,
+) -> tuple[mock.Mock, mock.Mock]:
+    """Install native settlement doubles and return the close spies."""
+    close_reader = mock.Mock(wraps=_pipeline_streams._close_native_pump_worker_fd)
+    close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
+
+    import cuprum._streams_rs as streams_rs
+
+    monkeypatch.setattr(streams_rs, "rust_pump_stream", native_pump.retain_writer)
+    monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
+    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
+    monkeypatch.setattr(_pipeline_streams, "_close_native_pump_worker_fd", close_reader)
+    monkeypatch.setattr(_pipeline_streams, "_close_rust_writer_fd", close_duplicate)
+    monkeypatch.setattr(
+        _pipeline_stream_fds, "_restore_stream_fd_blocking", cleanup.restore
+    )
+    return close_reader, close_duplicate

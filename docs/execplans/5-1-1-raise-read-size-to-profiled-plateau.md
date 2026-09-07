@@ -5,13 +5,13 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
 
-Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
-that the native pump received an asyncio-owned reader descriptor. The
-corrective milestone gives Rust worker-owned descriptors while keeping asyncio
-ownership intact. Focused tests, the extension suite, full deterministic gates,
-and a committed CodeRabbit review completed without findings.
+Reopened 2026-09-07: Linux AUTO pipeline revalidation exposed that the native
+pump received an asyncio-owned reader descriptor. The corrective milestone gave
+Rust worker-owned descriptors while keeping asyncio ownership intact. A final
+CodeScene size follow-up then extracted two focused test helpers; deterministic
+revalidation passed and the refreshed committed review remains pending.
 
 Measurement update (2026-08-29): the 15-round interleaved sweep selected 65536
 bytes. The tee median improvement was 22.9997% (95% paired-bootstrap interval
@@ -215,6 +215,12 @@ This task is complete only when:
   tests), `make typecheck`, `make lint`, `make markdownlint`, and `make nixie`
   passed. `coderabbit review --agent --committed --base origin/main` reported
   zero findings across 72 files, so this plan returns to `COMPLETE`.
+- [x] 2026-09-07 CodeScene test-structure follow-up: replaced the bespoke
+  no-pause Rust-pump double with the existing worker-FD spy and extracted
+  native-settlement double installation. This keeps the two distinct
+  cancellation contracts explicit while reducing the two reported test methods
+  below CodeScene's size threshold. Focused coverage (13 passed) and every
+  deterministic gate passed; refreshed committed review remains pending.
 - [x] 2026-08-29 Stage A: rebased the five branch-exclusive ExecPlan commits
   from parent `41707268` onto `origin/main` (
   [the upstream commit][upstream-timeout-capture-commit]) without conflicts.
@@ -1426,6 +1432,12 @@ investigation.
   https://github.com/leynos/cuprum/commit/%62%6132d3f5fa6ea960ec69e357346dde927d3fe119
 
 ## Revision note
+
+Revision 10, 2026-09-07, after the CodeScene test-structure follow-up: reused
+the worker-FD spy and extracted settlement-double installation to reduce two
+oversized test methods without weakening ownership or cancellation checks. All
+deterministic gates passed; the plan remains `IN PROGRESS` only for the
+refreshed committed review.
 
 Revision 9, 2026-09-07, after the Linux native-pump hand-off correction: native
 workers now receive worker-owned reader and writer descriptors, while asyncio

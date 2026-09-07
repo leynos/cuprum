@@ -267,35 +267,12 @@ class TestPumpStreamDispatch:
             del read_write_fd, write_read_fd
             calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
-            def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
-                """Stand in for the Rust pump and record that it ran.
-
-                Returns
-                -------
-                int
-                    Always ``0`` to mimic a successful native pump.
-                """
-                assert reader_fd != read_fd, (
-                    "expected a worker reader rather than the transport FD"
-                )
-                assert os.fstat(reader_fd).st_ino == os.fstat(read_fd).st_ino, (
-                    "expected the worker reader to reference the transport pipe"
-                )
-                # Rust consumes its writer descriptor, so it receives a
-                # duplicate and closes it; the transport FD stays asyncio's.
-                assert writer_fd != write_fd, (
-                    "expected a duplicate rather than the transport writer FD"
-                )
-                calls["rust_pump"] += 1
-                os.close(writer_fd)
-                return 0
-
             import cuprum._streams_rs as streams_rs
 
             monkeypatch.setattr(
                 streams_rs,
                 "rust_pump_stream",
-                fake_rust_pump_stream,
+                _make_blocking_fd_spy(calls, read_fd, write_fd),
             )
             monkeypatch.setattr(
                 _pipeline_streams,
