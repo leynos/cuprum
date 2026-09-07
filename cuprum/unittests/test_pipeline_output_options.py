@@ -328,6 +328,53 @@ def test_pipeline_per_stream_echo_is_independent(*, stream: str) -> None:
         )
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_pipeline_echo_only_keeps_capture_off(*, stream: str) -> None:
+    """capture=False with one echo gate streams that stream and captures none."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+
+    producer = python(
+        "-c",
+        "import sys; print('out'); print('err', file=sys.stderr)",
+    )
+    consumer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+    echo_stdout = stream == "stdout"
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (producer | consumer).run_sync(
+            output=RunOutputOptions(
+                capture=False,
+                echo_stdout=echo_stdout,
+                echo_stderr=not echo_stdout,
+            ),
+            context=ExecutionContext(stdout_sink=stdout_sink, stderr_sink=stderr_sink),
+        )
+
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.final.stdout is None, "capture=False must leave stdout unset"
+    assert result.final.stderr is None, "capture=False must leave stderr unset"
+    if echo_stdout:
+        assert "out" in stdout_sink.getvalue(), (
+            "stdout echo must follow echo_stdout=True"
+        )
+        assert stderr_sink.getvalue() == "", (
+            "stderr must stay silent while only stdout echoes"
+        )
+    else:
+        assert "err" in stderr_sink.getvalue(), (
+            "stderr echo must follow echo_stderr=True"
+        )
+        assert stdout_sink.getvalue() == "", (
+            "stdout must stay silent while only stderr echoes"
+        )
+
+
 def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
     """Supplying both ``output`` and the deprecated flags raises ValueError."""
     catalogue, python_program = python_catalogue()

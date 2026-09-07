@@ -1236,10 +1236,12 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
   `ExecutionContext.env`) over the scoped overlay from the active
   `CuprumContext` and returns the immutable merge result. It stays overlay-only
   — `os.environ` is merged separately at spawn time by `resolve_env`.
-- `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
-  (`project`, `capture`, `echo`). The pipeline observation builder grafts on
-  only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
-  per-call tags are merged over the base via `_merge_tags`.
+- `_base_stage_tags(cmd, *, capture, echo_stdout, echo_stderr)` builds the
+  shared tag schema (`project`, `capture`, `echo`, `echo_stdout`,
+  `echo_stderr`); the combined `echo` tag stays the OR of the two per-stream
+  gates. The pipeline observation builder grafts on only its stage-specific keys
+  (`pipeline_stage_index`, `pipeline_stages`); per-call tags are merged over
+  the base via `_merge_tags`.
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/sh.py`), `_build_pipeline_observations`

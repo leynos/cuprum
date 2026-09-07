@@ -272,6 +272,51 @@ def test_allows_disabling_capture(
     assert_capture_disabled(result)
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_echo_only_keeps_capture_off(
+    python_builder: cabc.Callable[..., SafeCmd],
+    capsys: pytest.CaptureFixture[str],
+    execution_strategy: tuple[str, ExecuteFn],
+    *,
+    stream: str,
+) -> None:
+    """capture=False with a single echo gate streams only the gated stream."""
+    _, execute = execution_strategy
+    echo_stdout = stream == "stdout"
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+    command = python_builder(
+        "-c",
+        'import sys; print("out"); print("err", file=sys.stderr)',
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=False,
+                echo_stdout=echo_stdout,
+                echo_stderr=not echo_stdout,
+            ),
+            "context": ExecutionContext(
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
+            ),
+        },
+    )
+    captured = capsys.readouterr()
+
+    assert_capture_disabled(result)
+    assert captured.out == "", "injected sinks must keep stdout off capsys"
+    assert captured.err == "", "injected sinks must keep stderr off capsys"
+    assert stdout_sink.getvalue() == ("out\n" if echo_stdout else ""), (
+        f"stdout echo must follow echo_stdout={echo_stdout}"
+    )
+    assert stderr_sink.getvalue() == ("" if echo_stdout else "err\n"), (
+        f"stderr echo must follow echo_stderr={not echo_stdout}"
+    )
+
+
 def test_echoes_to_custom_sinks(
     python_builder: cabc.Callable[..., SafeCmd],
     capsys: pytest.CaptureFixture[str],

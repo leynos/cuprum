@@ -57,7 +57,10 @@ class TestConcurrentConfig:
     def test_new_fields_are_keyword_only() -> None:
         """Positional construction keeps binding context and fail_fast as before."""
         context = ExecutionContext()
-        config = ConcurrentConfig(2, False, False, context, True)  # ruff: ignore[boolean-positional-value-in-call] - positional binding is the contract under test
+        # Legacy callers pass ``context`` and ``fail_fast`` positionally; the
+        # per-stream fields are keyword-only and must never absorb them.
+        legacy_positional = (2, False, False, context, True)
+        config = ConcurrentConfig(*legacy_positional)
 
         assert config.concurrency == 2
         assert config.capture is False
@@ -66,6 +69,14 @@ class TestConcurrentConfig:
         assert config.fail_fast is True
         assert config.echo_stdout is None
         assert config.echo_stderr is None
+        # Six positional arguments is exactly the runtime guard under test;
+        # the tuple keeps the boolean out of the call site while preserving
+        # the legacy positional binding.
+        six_positional = (*legacy_positional, True)
+        with pytest.raises(TypeError, match="positional arguments"):
+            # The signature statically rejects six positional arguments; the
+            # dataclass must also reject them at runtime (the kw-only guard).
+            ConcurrentConfig(*six_positional)  # ty: ignore[too-many-positional-arguments]
 
 
 class TestConcurrentResult:

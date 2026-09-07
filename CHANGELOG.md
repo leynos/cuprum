@@ -30,7 +30,7 @@
   mirrors to the parent — for example, capturing the `cargo metadata --locked`
   JSON document without printing it to a CI log. Capture stays a single joint
   boolean and continues for a stream that is not echoed; `ConcurrentConfig`
-  forwards the same per-stream fields, which are keyword-only so positional
+  forwards the same per-stream fields, which are keyword-only, so positional
   callers keep binding `context` and `fail_fast` as before. The change is
   additive: existing `echo=True` callers resolve both streams to `True` exactly
   as before.
