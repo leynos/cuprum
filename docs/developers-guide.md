@@ -4074,3 +4074,89 @@ makes the stdout-sink resolution logic testable in isolation. The required
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Test timeouts: the tiers this repository sets
+
+Four independent timers can end a test run, and the canonical statement of how
+they must be ordered lives in the `generate-coverage` README in
+[`leynos/shared-actions`][shared-actions-coverage]. Two of them apply here.
+
+| Tier                     | What it bounds                     | Where it is set                               | Current value  |
+| ------------------------ | ---------------------------------- | --------------------------------------------- | -------------- |
+| Per-test `slow-timeout`  | one test                           | nextest, not configured here                  | absent         |
+| nextest `global-timeout` | the whole test run                 | nextest, not configured here                  | absent         |
+| Cargo watchdog           | one `cargo` invocation, wall clock | `RUN_RUST_CARGO_WAIT_TIMEOUT` at job level    | 2,700 s (45 m) |
+| Job `timeout-minutes`    | the whole job                      | job level in `ci.yml` and `coverage-main.yml` | 60 m           |
+
+*Table: the timers that can end a run, innermost first.*
+
+### The watchdog was the action's default, unmentioned
+
+Both coverage lanes ran on 1,800 seconds because neither set the variable, and
+nothing in this repository said so. A budget nobody chose is one nobody can
+defend, and the failure it produces names `cargo` rather than the test that
+hung, so the run reads as an infrastructure fault.
+
+### How the value was chosen
+
+From this repository's own run history, not a guess.
+
+| Lane                                  | Worst coverage step | Worst whole job | Outside the step | Run         |
+| ------------------------------------- | ------------------- | --------------- | ---------------- | ----------- |
+| `ci.yml` `coverage`                   | 418 s               | 461 s           | 43 s             | 34071469378 |
+| `coverage-main.yml` `coverage-upload` | 322 s               | 370 s           | 51 s             | 34062626757 |
+
+*Table: measured coverage-step and whole-job durations, read across roughly
+fifty successful runs of the two workflows.*
+
+None of those was a genuinely cold compile. That matters more than the numbers
+themselves: rstest-bdd's cold run took about four times its warm one, which
+would put this repository at 1,700 seconds, on the old default's shoulder. A
+budget the first cold run of a branch cannot finish inside produces a failure
+that looks like a hang and is not one.
+
+So the watchdog is 2,700 seconds, six times the worst observed step, and the
+value is written down in both lanes with this reasoning beside it. Raise it if
+the suite grows; lower it only if a hang must be caught sooner than the build
+can legitimately finish, knowing that trades a false failure for a faster one.
+
+### Why the ceilings moved with it
+
+The two clocks do not start together. The job timer starts when the job starts,
+before the checkout and the toolchain setup, and it is still running through
+whatever follows the coverage step; the watchdog starts when `cargo` does. So a
+ceiling merely above the watchdog still cancels the job before the watchdog can
+report an overrun, and a cancellation discards the log that would have
+explained it.
+
+The requirement is the watchdog plus the work outside its window, which
+measured 43 s and 51 s on the two lanes. Five minutes is six times the worse of
+those, matching the margin the watchdog itself carries, making the requirement
+50 minutes. The ceilings are 60, ten above it: a ceiling sitting exactly on its
+requirement is cancelled on the first run that spends the full watchdog.
+
+### The two nextest tiers are a gap, not a decision
+
+There is no `.config/nextest.toml`, so nothing bounds a single test or the run
+as a whole. Adding one would give a hung test a bound that names the test
+rather than `cargo`.
+
+`cuprum/unittests/test_timeout_ordering_contract.py` fails when that file
+appears, so the budgets arrive with this section updated in the same change
+rather than unbounded beneath a watchdog sized for neither. The failure message
+says what to check: that the whole-run budget sits above the largest per-test
+allowance, which is `period` multiplied by `terminate-after` rather than the
+period alone, and inside the watchdog.
+
+### The contract
+
+The same file asserts the two tiers that do exist, by value, over every job
+invoking the coverage action in both workflows. It resolves the watchdog from
+the step, then the job, then the workflow, as GitHub does, and it requires the
+ceiling to contain the watchdog multiplied by the number of coverage steps in
+that job, so a second invocation added later cannot silently exceed it.
+
+Both lanes are held to the same watchdog value. They move together or the
+pull-request lane stops predicting the trunk lane it exists to protect.
+
+[shared-actions-coverage]: https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md
