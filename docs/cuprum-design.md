@@ -2163,6 +2163,32 @@ flowchart TD
     J -. Phase 2 candidate .-> G
 ```
 
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.lines()` iteration. It moves from creation through the first
+`__anext__()` call to the streaming state, then ends either by publishing the
+`CommandResult` and closing, or — on timeout or caller cancellation — by
+tearing the child process down through the existing SIGTERM, grace-wait, and
+SIGKILL path before the consumers drain and the stream closes.
+
+Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+streaming to completion, timeout, or cancellation-driven teardown
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: SafeCmd.lines()
+    Created --> Running: first __anext__()
+    Running --> Streaming: subprocess and consumers active
+    Streaming --> Streaming: yield LineEvent
+    Streaming --> Completed: CommandResult published
+    Completed --> Closed: result exposed
+    Streaming --> Cancelling: break, aclose(), or cancellation
+    Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
+    Terminated --> Closed: consumers drained
+    Streaming --> TimedOut: timeout
+    TimedOut --> Terminated: existing timeout termination path
+    Closed --> [*]
+```
+
 ### 13.3 API Boundary
 
 The Rust extension exposes three functions via PyO3. As of 4.2.2,
