@@ -210,6 +210,30 @@ async def _settle_cancelled_native_pump_and_verify_descriptor_ownership(
         os.close(reused_writer_fd)
 
 
+async def _cancel_native_pump_and_verify_deferred_cleanup(
+    *,
+    native_pump: _HeldNativePump,
+    cleanup: _CleanupOrder,
+    task: asyncio.Task[bool],
+) -> None:
+    """Cancel native pumping and verify cleanup waits for worker settlement."""
+    await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert cleanup.order == ["pause", "drain"], (
+        "expected FD restoration and reader resumption to wait for native "
+        "worker settlement"
+    )
+    assert not task.done(), (
+        "expected cancellation to await the native worker's cleanup callback"
+    )
+    assert native_pump.received_fds, (
+        "expected native work to receive a writer duplicate"
+    )
+    os.fstat(native_pump.received_fds[0])
+
+
 async def _cancel_before_native_worker_settles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -265,21 +289,11 @@ async def _cancel_before_native_worker_settles(
                     ),
                 )
             )
-            await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
-            task.cancel()
-            await asyncio.sleep(0)
-
-            assert cleanup.order == ["pause", "drain"], (
-                "expected FD restoration and reader resumption to wait for native "
-                "worker settlement"
+            await _cancel_native_pump_and_verify_deferred_cleanup(
+                native_pump=native_pump,
+                cleanup=cleanup,
+                task=task,
             )
-            assert not task.done(), (
-                "expected cancellation to await the native worker's cleanup callback"
-            )
-            assert native_pump.received_fds, (
-                "expected native work to receive a writer duplicate"
-            )
-            os.fstat(native_pump.received_fds[0])
 
             await _settle_cancelled_native_pump_and_verify_descriptor_ownership(
                 _CancelledPumpSettlement(
