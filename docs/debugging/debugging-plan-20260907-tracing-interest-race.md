@@ -81,3 +81,11 @@ creating the second dispatch rebuilds callsite interest. Separate
 registration-policy checks fail on the old harness and pass with
 `Interest::sometimes()`, but do not cover registration from a thread without a
 subscriber. The cross-thread regression is therefore required alongside them.
+
+A proptest supplements that concrete regression with generated histories. Each
+history varies the parent capture level, child-first or parent-first ordering,
+whether the child uses its default subscriber or a separately filtered capture,
+the child's level, and reused warning sequences. The final assertion requires
+each parent warning exactly when the parent level is WARN; child warnings must
+never enter the parent's capture. This widens state coverage without replacing
+the deterministic child-first proof of the original failure.

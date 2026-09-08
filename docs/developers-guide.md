@@ -2804,9 +2804,9 @@ initialization and is never installed as a default subscriber. Together with
 dynamic interest, it prevents another thread's verdict from disabling a
 captured event. Reuse the guard only through the capture harness; it is not a
 production tracing setup. Capture correctness does not depend on nextest's
-process isolation; nextest remains the project's test runner. The
-[tracing investigation](debugging/debugging-plan-20260907-tracing-interest-race.md)
-records the deterministic regression and the rejected override-only fix.
+process isolation; nextest remains the project's test runner. The tracing
+investigation records the deterministic regression and the rejected
+[override-only fix](debugging/debugging-plan-20260907-tracing-interest-race.md).
 
 Run Kani separately because it is a bounded model checker rather than a normal
 unit-test runner. The Kani installer places the verifier under `~/.kani`; the
