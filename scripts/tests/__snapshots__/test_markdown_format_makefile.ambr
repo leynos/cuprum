@@ -1,0 +1,61 @@
+# serializer version: 1
+# name: test_fmt_excludes_tracked_symlink_aliases
+  list([
+    dict({
+      'paths': list([
+        'guide.markdown',
+        'guide.md',
+        'guide.mdx',
+        '''
+          nested/tracked
+          with newline.md
+        ''',
+        'nested/tracked with spaces.md',
+      ]),
+      'tool': 'mdtablefix',
+    }),
+    dict({
+      'paths': list([
+        'guide.markdown',
+        'guide.md',
+        'guide.mdx',
+        '''
+          nested/tracked
+          with newline.md
+        ''',
+        'nested/tracked with spaces.md',
+      ]),
+      'tool': 'markdownlint-cli2',
+    }),
+  ])
+# ---
+# name: test_fmt_formats_each_tracked_markdown_extension_in_order
+  list([
+    dict({
+      'paths': list([
+        'guide.markdown',
+        'guide.md',
+        'guide.mdx',
+        '''
+          nested/tracked
+          with newline.md
+        ''',
+        'nested/tracked with spaces.md',
+      ]),
+      'tool': 'mdtablefix',
+    }),
+    dict({
+      'paths': list([
+        'guide.markdown',
+        'guide.md',
+        'guide.mdx',
+        '''
+          nested/tracked
+          with newline.md
+        ''',
+        'nested/tracked with spaces.md',
+      ]),
+      'tool': 'markdownlint-cli2',
+    }),
+  ])
+# ---

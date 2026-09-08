@@ -7,8 +7,7 @@
 # result against the corresponding source without modifying tracked files.
 # `mdtablefix` emits LF, whereas Git can check text out with CRLF on Windows;
 # the comparison accepts only either exact line-ending form. Keep the flags in
-# step with the `mdtablefix` invocation in
-# `mdformat-all`, which `make fmt` runs.
+# step with `MDTABLEFIX_FLAGS` in the Makefile, which `make fmt` uses.
 #
 # `make fmt` also applies `markdownlint-cli2 --fix` after `mdtablefix`, but that
 # pass is deliberately not replayed here. `make markdownlint` already rejects

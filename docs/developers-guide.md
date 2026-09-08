@@ -2879,33 +2879,48 @@ The short version is:
 
 ### Markdown formatting
 
-`make fmt` runs `mdformat-all`, which applies `mdtablefix` with
-`--wrap --renumber --breaks --ellipsis --fences --in-place` before applying
-`markdownlint-cli2 --fix`. `mdtablefix` therefore owns table padding and
-paragraph wrapping, while `make markdownlint` verifies the result.
+`make fmt` formats every tracked regular Markdown source with a `.md`,
+`.markdown`, or `.mdx` suffix. It applies `mdtablefix` with
+`--in-place --wrap --renumber --breaks --ellipsis --fences`, then applies
+`markdownlint-cli2 --fix` to the same NUL-delimited file list. `mdtablefix`
+therefore owns table padding and paragraph wrapping, while `markdownlint`
+applies its configured source fixes. The Makefile owns this pipeline directly;
+it does not delegate file discovery to a machine-local wrapper. Untracked
+notes, ignored files, and symlink aliases are deliberately outside the
+repository formatting contract. A root-level filename beginning with a dash is
+made explicitly relative before either formatter receives it, and Make avoids
+invoking either formatter when the tracked list is empty.
 
-`make check-fmt` passes repository Markdown files to
+`make check-fmt` passes that same tracked source set to
 `scripts/check-markdown-format.sh`. Because `mdtablefix` has no check-only
 mode, the checker formats temporary copies and compares them with the source
 files; it never modifies the worktree. It accepts exact LF or CRLF output, but
-rejects mixed line endings. Run `make test-markdown-format` after changing the
-checker.
+rejects mixed line endings. The `markdownlint` target checks the second stage,
+so the formatter check can expose an incompatible transformation instead of
+silently applying it. Run `make test-markdown-format` after changing the
+checker or its Makefile contract.
 
-The gate installs the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
-`.github/workflows/ci.yml` through the
+The Makefile records the formatter releases selected by CI:
+`MDTABLEFIX_VERSION=0.5.1` and `MARKDOWNLINT_VERSION=0.20.0`. The gate installs
+the former through the
 `leynos/shared-actions/.github/actions/install-mdtablefix` action. The action
 requires `mdtablefix` 0.5.1 or later, installs only a matching prebuilt
 release, and fails closed when the runner has no supported archive; it never
 builds the formatter from source. Cuprum's project toolchain remains Rust
-1.85.0.
+1.85.0. The CI job installs the selected `markdownlint-cli2` release before
+running the Make targets. Local contributors install those releases before
+running the same targets; command variables remain injectable for contract
+tests.
 
 Install the pinned prebuilt version locally with `cargo-binstall` so formatter
 output matches CI:
 
 ```bash
 MDTABLEFIX_VERSION=0.5.1
+MARKDOWNLINT_VERSION=0.20.0
 cargo binstall --no-confirm --locked --disable-strategies compile \
   --install-path "$HOME/.local/bin" "mdtablefix@${MDTABLEFIX_VERSION}"
+npm install --global "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 ```
 
 ### Docstring structure
@@ -2945,14 +2960,15 @@ assertion, alias, suppression rationale, or dispatch structure instead.
 
 ### Markdown linting
 
-The `markdownlint` target lints exactly the Markdown files tracked by Git. The
-recipe feeds `git ls-files -z '*.md'` through `xargs -0` to `markdownlint-cli2`
-with `$(LOCAL_TOOL_ENV)` applied to both pipeline stages, so the tool resolves
-from `~/.local/bin` or `~/.bun/bin` even under a minimal `PATH`, arguments with
-spaces survive intact, and untracked scratch files can never fail the gate. The
-`.vtcode/**` directory is excluded in `.markdownlint-cli2.jsonc` as
-session-scratch content. The target then runs the shared `spelling` recipe, so
-one invocation covers both Markdown structure and en-GB-oxendict spelling.
+The `markdownlint` target reuses the formatting pipeline's Git-tracked regular
+`.md`, `.markdown`, and `.mdx` source set. It transports those paths with NUL
+delimiters to `markdownlint-cli2`, so names with spaces and newlines survive
+intact while untracked, ignored, and symlink-alias content remains outside the
+gate. `$(LOCAL_TOOL_ENV)` resolves the linter from `~/.local/bin` or
+`~/.bun/bin` under a minimal `PATH`. The `.vtcode/**` directory is excluded in
+`.markdownlint-cli2.jsonc` as session-scratch content. The target then runs the
+shared `spelling` recipe, so one invocation covers Markdown structure and
+en-GB-oxendict spelling.
 
 ### GitHub Actions workflow linting
 
