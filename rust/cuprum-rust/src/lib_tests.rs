@@ -1,6 +1,6 @@
 //! Tests for the borrowed file-descriptor ownership contract.
 
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -28,34 +28,39 @@ enum BorrowedReaderScenario {
 }
 
 #[fixture]
-fn borrowed_reader_pipe() -> BorrowedReaderPipe {
-    let (read_end, write_end) = make_pipe();
+fn borrowed_reader_pipe() -> io::Result<BorrowedReaderPipe> {
+    let (read_end, write_end) = make_pipe()?;
     let raw_fd = read_end.as_raw_fd();
 
-    BorrowedReaderPipe {
+    Ok(BorrowedReaderPipe {
         read_end,
         write_end,
         raw_fd,
-    }
+    })
 }
 
 #[rstest]
 #[case::panicking_operation(BorrowedReaderScenario::Panic)]
 #[case::successful_operation(BorrowedReaderScenario::Success)]
 fn borrowed_reader_stays_open_after_operation(
-    borrowed_reader_pipe: BorrowedReaderPipe,
+    #[from(borrowed_reader_pipe)] borrowed_reader_pipe_result: io::Result<BorrowedReaderPipe>,
     #[case] scenario: BorrowedReaderScenario,
 ) {
     let BorrowedReaderPipe {
         read_end,
         write_end,
         raw_fd,
-    } = borrowed_reader_pipe;
+    } = crate::test_support::unwrap_ok(borrowed_reader_pipe_result);
 
     match scenario {
         BorrowedReaderScenario::Panic => assert_panicking_reader_keeps_fd_open(raw_fd),
         BorrowedReaderScenario::Success => {
-            assert_successful_reader_keeps_fd_usable(raw_fd, write_end);
+            let collected =
+                crate::test_support::unwrap_ok(successful_reader_bytes(raw_fd, write_end));
+            assert_eq!(
+                collected, b"ping",
+                "the borrowed reader must retain the pipe bytes",
+            );
         }
     }
 
@@ -65,8 +70,8 @@ fn borrowed_reader_stays_open_after_operation(
 
 #[rstest]
 fn stream_from_raw_owns_and_reads_the_descriptor() {
-    let (read_end, write_end) = make_pipe();
-    write_all_to(&write_end, b"pong");
+    let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
+    crate::test_support::unwrap_ok(write_all_to(&write_end, b"pong"));
     drop(write_end);
 
     // Transfer ownership of the read descriptor into the constructed handle
@@ -88,9 +93,9 @@ fn stream_from_raw_owns_and_reads_the_descriptor() {
 
 #[rstest]
 fn consume_records_total_bytes_and_retries_on_span() {
-    let (read_end, write_end) = make_pipe();
+    let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
     let payload = b"boundary-check-payload";
-    write_all_to(&write_end, payload);
+    crate::test_support::unwrap_ok(write_all_to(&write_end, payload));
     // Close the write end so the read loop reaches EOF and terminates.
     drop(write_end);
 
@@ -124,10 +129,10 @@ fn consume_records_total_bytes_and_retries_on_span() {
 #[rstest]
 fn pump_records_span_fields_under_error_filter() {
     // Source pipe: the payload the pump reads. Sink pipe: where it writes.
-    let (source_read, source_write) = make_pipe();
-    let (sink_read, sink_write) = make_pipe();
+    let (source_read, source_write) = crate::test_support::unwrap_ok(make_pipe());
+    let (sink_read, sink_write) = crate::test_support::unwrap_ok(make_pipe());
     let payload = b"pump-span-check";
-    write_all_to(&source_write, payload);
+    crate::test_support::unwrap_ok(write_all_to(&source_write, payload));
     // Close the source's write end so the read loop reaches EOF.
     drop(source_write);
 
@@ -142,8 +147,9 @@ fn pump_records_span_fields_under_error_filter() {
     // Close the write end, then confirm the sink received exactly the source
     // payload — a data oracle so same-length corruption cannot pass.
     drop(writer);
+    let received = crate::test_support::unwrap_ok(read_all_from(&sink_read));
     assert_eq!(
-        read_all_from(&sink_read).as_slice(),
+        received.as_slice(),
         &payload[..],
         "the pump must deliver the source bytes unchanged to the sink",
     );
@@ -186,7 +192,7 @@ fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
 
 #[rstest]
 fn classify_write_reports_a_completed_write() {
-    let (read_end, mut write_end) = make_pipe();
+    let (read_end, mut write_end) = crate::test_support::unwrap_ok(make_pipe());
 
     let event = match classify_write(&mut write_end, b"chunk") {
         Ok(event) => event,
@@ -202,7 +208,7 @@ fn classify_write_reports_a_completed_write() {
 fn classify_write_propagates_a_fatal_error() {
     // Writing to the read end of a pipe is a fatal `EBADF`, which must
     // propagate rather than latch the writer closed.
-    let (mut read_end, _write_end) = make_pipe();
+    let (mut read_end, _write_end) = crate::test_support::unwrap_ok(make_pipe());
 
     match classify_write(&mut read_end, b"chunk") {
         Ok(event) => panic!("expected a fatal write error, got {event:?}"),
@@ -210,23 +216,18 @@ fn classify_write_propagates_a_fatal_error() {
     }
 }
 
-fn assert_successful_reader_keeps_fd_usable(raw_fd: i32, write_end: OwnedFd) {
-    write_all_to(&write_end, b"ping");
+fn successful_reader_bytes(raw_fd: i32, write_end: OwnedFd) -> io::Result<Vec<u8>> {
+    write_all_to(&write_end, b"ping")?;
     drop(write_end);
 
-    let collected = with_borrowed_reader(raw_fd, |reader| {
+    with_borrowed_reader(raw_fd, |reader| {
         // SAFETY: reading through the borrowed handle's raw descriptor.
         let mut file =
             unsafe { std::mem::ManuallyDrop::new(std::fs::File::from_raw_fd(reader.as_raw_fd())) };
         let mut data = Vec::new();
-        match file.read_to_end(&mut data) {
-            Ok(_) => {}
-            Err(err) => panic!("pipe read failed: {err}"),
-        }
-        data
-    });
-
-    assert_eq!(collected, b"ping");
+        file.read_to_end(&mut data)?;
+        Ok(data)
+    })
 }
 
 #[rstest]
@@ -235,10 +236,10 @@ fn pump_drains_the_reader_after_the_writer_breaks() {
     // the real-world `head`-style early exit. The loop must latch the writer
     // closed, keep draining the upstream reader to EOF, and report success
     // with the bytes that actually reached the sink — none, here.
-    let (source_read, source_write) = make_pipe();
-    let (sink_read, sink_write) = make_pipe();
+    let (source_read, source_write) = crate::test_support::unwrap_ok(make_pipe());
+    let (sink_read, sink_write) = crate::test_support::unwrap_ok(make_pipe());
     let payload = b"payload-written-after-the-downstream-hangs-up";
-    write_all_to(&source_write, payload);
+    crate::test_support::unwrap_ok(write_all_to(&source_write, payload));
     // Close the source's write end so the read loop can reach EOF.
     drop(source_write);
     // Close the sink's read end so every write fails with a broken pipe.

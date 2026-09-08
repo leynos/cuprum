@@ -23,20 +23,20 @@ type PipePair = (OwnedFd, OwnedFd);
 /// one place; tests needing several independent pipes request it once per
 /// `#[from(pipe)]` parameter.
 #[fixture]
-fn pipe() -> PipePair {
+fn pipe() -> io::Result<PipePair> {
     make_pipe()
 }
 
 #[rstest]
 fn splice_transfers_all_bytes_between_pipes(
-    #[from(pipe)] source: PipePair,
-    #[from(pipe)] sink: PipePair,
+    #[from(pipe)] source_result: io::Result<PipePair>,
+    #[from(pipe)] sink_result: io::Result<PipePair>,
 ) {
-    let (source_read, source_write) = source;
-    let (sink_read, sink_write) = sink;
+    let (source_read, source_write) = unwrap_ok(source_result);
+    let (sink_read, sink_write) = unwrap_ok(sink_result);
     let payload = b"unified splice loop payload";
 
-    write_all_to(&source_write, payload);
+    unwrap_ok(write_all_to(&source_write, payload));
     drop(source_write); // EOF for the splice loop.
 
     let outcome = try_splice_pump(&source_read, &sink_write, 4096);
@@ -49,7 +49,8 @@ fn splice_transfers_all_bytes_between_pipes(
         }
         other => panic!("expected Some(Ok(_)) from pipe splice, got {other:?}"),
     }
-    assert_eq!(read_all_from(&sink_read), payload);
+    let collected = unwrap_ok(read_all_from(&sink_read));
+    assert_eq!(collected, payload);
 }
 
 #[rstest]
@@ -76,14 +77,14 @@ fn unsupported_descriptors_signal_fallback() {
 
 #[rstest]
 fn broken_pipe_drains_reader_and_reports_transferred_bytes(
-    #[from(pipe)] source: PipePair,
-    #[from(pipe)] sink: PipePair,
+    #[from(pipe)] source_result: io::Result<PipePair>,
+    #[from(pipe)] sink_result: io::Result<PipePair>,
 ) {
-    let (source_read, source_write) = source;
-    let (sink_read, sink_write) = sink;
+    let (source_read, source_write) = unwrap_ok(source_result);
+    let (sink_read, sink_write) = unwrap_ok(sink_result);
     let payload = b"bytes that can no longer be delivered";
 
-    write_all_to(&source_write, payload);
+    unwrap_ok(write_all_to(&source_write, payload));
     drop(source_write);
     drop(sink_read); // Break the downstream pipe before pumping.
 
@@ -95,7 +96,7 @@ fn broken_pipe_drains_reader_and_reports_transferred_bytes(
 
     // The drain must have consumed the source to EOF so upstream writers
     // cannot block on a full pipe buffer.
-    let leftover = read_all_from(&source_read);
+    let leftover = unwrap_ok(read_all_from(&source_read));
     assert!(
         leftover.is_empty(),
         "reader must be drained, got {leftover:?}"
@@ -103,14 +104,14 @@ fn broken_pipe_drains_reader_and_reports_transferred_bytes(
 }
 
 #[rstest]
-fn drain_reader_consumes_to_eof(pipe: PipePair) {
-    let (read_end, write_end) = pipe;
-    write_all_to(&write_end, b"residual data");
+fn drain_reader_consumes_to_eof(#[from(pipe)] pipe_result: io::Result<PipePair>) {
+    let (read_end, write_end) = unwrap_ok(pipe_result);
+    unwrap_ok(write_all_to(&write_end, b"residual data"));
     drop(write_end);
 
     unwrap_ok(drain_reader(read_end.as_raw_fd(), 8));
 
-    let leftover = read_all_from(&read_end);
+    let leftover = unwrap_ok(read_all_from(&read_end));
     assert!(leftover.is_empty(), "drain must consume the pipe to EOF");
 }
 
