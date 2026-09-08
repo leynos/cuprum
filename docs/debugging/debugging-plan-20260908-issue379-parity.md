@@ -8,15 +8,17 @@ experiment; it must not run full repository gates or edit production code.
 
 ## Current state
 
-Round 33 local checks are green: Python recorded 1,568 passes and one skip,
-Rust recorded 112/112 tests with no skips, and the extension-required suite
-recorded 80 passes and one skip. The nine compiler probes, Windows cross-
-Clippy, development build, and cached Kani setup also passed. The formal and
-native evidence remains 2 Verus functions, 7 native plus 11 safe Kani
-harnesses, 13 Miri tests, and 4 detected fault mutations. Hosted Windows/macOS
-runtime checks and CodeRabbit review remain pending.
+Round 35 integrated local checks are green: Python recorded 1,568 passes and
+one skip in `/tmp/issue379-round35-test.log`, Rust recorded 115/115 tests with
+no skips, and the extension-required suite recorded 80 passes and one skip. The
+nine compiler probes, Windows cross-Clippy, and development build also passed.
+The cached Kani setup had already passed in Round 33. The formal and native
+evidence remains 2 Verus functions, 7 native plus 11 safe Kani harnesses, 13
+Miri tests, and 4 detected fault mutations. The Round 33 checkpoint remains
+retained in the history. Hosted Windows/macOS runtime checks and the second
+CodeRabbit review remain pending; the first review passed with 0 findings.
 
-Round 33's `fmt`, `check-fmt`, `lint`, `typecheck`, `test`, `markdownlint`, and
+Round 35's `fmt`, `check-fmt`, `lint`, `typecheck`, `test`, `markdownlint`, and
 `nixie` gates all passed.
 
 The historical native payload mismatch remains unexplained and is not claimed
