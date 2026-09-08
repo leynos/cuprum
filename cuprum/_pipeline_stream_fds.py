@@ -114,6 +114,11 @@ def _pause_reader_transport(
 ) -> _ReaderPause:
     """Pause reader callbacks while a duplicate-backed native worker pumps."""
     transport = _stream_transport(reader)
+    is_closing = getattr(transport, "is_closing", None)
+    if callable(is_closing) and is_closing():
+        # asyncio silently ignores pause on a closing transport. Its queued
+        # connection_lost callback can still close the FD during hand-off.
+        return _ReaderPause(decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED)
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
     if not callable(pause_reading):

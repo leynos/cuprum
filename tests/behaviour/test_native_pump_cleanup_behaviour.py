@@ -12,7 +12,6 @@ import typing as typ
 import pytest
 
 from cuprum import (
-    ECHO,
     ExecutionContext,
     ScopeConfig,
     _pipeline_native_pump_runtime,
@@ -86,14 +85,18 @@ def _make_cleanup_scenario() -> _CleanupScenario:
     """Create a two-stage pipeline whose pump remains active until cancelled."""
     _, python_program = python_catalogue()
     catalogue = combine_programs_into_catalogue(
-        ECHO,
         python_program,
         project_name="native-pump-cleanup-behaviour",
     )
-    echo = sh.make(ECHO, catalogue=catalogue)
     python = sh.make(python_program, catalogue=catalogue)
-    pipeline = echo("-n", "payload") | python("-c", "import sys; sys.stdin.read()")
-    return _CleanupScenario(pipeline, frozenset((ECHO, python_program)))
+    # The scenario requires a live reader at hand-off, not an echo process
+    # whose EOF may already have queued the transport's close callback.
+    producer = (
+        "import sys, threading; sys.stdout.write('payload'); "
+        "sys.stdout.flush(); threading.Event().wait()"
+    )
+    pipeline = python("-c", producer) | python("-c", "import sys; sys.stdin.read()")
+    return _CleanupScenario(pipeline, frozenset((python_program,)))
 
 
 async def _cancel_public_pipeline(

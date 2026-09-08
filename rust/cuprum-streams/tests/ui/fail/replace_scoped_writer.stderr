@@ -1,0 +1,12 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/replace_scoped_writer.rs:7:27
+  |
+7 |         std::mem::replace(scoped_writer, replacement)
+  |         ----------------- ^^^^^^^^^^^^^ types differ in mutability
+  |         |
+  |         arguments to this function are incorrect
+  |
+  = note: expected mutable reference `&mut W`
+                     found reference `&W`
+note: function defined here
+ --> $RUST/core/src/mem/mod.rs
