@@ -55,7 +55,7 @@ jobs:
       RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # Coverage generation runs project code; the scoped token must not
           # stay in .git/config where that code could read it.
@@ -151,12 +151,12 @@ jobs:
         run: sccache --zero-stats
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           enable-cache: false
 
@@ -164,7 +164,7 @@ jobs:
       # same pinned toolchain the pull-request coverage job uses rather than
       # whatever the runner image ships.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@6b5cdc2d4c0bb72cafd5a66d24d248ac25827db9
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -203,7 +203,7 @@ jobs:
       # and without the check `always` would publish its coverage as the
       # authoritative baseline.
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@77ea10341249024e22ec5d9069e3caa7596e0d4f
+        uses: leynos/shared-actions/.github/actions/generate-coverage@6b5cdc2d4c0bb72cafd5a66d24d248ac25827db9
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
@@ -239,7 +239,7 @@ jobs:
         env:
           CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         if: env.CS_ACCESS_TOKEN != ''
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@6b5cdc2d4c0bb72cafd5a66d24d248ac25827db9
         with:
           format: cobertura
           path: coverage.xml
