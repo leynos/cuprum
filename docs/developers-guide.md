@@ -2533,6 +2533,18 @@ The splice behavioural tests expose that shared `make_pipe` as an rstest `pipe`
 fixture, so scenarios needing several independent pipes inject it once per
 `#[from(pipe)]` parameter.
 
+### Fallible Rust test I/O
+
+The Unix-only `test_support` helpers `make_pipe`, `dup_as_file`,
+`write_all_to`, and `read_all_from` return `io::Result` values. They preserve
+operating-system errors from pipe creation, descriptor duplication, reads, and
+writes. Fixtures in `io_utils/tests.rs`, `lib_tests.rs`, and `splice/tests.rs`
+pass those results into recognized test bodies, which use
+`test_support::unwrap_ok` at the assertion boundary under the current lint
+configuration. Keep this error propagation intact when adding descriptor-backed
+tests. Keep the sibling `test_support_tests.rs` errno assertion local to this
+descriptor contract; it is not a general assertion framework.
+
 ## Rust property testing and verification
 
 Rust-level tests for `cuprum-rust` live with the crate under
