@@ -51,6 +51,8 @@ TEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_native_sdist.py \
+  scripts/tests/test_boundary_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -326,3 +328,46 @@ benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
 	awk 'BEGIN {FS=":"; printf "Available targets:\n"} {printf "  %-20s %s\n", $$1, $$2}'
+
+# Boundary verifiers use their own pinned binary toolchains; normal gates keep
+# rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
+PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
+PROVER_TOOLS = uv tool run --from $(PROVER_TOOLS_SOURCE) prover-tools
+VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+MIRI_TOOLCHAIN = nightly-2026-08-07
+KANI_VERSION = 0.67.0
+KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.kani/kani-$(KANI_VERSION)/lib
+
+.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
+install-verus: ## Install the checksum-verified prebuilt Verus release
+	$(PROVER_TOOLS) verus install --install-dir $(VERUS_INSTALL_DIR)
+	uv run python scripts/install_boundary_z3.py
+
+boundary-verus: ## Verify actual production length/accounting kernels
+	uv run python scripts/render_boundary_proofs.py
+	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
+
+boundary-kani: ## Check bounded native ownership and existing policy proofs
+	$(PROVER_TOOLS) kani check-version
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
+
+boundary-miri: ## Interpret isolated native resource and memory paths
+	cd $(RUST_DIR) && $(CARGO) +$(MIRI_TOOLCHAIN) miri test --package cuprum-native-io --lib
+
+boundary-test: ## Run isolated native integration and verification-tool contracts
+	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
+	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
+
+.PHONY: install-boundary-kani
+install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
+	uv run python scripts/install_boundary_kani.py
+	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" cargo kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
+
+.PHONY: boundary-contract
+boundary-contract: ## Confirm actual safe targets reject all forms of unsafe Rust
+	$(UV_RUN_ENV) uv run python scripts/check_boundary_contract.py
+
+.PHONY: boundary-faults
+boundary-faults: ## Require proof and real-unwind regressions to detect deliberate faults
+	$(UV_RUN_ENV) uv run python -m scripts.check_boundary_faults

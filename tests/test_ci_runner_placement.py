@@ -133,6 +133,7 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
         | set(WINDOWS_HOSTED_CASES)
         | {
             ("build-wheels.yml", "build-native-wheels"),
+            ("rust-boundaries.yml", "native"),
             # Callers of a reusable workflow declare no runner of their own.
             ("ci.yml", "build-wheels"),
             ("release.yml", "build-wheels"),
