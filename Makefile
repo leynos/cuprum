@@ -332,7 +332,7 @@ help: ## Show available targets
 # Boundary verifiers use their own pinned binary toolchains; normal gates keep
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
 PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
-PROVER_TOOLS = uv tool run --from $(PROVER_TOOLS_SOURCE) prover-tools
+PROVER_TOOLS = uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
