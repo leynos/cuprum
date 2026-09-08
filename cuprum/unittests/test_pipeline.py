@@ -166,6 +166,12 @@ def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None
     assert result.stages[1].exit_code == 0
     assert result.stages[0].pid > 0
     assert result.stages[1].pid > 0
+    for stage in result.stages:
+        assert stage.started_at > 0
+        assert stage.duration >= 0
+        assert stage.max_rss_bytes is None
+        assert stage.user_cpu_seconds is None
+        assert stage.system_cpu_seconds is None
 
 
 def test_pipeline_propagates_cancelled_pipe_task(

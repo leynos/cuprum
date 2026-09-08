@@ -108,6 +108,11 @@ def _build_pipeline_stage_results(
                 pid=process.pid if process.pid is not None else -1,
                 stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
                 stderr=inputs.stderr_by_stage[idx],
+                started_at=inputs.wait_result.wall_clock_started_at[idx],
+                duration=0.0 if duration_s is None else duration_s,
+                max_rss_bytes=None,
+                user_cpu_seconds=None,
+                system_cpu_seconds=None,
             ),
         )
     return stage_results

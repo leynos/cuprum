@@ -71,6 +71,21 @@ def test_public_catalogue_behaviour_via_reexports() -> None:
     )
 
 
+def test_command_result_exposes_execution_measurements() -> None:
+    """``CommandResult`` keeps exit semantics while exposing measurements."""
+    fields = {field.name for field in dc.fields(c.CommandResult)}
+
+    assert {
+        "started_at",
+        "duration",
+        "max_rss_bytes",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+    } <= fields
+    assert c.CommandResult(c.ECHO, (), 0, 1, "", "", 0.0, 0.0).ok is True
+    assert c.CommandResult(c.ECHO, (), 1, 1, "", "", 0.0, 0.0).ok is False
+
+
 def test_exec_id_keeps_its_positional_slot() -> None:
     """``exec_id`` must stay the first optional field after ``error_type``.
 

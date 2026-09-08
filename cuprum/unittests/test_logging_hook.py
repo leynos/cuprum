@@ -150,6 +150,8 @@ def test_logging_hook_logs_unknown_duration() -> None:
             pid=1234,
             stdout=None,
             stderr=None,
+            started_at=0.0,
+            duration=0.0,
         )
         exit_(cmd, result)
 
@@ -177,6 +179,8 @@ def test_logging_hook_logs_non_zero_exit_code() -> None:
             pid=4321,
             stdout="x" * 10,
             stderr="y" * 5,
+            started_at=0.0,
+            duration=0.0,
         )
         exit_(cmd, result)
 

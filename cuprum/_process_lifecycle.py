@@ -195,6 +195,7 @@ async def _spawn_pipeline_processes(
     list[asyncio.Task[str | None] | None],
     asyncio.Task[str | None] | None,
     list[float],
+    list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
     from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
@@ -206,13 +207,13 @@ async def _spawn_pipeline_processes(
     stderr_tasks: list[asyncio.Task[str | None] | None] = []
     stdout_task: asyncio.Task[str | None] | None = None
     started_at: list[float] = []
+    wall_clock_started_at: list[float] = []
 
-    last_idx = len(observations) - 1
     try:
         for idx, observation in enumerate(observations):
             stream_fds = _get_stage_stream_fds(
                 idx,
-                last_idx,
+                len(observations) - 1,
                 capture_or_echo=config.capture_or_echo,
             )
             process = await asyncio.create_subprocess_exec(
@@ -225,12 +226,13 @@ async def _spawn_pipeline_processes(
             )
             processes.append(process)
             started_at.append(time.perf_counter())
+            wall_clock_started_at.append(time.time())
             observation.emit("start", _EventDetails(pid=process.pid))
 
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
                 process,
                 config,
-                is_last_stage=(idx == last_idx),
+                is_last_stage=(idx == len(observations) - 1),
                 observation=observation,
             )
             stderr_tasks.append(stderr_task)
@@ -245,7 +247,7 @@ async def _spawn_pipeline_processes(
         )
         raise
 
-    return processes, stderr_tasks, stdout_task, started_at
+    return processes, stderr_tasks, stdout_task, started_at, wall_clock_started_at
 
 
 async def _terminate_process_via_wait_task(

@@ -133,6 +133,19 @@ class CommandResult:
         Captured standard output, or ``None`` when capture was disabled.
     stderr:
         Captured standard error, or ``None`` when capture was disabled.
+    started_at:
+        Wall-clock timestamp at which process execution started.
+    duration:
+        Monotonic process duration in seconds.
+    max_rss_bytes:
+        Maximum-resident-set-size delta in bytes. ``None`` on Windows and
+        platforms that cannot provide child resource accounting.
+    user_cpu_seconds:
+        User CPU-time delta in seconds. ``None`` on Windows and platforms that
+        cannot provide child resource accounting.
+    system_cpu_seconds:
+        System CPU-time delta in seconds. ``None`` on Windows and platforms
+        that cannot provide child resource accounting.
 
     """
 
@@ -142,6 +155,11 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
+    started_at: float
+    duration: float
+    max_rss_bytes: int | None = None
+    user_cpu_seconds: float | None = None
+    system_cpu_seconds: float | None = None
 
     @property
     def ok(self) -> bool:
