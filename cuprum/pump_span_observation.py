@@ -24,7 +24,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from contextvars import Token
 
-    from cuprum.adapters.tracing_protocols import Span, Tracer
+    from cuprum.tracing_protocols import Span, Tracer
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +87,9 @@ class _PumpHopSpans:
     spans: tuple[Span, ...] = ()
 
 
+_EMPTY_PUMP_HOP_SPANS = _PumpHopSpans()
+
+
 def current_pump_span_tracers() -> tuple[Tracer, ...]:
     """Return the hop tracers registered in the current context."""
     return _pump_span_tracers.get()
@@ -113,7 +116,7 @@ def _open_pump_hop_spans(attributes: cabc.Mapping[str, object]) -> _PumpHopSpans
     """Open one Rust-pump hop span for each registered tracer."""
     tracers = _pump_span_tracers.get()
     if not tracers:
-        return _PumpHopSpans()
+        return _EMPTY_PUMP_HOP_SPANS
 
     spans: list[Span] = []
     for tracer in tracers:

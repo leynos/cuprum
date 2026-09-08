@@ -1124,11 +1124,11 @@ count to Rust test commands and, through `CARGO_JOB_ENV`, to both
 
 `cuprum/adapters/tracing_adapter.py` provides `TracingHook`, an observe hook
 that turns the `ExecEvent` stream into OpenTelemetry-style spans. It depends
-only on the `Tracer` and `Span` protocols from
-`cuprum.adapters.tracing_protocols`, so any backend that implements them can be
-plugged in. `tracing_adapter` re-exports `Span` and `Tracer` as its public
-integration boundary. The legacy `cuprum.adapters._tracing_protocols` module is
-a compatibility re-export only and does not define a second protocol contract.
+only on the neutral `Tracer` and `Span` protocols from
+`cuprum.tracing_protocols`, so core instrumentation and any backend that
+implements them remain independent of adapter implementations. Both
+`tracing_adapter` and `cuprum.adapters.tracing_protocols` re-export the same
+protocol objects for compatibility; neither defines a second contract.
 `cuprum/adapters/tracing_memory.py` supplies `InMemoryTracer` and
 `InMemorySpan`, the reference doubles used by tests and examples:
 `InMemoryTracer` collects spans in memory and protects its span store through
@@ -1409,9 +1409,9 @@ Runtime (`cuprum/`):
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
-- `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
-  `Tracer` protocols. `tracing_adapter` re-exports both;
-  `_tracing_protocols.py` remains a compatibility re-export only.
+- `cuprum/tracing_protocols.py` — the canonical neutral PEP 544 `Span`/
+  `Tracer` protocols. `tracing_adapter` and
+  `cuprum/adapters/tracing_protocols.py` re-export both for compatibility.
 
 Benchmarks (`benchmarks/`):
 

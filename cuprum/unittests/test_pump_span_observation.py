@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import logging
 import typing as typ
+from pathlib import Path
 
 import pytest
 
+from cuprum import pump_span_observation
+from cuprum.adapters import tracing_protocols as adapter_tracing_protocols
+from cuprum.adapters.tracing_adapter import (
+    Span as AdapterSpan,
+)
+from cuprum.adapters.tracing_adapter import (
+    Tracer as AdapterTracer,
+)
 from cuprum.adapters.tracing_memory import InMemoryTracer
 from cuprum.pump_span_events import PUMP_HOP_SPAN_NAME, PumpHopOutcome
 from cuprum.pump_span_observation import (
@@ -15,9 +24,7 @@ from cuprum.pump_span_observation import (
     current_pump_span_tracers,
     observe_pump_span,
 )
-
-if typ.TYPE_CHECKING:
-    from cuprum.adapters.tracing_protocols import Tracer
+from cuprum.tracing_protocols import Span, Tracer
 
 
 class _FailingTracer:
@@ -39,6 +46,22 @@ class _InterruptingTracer:
 
 class TestPumpSpanObservation:
     """Registry and observer-failure contracts for pump-hop spans."""
+
+    def test_tracing_protocol_imports_preserve_contract_identity(self) -> None:
+        """Core and legacy adapter paths expose the same protocol objects."""
+        assert adapter_tracing_protocols.Span is Span
+        assert adapter_tracing_protocols.Tracer is Tracer
+        assert AdapterSpan is Span
+        assert AdapterTracer is Tracer
+
+    def test_core_pump_observation_has_no_adapter_protocol_dependency(self) -> None:
+        """The core observation boundary imports its contracts from core."""
+        module_source = pump_span_observation.__file__
+        assert module_source is not None
+        source = Path(module_source).read_text(encoding="utf-8")
+
+        assert "cuprum.adapters.tracing_protocols" not in source
+        assert "from cuprum.tracing_protocols import Span, Tracer" in source
 
     def test_registration_restores_the_prior_tracer_tuple(self) -> None:
         """Registrations support nested context-manager token restoration."""

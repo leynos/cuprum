@@ -181,6 +181,13 @@ def then_cancelled_pump_hop_span(behaviour_state: dict[str, object]) -> None:
         message="only successful spans may be marked ok",
     )
     _require(
-        condition=order.index("worker_returned") < order.index("restored"),
-        message=f"worker must return before descriptors restore: {order}",
+        condition=(
+            order.index("worker_returned")
+            < order.index("span_ended")
+            < order.index("restored")
+        ),
+        message=(
+            "worker return, span closure, and descriptor restoration must be "
+            f"ordered: {order}"
+        ),
     )

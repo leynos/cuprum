@@ -51,9 +51,10 @@ from cuprum.pump_span_events import (
     PumpHopOutcome,
 )
 from cuprum.pump_span_observation import (
+    _EMPTY_PUMP_HOP_SPANS,
     _close_pump_hop_spans,
     _open_pump_hop_spans,
-    _PumpHopSpans,
+    current_pump_span_tracers,
 )
 
 if typ.TYPE_CHECKING:
@@ -202,12 +203,14 @@ def _submit_rust_pump(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return None
 
-    pump_hop_spans = _PumpHopSpans()
+    tracers = current_pump_span_tracers()
+    pump_hop_spans = _EMPTY_PUMP_HOP_SPANS
     try:
-        pump_hop_spans = _open_pump_hop_spans({
-            PUMP_HOP_OPERATION_ATTRIBUTE: "rust_pump",
-            PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: NATIVE_PUMP_BUFFER_SIZE,
-        })
+        if tracers:
+            pump_hop_spans = _open_pump_hop_spans({
+                PUMP_HOP_OPERATION_ATTRIBUTE: "rust_pump",
+                PUMP_HOP_BUFFER_SIZE_ATTRIBUTE: NATIVE_PUMP_BUFFER_SIZE,
+            })
         context = contextvars.copy_context()
         native_pump = loop.run_in_executor(
             None,
