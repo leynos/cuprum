@@ -240,6 +240,15 @@ jobs:
       - name: Install Nixie
         uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
 
+      # The formatter profile needs nightly-only settings. Install its pinned
+      # maintenance toolchain before restoring the supported project compiler.
+      - name: Install formatter Rust toolchain
+        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          toolchain: 'nightly-2026-05-28'
+          cache-provider: external
+          use-sccache: 'false'
+
       - name: Install project Rust toolchain
         uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
