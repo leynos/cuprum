@@ -144,8 +144,9 @@ def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
 
     Selecting `external` delegates cache ownership to the workflow. The lint
     job temporarily selects a second toolchain because Nixie's Merman
-    dependency needs newer Rust than the project gate; both setup steps must
-    keep that same external cache policy.
+    dependency needs newer Rust than the project gate. Its Nixie, formatter
+    nightly, and restored project-stable setup steps must keep that same
+    external cache policy.
     """
     for workflow_name, job_name in expand(CACHED_JOBS):
         setup_steps = [
@@ -156,7 +157,7 @@ def test_shared_rust_setup_owns_no_cache_of_its_own() -> None:
         if not setup_steps:
             continue
         expected_count = (
-            2 if (workflow_name, job_name) == ("ci.yml", "lint-test") else 1
+            3 if (workflow_name, job_name) == ("ci.yml", "lint-test") else 1
         )
         assert len(setup_steps) == expected_count, (
             f"{workflow_name}:{job_name} must use shared setup-rust "

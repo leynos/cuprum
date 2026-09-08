@@ -16,6 +16,10 @@ use rstest::{fixture, rstest};
 /// A fresh `pipe(2)` pair (`read_end`, `write_end`) for descriptor-backed
 /// tests, so the shared setup lives in one place rather than a repeated
 /// `make_pipe()` call per test.
+// `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
+// form that triggers `unused_braces` under Rust 1.85. Remove this skip when
+// that formatter/rstest combination compiles the configured profile cleanly.
+#[rustfmt::skip]
 #[fixture]
 fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     make_pipe()

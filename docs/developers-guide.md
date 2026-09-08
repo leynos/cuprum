@@ -312,10 +312,23 @@ cranelift; the coverage gate cannot, because cranelift has no
 The lint job installs Nixie and Whitaker through the pinned
 `leynos/shared-actions` installers. Nixie's installer also provisions Merman;
 the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
-compiler. The job then restores Rust `1.85.0`, the project's supported
+compiler. The job then installs `nightly-2026-05-28` with `rustfmt` for the
+maintenance formatter before restoring Rust `1.85.0`, the project's supported
 toolchain, before installing Whitaker and running the project gates. The
-Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the job environment
-(`0.2.7`, the workflow's configured installer version).
+following stable setup replaces the shared action's temporary override, so the
+build, test, lint, and documentation commands continue to use Rust `1.85.0`.
+The current `fmt` and `check-fmt` recipes also continue to use that stable
+toolchain; the pinned nightly is provisioned for the later formatter-profile
+layer. The stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for
+local maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION`
+from the job environment (`0.2.7`, the workflow's configured installer version).
+
+The `pipe` rstest fixtures retain a scoped `#[rustfmt::skip]`. Rustfmt
+`1.9.0-nightly (57d06900fd 2026-05-27)` turns either fixture into a one-line
+form whose rstest `0.26.1` expansion triggers `unused_braces` under Rust
+`1.85.0`. The formatter profile remains unchanged and applies to every other
+item. Remove the two skips only after a candidate formatter or rstest update
+passes the profile check and warnings-denied pipe-fixture test.
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official

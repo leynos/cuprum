@@ -211,6 +211,7 @@
       'cuprum/unittests/test_rust_errno.py',
       'cuprum/unittests/test_rust_errno_windows.py',
       'cuprum/unittests/test_rust_extension.py',
+      'cuprum/unittests/test_rust_formatter_toolchain.py',
       'cuprum/unittests/test_rust_pump_debug_abort.py',
       'cuprum/unittests/test_rust_pump_handoff_metrics.py',
       'cuprum/unittests/test_rust_pump_handoff_observability.py',

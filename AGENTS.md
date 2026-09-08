@@ -209,6 +209,11 @@ working on the Rust portions of the project:
     running the Rust test suite with warnings denied. Use `make fmt`
     (`cargo fmt --all`) to apply formatting fixes reported by the formatter
     check alongside the Python and Markdown formatters.
+- The project toolchain stays pinned to Rust `1.85.0` and declares `rustfmt`,
+  `clippy`, and `rust-analyzer`. CI also provisions `nightly-2026-05-28` for
+  the maintenance formatter, then restores the project toolchain. The current
+  `fmt` and `check-fmt` recipes still use the project toolchain; the nightly is
+  not a build, test, lint, or documentation toolchain.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions
