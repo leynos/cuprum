@@ -82,7 +82,11 @@ def _create_stage_capture_tasks(
             process.stderr,
             dc.replace(
                 config.stream_config,
-                sink=config.stderr_sink,
+                sink=(
+                    config.sink_session.log
+                    if config.sink_session is not None
+                    else config.stderr_sink
+                ),
                 stream=EchoStream.STDERR,
             ),
             on_line=stderr_on_line,

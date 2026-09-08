@@ -116,6 +116,7 @@ def _single_command_tags(
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
+        sink_session=None,
     )
     observation = _prepare_execution_observation(
         cmd,
@@ -135,8 +136,7 @@ def _pipeline_tags(
 ) -> list[cabc.Mapping[str, object]]:
     """Build pipeline observations and return per-stage tags."""
     config = _prepare_pipeline_config(
-        capture=capture,
-        echo=echo,
+        output=sh.RunOutputOptions(capture=capture, echo=echo),
         timeout=None,
         context=context,
     )

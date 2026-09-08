@@ -945,6 +945,26 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Beyond the tee sinks above, a run may opt into a *presentation sink* through
+`RunOutputOptions.sink` (see ADR-010). A presentation sink reshapes the
+parent-facing output — framing it in a GitHub Actions log group and annotating
+failures — without changing capture, success semantics, or the returned result.
+The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
+one session before the subprocess starts, route echoed output through the
+session's `log` writer, and close the session exactly once per terminal path
+with a bounded categorical outcome. All presentation knowledge
+(workflow-command syntax, escaping, injection shielding) stays inside the
+adapter; runs without a sink are unchanged. The single-command and pipeline
+runners share this contract, and both close the session through the same
+shielded finalization that reconciles observe-hook tasks, so cancellation
+cannot abandon the framing part-way.
+
+Activation policy is also adapter-local: `GitHubActionsSink` reads
+`GITHUB_ACTIONS` from the parent environment at `open_session` time and
+declines activation (returning `None`) unless it holds the runner's `true`
+value, unless the caller passes `force=True`; the execution layer itself never
+inspects the environment.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model

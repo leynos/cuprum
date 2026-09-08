@@ -40,6 +40,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+    from cuprum.sinks.base import OutputSession
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -50,6 +51,7 @@ class _SubprocessExecution:
     ctx: ExecutionContext
     capture: bool
     echo: bool
+    sink_session: OutputSession | None
     timeout: float | None
     observation: _StageObservation
     stdin_data: bytes | None
@@ -98,13 +100,18 @@ def _spawn_stream_consumers(
     """Spawn stdout and stderr stream consumer tasks."""
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_config = dc.replace(
-        stream_config,
-        sink=(
+    stderr_sink = (
+        execution.sink_session.log
+        if execution.sink_session is not None
+        else (
             execution.ctx.stderr_sink
             if execution.ctx.stderr_sink is not None
             else sys.stderr
-        ),
+        )
+    )
+    stderr_config = dc.replace(
+        stream_config,
+        sink=stderr_sink,
         stream=EchoStream.STDERR,
     )
     return (
@@ -129,15 +136,31 @@ def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
 ) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context."""
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo,
-        sink=(
+    """Build the stdout _StreamConfig for an execution context.
+
+    When a presentation-sink session is active, mirrored stdout is routed
+    through the session's log destination so it lands inside the adapter's
+    framing (for example, inside the GitHub Actions group) in the order the
+    adapter received it.
+
+    Returns
+    -------
+    _StreamConfig
+        The stream configuration for the run's stdout drain.
+    """
+    stdout_sink = (
+        execution.sink_session.log
+        if execution.sink_session is not None
+        else (
             execution.ctx.stdout_sink
             if execution.ctx.stdout_sink is not None
             else sys.stdout
-        ),
+        )
+    )
+    return _StreamConfig(
+        capture_output=execution.capture,
+        echo_output=execution.echo,
+        sink=stdout_sink,
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
