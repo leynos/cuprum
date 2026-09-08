@@ -815,11 +815,28 @@ jobs:
     # coverage being generated twice on main.
     if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
-    timeout-minutes: 45
+    # Above the 2,700 s cargo watchdog set below plus the work either side
+    # of the coverage step, which reached 43 s on run 34071469378. Fifty
+    # minutes is the requirement, and the estate's rule is fifteen above
+    # it rather than merely reaching it, because a ceiling sitting on its
+    # requirement is cancelled by the job timer on the first run that
+    # spends the full watchdog, and a cancellation discards the log that
+    # would have explained it. This was 60, which is ten above.
+    timeout-minutes: 65
     needs:
       - lint-test
       - typecheck-test
     env:
+      # The shared coverage action kills `cargo` after this many seconds,
+      # defaulting to 1,800 and mentioning it nowhere. Written down and
+      # raised: the coverage step has never exceeded 418 s here, on run
+      # 34071469378 and read across roughly fifty successful runs, but none
+      # of those was a genuinely cold compile. rstest-bdd's cold run took
+      # about four times its warm one, which would put this at the old
+      # default's shoulder. 2,700 s is six times the worst seen, so a cold
+      # first run on a branch finishes inside it rather than being killed
+      # and read as a hang.
+      RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
     steps:

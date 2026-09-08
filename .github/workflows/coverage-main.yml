@@ -43,7 +43,16 @@ env:
 jobs:
   coverage-upload:
     runs-on: ubicloud-standard-2
-    timeout-minutes: 45
+    # Kept in step with ci.yml's coverage lane: above the 2,700 s cargo
+    # watchdog plus the work either side, and fifteen minutes above that
+    # sum rather than equal to it. This job's own worst outside the
+    # coverage step was 51 s, on run 34067223641.
+    timeout-minutes: 65
+    env:
+      # See ci.yml's coverage job for how this was sized. Written down
+      # rather than inherited: the action's 1,800 s default is mentioned
+      # nowhere in this repository, and this lane is the cold writer.
+      RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4

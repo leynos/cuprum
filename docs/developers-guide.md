@@ -4074,3 +4074,136 @@ makes the stdout-sink resolution logic testable in isolation. The required
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Test timeouts: the tiers this repository sets
+
+Four independent timers can end a test run, and the canonical statement of how
+they must be ordered lives in the `generate-coverage` README in
+`leynos/shared-actions`.[^1] Two of them apply here.
+
+| Tier                     | What it bounds                     | Where it is set                               | Current value  |
+| ------------------------ | ---------------------------------- | --------------------------------------------- | -------------- |
+| Per-test `slow-timeout`  | one test                           | nextest, not configured here                  | absent         |
+| nextest `global-timeout` | the whole test run                 | nextest, not configured here                  | absent         |
+| Cargo watchdog           | one `cargo` invocation, wall clock | `RUN_RUST_CARGO_WAIT_TIMEOUT` at job level    | 2,700 s (45 m) |
+| Job `timeout-minutes`    | the whole job                      | job level in `ci.yml` and `coverage-main.yml` | 65 m           |
+
+*Table: the timers that can end a run, innermost first.*
+
+### The watchdog was the action's default, unmentioned
+
+Both coverage lanes ran on 1,800 seconds because neither set the variable, and
+nothing in this repository said so. A budget nobody chose is one nobody can
+defend, and the failure it produces names `cargo` rather than the test that
+hung, so the run reads as an infrastructure fault.
+
+### How the value was chosen
+
+From this repository's own run history, not a guess.
+
+| Lane                                  | Worst coverage step | Worst whole job | Outside the step | Run         |
+| ------------------------------------- | ------------------- | --------------- | ---------------- | ----------- |
+| `ci.yml` `coverage`                   | 418 s               | 461 s           | 43 s             | 34071469378 |
+| `coverage-main.yml` `coverage-upload` | 322 s               | 370 s           | 51 s             | 34062626757 |
+
+*Table: measured coverage-step and whole-job durations, read across roughly
+fifty successful runs of the two workflows.*
+
+None of those was a genuinely cold compile. That matters more than the numbers
+themselves: rstest-bdd's cold run took about four times its warm one, which
+would put this repository at 1,700 seconds, on the old default's shoulder. A
+budget the first cold run of a branch cannot finish inside produces a failure
+that looks like a hang and is not one.
+
+So the watchdog is 2,700 seconds, six times the worst observed step, and the
+value is written down in both lanes with this reasoning beside it. Raise it if
+the suite grows; lower it only if a hang must be caught sooner than the build
+can legitimately finish, knowing that trades a false failure for a faster one.
+
+### Why the ceilings moved with it
+
+The two clocks do not start together. The job timer starts when the job starts,
+before the checkout and the toolchain setup, and it is still running through
+whatever follows the coverage step; the watchdog starts when `cargo` does. So a
+ceiling merely above the watchdog still cancels the job before the watchdog can
+report an overrun, and a cancellation discards the log that would have
+explained it.
+
+The requirement has three terms: the 2,700 s watchdog, the work outside its
+window, and a margin. The work outside measured 43 s and 51 s on the two lanes,
+and 300 s is six times the worse of those, matching the margin the watchdog
+itself carries. The third term is 900 s, because a ceiling equal to the first
+two is cancelled on the first run that spends the full watchdog, and a
+cancellation discards the log that would have explained it. That makes the
+requirement 65 minutes, which is what both ceilings are: the margin is a term
+of the requirement rather than slack above it.
+
+### The two nextest tiers are a gap, not a decision
+
+There is no `.config/nextest.toml`, so nothing bounds a single test or the run
+as a whole. Adding one would give a hung test a bound that names the test
+rather than `cargo`.
+
+`cuprum/unittests/test_timeout_ordering_contract.py` fails when that file
+appears, so the budgets arrive with this section updated in the same change
+rather than unbounded beneath a watchdog sized for neither. The failure message
+says what to check: that the whole-run budget sits above the largest per-test
+allowance, which is `period` multiplied by `terminate-after` rather than the
+period alone, and inside the watchdog.
+
+Issue 373[^2] holds the measurements a later pass needs to choose both values,
+and notes that the coverage step is `language: mixed`, so the Python half of
+the suite is not bounded by nextest at all and needs thinking about separately.
+
+### The contract
+
+The same file asserts the two tiers that do exist, by value, over every job
+invoking the coverage action in both workflows. It resolves the watchdog from
+the step, then the job, then the workflow, as GitHub does, and it requires the
+ceiling to contain the sum of the watchdogs of the coverage steps in that job,
+so a second invocation added later cannot silently exceed it. The steps are
+summed rather than the watchdog multiplied by their count, because a job may
+give two coverage steps different budgets and multiplying the first would
+understate what the ceiling has to hold.
+
+Both lanes are held to the same watchdog value. They move together or the
+pull-request lane stops predicting the trunk lane it exists to protect.
+
+It pins the manifest each coverage step hands the shared action. This
+repository has no root `Cargo.toml`; the crate is under `rust/`. The action
+decides whether to run `cargo` from the manifest it is given and falls back to
+the repository root, which here holds nothing, so a step that lost
+`cargo-manifest` would measure no Rust while every timer above it still read as
+correctly ordered.
+
+The contract also pins the condition each lane carries. A skipped step runs no
+`cargo`, so its watchdog never arms and the tiers say nothing about it:
+`if: false` on the step or on its job would leave a lane that looks bounded and
+is not, and so would a plausible condition that quietly excluded the event the
+lane exists for. The conditions are pinned rather than forbidden, because the
+one here is legitimate: `ci.yml`'s coverage job runs on pull requests only,
+because the trunk lane covers pushes. A lane gaining, losing or changing a
+condition has to change this section with it, and a lane appearing without an
+entry fails the contract too.
+
+The ceiling requirement sums each coverage step's own watchdog rather than
+multiplying one of them by the step count. Both lanes run the action once, so
+the two readings agree today and this tree cannot tell them apart; they stop
+agreeing the moment a lane raises the budget for one step, which the variable
+allows because it resolves per step. It also carries fifteen minutes above that
+sum, because a ceiling equal to it cancels the job at the moment the watchdog
+would have reported the overrun. The ceilings are 65, up from 60, which was ten
+above the requirement rather than fifteen.
+
+This repository is also the estate's live example of the second route to a
+`cargo` run. It has no root `Cargo.toml`; both coverage lanes pass
+`cargo-manifest: rust/Cargo.toml`, and the shared action falls back to that
+input when no root manifest exists. So these tiers are not inert here, and a
+contract that concluded otherwise from the missing root manifest would skip
+them at exactly the moment they became real.
+
+[^1]: [`generate-coverage`: test timeouts](
+    https://github.com/leynos/shared-actions/blob/main/.github/actions/generate-coverage/README.md)
+
+[^2]: [Issue 373: size the nextest budgets](
+    https://github.com/leynos/cuprum/issues/373)
