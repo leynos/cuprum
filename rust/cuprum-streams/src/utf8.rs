@@ -79,13 +79,14 @@ fn append_valid_prefix(pending: &[u8], output: &mut String, valid_up_to: ValidUp
     if valid_up_to.value() == 0 {
         return;
     }
-    // SAFETY: `valid_up_to` comes from a `Utf8Error`, so this prefix is known
-    // to be valid UTF-8.
+    // The prefix normally comes from Utf8Error; keep validation local so
+    // an incorrect bound cannot introduce undefined behaviour.
     let Some(prefix_bytes) = pending.get(..valid_up_to.value()) else {
         return;
     };
-    let valid_prefix = unsafe { std::str::from_utf8_unchecked(prefix_bytes) };
-    output.push_str(valid_prefix);
+    if let Ok(valid_prefix) = std::str::from_utf8(prefix_bytes) {
+        output.push_str(valid_prefix);
+    }
 }
 
 /// Handle a UTF-8 decoding error by replacing invalid bytes.

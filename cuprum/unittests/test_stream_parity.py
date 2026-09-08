@@ -217,7 +217,13 @@ class TestStreamParity:
         pipeline, allowlist = _build_pipeline(script, stages=stages)
         result = run_parity_pipeline(pipeline, allowlist)
 
-        assert result.stdout == "x" * size, "payload should survive pipeline intact"
+        # Report byte counts without constructing a huge repetitive-string diff.
+        matches = result.stdout == "x" * size
+        assert matches, (
+            f"payload should survive pipeline intact: expected={size}, "
+            f"actual={len(result.stdout or '')}, "
+            f"stage_exits={[stage.exit_code for stage in result.stages or ()]}"
+        )
         assert result.ok is True, "pipeline should succeed"
         assert len(result.stages) == stages, (
             f"pipeline should have exactly {stages} stages"

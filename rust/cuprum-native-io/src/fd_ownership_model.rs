@@ -1,30 +1,13 @@
-//! Pure ownership model for the borrowed-reader / consumed-writer contract.
+//! Close-effect model instantiated with the production retained-owner kernel.
 //!
-//! Kani cannot model real operating-system descriptor effects: closing an FD
-//! is I/O, which the bounded model checker does not interpret. This module
-//! therefore replaces the descriptor with [`ModelFd`], whose `Drop` records a
-//! close in a [`CloseLog`] instead of issuing one. Everything else — the
-//! [`ManuallyDrop`] wrapper, the closure call, the early-exit edge — is real
-//! Rust, so Rust's own drop elaboration decides the outcome rather than any
-//! hand-written accounting.
-//!
-//! # Modelling the unwind edge
-//!
-//! The hazard `with_borrowed_reader` exists to prevent only appears when a
-//! panic unwinds *through the helper's own frame*: the superseded
-//! `mem::forget`-after-the-call pattern was skipped on that path, so the
-//! caller-owned reader was dropped and closed. Kani builds with panics as
-//! aborts, so a literal `panic!` cannot be used to reach that path.
-//!
-//! [`ModelUnwind`] and the `?` operator stand in for it. Both a `?` early
-//! return and a real unwind leave the frame *without executing the statements
-//! that follow the operation*, and both run drop glue for every live local.
-//! That correspondence is what gives the proofs their teeth: a `mem::forget`
-//! placed after the operation is skipped by `?` exactly as it is skipped by an
-//! unwind, so reintroducing the old pattern makes the proofs fail.
+//! `ModelFd` substitutes an observable drop counter for an OS descriptor.
+//! The production helper executes unchanged; only the resource is modelled.
+//! Normal and error returns are checked here. Neither OS close effects nor
+//! real panic-unwind are proved by this model: native regressions exercise
+//! those paths, including the historical trailing-`mem::forget` mistake.
 
+use crate::memory::with_retained_owner;
 use core::cell::Cell;
-use core::mem::ManuallyDrop;
 
 /// Records how many times the modelled descriptor was closed.
 ///
@@ -75,43 +58,35 @@ impl Drop for ModelFd<'_> {
     }
 }
 
-/// Stands in for a panic-unwind leaving the frame early.
+/// Represents an ordinary operation error, not panic-unwind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ModelUnwind;
+pub(crate) struct ModelError;
 
 /// How a modelled operation leaves its scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExitMode {
     /// The operation ran to completion and returned normally.
     Normal,
-    /// The operation aborted, standing in for a panic-unwind through the
-    /// helper's frame.
-    Unwind,
+    /// The operation returned an error.
+    Error,
 }
 
 impl ExitMode {
     /// Outcome an operation returns under this exit mode.
-    pub(crate) const fn outcome(self) -> Result<(), ModelUnwind> {
+    pub(crate) const fn outcome(self) -> Result<(), ModelError> {
         match self {
             Self::Normal => Ok(()),
-            Self::Unwind => Err(ModelUnwind),
+            Self::Error => Err(ModelError),
         }
     }
 }
 
-/// Model of `with_borrowed_reader`.
-///
-/// Structurally identical to production: reconstruct the handle, wrap it in
-/// [`ManuallyDrop`], run the operation. The `?` is the modelled unwind edge —
-/// it leaves this frame before any trailing statement could run, so the
-/// wrapper is the only thing standing between the reader and a close.
+/// Run the production retained-owner kernel with an observable resource.
 pub(crate) fn model_with_borrowed_reader<'log, T>(
     fd: ModelFd<'log>,
-    operation: impl FnOnce(&mut ModelFd<'log>) -> Result<T, ModelUnwind>,
-) -> Result<T, ModelUnwind> {
-    let mut handle = ManuallyDrop::new(fd);
-    let value = operation(&mut handle)?;
-    Ok(value)
+    operation: impl FnOnce(&mut ModelFd<'log>) -> Result<T, ModelError>,
+) -> Result<T, ModelError> {
+    with_retained_owner(fd, operation)
 }
 
 /// Model of `pump_stream`'s descriptor handling.
@@ -123,7 +98,7 @@ pub(crate) fn model_pump_stream(
     reader: ModelFd<'_>,
     writer: ModelFd<'_>,
     exit: ExitMode,
-) -> Result<(), ModelUnwind> {
+) -> Result<(), ModelError> {
     // Held to the end of the scope so it drops on the normal return and on
     // the early exit alike, exactly as the real writer handle does.
     let _writer_handle = writer;
@@ -134,7 +109,7 @@ pub(crate) fn model_pump_stream(
 ///
 /// `consume_stream` takes no writer at all: the reader is its only
 /// descriptor, and it is borrowed.
-pub(crate) fn model_consume_stream(reader: ModelFd<'_>, exit: ExitMode) -> Result<(), ModelUnwind> {
+pub(crate) fn model_consume_stream(reader: ModelFd<'_>, exit: ExitMode) -> Result<(), ModelError> {
     model_with_borrowed_reader(reader, |_reader_handle| exit.outcome())
 }
 
@@ -148,7 +123,7 @@ mod tests {
 
     #[rstest]
     #[case(ExitMode::Normal)]
-    #[case(ExitMode::Unwind)]
+    #[case(ExitMode::Error)]
     fn pump_borrows_reader_and_consumes_writer(#[case] exit: ExitMode) {
         let reader_log = CloseLog::new();
         let writer_log = CloseLog::new();
@@ -161,19 +136,19 @@ mod tests {
             1,
             "writer must be consumed exactly once"
         );
-        assert_eq!(outcome.is_err(), exit == ExitMode::Unwind);
+        assert_eq!(outcome.is_err(), exit == ExitMode::Error);
     }
 
     #[rstest]
     #[case(ExitMode::Normal)]
-    #[case(ExitMode::Unwind)]
+    #[case(ExitMode::Error)]
     fn consume_borrows_its_only_reader(#[case] exit: ExitMode) {
         let reader_log = CloseLog::new();
 
         let outcome = model_consume_stream(ModelFd::new(&reader_log), exit);
 
         assert_eq!(reader_log.closes(), 0, "borrowed reader must stay open");
-        assert_eq!(outcome.is_err(), exit == ExitMode::Unwind);
+        assert_eq!(outcome.is_err(), exit == ExitMode::Error);
     }
 
     #[test]

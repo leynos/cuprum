@@ -1,0 +1,20 @@
+[package]
+name = "cuprum-native-io"
+version = "0.1.0"
+edition = "2024"
+license = "ISC"
+description = "Audited native resource and syscall boundary for Cuprum"
+publish = false
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
+
+[dev-dependencies]
+rstest = "0.26.1"
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+cap-std = "4.0.2"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Pipes"] }

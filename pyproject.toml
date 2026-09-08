@@ -397,6 +397,8 @@ also_copy = [
     "CHANGELOG.md",
     "Makefile",
     "rust/cuprum-rust/",
+    "rust/cuprum-streams/",
+    "rust/cuprum-native-io/",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/dylint.toml",
@@ -411,9 +413,28 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+# Ship the optional native workspace without including Cargo build artefacts.
+source-include = [
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/rust-toolchain.toml",
+    "rust/dylint.toml",
+    "rust/cuprum-rust/Cargo.toml",
+    "rust/cuprum-rust/src/**",
+    "rust/cuprum-rust/tests/**",
+    "rust/cuprum-streams/Cargo.toml",
+    "rust/cuprum-streams/src/**",
+    "rust/cuprum-streams/tests/**",
+    "rust/cuprum-native-io/Cargo.toml",
+    "rust/cuprum-native-io/src/**",
+]
 
 [tool.maturin]
 bindings = "pyo3"
 manifest-path = "rust/cuprum-rust/Cargo.toml"
 module-name = "cuprum._rust_backend_native"
 python-source = "."
+include = [
+    { path = "rust/rust-toolchain.toml", format = "sdist" },
+    { path = "rust/dylint.toml", format = "sdist" },
+]

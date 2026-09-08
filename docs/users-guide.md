@@ -1529,6 +1529,21 @@ place — a non-integer, or a Python integer outside the signed 64-bit range —
 may instead fail earlier, during PyO3 argument conversion, with a different
 exception.
 
+The internal pump validates the buffer size and reader ABI representation
+before transferring ownership of its duplicated writer. If either check fails,
+the duplicate is closed before native work begins. These checks establish only
+representability and error ordering; they do not prove that a descriptor or
+handle is valid, remains live, or is exclusively owned. The pipeline keeps the
+reader paused and waits for native cleanup after cancellation so those lifetime
+obligations remain in force.
+
+Before borrowing the reader's raw descriptor, the pipeline rejects an asyncio
+transport that is already closing. Asyncio may silently accept
+`pause_reading()` while a queued close callback can still close the descriptor;
+the hop therefore reports `READER_PAUSE_FAILED` and uses the Python fall-back,
+which retains the reader's buffered prefix. This protects the hand-off contract
+without identifying the cause of any historical native payload mismatch.
+
 ### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which

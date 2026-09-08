@@ -270,8 +270,12 @@ def _assert_stdout_matches(
     description : str
         Human-readable description of the payload for error messages.
     """
-    assert pipeline_result.stdout == expected, (
-        f"expected {description} to survive pipeline intact"
+    # Avoid quadratic full-string diff rendering hiding the useful diagnostic.
+    matches = pipeline_result.stdout == expected
+    assert matches, (
+        f"expected {description} to survive pipeline intact: "
+        f"expected={len(expected)}, actual={len(pipeline_result.stdout or '')}, "
+        f"stage_exits={[stage.exit_code for stage in pipeline_result.stages]}"
     )
 
 

@@ -2027,7 +2027,10 @@ over cleverness—especially in the type‑system and configuration layers.
 
 [ADR-009](adr-009-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
 spelling for identifiers and source prose; the repository spelling gate
-enforces that policy.
+enforces that policy. [ADR-010](adr-010-audited-rust-boundaries.md) governs the
+separation between safe stream policy and the audited native resource boundary.
+The inventory and verification status are maintained in
+[Rust boundary verification](rust-boundary-verification.md).
 
 ______________________________________________________________________
 
@@ -2111,6 +2114,16 @@ thin Python shim module `cuprum._streams_rs` re-exports the stream functions
 and performs any platform-specific file descriptor conversion (for example,
 translating Windows file descriptors into OS handles). This keeps the native
 module name stable while allowing Python-only adaptations.
+
+The Rust implementation is split internally by safety responsibility:
+`cuprum-streams` contains safe orchestration, state-machine policy, fallback
+selection, and checked UTF-8 decoding; `cuprum-native-io` contains lifetime
+bound operating-system borrows, unique writer adoption, single-call native I/O,
+and platform fixtures; and `cuprum-rust` remains the thin PyO3/maturin
+integration boundary. Only the latter two approved boundaries contain unsafe
+Rust, and only `cuprum-rust` reconstructs resources from Python raw values.
+This preserves the public module and maturin path while allowing
+`cuprum-streams` to forbid unsafe code.
 
 The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
@@ -2725,7 +2738,7 @@ contract.
 
 The non-splice read/write loop keeps its control flow — how each read and write
 outcome moves the running byte total and the latched writer state — in a pure,
-`io::Error`-free state machine in `rust/cuprum-rust/src/pump_machine.rs`,
+`io::Error`-free state machine in `rust/cuprum-streams/src/pump_machine.rs`,
 separate from the descriptor I/O that feeds it.
 
 `advance` is the whole public surface. It takes a `PumpState`, the length just

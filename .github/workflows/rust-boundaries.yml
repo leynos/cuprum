@@ -1,0 +1,256 @@
+---
+name: Rust boundary verification
+
+on:
+  pull_request:
+    paths:
+      - 'rust/**'
+      - 'cuprum/_streams_rs.py'
+      - 'cuprum/_pipeline_stream*.py'
+      - 'pyproject.toml'
+      - 'scripts/*boundary*'
+      - 'scripts/tests/test_boundary*'
+      - 'tools/**'
+      - 'Makefile'
+      - '.github/workflows/rust-boundaries.yml'
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-boundaries-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native:
+    name: Native contracts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-latest, windows-2022, macos-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: rust
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUSTFLAGS: '-D warnings'
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - name: Compute shared dependency cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+      - name: Restore the shared Cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+      - name: Install supported project toolchain
+        run: rustup toolchain install 1.85.0 --profile minimal --component clippy
+      - name: Restore the Linux boundary compiler cache
+        if: runner.os == 'Linux'
+        id: boundary-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: boundary-native-linux-${{ github.run_id }}
+          restore-keys: boundary-native-linux-
+      - name: Set up sccache
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-size: 1G
+      - name: Reset compiler-cache counters
+        if: runner.os == 'Linux'
+        run: sccache --zero-stats
+      - name: Check default feature configuration
+        run: cargo check -p cuprum-streams -p cuprum-native-io --all-targets --no-default-features
+      - name: Lint all feature and helper targets
+        run: cargo clippy -p cuprum-streams -p cuprum-native-io --all-targets --all-features -- -D warnings
+      - name: Exercise native effects and safe stream policy
+        run: |
+          set -o pipefail
+          mkdir -p target/boundary-verification
+          cargo test -p cuprum-streams -p cuprum-native-io --all-targets --all-features 2>&1 |
+            tee target/boundary-verification/native.log
+      - name: Record compiler-cache effectiveness
+        if: always() && runner.os == 'Linux'
+        run: sccache --show-stats --stats-format json
+      - name: Archive native evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: native-boundaries-${{ runner.os }}
+          path: rust/target/boundary-verification
+          retention-days: 14
+
+      - name: Save reviewed boundary cache generation
+        if: runner.os == 'Linux' && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: ${{ steps.boundary-cache.outputs.cache-primary-key }}
+
+  verus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - name: Compute shared dependency cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+      - name: Restore the shared Cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        with:
+          python-version: '3.13'
+      - name: Restore pinned verifier, solver, and compiler objects
+        id: boundary-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+            ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
+            .cache/boundary-z3
+            ~/.cache/sccache
+          key: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-${{ github.run_id }}
+          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-
+      - name: Set up sccache
+        uses: ./.github/actions/setup-sccache
+        with:
+          cache-size: 1G
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+      - name: Install prebuilt verifier and solver
+        run: |
+          make install-verus
+          rustup toolchain install 1.98.0 --profile minimal
+      - name: Test proof correspondence and binary installation contracts
+        run: uv run pytest scripts/tests/test_boundary_*.py
+      - name: Verify production kernels and compiler prohibition
+        run: |
+          set -o pipefail
+          mkdir -p rust/target/boundary-verification
+          make boundary-verus boundary-contract 2>&1 | tee rust/target/boundary-verification/verus.log
+      - name: Record compiler-cache effectiveness
+        if: always()
+        run: sccache --show-stats --stats-format json
+      - name: Archive proof and negative compiler evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: verus-and-compiler-contracts
+          path: rust/target/boundary-verification
+          retention-days: 14
+
+      - name: Save reviewed boundary cache generation
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+            ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
+            .cache/boundary-z3
+            ~/.cache/sccache
+          key: ${{ steps.boundary-cache.outputs.cache-primary-key }}
+
+  extended:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        check: [kani, miri]
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - name: Compute shared dependency cache keys
+        uses: ./.github/actions/cache-keys
+        with:
+          python-version: '3.13'
+      - name: Restore the shared Cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ env.CARGO_CACHE_KEY }}
+          restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        with:
+          python-version: '3.13'
+      - name: Restore proof tools and Miri sysroots
+        id: boundary-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.kani
+            ~/.cache/miri
+            ~/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu
+            ~/.rustup/toolchains/nightly-2026-08-07-x86_64-unknown-linux-gnu
+            .cache/boundary-kani
+            .cache/boundary-z3
+            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+            ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
+          key: boundary-${{ matrix.check }}-${{ hashFiles('tools/kani/*', 'Makefile') }}
+      - name: Install prebuilt Kani frontend and bundle
+        if: matrix.check == 'kani'
+        run: |
+          make install-boundary-kani
+          echo "${GITHUB_WORKSPACE}/.cache/boundary-kani/bin" >> "$GITHUB_PATH"
+      - name: Install pinned Miri binary toolchain
+        if: matrix.check == 'miri'
+        run: rustup toolchain install nightly-2026-08-07 --profile minimal --component miri
+      - name: Execute extended verification
+        run: |
+          set -o pipefail
+          mkdir -p rust/target/boundary-verification
+          make boundary-${{ matrix.check }} 2>&1 | tee rust/target/boundary-verification/${{ matrix.check }}.log
+      - name: Exercise deliberate production faults
+        if: matrix.check == 'kani'
+        run: |
+          make install-verus
+          rustup toolchain install 1.98.0 --profile minimal
+          make boundary-faults
+      - name: Archive proof summaries and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: extended-${{ matrix.check }}
+          path: rust/target/boundary-verification
+          retention-days: 14
+
+      - name: Save reviewed boundary cache generation
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.kani
+            ~/.cache/miri
+            ~/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu
+            ~/.rustup/toolchains/nightly-2026-08-07-x86_64-unknown-linux-gnu
+            .cache/boundary-kani
+            .cache/boundary-z3
+            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+            ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
+          key: ${{ steps.boundary-cache.outputs.cache-primary-key }}

@@ -17,12 +17,16 @@ fn assert_bad_file_descriptor(error: &io::Error, operation: &str) {
     );
 }
 
-/// Invalid descriptors preserve the native error returned by `dup(2)`.
+/// Dropping a duplicated reader leaves the original owner usable.
 #[test]
-fn dup_as_file_returns_an_error_for_an_invalid_raw_descriptor() {
-    let error = unwrap_err(dup_as_file(&-1));
+fn dup_as_file_preserves_the_original_owner() {
+    let (read_end, write_end) = unwrap_ok(make_pipe());
+    let duplicate = unwrap_ok(dup_as_file(&read_end));
+    drop(duplicate);
+    unwrap_ok(write_all_to(&write_end, b"retained owner"));
+    drop(write_end);
 
-    assert_bad_file_descriptor(&error, "dup(2)");
+    assert_eq!(unwrap_ok(read_all_from(&read_end)), b"retained owner");
 }
 
 /// Attempting to write through a pipe read end returns `EBADF`.

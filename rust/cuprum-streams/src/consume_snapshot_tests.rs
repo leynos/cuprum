@@ -36,8 +36,8 @@ fn consume(payload: &[u8], buffer_size: usize) -> Result<String, PumpError> {
     // Close the write end so the read loop reaches EOF and terminates.
     drop(write_end);
 
-    let mut reader = read_end;
-    consume_stream_files(&mut reader, BufferSize(buffer_size))
+    let reader = read_end;
+    consume_stream_files(&reader, BufferSize(buffer_size))
 }
 
 /// ASCII payloads pass through the pipe and decoder without transformation.
