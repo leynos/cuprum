@@ -2361,15 +2361,17 @@ make boundary-miri
 ```
 
 Install the checksum-verified prebuilt tools first with `make install-verus` and
-`make install-boundary-kani`. Verus uses Rust `1.98.0`, Verus
-`0.2026.09.06.8dea4a2`, and a separately installed prebuilt Z3 `4.16.0`. Kani
-uses `0.67.0` with compiler `rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and
-CBMC `6.8.0`; Miri uses `nightly-2026-08-07` with
-`rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The Verus input is regenerated
-from the production progress kernels on every run. The final-source progress
-proof verifies two functions with zero errors, recorded in
-`/tmp/issue379-round24-verus.log`, while direct assessment of the unchanged
-production `adopt_writer` fails on unsupported `OwnedFd` and
+`make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
+Python `3.14` explicitly, including when CI exports `UV_PYTHON=3.13`; this
+tool-only runtime does not change the project Python test matrix. Verus uses
+Rust `1.98.0`, Verus `0.2026.09.06.8dea4a2`, and a separately installed
+prebuilt Z3 `4.16.0`. Kani uses `0.67.0` with compiler
+`rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and CBMC `6.8.0`; Miri uses
+`nightly-2026-08-07` with `rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The
+Verus input is regenerated from the production progress kernels on every run.
+The final-source progress proof verifies two functions with zero errors,
+recorded in `/tmp/issue379-round24-verus.log`, while direct assessment of the
+unchanged production `adopt_writer` fails on unsupported `OwnedFd` and
 `FromRawFd::from_raw_fd` representations; see
 `/tmp/issue379-verus-resource-assessment.log`. The installer succeeds in
 fetching and validating the pinned Verus and Kani binary caches. Current proof
@@ -2403,9 +2405,22 @@ is unsuitable for fail-closed checksummed verifier binaries, so
 installers only: HTTPS-only bounded redirects, digest validation, and no source
 builds. `scripts/check_boundary_faults.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
-abstraction. `make boundary-faults` archives controls and deliberate fault
-failures for the scheduled Kani job. The final run passed its controls and
-detected all four mutations; see `/tmp/issue379-round27-faults.log`.
+abstraction. Its progress and ownership checks have separate private runners;
+their scope is the existing four mutations, with the same controls and failure
+diagnostics. The download helpers separate bounded redirect traversal, one
+connection's lifetime, and response classification. They remain private to the
+pinned binary installer and do not replace the dictionary refresh policy. The
+compiler-contract checker uses a named predicate requiring both failure and an
+unsafe-forbid diagnostic, so unrelated compiler failures cannot pass the probe.
+
+Windows borrowed I/O lives beside its handle adapter in
+`rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
+the borrowed handle and converts the byte count once for both read and write;
+Unix adapters retain their direct syscall and buffer contracts.
+
+`make boundary-faults` archives controls and deliberate fault failures for the
+scheduled Kani job. The final run passed its controls and detected all four
+mutations; see `/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 

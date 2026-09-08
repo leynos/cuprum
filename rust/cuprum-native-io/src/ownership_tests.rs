@@ -37,7 +37,9 @@ fn borrowed_reader_survives(
         // Unwind through that exact adapter before observing the real handle.
         #[cfg(windows)]
         if should_panic {
-            super::with_file(view, |_| panic!("injected real unwind"));
+            drop(super::windows::with_file(view, |_| {
+                panic!("injected real unwind")
+            }));
         }
         assert!(!should_panic, "injected real unwind");
         let written = super::write_once(borrow(&writer), b"ping")

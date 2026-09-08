@@ -120,6 +120,12 @@ def main() -> None:
         _check_target(workspace, workspace / "cuprum-streams" / target, logs)
 
 
+def _unsafe_was_forbidden(code: int, output: str) -> bool:
+    """Require compilation failure with an explicit unsafe-forbid diagnostic."""
+    markers = ("forbid(unsafe_code)", "-F unsafe-code")
+    return code != 0 and any(marker in output for marker in markers)
+
+
 def _check_target(workspace: Path, path: Path, logs: Path) -> None:
     """Probe one actual target and restore it even if compiler checking fails."""
     original = path.read_text(encoding="utf-8")
@@ -129,9 +135,7 @@ def _check_target(workspace: Path, path: Path, logs: Path) -> None:
             code, output = _compile(workspace)
             name = f"{path.stem}-unsafe-{index}.log"
             (logs / name).write_text(output, encoding="utf-8")
-            if code == 0 or not (
-                "forbid(unsafe_code)" in output or "-F unsafe-code" in output
-            ):
+            if not _unsafe_was_forbidden(code, output):
                 msg = f"safe target did not reject unsafe probe: {name}"
                 raise RuntimeError(msg)
         finally:
