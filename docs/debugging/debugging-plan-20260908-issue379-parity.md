@@ -6,16 +6,34 @@ captured-output loss) **Falsification sub-agent:** `alchemist`
 The planning agent prepared this document. The alchemist executes the bounded
 experiment; it must not run full repository gates or edit production code.
 
+## Current state
+
+Round 33 local checks are green: Python recorded 1,568 passes and one skip,
+Rust recorded 112/112 tests with no skips, and the extension-required suite
+recorded 80 passes and one skip. The nine compiler probes, Windows cross-
+Clippy, development build, and cached Kani setup also passed. The formal and
+native evidence remains 2 Verus functions, 7 native plus 11 safe Kani
+harnesses, 13 Miri tests, and 4 detected fault mutations. Hosted Windows/macOS
+runtime checks and CodeRabbit review remain pending.
+
+Round 33's `fmt`, `check-fmt`, `lint`, `typecheck`, `test`, `markdownlint`, and
+`nixie` gates all passed.
+
+The historical native payload mismatch remains unexplained and is not claimed
+fixed. H7 reproduced an empty `HELLO` result on the archived baseline, while H9
+identified and fixed a separate closing-transport reader-lease gap. Baseline
+comparison and the bounded investigations below retain their original scope.
+
 ## Problem and context
 
-The full native-enabled Python suite reported 1,565 passes, one skip, and two
-failures in `/tmp/issue379-round28-test.log`. The Rust two-stage backpressure
-case returned something other than its expected 1 MiB ASCII payload; the
-three-stage and Python cases passed. A separate fail-fast test took 1.089
-seconds against a one-second assertion. This shared host was heavily loaded.
-The exact captured byte count and EOF-grace observations are not in the failure
-report. Cuprum's Rust boundary extraction and Python pre-transfer validation
-are uncommitted; the starting revision is
+An earlier full native-enabled Python suite reported 1,565 passes, one skip,
+and two failures in `/tmp/issue379-round28-test.log`. The Rust two-stage
+backpressure case returned something other than its expected 1 MiB ASCII
+payload; the three-stage and Python cases passed. A separate fail-fast test
+took 1.089 seconds against a one-second assertion. This shared host was heavily
+loaded. The exact captured byte count and EOF-grace observations are not in the
+failure report. Cuprum's Rust boundary extraction and Python pre-transfer
+validation were uncommitted at the time; the starting revision is
 `34a59eac4cd13de82c3730d4b569eeaefbb5ee61`.
 
 ## H1: capture EOF-grace expiry truncates the parity output
