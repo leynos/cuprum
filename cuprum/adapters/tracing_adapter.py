@@ -78,7 +78,7 @@ from cuprum.adapters._support import (
 )
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
-from cuprum.adapters.tracing_protocols import Span, Tracer
+from cuprum.tracing_protocols import Span, Tracer
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId

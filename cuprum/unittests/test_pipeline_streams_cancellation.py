@@ -22,7 +22,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_cleanup_observation,
+    _pipeline_stream_fds,
+    _pipeline_streams,
+)
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 
@@ -204,7 +208,10 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
         return 0
 
     _install_fake_pump(monkeypatch, blocking_pump)
-    caplog.set_level(logging.DEBUG, logger=_pipeline_streams.__name__)
+    caplog.set_level(
+        logging.DEBUG,
+        logger=_pipeline_stream_cleanup_observation.__name__,
+    )
     with observe_pump(pump_events.append):
         asyncio.run(_cancel_mid_transfer(context))
 

@@ -305,6 +305,9 @@ def test_folded_summary_cli_rejects_invalid_invocation(
 )
 @settings(
     max_examples=30,
+    # Each example writes and reads a summary file, so wall time follows host I/O
+    # load rather than the property under test.
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_folded_summary_total_samples_matches_input(
@@ -343,6 +346,9 @@ def test_folded_summary_total_samples_matches_input(
 )
 @settings(
     max_examples=30,
+    # Each example writes and reads a summary file, so wall time follows host I/O
+    # load rather than the property under test.
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_inclusive_counts_deduplicate_within_each_stack(

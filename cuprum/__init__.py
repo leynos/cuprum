@@ -73,6 +73,8 @@ from cuprum.pump_events import (
     RustPumpHandoffOutcome,
 )
 from cuprum.pump_observation import PumpHookRegistration, observe_pump
+from cuprum.pump_span_events import PumpHopOutcome
+from cuprum.pump_span_observation import PumpHopSpanRegistration, observe_pump_span
 from cuprum.rust import is_rust_available
 from cuprum.sh import (
     CommandResult,
@@ -130,6 +132,8 @@ __all__ = [
     "PumpEvent",
     "PumpHook",
     "PumpHookRegistration",
+    "PumpHopOutcome",
+    "PumpHopSpanRegistration",
     "RunOutputOptions",
     "RustPumpDeclineReason",
     "RustPumpHandoffOutcome",
@@ -152,6 +156,7 @@ __all__ = [
     "observe",
     "observe_echo",
     "observe_pump",
+    "observe_pump_span",
     "resolve_env",
     "run_concurrent",
     "run_concurrent_sync",
