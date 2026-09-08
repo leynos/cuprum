@@ -27,6 +27,7 @@ enum BorrowedReaderScenario {
     Success,
 }
 
+/// Builds a pipe whose read descriptor can be borrowed across an operation.
 #[fixture]
 fn borrowed_reader_pipe() -> io::Result<BorrowedReaderPipe> {
     let (read_end, write_end) = make_pipe()?;
@@ -39,6 +40,7 @@ fn borrowed_reader_pipe() -> io::Result<BorrowedReaderPipe> {
     })
 }
 
+/// A borrowed reader keeps its descriptor open after success or panic.
 #[rstest]
 #[case::panicking_operation(BorrowedReaderScenario::Panic)]
 #[case::successful_operation(BorrowedReaderScenario::Success)]
@@ -68,6 +70,7 @@ fn borrowed_reader_stays_open_after_operation(
     drop(read_end);
 }
 
+/// Transferring a raw descriptor creates an owning stream that reads its data.
 #[rstest]
 fn stream_from_raw_owns_and_reads_the_descriptor() {
     let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
@@ -91,6 +94,7 @@ fn stream_from_raw_owns_and_reads_the_descriptor() {
     assert!(!fd_is_open(raw_fd), "the owned FD must be closed on drop");
 }
 
+/// Consuming a pipe records its byte total and zero read retries in the span.
 #[rstest]
 fn consume_records_total_bytes_and_retries_on_span() {
     let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
@@ -126,6 +130,7 @@ fn consume_records_total_bytes_and_retries_on_span() {
     );
 }
 
+/// The pump records completion fields even when its span filter allows errors.
 #[rstest]
 fn pump_records_span_fields_under_error_filter() {
     // Source pipe: the payload the pump reads. Sink pipe: where it writes.
@@ -190,6 +195,7 @@ fn assert_panicking_reader_keeps_fd_open(raw_fd: i32) {
     assert!(outcome.is_err(), "the panic must propagate to the caller");
 }
 
+/// A successful write is classified with the number of bytes delivered.
 #[rstest]
 fn classify_write_reports_a_completed_write() {
     let (read_end, mut write_end) = crate::test_support::unwrap_ok(make_pipe());
@@ -204,6 +210,7 @@ fn classify_write_reports_a_completed_write() {
     drop(read_end);
 }
 
+/// A fatal write error is returned instead of being treated as a closed writer.
 #[rstest]
 fn classify_write_propagates_a_fatal_error() {
     // Writing to the read end of a pipe is a fatal `EBADF`, which must
@@ -216,6 +223,7 @@ fn classify_write_propagates_a_fatal_error() {
     }
 }
 
+/// Writes a probe payload and reads it through the borrowed descriptor.
 fn successful_reader_bytes(raw_fd: i32, write_end: OwnedFd) -> io::Result<Vec<u8>> {
     write_all_to(&write_end, b"ping")?;
     drop(write_end);
@@ -230,6 +238,7 @@ fn successful_reader_bytes(raw_fd: i32, write_end: OwnedFd) -> io::Result<Vec<u8
     })
 }
 
+/// A broken writer still drains the reader before the pump reports completion.
 #[rstest]
 fn pump_drains_the_reader_after_the_writer_breaks() {
     // The downstream stage hangs up before the pump writes anything, which is

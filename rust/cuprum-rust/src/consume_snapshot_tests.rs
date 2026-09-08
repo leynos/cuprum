@@ -40,12 +40,14 @@ fn consume(payload: &[u8], buffer_size: usize) -> Result<String, PumpError> {
     consume_stream_files(&mut reader, BufferSize(buffer_size))
 }
 
+/// ASCII payloads pass through the pipe and decoder without transformation.
 #[test]
 fn pure_ascii_decodes_verbatim() {
     let output = crate::test_support::unwrap_ok(consume(b"cuprum reads pipes", 64));
     insta::assert_snapshot!(output, @"cuprum reads pipes");
 }
 
+/// Multi-byte UTF-8 remains intact when every byte arrives in a separate read.
 #[test]
 fn multibyte_sequences_split_across_buffer_boundaries() {
     // Each non-ASCII scalar is 2-3 bytes, so a one-byte buffer forces every
@@ -69,6 +71,7 @@ fn multibyte_sequences_split_across_buffer_boundaries() {
     insta::assert_snapshot!(byte_at_a_time, @"héllo, 世界! ☕");
 }
 
+/// Invalid lead and continuation bytes each become one replacement character.
 #[test]
 fn invalid_bytes_become_replacement_characters() {
     // 0xFF is never a valid lead byte and 0x80 is a lone continuation byte;
@@ -90,6 +93,7 @@ fn invalid_bytes_become_replacement_characters() {
     insta::assert_snapshot!(byte_at_a_time, @"x�y�z");
 }
 
+/// An incomplete UTF-8 sequence is replaced when the final read reaches EOF.
 #[test]
 fn incomplete_trailing_sequence_is_replaced_at_eof() {
     // The euro sign is E2 82 AC; dropping the final byte leaves an incomplete

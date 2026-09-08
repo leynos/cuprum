@@ -17,6 +17,7 @@ fn assert_bad_file_descriptor(error: &io::Error, operation: &str) {
     );
 }
 
+/// Invalid descriptors preserve the native error returned by `dup(2)`.
 #[test]
 fn dup_as_file_returns_an_error_for_an_invalid_raw_descriptor() {
     let error = unwrap_err(dup_as_file(&-1));
@@ -24,6 +25,7 @@ fn dup_as_file_returns_an_error_for_an_invalid_raw_descriptor() {
     assert_bad_file_descriptor(&error, "dup(2)");
 }
 
+/// Attempting to write through a pipe read end returns `EBADF`.
 #[test]
 fn write_all_to_returns_an_error_for_a_pipe_read_end() {
     let (read_end, _write_end) = unwrap_ok(make_pipe());
@@ -32,6 +34,7 @@ fn write_all_to_returns_an_error_for_a_pipe_read_end() {
     assert_bad_file_descriptor(&error, "write_all");
 }
 
+/// Attempting to read through a pipe write end returns `EBADF`.
 #[test]
 fn read_all_from_returns_an_error_for_a_pipe_write_end() {
     let (_read_end, write_end) = unwrap_ok(make_pipe());

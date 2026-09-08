@@ -27,6 +27,7 @@ fn pipe() -> io::Result<PipePair> {
     make_pipe()
 }
 
+/// A pipe payload reaches the sink intact through the splice loop.
 #[rstest]
 fn splice_transfers_all_bytes_between_pipes(
     #[from(pipe)] source_result: io::Result<PipePair>,
@@ -75,6 +76,7 @@ fn unsupported_descriptors_signal_fallback() {
     );
 }
 
+/// A broken sink drains the source and reports zero delivered bytes.
 #[rstest]
 fn broken_pipe_drains_reader_and_reports_transferred_bytes(
     #[from(pipe)] source_result: io::Result<PipePair>,
@@ -103,6 +105,7 @@ fn broken_pipe_drains_reader_and_reports_transferred_bytes(
     );
 }
 
+/// Draining a reader consumes all pending bytes through EOF.
 #[rstest]
 fn drain_reader_consumes_to_eof(#[from(pipe)] pipe_result: io::Result<PipePair>) {
     let (read_end, write_end) = unwrap_ok(pipe_result);
