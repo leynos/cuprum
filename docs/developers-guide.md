@@ -13,6 +13,12 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Audited Rust safety boundaries](adr-010-audited-rust-boundaries.md)
+
+The
+[Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
+is the source of truth for native safety contracts, verifier bounds, trusted
+assumptions, and current proof status.
 
 ## GitHub Actions runners
 
@@ -2140,8 +2146,8 @@ cache and tool directories on both platforms.
 
 ## Rust error taxonomy (`PumpError`)
 
-The `cuprum-rust` crate reports stream pump and consume failures through one
-semantic error enum, `PumpError` (`rust/cuprum-rust/src/errors.rs`), derived
+The `cuprum-streams` crate reports stream pump and consume failures through one
+semantic error enum, `PumpError` (`rust/cuprum-streams/src/errors.rs`), derived
 with `thiserror`:
 
 - `LengthOverflow` — an integer length conversion overflowed its target
@@ -2260,17 +2266,17 @@ sees the `#[cfg(unix)]` arm and never the Windows one.
 
 ## Rust FD-borrow ownership contract
 
-The pump and consume entry points in `rust/cuprum-rust/src/lib.rs` sort every
-descriptor they touch into a *borrowed* or a *consumed* role. `pump_stream`
-borrows its reader and consumes its writer; `consume_stream` borrows its reader
-and takes no writer at all. The borrow half is centralized in one helper,
-`with_borrowed_reader`. The helper rebuilds a `StreamHandle` from the
-caller-owned raw descriptor, wraps it in `ManuallyDrop`, and runs the caller's
-closure against it. `ManuallyDrop` suppresses the close on *every* exit path —
-a normal return and unwinding from a panicking operation alike — so a
-descriptor the Python side still owns is never closed by Rust. `pump_stream` and
-`consume_stream` both route their reader through the helper, keeping the
-"borrow this FD without owning it" rule in a single place.
+The PyO3 pump and consume entry points in `rust/cuprum-rust/src/lib.rs` sort
+every descriptor they touch into a *borrowed* or a *consumed* role.
+`pump_stream` borrows its reader and consumes its writer; `consume_stream`
+borrows its reader and takes no writer at all. The unsafe raw-reader constructor
+`cuprum_native_io::borrow_reader` is called only at this PyO3 integration
+boundary. The safe `cuprum_native_io::borrow` API returns a lifetime-bound OS
+borrow; `cuprum-streams` receives typed `AsStream` values and cannot
+reconstruct a resource from an integer. The native crate's
+`with_retained_owner` kernel is used by the Windows `cap_std::fs::File` adapter
+to keep a temporary reconstructed owner from closing a caller-owned handle
+across normal return, error, or real unwind.
 
 The private `stream_pyfunctions::run_stream_operation` helper is limited to the
 two PyO3 stream exports. It owns their shared buffer validation, reader
@@ -2284,50 +2290,121 @@ This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
 past the trailing `forget`, that pattern dropped — and therefore closed — the
 caller-owned descriptor on the unwind path, exposing the Python transport to a
-double close of the same FD (the `#125` panic-unwind hazard). `ManuallyDrop`
-holds regardless of how the scope exits, so no drop guard or `forget` call is
-required.
+double close of the same FD (the `#125` panic-unwind hazard). The borrowed
+reader path now constructs a lifetime-bound `BorrowedStream` directly. The
+Windows adapter uses `ManuallyDrop` through `with_retained_owner`; the real
+`catch_unwind` tests cover that retention path.
 
 There is deliberately no borrowed *writer* variant. The writer FD handed to
 `pump_stream` is consumed: it must close on drop — including during unwinding —
-so downstream readers observe EOF. Reconstruct the writer with
-`stream_from_raw` (which yields an owning handle) and let it drop; reserve
-`with_borrowed_reader` for descriptors whose ownership stays with the caller.
-Python callers must therefore fully relinquish the writer descriptor supplied to
-`pump_stream`/`rust_pump_stream`. The pipeline caller does this by passing an
-`os.dup` of the asyncio transport descriptor: asyncio keeps and closes the
-original, while Rust closes the received duplicate on drop to signal EOF. The
-two descriptor numbers must never be shared between those owners. The helper's
-safety contract obliges the caller to guarantee `fd` is a valid open descriptor
-(or Windows handle) for the duration of the call and that ownership remains
-with the caller; in return the helper guarantees it never closes `fd`.
+so downstream readers observe EOF. The PyO3 boundary calls the unsafe
+`cuprum_native_io::adopt_writer` only after Python has transferred a unique
+resource. `cuprum_native_io::with_owned_writer` then owns the drop scope and
+gives its callback only an immutable reference to the writer. This prevents
+callback code from replacing or moving the actual owned resource out of the
+scope. The normal path explicitly drops the writer after the callback; unwind
+relies on automatic RAII. Reserve `cuprum_native_io::borrow` for resources
+whose ownership stays with the caller. Python callers must therefore fully
+relinquish the writer descriptor supplied to `pump_stream`/`rust_pump_stream`.
+The pipeline caller does this by passing an `os.dup` of the asyncio transport
+descriptor: asyncio keeps and closes the original, while Rust closes the
+received duplicate on drop to signal EOF. The two descriptor numbers must never
+be shared between those owners. The helper's safety contract obliges the caller
+to guarantee `fd` is a valid open descriptor (or Windows handle) for the
+duration of the call and that ownership remains with the caller; in return the
+helper guarantees it never closes `fd`.
 
 The contract is checked at two levels, which are deliberately not
-interchangeable. `rust/cuprum-rust/src/lib_tests.rs` holds the
+interchangeable. `rust/cuprum-native-io/src/ownership_tests.rs` holds the
 integration-level regression tests: they open *real* descriptors, run the
 helper both normally and through a panicking operation, and assert the borrowed
 FD is still open afterwards. That is the only place actual `close(2)` behaviour
 is exercised, and it stays the authority on it. Alongside them,
-`rust/cuprum-rust/src/fd_ownership_kani_proofs.rs` carries a bounded Kani proof
-of the ownership invariant itself: a borrowed reader FD is never closed by Rust
-on a normal or an unwinding exit, and a `pump_stream` writer is always consumed
-and closes exactly once to signal EOF.
+`rust/cuprum-native-io/src/fd_ownership_kani_proofs.rs` carries the historical
+bounded close-count model proof. The current production drop and progress
+proofs are in `rust/cuprum-native-io/src/kani_proofs.rs`: a borrowed reader is
+retained, an owned writer is dropped once, and checked counts reject invalid
+external progress.
 
-Kani does not interpret I/O, so the proof cannot use real descriptors. It runs
-against the pure model in `fd_ownership_model.rs` — gated
-`#[cfg(any(test, kani))]`, so `make test` exercises it as ordinary unit tests
-too — where `ModelFd` records a close on drop instead of issuing one. The
-`ManuallyDrop` wrapper, the closure call, and the early-exit edge are all real
-Rust, so Rust's own drop elaboration decides the outcome rather than any
-hand-written accounting. Because Kani compiles panics as aborts, the unwind
-path is modelled with `?`: a `?` early return and a real unwind both leave the
-frame without running the statements that follow the operation, so
-reintroducing the superseded trailing-`mem::forget` makes the proof fail (that
-mutation was run to confirm the proof is not vacuous). Being a bounded model
-checker, Kani establishes this over an explicitly bounded state space — the two
-exit modes, and at most three repeated borrows — rather than for all
-executions. Active verification tracking, including whether Verus adds anything
-beyond the Kani model once that model is complete, lives in issue `#89`.
+Kani does not interpret I/O, so the proof cannot use real descriptors. The
+historical model in `rust/cuprum-native-io/src/fd_ownership_model.rs` remains
+provenance for the earlier close-count proof, while the current production
+ownership proof exercises `with_owned_writer` and the shared
+`memory::with_retained_owner` kernel. Neither model observes an OS close. The
+historical model is gated `#[cfg(any(test, kani))]`, so `make test` exercises
+it as ordinary unit tests too — where `ModelFd` records a close on drop instead
+of issuing one. The `ManuallyDrop` wrapper, the closure call, and the
+early-exit edge are all real Rust, so Rust's own drop elaboration decides the
+outcome rather than any hand-written accounting. The model covers only its
+explicit `Normal` and `Error` outcomes; it does not simulate panic unwind. Real
+`catch_unwind` native tests remain authoritative for that path and for OS close
+effects. Being a bounded model checker, Kani establishes its claims over an
+explicitly bounded state space rather than for all executions. The final fault
+run passed its controls and detected the historical trailing-`mem::forget`,
+invalid-prefix-bound, incorrect-accounting, and leaked-writer mutations; the
+archived results and exact command are recorded in the boundary verification
+document. Active verification tracking and the distinction between model
+evidence and real OS effects lives in
+[Rust boundary verification](rust-boundary-verification.md) and issue `#89`.
+
+### Native boundary verification
+
+The boundary checks have dedicated Makefile targets so the normal Rust
+toolchain and the verifier toolchains remain separate:
+
+```bash
+make boundary-test
+make boundary-verus
+make boundary-kani
+make boundary-miri
+```
+
+Install the checksum-verified prebuilt tools first with `make install-verus` and
+`make install-boundary-kani`. Verus uses Rust `1.98.0`, Verus
+`0.2026.09.06.8dea4a2`, and a separately installed prebuilt Z3 `4.16.0`. Kani
+uses `0.67.0` with compiler `rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and
+CBMC `6.8.0`; Miri uses `nightly-2026-08-07` with
+`rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The Verus input is regenerated
+from the production progress kernels on every run. The final-source progress
+proof verifies two functions with zero errors, recorded in
+`/tmp/issue379-round24-verus.log`, while direct assessment of the unchanged
+production `adopt_writer` fails on unsupported `OwnedFd` and
+`FromRawFd::from_raw_fd` representations; see
+`/tmp/issue379-verus-resource-assessment.log`. The installer succeeds in
+fetching and validating the pinned Verus and Kani binary caches. Current proof
+status, bounds, excluded targets, and trusted assumptions are recorded in
+[Rust boundary verification](rust-boundary-verification.md); a tool that is not
+available or compatible is a blocker rather than a passing skip.
+
+The final native Kani boundary run passed 7 harnesses with 0 failures in
+`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 11
+harnesses passed, covered by the current result in
+`/tmp/issue379-round24-kani.log`. The native ownership proofs enumerate two
+exits; the repeated-borrow harness restricts borrows to three and uses
+`#[kani::unwind(4)]`. Production progress proofs use symbolic `usize`
+count/capacity and `u64` total/remaining/written values. Safe pump proofs use
+symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
+three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
+four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
+the final prefix harness. These are bounded results, not an unbounded proof.
+Round 27 Miri passed all 13 isolated native tests with zero ignored; see
+`/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
+`libc::splice`, and unsupported operating-system representations. Round 33's
+prior local checkpoint passed the native and repository gates; the integrated
+tree awaits fresh gates after rebase. Windows and macOS runtime tests remain
+pending hosted execution.
+
+The boundary installer and fault harnesses have narrow reuse policies. The
+existing `scripts/typos_rollout_refresh.py` downloader is coupled to
+dictionary-specific parsing, conditional refresh, and stale-cache fallback. It
+is unsuitable for fail-closed checksummed verifier binaries, so
+`scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
+installers only: HTTPS-only bounded redirects, digest validation, and no source
+builds. `scripts/check_boundary_faults.py` scopes its runner to the four
+verification commands and a disposable source copy; it is not a general process
+abstraction. `make boundary-faults` archives controls and deliberate fault
+failures for the scheduled Kani job. The final run passed its controls and
+detected all four mutations; see `/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 
@@ -2363,14 +2440,15 @@ Blocking-mode failure selects the Python fallback and emits
 
 ## Rust splice-loop and drain contract
 
-The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
-canonical loop. `try_splice_pump` performs the first `splice_once` solely to
-detect support: `EINVAL` on that first call signals unsupported descriptor
-types and the read/write fallback. Every outcome thereafter — including the
-first call's, which is fed into the loop — is handled by the same arms: `Ok(0)`
-ends the transfer, `Ok(n)` accumulates, a non-fatal write error (broken pipe /
-connection reset) drains the reader and reports the bytes transferred so far,
-and anything else propagates.
+The Linux zero-copy policy in `rust/cuprum-streams/src/splice/mod.rs` follows
+one canonical loop. Its native syscall adapter is
+`rust/cuprum-native-io/src/lib.rs`; `try_splice_pump` performs the first
+`splice_once` solely to detect support: `EINVAL` on that first call signals
+unsupported descriptor types and the read/write fallback. Every outcome
+thereafter — including the first call's, which is fed into the loop — is
+handled by the same arms: `Ok(0)` ends the transfer, `Ok(n)` accumulates, a
+non-fatal write error (broken pipe / connection reset) drains the reader and
+reports the bytes transferred so far, and anything else propagates.
 
 `splice_once` retries at the syscall level: an interrupted splice (`EINTR`) is
 re-issued rather than surfaced, matching the Unix read and write policies, so a
@@ -2458,7 +2536,7 @@ looked like it was guarding against.
 That encapsulation is what the proptests and Kani proofs assume rather than
 establish — neither can observe a transition it cannot spell — so it is pinned
 separately by the compile-fail case
-`rust/cuprum-rust/tests/ui/fail/pump_transition_unreachable.rs`. That case
+`rust/cuprum-streams/tests/ui/fail/pump_transition_unreachable.rs`. That case
 includes `src/pump_machine.rs` as a child module, reproducing the relationship
 `lib.rs` has with it, and asserts the compiler's refusal of an attempt to build
 a `Transition::Wrote` and pass it to `step` from the parent. Widening either
@@ -2531,12 +2609,17 @@ The span is created at `error` level so the `warn`/`error` events keep their
 operation context even under a `warn`/`error`-only production filter, where an
 `info` span would be disabled; it emits no log line of its own.
 
-Unix Rust tests share pipe creation, duplicated-file wrapping, result helpers,
-and descriptor-state checks through `test_support`. Re-use that module for
+Safe stream tests share pipe creation, typed descriptor duplication, result
+helpers, and descriptor-state checks through
+`rust/cuprum-streams/src/test_support.rs`. Re-use that module for
 descriptor-backed test setup; keep production code independent of test helpers.
-The splice behavioural tests expose that shared `make_pipe` as an rstest `pipe`
-fixture, so scenarios needing several independent pipes inject it once per
-`#[from(pipe)]` parameter.
+Its `OwnedFd`-typed cloning API rejects a raw integer by construction, while
+the duplicate-owner lifetime test confirms that dropping the clone leaves the
+original usable. Keep the wrong-direction `EBADF` regressions for attempting to
+write through a pipe reader and read through a pipe writer. The splice
+behavioural tests expose the shared `make_pipe` as an rstest `pipe` fixture, so
+scenarios needing several independent pipes inject it once per `#[from(pipe)]`
+parameter.
 
 ### Fallible Rust test I/O
 
@@ -2552,9 +2635,11 @@ descriptor contract; it is not a general assertion framework.
 
 ## Rust property testing and verification
 
-Rust-level tests for `cuprum-rust` live with the crate under
-`rust/cuprum-rust/src/`. Use them for pure decoder, parsing, state-machine, and
-adapter logic where Python integration tests would only cover a few examples.
+Rust-level tests for safe stream policy live with `cuprum-streams` under
+`rust/cuprum-streams/src/`; native ownership and syscall tests live with
+`cuprum-native-io` under `rust/cuprum-native-io/src/`. Use them for pure
+decoder, parsing, state-machine, and adapter logic where Python integration
+tests would only cover a few examples.
 
 Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
 development dependency. Prefer generated payloads and small helper functions
@@ -3457,10 +3542,10 @@ platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
 guards against absurd allocations while comfortably exceeding any realistic
 transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
 its boundaries are property tested directly in
-`rust/cuprum-rust/src/buffer_size_tests.rs`; the Python-side error mapping is
-exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
-`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
-guide aligned with this contract when the cap changes.
+`rust/cuprum-streams/src/buffer_size_tests.rs`; the Python-side error mapping
+is exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep
+the `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
+users' guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 
@@ -3641,11 +3726,12 @@ as a test assertion on the SHA string.
 
 ## Compile-time UI tests (trybuild)
 
-The Rust crate at `rust/cuprum-rust/` uses
-[trybuild](https://github.com/dtolnay/trybuild) to validate contracts that hold
-at compile time and so cannot be observed by a runtime test: PyO3 macro
-behaviour, and encapsulation boundaries such as the pump machine's private
-`Transition`. Tests live under `rust/cuprum-rust/tests/ui/`:
+The Rust crates use [trybuild](https://github.com/dtolnay/trybuild) to validate
+contracts that hold at compile time and so cannot be observed by a runtime
+test. PyO3 macro behaviour remains in `rust/cuprum-rust/tests/ui/`; the safe
+stream crate keeps encapsulation and writer-lifetime probes, including the pump
+machine's private `Transition`, in `rust/cuprum-streams/tests/ui/`. Each
+crate's UI directory contains:
 
 - `tests/ui/pass/` — Rust files that **must compile** without error.
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics

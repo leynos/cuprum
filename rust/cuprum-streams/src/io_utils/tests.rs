@@ -1,7 +1,7 @@
 //! Direct tests for descriptor-backed I/O helper contracts.
 
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 
 use proptest::prelude::*;
 
@@ -48,12 +48,12 @@ fn ssize(len: usize) -> libc::ssize_t {
 /// Reading from a pipe copies the complete payload into the supplied buffer.
 #[rstest]
 fn read_stream_reads_pipe_bytes(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
-    let (mut read_end, write_end) = unwrap_ok(pipe);
+    let (read_end, write_end) = unwrap_ok(pipe);
     unwrap_ok(write_all_to(&write_end, b"chunk"));
     drop(write_end);
     let mut buffer = [0_u8; 8];
 
-    let read_len = unwrap_ok(read_stream(&mut read_end, &mut buffer));
+    let read_len = unwrap_ok(read_stream(&read_end, &mut buffer));
 
     assert_eq!(read_len, 5);
     assert_eq!(buffer.get(..read_len), Some(&b"chunk"[..]));
@@ -62,10 +62,10 @@ fn read_stream_reads_pipe_bytes(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd
 /// Passing a pipe's write end to the reader reports the underlying I/O error.
 #[rstest]
 fn read_stream_reports_unreadable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
-    let (_read_end, mut write_end) = unwrap_ok(pipe);
+    let (_read_end, write_end) = unwrap_ok(pipe);
     let mut buffer = [0_u8; 8];
 
-    let err = unwrap_err(read_stream(&mut write_end, &mut buffer));
+    let err = unwrap_err(read_stream(&write_end, &mut buffer));
 
     assert!(matches!(err, PumpError::Io(_)));
 }
@@ -77,7 +77,10 @@ fn read_raw_fd_reports_eof(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     drop(write_end);
     let mut buffer = [0_u8; 8];
 
-    let read_len = unwrap_ok(read_raw_fd(read_end.as_raw_fd(), &mut buffer));
+    let read_len = unwrap_ok(read_raw_fd(
+        cuprum_native_io::borrow(&read_end),
+        &mut buffer,
+    ));
 
     assert_eq!(read_len, 0);
 }
@@ -101,9 +104,9 @@ fn read_raw_fd_retries_after_interruption() {
 /// Writing to an open pipe reports a complete write with its byte count.
 #[rstest]
 fn handle_write_returns_complete_outcome(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
-    let (read_end, mut write_end) = unwrap_ok(pipe);
+    let (read_end, write_end) = unwrap_ok(pipe);
 
-    let outcome = unwrap_ok(handle_write(&mut write_end, b"chunk"));
+    let outcome = unwrap_ok(handle_write(&write_end, b"chunk"));
 
     assert_eq!(outcome, WriteOutcome::Complete(5));
     drop(read_end);
@@ -112,9 +115,9 @@ fn handle_write_returns_complete_outcome(#[from(pipe)] pipe: io::Result<(OwnedFd
 /// Passing a pipe's read end to the writer propagates the fatal I/O error.
 #[rstest]
 fn handle_write_reports_unwritable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
-    let (mut read_end, _write_end) = unwrap_ok(pipe);
+    let (read_end, _write_end) = unwrap_ok(pipe);
 
-    let err = unwrap_err(handle_write(&mut read_end, b"chunk"));
+    let err = unwrap_err(handle_write(&read_end, b"chunk"));
 
     assert!(matches!(err, PumpError::Io(_)));
 }
@@ -340,4 +343,30 @@ fn classify_write_with_propagates_a_fatal_error() {
     }));
 
     assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// Invalid progress must not partially commit the buffer or accounting state.
+#[rstest]
+#[case::overflow(u64::MAX, 1, "integer length conversion overflowed")]
+#[case::oversized(7, 2, "computed range exceeded the buffer bounds")]
+fn invalid_progress_leaves_chunk_and_count_unchanged(
+    #[case] starting_total: u64,
+    #[case] written: usize,
+    #[case] expected_message: &str,
+) {
+    let original = b"x".as_slice();
+    let mut chunk = original;
+    let mut total = starting_total;
+    let error = unwrap_err(super::record_write_progress(
+        &mut chunk, written, &mut total,
+    ));
+    assert_eq!(error.to_string(), expected_message);
+    assert_eq!(
+        chunk, original,
+        "rejected progress must retain the original tail"
+    );
+    assert_eq!(
+        total, starting_total,
+        "rejected progress must not commit accounting"
+    );
 }

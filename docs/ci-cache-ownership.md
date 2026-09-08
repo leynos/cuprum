@@ -27,6 +27,29 @@ Every key also carries a generation, the operating system, and the architecture.
 `target` archive would preserve, and a `target` archive is invalidated by every
 source change while the objects inside it are not.
 
+### Boundary verification cache family
+
+The Rust boundary workflow is a scoped member of the scheduled cache family. It
+restores the shared Cargo registry through `.github/actions/cache-keys`; it
+does not create a second registry owner. Linux native and Verus jobs use the
+existing `setup-sccache` action with a 1 GiB cap and record compiler-cache
+statistics. Verus compiler objects share that boundary-private sccache cache;
+the Verus, Kani, Z3, and Miri binaries or sysroots are cached separately. No
+job archives a Cargo `target` tree.
+
+The native matrix uses the pinned `windows-2022` image alongside the supported
+Linux and macOS images. The Kani and Miri jobs are scheduled or manually
+dispatched rather than added to pull requests, run serially, and use no
+ordinary target cache. Their proof, failure, and fault logs are uploaded as
+artefacts with 14-day retention. Only scheduled runs on `refs/heads/main` save
+boundary-private generations; pull requests and manual dispatches are read-only.
+
+`tests/test_ci_rust_boundaries.py` checks the hosted matrix, time and fan-out
+budgets, cache paths, and the absence of target archives. The runner manifest
+registers `verus` and `extended` in `GITHUB_HOSTED_JOBS`, and the native matrix
+has an explicit shared-registry test entry. These checks preserve the runner
+placement and cache ownership contract when the workflow changes.
+
 ## Why the lane is in every key
 
 `runner.environment` renders to `self-hosted` on Ubicloud and `github-hosted`

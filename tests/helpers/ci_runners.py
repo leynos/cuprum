@@ -105,6 +105,8 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),
+    # Issue379 requires verifier schedules on GitHub-hosted Linux.
+    "rust-boundaries.yml": ("verus", "extended"),
 }
 #: Windows-native validation needs GitHub's hosted Windows image; Ubicloud
 #: offers Linux capacity only.
@@ -137,6 +139,7 @@ MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
 #: is installed conditionally there and a job-wide contract cannot describe it.
 #: `test_the_typecheck_only_leg_installs_no_wrapper` covers that case instead.
 SCCACHE_JOBS: typ.Final = (
+    ("rust-boundaries.yml", "verus"),
     ("ci.yml", "lint-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),

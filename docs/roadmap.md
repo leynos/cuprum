@@ -503,3 +503,31 @@ and 5).
   - Requires 8.3.1.
   - Success: the decision and its rationale (likely continued deferral) are
     recorded in adr-002-additional-rust-components.md.
+
+### 8.4. Isolate unsafe Rust in audited boundary crates
+
+This step resolves issue #379 by keeping abstract stream policy safe while
+placing native descriptor, handle, and syscall obligations behind small
+workspace boundaries. See [ADR-010](adr-010-audited-rust-boundaries.md) and
+[Rust boundary verification](rust-boundary-verification.md).
+
+- [ ] 8.4.1. Keep `cuprum-streams` free of unsafe Rust, including test and
+  helper targets, and keep `cuprum-rust` limited to the PyO3/maturin hand-off.
+  - Success: the safe-crate contract rejects deliberate unsafe probes, the
+    workspace allowlist names only approved boundary crates, and Python API,
+    optional backend, packaging, and supported-platform behaviour retain
+    regression coverage.
+- [ ] 8.4.2. Maintain native ownership and I/O contracts for borrowed readers,
+  uniquely transferred writers, initialized buffers, short or interrupted
+  calls, byte accounting, and real cleanup on normal, error, and unwind paths.
+  - Success: native Unix/Linux and Windows tests observe descriptor/handle
+    effects, EOF, fallback, broken pipes, and setup or cancellation cleanup;
+    fault sensitivity detects leaks, double closes, invalid bounds, and bad
+    accounting.
+- [ ] 8.4.3. Run and archive the applicable Verus, Kani, and Miri evidence with
+  exact pinned toolchains, bounds, coverage witnesses, exclusions, and trusted
+  assumptions.
+  - Success: Verus verifies exact production kernels where feasible; Kani is
+    used for unsuitable representations with bounded results labelled as such;
+    Miri runs applicable isolated targets; CI has affordable pull-request
+    checks and documented scheduled or manual heavier validation.

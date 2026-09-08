@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["cuprum-rust"]
+members = ["cuprum-rust", "cuprum-streams", "cuprum-native-io"]
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

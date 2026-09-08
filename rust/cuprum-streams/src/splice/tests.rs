@@ -3,7 +3,7 @@
 //! unsupported descriptor types, and broken-pipe draining.
 
 use std::io::{self, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 
 use proptest::prelude::*;
 use rstest::{fixture, rstest};
@@ -61,7 +61,7 @@ fn unsupported_descriptors_signal_fallback() {
     // panic leaves nothing behind.
     let mut reader_file = unwrap_ok(NamedTempFile::new());
     let writer_file = unwrap_ok(NamedTempFile::new());
-    unwrap_ok(reader_file.as_file_mut().write_all(b"file payload"));
+    unwrap_ok(reader_file.write_all(b"file payload"));
     // `reopen()` hands back an independent descriptor to the same inode,
     // verified against replacement, rather than a racy path lookup.
     let reader = OwnedFd::from(unwrap_ok(reader_file.reopen()));
@@ -112,7 +112,7 @@ fn drain_reader_consumes_to_eof(#[from(pipe)] pipe_result: io::Result<PipePair>)
     unwrap_ok(write_all_to(&write_end, b"residual data"));
     drop(write_end);
 
-    unwrap_ok(drain_reader(read_end.as_raw_fd(), 8));
+    unwrap_ok(drain_reader(cuprum_native_io::borrow(&read_end), 8));
 
     let leftover = unwrap_ok(read_all_from(&read_end));
     assert!(leftover.is_empty(), "drain must consume the pipe to EOF");

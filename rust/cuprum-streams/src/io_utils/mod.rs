@@ -58,19 +58,8 @@ fn record_write_retry() {
 }
 
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, OwnedFd};
-
-#[cfg(windows)]
-use std::fs::File;
-
-#[cfg(windows)]
-use std::io::{Read, Write};
-
-#[cfg(unix)]
-pub(crate) type StreamHandle = OwnedFd;
-
-#[cfg(windows)]
-pub(crate) type StreamHandle = File;
+use cuprum_native_io::BorrowedStream;
+use cuprum_native_io::{AsStream, borrow};
 
 /// Result of a single write attempt on the stream.
 #[derive(Debug, PartialEq, Eq)]
@@ -107,10 +96,7 @@ pub(crate) fn operation_span(operation: &'static str, buffer_size: usize) -> tra
 }
 
 /// Read bytes from the stream into the buffer.
-pub(crate) fn read_stream(
-    reader: &mut StreamHandle,
-    buffer: &mut [u8],
-) -> Result<usize, PumpError> {
+pub(crate) fn read_stream(reader: &impl AsStream, buffer: &mut [u8]) -> Result<usize, PumpError> {
     #[cfg(unix)]
     {
         read_stream_unix(reader, buffer)
@@ -118,13 +104,15 @@ pub(crate) fn read_stream(
 
     #[cfg(windows)]
     {
-        reader.read(buffer).map_err(PumpError::from)
+        cuprum_native_io::read_once(borrow(reader), buffer)
+            .and_then(|count| usize::try_from(count).map_err(io::Error::other))
+            .map_err(PumpError::from)
     }
 }
 
 /// Write all bytes from a chunk to the writer, returning the write outcome.
 pub(crate) fn handle_write(
-    writer: &mut StreamHandle,
+    writer: &impl AsStream,
     chunk: &[u8],
 ) -> Result<WriteOutcome, PumpError> {
     #[cfg(unix)]
@@ -159,7 +147,7 @@ pub(crate) fn handle_write(
 /// assert_eq!(event, WriteEvent::Closed { bytes: 0 });
 /// ```
 pub(crate) fn classify_write(
-    writer: &mut StreamHandle,
+    writer: &impl AsStream,
     chunk: &[u8],
 ) -> Result<WriteEvent, PumpError> {
     classify_write_outcome(handle_write(writer, chunk))
@@ -209,8 +197,8 @@ fn classify_write_outcome(
 }
 
 #[cfg(unix)]
-fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, PumpError> {
-    read_raw_fd(reader.as_raw_fd(), buffer)
+fn read_stream_unix(reader: &impl AsStream, buffer: &mut [u8]) -> Result<usize, PumpError> {
+    read_raw_fd(borrow(reader), buffer)
 }
 
 /// Read from a raw descriptor, retrying on `EINTR`.
@@ -219,20 +207,8 @@ fn read_stream_unix(reader: &StreamHandle, buffer: &mut [u8]) -> Result<usize, P
 /// the splice drain: interrupted reads retry, end of file returns zero, and
 /// every other error propagates.
 #[cfg(unix)]
-pub(crate) fn read_raw_fd(fd: libc::c_int, buffer: &mut [u8]) -> Result<usize, PumpError> {
-    read_raw_fd_with(|| {
-        // SAFETY: `buffer` is valid for writes of `buffer.len()` bytes, and
-        // the caller guarantees `fd` stays valid for the duration of this
-        // call.
-        let read_len =
-            unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
-
-        if read_len >= 0 {
-            Ok(read_len)
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    })
+pub(crate) fn read_raw_fd(fd: BorrowedStream<'_>, buffer: &mut [u8]) -> Result<usize, PumpError> {
+    read_raw_fd_with(|| cuprum_native_io::read_once(fd, buffer))
 }
 
 #[cfg(unix)]
@@ -262,18 +238,9 @@ fn read_raw_fd_with(
 }
 
 #[cfg(unix)]
-fn write_all_unix(writer: &StreamHandle, chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
-    let fd = writer.as_raw_fd();
+fn write_all_unix(writer: &impl AsStream, chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
     write_all_unix_with(chunk, |buffer| {
-        // SAFETY: `buffer` is valid for reads of `buffer.len()` bytes, and
-        // `fd` stays valid for the duration of this call.
-        let written =
-            unsafe { libc::write(fd, buffer.as_ptr().cast::<libc::c_void>(), buffer.len()) };
-        if written >= 0 {
-            Ok(written)
-        } else {
-            Err(io::Error::last_os_error())
-        }
+        cuprum_native_io::write_once(borrow(writer), buffer)
     })
 }
 
@@ -320,14 +287,13 @@ fn write_all_unix_with(
 }
 
 #[cfg(windows)]
-fn write_all_windows(
-    writer: &mut StreamHandle,
-    mut chunk: &[u8],
-) -> Result<WriteOutcome, PumpError> {
+fn write_all_windows(writer: &impl AsStream, mut chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
     let mut total_written = 0_u64;
 
     while !chunk.is_empty() {
-        match writer.write(chunk) {
+        match cuprum_native_io::write_once(borrow(writer), chunk)
+            .and_then(|count| usize::try_from(count).map_err(io::Error::other))
+        {
             Ok(0) => {
                 return Err(PumpError::from(io::Error::new(
                     io::ErrorKind::WriteZero,
@@ -353,10 +319,15 @@ fn record_write_progress(
     total_written: &mut u64,
 ) -> Result<(), PumpError> {
     let written_len_u64 = u64::try_from(written_len).map_err(|_| PumpError::LengthOverflow)?;
-    *total_written = total_written.saturating_add(written_len_u64);
-    *chunk = chunk
+    let remaining = u64::try_from(chunk.len()).map_err(|_| PumpError::LengthOverflow)?;
+    let tail = chunk
         .get(written_len..)
         .ok_or(PumpError::BufferRangeExceeded)?;
+    let (new_total, _) =
+        cuprum_native_io::progress::checked_progress(*total_written, remaining, written_len_u64)
+            .ok_or(PumpError::LengthOverflow)?;
+    *total_written = new_total;
+    *chunk = tail;
     Ok(())
 }
 

@@ -46,6 +46,8 @@ open each document.
   report Rust-pump routing decisions on a channel separate from `ExecEvent`.
 - [ADR-009: Enforce Oxford spelling in source][adr-009] - accepted decision to
   govern identifiers and source prose with the repository spelling gate.
+- [ADR-010: Audited Rust safety boundaries][adr-010] - accepted decision to
+  isolate native resource operations from safe stream policy.
 
 ## Planning and validation references
 
@@ -58,6 +60,9 @@ open each document.
   when substantial work needs a durable plan.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
+- [Rust boundary verification and unsafe inventory][rust-boundary-verification]
+  - unsafe inventory, crate contracts, verifier evidence, and trusted
+  assumptions for the native stream boundaries.
 
 [adr-004]: adr-004-interrogate-docstring-gate.md
 [adr-005]: adr-005-unified-rust-availability-probe.md
@@ -65,5 +70,7 @@ open each document.
 [adr-007]: adr-007-subprocess-execution-module-boundaries.md
 [adr-008]: adr-008-rust-pump-observation-channel.md
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
+[adr-010]: adr-010-audited-rust-boundaries.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
+[rust-boundary-verification]: rust-boundary-verification.md

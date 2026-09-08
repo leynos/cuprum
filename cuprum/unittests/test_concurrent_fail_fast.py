@@ -152,25 +152,18 @@ class TestFailFastExecution:
         catalogue, python_program = python_catalogue()
         python = sh.make(python_program, catalogue=catalogue)
 
-        # First command fails immediately, second sleeps
+        # Leave the second command pending until cancellation reaches it.
         cmd1 = python("-c", "import sys; sys.exit(42)")
-        cmd2 = python("-c", "import time; time.sleep(1); print('should not complete')")
+        cmd2 = python("-c", "import time; time.sleep(10); print('should not complete')")
 
         with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-            start = time.perf_counter()
             result = run_concurrent_sync(
                 cmd1, cmd2, config=ConcurrentConfig(fail_fast=True)
             )
-            elapsed = time.perf_counter() - start
 
         assert result.ok is False, "the failing command makes the run unsuccessful"
-        # The slow command should be cancelled, so elapsed time should be short
-        assert elapsed < 1.0, f"Expected < 1.0s with fail-fast, got {elapsed:.3f}s"
-
-        # Verify shape of results and failures
-        # At minimum cmd1 completed (failed); cmd2 may or may not be in results
-        assert len(result.results) >= 1, (
-            "At least the failed command should be in results"
+        assert result.submission_indices == (0,), (
+            "the pending command must be cancelled before producing a result"
         )
         assert result.failures == (0,), "First result should be the failure"
         assert result.first_failure is not None, (

@@ -26,31 +26,38 @@ _Figure 1: Simplified repository tree for contributor orientation._
 
 ## Path responsibilities
 
-| Path                | Responsibility                                                                                                                |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `.github/`          | GitHub Actions workflows, Dependabot configuration, and reusable workflow actions.                                            |
-| `.rules/`           | Python coding rules referenced by `AGENTS.md` and maintainer guidance.                                                        |
-| `benchmarks/`       | Benchmark drivers, profiling helpers, deterministic fixtures, and benchmark validation code.                                  |
-| `cuprum/`           | Python package source for the command catalogue, safe command builders, execution runtime, streams, and Rust backend adapter. |
-| `docs/`             | User, maintainer, design, decision, roadmap, and reference documentation.                                                     |
-| `docs/execplans/`   | Durable execution plans for non-trivial implementation work.                                                                  |
-| `rust/`             | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                 |
-| `rust/cuprum-rust/` | PyO3-backed Rust crate that provides accelerated Cuprum components.                                                           |
-| `test-wheelhouse/`  | Local wheel artefacts used by validation workflows and compatibility tests.                                                   |
-| `tests/`            | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                             |
-| `AGENTS.md`         | Repository-specific assistant and contributor instructions.                                                                   |
-| `Makefile`          | Canonical entry point for build, format, lint, typecheck, test, documentation lint, and diagram validation gates.             |
-| `pyproject.toml`    | Python project metadata, dependency declarations, and tool configuration.                                                     |
-| `uv.lock`           | Locked Python dependency graph for reproducible `uv` environments.                                                            |
+| Path                     | Responsibility                                                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `.github/`               | GitHub Actions workflows, Dependabot configuration, and reusable workflow actions.                                            |
+| `.rules/`                | Python coding rules referenced by `AGENTS.md` and maintainer guidance.                                                        |
+| `benchmarks/`            | Benchmark drivers, profiling helpers, deterministic fixtures, and benchmark validation code.                                  |
+| `cuprum/`                | Python package source for the command catalogue, safe command builders, execution runtime, streams, and Rust backend adapter. |
+| `docs/`                  | User, maintainer, design, decision, roadmap, and reference documentation.                                                     |
+| `docs/execplans/`        | Durable execution plans for non-trivial implementation work.                                                                  |
+| `rust/`                  | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                 |
+| `rust/cuprum-rust/`      | Thin PyO3/maturin integration crate for the optional native backend; raw Python resource hand-off lives here.                 |
+| `rust/cuprum-streams/`   | Safe stream orchestration, pump policy, state machine, errors, and checked UTF-8 decoding; unsafe Rust is forbidden.          |
+| `rust/cuprum-native-io/` | Audited native descriptor/handle ownership, single-call I/O, progress kernels, and platform test fixtures.                    |
+| `test-wheelhouse/`       | Local wheel artefacts used by validation workflows and compatibility tests.                                                   |
+| `tests/`                 | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                             |
+| `AGENTS.md`              | Repository-specific assistant and contributor instructions.                                                                   |
+| `Makefile`               | Canonical entry point for build, format, lint, typecheck, test, documentation lint, and diagram validation gates.             |
+| `pyproject.toml`         | Python project metadata, dependency declarations, and tool configuration.                                                     |
+| `uv.lock`                | Locked Python dependency graph for reproducible `uv` environments.                                                            |
 
 _Table 1: Major repository paths and their ownership boundaries._
 
 ## Conventions
 
-Source code for the Python package belongs under `cuprum/`; source code for the
-Rust extension belongs under `rust/cuprum-rust/`. Cross-language behaviour
-should be documented in [Cuprum design](cuprum-design.md) and surfaced in the
-[users' guide](users-guide.md) when it affects public behaviour.
+Source code for the Python package belongs under `cuprum/`. The Rust workspace
+keeps PyO3 integration in `rust/cuprum-rust/`, safe stream policy in
+`rust/cuprum-streams/`, and native resource operations in
+`rust/cuprum-native-io/`. Cross-language behaviour should be documented in
+[Cuprum design](cuprum-design.md) and surfaced in the
+[users' guide](users-guide.md) when it affects public behaviour. See
+[ADR-010](adr-010-audited-rust-boundaries.md) and
+[Rust boundary verification](rust-boundary-verification.md) for the safety and
+verification contracts.
 
 Long-lived documentation belongs under `docs/`. New architectural decisions
 should be recorded as ADRs in `docs/` and linked from

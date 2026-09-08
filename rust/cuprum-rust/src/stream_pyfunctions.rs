@@ -1,8 +1,8 @@
 //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
 use super::{
-    BufferSize, PumpError, PyErr, PyResult, Python, ReaderFd, WriterFd, consume_stream, convert_fd,
-    pump_stream, pyfunction, validate_buffer_size,
+    BufferSize, PumpError, PyResult, Python, ReaderFd, consume_stream, convert_fd, pump_stream,
+    pyfunction, validate_buffer_size,
 };
 
 /// Run a prepared stream operation after validating its buffer size.
@@ -24,7 +24,7 @@ where
     let reader = ReaderFd(convert_fd(reader_fd)?);
     let operation = prepare_operation()?;
     let result = py.detach(move || operation(reader, validated_buffer_size));
-    result.map_err(PyErr::from)
+    result.map_err(super::errors::pump_error_to_py_err)
 }
 
 /// Pump bytes between file descriptors outside the GIL.
@@ -46,8 +46,17 @@ pub(super) fn rust_pump_stream(
     buffer_size: i64,
 ) -> PyResult<u64> {
     run_stream_operation(py, reader_fd, buffer_size, || {
-        let writer = WriterFd(convert_fd(writer_fd)?);
-        Ok(move |reader, validated_buffer_size| pump_stream(reader, writer, validated_buffer_size))
+        let writer_raw = convert_fd(writer_fd)?;
+        // SAFETY: `_streams_rs` transfers its duplicate exactly once.
+        // Python retains no owner after this hand-off; see the boundary
+        // contract for direct native callers and submission rollback.
+        let writer = unsafe { cuprum_native_io::adopt_writer(writer_raw) };
+        Ok(move |reader: ReaderFd, validated_buffer_size| {
+            // SAFETY: Python keeps the paused reader transport alive until
+            // the worker and cleanup finish, including cancellation.
+            let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
+            pump_stream(&source, writer, validated_buffer_size)
+        })
     })
 }
 
@@ -73,5 +82,12 @@ pub(super) fn rust_consume_stream(
     reader_fd: i64,
     buffer_size: i64,
 ) -> PyResult<String> {
-    run_stream_operation(py, reader_fd, buffer_size, || Ok(consume_stream))
+    run_stream_operation(py, reader_fd, buffer_size, || {
+        Ok(|reader: ReaderFd, size| {
+            // SAFETY: the Python consume caller retains its reader throughout
+            // this synchronous native call, including the GIL-free interval.
+            let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
+            consume_stream(&source, size)
+        })
+    })
 }
