@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import io
 import time
 
 import pytest
@@ -247,6 +248,206 @@ class TestConcurrentExecution:
 
         assert result.ok is True, "both async commands should succeed"
         assert len(result.results) == 2, "both submitted commands must be reported"
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("echo_stdout", "echo_stderr"),
+        [(False, True), (True, False)],
+        ids=["stderr-only", "stdout-only"],
+    )
+    def test_run_concurrent_sync_routes_per_stream_echo(
+        *,
+        echo_stdout: bool,
+        echo_stderr: bool,
+    ) -> None:
+        """Concurrent echo follows the per-stream gates onto the selected sinks."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            result = run_concurrent_sync(
+                command,
+                config=ConcurrentConfig(
+                    capture=True,
+                    echo_stdout=echo_stdout,
+                    echo_stderr=echo_stderr,
+                    context=ExecutionContext(
+                        stdout_sink=stdout_sink,
+                        stderr_sink=stderr_sink,
+                    ),
+                ),
+            )
+
+        command_result = result.results[0]
+        assert command_result.ok is True, "the concurrent command must succeed"
+        assert command_result.stdout == "out-line\n", (
+            "capture must return stdout regardless of the echo gates"
+        )
+        assert command_result.stderr == "err-line\n", (
+            "capture must return stderr regardless of the echo gates"
+        )
+        assert stdout_sink.getvalue() == ("out-line\n" if echo_stdout else ""), (
+            f"stdout echo must follow echo_stdout={echo_stdout}"
+        )
+        assert stderr_sink.getvalue() == ("err-line\n" if echo_stderr else ""), (
+            f"stderr echo must follow echo_stderr={echo_stderr}"
+        )
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("echo_stdout", "echo_stderr"),
+        [(False, True), (True, False)],
+        ids=["stderr-only", "stdout-only"],
+    )
+    def test_run_concurrent_routes_per_stream_echo(
+        *,
+        echo_stdout: bool,
+        echo_stderr: bool,
+    ) -> None:
+        """The async concurrent boundary honours the same per-stream gates."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+        config = ConcurrentConfig(
+            capture=True,
+            echo_stdout=echo_stdout,
+            echo_stderr=echo_stderr,
+            context=ExecutionContext(
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
+            ),
+        )
+
+        async def exercise() -> ConcurrentResult:
+            """Run the command concurrently within an allowlist scope."""
+            with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+                return await run_concurrent(command, config=config)
+
+        result = asyncio.run(exercise())
+
+        command_result = result.results[0]
+        assert command_result.ok is True, "the concurrent command must succeed"
+        assert command_result.stdout == "out-line\n", (
+            "capture must return stdout regardless of the echo gates"
+        )
+        assert command_result.stderr == "err-line\n", (
+            "capture must return stderr regardless of the echo gates"
+        )
+        assert stdout_sink.getvalue() == ("out-line\n" if echo_stdout else ""), (
+            f"stdout echo must follow echo_stdout={echo_stdout}"
+        )
+        assert stderr_sink.getvalue() == ("err-line\n" if echo_stderr else ""), (
+            f"stderr echo must follow echo_stderr={echo_stderr}"
+        )
+
+
+class TestConcurrentEchoOnly:
+    """Verify the echo-only concurrent path leaves results uncaptured."""
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("echo_stdout", "echo_stderr"),
+        [(False, True), (True, False)],
+        ids=["stderr-only", "stdout-only"],
+    )
+    def test_run_concurrent_sync_echo_only_keeps_capture_off(
+        *,
+        echo_stdout: bool,
+        echo_stderr: bool,
+    ) -> None:
+        """capture=False streams only the gated stream and captures neither."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            result = run_concurrent_sync(
+                command,
+                config=ConcurrentConfig(
+                    capture=False,
+                    echo_stdout=echo_stdout,
+                    echo_stderr=echo_stderr,
+                    context=ExecutionContext(
+                        stdout_sink=stdout_sink,
+                        stderr_sink=stderr_sink,
+                    ),
+                ),
+            )
+
+        command_result = result.results[0]
+        assert command_result.ok is True, "the concurrent command must succeed"
+        assert command_result.stdout is None, "capture=False must leave stdout unset"
+        assert command_result.stderr is None, "capture=False must leave stderr unset"
+        assert stdout_sink.getvalue() == ("out-line\n" if echo_stdout else ""), (
+            f"stdout echo must follow echo_stdout={echo_stdout}"
+        )
+        assert stderr_sink.getvalue() == ("err-line\n" if echo_stderr else ""), (
+            f"stderr echo must follow echo_stderr={echo_stderr}"
+        )
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("echo_stdout", "echo_stderr"),
+        [(False, True), (True, False)],
+        ids=["stderr-only", "stdout-only"],
+    )
+    def test_run_concurrent_echo_only_keeps_capture_off(
+        *,
+        echo_stdout: bool,
+        echo_stderr: bool,
+    ) -> None:
+        """The async concurrent boundary honours the same echo-only contract."""
+        catalogue, python_program = python_catalogue()
+        python = sh.make(python_program, catalogue=catalogue)
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+        config = ConcurrentConfig(
+            capture=False,
+            echo_stdout=echo_stdout,
+            echo_stderr=echo_stderr,
+            context=ExecutionContext(
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
+            ),
+        )
+
+        async def exercise() -> ConcurrentResult:
+            """Run the command concurrently within an allowlist scope."""
+            with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+                return await run_concurrent(command, config=config)
+
+        result = asyncio.run(exercise())
+
+        command_result = result.results[0]
+        assert command_result.ok is True, "the concurrent command must succeed"
+        assert command_result.stdout is None, "capture=False must leave stdout unset"
+        assert command_result.stderr is None, "capture=False must leave stderr unset"
+        assert stdout_sink.getvalue() == ("out-line\n" if echo_stdout else ""), (
+            f"stdout echo must follow echo_stdout={echo_stdout}"
+        )
+        assert stderr_sink.getvalue() == ("err-line\n" if echo_stderr else ""), (
+            f"stderr echo must follow echo_stderr={echo_stderr}"
+        )
 
 
 class TestConcurrencyLimits:

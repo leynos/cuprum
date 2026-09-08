@@ -13,28 +13,53 @@ if typ.TYPE_CHECKING:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class _PipelineStreamOptions:
+    """Per-stream echo gates resolved from ``RunOutputOptions``."""
+
+    echo_stdout: bool
+    echo_stderr: bool
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _PipelineRunConfig:
     """Normalized runtime options for pipeline execution."""
 
     ctx: ExecutionContext
     capture: bool
-    echo: bool
+    echo_stdout: bool
+    echo_stderr: bool
     timeout: float | None
     stdout_sink: typ.IO[str]
     stderr_sink: typ.IO[str]
 
     @property
-    def capture_or_echo(self) -> bool:
-        """Whether output must be consumed for capture or echo."""
-        return self.capture or self.echo
+    def stdout_capture_or_echo(self) -> bool:
+        """Whether stdout must be consumed for capture or echo."""
+        return self.capture or self.echo_stdout
+
+    @property
+    def stderr_capture_or_echo(self) -> bool:
+        """Whether stderr must be consumed for capture or echo."""
+        return self.capture or self.echo_stderr
 
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stream configuration for the final pipeline stage."""
+        """Build the stdout stream configuration for the final pipeline stage."""
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=self.echo,
+            echo_output=self.echo_stdout,
             sink=self.stdout_sink,
+            encoding=self.ctx.encoding,
+            errors=self.ctx.errors,
+        )
+
+    @property
+    def stderr_stream_config(self) -> _StreamConfig:
+        """Build the stderr stream configuration for a pipeline stage."""
+        return _StreamConfig(
+            capture_output=self.capture,
+            echo_output=self.echo_stderr,
+            sink=self.stderr_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
         )
@@ -43,7 +68,7 @@ class _PipelineRunConfig:
 def _prepare_pipeline_config(
     *,
     capture: bool,
-    echo: bool,
+    output: _PipelineStreamOptions,
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
@@ -61,7 +86,8 @@ def _prepare_pipeline_config(
     return _PipelineRunConfig(
         ctx=ctx,
         capture=capture,
-        echo=echo,
+        echo_stdout=output.echo_stdout,
+        echo_stderr=output.echo_stderr,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

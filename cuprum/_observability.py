@@ -48,13 +48,16 @@ def _base_stage_tags(
     cmd: SafeCmd,
     *,
     capture: bool,
-    echo: bool,
+    echo_stdout: bool,
+    echo_stderr: bool,
 ) -> dict[str, object]:
     """Build the base observation tags for one command stage."""
     return {
         "project": cmd.project.name,
         "capture": capture,
-        "echo": echo,
+        "echo": echo_stdout or echo_stderr,
+        "echo_stdout": echo_stdout,
+        "echo_stderr": echo_stderr,
     }
 
 

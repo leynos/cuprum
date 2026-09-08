@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from cuprum import ECHO, sh
+from cuprum._pipeline_config import _PipelineStreamOptions
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
 
 
@@ -49,7 +50,10 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
     first = echo("-n", "hello")
     second = echo("-n", "world")
     config = _prepare_pipeline_config(
-        capture=True, echo=False, timeout=None, context=None
+        capture=True,
+        output=_PipelineStreamOptions(echo_stdout=False, echo_stderr=False),
+        timeout=None,
+        context=None,
     )
 
     spawned: list[_StubSpawnProcess] = []

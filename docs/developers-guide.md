@@ -1258,10 +1258,12 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
   `ExecutionContext.env`) over the scoped overlay from the active
   `CuprumContext` and returns the immutable merge result. It stays overlay-only
   — `os.environ` is merged separately at spawn time by `resolve_env`.
-- `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
-  (`project`, `capture`, `echo`). The pipeline observation builder grafts on
-  only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
-  per-call tags are merged over the base via `_merge_tags`.
+- `_base_stage_tags(cmd, *, capture, echo_stdout, echo_stderr)` builds the
+  shared tag schema (`project`, `capture`, `echo`, `echo_stdout`,
+  `echo_stderr`); the combined `echo` tag stays the OR of the two per-stream
+  gates. The pipeline observation builder grafts on only its stage-specific keys
+  (`pipeline_stage_index`, `pipeline_stages`); per-call tags are merged over
+  the base via `_merge_tags`.
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/sh.py`), `_build_pipeline_observations`
@@ -3769,6 +3771,29 @@ arguments only for compatibility. Those flags emit `DeprecationWarning` and
 must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
+
+### Per-stream echo mechanics
+
+`RunOutputOptions.__post_init__` resolves the `echo` shorthand into
+`echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
+while an explicit field overrides it for that stream alone. `capture` remains
+one joint boolean, so a stream that is not echoed is still captured when
+`capture` is `True`.
+
+`ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
+fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.
+
+`_SubprocessExecution` carries separate `echo_stdout` and `echo_stderr` gates.
+Its `consumes_any_stream` predicate reports whether capture or either echo gate
+requires a reader; spawning pipes stdout for `capture or echo_stdout` and
+stderr for `capture or echo_stderr`.
+
+Pipeline fd selection follows the same per-stream gates through
+`_get_stage_stream_fds`. A non-final stage always pipes stdout so it can relay
+into the next stage, regardless of capture or echo. The final stage's stdout
+and every stage's stderr are piped only when their own capture-or-echo gate is
+true. `_PipelineRunConfig` builds a `_StreamConfig` per stream so both streams
+can share capture while differing in echo.
 
 ## Subprocess execution module boundaries
 

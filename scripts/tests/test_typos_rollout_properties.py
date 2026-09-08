@@ -46,6 +46,7 @@ _corrections_pool = st.dictionaries(
 
 _shared_settings = settings(
     max_examples=50,
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

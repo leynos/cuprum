@@ -213,7 +213,8 @@ async def _spawn_pipeline_processes(
             stream_fds = _get_stage_stream_fds(
                 idx,
                 last_idx,
-                capture_or_echo=config.capture_or_echo,
+                stdout_capture_or_echo=config.stdout_capture_or_echo,
+                stderr_capture_or_echo=config.stderr_capture_or_echo,
             )
             process = await asyncio.create_subprocess_exec(
                 *observation.cmd.argv_with_program,

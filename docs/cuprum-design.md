@@ -386,6 +386,7 @@ class Pipeline(Generic[Out]):
         self,
         *,
         # capture: final stage stdout and all stderr; echo: tee to sinks.
+        # echo_stdout/echo_stderr narrow the tee per stream; capture stays joint.
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
@@ -607,7 +608,9 @@ processes concurrently, and streams data between them.
   per-stage exit metadata (`result.stages`) without relying on side channels.
 - Only the final stage's stdout is captured. Intermediate stage stdout is
   streamed into the next stage and represented as `None` on its stage result.
-- `echo=True` tees the final stage stdout and all stage stderr streams.
+- `echo=True` tees the final stage stdout and all stage stderr streams;
+  `echo_stdout` / `echo_stderr` narrow the tee to one stream each. Capture
+  remains a single joint switch and is unaffected by the per-stream echo gates.
 - Pipelines apply fail-fast semantics: the first stage to exit non-zero
   terminates every other still-running stage — upstream producers and
   downstream consumers alike — unless it is the final stage, in which case
@@ -945,6 +948,33 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
+shorthand independently, so a command can capture stdout silently while stderr
+still mirrors to the log. Capture stays a single joint switch — `capture=True`
+keeps both streams captured even when neither echoes.
+
+Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+stream consumers
+
+```mermaid
+flowchart TD
+    A[RunOutputOptions] --> B[__post_init__ resolves echo_stdout and echo_stderr from echo]
+    B --> C{Execution path}
+    C -->|single command| D[_spawn_subprocess]
+    C -->|pipeline| E[_get_stage_stream_fds]
+    D --> F{capture or stream echo enabled}
+    F -->|stdout gate| G[stdout PIPE or DEVNULL]
+    F -->|stderr gate| H[stderr PIPE or DEVNULL]
+    G --> I[_spawn_stream_consumers]
+    H --> I
+    E --> J[non-final stdout always PIPE for relay]
+    E --> K[final stdout and every stderr use independent gates]
+    J --> L[_create_stage_capture_tasks]
+    K --> L
+    I --> M[Capture remains joint when capture is true]
+    L --> M
+```
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -1083,8 +1113,10 @@ implemented with the following decisions:
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
 - **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
-  `capture`/`echo`. Callers can attach additional tags via
-  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
+  `capture`/`echo` plus the per-stream `echo_stdout`/`echo_stderr`; the combined
+  `echo` tag stays the OR of the per-stream tags. Callers can attach
+  additional tags via `ExecutionContext.tags`; caller tags take precedence when
+  keys overlap.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.
@@ -1166,7 +1198,7 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 3: Sequence of start/exit logging hook execution
+Figure 4: Sequence of start/exit logging hook execution
 
 ```mermaid
 sequenceDiagram
@@ -1221,7 +1253,7 @@ stderr, and the exit time. It then reads the process exit code through
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
 
-Figure 4: Subprocess timeout handling, from payload resolution to
+Figure 5: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
 
 ```mermaid
@@ -1292,7 +1324,7 @@ grace, captured text is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 5: Capturing drain EOF-grace sequence
+Figure 6: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -1391,7 +1423,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 7: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1578,7 +1610,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 7: Concurrent execution flow with allowlist validation and semaphore
+Figure 8: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1624,7 +1656,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 8: Fail-fast mode cancellation behaviour
+Figure 9: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -1782,7 +1814,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 10: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -2532,7 +2564,9 @@ pathway. The following behaviours are only available via the Python backend:
 - **Teeing to sinks (`echo=True`):** The Python pathway can write chunks to a
   `sink` (e.g. `sys.stdout`) whilst simultaneously capturing output. The Rust
   extension does not support this; `echo=True` keeps consumption on the Python
-  path.
+  path. The per-stream `echo_stdout` / `echo_stderr` gates resolve before
+  dispatch, so any stream whose resolved gate is `True` keeps the Python path
+  while capture stays joint.
 
 - **Custom encodings:** The Rust extension always decodes as UTF-8 with
   replacement semantics. Other encodings or error modes require the Python
