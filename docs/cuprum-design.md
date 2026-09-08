@@ -2098,6 +2098,10 @@ operations. Both pathways remain available and are treated as first-class:
 - The existing asyncio-based implementation;
 - Used when the Rust extension is unavailable or explicitly disabled;
 - Remains the reference implementation for behavioural correctness.
+- Owns line-level observation: `SafeCmd.lines()` and the `on_line` option
+  deliver decoded `LineEvent` values stamped with a monotonic arrival time, and
+  any registered line callback keeps a stream on the Python pathway because the
+  incremental decoder and per-line fan-out have no Rust counterpart.
 
 **Rust pathway (`cuprum._streams_rs`):**
 
@@ -2157,6 +2161,69 @@ flowchart TD
     H --> I
     H -. exposes .-> J
     J -. Phase 2 candidate .-> G
+```
+
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.lines()` iteration. It moves from creation through the first
+`__anext__()` call to the streaming state, then ends either by publishing the
+`CommandResult` and closing, or — on timeout or caller cancellation — by
+tearing the child process down through the existing SIGTERM, grace-wait, and
+SIGKILL path before the consumers drain and the stream closes.
+
+Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+streaming to completion, timeout, or cancellation-driven teardown
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: SafeCmd.lines()
+    Created --> Running: first __anext__()
+    Running --> Streaming: subprocess and consumers active
+    Streaming --> Streaming: yield LineEvent
+    Streaming --> Completed: CommandResult published
+    Completed --> Closed: result exposed
+    Streaming --> Cancelling: break, aclose(), or cancellation
+    Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
+    Terminated --> Closed: consumers drained
+    Streaming --> TimedOut: timeout
+    TimedOut --> Terminated: existing timeout termination path
+    Closed --> [*]
+```
+
+For screen readers: The following sequence diagram shows one full
+`SafeCmd.lines()` iteration. The caller receives a `LineStream` from
+`SafeCmd.lines()`, each `__anext__()` call drives a coordinator that spawns the
+subprocess and starts the stdout and stderr consumers, decoded `LineEvent`
+values are enqueued and yielded as they arrive, and after the process exits the
+consumers are drained, the `CommandResult` is published, and iteration ends with
+`StopAsyncIteration` before the caller reads the `result` attribute.
+
+Figure 11: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+per-line events to the published `CommandResult` and `StopAsyncIteration`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant LineStream
+    participant Coordinator
+    participant Process
+    participant Consumers
+
+    Caller->>SafeCmd: lines(output, timeout, context, stdin)
+    SafeCmd-->>Caller: LineStream
+    Caller->>LineStream: __anext__()
+    LineStream->>Coordinator: start line stream
+    Coordinator->>Process: spawn subprocess
+    Coordinator->>Consumers: consume stdout and stderr
+    loop decoded lines
+        Consumers->>LineStream: enqueue LineEvent(stream, at, text)
+        LineStream-->>Caller: LineEvent
+    end
+    Process-->>Coordinator: exit
+    Coordinator->>Consumers: drain consumers
+    Coordinator->>LineStream: publish CommandResult
+    LineStream-->>Caller: StopAsyncIteration
+    Caller->>LineStream: result
 ```
 
 ### 13.3 API Boundary

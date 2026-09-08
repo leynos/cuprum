@@ -64,6 +64,7 @@ from cuprum.echo_events import (
 )
 from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
+from cuprum.lines import LineEvent, LineHook, LineStreamName
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
 from cuprum.pump_events import (
@@ -120,6 +121,9 @@ __all__ = [
     "ForbiddenProgramError",
     "HookRegistration",
     "IOOptions",
+    "LineEvent",
+    "LineHook",
+    "LineStreamName",
     "LoggingHookRegistration",
     "Pipeline",
     "PipelineResult",

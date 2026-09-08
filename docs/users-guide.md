@@ -399,6 +399,65 @@ async def greet() -> None:
     print(result.stdout)
 ```
 
+### Line-level output
+
+`SafeCmd.lines()` iterates a command's decoded output lines as they arrive
+instead of waiting for the whole run to finish. Each yielded `LineEvent`
+carries three fields:
+
+- `stream`: which pipe the line arrived on, `"stdout"` or `"stderr"`.
+- `at`: monotonic seconds since the command started, read from
+  `time.perf_counter()` when the line was decoded.
+- `text`: the decoded line without its line terminator.
+
+Lines are delivered in arrival order within each stream. There is no
+cross-stream ordering guarantee: stdout and stderr are consumed by independent
+tasks, so a stdout line and a stderr line written at the same moment may be
+delivered in either order relative to each other.
+
+```python
+from cuprum import ECHO, sh
+
+
+async def follow() -> None:
+    cmd = sh.make(ECHO)("hello", "line-level")
+    stream = cmd.lines()
+    async for event in stream:
+        print(event.stream, f"{event.at:.3f}", event.text)
+    result = stream.result
+    if result is not None and not result.ok:
+        raise RuntimeError(f"echo failed: {result.exit_code}")
+```
+
+After iteration completes, `stream.result` holds the same `CommandResult` a
+`run()` call would have returned, including captured output when
+`capture=True`. Iterating lines does not disable capture or echo; they stay
+independent options on `RunOutputOptions`.
+
+The `on_line` option on `RunOutputOptions` offers the same line access as a
+callback for callers who do not want pull-based iteration. It receives the same
+`LineEvent` values, in the same per-stream order, while `run()` executes:
+
+```python
+from cuprum import ECHO, RunOutputOptions, sh
+
+
+async def observe() -> None:
+    cmd = sh.make(ECHO)("hello")
+    events = []
+    await cmd.run(output=RunOutputOptions(on_line=events.append))
+    assert [event.text for event in events] == ["hello"]
+```
+
+Cancelling a task that is iterating `lines()`, breaking out of the loop, or
+closing the `LineStream` tears the subprocess down the same way a cancelled
+`run()` does: `SIGTERM`, a short grace period, then `SIGKILL`. Timeouts behave
+identically to `run()`.
+
+The callback alternative shares one decode pass with the structured `stdout`/
+`stderr` observe events, so registering both delivers each line twice: once as
+an `ExecEvent` to `sh.observe` hooks, and once as a `LineEvent`.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
