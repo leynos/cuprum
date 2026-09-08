@@ -2266,10 +2266,11 @@ sees the `#[cfg(unix)]` arm and never the Windows one.
 
 ## Rust FD-borrow ownership contract
 
-The PyO3 pump and consume entry points in `rust/cuprum-rust/src/lib.rs` sort
-every descriptor they touch into a *borrowed* or a *consumed* role.
-`pump_stream` borrows its reader and consumes its writer; `consume_stream`
-borrows its reader and takes no writer at all. The unsafe raw-reader constructor
+The PyO3 pump and consume entry points in
+`rust/cuprum-rust/src/stream_pyfunctions.rs:42,80` sort every descriptor they
+touch into a *borrowed* or a *consumed* role. `pump_stream` borrows its reader
+and consumes its writer; `consume_stream` borrows its reader and takes no
+writer at all. The unsafe raw-reader constructor
 `cuprum_native_io::borrow_reader` is called only at this PyO3 integration
 boundary. The safe `cuprum_native_io::borrow` API returns a lifetime-bound OS
 borrow; `cuprum-streams` receives typed `AsStream` values and cannot
@@ -2390,9 +2391,9 @@ the final prefix harness. These are bounded results, not an unbounded proof.
 Round 27 Miri passed all 13 isolated native tests with zero ignored; see
 `/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
 `libc::splice`, and unsupported operating-system representations. Round 33's
-prior local checkpoint passed the native and repository gates; the integrated
-tree awaits fresh gates after rebase. Windows and macOS runtime tests remain
-pending hosted execution.
+prior local checkpoint passed, and Round 35's integrated local run passed the
+native and repository gates. Windows and macOS runtime tests remain pending
+hosted execution.
 
 The boundary installer and fault harnesses have narrow reuse policies. The
 existing `scripts/typos_rollout_refresh.py` downloader is coupled to
@@ -3735,7 +3736,11 @@ crate's UI directory contains:
 
 - `tests/ui/pass/` — Rust files that **must compile** without error.
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
-  matching the corresponding `.stderr` file.
+matching the corresponding `.stderr` file.
+
+The PyO3 pass fixtures include
+`rust/cuprum-rust/tests/ui/pass/const_availability_export.rs`; the safe stream
+fixtures include the `Transition` and writer-lifetime probes.
 
 Run compile-time UI tests with:
 
