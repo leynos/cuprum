@@ -71,38 +71,49 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
 def _download(url: str, destination: Path) -> None:
     """Follow bounded HTTPS-only release redirects into a temporary file."""
     for _ in range(6):
-        parsed = urllib.parse.urlsplit(url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            msg = "binary downloads and redirects require HTTPS"
-            raise ValueError(msg)
-        connection = http.client.HTTPSConnection(
-            parsed.hostname, parsed.port, timeout=60
-        )
-        try:
-            path = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
-            connection.request(
-                "GET",
-                path or "/",
-                headers={"User-Agent": "cuprum-boundary-verification"},
-            )
-            with connection.getresponse() as response:
-                if response.status in {301, 302, 303, 307, 308}:
-                    location = response.getheader("Location")
-                    if location is None:
-                        msg = "release redirect has no Location"
-                        raise ValueError(msg)
-                    url = urllib.parse.urljoin(url, location)
-                    continue
-                if response.status != http.client.OK:
-                    msg = f"release download failed: HTTP {response.status}"
-                    raise OSError(msg)
-                with destination.open("wb") as output:
-                    shutil.copyfileobj(response, output)
-                return
-        finally:
-            connection.close()
+        redirect = _download_once(url, destination)
+        if redirect is None:
+            return
+        url = redirect
     msg = "release redirect limit exceeded"
     raise ValueError(msg)
+
+
+def _redirect_url(url: str, response: http.client.HTTPResponse) -> str | None:
+    """Resolve a redirect target or validate a terminal download response."""
+    if response.status in {301, 302, 303, 307, 308}:
+        location = response.getheader("Location")
+        if location is None:
+            msg = "release redirect has no Location"
+            raise ValueError(msg)
+        return urllib.parse.urljoin(url, location)
+    if response.status != http.client.OK:
+        msg = f"release download failed: HTTP {response.status}"
+        raise OSError(msg)
+    return None
+
+
+def _download_once(url: str, destination: Path) -> str | None:
+    """Close one HTTPS connection after saving its body or resolving a redirect."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        msg = "binary downloads and redirects require HTTPS"
+        raise ValueError(msg)
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
+    try:
+        path = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
+        connection.request(
+            "GET", path or "/", headers={"User-Agent": "cuprum-boundary-verification"}
+        )
+        with connection.getresponse() as response:
+            redirect = _redirect_url(url, response)
+            if redirect is not None:
+                return redirect
+            with destination.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            return None
+    finally:
+        connection.close()
 
 
 def _digest(path: Path) -> str:

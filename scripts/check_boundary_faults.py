@@ -106,6 +106,12 @@ def main() -> None:
     shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
     logs = ROOT / "rust/target/boundary-verification/faults"
     logs.mkdir(parents=True, exist_ok=True)
+    _verify_progress_faults(workspace, logs)
+    _verify_ownership_faults(workspace, logs)
+
+
+def _verify_progress_faults(workspace: Path, logs: Path) -> None:
+    """Check the production progress kernels against bound and accounting faults."""
     install = Path(
         os.environ.get(
             "VERUS_INSTALL_DIR",
@@ -130,6 +136,10 @@ def main() -> None:
             workspace,
             logs,
         )
+
+
+def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
+    """Check writer drop and real-unwind retention faults against their controls."""
     memory = workspace / "cuprum-native-io/src/memory.rs"
     original = memory.read_text(encoding="utf-8")
     ownership = (
