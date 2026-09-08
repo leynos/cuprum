@@ -1,6 +1,7 @@
 """Keep formal boundary validation hosted, bounded, and free of target archives."""
 
-from pathlib import PurePosixPath
+import shlex
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -63,3 +64,19 @@ def test_boundary_cache_ownership_is_limited(name: str) -> None:
         assert "github.ref == 'refs/heads/main'" in condition, (
             "a branch can publish the trusted cache"
         )
+
+
+def test_prover_tools_selects_its_required_python() -> None:
+    """The installer must override CI's Python 3.13 with its required Python 3.14."""
+    makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
+        encoding="utf-8"
+    )
+    assignment = next(
+        line for line in makefile.splitlines() if line.startswith("PROVER_TOOLS =")
+    )
+    arguments = shlex.split(assignment.partition("=")[2])
+    assert "--python" in arguments, (
+        "ambient UV_PYTHON can select an incompatible runtime"
+    )
+    runtime = arguments[arguments.index("--python") + 1]
+    assert runtime == "3.14", "the pinned prover-tools package requires Python 3.14"
