@@ -2417,17 +2417,16 @@ callback code from replacing or moving the actual owned resource out of the
 scope. The normal path explicitly drops the writer after the callback; unwind
 relies on automatic RAII. Reserve `cuprum_native_io::borrow` for resources
 whose ownership stays with the caller. Python callers must therefore fully
-relinquish the writer descriptor supplied to
-`pump_stream`/`rust_pump_stream`. The pipeline caller passes worker-owned
-duplicates of both asyncio transport descriptors: asyncio keeps and closes the
-originals, Rust borrows the reader duplicate without closing it, and Rust
-closes the received writer duplicate on drop to signal EOF. The Python hand-off
-owner closes the reader duplicate after the worker settles. The two descriptor
-numbers in each pair must never be shared between those owners. The helper's
-safety contract obliges the caller to guarantee each `fd` is a valid open
-descriptor (or Windows handle) for the duration of the call and that ownership
-remains with the caller; in return the helper guarantees it never closes the
-borrowed reader `fd`.
+relinquish the writer descriptor supplied to `pump_stream`/`rust_pump_stream`.
+The pipeline caller passes worker-owned duplicates of both asyncio transport
+descriptors: asyncio keeps and closes the originals, Rust borrows the reader
+duplicate without closing it, and Rust closes the received writer duplicate on
+drop to signal EOF. The Python hand-off owner closes the reader duplicate after
+the worker settles. The two descriptor numbers in each pair must never be
+shared between those owners. The helper's safety contract obliges the caller to
+guarantee each `fd` is a valid open descriptor (or Windows handle) for the
+duration of the call and that ownership remains with the caller; in return the
+helper guarantees it never closes the borrowed reader `fd`.
 
 The Windows-handle wording above describes direct Rust extension calls. The
 pipeline dispatcher declines Windows asyncio subprocess-pipe handles with
@@ -2482,15 +2481,17 @@ make boundary-miri
 ```
 
 Install the checksum-verified prebuilt tools first with `make install-verus` and
-`make install-boundary-kani`. Verus uses Rust `1.98.0`, Verus
-`0.2026.09.06.8dea4a2`, and a separately installed prebuilt Z3 `4.16.0`. Kani
-uses `0.67.0` with compiler `rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and
-CBMC `6.8.0`; Miri uses `nightly-2026-08-07` with
-`rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The Verus input is regenerated
-from the production progress kernels on every run. The final-source progress
-proof verifies two functions with zero errors, recorded in
-`/tmp/issue379-round24-verus.log`, while direct assessment of the unchanged
-production `adopt_writer` fails on unsupported `OwnedFd` and
+`make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
+Python `3.14` explicitly, including when CI exports `UV_PYTHON=3.13`; this
+tool-only runtime does not change the project Python test matrix. Verus uses
+Rust `1.98.0`, Verus `0.2026.09.06.8dea4a2`, and a separately installed
+prebuilt Z3 `4.16.0`. Kani uses `0.67.0` with compiler
+`rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and CBMC `6.8.0`; Miri uses
+`nightly-2026-08-07` with `rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The
+Verus input is regenerated from the production progress kernels on every run.
+The final-source progress proof verifies two functions with zero errors,
+recorded in `/tmp/issue379-round24-verus.log`, while direct assessment of the
+unchanged production `adopt_writer` fails on unsupported `OwnedFd` and
 `FromRawFd::from_raw_fd` representations; see
 `/tmp/issue379-verus-resource-assessment.log`. The installer succeeds in
 fetching and validating the pinned Verus and Kani binary caches. Current proof
@@ -2516,18 +2517,27 @@ prior local checkpoint passed, and Round 35's integrated local run passed the
 native and repository gates. Windows and macOS runtime tests remain pending
 hosted execution.
 
-The boundary installer and fault harnesses have narrow reuse policies.
-`scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
-installers only: HTTPS-only bounded redirects, digest validation, and no source
-builds. `scripts/check_boundary_faults.py` scopes its runner to the four
-verification commands and a disposable source copy; it is not a general process
-abstraction. Its progress and ownership checks have separate private runners;
-their scope is the existing four mutations, with the same controls and failure
-diagnostics. The download helpers separate bounded redirect traversal, one
-connection's lifetime, and response classification. They remain private to the
-pinned binary installer. The compiler-contract checker uses a named predicate
-requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
-failures cannot pass the probe.
+The boundary installer and fault harnesses have narrow reuse policies. \`
+scripts/install_boundary_kani.py\` owns \`checked_download\` for the Kani and
+Z3 installers only: HTTPS-only bounded redirects, digest validation, and no
+source builds. \`scripts/check_boundary_faults.py\` scopes its runner to the
+four verification commands and a disposable source copy; it is not a general
+process abstraction. Its progress and ownership checks have separate private
+runners; their scope is the existing four mutations, with the same controls and
+failure diagnostics. The download helpers separate bounded redirect traversal,
+one connection's lifetime, and response classification. They remain private to
+the pinned binary installer. The compiler-contract checker uses a named
+predicate requiring both failure and an unsafe-forbid diagnostic, so unrelated
+compiler failures cannot pass the probe.
+
+Windows borrowed I/O lives beside its handle adapter in \`
+rust/cuprum-native-io/src/windows.rs\`. Its private \`with_file\` helper
+retains the borrowed handle and converts the byte count once for both read and
+write; Unix adapters retain their direct syscall and buffer contracts.
+
+\`make boundary-faults\` archives controls and deliberate fault failures for
+the scheduled Kani job. The final run passed its controls and detected all four
+mutations; see \`/tmp/issue379-round27-faults.log\`.
 
 ### Python-side native pump descriptor lifetime
 

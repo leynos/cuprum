@@ -4,6 +4,7 @@
 //! integration boundary may reconstruct resources from raw integers.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(unix)]
 use std::io;
 #[cfg(kani)]
 mod kani_proofs;
@@ -25,7 +26,7 @@ pub use std::os::windows::io::{
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+use std::os::windows::io::{FromRawHandle, RawHandle};
 
 /// Integer representation at the Python ABI boundary, not an ownership token.
 #[cfg(unix)]
@@ -92,54 +93,25 @@ pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> BorrowedStream<'ow
 ///
 /// # Errors
 /// Returns the native I/O error, including interruption, without retrying.
+#[cfg(unix)]
 pub fn read_once(stream: BorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<isize> {
-    #[cfg(unix)]
-    {
-        // SAFETY: the descriptor borrow remains live; the exclusive slice is
-        // writable for its length. read does not retain the buffer pointer.
-        let result =
-            unsafe { libc::read(stream.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
-        syscall_result(result, buffer.len())
-    }
-    #[cfg(windows)]
-    {
-        use std::io::Read;
-        with_file(stream, |file| file.read(buffer))
-            .and_then(|count| isize::try_from(count).map_err(io::Error::other))
-    }
+    // SAFETY: the descriptor borrow remains live; the exclusive slice is
+    // writable for its length. read does not retain the buffer pointer.
+    let result =
+        unsafe { libc::read(stream.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
+    syscall_result(result, buffer.len())
 }
 
 /// Write once from initialized storage, retaining the resource borrow.
 ///
 /// # Errors
 /// Returns the native I/O error, including interruption, without retrying.
+#[cfg(unix)]
 pub fn write_once(stream: BorrowedStream<'_>, buffer: &[u8]) -> io::Result<isize> {
-    #[cfg(unix)]
-    {
-        // SAFETY: the descriptor borrow remains live; the shared slice is
-        // readable for its length. write does not retain or mutate the buffer.
-        let result =
-            unsafe { libc::write(stream.as_raw_fd(), buffer.as_ptr().cast(), buffer.len()) };
-        syscall_result(result, buffer.len())
-    }
-    #[cfg(windows)]
-    {
-        use std::io::Write;
-        with_file(stream, |file| file.write(buffer))
-            .and_then(|count| isize::try_from(count).map_err(io::Error::other))
-    }
-}
-
-#[cfg(windows)]
-fn with_file<T>(
-    stream: BorrowedStream<'_>,
-    operation: impl FnOnce(&mut cap_std::fs::File) -> T,
-) -> T {
-    // SAFETY: the borrowed handle is valid during this scope. ManuallyDrop
-    // prevents closing it on normal return and unwind. This private helper
-    // only invokes read/write; callers cannot replace or move out the File.
-    let file = unsafe { cap_std::fs::File::from_raw_handle(stream.as_raw_handle()) };
-    memory::with_retained_owner(file, operation)
+    // SAFETY: the descriptor borrow remains live; the shared slice is
+    // readable for its length. write does not retain or mutate the buffer.
+    let result = unsafe { libc::write(stream.as_raw_fd(), buffer.as_ptr().cast(), buffer.len()) };
+    syscall_result(result, buffer.len())
 }
 
 #[cfg(unix)]
@@ -227,4 +199,4 @@ mod ownership_tests;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{fd_is_open, pipe};
+pub use windows::{fd_is_open, pipe, read_once, write_once};
