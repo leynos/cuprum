@@ -55,6 +55,18 @@ def _drain_config(
     )
 
 
+class _MetricsProbe:
+    """Echo hook delegating to :class:`EchoMetricsHook` for one collector."""
+
+    def __init__(self, collector: MetricsCollector) -> None:
+        """Bind the probe to its collector."""
+        self._hook = echo_metrics_hook(collector)
+
+    def __call__(self, event: EchoEvent) -> None:
+        """Increment the collector's echo counter for ``event``."""
+        self._hook(event)
+
+
 def _run_drain(stream: EchoStream) -> None:
     """Run one drain whose echo path hits the sink's encoding limit."""
     sink = typ.cast("typ.IO[str]", _Cp1252TextOnlySink())
@@ -214,3 +226,26 @@ def test_failing_collector_does_not_break_the_drain() -> None:
     assert captured == "plain ś plain ń", (
         f"capture must survive a broken collector, found captured={captured!r}"
     )
+
+
+def test_metrics_hook_increments_once_per_disablement() -> None:
+    """The existing EchoMetricsHook counts one increment per transition."""
+    collector = RecordingCollector()
+    sink = typ.cast("typ.IO[str]", _Cp1252TextOnlySink())
+    chunks = (b"plain ", "ś".encode(), b" more")
+
+    with observe_echo(_MetricsProbe(collector)):
+        asyncio.run(
+            _drain(
+                _echo_reader(chunks),
+                _drain_config(sink, EchoStream.STDOUT),
+            ),
+        )
+
+    assert len(collector.counters) == 1, (
+        f"one disablement must increment once, found {collector.counters}"
+    )
+    name, value, labels = collector.counters[0]
+    assert name == ECHO_ENCODING_FAILURES_TOTAL
+    assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
+    assert labels == {"stream": "stdout", "error_category": "unicode_encode"}
