@@ -2098,6 +2098,11 @@ The Rust availability API uses a single source of truth:
   `set_rust_availability_for_testing(is_available=...)`, which also clears the
   two relevant caches.
 
+The native Rust marker `_rust_backend_native::is_available()` is a
+`pub const fn` that returns `true` once the extension loads. Its PyO3
+registration remains the runtime Python export, while the compile-pass UI
+fixture verifies that Rust callers can use the marker in a constant.
+
 Keep tests that bypass `cuprum.is_rust_available()` focused on this private
 layer, because `_rust_backend.is_available()` is an uncached import probe
 without lifetime caching.

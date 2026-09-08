@@ -53,16 +53,10 @@ use utf8::{FinalChunk, decode_utf8_replace};
 ///
 /// # Returns
 /// `true` whenever the extension is loaded and callable.
-// Tracking: https://github.com/leynos/cuprum/issues/128 records the runtime
-// availability resolver boundary that keeps this PyO3 export non-const.
 #[must_use]
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "runtime #[pyfunction] FFI boundary: the body is const-evaluable but the export must stay a runtime function, not a const item"
-)]
 #[doc(hidden)]
 #[pyfunction]
-pub fn is_available() -> bool {
+pub const fn is_available() -> bool {
     true
 }
 
