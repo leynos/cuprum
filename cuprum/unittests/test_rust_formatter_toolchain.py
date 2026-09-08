@@ -29,6 +29,9 @@ def test_formatter_toolchain_precedes_the_project_toolchain(
     assert formatter_setup.get("uses") == _SETUP_RUST, (
         "the formatter toolchain must use the pinned shared Rust setup action"
     )
+    assert project_setup.get("uses") == _SETUP_RUST, (
+        "the project toolchain must use the pinned shared Rust setup action"
+    )
     assert formatter_setup.get("with") == {
         "toolchain": _FORMATTER_TOOLCHAIN,
         "cache-provider": "external",
