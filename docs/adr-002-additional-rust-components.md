@@ -79,6 +79,26 @@ engine.
 - Profile and benchmark output must record enough metadata to compare runs
   across commits and machines.
 
+### Native pipeline descriptor hand-off
+
+The inter-stage native pump uses an ownership-safe descriptor hand-off. Asyncio
+retains ownership of each transport's original reader and writer descriptor.
+Before native I/O begins, the dispatcher pauses the reader transport, completes
+the transfer of bytes already buffered in `StreamReader`, and creates
+worker-owned duplicates for both ends. Buffered bytes are not discarded until
+their transfer outcome is known. Blocking mode is applied only to the worker
+duplicates; the original asyncio descriptors remain in their transport-owned,
+non-blocking state.
+
+Rust borrows the worker reader duplicate and never closes it. Rust consumes the
+worker writer duplicate and closes it on every exit path so downstream readers
+observe EOF. The Python hand-off owner closes the reader duplicate after the
+worker settles and closes either duplicate when preparation or executor
+submission fails. Cancellation waits for worker settlement before duplicate
+closure, mode restoration, and reader-transport resumption. If a safe
+preparation step cannot complete, dispatch falls back to the Python pump with
+the original asyncio descriptors intact.
+
 ## Options considered
 
 ### Option A: Extend the existing native module incrementally

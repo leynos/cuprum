@@ -67,6 +67,11 @@ def test_worker_cli_reports_config_errors(
             id="repeat-count-too-large",
         ),
         pytest.param(
+            {"read_size": 0},
+            "read-size must be >= 1",
+            id="read-size-zero",
+        ),
+        pytest.param(
             {"mode": "invalid"},
             "mode must be one of",
             id="invalid-mode",
@@ -129,6 +134,8 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
                 "python",
                 "--repeat-count",
                 "1",
+                "--read-size",
+                "17",
                 "--output",
                 str(output),
             ],
@@ -151,4 +158,7 @@ def test_worker_cli_runs_successfully_via_subprocess(tmp_path: pth.Path) -> None
     )
     assert result["lock_wait_seconds"] >= 0.0, (
         f"expected non-negative selector lock-wait seconds, got {result}"
+    )
+    assert result["read_size"] == 17, (
+        f"expected worker to report its active read size, got {result}"
     )

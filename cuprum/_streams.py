@@ -21,6 +21,7 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -32,9 +33,17 @@ from cuprum._streams_pump import (
 )
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import _emit_echo_event
+from cuprum.stream_events import StreamOperation, StreamOperationOutcome
+from cuprum.stream_observation import (
+    _complete_stream_operation,
+    _record_stream_read,
+    _start_stream_operation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.stream_observation import _StreamOperationMeasurement
 
 
 _LOGGER = logging.getLogger("cuprum.stream")
@@ -45,15 +54,23 @@ class _StreamConfig:
     """Configuration for decoding and echoing a subprocess stream."""
 
     capture_output: bool
+
     echo_output: bool
+
     sink: typ.IO[str]
+
     encoding: str
+
     errors: str
+
     discard_on_cancel: asyncio.Event | None = None
     # Which output stream this config drains, for bounded echo observability.
     # Defaults to stdout because every production call site names the stderr
     # config explicitly when it replaces the stdout one.
+
     stream: EchoStream = EchoStream.STDOUT
+
+    read_size: int = _READ_SIZE
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -82,11 +99,17 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config)
-    return await _consume_stream_with_lines(stream, config, on_line=on_line)
+        return await _consume_stream_without_lines(stream, config, read_size=read_size)
+    return await _consume_stream_with_lines(
+        stream,
+        config,
+        on_line=on_line,
+        read_size=read_size,
+    )
 
 
 async def _drain(
@@ -94,6 +117,7 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
     # This is the single source of truth for the consume mechanics shared by
@@ -108,14 +132,26 @@ async def _drain(
     echo_decoder = _echo_decoder(config)
     echo_guard = _EchoGuard()
     state = _DrainState(config, buffer, echo_decoder, on_chunk, echo_guard)
-    reached_eof = await _drain_chunks(stream, state)
+    measurement = _start_stream_operation(StreamOperation.DRAIN)
+    try:
+        reached_eof = await _drain_chunks(
+            stream,
+            state,
+            read_size=read_size,
+            measurement=measurement,
+        )
+    except BaseException:
+        _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
+        raise
     if not reached_eof:
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
         if buffer is None or _discard_on_cancel(config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
         return buffer.decode(config.encoding, errors=config.errors)
 
     _flush_echo_decoder(state)
+    _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
 
     if buffer is None:
         return None
@@ -130,13 +166,17 @@ def _discard_on_cancel(config: _StreamConfig) -> bool:
 async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
+    *,
+    read_size: int,
+    measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(_READ_SIZE)
+            chunk = await stream.read(read_size)
         except asyncio.CancelledError:
             return False
+        _record_stream_read(measurement, chunk)
         if not chunk:
             return True
         if state.buffer is not None:
@@ -150,11 +190,13 @@ async def _drain_chunks(
 async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
+    *,
+    read_size: int,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config)
+    return await _drain(stream, config, read_size=read_size)
 
 
 async def _consume_stream_with_lines(
@@ -162,6 +204,7 @@ async def _consume_stream_with_lines(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None],
+    read_size: int,
 ) -> str | None:
     """Read from a subprocess stream while emitting decoded output lines."""
     if stream is None:
@@ -178,11 +221,17 @@ async def _consume_stream_with_lines(
             on_line=on_line,
         )
 
-    captured = await _drain(stream, config, on_chunk=feed_decoder)
+    captured = await _drain(
+        stream,
+        config,
+        on_chunk=feed_decoder,
+        read_size=read_size,
+    )
 
     pending_text = _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),
         on_line=on_line,
+        final=True,
     )
     if pending_text:
         on_line(_strip_line_ending(pending_text))
@@ -284,54 +333,15 @@ def _emit_completed_lines(
     text: str,
     *,
     on_line: cabc.Callable[[str], None],
+    final: bool = False,
 ) -> str:
     """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
+    lines, remainder = _split_complete_lines(text, final=final)
 
     for line in lines:
         on_line(line)
 
     return remainder
-
-
-def _split_complete_lines(text: str) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
-
-    Parameters
-    ----------
-    text : str
-        Text to split using Python's universal line boundary rules.
-
-    Returns
-    -------
-    tuple[list[str], str]
-        Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line.
-    """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if not _ends_with_line_ending(lines[-1]):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
-
-
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith(("\n", "\r"))
-
-
-def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith(("\n", "\r")):
-        return line[:-1]
-    return line
 
 
 __all__ = [

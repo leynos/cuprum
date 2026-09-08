@@ -108,3 +108,26 @@ def test_worker_accumulates_repeat_counters(tmp_path: pth.Path) -> None:
         expected_length=len(fixture.read_text()) * 3,
         expected_lines=3,
     )
+
+
+def test_worker_uses_configured_read_size(tmp_path: pth.Path) -> None:
+    """Worker results report the configured private stream read size."""
+    fixture = tmp_path / "fixture_read_size.b64"
+    fixture.write_text("YWJjZGVm\n")
+
+    result = run_tee_profile_worker(
+        TeeProfileWorkerConfig(
+            fixture_path=fixture,
+            stages=1,
+            mode="tee",
+            sink_kind="devnull",
+            with_line_callbacks=False,
+            backend="python",
+            repeat_count=1,
+            read_size=17,
+        ),
+    )
+
+    assert result["read_size"] == 17, (
+        f"expected active 17-byte worker read size, got {result}"
+    )

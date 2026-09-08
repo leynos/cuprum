@@ -83,6 +83,9 @@ _render_cases = st.builds(
     excluded_files=_excluded_files,
 )
 _shared_settings = settings(
+    # This property proves deterministic rendering, not an execution-time
+    # bound; cold imports make Hypothesis's default deadline non-deterministic.
+    deadline=None,
     max_examples=50,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )

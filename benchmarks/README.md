@@ -73,6 +73,13 @@ The default matrix is fixed:
 - `echo-devnull-nocb-s4-python`
 - `echo-devnull-nocb-s4-rust`
 
+The pure-Python stream read-size default is 65536 bytes, selected by the
+15-round interleaved sweep recorded in
+[`docs/tee-hotpath-read-size-sweep-2026-08-29.md`](../docs/tee-hotpath-read-size-sweep-2026-08-29.md).
+The sweep used the private `--read-sizes` control to compare 4096 bytes with
+the candidate values; this option is for measurement and does not add a user
+configuration surface.
+
 ## Running scenarios
 
 Run one unprofiled scenario to validate the workload and write `scenario.json`,
@@ -142,6 +149,6 @@ Use the scenario comparisons to separate likely sources of cost:
   `echo-devnull-nocb-s4-rust` to distinguish inter-stage pumping cost from the
   constant final tee path.
 
-Treat `_READ_SIZE = 4096`, per-chunk flush, `bytearray.extend` plus final
+Treat `_READ_SIZE = 65536`, per-chunk flush, `bytearray.extend` plus final
 decode, and callback line splitting as hypotheses. The harness exists to test
 them, not to assume them.
