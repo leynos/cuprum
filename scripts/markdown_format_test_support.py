@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the process boundary is under test.
+import sys
+import textwrap
 import typing as typ
 from pathlib import Path
 
@@ -16,6 +19,8 @@ CHECKER = REPOSITORY_ROOT / "scripts" / "check-markdown-format.sh"
 
 _DEFAULT_TRACKED_FILES = (
     Path("guide.md"),
+    Path("guide.markdown"),
+    Path("guide.mdx"),
     Path("nested") / "tracked with spaces.md",
     Path("nested") / "tracked\nwith newline.md",
 )
@@ -31,6 +36,25 @@ class _UnavailableTestDependencyError(RuntimeError):
     def __str__(self) -> str:
         """Name the missing dependency in the failure message."""
         return f"the gate integration test requires {self._dependency}"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _MarkdownFormatterTools:
+    """Keep the controlled formatter boundary reusable only by Markdown Make tests."""
+
+    formatter: Path
+    linter: Path
+    call_log: Path
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _MarkdownMakeGate:
+    """Describe one controlled Markdown Make invocation for these gate tests only."""
+
+    target: str
+    environment: cabc.Mapping[str, str]
+    mdtablefix: Path | None = None
+    markdownlint: Path | None = None
 
 
 def run_process(
@@ -77,7 +101,7 @@ def stage_markdown_sources(repository: Path, tracked_files: tuple[Path, ...]) ->
     if initialized.returncode != 0:
         raise AssertionError(initialized.stdout + initialized.stderr)
     added = run_process(
-        [git, "add", ".gitignore", *(str(path) for path in tracked_files)],
+        [git, "add", "--", ".gitignore", *(str(path) for path in tracked_files)],
         os.environ,
         repository,
     )
@@ -91,6 +115,40 @@ def run_check_format_gate(
     markdown_discovery: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real formatting recipe against the controlled repository."""
+    return _run_markdown_make_gate(
+        repository,
+        _MarkdownMakeGate(
+            target="check-fmt",
+            environment=os.environ | {"MARKDOWN_CHECKER_CALL_LOG": str(checker_log)},
+        ),
+        markdown_discovery,
+    )
+
+
+def run_format_gate(
+    repository: Path,
+    tools: _MarkdownFormatterTools,
+    markdown_discovery: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real formatter recipe against controlled Markdown tools."""
+    return _run_markdown_make_gate(
+        repository,
+        _MarkdownMakeGate(
+            target="fmt",
+            environment=os.environ | {"MARKDOWN_FORMAT_CALL_LOG": str(tools.call_log)},
+            mdtablefix=tools.formatter,
+            markdownlint=tools.linter,
+        ),
+        markdown_discovery,
+    )
+
+
+def _run_markdown_make_gate(
+    repository: Path,
+    gate: _MarkdownMakeGate,
+    markdown_discovery: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a controlled Markdown Make target; reuse only from this test support."""
     make = shutil.which("make")
     if make is None:
         raise _UnavailableTestDependencyError("make")
@@ -98,19 +156,23 @@ def run_check_format_gate(
     discovery_override = (
         [] if markdown_discovery is None else [f"MD_FILES_FIND={markdown_discovery}"]
     )
+    mdtablefix = gate.mdtablefix or command_stub
+    markdownlint = [] if gate.markdownlint is None else [f"MDLINT={gate.markdownlint}"]
     return run_process(
         [
             make,
             "-f",
             str(REPOSITORY_ROOT / "Makefile"),
-            "check-fmt",
+            gate.target,
             "VENV_TOOLS=",
             f"RUFF={command_stub}",
             f"CARGO={command_stub}",
             "RUST_DIR=.",
+            f"MDTABLEFIX={mdtablefix}",
+            *markdownlint,
             *discovery_override,
         ],
-        os.environ | {"MARKDOWN_CHECKER_CALL_LOG": str(checker_log)},
+        gate.environment,
         repository,
     )
 
@@ -134,3 +196,69 @@ def write_markdown_checker_stub(directory: Path) -> Path:
     )
     checker.chmod(0o755)
     return checker
+
+
+def write_markdown_formatter_stubs(directory: Path) -> _MarkdownFormatterTools:
+    """Create formatter and linter doubles that record their ordered inputs."""
+    call_log = directory / "markdown-format-calls.jsonl"
+    formatter = directory / "mdtablefix"
+    linter = directory / "markdownlint-cli2"
+    formatter.write_text(
+        textwrap.dedent(
+            """\
+            #!__PYTHON__
+            import json
+            import os
+            import pathlib
+            import sys
+
+            flags = [
+                "--in-place",
+                "--wrap",
+                "--renumber",
+                "--breaks",
+                "--ellipsis",
+                "--fences",
+            ]
+            arguments = sys.argv[1:]
+            if arguments[:len(flags)] != flags:
+                raise SystemExit(64)
+            paths = arguments[len(flags):]
+            call_log = pathlib.Path(os.environ["MARKDOWN_FORMAT_CALL_LOG"])
+            with call_log.open("a") as log:
+                print(json.dumps({"tool": "mdtablefix", "paths": paths}), file=log)
+            for path in paths:
+                source = pathlib.Path(path)
+                source.write_bytes(
+                    source.read_bytes().replace(b"unformatted", b"formatted")
+                )
+            """
+        ).replace("__PYTHON__", sys.executable),
+        encoding="utf-8",
+    )
+    linter.write_text(
+        textwrap.dedent(
+            """\
+            #!__PYTHON__
+            import json
+            import os
+            import pathlib
+            import sys
+
+            arguments = sys.argv[1:]
+            if arguments[:1] != ["--fix"]:
+                raise SystemExit(64)
+            paths = arguments[1:]
+            if any(b"unformatted" in pathlib.Path(path).read_bytes() for path in paths):
+                raise SystemExit(65)
+            call_log = pathlib.Path(os.environ["MARKDOWN_FORMAT_CALL_LOG"])
+            with call_log.open("a") as log:
+                entry = {"tool": "markdownlint-cli2", "paths": paths}
+                print(json.dumps(entry), file=log)
+            """
+        ).replace("__PYTHON__", sys.executable),
+        encoding="utf-8",
+    )
+    formatter.chmod(0o755)
+    linter.chmod(0o755)
+    return _MarkdownFormatterTools(formatter, linter, call_log)

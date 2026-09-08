@@ -286,6 +286,26 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     }, "the shared Whitaker installer must receive the configured version"
 
 
+def test_markdown_formatter_pins_match_the_ci_installations() -> None:
+    """Keep Make's local formatter guidance aligned with the CI tools."""
+    root = repo_root()
+    job = _lint_test_job(root)
+    environment = job.get("env")
+    assert isinstance(environment, dict), "the lint-test job must declare env"
+    assert _read_makefile_pin(root, "MDTABLEFIX_VERSION") == environment.get(
+        "MDTABLEFIX_VERSION"
+    ), "Makefile and CI must select the same mdtablefix release"
+    assert _read_makefile_pin(root, "MARKDOWNLINT_VERSION") == _read_workflow_env(
+        root,
+        "MARKDOWNLINT_VERSION",
+    ), "Makefile and CI must select the same markdownlint-cli2 release"
+
+    install_tools = _lint_test_step_script(job, "Install CLI tools")
+    assert "markdownlint-cli2@${MARKDOWNLINT_VERSION}" in install_tools, (
+        "the CI installer must consume the selected markdownlint-cli2 release"
+    )
+
+
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()
@@ -325,20 +345,23 @@ def test_interrogate_targets_override_reaches_the_lint_recipe() -> None:
     )
 
 
-def test_markdownlint_lints_tracked_files_through_the_local_tool_path() -> None:
-    """The markdownlint recipe pipes tracked files with the local tool PATH."""
-    recipes = _expanded_make_recipes(repo_root(), targets=("markdownlint",))
-    assert "git ls-files -z '*.md'" in recipes, (
-        "make markdownlint must lint exactly the tracked Markdown files"
+def test_markdownlint_lints_all_tracked_markdown_extensions() -> None:
+    """The linter reuses the formatter's tracked, NUL-safe discovery contract."""
+    markdownlint = "/opt/markdown-tools/markdownlint-cli2"
+    recipes = _expanded_make_recipes(
+        repo_root(),
+        targets=("markdownlint",),
+        extra_variables={"MDLINT": markdownlint},
     )
-    assert re.search(r'PATH="[^"]+" git ls-files', recipes) is not None, (
-        "LOCAL_TOOL_ENV must reach the git side of the pipeline"
+    assert 'git ls-files -z -- "$@"' in recipes, (
+        "make markdownlint must discover tracked Markdown paths through Git"
     )
-    assert "| PATH=" in recipes, (
-        "LOCAL_TOOL_ENV must reach the xargs side so a clean PATH resolves the tool"
-    )
-    assert "xargs -0 markdownlint-cli2" in recipes, (
-        "the pipeline must run markdownlint-cli2 over the null-delimited file list"
+    for extension in ("'*.md'", "'*.markdown'", "'*.mdx'"):
+        assert extension in recipes, (
+            "make markdownlint must cover every supported Markdown extension"
+        )
+    assert f"xargs -0 {markdownlint}" in recipes, (
+        "the injected linter must receive the formatter's NUL-delimited file list"
     )
 
 
