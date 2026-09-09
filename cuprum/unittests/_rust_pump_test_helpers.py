@@ -23,26 +23,13 @@ import pytest
 
 from cuprum import (
     _pipeline_stream_fds,
-    _pipeline_streams,
     _pipeline_stream_native_cleanup,
+    _pipeline_streams,
 )
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.pump_events import RustPumpDeclineReason
-
-
-"""Shared support for tests that observe Rust-pump routing decisions.
-Both the log-record tests and the metrics tests have to reach the *real*
-decline paths rather than calling the recording helper directly — a helper
-called by hand proves only that the helper works, not that the pump still calls
-it. The triggers below therefore drive ``_pump_over_raw_fds`` and
-``_try_rust_pump`` with exactly the descriptor state each seam refuses, so
-deleting the call site fails every test that uses them.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from cuprum.pump_events import RustPumpDeclineReason
 
 
@@ -80,6 +67,7 @@ class RecordingCollector:
         """Return the names of the counters recorded, in call order."""
         return [name for name, _value, _labels in self.counters]
 
+
 @dc.dataclass(slots=True)
 class ControllableMonotonicClock:
     """A monotonic clock double advanced explicitly by a timing test."""
@@ -93,6 +81,7 @@ class ControllableMonotonicClock:
     def advance(self, seconds: float) -> None:
         """Advance simulated time by a non-negative test-controlled duration."""
         self.value += seconds
+
 
 @dc.dataclass(slots=True)
 class HeldNativePump:
@@ -110,6 +99,8 @@ class HeldNativePump:
             self.release.wait()
         self.finished.set()
         return 0
+
+
 def fail_engage(**_kwargs: object) -> object:
     """Refuse to switch the descriptors to blocking mode."""
     msg = "blocking mode is unavailable for this descriptor pair"
@@ -304,7 +295,7 @@ async def run_fake_pump(
     """Run a fake Rust pump over descriptors owned by this helper."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -324,7 +315,7 @@ async def cancel_fake_pump(
     """Cancel a live fake worker, then release it for callback cleanup."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(

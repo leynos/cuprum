@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
+import logging
 import types
 import typing as typ
 
@@ -11,7 +13,8 @@ from cuprum.pump_observation import _current_pump_event_exec_id, _emit_pump_even
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -167,3 +170,67 @@ def _log_native_pump_failed_after_cancel(
         extra={"cuprum_action": "rust_pump_failed_after_cancel"},
     )
     _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _NativePumpCleanupWait:
+    """Caller-supplied policy for one deferred cleanup wait."""
+
+    logger: logging.Logger
+    monotonic_clock: cabc.Callable[[], float]
+    cleanup_grace_s: float
+    state: object | None
+
+
+def _defer_native_pump_cleanup(
+    *,
+    wait: _NativePumpCleanupWait,
+    started_at: float,
+) -> None:
+    """Mark callback-owned cleanup deferred and report its caller-bound expiry."""
+    if wait.state is not None:
+        wait.state.was_deferred = True
+    _log_native_pump_cleanup(
+        wait.logger,
+        "cleanup_grace_expired",
+        max(0.0, wait.monotonic_clock() - started_at),
+    )
+
+
+async def _await_native_pump_cleanup(
+    cleanup_complete: asyncio.Future[None],
+    *,
+    wait: _NativePumpCleanupWait,
+) -> None:
+    """Wait for cleanup or defer it when its caller grace expires."""
+    started_at = wait.monotonic_clock()
+    deadline = started_at + wait.cleanup_grace_s
+    _log_native_pump_cleanup(wait.logger, "cleanup_started")
+    try:
+        while not cleanup_complete.done():
+            remaining_s = deadline - wait.monotonic_clock()
+            if remaining_s <= 0:
+                _defer_native_pump_cleanup(
+                    wait=wait,
+                    started_at=started_at,
+                )
+                return
+            try:
+                async with asyncio.timeout(remaining_s):
+                    await asyncio.shield(cleanup_complete)
+            except asyncio.CancelledError:
+                continue
+            except TimeoutError:
+                if not cleanup_complete.done():
+                    _defer_native_pump_cleanup(
+                        wait=wait,
+                        started_at=started_at,
+                    )
+                    return
+    finally:
+        if cleanup_complete.done():
+            _log_native_pump_cleanup(
+                wait.logger,
+                "cleanup_completed",
+                wait.monotonic_clock() - started_at,
+            )
