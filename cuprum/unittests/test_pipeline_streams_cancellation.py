@@ -23,7 +23,6 @@ import typing as typ
 import pytest
 
 from cuprum import (
-    _pipeline_stream_cleanup_observation,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
@@ -211,7 +210,7 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
     _install_fake_pump(monkeypatch, blocking_pump)
     caplog.set_level(
         logging.DEBUG,
-        logger=_pipeline_stream_cleanup_observation.__name__,
+        logger=_pipeline_streams.__name__,
     )
     with observe_pump(pump_events.append):
         asyncio.run(_cancel_mid_transfer(context))
@@ -248,6 +247,8 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
         record.__dict__.get("cuprum_operation") == "native_pump_cleanup"
         for record in cleanup_records
     ), f"cleanup logs must name their operation, found {cleanup_records}"
+
+
 def _assert_cancelled_pump_failure_reported(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

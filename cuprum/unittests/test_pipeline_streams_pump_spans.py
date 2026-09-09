@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_streams
+from cuprum import _pipeline_stream_native_cleanup
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.pump_span_events import (
     NATIVE_PUMP_BUFFER_SIZE,
@@ -138,7 +138,9 @@ def test_unregistered_executor_hop_does_not_open_spans(
         """Fail if the unregistered path constructs tracing state."""
         pytest.fail("unregistered executor hops must not open spans")
 
-    monkeypatch.setattr(_pipeline_streams, "_open_pump_hop_spans", fail_open)
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup, "_open_pump_hop_spans", fail_open
+    )
 
     asyncio.run(
         run_fake_pump(
@@ -184,11 +186,10 @@ def test_rejected_executor_submission_ends_failed_span(
 
     async def reject_submission() -> None:
         """Reject executor acceptance after the hop span opens."""
-        loop = asyncio.get_running_loop()
         with (
             mock.patch.object(
-                loop,
-                "run_in_executor",
+                _pipeline_stream_native_cleanup._NATIVE_PUMP_EXECUTOR,
+                "submit",
                 side_effect=RuntimeError("executor rejected the worker"),
             ),
             pytest.raises(RuntimeError, match="executor rejected"),

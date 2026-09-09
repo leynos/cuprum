@@ -57,7 +57,7 @@ def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
 
     caplog.set_level(
         logging.DEBUG,
-        logger=_pipeline_stream_cleanup_observation.__name__,
+        logger=_pipeline_streams.__name__,
     )
     with (
         _correlate_pump_events(exec_id),
