@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures as cf
 import dataclasses
 import os
 import typing as typ
@@ -10,7 +11,11 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor_returning,
@@ -28,9 +33,9 @@ pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 class _HeldNativePump:
     """Executor double that keeps submitted native work pending."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self) -> None:
         """Create a pending future controlled by the test."""
-        self.future = loop.create_future()
+        self.future: cf.Future[int] = cf.Future()
         self.submitted = asyncio.Event()
         self.received_fds: list[int] = []
 
@@ -46,12 +51,10 @@ class _HeldNativePump:
 
     def submit(
         self,
-        executor: object,
         function: object,
         *args: object,
-    ) -> asyncio.Future[object]:
+    ) -> cf.Future[int]:
         """Start native work and defer publication of its completion."""
-        del executor
         typ.cast("cabc.Callable[..., object]", function)(*args)
         self.submitted.set()
         return self.future
@@ -114,7 +117,8 @@ class _CancelledPumpSettlement:
 
     native_pump: _HeldNativePump
     cleanup: _CleanupOrder
-    close_duplicate: mock.Mock
+    close_native_reader: mock.Mock
+    close_state_fd: mock.Mock
     write_fd: int
     task: asyncio.Task[bool]
 
@@ -159,8 +163,11 @@ class TestRustPumpSettlement:
                     _pipeline_streams._run_rust_pump(
                         reader=typ.cast("asyncio.StreamReader", object()),
                         writer=None,
-                        reader_fd=read_fd,
-                        writer_fd=write_fd,
+                        handoff=_pipeline_streams._RustPumpHandoff(
+                            reader_fd=read_fd,
+                            writer_fd=write_fd,
+                            cleanup_grace_s=0.5,
+                        ),
                     )
                 )
             )
@@ -188,21 +195,57 @@ async def _settle_cancelled_native_pump_and_verify_descriptor_ownership(
         )
         os.fstat(settlement.write_fd)
         os.fstat(reused_writer_fd)
-        settlement.close_duplicate.assert_not_called()
+        received_writer_fd = settlement.native_pump.received_fds[0]
+        assert all(
+            call.args[0] != received_writer_fd
+            for call in settlement.close_native_reader.call_args_list
+        ), "Python cleanup must not close Rust's submitted writer"
+        assert all(
+            call.args[0] != received_writer_fd
+            for call in settlement.close_state_fd.call_args_list
+        ), "state cleanup must not receive Rust's submitted writer"
         with pytest.raises(asyncio.CancelledError):
             await settlement.task
     finally:
         os.close(reused_writer_fd)
 
 
+async def _cancel_native_pump_and_verify_deferred_cleanup(
+    *,
+    native_pump: _HeldNativePump,
+    cleanup: _CleanupOrder,
+    task: asyncio.Task[bool],
+) -> None:
+    """Cancel native pumping and verify cleanup waits for worker settlement."""
+    await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
+    task.cancel()
+    await asyncio.sleep(0)
+
+    assert cleanup.order == ["pause", "drain"], (
+        "expected FD restoration and reader resumption to wait for native "
+        "worker settlement"
+    )
+    assert not task.done(), (
+        "expected cancellation to await the native worker's cleanup callback"
+    )
+    assert native_pump.received_fds, (
+        "expected native work to receive a writer duplicate"
+    )
+    os.fstat(native_pump.received_fds[0])
+
+
 async def _cancel_before_native_worker_settles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancel a pump task and verify completion-owned cleanup ordering."""
-    loop = asyncio.get_running_loop()
-    native_pump = _HeldNativePump(loop)
+    native_pump = _HeldNativePump()
     cleanup = _CleanupOrder()
-    close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
+    close_native_reader = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+    )
+    close_state_fd = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
+    )
 
     import cuprum._streams_rs as streams_rs
 
@@ -210,9 +253,14 @@ async def _cancel_before_native_worker_settles(
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
     monkeypatch.setattr(
-        _pipeline_streams,
-        "_close_rust_writer_fd",
-        close_duplicate,
+        _pipeline_stream_native_cleanup,
+        "_close_rust_reader_fd",
+        close_native_reader,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_state_fd",
+        close_state_fd,
     )
     monkeypatch.setattr(
         _pipeline_stream_fds, "_restore_stream_fd_blocking", cleanup.restore
@@ -226,39 +274,33 @@ async def _cancel_before_native_worker_settles(
     ):
         del read_write_fd, write_read_fd
         with mock.patch.object(
-            loop,
-            "run_in_executor",
-            side_effect=native_pump.submit,
+            _pipeline_stream_native_cleanup,
+            "_NATIVE_PUMP_EXECUTOR",
+            native_pump,
         ):
             task = asyncio.create_task(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
                     writer=None,
-                    reader_fd=read_fd,
-                    writer_fd=write_fd,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=read_fd,
+                        writer_fd=write_fd,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
-            await asyncio.wait_for(native_pump.submitted.wait(), timeout=0.5)
-            task.cancel()
-            await asyncio.sleep(0)
-
-            assert cleanup.order == ["pause", "drain"], (
-                "expected FD restoration and reader resumption to wait for native "
-                "worker settlement"
+            await _cancel_native_pump_and_verify_deferred_cleanup(
+                native_pump=native_pump,
+                cleanup=cleanup,
+                task=task,
             )
-            assert not task.done(), (
-                "expected cancellation to await the native worker's cleanup callback"
-            )
-            assert native_pump.received_fds, (
-                "expected native work to receive a writer duplicate"
-            )
-            os.fstat(native_pump.received_fds[0])
 
             await _settle_cancelled_native_pump_and_verify_descriptor_ownership(
                 _CancelledPumpSettlement(
                     native_pump=native_pump,
                     cleanup=cleanup,
-                    close_duplicate=close_duplicate,
+                    close_native_reader=close_native_reader,
+                    close_state_fd=close_state_fd,
                     write_fd=write_fd,
                     task=task,
                 )

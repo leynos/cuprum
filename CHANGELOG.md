@@ -45,6 +45,18 @@
   cleanup `DEBUG` records. The native worker retains descriptor ownership until
   cleanup completes, so these events and records describe the
   cancellation-cleanup contract.
+- **Bounded native-pump cancellation cleanup:**
+  `ExecutionContext.native_pump_cleanup_grace` sets the finite, non-negative
+  caller wait (0.5 seconds by default). When the grace limit expires,
+  cancellation returns `CancelledError` while worker-owned descriptors remain
+  quarantined until the completion callback can safely clean them up. The
+  `cleanup_grace_expired` and `cleanup_deferred` pump events, together with the
+  unlabelled `cuprum_rust_pump_cleanup_grace_expired_total` and
+  `cuprum_rust_pump_cleanup_deferred_total` metrics, report the bounded and
+  eventual outcomes. The dedicated native-pump executor is independent of
+  `asyncio.run()` shutdown, so the caller-facing bound remains effective for
+  synchronous execution; a late completion still finalizes descriptors after
+  the originating event loop has closed.
 - **`PumpEvent`:** The frozen event a pump hook receives, carrying the routing
   `phase` and, for a decline, the `reason` for the decline.
 - **`PumpHook`:** The synchronous callable type a pump observer must satisfy.

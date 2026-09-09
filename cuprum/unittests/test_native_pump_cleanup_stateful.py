@@ -8,7 +8,12 @@ import typing as typ
 from hypothesis import settings
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 
-type _CleanupPhase = typ.Literal["cleanup_started", "cleanup_completed"]
+type _CleanupPhase = typ.Literal[
+    "cleanup_started",
+    "cleanup_completed",
+    "cleanup_grace_expired",
+    "cleanup_deferred",
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -17,6 +22,7 @@ class _CleanupTelemetry:
 
     phase: _CleanupPhase
     duration_s: float | None = None
+    elapsed_s: float | None = None
 
 
 class _NativePumpCleanupMachine(RuleBasedStateMachine):
@@ -30,6 +36,7 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
         self._worker_completed = False
         self._restore_attempted = False
         self._restore_failures = 0
+        self._grace_expired = False
         self._cleanup_future_settlements = 0
         self._telemetry: list[_CleanupTelemetry] = []
         self._restored_while_owned = False
@@ -47,6 +54,21 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
     def repeated_cancellation(self) -> None:
         """Model another cancellation request while cleanup is already pending."""
 
+    @precondition(
+        lambda self: (
+            self._cancelled
+            and self._worker_owns_descriptors
+            and not self._grace_expired
+        )
+    )
+    @rule()
+    def grace_expires_before_worker_completes(self) -> None:
+        """Return cancellation to the caller while retaining worker ownership."""
+        self._grace_expired = True
+        self._telemetry.append(
+            _CleanupTelemetry("cleanup_grace_expired", elapsed_s=1.0)
+        )
+
     @precondition(lambda self: self._worker_owns_descriptors)
     @rule()
     def worker_completion(self) -> None:
@@ -60,6 +82,7 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
         """Start a new worker after one completes without cancellation."""
         self._worker_owns_descriptors = True
         self._worker_completed = False
+        self._grace_expired = False
 
     @precondition(
         lambda self: (
@@ -88,7 +111,10 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
         self._restored_while_owned |= self._worker_owns_descriptors
         self._closed_while_owned |= self._worker_owns_descriptors
         self._cleanup_future_settlements += 1
-        self._telemetry.append(_CleanupTelemetry("cleanup_completed", 1.0))
+        if self._grace_expired:
+            self._telemetry.append(_CleanupTelemetry("cleanup_deferred"))
+        else:
+            self._telemetry.append(_CleanupTelemetry("cleanup_completed", 1.0))
 
     @invariant()
     def completion_settles_once_and_after_the_worker(self) -> None:
@@ -106,7 +132,7 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
 
     @invariant()
     def cleanup_telemetry_is_ordered_and_completion_only_for_duration(self) -> None:
-        """Cleanup emits at most one ordered start/completion pair."""
+        """Cleanup emits one ordered terminal phase for each cancellation."""
         phases = [event.phase for event in self._telemetry]
         assert phases.count("cleanup_started") <= 1, (
             "repeated cancellation must not duplicate cleanup-start telemetry"
@@ -114,14 +140,38 @@ class _NativePumpCleanupMachine(RuleBasedStateMachine):
         assert phases.count("cleanup_completed") <= 1, (
             "repeated cancellation must not duplicate cleanup-complete telemetry"
         )
+        assert phases.count("cleanup_grace_expired") <= 1, (
+            "cleanup grace expiry must be reported at most once"
+        )
+        assert phases.count("cleanup_deferred") <= 1, (
+            "deferred cleanup must be reported at most once"
+        )
         if "cleanup_completed" in phases:
             assert phases == ["cleanup_started", "cleanup_completed"], (
                 "cleanup completion must follow cleanup start"
             )
+        if "cleanup_deferred" in phases:
+            assert phases == [
+                "cleanup_started",
+                "cleanup_grace_expired",
+                "cleanup_deferred",
+            ], "deferred completion must follow the expired caller grace"
         assert all(
             (event.phase == "cleanup_completed") == (event.duration_s is not None)
             for event in self._telemetry
         ), "only cleanup completion may carry a duration"
+        assert all(
+            (event.phase == "cleanup_grace_expired") == (event.elapsed_s is not None)
+            for event in self._telemetry
+        ), "only grace expiry may carry elapsed time"
+
+    @invariant()
+    def grace_expiry_reconciles_with_late_completion(self) -> None:
+        """Require one safe callback reconciliation after grace expiry."""
+        if self._grace_expired and self._cleanup_future_settlements:
+            assert self._restore_attempted, (
+                "late worker completion must retain callback-owned restoration"
+            )
 
     @invariant()
     def restore_failures_cannot_strand_or_violate_ownership(self) -> None:

@@ -21,7 +21,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -62,6 +66,39 @@ class RecordingCollector:
     def counter_names(self) -> list[str]:
         """Return the names of the counters recorded, in call order."""
         return [name for name, _value, _labels in self.counters]
+
+
+@dc.dataclass(slots=True)
+class ControllableMonotonicClock:
+    """A monotonic clock double advanced explicitly by a timing test."""
+
+    value: float = 0.0
+
+    def __call__(self) -> float:
+        """Return the current simulated monotonic time."""
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        """Advance simulated time by a non-negative test-controlled duration."""
+        self.value += seconds
+
+
+@dc.dataclass(slots=True)
+class HeldNativePump:
+    """Worker double held past cancellation grace until a test releases it."""
+
+    started: threading.Event = dc.field(default_factory=threading.Event)
+    release: threading.Event = dc.field(default_factory=threading.Event)
+    finished: threading.Event = dc.field(default_factory=threading.Event)
+
+    def __call__(self, reader_fd: int, writer_fd: int) -> int:
+        """Hold native descriptor ownership until ``release`` is set."""
+        del reader_fd, writer_fd
+        self.started.set()
+        if not self.release.wait(timeout=5.0):
+            self.release.wait()
+        self.finished.set()
+        return 0
 
 
 def fail_engage(**_kwargs: object) -> object:
@@ -212,8 +249,11 @@ def run_raw_fd_pump() -> bool:
             _pipeline_streams._pump_over_raw_fds(
                 reader=reader,
                 writer=None,
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
+                handoff=_pipeline_streams._RustPumpHandoff(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
 
@@ -255,7 +295,7 @@ async def run_fake_pump(
     """Run a fake Rust pump over descriptors owned by this helper."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -275,7 +315,7 @@ async def cancel_fake_pump(
     """Cancel a live fake worker, then release it for callback cleanup."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -361,7 +401,7 @@ async def _drive_cancelled_pump(
     writer_fd: int,
 ) -> None:
     """Cancel an in-flight pump over ``reader_fd``/``writer_fd``."""
-    state = _pipeline_streams._RustPumpState(
+    state = _pipeline_stream_native_cleanup._RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
         blocking_mode_guard=typ.cast(

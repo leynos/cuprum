@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import typing as typ
 from pathlib import Path
 
+import pytest
+
 from cuprum.adapters.tracing_adapter import TracingHook
-from cuprum.events import ExecEvent, new_exec_id
+from cuprum.events import ExecEvent, ExecId, new_exec_id
 from cuprum.program import Program
 from cuprum.pump_events import PumpEvent
 from cuprum.unittests._adapter_test_support import (
@@ -15,6 +18,9 @@ from cuprum.unittests._adapter_test_support import (
     tracing_hook,
 )
 from tests.helpers import read_doc, read_users_guide
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = ["tracing_hook"]
 
@@ -31,14 +37,86 @@ DOCUMENTED_SPAN_ATTRIBUTES: frozenset[str] = frozenset({
 })
 
 
+def _record_completed_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
+    """Record the normal native-pump cleanup lifecycle."""
+    hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=source_exec_id))
+    hook.record_pump_event(
+        PumpEvent(
+            phase="cleanup_completed",
+            duration_s=2.5,
+            exec_id=source_exec_id,
+        )
+    )
+
+
+def _record_deferred_cleanup_events(hook: TracingHook, source_exec_id: ExecId) -> None:
+    """Record the grace-expired native-pump cleanup lifecycle."""
+    hook.record_pump_event(PumpEvent(phase="cleanup_started", exec_id=source_exec_id))
+    hook.record_pump_event(
+        PumpEvent(
+            phase="cleanup_grace_expired",
+            elapsed_s=0.5,
+            exec_id=source_exec_id,
+        )
+    )
+    hook.record_pump_event(PumpEvent(phase="cleanup_deferred", exec_id=source_exec_id))
+
+
 class TestNativePumpCleanupTracing:
     """The pump channel records cleanup facts on their matching execution span."""
 
+    @pytest.mark.parametrize(
+        ("record_events", "expected_events"),
+        [
+            pytest.param(
+                _record_completed_cleanup_events,
+                [
+                    (
+                        "cuprum.cleanup_started",
+                        {"operation": "native_pump_cleanup", "outcome": "started"},
+                    ),
+                    (
+                        "cuprum.cleanup_completed",
+                        {
+                            "operation": "native_pump_cleanup",
+                            "outcome": "completed",
+                            "duration_s": 2.5,
+                        },
+                    ),
+                ],
+                id="completed",
+            ),
+            pytest.param(
+                _record_deferred_cleanup_events,
+                [
+                    (
+                        "cuprum.cleanup_started",
+                        {"operation": "native_pump_cleanup", "outcome": "started"},
+                    ),
+                    (
+                        "cuprum.cleanup_grace_expired",
+                        {
+                            "operation": "native_pump_cleanup",
+                            "outcome": "grace_expired",
+                            "elapsed_s": 0.5,
+                        },
+                    ),
+                    (
+                        "cuprum.cleanup_deferred",
+                        {"operation": "native_pump_cleanup", "outcome": "deferred"},
+                    ),
+                ],
+                id="deferred",
+            ),
+        ],
+    )
     def test_cleanup_events_attach_only_to_the_source_stage_span(
         self,
         tracing_hook: Traced,
+        record_events: cabc.Callable[[TracingHook, ExecId], None],
+        expected_events: list[tuple[str, dict[str, object]]],
     ) -> None:
-        """A source token selects its open stage span without ending it."""
+        """A cleanup lifecycle selects its source span without ending it."""
         tracer, hook = tracing_hook
         source_exec_id, downstream_exec_id = new_exec_id(), new_exec_id()
         hook(
@@ -62,31 +140,12 @@ class TestNativePumpCleanupTracing:
         )
         downstream_span = tracer.spans[1]
 
-        hook.record_pump_event(
-            PumpEvent(phase="cleanup_started", exec_id=source_exec_id)
-        )
-        hook.record_pump_event(
-            PumpEvent(
-                phase="cleanup_completed",
-                duration_s=2.5,
-                exec_id=source_exec_id,
-            )
-        )
+        record_events(hook, source_exec_id)
 
-        assert source_span.events == [
-            (
-                "cuprum.cleanup_started",
-                {"operation": "native_pump_cleanup", "outcome": "started"},
-            ),
-            (
-                "cuprum.cleanup_completed",
-                {
-                    "operation": "native_pump_cleanup",
-                    "outcome": "completed",
-                    "duration_s": 2.5,
-                },
-            ),
-        ], f"cleanup events must attach to the source stage, found {source_span.events}"
+        assert source_span.events == expected_events, (
+            "cleanup events must attach to the source stage, "
+            f"found {source_span.events}"
+        )
         assert downstream_span.events == [], (
             "cleanup events must not attach to the downstream stage span"
         )

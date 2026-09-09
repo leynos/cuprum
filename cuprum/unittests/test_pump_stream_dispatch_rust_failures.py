@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import concurrent.futures as cf
 import os
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.unittests._pump_stream_dispatch_support import (
     _nonblocking_pipe_pair,
     _run_with_inline_executor,
-    bypass_reader_drain,
     clear_backend_caches,
 )
 
@@ -99,8 +102,39 @@ def _install_recording_native_failure(
     monkeypatch.setattr(streams_rs, "rust_pump_stream", fail_rust_pump)
 
 
+class _NativeLoadFailureExecutor:
+    """Publish import failures through the native-worker future."""
+
+    def submit(
+        self,
+        function: cabc.Callable[..., object],
+        *args: object,
+    ) -> cf.Future[object]:
+        """Run native loading and settle its concurrent future."""
+        future: cf.Future[object] = cf.Future()
+        try:
+            result = function(*args)
+        except ImportError as error:
+            future.set_exception(error)
+        else:
+            future.set_result(result)
+        return future
+
+
+async def _run_with_native_load_failure(
+    awaitable: cabc.Awaitable[object],
+) -> None:
+    """Run an awaitable with native-load failures published by the executor."""
+    with mock.patch.object(
+        _pipeline_stream_native_cleanup,
+        "_NATIVE_PUMP_EXECUTOR",
+        _NativeLoadFailureExecutor(),
+    ):
+        await awaitable
+
+
 class TestRustPumpFailures:
-    """Cover native-pump setup and worker failure cleanup."""
+    """Regression tests for Rust-pump cleanup paths."""
 
     def test_run_rust_pump_resumes_reader_when_draining_raises_base_exception(
         self,
@@ -138,8 +172,11 @@ class TestRustPumpFailures:
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
                     writer=None,
-                    reader_fd=1,
-                    writer_fd=2,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=1,
+                        writer_fd=2,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
 
@@ -169,8 +206,11 @@ class TestRustPumpFailures:
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
+                            handoff=_pipeline_streams._RustPumpHandoff(
+                                reader_fd=read_fd,
+                                writer_fd=write_fd,
+                                cleanup_grace_s=0.5,
+                            ),
                         )
                     )
                 )
@@ -187,57 +227,29 @@ class TestRustPumpFailures:
         )
         close_writer.assert_not_awaited()
 
-    def test_run_rust_pump_closes_duplicate_when_native_load_fails(
+    def test_run_rust_pump_closes_duplicate_after_native_load_failure(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A submitted shim failure should close its writer duplicate once."""
-        _ = self
+        """A native-load failure should close every state and native duplicate."""
         duplicated_fds: list[int] = []
         original_dup = os.dup
 
         def record_dup(fd: int) -> int:
-            """Record the duplicate passed across the submitted worker boundary."""
+            """Duplicate an FD while retaining its value for the assertion."""
             duplicate = original_dup(fd)
             duplicated_fds.append(duplicate)
             return duplicate
 
+        monkeypatch.setattr(os, "dup", record_dup)
+
         import cuprum._streams_rs as streams_rs
 
-        def fail_native_load() -> typ.NoReturn:
-            """Fail before the shim can invoke the native callable."""
+        def fail_native_load() -> object:
+            """Model an unavailable native extension import."""
             raise ImportError(_NATIVE_LOAD_FAILURE_MESSAGE)
 
-        async def run_with_submitted_native_failure(
-            awaitable: cabc.Awaitable[object],
-        ) -> None:
-            """Accept the worker, then publish its pre-native failure."""
-            loop = asyncio.get_running_loop()
-
-            def submit_native_work(
-                executor: object,
-                function: cabc.Callable[..., object],
-                *args: object,
-            ) -> asyncio.Future[object]:
-                """Return a settled future after executing accepted native work."""
-                del executor
-                future = loop.create_future()
-                try:
-                    future.set_result(function(*args))
-                except BaseException as exc:  # ruff: ignore[blind-except] - preserve worker errors
-                    future.set_exception(exc)
-                return future
-
-            with mock.patch.object(
-                loop,
-                "run_in_executor",
-                side_effect=submit_native_work,
-            ):
-                await awaitable
-
-        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
         monkeypatch.setattr(streams_rs, "_load_native", fail_native_load)
-        bypass_reader_drain(monkeypatch)
 
         with _nonblocking_pipe_pair() as (
             read_fd,
@@ -248,107 +260,22 @@ class TestRustPumpFailures:
             del read_write_fd, write_read_fd
             with pytest.raises(ImportError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
                 asyncio.run(
-                    run_with_submitted_native_failure(
+                    _run_with_native_load_failure(
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
                             writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
+                            handoff=_pipeline_streams._RustPumpHandoff(
+                                reader_fd=read_fd,
+                                writer_fd=write_fd,
+                                cleanup_grace_s=0.5,
+                            ),
                         )
                     )
                 )
 
-            assert duplicated_fds, "native pumping should create a writer duplicate"
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicated_fds[0])
-            os.fstat(write_fd)
-
-    def test_run_rust_pump_closes_duplicate_when_executor_rejects_submission(
-        self,
-        caplog: pytest.LogCaptureFixture,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A rejected executor submission should close the duplicate writer FD."""
-        _ = self
-        caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
-        duplicated_fds: list[int] = []
-        original_dup = os.dup
-
-        def record_dup(fd: int) -> int:
-            """Duplicate an FD while retaining its value for the assertion."""
-            duplicate = original_dup(fd)
-            duplicated_fds.append(duplicate)
-            return duplicate
-
-        monkeypatch.setattr(_pipeline_streams.os, "dup", record_dup)
-        close_duplicate = mock.Mock(wraps=_pipeline_streams._close_rust_writer_fd)
-        monkeypatch.setattr(
-            _pipeline_streams,
-            "_close_rust_writer_fd",
-            close_duplicate,
-        )
-
-        async def run_with_rejected_executor_submission(
-            awaitable: cabc.Awaitable[object],
-        ) -> None:
-            """Reject submission before a worker can consume the duplicate."""
-            loop = asyncio.get_running_loop()
-
-            def reject_native_submission(
-                executor: object,
-                function: cabc.Callable[..., object],
-                *args: object,
-            ) -> asyncio.Future[object]:
-                """Raise before ``function`` is accepted by the executor."""
-                del executor, function, args
-                raise RuntimeError(_NATIVE_LOAD_FAILURE_MESSAGE)
-
-            with mock.patch.object(
-                loop,
-                "run_in_executor",
-                side_effect=reject_native_submission,
-            ):
-                await awaitable
-
-        with _nonblocking_pipe_pair() as (
-            read_fd,
-            read_write_fd,
-            write_read_fd,
-            write_fd,
-        ):
-            del read_write_fd, write_read_fd
-            with pytest.raises(RuntimeError, match=_NATIVE_LOAD_FAILURE_MESSAGE):
-                asyncio.run(
-                    run_with_rejected_executor_submission(
-                        _pipeline_streams._run_rust_pump(
-                            reader=typ.cast("asyncio.StreamReader", object()),
-                            writer=None,
-                            reader_fd=read_fd,
-                            writer_fd=write_fd,
-                        )
-                    )
-                )
-
-            assert duplicated_fds, "native pumping should create a writer duplicate"
-            close_duplicate.assert_called_once_with(duplicated_fds[0])
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicated_fds[0])
-        records = [
-            record.__dict__
-            for record in caplog.records
-            if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
-        ]
-        assert len(records) == 1, "a rejected submission must produce one diagnostic"
-        fields = records[0]
-        assert fields["cuprum_phase"] == "executor_submission", (
-            "the diagnostic must identify executor submission as the failed phase"
-        )
-        assert fields["cuprum_outcome"] == "failed", (
-            "a rejected executor submission must be recorded as failed"
-        )
-        assert fields["cuprum_error_type"] == "RuntimeError", (
-            "the diagnostic must preserve the executor failure category"
-        )
-        assert fields["cuprum_errno"] is None, (
-            "a non-OS executor failure must not invent an errno"
-        )
+            assert duplicated_fds, (
+                "native pumping should create state and native duplicates"
+            )
+            for duplicated_fd in duplicated_fds:
+                with pytest.raises(OSError, match="Bad file descriptor"):
+                    os.fstat(duplicated_fd)

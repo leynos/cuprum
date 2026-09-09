@@ -13,9 +13,10 @@ import pytest
 
 from cuprum import (
     ECHO,
+    ExecutionContext,
     ScopeConfig,
     _pipeline_stream_fds,
-    _pipeline_streams,
+    _pipeline_stream_native_cleanup,
     scoped,
     sh,
 )
@@ -30,7 +31,9 @@ from cuprum._testing import (
 )
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
 from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
     RUST_PUMP_CLEANUP_DURATION_SECONDS,
+    RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
     RUST_PUMP_CLEANUP_TOTAL,
     RUST_PUMP_HANDOFF_TOTAL,
     PumpMetricsHook,
@@ -61,6 +64,9 @@ class _CleanupScenario:
     cleanup_started: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
+    cleanup_grace_expired: threading.Event = dataclasses.field(
+        default_factory=threading.Event
+    )
     cleanup_events: list[PumpEvent] = dataclasses.field(default_factory=list)
     restores: list[bool] = dataclasses.field(default_factory=list)
     writer_closes: list[bool] = dataclasses.field(default_factory=list)
@@ -71,6 +77,8 @@ class _CleanupScenario:
         self.cleanup_events.append(event)
         if event.phase == "cleanup_started":
             self.cleanup_started.set()
+        if event.phase == "cleanup_grace_expired":
+            self.cleanup_grace_expired.set()
 
 
 def _make_cleanup_scenario() -> _CleanupScenario:
@@ -127,13 +135,56 @@ async def _cancel_public_pipeline(
         )
 
 
+async def _cancel_public_pipeline_after_grace_expiry(
+    scenario: _CleanupScenario,
+) -> None:
+    """Return public cancellation at grace expiry, then release native I/O."""
+    task = asyncio.create_task(
+        scenario.pipeline.run(context=ExecutionContext(native_pump_cleanup_grace=0.01))
+    )
+    try:
+        started = await asyncio.to_thread(scenario.worker_started.wait, 5.0)
+        assert started, "the fake native worker must start before cancellation"
+        task.cancel()
+        expired = await asyncio.to_thread(scenario.cleanup_grace_expired.wait, 5.0)
+        assert expired, "the caller-facing cleanup grace must expire"
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert scenario.restores == [], (
+            "descriptor restoration must remain deferred while native I/O owns it"
+        )
+        assert scenario.writer_closes == [], (
+            "worker-owned writer cleanup must remain deferred after caller return"
+        )
+        scenario.release_worker.set()
+        released = await asyncio.to_thread(scenario.worker_released.wait, 5.0)
+        assert released, "the test must release the deferred native worker"
+        await _wait_for_deferred_native_pump_cleanup()
+    finally:
+        scenario.release_worker.set()
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+async def _wait_for_deferred_native_pump_cleanup() -> None:
+    """Wait for the deferred worker callback to complete descriptor cleanup."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while _pipeline_stream_native_cleanup._NATIVE_PUMP_FUTURES:
+        if loop.time() >= deadline:
+            pytest.fail("the deferred native-pump cleanup callback did not finish")
+        await asyncio.sleep(0.01)
+
+
 def _install_blocked_native_pump(
     monkeypatch: pytest.MonkeyPatch,
     scenario: _CleanupScenario,
 ) -> None:
     """Install worker and descriptor seams that enforce native ownership order."""
     original_restore = _pipeline_stream_fds._BlockingModeGuard.restore
-    original_close = _pipeline_streams._close_rust_writer_fd
+    original_close = _pipeline_stream_native_cleanup._close_rust_writer_fd
 
     def blocked_native_pump(reader_fd: int, writer_fd: int) -> int:
         """Retain worker descriptor ownership until the test releases it."""
@@ -164,7 +215,11 @@ def _install_blocked_native_pump(
     monkeypatch.setattr(
         _pipeline_stream_fds._BlockingModeGuard, "restore", record_restore
     )
-    monkeypatch.setattr(_pipeline_streams, "_close_rust_writer_fd", record_writer_close)
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_rust_writer_fd",
+        record_writer_close,
+    )
     install_fake_pump(monkeypatch, blocked_native_pump)
 
 
@@ -243,7 +298,7 @@ def _assert_cleanup_telemetry(scenario: _CleanupScenario) -> None:
     assert scenario.restores == [True], (
         f"descriptor restoration must occur once, found {scenario.restores}"
     )
-    assert scenario.writer_closes == [], (
+    assert not scenario.writer_closes, (
         "Python must never close the Rust-owned duplicate after submission, found "
         f"{scenario.writer_closes}"
     )
@@ -264,3 +319,43 @@ def test_cancelled_pipeline_reports_native_cleanup_telemetry(
         asyncio.run(_cancel_public_pipeline(scenario))
 
     _assert_cleanup_telemetry(scenario)
+
+
+def test_cancelled_pipeline_defers_cleanup_after_grace_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A public pipeline bounds cancellation without releasing native FDs."""
+    scenario = _make_cleanup_scenario()
+    _install_blocked_native_pump(monkeypatch, scenario)
+    with (
+        _force_rust_pump_path(monkeypatch),
+        scoped(ScopeConfig(allowlist=scenario.allowlist)),
+        observe_pump(scenario.record_cleanup_event),
+        observe_pump(PumpMetricsHook(scenario.metrics)),
+    ):
+        asyncio.run(_cancel_public_pipeline_after_grace_expiry(scenario))
+
+    cleanup_events = [
+        event for event in scenario.cleanup_events if event.phase.startswith("cleanup_")
+    ]
+    assert [event.phase for event in cleanup_events] == [
+        "cleanup_started",
+        "cleanup_grace_expired",
+        "cleanup_deferred",
+    ], (
+        "grace expiry must preserve the ordered deferred cleanup lifecycle, "
+        f"found {scenario.cleanup_events}"
+    )
+    assert scenario.metrics.counters == {
+        RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL: 1.0,
+        RUST_PUMP_CLEANUP_DEFERRED_TOTAL: 1.0,
+        RUST_PUMP_HANDOFF_TOTAL: 1.0,
+    }, f"grace outcomes must each increment once, found {scenario.metrics.counters}"
+    assert scenario.restores == [True], (
+        "deferred completion must restore descriptor state exactly once, found "
+        f"{scenario.restores}"
+    )
+    assert not scenario.writer_closes, (
+        "Python must never close the Rust-owned writer after deferred completion, "
+        f"found {scenario.writer_closes}"
+    )

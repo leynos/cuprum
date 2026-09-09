@@ -56,6 +56,12 @@ RUST_PUMP_CLEANUP_DURATION_SECONDS = "cuprum_rust_pump_cleanup_duration_seconds"
 RUST_PUMP_HANDOFF_TOTAL = "cuprum_rust_pump_handoff_total"
 """Rust writer-resource hand-offs, labelled by their bounded outcome."""
 
+RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL = "cuprum_rust_pump_cleanup_grace_expired_total"
+"""Caller-facing cleanup waits that exhausted their configured grace."""
+
+RUST_PUMP_CLEANUP_DEFERRED_TOTAL = "cuprum_rust_pump_cleanup_deferred_total"
+"""Deferred native-pump cleanups completed after the caller had returned."""
+
 # One counter per phase, keyed by phase so the metric names have exactly one
 # definition. Read-only so an importing module cannot rewrite them at runtime.
 _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
@@ -63,6 +69,8 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "failed_after_cancel": RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL,
     "cleanup_completed": RUST_PUMP_CLEANUP_TOTAL,
     "handoff": RUST_PUMP_HANDOFF_TOTAL,
+    "cleanup_grace_expired": RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL,
+    "cleanup_deferred": RUST_PUMP_CLEANUP_DEFERRED_TOTAL,
 })
 
 UNKNOWN_DECLINE_REASON = "unknown"
@@ -110,47 +118,38 @@ def _phase_labels(event: PumpEvent) -> dict[str, str]:
 
 
 class PumpMetricsHook:
-    """Pump observation hook that counts Rust-pump routing decisions.
+    """Collect bounded metrics from Rust-pump routing events.
 
-    The hook emits:
+    The hook emits the following metrics:
 
-    - ``cuprum_rust_pump_declined_total``: incremented once per hop that fell
-      back to the Python pump, labelled ``reason`` with the
-      :class:`~cuprum.pump_events.RustPumpDeclineReason` member naming the seam
-      that refused — or :data:`UNKNOWN_DECLINE_REASON` for a decline whose
-      reason is not one of them, which no call site in this library produces
-      but a hand-built event can carry.
-    - ``cuprum_rust_pump_failed_after_cancel_total``: incremented once,
-      unlabelled, per Rust-pump worker failure recovered after its hop was
-      cancelled.
-    - ``cuprum_rust_pump_cleanup_total``: incremented once, unlabelled, for a
-      native-pump cleanup that completed after cancellation.
-    - ``cuprum_rust_pump_cleanup_duration_seconds``: observed once,
-      unlabelled, with the completed cleanup's monotonic wait duration.
-    - ``cuprum_rust_pump_handoff_total``: incremented once per writer-resource
-      hand-off outcome, labelled only with the closed
-      :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary.
+    - ``cuprum_rust_pump_declined_total``: a counter labelled ``reason`` by
+      the closed :class:`~cuprum.pump_events.RustPumpDeclineReason` vocabulary,
+      plus ``unknown`` for an unrecognized hand-built event.
+    - ``cuprum_rust_pump_failed_after_cancel_total``: an unlabelled counter for
+      worker failures observed after cancellation.
+    - ``cuprum_rust_pump_cleanup_total``: an unlabelled counter for completed
+      native-pump cleanup.
+    - ``cuprum_rust_pump_cleanup_duration_seconds``: an unlabelled histogram
+      of normal cleanup durations.
+    - ``cuprum_rust_pump_cleanup_grace_expired_total``: an unlabelled counter
+      for cleanup waits that reach their configured grace limit.
+    - ``cuprum_rust_pump_cleanup_deferred_total``: an unlabelled counter for
+      deferred cleanup completed by the worker's callback.
+    - ``cuprum_rust_pump_handoff_total``: a counter labelled ``outcome`` by
+      the closed :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary.
 
-    A successful executor submission increments the ``submitted`` hand-off
-    outcome.
-
-    An unrecognized phase is ignored rather than raised on. That is the lesson
-    of :class:`~cuprum.adapters.metrics_adapter._UnhandledMetricsPhaseError`,
-    whose fail-closed match is why pump events are not an ``ExecPhase``: a hook
-    that raises on a phase it has not heard of turns a library-side addition
-    into a failure inside code that was correct when it was written. The phase
-    set is a closed :data:`~cuprum.pump_events.PumpPhase` literal, so a
-    misspelling is a type error rather than a silent drop.
+    All labels are closed and bounded; descriptor values, exception details,
+    and other event data are never labels. Unknown phases are ignored so a
+    newer producer cannot make an existing observer fail. The collector must
+    be thread-safe because pump events may be emitted from worker threads.
 
     Parameters
     ----------
     collector:
-        A :class:`~cuprum.adapters.metrics_adapter.MetricsCollector`
-        implementation for the target backend. It must be thread-safe: a
-        decline can be recorded from any task running a pipe hop.
+        Thread-safe metrics backend receiving counters and histograms.
 
-    Example
-    -------
+    Examples
+    --------
     ::
 
         metrics = InMemoryMetrics()
@@ -158,11 +157,7 @@ class PumpMetricsHook:
         with observe_pump(PumpMetricsHook(metrics)):
             pipeline.run_sync()
 
-        assert metrics.counters["cuprum_rust_pump_declined_total"] == 1.0
-
     """
-
-    __slots__ = ("_collector",)
 
     def __init__(self, collector: MetricsCollector) -> None:
         """Initialize the pump metrics hook with a collector."""
@@ -221,7 +216,9 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
 
 
 __all__ = [
+    "RUST_PUMP_CLEANUP_DEFERRED_TOTAL",
     "RUST_PUMP_CLEANUP_DURATION_SECONDS",
+    "RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL",
     "RUST_PUMP_CLEANUP_TOTAL",
     "RUST_PUMP_DECLINED_TOTAL",
     "RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL",

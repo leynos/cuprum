@@ -183,9 +183,10 @@ def test_pipeline_propagates_cancelled_pipe_task(
         _processes: object,
         *,
         observations: object = (),
+        native_pump_cleanup_grace: float = 0.5,
     ) -> list[asyncio.Task[None]]:
         """Inject the cancelled pipe task at the pipeline creation boundary."""
-        del observations
+        del observations, native_pump_cleanup_grace
         return [asyncio.create_task(cancelled_pipe_task())]
 
     monkeypatch.setattr(
@@ -212,9 +213,10 @@ def test_pipeline_ignores_broken_pipe_task(
         _processes: object,
         *,
         observations: object = (),
+        native_pump_cleanup_grace: float = 0.5,
     ) -> list[asyncio.Task[None]]:
         """Inject the expected broken-pipe task at the creation boundary."""
-        del observations
+        del observations, native_pump_cleanup_grace
         return [asyncio.create_task(broken_pipe_task())]
 
     monkeypatch.setattr(
