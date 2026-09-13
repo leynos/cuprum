@@ -172,6 +172,12 @@ def _log_native_pump_failed_after_cancel(
     _emit_pump_event(PumpEvent(phase="failed_after_cancel"))
 
 
+class _DeferredNativePumpCleanupState(typ.Protocol):
+    """State that records whether callback-owned cleanup was deferred."""
+
+    was_deferred: bool
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _NativePumpCleanupWait:
     """Caller-supplied policy for one deferred cleanup wait."""
@@ -179,7 +185,7 @@ class _NativePumpCleanupWait:
     logger: logging.Logger
     monotonic_clock: cabc.Callable[[], float]
     cleanup_grace_s: float
-    state: object | None
+    state: _DeferredNativePumpCleanupState | None
 
 
 def _defer_native_pump_cleanup(

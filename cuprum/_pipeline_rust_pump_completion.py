@@ -33,6 +33,22 @@ class _CancellationAwarePumpState(typ.Protocol):
         raise NotImplementedError
 
 
+class _CompletedPumpFuture(typ.Protocol):
+    """Settled native-pump future used to classify a worker outcome."""
+
+    def cancelled(self) -> bool:
+        """Report whether the worker finished by cancellation."""
+        ...
+
+    def exception(self) -> BaseException | None:
+        """Return the worker exception after it settles, if any."""
+        ...
+
+    def result(self) -> int:
+        """Return the successful native-pump byte total."""
+        ...
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _RustPumpCompletion[StateT: _CancellationAwarePumpState]:
     """Resources whose lifetime ends when the native worker settles."""
@@ -44,7 +60,7 @@ class _RustPumpCompletion[StateT: _CancellationAwarePumpState]:
 
 
 def _classify_pump_outcome(
-    completed: asyncio.Future[int],
+    completed: _CompletedPumpFuture,
     state: _CancellationAwarePumpState,
 ) -> tuple[PumpHopOutcome, int | None]:
     """Return the worker's bounded outcome and transferred-byte total."""
@@ -63,7 +79,7 @@ def _classify_pump_outcome(
 
 
 def _complete_rust_pump[StateT: _CancellationAwarePumpState](
-    completed: asyncio.Future[int],
+    completed: _CompletedPumpFuture,
     *,
     completion: _RustPumpCompletion[StateT],
     logger: logging.Logger,
