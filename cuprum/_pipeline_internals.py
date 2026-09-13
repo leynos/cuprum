@@ -104,7 +104,12 @@ def _build_pipeline_observations(
             cmd=cmd,
             hooks=hooks,
             tags=_merge_tags(
-                _base_stage_tags(cmd, capture=config.capture, echo=config.echo),
+                _base_stage_tags(
+                    cmd,
+                    capture=config.capture,
+                    echo_stdout=config.echo_stdout,
+                    echo_stderr=config.echo_stderr,
+                ),
                 {
                     "pipeline_stage_index": idx,
                     "pipeline_stages": len(parts),

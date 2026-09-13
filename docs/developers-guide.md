@@ -1303,10 +1303,12 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
   `ExecutionContext.env`) over the scoped overlay from the active
   `CuprumContext` and returns the immutable merge result. It stays overlay-only
   — `os.environ` is merged separately at spawn time by `resolve_env`.
-- `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
-  (`project`, `capture`, `echo`). The pipeline observation builder grafts on
-  only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
-  per-call tags are merged over the base via `_merge_tags`.
+- `_base_stage_tags(cmd, *, capture, echo_stdout, echo_stderr)` builds the
+  shared tag schema (`project`, `capture`, `echo`, `echo_stdout`,
+  `echo_stderr`); the combined `echo` tag stays the OR of the two per-stream
+  gates. The pipeline observation builder grafts on only its stage-specific keys
+  (`pipeline_stage_index`, `pipeline_stages`); per-call tags are merged over
+  the base via `_merge_tags`.
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/sh.py`), `_build_pipeline_observations`
@@ -3797,15 +3799,18 @@ without updating snapshot files and any downstream tooling.
 Two canonical helpers own the subprocess spawn flags used by the subprocess
 spawn paths:
 
-- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
-  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
-  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
-  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
-  stages always pipe stdout, while the final stage pipes stdout only when
-  output is captured or echoed; stderr is piped exactly when output is captured
-  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
-  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
-  for single-command spawning.
+- `_get_stage_stream_fds(idx, last_idx, *, stdout_capture_or_echo, stderr_capture_or_echo)`
+  in `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. Its input
+  domain is the stage position (first / intermediate / final) crossed with the
+  two independent boolean per-stream capture-or-echo gates. The first stage
+  reads stdin from `DEVNULL` and every later stage from a `PIPE`; a non-final
+  stage always pipes stdout so it can relay into the next stage regardless of
+  capture or echo; the final stage's stdout follows its own
+  `stdout_capture_or_echo` gate, and every stage's stderr follows its own
+  `stderr_capture_or_echo` gate. `_spawn_pipeline_processes` routes through
+  this helper — do not re-derive the flags inline at pipeline-stage spawn
+  sites, and do not use it for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
@@ -3822,20 +3827,29 @@ on the overlapping cases.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
-output behaviour. Public command execution should accept or construct this
-object rather than threading separate `capture` and `echo` keyword arguments
-through new APIs. Keep that pairing intact so stdout/stderr handling stays
-explicit, testable, and compatible with the `IOOptions` deprecation path.
+`RunOutputOptions` is the canonical carrier for command output behaviour: it
+holds `capture`, the `echo` shorthand, and the resolved `echo_stdout` and
+`echo_stderr` gates. `capture` is one joint switch for both streams, while an
+unset per-stream gate inherits `echo`. Public command execution should accept
+or construct this object rather than threading separate `capture` and `echo`
+keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
+handling stays explicit, testable, and compatible with the `IOOptions`
+deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
-`output.capture` / `output.echo` for the observation tags. `Pipeline.run` /
-`run_sync` use the same `output` parameter and resolve it before building the
-pipeline execution config. There is no parallel internal `(capture, echo)`
-value object: the former `_IOBehaviour` was redundant with `RunOutputOptions`
-and has been removed. `IOOptions` remains only as a deprecated subclass alias
-that emits a `DeprecationWarning`.
+`output.capture` and both values of `output.resolved_echo` for the observation
+tags. The base observation tags come from `_base_stage_tags`, which emits
+`capture`, the aggregate `echo` (the OR of the two per-stream gates), and both
+per-stream gates; see the canonical tag-schema bullet under
+[Canonical stage-observation inputs](#canonical-stage-observation-inputs).
+`Pipeline.run` / `run_sync` use the same `output` parameter and resolve it
+before building the pipeline execution config. There is no parallel internal
+`(capture, echo)` value object: the former `_IOBehaviour` was redundant with
+`RunOutputOptions` and has been removed, and `_prepare_pipeline_config` now
+takes the canonical `RunOutputOptions` carrier rather than a copy of its gates;
+neither pattern may be reintroduced. `IOOptions` remains only as a deprecated
+subclass alias that emits a `DeprecationWarning`.
 
 Internal adapters may translate legacy or aggregate configuration into
 `RunOutputOptions` at the boundary. For example, the concurrent runner converts
@@ -3849,6 +3863,29 @@ arguments only for compatibility. Those flags emit `DeprecationWarning` and
 must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
+
+### Per-stream echo mechanics
+
+`RunOutputOptions.__post_init__` resolves the `echo` shorthand into
+`echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
+while an explicit field overrides it for that stream alone. `capture` remains
+one joint boolean, so a stream that is not echoed is still captured when
+`capture` is `True`.
+
+`ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
+fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.
+
+`_SubprocessExecution` carries separate `echo_stdout` and `echo_stderr` gates.
+Its `consumes_any_stream` predicate reports whether capture or either echo gate
+requires a reader; spawning pipes stdout for `capture or echo_stdout` and
+stderr for `capture or echo_stderr`.
+
+Pipeline fd selection follows the same per-stream gates through
+`_get_stage_stream_fds`. A non-final stage always pipes stdout so it can relay
+into the next stage, regardless of capture or echo. The final stage's stdout
+and every stage's stderr are piped only when their own capture-or-echo gate is
+true. `_PipelineRunConfig` builds a `_StreamConfig` per stream so both streams
+can share capture while differing in echo.
 
 ## Subprocess execution module boundaries
 

@@ -9,7 +9,7 @@ import typing as typ
 from cuprum._streams import _StreamConfig
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import ExecutionContext
+    from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -18,23 +18,40 @@ class _PipelineRunConfig:
 
     ctx: ExecutionContext
     capture: bool
-    echo: bool
+    echo_stdout: bool
+    echo_stderr: bool
     timeout: float | None
     stdout_sink: typ.IO[str]
     stderr_sink: typ.IO[str]
 
     @property
-    def capture_or_echo(self) -> bool:
-        """Whether output must be consumed for capture or echo."""
-        return self.capture or self.echo
+    def stdout_capture_or_echo(self) -> bool:
+        """Whether stdout must be consumed for capture or echo."""
+        return self.capture or self.echo_stdout
+
+    @property
+    def stderr_capture_or_echo(self) -> bool:
+        """Whether stderr must be consumed for capture or echo."""
+        return self.capture or self.echo_stderr
 
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stream configuration for the final pipeline stage."""
+        """Build the stdout stream configuration for the final pipeline stage."""
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=self.echo,
+            echo_output=self.echo_stdout,
             sink=self.stdout_sink,
+            encoding=self.ctx.encoding,
+            errors=self.ctx.errors,
+        )
+
+    @property
+    def stderr_stream_config(self) -> _StreamConfig:
+        """Build the stderr stream configuration for a pipeline stage."""
+        return _StreamConfig(
+            capture_output=self.capture,
+            echo_output=self.echo_stderr,
+            sink=self.stderr_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
         )
@@ -42,8 +59,7 @@ class _PipelineRunConfig:
 
 def _prepare_pipeline_config(
     *,
-    capture: bool,
-    echo: bool,
+    output: RunOutputOptions,
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
@@ -58,10 +74,16 @@ def _prepare_pipeline_config(
     ctx = context or sh.ExecutionContext()
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
+    # ``RunOutputOptions`` is the canonical carrier for output behaviour, so
+    # the resolved gates are read straight off it rather than restated as
+    # separate arguments; the developer guide forbids parallel internal
+    # output-option objects.
+    echo_stdout, echo_stderr = output.resolved_echo
     return _PipelineRunConfig(
         ctx=ctx,
-        capture=capture,
-        echo=echo,
+        capture=output.capture,
+        echo_stdout=echo_stdout,
+        echo_stderr=echo_stderr,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

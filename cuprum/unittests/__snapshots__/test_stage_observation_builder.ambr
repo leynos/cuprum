@@ -5,6 +5,8 @@
       dict({
         'capture': True,
         'echo': False,
+        'echo_stderr': False,
+        'echo_stdout': False,
         'pipeline_stage_index': 0,
         'pipeline_stages': 2,
         'project': 'core-ops',
@@ -13,6 +15,8 @@
       dict({
         'capture': True,
         'echo': False,
+        'echo_stderr': False,
+        'echo_stdout': False,
         'pipeline_stage_index': 1,
         'pipeline_stages': 2,
         'project': 'core-ops',
@@ -22,6 +26,8 @@
     'single': dict({
       'capture': True,
       'echo': False,
+      'echo_stderr': False,
+      'echo_stdout': False,
       'project': 'core-ops',
       'team': 'ops',
     }),

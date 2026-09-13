@@ -228,7 +228,12 @@ async def run_concurrent(
     )
     # ExecutionContext is passed through for runtime parameters (env, cwd, etc.)
     run_config = _ConcurrentRunConfig(
-        output=RunOutputOptions(capture=cfg.capture, echo=cfg.echo),
+        output=RunOutputOptions(
+            capture=cfg.capture,
+            echo=cfg.echo,
+            echo_stdout=cfg.echo_stdout,
+            echo_stderr=cfg.echo_stderr,
+        ),
         context=cfg.context,
     )
 

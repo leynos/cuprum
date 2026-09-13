@@ -21,6 +21,10 @@ from cuprum.concurrent import (
     ConcurrentConfig,
     ConcurrentResult,
 )
+from cuprum.sh import ExecutionContext
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 class TestConcurrentConfig:
@@ -51,6 +55,36 @@ class TestConcurrentConfig:
             TypeError, match=f"concurrency must be an int, got {type_name}"
         ):
             ConcurrentConfig(concurrency=concurrency)
+
+    @staticmethod
+    def test_new_fields_are_keyword_only() -> None:
+        """Positional construction keeps binding context and fail_fast as before."""
+        context = ExecutionContext()
+        # Legacy callers pass ``context`` and ``fail_fast`` positionally; the
+        # per-stream fields are keyword-only and must never absorb them.
+        legacy_positional = (2, False, False, context, True)
+        config = ConcurrentConfig(*legacy_positional)
+
+        assert config.concurrency == 2
+        assert config.capture is False
+        assert config.echo is False
+        assert config.context is context
+        assert config.fail_fast is True
+        assert config.echo_stdout is None
+        assert config.echo_stderr is None
+        # Six positional arguments is exactly the runtime guard under test;
+        # the tuple keeps the boolean out of the call site while preserving
+        # the legacy positional binding.
+        six_positional = (*legacy_positional, True)
+        # The cast widens the signature to an unconstrained callable so the
+        # deliberately invalid call below needs no inline suppression; the
+        # dataclass must still reject the arguments at runtime.
+        unchecked_config = typ.cast(
+            "cabc.Callable[..., ConcurrentConfig]",
+            ConcurrentConfig,
+        )
+        with pytest.raises(TypeError, match="positional arguments"):
+            unchecked_config(*six_positional)
 
 
 class TestConcurrentResult:
