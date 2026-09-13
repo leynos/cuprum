@@ -10,11 +10,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
 use tracing::field::{Field, Visit};
+use tracing::level_filters::LevelFilter;
 use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Level, Metadata, Subscriber};
+use tracing::subscriber::{Interest, NoSubscriber};
+use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
 
 /// A captured event: its level, the field names reachable from the active span
 /// stack when it was emitted, and the values it carried itself.
@@ -124,12 +126,19 @@ fn lock(state: &Arc<Mutex<CaptureState>>) -> MutexGuard<'_, CaptureState> {
 }
 
 impl Subscriber for FilterCapture {
+    /// Request an `enabled` check for every event at this callsite.
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
+    /// Accept metadata at or below this capture's configured level.
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         // `Level` orders ERROR < WARN < INFO < DEBUG < TRACE, so an item is
         // enabled when its level is at or below the configured verbosity.
         *metadata.level() <= self.max_level
     }
 
+    /// Allocate a span identifier and retain its initial fields.
     fn new_span(&self, attrs: &Attributes<'_>) -> Id {
         let mut fields = BTreeMap::new();
         attrs.record(&mut FieldVisitor(&mut fields));
@@ -140,6 +149,7 @@ impl Subscriber for FilterCapture {
         Id::from_u64(id)
     }
 
+    /// Merge fields recorded after a span's creation into its retained state.
     fn record(&self, span: &Id, values: &Record<'_>) {
         let mut fields = BTreeMap::new();
         values.record(&mut FieldVisitor(&mut fields));
@@ -149,8 +159,10 @@ impl Subscriber for FilterCapture {
         }
     }
 
+    /// Ignore causal links because capture assertions inspect only active spans.
     fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
 
+    /// Record an event with its direct and active-span fields.
     fn event(&self, event: &Event<'_>) {
         let mut fields = {
             let state = lock(&self.state);
@@ -171,10 +183,12 @@ impl Subscriber for FilterCapture {
         });
     }
 
+    /// Add the entered span to the active context stack.
     fn enter(&self, span: &Id) {
         lock(&self.state).stack.push(span.into_u64());
     }
 
+    /// Remove the most recently entered matching span from the context stack.
     fn exit(&self, span: &Id) {
         let mut state = lock(&self.state);
         if let Some(pos) = state.stack.iter().rposition(|&id| id == span.into_u64()) {
@@ -183,14 +197,63 @@ impl Subscriber for FilterCapture {
     }
 }
 
+/// Keep registration on tracing's synchronized registry path for all threads.
+///
+/// Each capture registers beside this retained dispatch, avoiding the
+/// single-dispatch fast path that consults only the registering thread's
+/// default subscriber. The guard is never installed as a default subscriber.
+static REGISTRY_GUARD: LazyLock<Dispatch> = LazyLock::new(|| Dispatch::new(DormantSubscriber));
+
+/// Disable tracing until the first capture has joined the shared registry.
+struct DormantSubscriber;
+
+impl Subscriber for DormantSubscriber {
+    /// Keep the retained guard dormant so it never receives events.
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        false
+    }
+
+    /// Disable callsites while this is the registry's only dispatch.
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        // NoSubscriber alone reports no hint, enabling callsite registration
+        // while this guard is still the only dispatch in the registry.
+        Some(LevelFilter::OFF)
+    }
+
+    /// Produce inert span identifiers because the guard retains no span state.
+    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
+        NoSubscriber::new().new_span(attrs)
+    }
+
+    /// Ignore records because the dormant guard retains no span state.
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    /// Ignore causal links because the dormant guard retains no span state.
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    /// Discard events because the retained guard is never a test capture.
+    fn event(&self, _event: &Event<'_>) {}
+
+    /// Ignore span entry because the dormant guard retains no context.
+    fn enter(&self, _span: &Id) {}
+
+    /// Ignore span exit because the dormant guard retains no context.
+    fn exit(&self, _span: &Id) {}
+}
+
 /// Run `body` under a subscriber limited to `max_level` and return what it
 /// captured.
 ///
-/// Tests using this must run under `cargo nextest` (the project's test
-/// runner), which isolates each test in its own process. That isolation keeps
-/// tracing's process-global callsite `Interest` cache from being shared across
-/// tests that install different subscribers.
+/// `FilterCapture` returns `Interest::sometimes()` from `register_callsite`,
+/// so tracing re-evaluates `enabled()` for every event and span. A retained,
+/// dormant dispatch also makes registration consult tracing's synchronized
+/// registry rather than only the registering thread's default subscriber.
+/// Together these prevent the process-global callsite cache from retaining
+/// another capture's max-level verdict or an uncaptured thread's `never`.
+/// Correctness no longer depends on process isolation, although `cargo nextest`
+/// remains the project's test runner.
 pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
+    let _ = LazyLock::force(&REGISTRY_GUARD);
     let state = Arc::new(Mutex::new(CaptureState::default()));
     let subscriber = FilterCapture {
         max_level,
@@ -205,52 +268,5 @@ pub(crate) fn capture(max_level: Level, body: impl FnOnce()) -> Captured {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Tests for the capture harness's own matchers.
-    //!
-    //! `event_matches` is what other modules assert their diagnostics with, so
-    //! a predicate it quietly ignores would weaken every one of those tests at
-    //! once. The negative cases below vary exactly one of level, message, and
-    //! field value, so no single dropped predicate can pass them all.
-
-    use rstest::rstest;
-    use tracing::Level;
-
-    use super::capture;
-
-    /// Emit one known event and return what the harness captured.
-    fn captured_probe() -> super::Captured {
-        capture(Level::DEBUG, || {
-            tracing::debug!(bytes_transferred = 0_u64, "probe event");
-        })
-    }
-
-    #[rstest]
-    fn event_matches_accepts_the_exact_event() {
-        assert!(
-            captured_probe().event_matches(
-                Level::DEBUG,
-                "probe event",
-                &[("bytes_transferred", "0")],
-            ),
-            "the event that fired must match its own level, message, and fields",
-        );
-    }
-
-    #[rstest]
-    #[case::wrong_level(Level::WARN, "probe event", "bytes_transferred", "0")]
-    #[case::wrong_message(Level::DEBUG, "a different event", "bytes_transferred", "0")]
-    #[case::wrong_value(Level::DEBUG, "probe event", "bytes_transferred", "1")]
-    #[case::absent_field(Level::DEBUG, "probe event", "no_such_field", "0")]
-    fn event_matches_rejects_a_single_mismatch(
-        #[case] level: Level,
-        #[case] message: &str,
-        #[case] field: &str,
-        #[case] value: &str,
-    ) {
-        assert!(
-            !captured_probe().event_matches(level, message, &[(field, value)]),
-            "event_matches must require every predicate, not just some",
-        );
-    }
-}
+#[path = "tracing_capture_tests.rs"]
+mod tests;
