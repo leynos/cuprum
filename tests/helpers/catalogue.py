@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import sys
 import typing as typ
 from pathlib import Path
@@ -14,6 +15,21 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.sh import SafeCmd
+
+
+@dc.dataclass(frozen=True, slots=True)
+class PythonCatalogue:
+    """A catalogue paired with its allowlisted program and command builder.
+
+    Bundling the three together lets a single pytest fixture hand tests
+    everything they need to build commands without re-deriving the catalogue:
+    ``program`` is the allowlist entry to pass to ``scoped``, and ``builder``
+    already binds ``program`` to ``catalogue``.
+    """
+
+    catalogue: ProgramCatalogue
+    program: Program
+    builder: cabc.Callable[..., SafeCmd]
 
 
 def python_catalogue() -> tuple[ProgramCatalogue, Program]:
@@ -42,8 +58,25 @@ def python_builder() -> cabc.Callable[..., SafeCmd]:
     cabc.Callable[..., SafeCmd]
         A builder that produces SafeCmd instances for the interpreter.
     """
+    return build_python_catalogue_env().builder
+
+
+def build_python_catalogue_env() -> PythonCatalogue:
+    """Build the interpreter catalogue, its allowlisted program, and a builder.
+
+    Returns
+    -------
+    PythonCatalogue
+        The catalogue, the Python program it allowlists, and a builder bound
+        to both. The catalogue is constructed once so the builder and the
+        allowlist entry refer to the same instance.
+    """
     catalogue, program = python_catalogue()
-    return sh.make(program, catalogue=catalogue)
+    return PythonCatalogue(
+        catalogue=catalogue,
+        program=program,
+        builder=sh.make(program, catalogue=catalogue),
+    )
 
 
 def cat_program() -> Program:

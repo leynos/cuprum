@@ -23,6 +23,9 @@ from cuprum.concurrent import (
 )
 from cuprum.sh import ExecutionContext
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 class TestConcurrentConfig:
     """Validate concurrent execution configuration."""
@@ -73,10 +76,15 @@ class TestConcurrentConfig:
         # the tuple keeps the boolean out of the call site while preserving
         # the legacy positional binding.
         six_positional = (*legacy_positional, True)
+        # The cast widens the signature to an unconstrained callable so the
+        # deliberately invalid call below needs no inline suppression; the
+        # dataclass must still reject the arguments at runtime.
+        unchecked_config = typ.cast(
+            "cabc.Callable[..., ConcurrentConfig]",
+            ConcurrentConfig,
+        )
         with pytest.raises(TypeError, match="positional arguments"):
-            # The signature statically rejects six positional arguments; the
-            # dataclass must also reject them at runtime (the kw-only guard).
-            ConcurrentConfig(*six_positional)  # ty: ignore[too-many-positional-arguments]
+            unchecked_config(*six_positional)
 
 
 class TestConcurrentResult:

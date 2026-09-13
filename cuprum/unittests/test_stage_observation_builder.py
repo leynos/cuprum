@@ -26,7 +26,6 @@ from hypothesis import strategies as st
 
 from cuprum import ECHO, sh
 from cuprum._observability import _base_stage_tags, _resolve_env_overlay
-from cuprum._pipeline_config import _PipelineStreamOptions
 from cuprum._pipeline_internals import (
     _build_pipeline_observations,
     _collect_hooks,
@@ -137,8 +136,11 @@ def _pipeline_tags(
 ) -> list[cabc.Mapping[str, object]]:
     """Build pipeline observations and return per-stage tags."""
     config = _prepare_pipeline_config(
-        capture=capture,
-        output=_PipelineStreamOptions(echo_stdout=echo, echo_stderr=echo),
+        output=RunOutputOptions(
+            capture=capture,
+            echo_stdout=echo,
+            echo_stderr=echo,
+        ),
         timeout=None,
         context=context,
     )

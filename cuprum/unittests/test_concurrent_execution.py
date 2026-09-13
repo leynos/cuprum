@@ -32,7 +32,7 @@ from cuprum.concurrent import (
     run_concurrent_sync,
 )
 from cuprum.sh import CommandResult, RunOutputOptions, SafeCmd
-from tests.helpers.catalogue import python_catalogue
+from tests.helpers.catalogue import PythonCatalogue, python_catalogue
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -95,6 +95,34 @@ def _assert_concurrent_timing(
     assert elapsed >= timing.min_elapsed, (
         f"Expected >= {timing.min_elapsed}s with concurrency={concurrency}, "
         f"got {elapsed:.3f}s"
+    )
+
+
+def _assert_concurrent_echo_shorthand(
+    result: ConcurrentResult,
+    stdout_sink: io.StringIO,
+    stderr_sink: io.StringIO,
+) -> None:
+    """Assert ``echo=True`` captured and echoed both streams.
+
+    Parameters
+    ----------
+    result:
+        Concurrent result from a single command that wrote to both streams.
+    stdout_sink:
+        Sink that received stdout echo output.
+    stderr_sink:
+        Sink that received stderr echo output.
+    """
+    command_result = result.results[0]
+    assert command_result.ok is True, "the concurrent command must succeed"
+    assert command_result.stdout == "out-line\n", "stdout must still be captured"
+    assert command_result.stderr == "err-line\n", "stderr must still be captured"
+    assert stdout_sink.getvalue() == "out-line\n", (
+        "echo=True must resolve echo_stdout to True"
+    )
+    assert stderr_sink.getvalue() == "err-line\n", (
+        "echo=True must resolve echo_stderr to True"
     )
 
 
@@ -351,6 +379,66 @@ class TestConcurrentExecution:
             f"stderr echo must follow echo_stderr={echo_stderr}"
         )
 
+    @staticmethod
+    def test_run_concurrent_sync_echo_shorthand_echoes_both_streams(
+        python_catalogue_env: PythonCatalogue,
+    ) -> None:
+        """ConcurrentConfig(echo=True) inherits into both per-stream gates."""
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python_catalogue_env.builder(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+
+        with scoped(ScopeConfig(allowlist=frozenset([python_catalogue_env.program]))):
+            result = run_concurrent_sync(
+                command,
+                config=ConcurrentConfig(
+                    echo=True,
+                    echo_stdout=None,
+                    echo_stderr=None,
+                    context=ExecutionContext(
+                        stdout_sink=stdout_sink,
+                        stderr_sink=stderr_sink,
+                    ),
+                ),
+            )
+
+        _assert_concurrent_echo_shorthand(result, stdout_sink, stderr_sink)
+
+    @staticmethod
+    def test_run_concurrent_echo_shorthand_echoes_both_streams(
+        python_catalogue_env: PythonCatalogue,
+    ) -> None:
+        """The async boundary resolves the same ``echo`` shorthand."""
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        command = python_catalogue_env.builder(
+            "-c",
+            "import sys; print('out-line'); print('err-line', file=sys.stderr)",
+        )
+        config = ConcurrentConfig(
+            echo=True,
+            echo_stdout=None,
+            echo_stderr=None,
+            context=ExecutionContext(
+                stdout_sink=stdout_sink,
+                stderr_sink=stderr_sink,
+            ),
+        )
+
+        async def exercise() -> ConcurrentResult:
+            """Run the command concurrently within an allowlist scope."""
+            with scoped(
+                ScopeConfig(allowlist=frozenset([python_catalogue_env.program]))
+            ):
+                return await run_concurrent(command, config=config)
+
+        result = asyncio.run(exercise())
+
+        _assert_concurrent_echo_shorthand(result, stdout_sink, stderr_sink)
+
 
 class TestConcurrentEchoOnly:
     """Verify the echo-only concurrent path leaves results uncaptured."""
@@ -362,21 +450,20 @@ class TestConcurrentEchoOnly:
         ids=["stderr-only", "stdout-only"],
     )
     def test_run_concurrent_sync_echo_only_keeps_capture_off(
+        python_catalogue_env: PythonCatalogue,
         *,
         echo_stdout: bool,
         echo_stderr: bool,
     ) -> None:
         """capture=False streams only the gated stream and captures neither."""
-        catalogue, python_program = python_catalogue()
-        python = sh.make(python_program, catalogue=catalogue)
         stdout_sink = io.StringIO()
         stderr_sink = io.StringIO()
-        command = python(
+        command = python_catalogue_env.builder(
             "-c",
             "import sys; print('out-line'); print('err-line', file=sys.stderr)",
         )
 
-        with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        with scoped(ScopeConfig(allowlist=frozenset([python_catalogue_env.program]))):
             result = run_concurrent_sync(
                 command,
                 config=ConcurrentConfig(
@@ -408,16 +495,15 @@ class TestConcurrentEchoOnly:
         ids=["stderr-only", "stdout-only"],
     )
     def test_run_concurrent_echo_only_keeps_capture_off(
+        python_catalogue_env: PythonCatalogue,
         *,
         echo_stdout: bool,
         echo_stderr: bool,
     ) -> None:
         """The async concurrent boundary honours the same echo-only contract."""
-        catalogue, python_program = python_catalogue()
-        python = sh.make(python_program, catalogue=catalogue)
         stdout_sink = io.StringIO()
         stderr_sink = io.StringIO()
-        command = python(
+        command = python_catalogue_env.builder(
             "-c",
             "import sys; print('out-line'); print('err-line', file=sys.stderr)",
         )
@@ -433,7 +519,9 @@ class TestConcurrentEchoOnly:
 
         async def exercise() -> ConcurrentResult:
             """Run the command concurrently within an allowlist scope."""
-            with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+            with scoped(
+                ScopeConfig(allowlist=frozenset([python_catalogue_env.program]))
+            ):
                 return await run_concurrent(command, config=config)
 
         result = asyncio.run(exercise())

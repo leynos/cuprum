@@ -22,6 +22,7 @@ import pytest
 
 from cuprum import _rust_backend
 from cuprum._backend import _check_rust_available, get_stream_backend
+from tests.helpers.catalogue import PythonCatalogue, build_python_catalogue_env
 from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
@@ -95,6 +96,22 @@ def fixture_rust_streams() -> ModuleType:
     from cuprum import _streams_rs
 
     return _streams_rs
+
+
+@pytest.fixture
+def python_catalogue_env() -> PythonCatalogue:
+    """Provide the interpreter catalogue, its allowlisted program, and a builder.
+
+    Function-scoped so each test gets a catalogue built from the running
+    interpreter rather than sharing mutable catalogue state across tests.
+
+    Returns
+    -------
+    PythonCatalogue
+        The catalogue, the allowlisted ``sys.executable`` program, and a
+        builder bound to both.
+    """
+    return build_python_catalogue_env()
 
 
 @pytest.fixture(

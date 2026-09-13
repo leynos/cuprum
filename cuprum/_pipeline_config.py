@@ -9,15 +9,7 @@ import typing as typ
 from cuprum._streams import _StreamConfig
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import ExecutionContext
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _PipelineStreamOptions:
-    """Per-stream echo gates resolved from ``RunOutputOptions``."""
-
-    echo_stdout: bool
-    echo_stderr: bool
+    from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -67,8 +59,7 @@ class _PipelineRunConfig:
 
 def _prepare_pipeline_config(
     *,
-    capture: bool,
-    output: _PipelineStreamOptions,
+    output: RunOutputOptions,
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
@@ -83,11 +74,16 @@ def _prepare_pipeline_config(
     ctx = context or sh.ExecutionContext()
     stdout_sink = ctx.stdout_sink if ctx.stdout_sink is not None else sys.stdout
     stderr_sink = ctx.stderr_sink if ctx.stderr_sink is not None else sys.stderr
+    # ``RunOutputOptions`` is the canonical carrier for output behaviour, so
+    # the resolved gates are read straight off it rather than restated as
+    # separate arguments; the developer guide forbids parallel internal
+    # output-option objects.
+    echo_stdout, echo_stderr = output.resolved_echo
     return _PipelineRunConfig(
         ctx=ctx,
-        capture=capture,
-        echo_stdout=output.echo_stdout,
-        echo_stderr=output.echo_stderr,
+        capture=output.capture,
+        echo_stdout=echo_stdout,
+        echo_stderr=echo_stderr,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

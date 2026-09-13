@@ -22,7 +22,7 @@ from cuprum._observability import (
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
 )
-from cuprum._pipeline_config import _PipelineStreamOptions, _prepare_pipeline_config
+from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
@@ -753,11 +753,7 @@ class Pipeline:
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
-            capture=out.capture,
-            output=_PipelineStreamOptions(
-                echo_stdout=out.resolved_echo[0],
-                echo_stderr=out.resolved_echo[1],
-            ),
+            output=out,
             timeout=effective_timeout,
             context=context,
         )

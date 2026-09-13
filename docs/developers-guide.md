@@ -3405,15 +3405,18 @@ without updating snapshot files and any downstream tooling.
 Two canonical helpers own the subprocess spawn flags used by the subprocess
 spawn paths:
 
-- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
-  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
-  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
-  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
-  stages always pipe stdout, while the final stage pipes stdout only when
-  output is captured or echoed; stderr is piped exactly when output is captured
-  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
-  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
-  for single-command spawning.
+- `_get_stage_stream_fds(idx, last_idx, *, stdout_capture_or_echo, stderr_capture_or_echo)`
+  in `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. Its input
+  domain is the stage position (first / intermediate / final) crossed with the
+  two independent boolean per-stream capture-or-echo gates. The first stage
+  reads stdin from `DEVNULL` and every later stage from a `PIPE`; a non-final
+  stage always pipes stdout so it can relay into the next stage regardless of
+  capture or echo; the final stage's stdout follows its own
+  `stdout_capture_or_echo` gate, and every stage's stderr follows its own
+  `stderr_capture_or_echo` gate. `_spawn_pipeline_processes` routes through
+  this helper — do not re-derive the flags inline at pipeline-stage spawn
+  sites, and do not use it for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the

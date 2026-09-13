@@ -20,7 +20,7 @@ from cuprum.sh import (
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
-from tests.helpers.catalogue import python_catalogue
+from tests.helpers.catalogue import PythonCatalogue, python_catalogue
 
 type PipelineExecuteFn = cabc.Callable[[Pipeline, dict[str, typ.Any]], PipelineResult]
 
@@ -86,6 +86,89 @@ def _identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
         "import sys; sys.stdout.write(sys.stdin.read())",
     )
     return pipeline, frozenset([ECHO, python_program])
+
+
+def _run_per_stream_echo_pipeline(
+    env: PythonCatalogue,
+    *,
+    capture: bool,
+    stream: str,
+) -> tuple[PipelineResult, io.StringIO, io.StringIO]:
+    """Run a two-stage pipeline echoing exactly one of its streams.
+
+    Parameters
+    ----------
+    env:
+        Catalogue bundle supplying the interpreter builder and allowlist entry.
+    capture:
+        Whether the pipeline should capture each stage's stdio.
+    stream:
+        The stream selected for echo; the other stream stays muted.
+
+    Returns
+    -------
+    tuple[PipelineResult, io.StringIO, io.StringIO]
+        The pipeline result together with the stdout and stderr echo sinks,
+        both injected via ``ExecutionContext`` so neither reaches the parent.
+    """
+    python = env.builder
+    # The producer writes to both streams so each echo gate can be observed
+    # independently; the consumer relays stdin so the pipeline is two stages.
+    producer = python(
+        "-c",
+        "import sys; print('out'); print('err', file=sys.stderr)",
+    )
+    consumer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+    echo_stdout = stream == "stdout"
+    stdout_sink = io.StringIO()
+    stderr_sink = io.StringIO()
+
+    with scoped(ScopeConfig(allowlist=frozenset([env.program]))):
+        result = (producer | consumer).run_sync(
+            output=RunOutputOptions(
+                capture=capture,
+                echo_stdout=echo_stdout,
+                echo_stderr=not echo_stdout,
+            ),
+            context=ExecutionContext(stdout_sink=stdout_sink, stderr_sink=stderr_sink),
+        )
+
+    return result, stdout_sink, stderr_sink
+
+
+def _assert_only_selected_stream_echoed(
+    stream: str,
+    stdout_sink: io.StringIO,
+    stderr_sink: io.StringIO,
+) -> None:
+    """Assert the selected stream reached its sink and the other stayed silent.
+
+    Parameters
+    ----------
+    stream:
+        The stream selected for echo; every other stream must be empty.
+    stdout_sink:
+        Sink that received stdout echo output.
+    stderr_sink:
+        Sink that received stderr echo output.
+    """
+    if stream == "stdout":
+        assert "out" in stdout_sink.getvalue(), (
+            "stdout echo must follow echo_stdout=True"
+        )
+        assert stderr_sink.getvalue() == "", (
+            "stderr must stay silent while only stdout echoes"
+        )
+    else:
+        assert "err" in stderr_sink.getvalue(), (
+            "stderr echo must follow echo_stderr=True"
+        )
+        assert stdout_sink.getvalue() == "", (
+            "stdout must stay silent while only stderr echoes"
+        )
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -281,98 +364,46 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     assert result.stdout == "legacy", "the deprecated flags must still capture output"
 
 
-@pytest.mark.usefixtures("stream_backend")
-@pytest.mark.parametrize("stream", ["stdout", "stderr"])
-def test_pipeline_per_stream_echo_is_independent(*, stream: str) -> None:
-    """Pipeline echo of one stream leaves the other out of the parent."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
+class TestPipelineEchoRouting:
+    """Verify per-stream echo routing through pipeline execution."""
 
-    producer = python(
-        "-c",
-        "import sys; print('out'); print('err', file=sys.stderr)",
-    )
-    consumer = python(
-        "-c",
-        "import sys; sys.stdout.write(sys.stdin.read())",
-    )
-    echo_stdout = stream == "stdout"
-    stdout_sink = io.StringIO()
-    stderr_sink = io.StringIO()
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = (producer | consumer).run_sync(
-            output=RunOutputOptions(
-                capture=True,
-                echo_stdout=echo_stdout,
-                echo_stderr=not echo_stdout,
-            ),
-            context=ExecutionContext(stdout_sink=stdout_sink, stderr_sink=stderr_sink),
+    @staticmethod
+    @pytest.mark.usefixtures("stream_backend")
+    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
+    def test_pipeline_per_stream_echo_is_independent(
+        python_catalogue_env: PythonCatalogue,
+        *,
+        stream: str,
+    ) -> None:
+        """Pipeline echo of one stream leaves the other out of the parent."""
+        result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
+            python_catalogue_env,
+            capture=True,
+            stream=stream,
         )
 
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.stdout == "out\n", "capture must return the final stage stdout"
-    if echo_stdout:
-        assert "out" in stdout_sink.getvalue(), (
-            "stdout echo must follow echo_stdout=True"
-        )
-        assert stderr_sink.getvalue() == "", (
-            "stderr must stay silent while only stdout echoes"
-        )
-    else:
-        assert "err" in stderr_sink.getvalue(), (
-            "stderr echo must follow echo_stderr=True"
-        )
-        assert stdout_sink.getvalue() == "", (
-            "stdout must stay silent while only stderr echoes"
+        assert result.ok is True, "the pipeline should succeed"
+        assert result.stdout == "out\n", "capture must return the final stage stdout"
+        _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
+
+    @staticmethod
+    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
+    def test_pipeline_echo_only_keeps_capture_off(
+        python_catalogue_env: PythonCatalogue,
+        *,
+        stream: str,
+    ) -> None:
+        """capture=False with one echo gate streams that stream and captures none."""
+        result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
+            python_catalogue_env,
+            capture=False,
+            stream=stream,
         )
 
-
-@pytest.mark.parametrize("stream", ["stdout", "stderr"])
-def test_pipeline_echo_only_keeps_capture_off(*, stream: str) -> None:
-    """capture=False with one echo gate streams that stream and captures none."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-
-    producer = python(
-        "-c",
-        "import sys; print('out'); print('err', file=sys.stderr)",
-    )
-    consumer = python(
-        "-c",
-        "import sys; sys.stdout.write(sys.stdin.read())",
-    )
-    echo_stdout = stream == "stdout"
-    stdout_sink = io.StringIO()
-    stderr_sink = io.StringIO()
-
-    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        result = (producer | consumer).run_sync(
-            output=RunOutputOptions(
-                capture=False,
-                echo_stdout=echo_stdout,
-                echo_stderr=not echo_stdout,
-            ),
-            context=ExecutionContext(stdout_sink=stdout_sink, stderr_sink=stderr_sink),
-        )
-
-    assert result.ok is True, "the pipeline should succeed"
-    assert result.final.stdout is None, "capture=False must leave stdout unset"
-    assert result.final.stderr is None, "capture=False must leave stderr unset"
-    if echo_stdout:
-        assert "out" in stdout_sink.getvalue(), (
-            "stdout echo must follow echo_stdout=True"
-        )
-        assert stderr_sink.getvalue() == "", (
-            "stderr must stay silent while only stdout echoes"
-        )
-    else:
-        assert "err" in stderr_sink.getvalue(), (
-            "stderr echo must follow echo_stderr=True"
-        )
-        assert stdout_sink.getvalue() == "", (
-            "stdout must stay silent while only stderr echoes"
-        )
+        assert result.ok is True, "the pipeline should succeed"
+        assert result.final.stdout is None, "capture=False must leave stdout unset"
+        assert result.final.stderr is None, "capture=False must leave stderr unset"
+        _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
 
 
 def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
