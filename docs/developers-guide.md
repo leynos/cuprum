@@ -3433,20 +3433,29 @@ on the overlapping cases.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
-output behaviour. Public command execution should accept or construct this
-object rather than threading separate `capture` and `echo` keyword arguments
-through new APIs. Keep that pairing intact so stdout/stderr handling stays
-explicit, testable, and compatible with the `IOOptions` deprecation path.
+`RunOutputOptions` is the canonical carrier for command output behaviour: it
+holds `capture`, the `echo` shorthand, and the resolved `echo_stdout` and
+`echo_stderr` gates. `capture` is one joint switch for both streams, while an
+unset per-stream gate inherits `echo`. Public command execution should accept
+or construct this object rather than threading separate `capture` and `echo`
+keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
+handling stays explicit, testable, and compatible with the `IOOptions`
+deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
-`output.capture` / `output.echo` for the observation tags. `Pipeline.run` /
-`run_sync` use the same `output` parameter and resolve it before building the
-pipeline execution config. There is no parallel internal `(capture, echo)`
-value object: the former `_IOBehaviour` was redundant with `RunOutputOptions`
-and has been removed. `IOOptions` remains only as a deprecated subclass alias
-that emits a `DeprecationWarning`.
+`output.capture` and both values of `output.resolved_echo` for the observation
+tags. The base observation tags come from `_base_stage_tags`, which emits
+`capture`, the aggregate `echo` (the OR of the two per-stream gates), and both
+per-stream gates; see the canonical tag-schema bullet under
+[Canonical stage-observation inputs](#canonical-stage-observation-inputs).
+`Pipeline.run` / `run_sync` use the same `output` parameter and resolve it
+before building the pipeline execution config. There is no parallel internal
+`(capture, echo)` value object: the former `_IOBehaviour` was redundant with
+`RunOutputOptions` and has been removed, and `_prepare_pipeline_config` now
+takes the canonical `RunOutputOptions` carrier rather than a copy of its gates;
+neither pattern may be reintroduced. `IOOptions` remains only as a deprecated
+subclass alias that emits a `DeprecationWarning`.
 
 Internal adapters may translate legacy or aggregate configuration into
 `RunOutputOptions` at the boundary. For example, the concurrent runner converts
