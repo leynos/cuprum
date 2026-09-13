@@ -272,6 +272,9 @@ def _assert_late_pipeline_completion(
     assert lifecycle.restored.wait(timeout=5.0), (
         "late completion must restore blocking mode after native I/O stops"
     )
+    assert _wait_for_deferred_cleanup(), (
+        "late completion must release the retained worker future"
+    )
     with pytest.raises(OSError, match="Bad file descriptor"):
         os.fstat(native_reader_fd)
     with pytest.raises(OSError, match="Bad file descriptor"):
@@ -281,9 +284,6 @@ def _assert_late_pipeline_completion(
     )
     assert state_fd_close.call_count == 2, (
         "the callback must close both callback-owned state descriptors"
-    )
-    assert _wait_for_deferred_cleanup(), (
-        "late completion must release the retained worker future"
     )
 
 
