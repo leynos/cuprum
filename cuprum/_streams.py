@@ -451,6 +451,12 @@ async def _emit_completed_lines(
     drain-side emitter, which awaits each sink call so a sink that must apply
     backpressure to the producer holds the read loop instead of letting the
     lines queue without bound. See :func:`_emit_line`.
+
+    Returns
+    -------
+    str
+        The trailing partial line that carries no line ending yet, retained so
+        the next chunk can complete it.
     """
     lines, remainder = _split_complete_lines(text)
 
