@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import io
 import os
@@ -12,7 +13,13 @@ from unittest import mock
 import pytest
 
 from benchmarks import PtyBlackholeStateError, sinks
-from cuprum.sh import RunOutputOptions, TimeoutExpired, _run_label
+from cuprum._sink_lifecycle import (
+    _close_sink_session,
+    _open_sink_session,
+    _outcome_for_error,
+    _run_label,
+)
+from cuprum.sh import RunOutputOptions, TimeoutExpired
 from cuprum.sinks import (
     GitHubActionsSink,
     OutputSession,
@@ -67,13 +74,19 @@ class _RecordingSink:
 
     title: str | None
 
-    def __init__(self, *, decline: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        decline: bool = False,
+        session_factory: cabc.Callable[[], _RecordingSession] = _RecordingSession,
+    ) -> None:
         """Configure whether the adapter declines activation."""
         self.decline = decline
         self.title = None
         self.started_with: SessionStart | None = None
         self.opened = 0
         self.last_session: _RecordingSession | None = None
+        self._session_factory = session_factory
 
     def open_session(self, start: SessionStart) -> OutputSession | None:
         """Record the start and return a fresh recording session."""
@@ -81,8 +94,21 @@ class _RecordingSink:
         self.opened += 1
         if self.decline:
             return None
-        self.last_session = _RecordingSession()
+        self.last_session = self._session_factory()
         return self.last_session
+
+
+class _EagerRecordingSession(_RecordingSession):
+    """Recording session that also implements the optional eager framing hook."""
+
+    def __init__(self) -> None:
+        """Start with no eager group opened."""
+        super().__init__()
+        self.open_groups = 0
+
+    def open_group(self) -> None:
+        """Record one eager group opening."""
+        self.open_groups += 1
 
 
 def _recorded_outcome(adapter: _RecordingSink) -> SessionOutcome:
@@ -203,6 +229,62 @@ def test_sink_session_label_omits_argv() -> None:
 
     assert adapter.started_with is not None
     assert secret not in adapter.started_with.label
+
+
+# ---------------------------------------------------------------------------
+# Shared sink session lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def test_open_sink_session_runs_eager_framing_once() -> None:
+    """An active adapter opens once and its eager framing runs once."""
+    session = _EagerRecordingSession()
+    adapter = _RecordingSink(session_factory=lambda: session)
+    start = SessionStart(label="project: program", argv=("python", "-c"))
+
+    opened = _open_sink_session(adapter, start)
+
+    assert opened is session
+    assert adapter.started_with == start
+    assert adapter.opened == 1
+    assert session.open_groups == 1
+
+
+def test_close_sink_session_without_a_session_is_a_no_op() -> None:
+    """Closing a run that never opened a session does nothing."""
+    _close_sink_session(None, outcome=SessionOutcome(TerminalOutcome.ERROR))
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        pytest.param(
+            TimeoutExpired(cmd=("python", "-c"), timeout=0.5),
+            SessionOutcome(
+                outcome=TerminalOutcome.TIMEOUT,
+                exit_code=None,
+                detail="timeout",
+            ),
+            id="timeout",
+        ),
+        pytest.param(
+            asyncio.CancelledError(),
+            SessionOutcome(outcome=TerminalOutcome.CANCELLED),
+            id="cancelled",
+        ),
+        pytest.param(
+            RuntimeError("boom"),
+            SessionOutcome(outcome=TerminalOutcome.ERROR),
+            id="error",
+        ),
+    ],
+)
+def test_outcome_for_error_maps_each_terminal_category(
+    error: BaseException,
+    expected: SessionOutcome,
+) -> None:
+    """Only the bounded categorical outcomes reach the adapter."""
+    assert _outcome_for_error(error) == expected
 
 
 # ---------------------------------------------------------------------------
