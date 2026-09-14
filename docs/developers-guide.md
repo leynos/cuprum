@@ -1064,8 +1064,9 @@ their bodies to the per-drain `_EchoLineLimiter` in
   then resets both at each completed line;
 - it reserves room for the configured sink's encoded marker and line ending,
   so the complete echoed line is no longer than the configured bound;
-- a pending carriage return is held until the next byte identifies `\r\n` or
-  standalone `\r`, keeping CRLF accounting independent of read boundaries;
+- a trailing carriage return is held until the next byte identifies `\r\n`; if
+  the next byte is not `\n`, or the stream reaches EOF, it remains line data,
+  keeping CRLF accounting independent of read boundaries;
 - the limiter affects only the sink copy. `buffer.extend` runs first and the
   capture buffer retains every child-output byte, including bytes omitted from
   the mirrored prefix.
