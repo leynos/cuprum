@@ -14,6 +14,7 @@ from cuprum._streams import _drain, _StreamConfig
 from cuprum._streams_pump import _pump_stream
 from cuprum.stream_events import (
     StreamOperation,
+    StreamOperationEvent,
     StreamOperationHook,
     StreamOperationOutcome,
 )
@@ -23,6 +24,9 @@ from cuprum.stream_observation import (
     current_stream_operation_hooks,
     observe_stream_operation,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 class _CancelledReader:
@@ -49,6 +53,10 @@ class _PayloadReader:
 class _Writer:
     """Minimal writer double accepted by the pipeline pump."""
 
+    def __init__(self) -> None:
+        """Initialize a writer that has not yet been closed."""
+        self.closed = False
+
     def write(self, _: bytes) -> None:
         """Accept a written chunk."""
 
@@ -59,7 +67,8 @@ class _Writer:
         """Accept writer EOF."""
 
     def close(self) -> None:
-        """Accept writer close."""
+        """Record writer cleanup."""
+        self.closed = True
 
     async def wait_closed(self) -> None:
         """Accept writer close completion."""
@@ -158,35 +167,77 @@ def test_measurement_uses_its_injected_monotonic_clock() -> None:
     )
 
 
-def test_drain_completes_cancellation_before_reraising() -> None:
-    """A cancelled non-capturing drain publishes its terminal outcome first."""
-    seen = []
-
-    with observe_stream_operation(seen.append), pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            _drain(
-                typ.cast("asyncio.StreamReader", _CancelledReader()),
-                _drain_config(capture_output=False),
-            )
-        )
-
-    assert [event.outcome for event in seen] == [StreamOperationOutcome.CANCELLED], (
-        "a cancelled drain must publish exactly one CANCELLED event"
+async def _run_cancelled_drain(_: _Writer) -> None:
+    """Run the direct drain cancellation case."""
+    await _drain(
+        typ.cast("asyncio.StreamReader", _CancelledReader()),
+        _drain_config(capture_output=False),
     )
 
 
-def test_pump_completes_cancellation_after_writer_cleanup() -> None:
-    """A cancelled relay publishes its terminal outcome while closing its writer."""
-    seen = []
-
-    with observe_stream_operation(seen.append), pytest.raises(asyncio.CancelledError):
-        asyncio.run(
-            _pump_stream(
-                typ.cast("asyncio.StreamReader", _CancelledReader()),
-                typ.cast("asyncio.StreamWriter", _Writer()),
-            )
-        )
-
-    assert [event.outcome for event in seen] == [StreamOperationOutcome.CANCELLED], (
-        "a cancelled relay must publish exactly one CANCELLED event"
+async def _run_cancelled_pump(writer: _Writer) -> None:
+    """Run the pipeline transfer cancellation case."""
+    await _pump_stream(
+        typ.cast("asyncio.StreamReader", _CancelledReader()),
+        typ.cast("asyncio.StreamWriter", writer),
     )
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_operation", "runner", "expects_writer_cleanup"),
+    [
+        pytest.param(
+            "drain",
+            StreamOperation.DRAIN,
+            _run_cancelled_drain,
+            False,
+            id="drain",
+        ),
+        pytest.param(
+            "pump",
+            StreamOperation.PIPELINE_TRANSFER,
+            _run_cancelled_pump,
+            True,
+            id="pump",
+        ),
+    ],
+)
+def test_cancellation_completes_before_reraising(
+    case_id: str,
+    expected_operation: StreamOperation,
+    runner: cabc.Callable[[_Writer], cabc.Coroutine[typ.Any, typ.Any, None]],
+    expects_writer_cleanup: bool,
+) -> None:
+    """Cancellation completes its operation before propagation reaches callers."""
+    writer = _Writer()
+    seen: list[StreamOperationEvent] = []
+    writer_closed_at_completion: list[bool] = []
+
+    def observe_completion(event: StreamOperationEvent) -> None:
+        """Record writer cleanup at the expected completion boundary."""
+        seen.append(event)
+        if event.operation is expected_operation:
+            writer_closed_at_completion.append(writer.closed)
+
+    with (
+        observe_stream_operation(observe_completion),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        asyncio.run(runner(writer))
+
+    assert len(seen) == 1, (
+        f"{case_id}: expected exactly one {expected_operation.name} completion event"
+    )
+    assert seen[0].operation is expected_operation, (
+        f"{case_id}: expected operation {expected_operation.name}, "
+        f"received {seen[0].operation.name}"
+    )
+    assert seen[0].outcome is StreamOperationOutcome.CANCELLED, (
+        f"{case_id}: expected outcome {StreamOperationOutcome.CANCELLED.name}, "
+        f"received {seen[0].outcome.name}"
+    )
+    if expects_writer_cleanup:
+        assert writer_closed_at_completion == [True], (
+            f"{case_id}: expected writer cleanup before "
+            f"{expected_operation.name} completion delivery"
+        )
