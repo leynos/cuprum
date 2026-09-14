@@ -4640,10 +4640,12 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
-deciding which streams are consumed, and assembling the result — belongs in
-`_subprocess_execution`; and single-command stream-consumer construction
-belongs in `_subprocess_streams`. On the pipeline side, starting stages — and
+belong in `_subprocess_wait`; choosing each mirrored stream's destination and
+single-command stream-consumer construction — the stdout `_StreamConfig`, the
+stderr config derived from it, and the consumer tasks that drain into it —
+belong in `_subprocess_streams`; orchestration that coordinates them —
+spawning, deciding which streams are consumed, and assembling the result —
+belongs in `_subprocess_execution`. On the pipeline side, starting stages — and
 cleaning up whatever a failed startup left running — belongs in
 `_pipeline_spawn`, while terminating stages that are already running belongs in
 `_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
@@ -4665,11 +4667,25 @@ shaped one was withdrawn.
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
 settles the per-stream relay-diagnostics collectors before returning captured
-output. `_subprocess_execution.py` retains process spawning, stream-consumer
-construction, stream configuration, the non-streaming path, and final
-`CommandResult` assembly. `_StreamConsumerSpawnContext` is its private bundle
-of stream configuration, PID, and the stdout/stderr diagnostics collectors; the
-streamed run creates it before handing those values to the consumer tasks.
+output. `_subprocess_execution.py` retains process spawning, the non-streaming
+path, and final `CommandResult` assembly, re-exporting stream-consumer
+construction and stream configuration from `_subprocess_streams`.
+`_StreamConsumerSpawnContext` is the private bundle of stream configuration,
+PID, and the stdout/stderr diagnostics collectors that the streamed run creates
+before handing those values to the consumer tasks.
+
+`cuprum/_subprocess_streams.py` holds the consumer wiring itself:
+`_resolve_stream_sink` picks the destination for one mirrored stream — a live
+presentation-sink session's log first, so mirrored output lands inside the
+adapter's framing (the GitHub Actions group, say) in the order the adapter
+received it, then the execution context's configured sink, then the process's
+own stream — `_create_stream_callback` builds the per-line observability hook,
+`_build_stream_config` assembles the stdout `_StreamConfig`, and
+`_spawn_stream_consumers` derives the stderr config from it and starts both
+reader tasks. It was split out of `_subprocess_execution` to keep both modules
+within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
+so callers and the tests that monkeypatch them by module path resolve the same
+names as before.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -4685,12 +4701,13 @@ promptly and discards output. `_await_capture_eof_grace` uses an injected
 waiter when supplied and otherwise delegates to the bounded `_await_eof_grace`;
 `_settle_consumers` is the single optional settlement boundary that sets the
 discard event before cancelling pending readers.
-`_build_stream_config(execution, discard_on_cancel)` passes that shared event
-into each stream's `_StreamConfig`, so timeout capture can retain buffered text
-while cancellation and failure cleanup can discard it. It was split out of
-`_subprocess_execution` so that module stays about orchestration; termination
-routes through `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a
-caller cancelling during the grace period cannot skip the `SIGKILL` escalation.
+`_build_stream_config(execution, discard_on_cancel)` (in
+`cuprum/_subprocess_streams.py`) passes that shared event into each stream's
+`_StreamConfig`, so timeout capture can retain buffered text while cancellation
+and failure cleanup can discard it. It was split out of `_subprocess_execution`
+so that module stays about orchestration; termination routes through
+`_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
+cancelling during the grace period cannot skip the `SIGKILL` escalation.
 
 The pipeline side has an analogous split. `cuprum/_pipeline_results.py` owns
 per-stage *reporting*: the terminal `exit` event a stage owes its observers

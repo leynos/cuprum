@@ -1431,7 +1431,10 @@ preserving the `SafeCmd.run()` execution contract:
   `_RunTaskOwnership` retains those consumers and collectors until the one
   success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
-  *construction*: `_build_stream_config` assembles the stdout `_StreamConfig`,
+  *construction* and *routing*: `_resolve_stream_sink` chooses the destination
+  for each mirrored stream — a live presentation-sink session's log, the
+  execution context's configured sink, or the process's own stream — and
+  `_build_stream_config` assembles the stdout `_StreamConfig`,
   and `_spawn_stream_consumers` derives the stderr config from it and creates
   the pair of consumer tasks. Fixing the stderr config's echo, sink, and
   `EchoStream.STDERR` on the derived config is what keeps the two streams
@@ -1441,9 +1444,11 @@ preserving the `SafeCmd.run()` execution contract:
   from the observe hooks and the caller's `on_line`, so `SafeCmd.run()` and
   `SafeCmd.lines()` share one composition point. Because both entry points
   reach the consumers through this one module, a patched reader covers both. It
-  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`.
-  This boundary exists to keep `_subprocess_execution` within the Pylint module
-  ceiling once the idle-heartbeat wiring joined the stream configs; see the
+  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`;
+  `_subprocess_execution` re-exports the wiring helpers, so callers and
+  monkeypatch targets resolve the same names as before. This boundary exists to
+  keep `_subprocess_execution` within the Pylint module ceiling once the
+  idle-heartbeat wiring joined the stream configs; see the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval

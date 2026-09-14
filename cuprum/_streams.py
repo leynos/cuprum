@@ -59,7 +59,6 @@ if typ.TYPE_CHECKING:
     import codecs
     import collections.abc as cabc
 
-    from cuprum.sinks.base import OutputSession
     from cuprum.stream_observation import _StreamOperationMeasurement
 
 
@@ -388,28 +387,6 @@ async def _consume_stream_without_lines(
     )
 
 
-def _resolve_stream_sink(
-    session: OutputSession | None,
-    configured: typ.IO[str] | None,
-    fallback: typ.IO[str],
-) -> typ.IO[str]:
-    """Return the sink echoed output for one stream is written to.
-
-    A live presentation-sink session owns the destination, so mirrored output
-    lands inside the adapter's framing — the GitHub Actions group, say — in the
-    order the adapter received it. Without a session the caller-configured sink
-    wins, and the process's own stream is the last resort.
-
-    Returns
-    -------
-    typ.IO[str]
-        The destination for this stream's echoed output.
-    """
-    if session is not None:
-        return session.log
-    return fallback if configured is None else configured
-
-
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
@@ -423,7 +400,6 @@ __all__ = [
     "_drain_stream_reader_bounded",
     "_emit_line",
     "_pump_stream",
-    "_resolve_stream_sink",
     "_split_complete_lines",
     "_strip_line_ending",
     "_write_chunk",
