@@ -6,6 +6,7 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._sink_lifecycle import _open_sink_session
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
@@ -113,20 +114,10 @@ def _prepare_pipeline_config(
     # separate arguments; the developer guide forbids parallel internal
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
-    sink_session = (
-        None
-        if output.sink is None
-        else output.sink.open_session(
-            sinks.SessionStart(
-                label="pipeline",
-                argv=(),
-            ),
-        )
+    sink_session = _open_sink_session(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
     )
-    if sink_session is not None:
-        open_group = getattr(sink_session, "open_group", None)
-        if open_group is not None:
-            open_group()
     return _PipelineRunConfig(
         ctx=ctx,
         capture=output.capture,

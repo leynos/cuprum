@@ -34,6 +34,13 @@ from cuprum._pipeline_internals import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import (
+    _close_sink_session,
+    _command_session_start,
+    _open_sink_session,
+    _outcome_for_error,
+    _outcome_for_result,
+)
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
@@ -55,34 +62,19 @@ from cuprum.context import scoped as scoped
 from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
-from cuprum.sinks import base as sinks
+
+# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
+from cuprum.sinks import (
+    base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
-_DEFAULT_LABEL_SEPARATOR = ": "
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-
-
-def _run_label(cmd: SafeCmd, override: str | None) -> str:
-    """Build the bounded display label for one run.
-
-    Prefers the caller's explicit ``title`` override; otherwise falls back to
-    ``"<project>: <program>"`` from catalogue metadata. Never includes argv:
-    catalogue membership does not make arguments safe to print, so secrets
-    cannot leak into the label here.
-
-    Returns
-    -------
-    str
-        The bounded display label for the run.
-    """
-    if override is not None:
-        return override
-    return f"{cmd.project.name}{_DEFAULT_LABEL_SEPARATOR}{cmd.program}"
 
 
 # Names the aggregate raised when draining observe-hook tasks fails while a
@@ -547,98 +539,6 @@ def _prepare_execution_observation(
     )
 
 
-def _prepare_sink_session(
-    cmd: SafeCmd,
-    out: RunOutputOptions,
-) -> sinks.OutputSession | None:
-    """Open the presentation sink's session for this run, if any.
-
-    Called once per invocation before the subprocess starts. An adapter that
-    declines activation returns ``None`` and the run keeps the plain
-    destinations; there is no state to unwind in that case.
-
-    Returns
-    -------
-    sinks.OutputSession | None
-        The active session, or ``None`` when no sink is configured or the
-        adapter declines activation.
-    """
-    if out.sink is None:
-        return None
-    session = out.sink.open_session(
-        sinks.SessionStart(
-            label=_run_label(cmd, getattr(out.sink, "title", None)),
-            argv=cmd.argv_with_program,
-        ),
-    )
-    # Framing brackets the whole run: the adapter that supports eager framing
-    # (GitHub Actions groups) opens before the subprocess starts so child
-    # output can never appear above the group opening. Adapters without an
-    # eager open frame lazily on first write through ``log``.
-    open_group = getattr(session, "open_group", None)
-    if open_group is not None:
-        open_group()
-    return session
-
-
-def _close_sink_session(
-    session: sinks.OutputSession | None,
-    *,
-    outcome: sinks.SessionOutcome,
-) -> None:
-    """Finalize a presentation-sink session on any terminal path.
-
-    Called during shielded cleanup so cancellation cannot abandon the close
-    part-way. The adapter's ``close`` is idempotent by protocol, so a caller
-    that inspects the result after the run cannot double-finalize the session.
-
-    Parameters
-    ----------
-    session : sinks.OutputSession | None
-        The active session, or ``None`` when no sink was configured.
-    outcome : sinks.SessionOutcome
-        The terminal report for the run.
-    """
-    if session is None:
-        return
-    session.close(outcome)
-
-
-def _outcome_for_result(result: CommandResult) -> sinks.SessionOutcome:
-    """Map a completed command's result onto the terminal-outcome set."""
-    outcome = (
-        sinks.TerminalOutcome.EXIT_ZERO
-        if result.exit_code == 0
-        else sinks.TerminalOutcome.EXIT_NONZERO
-    )
-    return sinks.SessionOutcome(outcome=outcome, exit_code=result.exit_code)
-
-
-def _outcome_for_error(error: BaseException) -> sinks.SessionOutcome:
-    """Map a run's terminal error onto the terminal-outcome set.
-
-    The execution layer never passes exception text as the detail: only the
-    bounded categorical categories below reach the adapter, so exception
-    messages and argv cannot leak into workflow-log annotations.
-
-    Returns
-    -------
-    sinks.SessionOutcome
-        The terminal report for the run.
-    """
-    match error:
-        case TimeoutExpired():
-            return sinks.SessionOutcome(
-                outcome=sinks.TerminalOutcome.TIMEOUT,
-                exit_code=None,
-                detail="timeout",
-            )
-        case asyncio.CancelledError():
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.CANCELLED)
-        case _:
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.ERROR)
-
-
 async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
@@ -771,7 +671,10 @@ class SafeCmd:
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
-            sink_session=_prepare_sink_session(self, out),
+            sink_session=_open_sink_session(
+                out.sink,
+                _command_session_start(self, out.sink),
+            ),
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
         observation.emit("plan", _EventDetails(pid=None))
