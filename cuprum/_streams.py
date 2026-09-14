@@ -100,6 +100,30 @@ class _EchoGuard:
     disabled: bool = False
 
 
+@dc.dataclass(slots=True)
+class _MirrorCursor:
+    """Presentation-only record of whether a mirrored sink is mid-line.
+
+    Shared with the idle heartbeat, which needs to know whether the last bytes
+    echoed to the parent's stderr ended a line: a keepalive written now would
+    otherwise become the tail of an unfinished mirrored line. Recording the
+    position here, on the echo path, keeps the diagnostic free of any
+    knowledge about the child's stream, and nothing in this class can affect
+    what was captured.
+    """
+
+    is_mid_line: bool = False
+
+    def note(self, chunk: bytes) -> None:
+        """Record one written echo chunk; an empty chunk changes nothing."""
+        if chunk:
+            self.is_mid_line = not chunk.endswith(b"\n")
+
+    def is_open(self) -> bool:
+        """Return whether the mirrored sink is mid-line."""
+        return self.is_mid_line
+
+
 async def _consume_stream(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
@@ -381,6 +405,7 @@ def _flush_echo_decoder(state: _DrainState) -> None:
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_MirrorCursor",
     "_StreamConfig",
     "_WriteOutcome",
     "_close_stream_writer",
