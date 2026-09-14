@@ -728,10 +728,6 @@ class SafeCmd:
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
 
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(self)
-
         return LineStream(
             _iter_line_events(
                 _SubprocessExecution(

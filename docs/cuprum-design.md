@@ -1015,7 +1015,10 @@ independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
 consume those gates: `_spawn_subprocess` for a single command and
 `_get_stage_stream_fds` for a pipeline. For a single command, each stream
 independently becomes a `PIPE` or `DEVNULL` according to its own
-capture-or-echo-or-line-observation gate. For a pipeline, the stdout of a
+capture-or-echo-or-line-observation gate. `SafeCmd.lines()` adds its queue
+observer before spawning, so both streams remain `PIPE` for line delivery even
+when `capture=False` and echo is disabled; the resulting `CommandResult` still
+has `None` for both captured fields. For a pipeline, the stdout of a
 non-final stage is always a `PIPE` so that it can relay into the next stage,
 while the stdout of the final stage and the stderr of every stage follow their
 own independent gates.

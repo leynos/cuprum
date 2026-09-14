@@ -58,27 +58,21 @@ class _PipelineRunConfig:
         """Whether every stage's stderr must be read at all."""
         return self.stderr_capture_or_echo or self.on_line is not None
 
-    @property
-    def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
-        return _StreamConfig(
-            capture_output=self.capture,
-            echo_output=self.echo_stdout,
-            echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stdout_sink,
-            encoding=self.ctx.encoding,
-            errors=self.ctx.errors,
-            read_size=_current_read_size(),
+    def stream_config(
+        self,
+        stream: typ.Literal["stdout", "stderr"],
+    ) -> _StreamConfig:
+        """Build the requested pipeline stream's capture and echo settings."""
+        echo_output, sink = (
+            (self.echo_stdout, self.stdout_sink)
+            if stream == "stdout"
+            else (self.echo_stderr, self.stderr_sink)
         )
-
-    @property
-    def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage."""
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=self.echo_stderr,
+            echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stderr_sink,
+            sink=sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),

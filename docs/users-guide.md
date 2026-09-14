@@ -527,10 +527,13 @@ async def follow() -> None:
 After iteration completes, `stream.result` holds the same `CommandResult` a
 `run()` call would have returned, including captured output when
 `capture=True`. Iterating lines does not disable capture or echo; they stay
-independent options on `RunOutputOptions`. `max_echo_line_bytes` still bounds
-each mirrored line when echo is enabled, and `LineEvent.text` is unaffected by
-that bound: line observation reads the decoded stream, so an iterator sees the
-line the child wrote even when the mirrored copy was truncated for the sink.
+independent options on `RunOutputOptions`. Line events are still delivered when
+both are disabled with `RunOutputOptions(capture=False, echo=False)`; in that
+case `stream.result.stdout` and `stream.result.stderr` are `None`.
+`max_echo_line_bytes` still bounds each mirrored line when echo is enabled, and
+`LineEvent.text` is unaffected by that bound: line observation reads the
+decoded stream, so an iterator sees the line the child wrote even when the
+mirrored copy was truncated for the sink.
 
 The `on_line` option on `RunOutputOptions` offers the same line access as a
 callback for callers who do not want pull-based iteration. It receives the same
