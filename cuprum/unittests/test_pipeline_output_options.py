@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import dataclasses as dc
 import io
 import typing as typ
 
@@ -12,11 +13,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
+    CommandResult,
     ExecutionContext,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
+    SafeCmd,
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
@@ -225,6 +229,10 @@ _OUTPUT_OPTIONS = st.one_of(
         echo=st.booleans(),
         echo_stdout=st.none() | st.booleans(),
         echo_stderr=st.none() | st.booleans(),
+        max_echo_line_bytes=st.one_of(
+            st.none(),
+            st.integers(min_value=1, max_value=1 << 20),
+        ),
     ),
 )
 
@@ -364,45 +372,62 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     assert result.stdout == "legacy", "the deprecated flags must still capture output"
 
 
+@dc.dataclass(frozen=True)
+class _EchoRoutingCase:
+    """Expected capture values for one pipeline echo-routing run."""
+
+    capture: bool
+    expected_stdout: str | None
+    expected_stderr: str | None
+
+
 class TestPipelineEchoRouting:
     """Verify per-stream echo routing through pipeline execution."""
 
     @staticmethod
     @pytest.mark.usefixtures("stream_backend")
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(
+                _EchoRoutingCase(
+                    capture=True,
+                    expected_stdout="out\n",
+                    expected_stderr="",
+                ),
+                id="capture",
+            ),
+            pytest.param(
+                _EchoRoutingCase(
+                    capture=False,
+                    expected_stdout=None,
+                    expected_stderr=None,
+                ),
+                id="echo-only",
+            ),
+        ],
+    )
     @pytest.mark.parametrize("stream", ["stdout", "stderr"])
-    def test_pipeline_per_stream_echo_is_independent(
+    def test_pipeline_per_stream_echo_respects_capture_setting(
         python_catalogue_env: PythonCatalogue,
         *,
+        case: _EchoRoutingCase,
         stream: str,
     ) -> None:
-        """Pipeline echo of one stream leaves the other out of the parent."""
+        """Pipeline echo routing preserves the selected capture contract."""
         result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
             python_catalogue_env,
-            capture=True,
+            capture=case.capture,
             stream=stream,
         )
 
         assert result.ok is True, "the pipeline should succeed"
-        assert result.stdout == "out\n", "capture must return the final stage stdout"
-        _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
-
-    @staticmethod
-    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
-    def test_pipeline_echo_only_keeps_capture_off(
-        python_catalogue_env: PythonCatalogue,
-        *,
-        stream: str,
-    ) -> None:
-        """capture=False with one echo gate streams that stream and captures none."""
-        result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
-            python_catalogue_env,
-            capture=False,
-            stream=stream,
+        assert result.final.stdout == case.expected_stdout, (
+            f"capture={case.capture}: final stdout mismatch"
         )
-
-        assert result.ok is True, "the pipeline should succeed"
-        assert result.final.stdout is None, "capture=False must leave stdout unset"
-        assert result.final.stderr is None, "capture=False must leave stderr unset"
+        assert result.final.stderr == case.expected_stderr, (
+            f"capture={case.capture}: final stderr mismatch"
+        )
         _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
 
 
@@ -424,6 +449,21 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         run_sync = typ.cast("cabc.Callable[..., object]", pipeline.run_sync)
         with pytest.raises(TypeError, match="unexpected keyword"):
             run_sync(**unknown_output_kwargs)
+
+
+@pytest.mark.parametrize("invalid_bound", [0, -1, True])
+def test_run_output_options_rejects_invalid_echo_bound(
+    invalid_bound: int | bool,
+) -> None:
+    """Invalid ``max_echo_line_bytes`` values are rejected at construction."""
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        RunOutputOptions(max_echo_line_bytes=invalid_bound)
+
+
+def test_run_output_options_default_bound_matches_github_log_limit() -> None:
+    """The default bound mirrors the GitHub Actions 64 KiB per-line limit."""
+    assert RunOutputOptions().max_echo_line_bytes == DEFAULT_ECHO_MAX_LINE_BYTES
+    assert DEFAULT_ECHO_MAX_LINE_BYTES == 64 * 1024
 
 
 @pytest.mark.parametrize(
@@ -488,3 +528,103 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     assert result.stages[1].exit_code == 0, (
         f"capture={capture}: stage 1 exit_code mismatch"
     )
+
+
+@dc.dataclass
+class _BoundedEchoCase:
+    """Shared input and expected output for public bounded-echo tests."""
+
+    payload: str
+    bound: int
+    expected_echo: str
+    sink: io.StringIO
+    options: RunOutputOptions
+
+
+def _bounded_echo_case() -> _BoundedEchoCase:
+    """Build the common bounded output options and exact expected echo."""
+    payload = "x" * 80 + "\n"
+    bound = 50
+    return _BoundedEchoCase(
+        payload=payload,
+        bound=bound,
+        expected_echo="x" * 25 + "… [truncated 55 bytes]\n",
+        sink=io.StringIO(),
+        options=RunOutputOptions(
+            capture=True,
+            echo=True,
+            max_echo_line_bytes=bound,
+        ),
+    )
+
+
+def _assert_bounded_public_echo(
+    result: CommandResult | PipelineResult,
+    case: _BoundedEchoCase,
+) -> None:
+    """Assert a public execution captures and echoes the shared case exactly."""
+    assert result.ok is True, "the public execution should succeed"
+    assert result.stdout == case.payload, "capture must retain the complete line"
+    assert case.sink.getvalue() == case.expected_echo, (
+        "echo must retain the exact bounded prefix, marker, and newline"
+    )
+    assert len(case.sink.getvalue().encode()) <= case.bound, (
+        "the echoed bytes must not exceed max_echo_line_bytes"
+    )
+
+
+def _execute_bounded_command(
+    command: SafeCmd,
+    *,
+    is_sync: bool,
+    case: _BoundedEchoCase,
+) -> CommandResult:
+    """Execute one SafeCmd through its selected public entry point."""
+    context = ExecutionContext(stdout_sink=case.sink)
+    if is_sync:
+        return command.run_sync(output=case.options, context=context)
+    return asyncio.run(command.run(output=case.options, context=context))
+
+
+def _execute_bounded_pipeline(
+    pipeline: Pipeline,
+    *,
+    is_sync: bool,
+    case: _BoundedEchoCase,
+) -> PipelineResult:
+    """Execute one Pipeline through its selected public entry point."""
+    context = ExecutionContext(stdout_sink=case.sink)
+    if is_sync:
+        return pipeline.run_sync(output=case.options, context=context)
+    return asyncio.run(pipeline.run(output=case.options, context=context))
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
+def test_safe_command_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
+    """SafeCmd public entry points retain capture while bounding mirrored output."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    case = _bounded_echo_case()
+    command = python("-c", f"import sys; sys.stdout.write({case.payload!r})")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = _execute_bounded_command(command, is_sync=is_sync, case=case)
+
+    _assert_bounded_public_echo(result, case)
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
+def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
+    """Pipeline public entry points propagate the output bound to the final sink."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    case = _bounded_echo_case()
+    pipeline = python("-c", f"import sys; sys.stdout.write({case.payload!r})") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = _execute_bounded_pipeline(pipeline, is_sync=is_sync, case=case)
+
+    _assert_bounded_public_echo(result, case)

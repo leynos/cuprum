@@ -15,6 +15,7 @@ import typing as typ
 import warnings
 from pathlib import Path
 
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor, _validate_idle_options
 from cuprum._observability import (
@@ -54,7 +55,7 @@ from cuprum.context import scoped as scoped
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.
 from cuprum.program import (
-    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
 type _ArgValue = str | int | float | bool | Path
@@ -364,31 +365,35 @@ class StdinInput:
 
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
-    """Controls how a command's output streams are handled.
+    """Configure captured and mirrored command output.
 
-    Attributes
+    Parameters
     ----------
-    capture:
-        When ``True`` capture stdout/stderr; otherwise discard them. Capture
-        applies to both streams together and is independent of echo: a stream
-        that is not echoed is still captured while ``capture`` is ``True``.
-    echo:
-        Shorthand that sets both ``echo_stdout`` and ``echo_stderr``. Leave
-        the per-stream fields as ``None`` (the default) to inherit it.
-    echo_stdout:
-        When ``True`` tee stdout to the parent process; ``None`` inherits
-        ``echo``. Takes precedence over ``echo`` for stdout alone.
-    echo_stderr:
-        When ``True`` tee stderr to the parent process; ``None`` inherits
-        ``echo``. Takes precedence over ``echo`` for stderr alone.
-    idle_after:
+    capture : bool, default=True
+        Store stdout and stderr on the returned result. Capture is independent
+        of echoing, so a captured stream can remain silent and an echoed stream
+        can be left uncaptured.
+    echo : bool, default=False
+        Shorthand for enabling both ``echo_stdout`` and ``echo_stderr`` unless
+        either stream has an explicit override.
+    echo_stdout : bool | None, default=None
+        Whether stdout is mirrored to the execution context's stdout sink.
+        ``None`` inherits ``echo``.
+    echo_stderr : bool | None, default=None
+        Whether stderr is mirrored to the execution context's stderr sink.
+        ``None`` inherits ``echo``.
+    max_echo_line_bytes : int | None, default=64 * 1024
+        Inclusive byte bound for every echoed line, including its retained
+        bytes, truncation marker, and terminator. ``None`` restores unbounded,
+        chunk-for-chunk mirroring; captured output always remains complete.
+    idle_after : float | None, default=None
         Seconds of silence, measured across both streams, before the run
-        reports that it is still running. ``None`` (the default) disables idle
-        reporting and costs nothing: no watchdog, no timer, no extra pipe.
-        The interval must be finite and strictly positive. Reporting describes
-        the absence of observed output — never a deadlock diagnosis — and can
-        neither terminate the child nor extend its timeout.
-    on_idle:
+        reports that it is still running. ``None`` disables idle reporting and
+        costs nothing: no watchdog, no timer, no extra pipe. The interval must
+        be finite and strictly positive. Reporting describes the absence of
+        observed output — never a deadlock diagnosis — and can neither
+        terminate the child nor extend its timeout.
+    on_idle : cabc.Callable[[float, float], None] | None, default=None
         Synchronous ``(elapsed_total, elapsed_idle)`` callback, in seconds,
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
@@ -409,6 +414,7 @@ class RunOutputOptions:
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
+    max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
 
@@ -425,6 +431,17 @@ class RunOutputOptions:
             self.echo if self.echo_stderr is None else self.echo_stderr,
         )
         _validate_idle_options(self.idle_after, self.on_idle)
+
+        if self.max_echo_line_bytes is None:
+            return
+        bound = self.max_echo_line_bytes
+        is_positive_int = isinstance(bound, int) and not isinstance(bound, bool)
+        if not is_positive_int or bound <= 0:
+            msg = (
+                "RunOutputOptions max_echo_line_bytes must be a positive "
+                f"integer or None, got {bound!r}"
+            )
+            raise ValueError(msg)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:
@@ -577,8 +594,11 @@ class SafeCmd:
     """Typed representation of a curated command ready for execution."""
 
     program: Program
+
     argv: tuple[str, ...]
+
     project: ProjectSettings
+
     __weakref__: object = dc.field(
         init=False,
         repr=False,
@@ -605,9 +625,7 @@ class SafeCmd:
         self,
         *,
         output: RunOutputOptions | None = None,
-        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
-        # not a callee-owned deadline; keeping it is a deliberate design choice.
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
@@ -615,29 +633,33 @@ class SafeCmd:
 
         Parameters
         ----------
-        output:
-            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-        stdin:
-            Optional ``StdinInput`` data to feed to the subprocess.
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. Its 64 KiB default bounds each mirrored
+            line without affecting capture; set ``max_echo_line_bytes=None``
+            for unbounded mirroring.
+        timeout : float | None, default=None
+            Maximum execution time in seconds. An explicit value overrides the
+            timeout in ``context``.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
 
         Returns
         -------
         CommandResult
-            Structured information about the completed process.
+            The command outcome, including complete captured streams when
+            ``output.capture`` is true.
 
         Raises
         ------
-        ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the command completes.
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
         UnicodeEncodeError
-            If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+            If text stdin cannot be encoded by the execution context.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through execution helpers
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
@@ -647,17 +669,10 @@ class SafeCmd:
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
         )
-        observation = _prepare_execution_observation(
-            self,
-            ctx,
-            tracking,
-            out,
-        )
-
+        observation = _prepare_execution_observation(self, ctx, tracking, out)
         observation.emit("plan", _EventDetails(pid=None))
         for hook in tracking.execution_hooks.before_hooks:
             hook(self)
-
         return await _execute_with_hooks(
             self,
             _SubprocessExecution(
@@ -666,6 +681,7 @@ class SafeCmd:
                 capture=out.capture,
                 echo_stdout=out.resolved_echo[0],
                 echo_stderr=out.resolved_echo[1],
+                max_echo_line_bytes=out.max_echo_line_bytes,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -692,22 +708,34 @@ class SafeCmd:
     ) -> CommandResult:
         """Execute the command synchronously.
 
-        Mirrors :meth:`run`; all parameters and return semantics are identical.
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. The default limits each mirrored line to
+            64 KiB; ``max_echo_line_bytes=None`` restores unbounded echoing
+            while preserving the same capture contract.
+        timeout : float | None, default=None
+            Maximum execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
 
         Returns
         -------
         CommandResult
-            Structured information about the completed process.
+            The command outcome, including complete captured streams when
+            enabled.
 
         Raises
         ------
-        ForbiddenProgramError
-            If the program is not permitted by the active context allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the command completes.
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
         UnicodeEncodeError
-            If ``stdin`` text cannot be encoded with the context's encoding.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+            If text stdin cannot be encoded by the execution context.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
@@ -753,9 +781,7 @@ class Pipeline:
         self,
         *,
         output: RunOutputOptions | None = None,
-        # ASYNC109: `timeout` is public API mirroring subprocess.run(timeout=…),
-        # not a callee-owned deadline; keeping it is a deliberate design choice.
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
@@ -763,39 +789,34 @@ class Pipeline:
 
         Parameters
         ----------
-        output:
-            Optional ``RunOutputOptions`` controlling stdout/stderr handling,
-            mirroring :meth:`SafeCmd.run`. Defaults to ``RunOutputOptions()``
-            (capture on, echo off).
-        timeout:
-            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
-        context:
-            Optional execution settings such as env, cwd, and cancel grace.
-        deprecated_flags:
-            Deprecated flat ``capture`` / ``echo`` flags retained for
-            backwards compatibility; pass ``output=RunOutputOptions(...)``
-            instead. Supplying either emits a ``DeprecationWarning``;
-            combining them with ``output`` raises ``ValueError``.
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings for every observed pipeline stream. The
+            default bounds each echoed line to 64 KiB; ``None`` for
+            ``max_echo_line_bytes`` restores unbounded mirroring without
+            changing capture.
+        timeout : float | None, default=None
+            Maximum pipeline execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        **deprecated_flags : bool
+            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
+            combine them with ``output``.
 
         Returns
         -------
         PipelineResult
-            Structured per-stage results for the completed pipeline.
+            The outcome for every stage and complete captured streams when
+            capture is enabled.
 
         Raises
         ------
-        ForbiddenProgramError
-            If any stage's program is not permitted by the active context
-            allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the pipeline completes.
-        TypeError
-            If ``deprecated_flags`` contains keys other than ``capture`` or
-            ``echo``.
         ValueError
-            If ``output`` is combined with the deprecated ``capture``/``echo``
-            flags.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
+            If ``output`` is combined with deprecated flags.
+        PermissionError
+            If a pipeline command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through pipeline helpers
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
@@ -815,36 +836,38 @@ class Pipeline:
     ) -> PipelineResult:
         """Execute the pipeline synchronously via ``asyncio.run``.
 
-        Mirrors :meth:`run`; all parameters and return semantics are identical,
-        including the deprecation of the flat ``capture``/``echo`` flags.
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. The 64 KiB default bounds mirrored lines;
+            ``max_echo_line_bytes=None`` restores unbounded echoing while
+            leaving captured output complete.
+        timeout : float | None, default=None
+            Maximum pipeline execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        **deprecated_flags : bool
+            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
+            combine them with ``output``.
 
         Returns
         -------
         PipelineResult
-            Structured per-stage results for the completed pipeline.
+            The outcome for every stage and complete captured streams when
+            capture is enabled.
 
         Raises
         ------
-        ForbiddenProgramError
-            If any stage's program is not permitted by the active context
-            allowlist.
-        TimeoutExpired
-            If *timeout* elapses before the pipeline completes.
-        TypeError
-            If an unexpected deprecated output keyword argument is supplied.
         ValueError
-            If ``output`` is combined with the deprecated ``capture``/``echo``
-            flags.
-        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and output resolver
-        # Resolve here so the DeprecationWarning points at the caller rather
-        # than at the internal ``self.run`` delegation.
+            If ``output`` is combined with deprecated flags.
+        PermissionError
+            If a pipeline command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         out = _resolve_pipeline_output(output, deprecated_flags)
         return asyncio.run(
-            self.run(
-                output=out,
-                timeout=timeout,
-                context=context,
-            ),
+            self.run(output=out, timeout=timeout, context=context),
         )
 
 

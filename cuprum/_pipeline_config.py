@@ -20,11 +20,19 @@ class _PipelineRunConfig:
     """Normalized runtime options for pipeline execution."""
 
     ctx: ExecutionContext
+
     capture: bool
+
     echo_stdout: bool
+
     echo_stderr: bool
+
+    max_echo_line_bytes: int | None
+
     timeout: float | None
+
     stdout_sink: typ.IO[str]
+
     stderr_sink: typ.IO[str]
     idle: _IdleMonitor | None = None
 
@@ -44,6 +52,7 @@ class _PipelineRunConfig:
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stdout,
+            echo_max_line_bytes=self.max_echo_line_bytes,
             sink=self.stdout_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
@@ -56,6 +65,7 @@ class _PipelineRunConfig:
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stderr,
+            echo_max_line_bytes=self.max_echo_line_bytes,
             sink=self.stderr_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
@@ -72,7 +82,7 @@ def _prepare_pipeline_config(
     timeout: float | None,
     context: ExecutionContext | None,
 ) -> _PipelineRunConfig:
-    """Normalize runtime options for pipeline execution."""
+    """Normalize runtime options for pipeline execution from one options object."""
     # Deferred, unlike the module-scope import in ``_pipeline_results``: this
     # module is imported by ``_pipeline_streams``, which ``_pipeline_collect``
     # imports, so hoisting the import would close the cycle rather than avoid
@@ -93,6 +103,7 @@ def _prepare_pipeline_config(
         capture=output.capture,
         echo_stdout=echo_stdout,
         echo_stderr=echo_stderr,
+        max_echo_line_bytes=output.max_echo_line_bytes,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

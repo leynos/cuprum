@@ -8,6 +8,7 @@ these tests rather than leaving them green against a stub.
 from __future__ import annotations
 
 import asyncio
+import io
 import typing as typ
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.adapters.echo_metrics import (
     ECHO_ENCODING_FAILURES_TOTAL,
+    ECHO_TRUNCATIONS_TOTAL,
     EchoMetricsHook,
     echo_metrics_hook,
 )
@@ -128,6 +130,31 @@ def test_independent_streams_produce_one_increment_each() -> None:
     streams = [labels["stream"] for _name, _value, labels in collector.counters]
     assert streams == ["stdout", "stderr"], (
         f"each stream must be labelled once, found streams={streams!r}"
+    )
+
+
+def test_successful_bounded_truncation_increments_its_own_series() -> None:
+    """A successfully echoed truncation has its own stream-only metric."""
+    collector = RecordingCollector()
+    sink = io.StringIO()
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=True,
+        echo_max_line_bytes=50,
+        sink=sink,
+        encoding="utf-8",
+        errors="strict",
+        stream=EchoStream.STDOUT,
+    )
+
+    with observe_echo(EchoMetricsHook(collector)):
+        asyncio.run(_drain(_echo_reader((b"x" * 80 + b"\n",)), config))
+
+    assert collector.counters == [
+        (ECHO_TRUNCATIONS_TOTAL, 1.0, {"stream": "stdout"})
+    ], (
+        "successful truncation must increment only its own metric: "
+        f"{collector.counters!r}"
     )
 
 
