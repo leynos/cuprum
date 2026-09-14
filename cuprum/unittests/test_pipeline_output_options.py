@@ -26,6 +26,9 @@ from cuprum.sh import (
 )
 from tests.helpers.catalogue import PythonCatalogue, python_catalogue
 
+if typ.TYPE_CHECKING:
+    from cuprum.lines import LineEvent
+
 type PipelineExecuteFn = cabc.Callable[[Pipeline, dict[str, typ.Any]], PipelineResult]
 
 
@@ -628,3 +631,99 @@ def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
         result = _execute_bounded_pipeline(pipeline, is_sync=is_sync, case=case)
 
     _assert_bounded_public_echo(result, case)
+
+
+# The producer names its streams so the final stage's stdout is distinguishable
+# from the intermediate stage's; the consumer relays stdin and adds its own
+# stderr line, so every stage contributes an observable stderr event.
+_LINE_OBSERVATION_PRODUCER = (
+    "import sys; print('p-out'); print('p-err', file=sys.stderr)"
+)
+_LINE_OBSERVATION_CONSUMER = (
+    "import sys; sys.stdout.write(sys.stdin.read()); print('c-err', file=sys.stderr)"
+)
+
+# The final stage's stdout, plus every stage's stderr. The intermediate stage's
+# stdout is relayed into the next stage rather than observed.
+_EXPECTED_OBSERVED_LINES = {
+    ("stdout", "p-out"),
+    ("stderr", "p-err"),
+    ("stderr", "c-err"),
+}
+
+
+def _line_observation_pipeline() -> tuple[Pipeline, frozenset[Program]]:
+    """Build a two-stage pipeline where each stage writes to both streams."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", _LINE_OBSERVATION_PRODUCER)
+    consumer = python("-c", _LINE_OBSERVATION_CONSUMER)
+    return producer | consumer, frozenset([python_program])
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_on_line_observes_without_capture_or_echo() -> None:
+    """A registered ``on_line`` keeps the pipes open on its own.
+
+    Every stage's stderr and the final stage's stdout are consumed for line
+    observation even though capture and echo are both off, so the callback —
+    not DEVNULL — receives them.
+    """
+    events: list[LineEvent] = []
+    pipeline, allowlist = _line_observation_pipeline()
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = pipeline.run_sync(
+            output=RunOutputOptions(
+                capture=False,
+                echo=False,
+                on_line=events.append,
+            ),
+        )
+
+    observed = {(event.stream, event.text) for event in events}
+    assert observed == _EXPECTED_OBSERVED_LINES, (
+        f"on_line must observe the final stdout and every stderr, got {observed!r}"
+    )
+    assert result.ok is True, "the pipeline should succeed"
+    assert result.final.stdout is None, (
+        "capture=False must leave stdout unset even while lines are observed"
+    )
+    assert result.final.stderr is None, (
+        "capture=False must leave stderr unset even while lines are observed"
+    )
+    assert all(event.at >= 0.0 for event in events), (
+        "line stamps must be monotonic seconds since the stage started"
+    )
+
+
+@pytest.mark.usefixtures("stream_backend")
+def test_pipeline_on_line_composes_with_capture_and_echo() -> None:
+    """Line observation is additive: capture and echo still happen."""
+    events: list[LineEvent] = []
+    stdout_sink = io.StringIO()
+    pipeline, allowlist = _line_observation_pipeline()
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = pipeline.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo=True,
+                on_line=events.append,
+            ),
+            context=ExecutionContext(
+                stdout_sink=typ.cast("typ.IO[str]", stdout_sink),
+                stderr_sink=typ.cast("typ.IO[str]", io.StringIO()),
+            ),
+        )
+
+    observed = {(event.stream, event.text) for event in events}
+    assert observed == _EXPECTED_OBSERVED_LINES, (
+        f"capture and echo must not suppress line observation, got {observed!r}"
+    )
+    assert result.stdout == "p-out\n", (
+        f"capture must still return the final stage stdout, got {result.stdout!r}"
+    )
+    assert stdout_sink.getvalue() == "p-out\n", (
+        f"echo must still reach the configured sink, got {stdout_sink.getvalue()!r}"
+    )

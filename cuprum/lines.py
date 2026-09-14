@@ -21,6 +21,14 @@ from time import (
 type LineStreamName = typ.Literal["stdout", "stderr"]
 type LineHook = cabc.Callable[[LineEvent], None]
 
+# ``LineHook`` is the public, synchronous contract. Internally a hook may also
+# return an awaitable, which the drain loop awaits before reading on: that is
+# the seam ``SafeCmd.lines()`` uses to park a bounded queue's producer instead
+# of dropping an event or retaining it without limit. A hook that returns
+# ``None`` — every ``LineHook`` — is invoked and never awaited.
+type _LineHookOutcome = cabc.Awaitable[None] | None
+type _LineHookFn = cabc.Callable[[LineEvent], _LineHookOutcome]
+
 
 @dc.dataclass(frozen=True, slots=True)
 class LineEvent:

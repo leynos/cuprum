@@ -1291,8 +1291,14 @@ from the `_TimeoutFallback`.
 The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
-- `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+- `cuprum/_subprocess_execution.py` owns runner orchestration and spawning: it
+  drives a run to completion and assembles the `CommandResult`.
+- `cuprum/_subprocess_consumers.py` owns what reads each pipe: it pairs the
+  spawned process's stdout and stderr with their consumer tasks, and composes
+  each stream's per-line callback from the observe hooks and the caller's
+  `on_line`. Both `SafeCmd.run()` and `SafeCmd.lines()` reach it, so line
+  observation is wired in exactly one place. Split out of
+  `_subprocess_execution` to keep that module under the module-size limit.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
@@ -2239,7 +2245,8 @@ stateDiagram-v2
     Streaming --> Streaming: yield LineEvent
     Streaming --> Completed: CommandResult published
     Completed --> Closed: result exposed
-    Streaming --> Cancelling: break, aclose(), or cancellation
+    Streaming --> Cancelling: aclose() or cancellation
+    Streaming --> Streaming: break (stream still open)
     Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
     Terminated --> Closed: consumers drained
     Streaming --> TimedOut: timeout

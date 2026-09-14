@@ -39,14 +39,16 @@ def _get_stage_stream_fds(
     idx: int,
     last_idx: int,
     *,
-    stdout_capture_or_echo: bool,
-    stderr_capture_or_echo: bool,
+    stdout_consumed: bool,
+    stderr_consumed: bool,
 ) -> _StageStreamConfig:
     """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode.
 
     A non-final stage always pipes stdout so its output can relay into the
     next stage's stdin, regardless of capture or echo. The final stage's
-    stdout and every stage's stderr follow their own capture-or-echo gate.
+    stdout and every stage's stderr follow their own "consumed" gate, which
+    covers capture, echo, and line observation alike: a stage whose stream
+    nothing reads gets ``DEVNULL``, so no pipe is left open without a reader.
 
     Returns
     -------
@@ -56,14 +58,10 @@ def _get_stage_stream_fds(
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
-        if idx != last_idx or stdout_capture_or_echo
+        if idx != last_idx or stdout_consumed
         else asyncio.subprocess.DEVNULL
     )
-    stderr = (
-        asyncio.subprocess.PIPE
-        if stderr_capture_or_echo
-        else asyncio.subprocess.DEVNULL
-    )
+    stderr = asyncio.subprocess.PIPE if stderr_consumed else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 @dc.dataclass(frozen=True, slots=True)
@@ -100,17 +98,20 @@ def _create_stage_capture_tasks(
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
+    # Every stage's stderr is observed for lines, so the caller's ``on_line``
+    # runs here too; the consumer itself is created whenever the stream is
+    # consumed at all, which includes line observation with capture and echo off.
     stderr_on_line = _compose_line_callbacks(
         observation,
         _LineEmissionContext(
             stream="stderr",
             pid=process.pid,
-            on_line=None,
+            on_line=config.on_line,
             started_at=request.started_at,
         ),
     )
 
-    if config.stderr_capture_or_echo:
+    if config.stderr_consumed:
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
@@ -133,12 +134,12 @@ def _create_stage_capture_tasks(
         _LineEmissionContext(
             stream="stdout",
             pid=process.pid,
-            on_line=None,
+            on_line=config.on_line,
             started_at=request.started_at,
         ),
     )
 
-    if config.stdout_capture_or_echo:
+    if config.stdout_consumed:
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
