@@ -16,6 +16,8 @@ import warnings
 from pathlib import Path
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._idle_diagnostic import _idle_subject
+from cuprum._idle_heartbeat import _build_idle_monitor, _validate_idle_options
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -384,6 +386,28 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+    idle_after : float | None, default=None
+        Seconds of silence, measured across both streams, before the run
+        reports that it is still running. ``None`` disables idle reporting and
+        costs nothing: no watchdog, no timer, no extra pipe. The interval must
+        be finite and strictly positive. Reporting describes the absence of
+        observed output — never a deadlock diagnosis — and can neither
+        terminate the child nor extend its timeout.
+    on_idle : cabc.Callable[[float, float], None] | None, default=None
+        Synchronous ``(elapsed_total, elapsed_idle)`` callback, in seconds,
+        invoked once per idle interval in place of the built-in stderr
+        keepalive. It must not block for long: it runs on the run's own event
+        loop. Requires ``idle_after``.
+
+    Examples
+    --------
+    >>> options = RunOutputOptions(capture=True, echo=True)
+    >>> options.resolved_echo
+    (True, True)
+    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False).resolved_echo
+    (False, True)
+    >>> RunOutputOptions(capture=False, idle_after=30.0).capture
+    False
     """
 
     capture: bool = True
@@ -391,6 +415,8 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+    idle_after: float | None = None
+    on_idle: cabc.Callable[[float, float], None] | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -404,6 +430,7 @@ class RunOutputOptions:
             "echo_stderr",
             self.echo if self.echo_stderr is None else self.echo_stderr,
         )
+        _validate_idle_options(self.idle_after, self.on_idle)
 
         if self.max_echo_line_bytes is None:
             return
@@ -658,6 +685,15 @@ class SafeCmd:
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
+                # Built here but armed by the run itself, once the child is
+                # actually running: everything above this line is the parent's
+                # work, and must not read as the child's silence.
+                idle=_build_idle_monitor(
+                    out.idle_after,
+                    out.on_idle,
+                    _idle_subject(str(self.program)),
+                    ctx.stderr_sink,
+                ),
             ),
             tracking,
         )

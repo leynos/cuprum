@@ -965,6 +965,18 @@ default is 64 KiB, and the bound includes retained child bytes, the encoded
 is independent of read boundaries, so a `\r` held at the end of one read is
 accounted as part of the ending when the following read supplies `\n`.
 
+A third reason the parent reads a child's stream is idle reporting: when
+`idle_after` is set, a run-owned heartbeat emits one keepalive line for every
+interval in which no monitored stream produces output, and any non-empty read
+resets the timer. The line reports the absence of observed output — it is not a
+deadlock or CPU diagnosis, it never terminates a child, and it never extends a
+timeout. For a single command either stream resets it; for a pipeline only the
+final stage's stdout and every stage's stderr do, never an inter-stage
+transfer, hence the label `pipeline output idle`. The line goes to the parent's
+stderr sink, resolved at emission time, so it never enters capture, echo, line
+observers, or the activity tracker. An `on_idle` callback is synchronous and
+replaces the built-in renderer rather than joining it.
+
 Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
 
@@ -975,11 +987,12 @@ independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
 consume those gates: `_spawn_subprocess` for a single command and
 `_get_stage_stream_fds` for a pipeline. For a single command, each stream
 independently becomes a `PIPE` or `DEVNULL` according to its own
-capture-or-echo gate. For a pipeline, the stdout of a non-final stage is always
-a `PIPE` so that it can relay into the next stage, while the stdout of the
-final stage and the stderr of every stage follow their own independent gates.
-`capture` remains a single joint switch, so both streams are still captured when
-`capture=True` even if neither echoes. The flow ends at the stream consumers:
+parent-consumption gate (capture, that stream's echo, or idle reporting). For a
+pipeline, the stdout of a non-final stage is always a `PIPE` so that it can
+relay into the next stage, while the stdout of the final stage and the stderr
+of every stage follow their own independent gates. `capture` remains a single
+joint switch, so both streams are still captured when `capture=True` even if
+neither echoes. The flow ends at the stream consumers:
 `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 
@@ -989,13 +1002,13 @@ flowchart TD
     B --> C{Execution path}
     C -->|single command| D[_spawn_subprocess]
     C -->|pipeline| E[_get_stage_stream_fds]
-    D --> F{capture or stream echo enabled}
+    D --> F{capture, stream echo, or idle reporting enabled}
     F -->|stdout gate| G[stdout PIPE or DEVNULL]
     F -->|stderr gate| H[stderr PIPE or DEVNULL]
     G --> I[_spawn_stream_consumers]
     H --> I
     E --> J[non-final stdout always PIPE for relay]
-    E --> K[final stdout and every stderr use independent gates]
+    E --> K[final stdout and every stderr use independent consumption gates]
     J --> L[_create_stage_capture_tasks]
     K --> L
     I --> M[Capture remains joint when capture is true]
@@ -2118,7 +2131,9 @@ are:
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
-for compatibility.
+for compatibility. The bounded echo renderer sits beside the drain loop in
+`cuprum/_stream_echo.py`, which owns the sink write, the incremental decoder,
+and the cursor recording where a mirrored sink ended up.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The
@@ -2132,10 +2147,10 @@ captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
-`RunOutputOptions.max_echo_line_bytes` is set, `_streams.py` splits raw reads
-with `_echo_truncation.py` and keeps a per-stream limiter across chunks. The
-limiter reserves space for the encoded truncation marker and line ending, so
-each mirrored line stays within the inclusive byte bound; it resets its body
+`RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw
+reads with `_echo_truncation.py` and keeps a per-stream limiter across chunks.
+The limiter reserves space for the encoded truncation marker and line ending,
+so each mirrored line stays within the inclusive byte bound; it resets its body
 and dropped-byte counters at every line boundary. A carriage return is held
 until the next byte identifies CRLF, which keeps a CRLF ending equivalent when
 reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
