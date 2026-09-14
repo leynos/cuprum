@@ -31,8 +31,6 @@
   evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
-[^1]: <https://github.com/leynos/cuprum/issues/348>
-
 [^2]: <https://github.com/leynos/cuprum/issues/356>
 
 ### Added
@@ -250,5 +248,3 @@
   terminal `teardown_error`); the registry of open spans is now bounded and
   evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
-
-[^1]: <https://github.com/leynos/cuprum/issues/348>
