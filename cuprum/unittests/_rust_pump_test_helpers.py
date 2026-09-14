@@ -16,12 +16,17 @@ import dataclasses as dc
 import os
 import sys
 import threading
+import time
 import types
 import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -62,6 +67,41 @@ class RecordingCollector:
     def counter_names(self) -> list[str]:
         """Return the names of the counters recorded, in call order."""
         return [name for name, _value, _labels in self.counters]
+
+
+@dc.dataclass(slots=True)
+class ControllableMonotonicClock:
+    """A monotonic clock double advanced explicitly by a timing test."""
+
+    value: float = 0.0
+
+    def __call__(self) -> float:
+        """Return the current simulated monotonic time."""
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        """Advance simulated time by a non-negative test-controlled duration."""
+        self.value += seconds
+
+
+@dc.dataclass(slots=True)
+class HeldNativePump:
+    """Worker double held past cancellation grace until a test releases it."""
+
+    started: threading.Event = dc.field(default_factory=threading.Event)
+    release: threading.Event = dc.field(default_factory=threading.Event)
+    finished: threading.Event = dc.field(default_factory=threading.Event)
+
+    def __call__(self, reader_fd: int, writer_fd: int) -> int:
+        """Hold native descriptor ownership until ``release`` is set."""
+        del reader_fd, writer_fd
+        self.started.set()
+        deadline = time.monotonic() + 5.0
+        if not self.release.wait(timeout=max(0.0, deadline - time.monotonic())):
+            msg = "held native worker was not released before its deadline"
+            raise TimeoutError(msg)
+        self.finished.set()
+        return 0
 
 
 def fail_engage(**_kwargs: object) -> object:
@@ -162,8 +202,24 @@ def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     )
 
 
-def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
+def decline_on_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose platform cannot safely use the native pump."""
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_native_pump_supported_on_platform",
+        lambda: False,
+    )
+    reader = typ.cast("asyncio.StreamReader", object())
+    asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
+
+
+def decline_on_missing_fds(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose streams expose no raw descriptors."""
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_native_pump_supported_on_platform",
+        lambda: True,
+    )
     reader = typ.cast("asyncio.StreamReader", object())
     asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
 
@@ -212,8 +268,11 @@ def run_raw_fd_pump() -> bool:
             _pipeline_streams._pump_over_raw_fds(
                 reader=reader,
                 writer=None,
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
+                handoff=_pipeline_streams._RustPumpHandoff(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
 
@@ -255,7 +314,7 @@ async def run_fake_pump(
     """Run a fake Rust pump over descriptors owned by this helper."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -275,7 +334,7 @@ async def cancel_fake_pump(
     """Cancel a live fake worker, then release it for callback cleanup."""
     install_fake_pump(monkeypatch, pump)
     with owned_fds() as (reader_fd, writer_fd):
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -361,7 +420,7 @@ async def _drive_cancelled_pump(
     writer_fd: int,
 ) -> None:
     """Cancel an in-flight pump over ``reader_fd``/``writer_fd``."""
-    state = _pipeline_streams._RustPumpState(
+    state = _pipeline_stream_native_cleanup._RustPumpState(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
         blocking_mode_guard=typ.cast(
@@ -400,7 +459,10 @@ def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None
         """Fail after the cancellation has been delivered."""
         del reader_fd, writer_fd
         worker_started.set()
-        release.wait(timeout=5.0)
+        deadline = time.monotonic() + 5.0
+        if not release.wait(timeout=max(0.0, deadline - time.monotonic())):
+            msg = "cancelled native worker was not released before its deadline"
+            raise TimeoutError(msg)
         msg = "the pump failed while the hop was being cancelled"
         raise OSError(msg)
 
@@ -411,6 +473,7 @@ def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None
 DECLINE_PATHS: tuple[
     tuple[str, cabc.Callable[[pytest.MonkeyPatch], None], str], ...
 ] = (
+    ("unsupported_platform", decline_on_unsupported_platform, "platform_unsupported"),
     ("missing_fds", decline_on_missing_fds, "raw_fd_unavailable"),
     ("pause_failure", decline_on_pause_failure, "reader_pause_failed"),
     ("blocking_failure", decline_on_blocking_failure, "blocking_mode_unavailable"),

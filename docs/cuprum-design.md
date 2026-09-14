@@ -849,19 +849,21 @@ The concrete shape is an implementation detail, but the design assumes:
 
 Rust-pump declines, failures recovered after cancellation, and native cleanup
 are routing facts, not command lifecycle phases. They are therefore represented
-by `PumpEvent` on the separate `observe_pump` channel. Its
-`phase="cleanup_started"` event marks cancellation beginning to wait for the
-native worker, while `phase="cleanup_completed"` marks the worker releasing
-descriptor ownership. The latter carries `PumpEvent.duration_s`, the monotonic
-cleanup wait duration; other phases leave it unset. Cleanup is required because
-the executor worker retains descriptor ownership until it settles.
+by `PumpEvent` on the separate `observe_pump` channel. `cleanup_started` marks
+cancellation beginning to wait for the native worker, while `cleanup_completed`
+marks normal release of descriptor ownership and carries
+`PumpEvent.duration_s`. If `ExecutionContext.native_pump_cleanup_grace` expires
+first, `cleanup_grace_expired` carries `PumpEvent.elapsed_s`, the caller
+receives its original `CancelledError`, and `cleanup_deferred` reports eventual
+callback cleanup after the uninterruptible worker settles.
 
-`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each
-completed native cleanup and one observation of
-`cuprum_rust_pump_cleanup_duration_seconds` for each such cleanup. Both cleanup
-metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
-bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
-counters without extending the closed `ExecPhase` contract. See
+`PumpMetricsHook` emits `cuprum_rust_pump_cleanup_total` once for each normal
+cleanup and one observation of `cuprum_rust_pump_cleanup_duration_seconds`. The
+unlabelled `cuprum_rust_pump_cleanup_grace_expired_total` and
+`cuprum_rust_pump_cleanup_deferred_total` count the bounded and eventual sides
+of deferred cleanup. `RustPumpDeclineReason` bounds the `reason` label on the
+decline metric, and `PumpMetricsHook` emits counters without extending the
+closed `ExecPhase` contract. See
 [ADR-008](adr-008-rust-pump-observation-channel.md).
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
@@ -870,13 +872,15 @@ same `TracingHook` on both `sh.observe(hook)` and
 `observe_pump(hook.record_pump_event)`. For an inter-stage hop, each cleanup
 event carries the source stage's existing `ExecId` solely for lookup of its
 open pipeline-stage span; it is not a trace attribute, and the correlation does
-not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins and
-`cuprum.cleanup_completed` when descriptor ownership is released. Both events
-have `operation="native_pump_cleanup"` and a bounded `outcome` (`"started"` or
-`"completed"`); only completion has `duration_s`, the monotonic cleanup wait in
-seconds. Descriptor numbers, command arguments, exception text, and other
-unbounded values are excluded. Events without a matching active span are
-dropped, and cleanup events neither set span status nor end the span.
+not use a PID. The hook records `cuprum.cleanup_started` when cleanup begins,
+`cuprum.cleanup_completed` on normal completion, `cuprum.cleanup_grace_expired`
+when the caller returns, and `cuprum.cleanup_deferred` when the callback later
+completes. Every event has `operation="native_pump_cleanup"` and a bounded
+`outcome`; normal completion carries `duration_s`, while grace expiry carries
+`elapsed_s`, both in monotonic seconds. Descriptor numbers, command arguments,
+exception text, and other unbounded values are excluded. Events without a
+matching active span are dropped, and cleanup events neither set span status
+nor end the span.
 
 ### 7.2 Logging via `logging`
 
@@ -2155,9 +2159,14 @@ operations. Both pathways remain available and are treated as first-class:
 
 The native Rust functions are exported from `cuprum._rust_backend_native`. A
 thin Python shim module `cuprum._streams_rs` re-exports the stream functions
-and performs any platform-specific file descriptor conversion (for example,
-translating Windows file descriptors into OS handles). This keeps the native
-module name stable while allowing Python-only adaptations.
+and performs any platform-specific conversion required by direct extension
+calls. This keeps the native module name stable while allowing Python-only
+adaptations. The pipeline dispatcher does not pass Windows asyncio
+subprocess-pipe handles to the native pump: ProactorEventLoop supplies
+overlapped handles, whilst the Rust implementation currently performs
+synchronous `std::fs::File` I/O and does not provide the required `OVERLAPPED`
+state. Native Windows wheels and direct Rust extension calls remain available;
+only the asyncio subprocess-pipe pumping path is restricted.
 
 The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
@@ -2417,6 +2426,11 @@ Cuprum selects the stream backend at runtime using the following precedence:
      for both reader and writer transports;
    - if extraction fails for either side, dispatch falls back to Python
      `_pump_stream()` for that transfer;
+   - on Windows, dispatch declines the native pump with
+     `platform_unsupported` before touching the asyncio transport, because
+     ProactorEventLoop subprocess pipes use overlapped handles that the
+     synchronous Rust I/O path cannot safely use; the Python pump preserves
+     pipeline correctness;
    - the Rust pump implementation itself lives in `cuprum._streams_rs` and is
      only entered after `get_stream_backend()` resolves `StreamBackend.RUST`.
 
@@ -2597,8 +2611,9 @@ explicitly.
 ### 13.6 Thread Safety and Asyncio Integration
 
 The Rust extension releases the GIL during I/O operations, allowing other
-Python threads and asyncio tasks to proceed. Integration with asyncio uses
-`loop.run_in_executor()`.
+Python threads and asyncio tasks to proceed. Integration with asyncio uses the
+dedicated native-pump executor, which is kept outside `asyncio.run()`'s
+default-executor shutdown.
 
 The dispatcher itself only chooses; `_try_rust_pump` owns the whole attempt and
 reports whether it succeeded, so the caller never runs the native pump itself:
@@ -2640,13 +2655,14 @@ asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate.
 Python closes that duplicate if blocking-mode setup or executor submission
 fails. Once submission succeeds, the `_streams_rs` shim owns the hand-off: it
 closes the duplicate if native loading or platform preparation fails, otherwise
-the native call transfers it to Rust, which closes the received resource. On
-Windows the shim converts the duplicate to an independently owned Win32 handle
-and closes the duplicate CRT descriptor before invoking Rust. The completion
-callback never closes the writer resource. Restoration of the original
-descriptor modes and reader transport resumption remain tied to worker
-settlement, so cancellation of the awaiting task cannot close or reuse a
-descriptor while native I/O is still running.
+the native call transfers it to Rust, which closes the received resource. The
+pipeline declines before this hand-off on Windows, so the shim's direct-call
+conversion of Windows descriptors does not make asyncio Proactor handles safe
+for the synchronous native pump. The completion callback never closes the
+writer resource. Restoration of the original descriptor modes and reader
+transport resumption remain tied to worker settlement, so cancellation of the
+awaiting task cannot close or reuse a descriptor while native I/O is still
+running.
 
 #### Raw descriptor lifecycle
 
@@ -2682,13 +2698,66 @@ each path is testable without a live pump:
   undone, and the Python fallback reads the same stream and would wait forever
   on a reader nothing can restart.
 
-Cancellation is handled explicitly rather than implicitly. `run_in_executor`
-cannot interrupt the worker thread running the Rust pump, and that thread still
-operates with the borrowed reader and Rust-owned writer resource, so cancelling
-the awaiting task waits for the worker to return before the blocking mode is
-restored and the transport resumed. The original writer descriptor remains
-asyncio-owned throughout. Restoring or resuming earlier would hand the reader
-or writer state back to asyncio while native code was still mid-transfer.
+Cancellation is handled explicitly rather than implicitly. The dedicated
+executor cannot interrupt the worker thread running the Rust pump, but it is
+kept outside `asyncio.run()`'s default-executor shutdown. The hand-off gives
+native I/O and its callback their own duplicates, leaving asyncio transport
+descriptors safe for pipeline teardown. Cancelling the awaiting task waits only
+until `native_pump_cleanup_grace`; on expiry it re-raises `CancelledError` and
+retains the executor future. Once submission succeeds, Rust owns the submitted
+writer duplicate. The completion callback runs on worker completion and
+independently closes the callback-owned native reader and state duplicates,
+restores the callback-owned blocking state, and requests reader resumption on
+the originating loop. If that loop has closed, only reader resumption is
+skipped; descriptor finalization is already complete. The callback must not
+close the writer transferred to Rust. No descriptor is restored, closed,
+reused, or resumed while native code can still use it.
+
+For screen readers: The following sequence diagram shows bounded cancellation
+cleanup, including the quarantine of worker-owned descriptors until the Rust
+worker completes and the callback restores the asyncio transport state.
+
+Figure 11: Native-pump cancellation cleanup, including
+`blocking_mode_guard.restore()`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Pump as RustPumpTask
+    participant Executor as ExecutorWorker
+    participant Callback as CompletionCallback
+    participant Transport as AsyncioTransport
+
+    Caller->>Pump: Cancel task
+    Pump->>Executor: Retain shielded native_pump future
+    Pump->>Pump: _await_native_pump_cleanup(cleanup_grace_s)
+    alt Worker settles within grace
+        Executor->>Executor: Rust closes submitted writer duplicate
+        Executor-->>Callback: Future completion
+        Callback->>Callback: _close_rust_reader_fd()
+        Callback->>Transport: blocking_mode_guard.restore()
+        Callback->>Callback: Close callback-owned state descriptors
+        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
+        Callback-->>Pump: cleanup_complete
+        Pump-->>Caller: Original CancelledError
+    else Grace expires first
+        Pump-->>Caller: Original CancelledError
+        Pump->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_grace_expired")
+        Note over Executor,Callback: Duplicated descriptors remain quarantined
+        Executor->>Executor: Rust closes submitted writer duplicate
+        Executor-->>Callback: Late future completion
+        Callback->>Callback: _close_rust_reader_fd()
+        Callback->>Transport: blocking_mode_guard.restore()
+        Callback->>Callback: Close callback-owned state descriptors
+        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
+        Callback->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_deferred")
+    end
+```
+
+The original writer descriptor remains asyncio-owned throughout. Native code
+receives its own writer resource; the shim closes it only before transfer, and
+Rust owns it thereafter. Restoring or resuming earlier would hand the reader or
+writer state back to asyncio while native code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code

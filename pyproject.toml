@@ -411,9 +411,11 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+source-exclude = ["cuprum/unittests/**"]
 
 [tool.maturin]
 bindings = "pyo3"
 manifest-path = "rust/cuprum-rust/Cargo.toml"
 module-name = "cuprum._rust_backend_native"
 python-source = "."
+exclude = ["cuprum/unittests/**"]

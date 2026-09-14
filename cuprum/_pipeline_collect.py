@@ -138,6 +138,7 @@ async def _collect_pipeline_inputs(
     pipe_tasks = _create_pipe_tasks(
         spawn.processes,
         observations=spawn.stages.observations,
+        native_pump_cleanup_grace=config.ctx.native_pump_cleanup_grace,
     )
     try:
         wait_result = await _await_pipeline_wait_result(

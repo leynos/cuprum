@@ -23,8 +23,8 @@ import typing as typ
 import pytest
 
 from cuprum import (
-    _pipeline_stream_cleanup_observation,
     _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
 from cuprum.pump_events import RustPumpHandoffOutcome
@@ -82,7 +82,7 @@ async def _cancel_mid_transfer(
     """Start a pipeline pump, cancel it mid-transfer, then release its worker."""
     reader_fd, writer_fd = os.pipe()
     try:
-        state = _pipeline_streams._RustPumpState(
+        state = _pipeline_stream_native_cleanup._RustPumpState(
             reader_fd=reader_fd,
             writer_fd=writer_fd,
             blocking_mode_guard=typ.cast(
@@ -210,7 +210,7 @@ def test_cancellation_records_native_pump_cleanup_lifecycle(
     _install_fake_pump(monkeypatch, blocking_pump)
     caplog.set_level(
         logging.DEBUG,
-        logger=_pipeline_stream_cleanup_observation.__name__,
+        logger=_pipeline_streams.__name__,
     )
     with observe_pump(pump_events.append):
         asyncio.run(_cancel_mid_transfer(context))

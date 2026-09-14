@@ -9,7 +9,11 @@ import typing as typ
 
 import pytest
 
-from cuprum import _pipeline_stream_cleanup_observation, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_cleanup_observation,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from cuprum.events import new_exec_id
 from cuprum.pump_observation import _correlate_pump_events, observe_pump
@@ -28,9 +32,10 @@ async def _await_completed_native_pump_cleanup(
     """Run the cleanup boundary with an already-settled worker future."""
     cleanup_complete = asyncio.get_running_loop().create_future()
     cleanup_complete.set_result(None)
-    await _pipeline_streams._await_native_pump_cleanup(
+    await _pipeline_stream_native_cleanup._await_native_pump_cleanup(
         cleanup_complete,
         monotonic_clock=monotonic_clock,
+        cleanup_grace_s=1.0,
     )
 
 
@@ -52,7 +57,7 @@ def test_native_pump_cleanup_uses_the_injected_monotonic_clock(
 
     caplog.set_level(
         logging.DEBUG,
-        logger=_pipeline_stream_cleanup_observation.__name__,
+        logger=_pipeline_streams.__name__,
     )
     with (
         _correlate_pump_events(exec_id),
@@ -122,15 +127,19 @@ def test_pipe_task_carries_its_source_stage_token(
     async def fake_dispatch(
         reader: asyncio.StreamReader | None,
         writer: asyncio.StreamWriter | None,
+        *,
+        cleanup_grace_s: float,
     ) -> None:
         """Emit cleanup facts from the task's inherited context."""
-        del reader, writer
+        del reader, writer, cleanup_grace_s
         await asyncio.sleep(0)
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_started(
-            logging.getLogger(__name__)
-        )
-        _pipeline_stream_cleanup_observation._log_native_pump_cleanup_completed(
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
             logging.getLogger(__name__),
+            "cleanup_started",
+        )
+        _pipeline_stream_cleanup_observation._log_native_pump_cleanup(
+            logging.getLogger(__name__),
+            "cleanup_completed",
             0.25,
         )
 

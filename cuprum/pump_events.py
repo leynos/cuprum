@@ -31,7 +31,9 @@ class RustPumpDeclineReason(enum.StrEnum):
     and aggregate the ``reason`` metric label, so a typo at a new call site
     would produce a value their filters silently miss; as an enum it is a type
     error instead. Members are `str`, so the logged field and the metric label
-    stay plain strings.
+    stay plain strings. ``PLATFORM_UNSUPPORTED`` means the current operating
+    system and asyncio transport combination cannot safely use the native Rust
+    pump.
 
     Examples
     --------
@@ -45,6 +47,7 @@ class RustPumpDeclineReason(enum.StrEnum):
     READER_UNRESUMABLE = "reader_unresumable"
     READER_PAUSE_FAILED = "reader_pause_failed"
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+    PLATFORM_UNSUPPORTED = "platform_unsupported"
 
 
 class RustPumpHandoffOutcome(enum.StrEnum):
@@ -67,6 +70,8 @@ type PumpPhase = typ.Literal[
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
+    "cleanup_grace_expired",
+    "cleanup_deferred",
 ]
 """What a :class:`PumpEvent` reports.
 
@@ -83,6 +88,12 @@ type PumpPhase = typ.Literal[
 ``cleanup_completed``
     The native worker released its descriptors after cancellation; ``duration_s``
     records the monotonic cleanup wait.
+``cleanup_grace_expired``
+    The caller's bounded cleanup grace elapsed; ``elapsed_s`` records the
+    monotonic grace wait before callback-owned cleanup was deferred.
+``cleanup_deferred``
+    A worker that outlived its caller-facing grace later completed its deferred
+    descriptor cleanup.
 """
 
 
@@ -90,9 +101,10 @@ type PumpPhase = typ.Literal[
 class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
 
-    The event carries the phase, closed-set reason or hand-off outcome, the
-    monotonic wait duration for completed native-pump cleanup, and the source
-    stage token needed to correlate cleanup tracing. Descriptor numbers,
+    The event carries the phase, a closed-set reason or hand-off outcome, the
+    monotonic wait duration for completed native-pump cleanup, the monotonic
+    elapsed grace wait, and the source stage token needed to correlate cleanup
+    tracing. Descriptor numbers,
     command arguments, exception types, and tracebacks are all either
     unbounded as metric labels or a disclosure risk, and the DEBUG log records
     emitted alongside these events carry the diagnostic detail — including the
@@ -111,6 +123,9 @@ class PumpEvent:
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
+    elapsed_s:
+        Monotonic seconds spent waiting before ``cleanup_grace_expired``.
+        ``None`` for every other phase.
     exec_id:
         The upstream pipeline stage's stable execution token for native-cleanup
         phases. Tracing observers use it only to locate an existing execution
@@ -142,6 +157,7 @@ class PumpEvent:
     reason: RustPumpDeclineReason | None = None
     outcome: RustPumpHandoffOutcome | None = None
     duration_s: float | None = None
+    elapsed_s: float | None = None
     exec_id: ExecId | None = None
 
 

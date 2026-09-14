@@ -12,10 +12,10 @@ import pytest
 from cuprum._pipeline_rust_pump_completion import (
     _classify_pump_outcome,
     _complete_rust_pump,
-    _RustPumpCompletion,
+    _RustPumpCompletionHooks,
 )
 from cuprum.pump_span_events import PumpHopOutcome
-from cuprum.pump_span_observation import _PumpHopSpans
+from cuprum.pump_span_observation import _close_pump_hop_spans, _PumpHopSpans
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -109,17 +109,28 @@ async def _assert_cleanup_after_span_control_flow() -> None:
     state = _CompletionState(was_cancelled=False)
     restored: list[_CompletionState] = []
     span = _InterruptingSpan()
-    completion = _RustPumpCompletion(
-        cleanup_complete=cleanup_complete,
-        pump_hop_spans=_PumpHopSpans((span,)),
-        state=state,
-        restore_state=restored.append,
-    )
+
+    def close_spans(outcome: PumpHopOutcome, total_bytes: int | None) -> None:
+        """Close the intentionally interrupting test span."""
+        _close_pump_hop_spans(
+            _PumpHopSpans((span,)),
+            outcome=outcome,
+            total_bytes=total_bytes,
+        )
+
+    def signal_completion() -> None:
+        """Settle the loop-owned waiter after terminal cleanup."""
+        cleanup_complete.set_result(None)
 
     with pytest.raises(KeyboardInterrupt):
         _complete_rust_pump(
             completed,
-            completion=completion,
+            state=state,
+            hooks=_RustPumpCompletionHooks(
+                close_spans=close_spans,
+                restore_state=lambda: restored.append(state),
+                signal_completion=signal_completion,
+            ),
             logger=logging.getLogger(__name__),
         )
 
