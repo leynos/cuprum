@@ -385,6 +385,9 @@ when a call needs output behaviour that differs from the default.
   `\r\n` reads are treated the same as a single read. For echoing, a trailing
   `\r` is held while the next byte is pending; at EOF, or when the next byte is
   not `\n`, it remains line data, and only `\r\n` terminates it.
+  Bounded echo also requires an encoding whose newline is a single raw `LF`
+  byte; encodings such as UTF-16, UTF-32, and stateful encodings are rejected
+  when a bound is set. Use `None` for unbounded echoing with those encodings.
 
 #### Observing echo truncation
 
