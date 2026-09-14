@@ -7,13 +7,13 @@ be kept up to date as work proceeds.
 
 Status: IN PROGRESS
 
-Reopened 2026-09-14 for a maintenance rebase onto `origin/main` at `c7aa2bdf`.
-The 39 replayed commits retained the upstream bounded-echo and timeout-fixture
-improvements alongside this plan's read-size injection, completed-operation
-telemetry, and worker-owned native reader-descriptor handoff. Deterministic
-revalidation passed; force-with-lease publication and the refreshed CodeRabbit
-review remained pending at that point. The validated branch was published as
-`92390072`, and CodeRabbit review `f0713b24` is queued for PR #321.
+The 2026-09-14 maintenance-rebase reopening is historical: the 39 replayed
+commits retained upstream bounded-echo and timeout-fixture improvements
+alongside this plan's read-size injection, completed-operation telemetry, and
+worker-owned native reader-descriptor handoff. Local deterministic revalidation
+and CodeRabbit have since passed. Current acceptance remains `IN PROGRESS`
+solely until hosted GitHub CI and CodeScene revalidate the follow-up commit
+that adds public-boundary stream-operation observation coverage.
 
 Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
 that the native pump received an asyncio-owned reader descriptor. The
@@ -242,6 +242,15 @@ This task is complete only when:
   pre-call-empty record that captures `writer_fd`. `make check-fmt`, focused
   `ty`, the FD-ownership regression, `make markdownlint`, and `make nixie`
   passed. The queued CodeRabbit review remains the pending acceptance step.
+
+- [x] 2026-09-14 Public observation follow-up: added an allowlisted `SafeCmd`
+  behavioural test that registers `observe_stream_operation`, preserves a
+  non-empty byte payload, and verifies aggregate EOF drain telemetry without
+  depending on chunk segmentation. Refreshed the ExecPlan's source-layout
+  orientation and historical-versus-current status wording. `make check-fmt`,
+  `make typecheck`, `make lint`, the 30-test focused stream and pipeline set,
+  `make test`, `make markdownlint`, and `make nixie` passed. Hosted GitHub CI
+  and CodeScene revalidation of this follow-up commit remain pending.
 
 - [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
   reader-descriptor hand-off with worker-owned duplicates, preserved buffered
@@ -977,10 +986,10 @@ cost, not a change in scope. The CRLF boundary fix did not surface an
 additional line-ending question; vertical tab, form feed, U+2028, and NEL
 remain the existing stable separator cases covered by the line-splitting
 properties. The 2026-09-02 V3/V4 correction restored the final integration and
-retuning contracts. Final deterministic gates passed, and
-`coderabbit review --agent` reported zero findings before the plan returned to
-`COMPLETE`; the 2026-09-06 review follow-up explicitly reopened the plan for
-revalidation, so its current state is `IN PROGRESS`.
+retuning contracts. Earlier dated entries that returned the plan to `COMPLETE`
+remain historical evidence. The present acceptance state is `IN PROGRESS`
+solely pending hosted GitHub CI and CodeScene revalidation of the follow-up
+commit that adds public-boundary stream-operation observation coverage.
 
 ## Context and orientation
 
@@ -990,48 +999,50 @@ from the child's pipe in a loop. That loop is the parent-side consume path.
 
 Key modules, by full path:
 
-- `cuprum/_streams_pump.py` defines `_READ_SIZE = 65536` at line 29. It owns the
-  inter-stage pump: `_relay_chunks` (line 84) copies one stage's stdout into
-  the next stage's stdin with backpressure, and `_drain_stream_reader` (line
-  102) discards to end of file when there is no downstream writer.
-- `cuprum/_streams.py` consumes a stage's output. `_drain` (line 60) is the
-  canonical read, echo, and capture loop shared by
-  `_consume_stream_without_lines` and `_consume_stream_with_lines`, reading at
-  line 78. `_write_chunk` (line 143) performs the synchronous echo write.
-  `_split_complete_lines` (line 205), `_ends_with_line_ending` (line 230), and
-  `_strip_line_ending` (line 236) are the helpers the prerequisite targets.
-- `cuprum/_testing.py` re-exports the constant at lines 36 and 96.
+- `cuprum/_pipeline_streams.py` orchestrates pipeline stream movement after
+  process creation: it creates capture tasks and inter-stage pumps, then
+  dispatches the selected stream backend.
+- `cuprum/_pipeline_stage_streams.py` is the canonical pipeline stdio-policy
+  module. It creates stage capture tasks using the configured stdout and stderr
+  policies.
+- `cuprum/_streams_pump.py` defines `_READ_SIZE = 65536` and the pure-Python
+  inter-stage pump, relay, and reader-drain helpers.
+- `cuprum/_streams.py` consumes a stage's output through the canonical read,
+  echo, and capture loop shared by `_consume_stream_without_lines` and
+  `_consume_stream_with_lines`.
+- `cuprum/_stream_line_boundaries.py` owns `_split_complete_lines`,
+  `_ends_with_line_ending`, and `_strip_line_ending`, the helpers targeted by
+  the line-boundary prerequisite.
+- `cuprum/_testing.py` re-exports the constant for test seams.
 - `cuprum/_streams_rs.py` wraps the optional Rust extension; its `buffer_size`
   defaults of 65536 are separate knobs, untouched here.
 
 The tests that matter:
 
 - `cuprum/unittests/test_stream_property_based.py` derives its boundary window
-  from `_READ_SIZE` (`_BOUNDARY_DELTA = 512` at line 28), so it tracks the
-  constant automatically but is bounded by the kernel argv limit.
+  from `_READ_SIZE`, so it tracks the constant automatically but is bounded by
+  the kernel argv limit.
 - `cuprum/unittests/test_stream_pump_runtime_behaviour.py` builds payloads from
   `_READ_SIZE` and uses in-process readers, so it is safe at the larger size.
-- `tests/features/stream_parity.feature:24` already provides a large-payload
+- `tests/features/stream_parity.feature` already provides a large-payload
   backpressure scenario: three stages, 1 MiB, both backends, generating its
   payload inside the subprocess to avoid the argv limit
-  (`tests/behaviour/test_stream_parity_behaviour.py:204-225`). This already
-  discharges the end-to-end behavioural obligation; no new feature file is
-  needed.
-- `tests/helpers/parity.py:105` documents 4096-byte reads and goes stale.
+  (`tests/behaviour/test_stream_parity_behaviour.py`). This already discharges
+  the end-to-end behavioural obligation; no new feature file is needed.
+- `tests/helpers/parity.py` documents 4096-byte reads and goes stale.
 
 The benchmark harness, under `benchmarks/`:
 
 - `tee_profile_worker.py` runs one scenario and emits `worker-result.json`.
-  `TeeProfileWorkerResult` (line 67) is a **total** `TypedDict`, so a new key
-  is mandatory at every construction site. `_build_worker_result` (line 392)
-  sits at exactly the `max-args = 4` limit (`pyproject.toml:218`), and the
-  comment at lines 161-165 records that this is structural; a new input must
-  therefore go on `TeeProfileWorkerConfig` (line 84), where peer inputs are
-  validated.
-- `tee_profile_scenarios.py` defines the matrix and `_worker_command` (line
-  297), which is what the `perf` and `py-spy` profilers execute.
-- `tee_profile_profilers.py` runs the `none` profiler **in-process** (lines
-  26-46), so a command-line flag alone would never reach the default sweep path.
+  `TeeProfileWorkerResult` is a **total** `TypedDict`, so a new key is
+  mandatory at every construction site. `_build_worker_result` is at the
+  `max-args = 4` limit, so a new input belongs on `TeeProfileWorkerConfig`,
+  where peer inputs are validated.
+- `tee_profile_scenarios.py` defines the matrix. The profiling worker-command
+  helper `_worker_command` lives in `tee_profile_configuration.py`, which the
+  `perf` and `py-spy` profilers use.
+- `tee_profile_profilers.py` runs the `none` profiler **in-process**, so a
+  command-line flag alone would never reach the default sweep path.
 
 Terms:
 
