@@ -353,45 +353,49 @@ def test_drain_truncates_each_line_independently() -> None:
     )
 
 
-def test_drain_truncates_unterminated_trailing_line_at_eof() -> None:
+@pytest.mark.parametrize(
+    ("chunks", "capture", "expected_capture"),
+    [
+        pytest.param((b"z" * 80,), True, "z" * 80, id="capture"),
+        pytest.param(
+            tuple(b"z" * 8192 for _ in range(256)),
+            False,
+            None,
+            id="echo-only",
+        ),
+    ],
+)
+def test_drain_truncates_unterminated_trailing_line_at_eof(
+    chunks: tuple[bytes, ...],
+    capture: bool,
+    expected_capture: str | None,
+) -> None:
     """A trailing partial line is bounded and marked before the drain ends."""
     bound = 50
-    payload = b"z" * 80
     sink = io.StringIO()
 
     captured = asyncio.run(
-        _drain(_reader((payload,)), _config(sink, echo=True, max_line_bytes=bound)),
+        _drain(
+            _reader(chunks),
+            _config(
+                sink,
+                capture=capture,
+                echo=True,
+                max_line_bytes=bound,
+            ),
+        ),
     )
 
-    assert captured == payload.decode(), "capture keeps the unterminated line"
+    assert captured == expected_capture, (
+        "capture must retain the complete line when enabled and remain empty "
+        f"when disabled; got={captured!r}"
+    )
     echoed = sink.getvalue()
     assert "… [truncated " in echoed, (
         f"EOF finalization must mark the truncated partial line, got={echoed!r}"
     )
     assert len(echoed.encode()) <= bound, (
         f"unterminated echoed line must fit bound={bound}, got={len(echoed.encode())}"
-    )
-
-
-def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
-    """capture=False does not require retaining an oversized unfinished line."""
-    bound = 50
-    payload = b"z" * (2 * 1024 * 1024)
-    chunks = tuple(
-        payload[start : start + 8192] for start in range(0, len(payload), 8192)
-    )
-    sink = io.StringIO()
-
-    captured = asyncio.run(
-        _drain(
-            _reader(chunks),
-            _config(sink, capture=False, echo=True, max_line_bytes=bound),
-        ),
-    )
-
-    assert captured is None, "echo-only drains must not create captured output"
-    assert len(sink.getvalue().encode()) <= bound, (
-        "the unfinished echoed line must remain bounded without capture"
     )
 
 
