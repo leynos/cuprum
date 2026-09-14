@@ -982,6 +982,61 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
+shorthand independently, so a command can capture stdout silently while stderr
+still mirrors to the log. Capture stays a single joint switch — `capture=True`
+keeps both streams captured even when neither echoes.
+
+A third reason the parent reads a child's stream is idle reporting: when
+`idle_after` is set, a run-owned heartbeat emits one keepalive line for every
+interval in which no monitored stream produces output, and any non-empty read
+resets the timer. The line reports the absence of observed output — it is
+not a deadlock or CPU diagnosis, it never terminates a child, and it never
+extends a timeout. For a single command either stream resets it; for a
+pipeline only the final stage's stdout and every stage's stderr do, never an
+inter-stage transfer, hence the label `pipeline output idle`. The line goes to
+the parent's stderr sink, resolved at emission time, so it never enters
+capture, echo, line observers, or the activity tracker. An `on_idle` callback
+is synchronous and replaces the built-in renderer rather than joining it.
+
+Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+stream consumers
+
+For screen readers: The following flowchart shows how per-stream echo
+resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
+`RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
+independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
+consume those gates: `_spawn_subprocess` for a single command and
+`_get_stage_stream_fds` for a pipeline. For a single command each stream
+independently becomes a `PIPE` or `DEVNULL` according to its own
+parent-consumption gate (capture, that stream's echo, or idle reporting). For a
+pipeline, the stdout of a non-final stage is always a `PIPE` so that it can
+relay into the next stage, while the stdout of the final stage and the stderr
+of every stage follow their own independent gates.
+`capture` remains a single joint switch, so both streams are still captured when
+`capture=True` even if neither echoes. The flow ends at the stream consumers:
+`_spawn_stream_consumers` for a single command and
+`_create_stage_capture_tasks` for pipeline stages.
+
+```mermaid
+flowchart TD
+    A[RunOutputOptions] --> B[__post_init__ resolves echo_stdout and echo_stderr from echo]
+    B --> C{Execution path}
+    C -->|single command| D[_spawn_subprocess]
+    C -->|pipeline| E[_get_stage_stream_fds]
+    D --> F{capture, stream echo, or idle reporting enabled}
+    F -->|stdout gate| G[stdout PIPE or DEVNULL]
+    F -->|stderr gate| H[stderr PIPE or DEVNULL]
+    G --> I[_spawn_stream_consumers]
+    H --> I
+    E --> J[non-final stdout always PIPE for relay]
+    E --> K[final stdout and every stderr use independent consumption gates]
+    J --> L[_create_stage_capture_tasks]
+    K --> L
+    I --> M[Capture remains joint when capture is true]
+    L --> M
+```
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
