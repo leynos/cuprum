@@ -384,10 +384,10 @@ when a call needs output behaviour that differs from the default.
   were truncated for the sink. `\n` and `\r\n` are recognized endings; split
   `\r\n` reads are treated the same as a single read. For echoing, a trailing
   `\r` is held while the next byte is pending; at EOF, or when the next byte is
-  not `\n`, it remains line data, and only `\r\n` terminates it.
-  Bounded echo also requires an encoding whose newline is a single raw `LF`
-  byte; encodings such as UTF-16, UTF-32, and stateful encodings are rejected
-  when a bound is set. Use `None` for unbounded echoing with those encodings.
+  not `\n`, it remains line data, and only `\r\n` terminates it. Bounded echo
+  also requires an encoding whose newline is a single raw `LF` byte; encodings
+  such as UTF-16, UTF-32, and stateful encodings are rejected when a bound is
+  set. Use `None` for unbounded echoing with those encodings.
 
 #### Observing echo truncation
 
@@ -397,8 +397,8 @@ events. A successfully written bounded line produces an `EchoEvent` with
 `stderr`, and `dropped_bytes` set to the number of child-output bytes omitted
 from that line. The event is emitted only after the complete truncated payload,
 including its marker and line ending, has been written successfully. A failed
-echo write therefore does not produce a truncation event. No events are
-emitted unless a hook is registered.
+echo write therefore does not produce a truncation event. No events are emitted
+unless a hook is registered.
 
 If a text-only echo sink cannot represent the subprocess output (for example a
 CP1252 console receiving UTF-8 text), Cuprum no longer aborts the run with
