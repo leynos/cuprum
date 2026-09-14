@@ -375,14 +375,14 @@ def test_monitor_polls_only_once_armed_and_due() -> None:
         monitor.clock = clock
         assert monitor.is_running is False, "a built monitor must not be armed yet"
         monitor.poll()
-        assert seen == [], "an unlaunched monitor must not notify"
+        assert not seen, "an unlaunched monitor must not notify"
         monitor.launch()
         assert monitor.is_running is True, "launch must arm the heartbeat"
         # Halves are exact in binary floating point, so the poll just before the
         # deadline and the poll on it straddle the boundary by construction.
         clock.advance(_INTERVAL - 0.5)
         monitor.poll()
-        assert seen == [], "a poll before the deadline must stay silent"
+        assert not seen, "a poll before the deadline must stay silent"
         clock.advance(0.5)
         monitor.poll()
         await _stop_idle_monitor(monitor)
