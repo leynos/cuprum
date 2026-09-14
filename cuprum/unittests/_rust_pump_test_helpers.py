@@ -202,8 +202,24 @@ def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     )
 
 
-def decline_on_missing_fds(_monkeypatch: pytest.MonkeyPatch) -> None:
+def decline_on_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose platform cannot safely use the native pump."""
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_native_pump_supported_on_platform",
+        lambda: False,
+    )
+    reader = typ.cast("asyncio.StreamReader", object())
+    asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
+
+
+def decline_on_missing_fds(monkeypatch: pytest.MonkeyPatch) -> None:
     """Route a hop whose streams expose no raw descriptors."""
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_native_pump_supported_on_platform",
+        lambda: True,
+    )
     reader = typ.cast("asyncio.StreamReader", object())
     asyncio.run(_pipeline_streams._try_rust_pump(reader, None))
 
@@ -457,6 +473,7 @@ def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None
 DECLINE_PATHS: tuple[
     tuple[str, cabc.Callable[[pytest.MonkeyPatch], None], str], ...
 ] = (
+    ("unsupported_platform", decline_on_unsupported_platform, "platform_unsupported"),
     ("missing_fds", decline_on_missing_fds, "raw_fd_unavailable"),
     ("pause_failure", decline_on_pause_failure, "reader_pause_failed"),
     ("blocking_failure", decline_on_blocking_failure, "blocking_mode_unavailable"),

@@ -829,11 +829,12 @@ the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
 
 Table 1: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason`             | Seam that declined                                                 |
-| --------------------------- | ------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
+| `cuprum_reason`             | Seam that declined                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport                        |
+| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming                               |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors                             |
+| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -849,6 +850,13 @@ logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 `cuprum/unittests/test_pipeline_streams_observability.py` pins each reason to
 the real code path that emits it, so a decline that stops being recorded fails
 the suite rather than going unnoticed.
+
+On Windows, the dispatcher records `platform_unsupported` before extracting any
+descriptor. ProactorEventLoop subprocess pipes use overlapped handles, whereas
+the native pump currently performs synchronous `std::fs::File` I/O; the Python
+pump therefore handles these inter-stage transfers. Windows wheels and direct
+Rust extension calls remain available, but the extension must gain true
+overlapped I/O before it can safely pump asyncio subprocess pipes.
 
 A pump failure can also be masked by cancellation. `asyncio.wait` never
 retrieves a future's outcome, so when a hop is cancelled
@@ -881,7 +889,7 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      |
 | `cuprum_rust_pump_handoff_total`               | `outcome` |
 
-`RustPumpDeclineReason` bounds the decline label to its four declared values.
+`RustPumpDeclineReason` bounds the decline label to its five declared values.
 The `outcome` label is also closed: it is exactly `submitted`,
 `blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`,
@@ -2360,6 +2368,13 @@ two descriptor numbers must never be shared between those owners. The helper's
 safety contract obliges the caller to guarantee `fd` is a valid open descriptor
 (or Windows handle) for the duration of the call and that ownership remains
 with the caller; in return the helper guarantees it never closes `fd`.
+
+The Windows-handle wording above describes direct Rust extension calls. The
+pipeline dispatcher declines Windows asyncio subprocess-pipe handles with
+`platform_unsupported`, because ProactorEventLoop's overlapped handles cannot
+be used safely by the pump's synchronous Rust I/O. Native Windows wheels and
+the direct extension API remain supported independently of this pipeline
+restriction.
 
 The contract is checked at two levels, which are deliberately not
 interchangeable. `rust/cuprum-rust/src/lib_tests.rs` holds the

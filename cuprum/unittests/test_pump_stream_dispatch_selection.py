@@ -16,6 +16,8 @@ from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
 )
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import clear_backend_caches
 
 __all__ = ["clear_backend_caches"]
@@ -77,6 +79,11 @@ class TestPumpStreamDispatch:
         force_fd_extraction_failure = case["force_fd_extraction_failure"]
         expected_rust_fd_attempts = case["expected_rust_fd_attempts"]
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend_env)
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_native_pump_supported_on_platform",
+            lambda: True,
+        )
         if rust_available is not None:
             set_rust_availability_for_testing(is_available=rust_available)
 
@@ -110,6 +117,61 @@ class TestPumpStreamDispatch:
             f"got {calls['rust_fd_path_attempts']}"
         )
         assert calls["python_pump"] == 1, "expected Python pump to handle the dispatch"
+
+    def test_dispatch_declines_unsupported_native_platform_before_rust_work(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unsupported platforms fall back without touching native-pump seams."""
+        monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_native_pump_supported_on_platform",
+            lambda: False,
+        )
+        set_rust_availability_for_testing(is_available=True)
+        calls = {"python_pump": 0}
+        events: list[PumpEvent] = []
+
+        async def fake_pump(
+            reader: asyncio.StreamReader | None,
+            writer: asyncio.StreamWriter | None,
+        ) -> None:
+            """Record the fallback pump invocation."""
+            del reader, writer
+            calls["python_pump"] += 1
+            await asyncio.sleep(0)
+
+        def unexpected_rust_work() -> None:
+            """Fail if platform rejection reaches the Rust FD path."""
+            msg = "unsupported platforms must not start the Rust FD path"
+            raise AssertionError(msg)
+
+        def unexpected_raw_fd_extraction(
+            stream: asyncio.StreamReader | asyncio.StreamWriter | None,
+        ) -> int | None:
+            """Fail if platform rejection reaches raw descriptor extraction."""
+            del stream
+            msg = "unsupported platforms must not extract raw descriptors"
+            raise AssertionError(msg)
+
+        configure_pump_stream_dispatch_for_testing(
+            on_rust_fd_path_attempt=unexpected_rust_work,
+            raw_fd_extractor=unexpected_raw_fd_extraction,
+            python_pump=fake_pump,
+        )
+        reader = typ.cast("asyncio.StreamReader", object())
+        writer = typ.cast("asyncio.StreamWriter", object())
+        with observe_pump(events.append):
+            asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
+
+        assert calls["python_pump"] == 1, "the Python pump must handle fallback"
+        assert events == [
+            PumpEvent(
+                phase="declined",
+                reason=RustPumpDeclineReason.PLATFORM_UNSUPPORTED,
+            )
+        ], "platform rejection must emit one bounded decline event"
 
     def test_dispatch_raises_import_error_when_rust_forced_but_unavailable(
         self,

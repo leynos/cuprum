@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import dataclasses as dc
 import functools
+import threading
 import typing as typ
 
 if typ.TYPE_CHECKING:
@@ -25,13 +26,23 @@ class _NativePumpExecutor(typ.Protocol):
         raise NotImplementedError
 
 
-class _ThreadPoolNativePumpExecutor:
-    """Adapt the dedicated thread pool to the fixed native-pump call shape."""
+def _settle_native_pump_future(
+    future: cf.Future[int],
+    function: cabc.Callable[[int, int], int],
+    reader_fd: int,
+    writer_fd: int,
+) -> None:
+    """Run a native worker and publish its terminal state."""
+    try:
+        future.set_result(function(reader_fd, writer_fd))
+    except BaseException as error:  # ruff: ignore[blind-except] - worker failures must settle the future.
+        future.set_exception(error)
 
-    def __init__(self) -> None:
-        """Create the executor that must outlive caller event loops."""
-        self._executor = cf.ThreadPoolExecutor(thread_name_prefix="cuprum-native-pump")
 
+class _PersistentNativePumpExecutor(_NativePumpExecutor):
+    """Run uninterruptible native I/O without interpreter-shutdown joining."""
+
+    @typ.override
     def submit(
         self,
         function: cabc.Callable[[int, int], int],
@@ -40,8 +51,20 @@ class _ThreadPoolNativePumpExecutor:
         /,
     ) -> cf.Future[int]:
         """Submit one native reader/writer descriptor pair."""
-        worker = functools.partial(function, reader_fd, writer_fd)
-        return self._executor.submit(worker)
+        future: cf.Future[int] = cf.Future()
+        worker = threading.Thread(
+            target=functools.partial(
+                _settle_native_pump_future,
+                future,
+                function,
+                reader_fd,
+                writer_fd,
+            ),
+            name="cuprum-native-pump",
+            daemon=True,
+        )
+        worker.start()
+        return future
 
 
 @dc.dataclass(slots=True)
@@ -54,6 +77,6 @@ class _NativePumpRuntime:
 
 # Keep uninterruptible native I/O outside ``asyncio.run`` executor shutdown.
 _DEFAULT_NATIVE_PUMP_RUNTIME = _NativePumpRuntime(
-    executor=_ThreadPoolNativePumpExecutor(),
+    executor=_PersistentNativePumpExecutor(),
     retained_futures=set(),
 )

@@ -1759,6 +1759,7 @@ Table 1: reasons an inter-stage hop declines the Rust pump
 | `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused        |
 | `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor     |
 | `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                |
+| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use   |
 
 These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
 than a fault, and on platforms where the fast path does not apply every hop
@@ -1774,6 +1775,14 @@ logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
 `raw_fd_unavailable` on every hop usually means the streams are not real OS
 pipes. The others indicate the descriptors were found but could not be borrowed
 safely, which is worth investigating rather than accepting.
+
+On Windows, every asyncio subprocess-pipe hop records `platform_unsupported`
+and uses the Python pump. ProactorEventLoop supplies overlapped handles, whilst
+the native pump currently performs synchronous `std::fs::File` I/O; true
+overlapped I/O is required before this path can use the Rust pump safely.
+Native Windows wheels and direct Rust extension calls remain available, and
+`CUPRUM_STREAM_BACKEND=rust` still preserves pipeline correctness through this
+Python fallback.
 
 ### A pump failure hidden by cancellation
 
@@ -1999,10 +2008,13 @@ consumption (stdout/stderr capture) currently always uses the Python pathway
 regardless of the backend setting; this ensures line callbacks and echo
 features remain available.
 
-Pipeline pumping applies an additional safety guard: if Rust is selected but
+Pipeline pumping applies additional safety guards: if Rust is selected but
 Cuprum cannot extract raw file descriptors from asyncio transports for a
-specific transfer, it falls back to the Python pump for that transfer. This
-fallback is automatic and transparent to callers.
+specific transfer, it falls back to the Python pump for that transfer. On
+Windows, it declines before descriptor extraction with `platform_unsupported`,
+because asyncio subprocess pipes use overlapped handles that the synchronous
+native I/O path cannot safely use. Both fallbacks are automatic and preserve
+pipeline correctness.
 
 Forced Rust mode is intentionally strict. If `CUPRUM_STREAM_BACKEND=rust` is
 set and the Rust extension is unavailable, pipeline execution raises
@@ -2214,6 +2226,12 @@ functionality without Rust acceleration. Contributors who want Rust
 acceleration on unsupported platforms can build from source using the
 prerequisites described above and running `maturin develop`.
 
+Windows wheels and direct Rust extension APIs remain available even though the
+pipeline dispatcher declines Windows asyncio subprocess-pipe pumping with
+`platform_unsupported`. This restriction protects ProactorEventLoop handles;
+selecting `CUPRUM_STREAM_BACKEND=rust` still runs those pipeline hops through
+the correct Python fallback.
+
 **Forced fallback behaviour.** The `CUPRUM_STREAM_BACKEND` environment variable
 controls which stream implementation is used:
 
@@ -2240,8 +2258,9 @@ following in mind:
 
 - Small payloads show negligible difference between Python and Rust pathways.
   The overhead being avoided is per-chunk, and small payloads have few chunks.
-- The `splice()` optimization is Linux-only. macOS and Windows use
-  read/write loops, so Rust throughput gains are smaller on those platforms.
+- The `splice()` optimization is Linux-only. macOS uses the Rust read/write
+  loop, while Windows inter-stage pumping declines to the Python path until
+  true overlapped I/O is implemented for asyncio subprocess pipes.
 - The CI comparison summary reports speedup as `python_mean / rust_mean`.
   Values above `1.0x` mean Rust was faster.
 - Use `make benchmark-e2e` to measure performance on your specific workload

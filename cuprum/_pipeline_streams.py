@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses as dc
 import functools
 import logging
+import os
 import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
@@ -57,6 +58,22 @@ _LOGGER = logging.getLogger(__name__)
 def _log_rust_pump_declined(reason: RustPumpDeclineReason) -> None:
     """Record the reason an inter-stage hop falls back to Python pumping."""
     _pump_obs._log_native_pump_declined(_LOGGER, reason)
+
+
+def _native_pump_supported_on_platform() -> bool:
+    """Return whether the native Rust pump is safe for this platform.
+
+    Windows ``ProactorEventLoop`` subprocess pipes use overlapped handles, but
+    the Rust extension currently performs synchronous ``std::fs::File`` I/O.
+    Do not give native pumping those handles until it implements true
+    overlapped I/O.
+
+    Returns
+    -------
+    bool
+        Whether this operating system can use synchronous native pipe I/O.
+    """
+    return os.name != "nt"
 
 
 @dc.dataclass(slots=True)
@@ -222,6 +239,10 @@ async def _try_rust_pump(
     cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 ) -> bool:
     """Attempt to route the pipe hop through the Rust pump."""
+    if not _native_pump_supported_on_platform():
+        _log_rust_pump_declined(RustPumpDeclineReason.PLATFORM_UNSUPPORTED)
+        return False
+
     rust_fd_attempt_hook = _PUMP_STREAM_DISPATCH_TEST_HOOKS.on_rust_fd_path_attempt
     if rust_fd_attempt_hook is not None:
         rust_fd_attempt_hook()

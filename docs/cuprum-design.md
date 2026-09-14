@@ -2159,9 +2159,14 @@ operations. Both pathways remain available and are treated as first-class:
 
 The native Rust functions are exported from `cuprum._rust_backend_native`. A
 thin Python shim module `cuprum._streams_rs` re-exports the stream functions
-and performs any platform-specific file descriptor conversion (for example,
-translating Windows file descriptors into OS handles). This keeps the native
-module name stable while allowing Python-only adaptations.
+and performs any platform-specific conversion required by direct extension
+calls. This keeps the native module name stable while allowing Python-only
+adaptations. The pipeline dispatcher does not pass Windows asyncio
+subprocess-pipe handles to the native pump: ProactorEventLoop supplies
+overlapped handles, whilst the Rust implementation currently performs
+synchronous `std::fs::File` I/O and does not provide the required `OVERLAPPED`
+state. Native Windows wheels and direct Rust extension calls remain available;
+only the asyncio subprocess-pipe pumping path is restricted.
 
 The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
@@ -2421,6 +2426,11 @@ Cuprum selects the stream backend at runtime using the following precedence:
      for both reader and writer transports;
    - if extraction fails for either side, dispatch falls back to Python
      `_pump_stream()` for that transfer;
+   - on Windows, dispatch declines the native pump with
+     `platform_unsupported` before touching the asyncio transport, because
+     ProactorEventLoop subprocess pipes use overlapped handles that the
+     synchronous Rust I/O path cannot safely use; the Python pump preserves
+     pipeline correctness;
    - the Rust pump implementation itself lives in `cuprum._streams_rs` and is
      only entered after `get_stream_backend()` resolves `StreamBackend.RUST`.
 
@@ -2645,13 +2655,14 @@ asyncio transport. `_run_rust_pump` passes `rust_pump_stream` a duplicate.
 Python closes that duplicate if blocking-mode setup or executor submission
 fails. Once submission succeeds, the `_streams_rs` shim owns the hand-off: it
 closes the duplicate if native loading or platform preparation fails, otherwise
-the native call transfers it to Rust, which closes the received resource. On
-Windows the shim converts the duplicate to an independently owned Win32 handle
-and closes the duplicate CRT descriptor before invoking Rust. The completion
-callback never closes the writer resource. Restoration of the original
-descriptor modes and reader transport resumption remain tied to worker
-settlement, so cancellation of the awaiting task cannot close or reuse a
-descriptor while native I/O is still running.
+the native call transfers it to Rust, which closes the received resource. The
+pipeline declines before this hand-off on Windows, so the shim's direct-call
+conversion of Windows descriptors does not make asyncio Proactor handles safe
+for the synchronous native pump. The completion callback never closes the
+writer resource. Restoration of the original descriptor modes and reader
+transport resumption remain tied to worker settlement, so cancellation of the
+awaiting task cannot close or reuse a descriptor while native I/O is still
+running.
 
 #### Raw descriptor lifecycle
 
@@ -2705,6 +2716,9 @@ reused, or resumed while native code can still use it.
 For screen readers: The following sequence diagram shows bounded cancellation
 cleanup, including the quarantine of worker-owned descriptors until the Rust
 worker completes and the callback restores the asyncio transport state.
+
+Figure 11: Native-pump cancellation cleanup, including
+`blocking_mode_guard.restore()`
 
 ```mermaid
 sequenceDiagram

@@ -31,7 +31,9 @@ class RustPumpDeclineReason(enum.StrEnum):
     and aggregate the ``reason`` metric label, so a typo at a new call site
     would produce a value their filters silently miss; as an enum it is a type
     error instead. Members are `str`, so the logged field and the metric label
-    stay plain strings.
+    stay plain strings. ``PLATFORM_UNSUPPORTED`` means the current operating
+    system and asyncio transport combination cannot safely use the native Rust
+    pump.
 
     Examples
     --------
@@ -45,6 +47,7 @@ class RustPumpDeclineReason(enum.StrEnum):
     READER_UNRESUMABLE = "reader_unresumable"
     READER_PAUSE_FAILED = "reader_pause_failed"
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+    PLATFORM_UNSUPPORTED = "platform_unsupported"
 
 
 class RustPumpHandoffOutcome(enum.StrEnum):
