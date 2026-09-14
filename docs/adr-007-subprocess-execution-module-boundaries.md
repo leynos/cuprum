@@ -316,3 +316,24 @@ previous definition site. The private import compatibility rule from the
 and `cuprum._pipeline_internals` continue to resolve
 `_spawn_pipeline_processes` without change, but a test that replaces it must
 target `cuprum._pipeline_spawn`, the module that now resolves it.
+## Addendum (2026-09-14): stream-wiring split for the module-size ceiling
+
+Routing mirrored output through an opt-in presentation-sink session (see
+[ADR-011](adr-011-opt-in-github-actions-presentation-sink.md)) added sink
+resolution to `_subprocess_execution`, which pushed that module back over the
+400-line `max-module-lines` ceiling whose suppression Option B removed. The
+wiring half moves to a new cohesive module rather than reintroducing an
+exception:
+
+- `cuprum/_subprocess_streams.py` owns destination selection
+  (`_resolve_stream_sink`), the per-line observability callback
+  (`_create_stream_callback`), the stdout `_StreamConfig`
+  (`_build_stream_config`), and consumer-task creation
+  (`_spawn_stream_consumers`).
+- `_subprocess_execution` remains the composition root: it invokes that wiring
+  for each run and re-exports the helpers, so existing imports and the tests
+  that monkeypatch them by module path keep resolving unchanged.
+
+No public API changes, and the module-size suppression is still unnecessary.
+`_subprocess_wait` continues to own teardown through the unchanged drain
+interface.
