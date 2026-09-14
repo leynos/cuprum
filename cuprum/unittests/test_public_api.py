@@ -4,25 +4,18 @@ from __future__ import annotations
 
 import dataclasses as dc
 
+import pytest
+
 import cuprum as c
 from cuprum import (
     context,
+    echo_events,
     pump_events,
     pump_observation,
     pump_span_events,
     pump_span_observation,
-    echo_events,
 )
 from cuprum.events import ExecHook, new_exec_id
-
-
-"""Unit tests for cuprum public exports."""
-
-
-import pytest
-
-"""Unit tests for cuprum public exports."""
-"""Unit tests for cuprum public exports."""
 
 
 def test_public_exports_are_available() -> None:
@@ -185,6 +178,7 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         f"{hints['relay_fallbacks']!r}"
     )
     assert hints["stdout"] == str | None
+
 
 def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
     """RelayFallback is immutable and carries only closed-set vocabulary."""

@@ -67,6 +67,7 @@ class _SubprocessExecution:
         """Whether any stream must be consumed for capture or echo."""
         return self.capture or self.echo_stdout or self.echo_stderr
 
+
 @dc.dataclass(frozen=True, slots=True)
 class _StreamConsumerSpawnContext:
     """Inputs a run hands to its stream-consumer spawn.
