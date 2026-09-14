@@ -33,6 +33,7 @@ from cuprum._timeout_reporting import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.sh import ExecutionContext
@@ -68,6 +69,7 @@ class _RunTaskOwnership:
     stdin_task: asyncio.Task[None] | None
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
     discard_on_cancel: asyncio.Event
+    idle: _IdleMonitor | None = None
 
 
 async def _await_eof_grace(

@@ -39,6 +39,7 @@ from cuprum.echo_events import EchoStream
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -54,11 +55,17 @@ class _SubprocessExecution:
     timeout: float | None
     observation: _StageObservation
     stdin_data: bytes | None
+    idle: _IdleMonitor | None = None
 
     @property
-    def consumes_any_stream(self) -> bool:
-        """Whether any stream must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout or self.echo_stderr
+    def consumes_stdout(self) -> bool:
+        """Whether the parent must consume stdout, rather than discard it."""
+        return self.capture or self.echo_stdout or self.idle is not None
+
+    @property
+    def consumes_stderr(self) -> bool:
+        """Whether the parent must consume stderr, rather than discard it."""
+        return self.capture or self.echo_stderr or self.idle is not None
 
 
 async def _spawn_subprocess(
@@ -69,12 +76,12 @@ async def _spawn_subprocess(
         *execution.cmd.argv_with_program,
         stdout=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stdout
+            if execution.consumes_stdout
             else asyncio.subprocess.DEVNULL
         ),
         stderr=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stderr
+            if execution.consumes_stderr
             else asyncio.subprocess.DEVNULL
         ),
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
@@ -113,6 +120,9 @@ def _spawn_stream_consumers(
             else sys.stderr
         ),
         stream=EchoStream.STDERR,
+        # Only the stderr echo shares a destination with the keepalive, so it
+        # alone can leave a line for the diagnostic to trip over.
+        mirror=execution.idle.mirror if execution.idle is not None else None,
     )
     return (
         asyncio.create_task(
@@ -148,6 +158,7 @@ def _build_stream_config(
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
+        activity=execution.idle.note_activity if execution.idle is not None else None,
     )
 
 
@@ -220,6 +231,7 @@ async def _run_subprocess_with_streams(
         ),
         consumers=_spawn_stream_consumers(process, execution, stream_config, pid=pid),
         discard_on_cancel=discard_on_cancel,
+        idle=execution.idle,
     )
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
@@ -320,7 +332,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stdout_text: str | None = None
     stderr_text: str | None = None
     try:
-        if execution.consumes_any_stream:
+        if execution.consumes_stdout or execution.consumes_stderr:
             (
                 exit_code,
                 exited_at,
