@@ -106,6 +106,7 @@ async def _gather_pipeline_outputs(
     final_stdout = None if spawn.stdout_task is None else await spawn.stdout_task
     return stderr_by_stage, final_stdout
 
+
 def _stage_relay_fallbacks(
     spawn: _PipelineSpawnResult,
 ) -> tuple[tuple[RelayFallback, ...], ...]:
@@ -136,6 +137,8 @@ def _stage_relay_fallbacks(
         )
         stage_tuples.append(stdout_fallbacks + stderr_fallbacks)
     return tuple(stage_tuples)
+
+
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
