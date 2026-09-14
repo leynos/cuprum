@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
     from cuprum._streams import _StreamConfig
 
 
+# Keep this pinned: test_stream_echo_guard.py observes this public log channel.
 _LOGGER = logging.getLogger("cuprum.stream")
 
 

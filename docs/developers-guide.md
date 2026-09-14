@@ -1034,10 +1034,11 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 
 `_StreamConfig.read_size` carries the active private read size for one stream;
 its default is `_READ_SIZE`, currently 65536 bytes. The private
-`cuprum._streams._consume_stream(stream, config, *, on_line=None, read_size=_READ_SIZE)`
-and `_drain(stream, config, *, on_chunk=None, read_size=_READ_SIZE)` functions
-accept an explicit keyword-only override. `_drain` is the single
-read/echo/buffer loop behind both consume variants. It reads in the selected
+`cuprum._streams._consume_stream(stream, config, *, on_line=None,
+relay_diagnostics=None)`
+and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
+functions use `config.read_size` for each read. `_drain` is the single
+read/echo/buffer loop behind both consume variants. It reads in that configured
 size, extends the capture buffer when capturing, echoes each chunk to the
 configured sink when echoing, and hands the chunk to the optional `on_chunk`
 callback for variant-specific processing:
@@ -3857,6 +3858,15 @@ authoritative. That test module covers the full finite input domain (stage
 position × capture/echo) and asserts agreement with the single-command policy
 on the overlapping cases.
 
+During pipeline startup, the mutable `_SpawnedPipelineStages` accumulator in
+`cuprum/_process_lifecycle.py` retains the processes, capture tasks, start
+timestamps, and per-stage relay-diagnostics collectors created so far.
+`_spawn_pipeline_stages` fills it one stage at a time, allowing
+`_spawn_pipeline_processes` to clean up a partial spawn without losing task or
+diagnostic ownership. After startup succeeds, `_run_pipeline` projects those
+values into the immutable `_PipelineSpawnResult` used by the wait and
+collection paths.
+
 ## Output behaviour carrier
 
 `RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
@@ -3890,9 +3900,9 @@ not obscure the documented ambiguity error.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -3903,6 +3913,16 @@ terminating the process, and draining the stream consumers exactly once —
 belong in `_subprocess_wait`; and orchestration that coordinates them —
 spawning, wiring streams, and assembling the result — belongs in
 `_subprocess_execution`.
+
+`cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
+the process has been spawned. `_run_subprocess_with_streams` waits for exit,
+reconciles the stdin writer and both stream consumers on every exit path, and
+settles the per-stream relay-diagnostics collectors before returning captured
+output. `_subprocess_execution.py` retains process spawning, stream-consumer
+construction, stream configuration, the non-streaming path, and final
+`CommandResult` assembly. `_StreamConsumerSpawnContext` is its private bundle
+of stream configuration, PID, and the stdout/stderr diagnostics collectors; the
+streamed run creates it before handing those values to the consumer tasks.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -4040,17 +4060,18 @@ passing `return_exceptions=True`.
 
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
-cleanup paths in `_run_subprocess_with_streams` and
-`_run_subprocess_without_streams` (`cuprum/_subprocess_execution.py`); the
-spawn-failure, timeout, and run-failure paths, plus
-`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
-`_execute_with_hooks` in `cuprum/sh.py`, which previously used a bare
-`await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
-shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
-the stdin writer, then drains the stream consumers, and
-`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
-the stream tasks, then drains the observe-hook tasks. Shielding the halves
-separately would let a cancellation landing between them abandon the second.
+cleanup paths in `_run_subprocess_with_streams`
+(`cuprum/_subprocess_stream_run.py`) and `_run_subprocess_without_streams`
+(`cuprum/_subprocess_execution.py`); the spawn-failure, timeout, and
+run-failure paths, plus `_finalize_pipeline_execution`, in
+`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in `cuprum/sh.py`,
+which previously used a bare `await asyncio.shield(...)`. Two further helpers
+keep multi-step cleanup as one shielded unit: `_reconcile_run_tasks` in
+`cuprum/_subprocess_wait.py` cancels the stdin writer, then drains the stream
+consumers, and `_reconcile_pipeline_run_failure` in
+`cuprum/_pipeline_internals.py` cancels the stream tasks, then drains the
+observe-hook tasks. Shielding the halves separately would let a cancellation
+landing between them abandon the second.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
@@ -4147,15 +4168,15 @@ executes:
    without execution disruption. Successful writes emit a `stdin` event with a
    byte count. The metrics adapter increments `cuprum_stdin_bytes_total` for
    successful writes and `cuprum_stdin_errors_total` for failure events.
-5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
-   task runs concurrently with the stdout/stderr consumer tasks. On
-   `TimeoutError` or `asyncio.CancelledError`,
-   `_wait_for_streamed_process_exit` reconciles the stdin writer and stream
-   consumers exactly once via `_reconcile_run_tasks`. The timeout
-   reconciliation passes the execution's capture setting so the bounded EOF
-   grace preserves partial text before `_handle_stream_timeout` raises
-   `_SubprocessTimeoutError`; cancellation passes `capture=False` and re-raises
-   `CancelledError` after all tasks settle.
+5. In the streaming path (`_run_subprocess_with_streams` in
+   `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
+   with the stdout/stderr consumer tasks. On `TimeoutError` or
+   `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
+   stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
+   The timeout reconciliation passes the execution's capture setting so the
+   bounded EOF grace preserves partial text before `_handle_stream_timeout`
+   raises `_SubprocessTimeoutError`; cancellation passes `capture=False` and
+   re-raises `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits `_wait_for_exit_code` itself. On `TimeoutError` or
@@ -4183,11 +4204,12 @@ skeleton (plan event, before-hooks dispatch, delegation).
 
 `_build_stream_config(execution, discard_on_cancel)` centralizes construction
 of the `_StreamConfig` used by the streaming execution path
-(`_run_subprocess_with_streams`). Extracting it removes one branch from that
-function, reducing its cyclomatic complexity below the CodeScene threshold, and
-makes the stdout-sink resolution logic testable in isolation. The required
-`discard_on_cancel` event is shared by both stream consumers and is set by
-`_settle_consumers` only for cleanup paths that must discard retained output.
+(`_run_subprocess_with_streams` in `cuprum/_subprocess_stream_run.py`).
+Extracting it removes one branch from that function, reducing its cyclomatic
+complexity below the CodeScene threshold, and makes the stdout-sink resolution
+logic testable in isolation. The required `discard_on_cancel` event is shared
+by both stream consumers and is set by `_settle_consumers` only for cleanup
+paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.

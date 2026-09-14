@@ -55,6 +55,10 @@ _EXPECTED_STDERR_FALLBACK = RelayFallback(
     stream=EchoStream.STDERR,
     error_category=EchoErrorCategory.UNICODE_ENCODE,
 )
+_EXPECTED_STDOUT_FALLBACK = RelayFallback(
+    stream=EchoStream.STDOUT,
+    error_category=EchoErrorCategory.UNICODE_ENCODE,
+)
 _NON_ENCODABLE = "héllo ś"
 
 
@@ -81,8 +85,8 @@ def test_pipeline_final_stage_owns_its_stdout_diagnostics(
             result = await pipeline.run(
                 output=RunOutputOptions(capture=True, echo=True),
                 context=ExecutionContext(
-                    stdout_sink=typ.cast("typ.IO[str]", accepting),
-                    stderr_sink=typ.cast("typ.IO[str]", rejecting),
+                    stdout_sink=typ.cast("typ.IO[str]", rejecting),
+                    stderr_sink=typ.cast("typ.IO[str]", accepting),
                 ),
             )
         return result.stages[0].relay_fallbacks, result.stages[1].relay_fallbacks
@@ -92,8 +96,8 @@ def test_pipeline_final_stage_owns_its_stdout_diagnostics(
     assert first_fallbacks == (), (
         f"the first stage has no echo of its own stdout, got {first_fallbacks!r}"
     )
-    assert final_fallbacks == (), (
-        f"the final stage's stdout used the healthy sink, got {final_fallbacks!r}"
+    assert final_fallbacks == (_EXPECTED_STDOUT_FALLBACK,), (
+        f"the final stage must own its stdout fallback, got {final_fallbacks!r}"
     )
 
 
