@@ -6,6 +6,8 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
+from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._streams import _StreamConfig
 
 if typ.TYPE_CHECKING:
@@ -94,4 +96,13 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        # One aggregate heartbeat for the whole pipeline, labelled for what it
+        # actually observes: the parent-facing output, not the health of every
+        # stage. The clock starts when the first stage starts.
+        idle=_build_idle_monitor(
+            output.idle_after,
+            output.on_idle,
+            _PIPELINE_IDLE_SUBJECT,
+            ctx.stderr_sink,
+        ),
     )

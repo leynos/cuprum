@@ -14,6 +14,7 @@ import sys
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _consume_stream, _StreamConfig
@@ -28,7 +29,6 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import (
-    _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
     _RunTaskOwnership,
@@ -162,6 +162,30 @@ def _build_stream_config(
     )
 
 
+async def _settle_owned_tasks(
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    *,
+    pid: int | None,
+    capture: bool,
+) -> tuple[str | None, str | None]:
+    """Reconcile every task the run owns, shielded from a caller's cancellation."""
+    # Shielded, because a caller cancelling now would otherwise abandon the
+    # consumers mid-drain and leak them. ``capture`` decides only whether the
+    # drained text survives: the run's tasks are settled either way.
+    return await _shielded_cleanup(
+        _reconcile_run_tasks(
+            tasks,
+            _DrainContext(
+                capture=capture,
+                pid=pid,
+                observation=execution.observation,
+                discard_on_cancel=tasks.discard_on_cancel,
+            ),
+        )
+    )
+
+
 async def _wait_for_streamed_process_exit(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -175,21 +199,14 @@ async def _wait_for_streamed_process_exit(
             execution,
         )
     except TimeoutError as exc:
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired. The
-        # reconciliation is shielded because a caller cancelling now would
-        # otherwise abandon the consumers mid-drain and leak them.
-        stdout_text, stderr_text = await _shielded_cleanup(
-            _reconcile_run_tasks(
-                tasks,
-                _DrainContext(
-                    capture=execution.capture,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
+        # The process has been terminated; settle its tasks exactly once here,
+        # then hand the decoded output to the timeout handler so it survives on
+        # the resulting TimeoutExpired.
+        stdout_text, stderr_text = await _settle_owned_tasks(
+            execution,
+            tasks,
+            pid=pid,
+            capture=execution.capture,
         )
         _handle_stream_timeout(
             exc,
@@ -199,20 +216,10 @@ async def _wait_for_streamed_process_exit(
         )
     except BaseException:
         # Cancellation, and any other failure escaping the wait — an OS error
-        # while terminating, say — need the same reconciliation. Do not capture
+        # while terminating, say — need the same settlement. Do not capture
         # stream text while another error propagates, but settle every task
         # before re-raising the original failure unchanged.
-        await _shielded_cleanup(
-            _reconcile_run_tasks(
-                tasks,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
+        await _settle_owned_tasks(execution, tasks, pid=pid, capture=False)
         raise
 
 
@@ -223,6 +230,11 @@ async def _run_subprocess_with_streams(
     pid: int | None,
 ) -> tuple[int, float, str | None, str | None]:
     """Run subprocess with stream capture and timeout handling."""
+    if execution.idle is not None:
+        # Armed here, once the child is running: the catalogue checks and the
+        # before hooks that preceded this spawn are the parent's work, not the
+        # child's silence.
+        execution.idle.launch()
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
     tasks = _RunTaskOwnership(
@@ -239,46 +251,29 @@ async def _run_subprocess_with_streams(
         tasks,
         pid,
     )
+    # The child has exited, so silence no longer means anything: stop before
+    # waiting on stream EOF, which a grandchild's inherited pipe can hold open
+    # long after its parent is gone.
+    await _stop_idle_monitor(execution.idle)
     if tasks.stdin_task is not None:
         try:
             await tasks.stdin_task
         except BaseException:
             # An unexpected stdin-writer failure (or a cancellation landing on
-            # this await) must still reconcile the stdout/stderr consumers,
-            # mirroring the timeout and cancellation paths above, so those tasks
-            # are cancelled and drained before the error propagates. The writer
-            # has already settled here, so only the consumers need draining.
-            await _shielded_cleanup(
-                _drain_stream_consumers(
-                    tasks.consumers,
-                    _DrainContext(
-                        capture=False,
-                        pid=pid,
-                        observation=execution.observation,
-                        discard_on_cancel=tasks.discard_on_cancel,
-                    ),
-                )
-            )
+            # this await) must still settle the stdout/stderr consumers,
+            # mirroring the timeout and cancellation paths above, before the
+            # error propagates. The writer itself has already settled.
+            await _settle_owned_tasks(execution, tasks, pid=pid, capture=False)
             raise
     try:
         stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
     except BaseException:
         # `gather` re-raises the first failure and leaves its sibling running,
         # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
+        # Settle it the way every other exit path does, then re-raise: the
         # drain absorbs what it finds, which is right while another error is
         # propagating — and here the consumer failure *is* that error.
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
+        await _settle_owned_tasks(execution, tasks, pid=pid, capture=False)
         raise
     return exit_code, exited_at, stdout_text, stderr_text
 
@@ -359,6 +354,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             ),
             exc,
         )
+    finally:
+        # Every exit path settles the watchdog exactly once, including the
+        # failures converted above and any that bypass the stream helpers
+        # entirely; repeats are no-ops.
+        await _shielded_cleanup(_stop_idle_monitor(execution.idle))
 
     _emit_exit_event(
         execution.observation,

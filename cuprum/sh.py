@@ -15,7 +15,8 @@ import typing as typ
 import warnings
 from pathlib import Path
 
-from cuprum._idle_heartbeat import _validate_idle_options
+from cuprum._idle_diagnostic import _idle_subject
+from cuprum._idle_heartbeat import _build_idle_monitor, _validate_idle_options
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -668,6 +669,15 @@ class SafeCmd:
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
+                # Built here but armed by the run itself, once the child is
+                # actually running: everything above this line is the parent's
+                # work, and must not read as the child's silence.
+                idle=_build_idle_monitor(
+                    out.idle_after,
+                    out.on_idle,
+                    _idle_subject(str(self.program)),
+                    ctx.stderr_sink,
+                ),
             ),
             tracking,
         )
