@@ -10,6 +10,7 @@ from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
@@ -32,16 +33,17 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    idle: _IdleMonitor | None = None
 
     @property
-    def stdout_capture_or_echo(self) -> bool:
-        """Whether stdout must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout
+    def consumes_stdout(self) -> bool:
+        """Whether the parent must consume the final stage's stdout."""
+        return self.capture or self.echo_stdout or self.idle is not None
 
     @property
-    def stderr_capture_or_echo(self) -> bool:
-        """Whether stderr must be consumed for capture or echo."""
-        return self.capture or self.echo_stderr
+    def consumes_stderr(self) -> bool:
+        """Whether the parent must consume a stage's stderr."""
+        return self.capture or self.echo_stderr or self.idle is not None
 
     @property
     def stream_config(self) -> _StreamConfig:
@@ -54,6 +56,7 @@ class _PipelineRunConfig:
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
         )
 
     @property
@@ -67,6 +70,10 @@ class _PipelineRunConfig:
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            # The keepalive shares the stderr sink, so this is the echo that
+            # can strand it at the end of an unfinished line.
+            mirror=self.idle.mirror if self.idle is not None else None,
         )
 
 

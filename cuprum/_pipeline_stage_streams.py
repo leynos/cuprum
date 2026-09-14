@@ -40,14 +40,15 @@ def _get_stage_stream_fds(
     idx: int,
     last_idx: int,
     *,
-    stdout_capture_or_echo: bool,
-    stderr_capture_or_echo: bool,
+    consumes_stdout: bool,
+    consumes_stderr: bool,
 ) -> _StageStreamConfig:
     """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode.
 
     A non-final stage always pipes stdout so its output can relay into the
     next stage's stdin, regardless of capture or echo. The final stage's
-    stdout and every stage's stderr follow their own capture-or-echo gate.
+    stdout and every stage's stderr follow their own parent-consumption gate,
+    which is capture, echo, or an idle heartbeat watching for output.
 
     Returns
     -------
@@ -57,13 +58,11 @@ def _get_stage_stream_fds(
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
-        if idx != last_idx or stdout_capture_or_echo
+        if idx != last_idx or consumes_stdout
         else asyncio.subprocess.DEVNULL
     )
     stderr = (
-        asyncio.subprocess.PIPE
-        if stderr_capture_or_echo
-        else asyncio.subprocess.DEVNULL
+        asyncio.subprocess.PIPE if consumes_stderr else asyncio.subprocess.DEVNULL
     )
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
@@ -89,7 +88,7 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
-    if config.stderr_capture_or_echo:
+    if config.consumes_stderr:
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
@@ -115,7 +114,7 @@ def _create_stage_capture_tasks(
                 _EventDetails(pid=process.pid, line=line),
             )
 
-    if config.stdout_capture_or_echo:
+    if config.consumes_stdout:
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,

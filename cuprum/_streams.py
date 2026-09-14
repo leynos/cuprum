@@ -71,6 +71,13 @@ class _StreamConfig:
     discard_on_cancel: asyncio.Event | None = None
     # Drained output stream for bounded-echo observability.
     stream: EchoStream = EchoStream.STDOUT
+    # Run-owned observers, both optional and both unable to change what is
+    # captured: ``activity`` reports that a non-empty chunk arrived, before any
+    # decoding, truncation, or line callback could drop it, and ``mirror``
+    # records where the echo sink ended up so a keepalive written later knows
+    # whether it would land mid-line.
+    activity: cabc.Callable[[], None] | None = None
+    mirror: _MirrorCursor | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -227,6 +234,14 @@ async def _drain_chunks(
         _record_stream_read(measurement, chunk)
         if not chunk:
             return True
+        # Activity is reported here, on the raw read, so that every way a chunk
+        # can go on to be dropped still counts: undecodable bytes, output with
+        # no line ending yet, a disabled mirror, and text truncated past the
+        # echo bound all mean the child is talking. A run with idle reporting
+        # off has no observer and pays nothing for this.
+        activity = state.config.activity
+        if activity is not None:
+            activity()
         if state.buffer is not None:
             state.buffer.extend(chunk)
         if state.config.echo_output:
@@ -361,6 +376,11 @@ def _echo_write(
         return False
     try:
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
+        mirror = state.config.mirror
+        if mirror is not None:
+            # Only a chunk that reached the sink moves the cursor: a write that
+            # raised left the sink where it was.
+            mirror.note(chunk)
     except UnicodeEncodeError as exc:
         state.echo_guard.disabled = True
         # The first failure emits both projections; the guard prevents retries.
