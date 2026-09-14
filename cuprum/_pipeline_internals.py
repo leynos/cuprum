@@ -186,6 +186,33 @@ async def _reconcile_pipeline_run_failure(
     )
 
 
+async def _finalize_pipeline_timeout(
+    config: _PipelineRunConfig,
+    spawn: _PipelineSpawnResult,
+    observers: _PipelineObservers,
+    timeout_error: BaseException,
+) -> None:
+    """Report a pipeline timeout and finalize its sink and observe tasks."""
+    observations = observers.observations
+    _close_pipeline_sink_session(
+        config.sink_session,
+        outcome=_pipeline_error_outcome(timeout_error),
+    )
+    _report_pipeline_timeout_expiry(
+        observations,
+        spawn.processes,
+        configured_timeout=config.timeout,
+    )
+    _emit_timeout_exit_events(observations, spawn)
+    await _shielded_cleanup(
+        _drain_tasks_during_cleanup(
+            observers.pending_tasks,
+            timeout_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
+        )
+    )
+
+
 async def _run_spawned_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
@@ -220,20 +247,11 @@ async def _run_spawned_pipeline(
             config,
         )
     except _sh_module().TimeoutExpired as timeout_error:
-        _close_pipeline_sink_session(
-            sink_session,
-            outcome=_pipeline_error_outcome(timeout_error),
-        )
-        _report_pipeline_timeout_expiry(
-            observations,
-            spawn.processes,
-            configured_timeout=config.timeout,
-        )
-        _emit_timeout_exit_events(observations, spawn)
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, timeout_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
+        await _finalize_pipeline_timeout(
+            config,
+            spawn,
+            observers,
+            timeout_error,
         )
         raise
     except BaseException as run_error:
