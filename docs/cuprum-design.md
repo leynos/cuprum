@@ -1010,13 +1010,12 @@ independently becomes a `PIPE` or `DEVNULL` according to its own
 capture-or-echo-or-line-observation gate. `SafeCmd.lines()` adds its queue
 observer before spawning, so both streams remain `PIPE` for line delivery even
 when `capture=False` and echo is disabled; the resulting `CommandResult` still
-has `None` for both captured fields. For a pipeline, the stdout of a
-non-final stage is always a `PIPE` so that it can relay into the next stage,
-while the stdout of the final stage and the stderr of every stage follow their
-own independent gates.
-`capture` remains a single joint switch, so both streams are still captured when
-`capture=True` even if neither echoes. The flow ends at the stream consumers:
-`_spawn_stream_consumers` for a single command and
+has `None` for both captured fields. For a pipeline, the stdout of a non-final
+stage is always a `PIPE` so that it can relay into the next stage, while the
+stdout of the final stage and the stderr of every stage follow their own
+independent gates. `capture` remains a single joint switch, so both streams are
+still captured when `capture=True` even if neither echoes. The flow ends at the
+stream consumers: `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 
 ```mermaid

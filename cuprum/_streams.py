@@ -237,6 +237,7 @@ async def _consume_stream_without_lines(
         return "" if config.capture_output else None
     return await _drain(stream, config, read_size=read_size)
 
+
 async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
@@ -439,6 +440,7 @@ def _flush_echo_decoder(state: _DrainState) -> None:
             _write_finished_echo_line(state, limiter, b"")
     if state.echo_decoder is not None:
         _echo_write(state, b"", final=True)
+
 
 async def _emit_completed_lines(
     text: str,
