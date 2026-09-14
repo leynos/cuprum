@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 
+import pytest
+
 import cuprum as c
 from cuprum import (
     context,
@@ -97,6 +99,10 @@ def test_command_result_exposes_execution_measurements() -> None:
         "user_cpu_seconds",
         "system_cpu_seconds",
     } <= fields
+    legacy_result = c.CommandResult(c.ECHO, (), 0, 1, "", "")
+    assert legacy_result.started_at == pytest.approx(0.0)
+    assert legacy_result.duration == pytest.approx(0.0)
+    assert legacy_result.ok is True
     assert c.CommandResult(c.ECHO, (), 0, 1, "", "", 0.0, 0.0).ok is True
     assert c.CommandResult(c.ECHO, (), 1, 1, "", "", 0.0, 0.0).ok is False
 

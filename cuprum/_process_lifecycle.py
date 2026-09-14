@@ -217,6 +217,8 @@ async def _spawn_pipeline_processes(
                 stdout_capture_or_echo=config.stdout_capture_or_echo,
                 stderr_capture_or_echo=config.stderr_capture_or_echo,
             )
+            started_at.append(time.perf_counter())
+            wall_clock_started_at.append(observation.wall_clock())
             process = await asyncio.create_subprocess_exec(
                 *observation.cmd.argv_with_program,
                 stdin=stream_fds.stdin,
@@ -226,8 +228,6 @@ async def _spawn_pipeline_processes(
                 cwd=_cwd_arg(config.ctx.cwd),
             )
             processes.append(process)
-            started_at.append(time.perf_counter())
-            wall_clock_started_at.append(time.time())
             observation.emit("start", _EventDetails(pid=process.pid))
 
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
