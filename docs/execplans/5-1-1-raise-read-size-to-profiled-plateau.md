@@ -12,7 +12,8 @@ The 39 replayed commits retained the upstream bounded-echo and timeout-fixture
 improvements alongside this plan's read-size injection, completed-operation
 telemetry, and worker-owned native reader-descriptor handoff. Deterministic
 revalidation passed; force-with-lease publication and the refreshed CodeRabbit
-review remain pending.
+review remained pending at that point. The validated branch was published as
+`92390072`, and CodeRabbit review `f0713b24` is queued for PR #321.
 
 Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
 that the native pump received an asyncio-owned reader descriptor. The
@@ -220,9 +221,9 @@ This task is complete only when:
   `git range-diff` confirms the substantive replay. Revalidation passed
   `make check-fmt`, `make test`, `make typecheck`, `make lint`,
   `make markdownlint`, and `make nixie`; the regenerated Maturin snapshot and a
-  real nonzero-byte native hop span cover the changed module boundaries.
-  Force-with-lease publication and the refreshed CodeRabbit review remain
-  pending.
+  real nonzero-byte native hop span cover the changed module boundaries. The
+  branch was force-with-lease published as `92390072`; CodeRabbit review
+  `f0713b24` is queued for PR #321 and remains the sole pending acceptance step.
 
 - [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
   reader-descriptor hand-off with worker-owned duplicates, preserved buffered
