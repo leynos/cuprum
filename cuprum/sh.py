@@ -49,6 +49,9 @@ from cuprum.context import _validate_timeout
 from cuprum.context import current_context as current_context
 from cuprum.context import observe as observe
 from cuprum.context import scoped as scoped
+from cuprum.echo_events import (
+    RelayFallback as RelayFallback,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
 
 # Public annotations use ``Program``. Keep it in module globals so
 # ``typing.get_type_hints`` can resolve the postponed public annotations.
@@ -61,69 +64,6 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
-_DEFAULT_CANCEL_GRACE = 0.5
-_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-_DEFAULT_ENCODING = "utf-8"
-_DEFAULT_ERROR_HANDLING = "replace"
-
-
-from cuprum.echo_events import (
-    RelayFallback as RelayFallback,
-    RelayFallback as RelayFallback,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
-)
-
-"""Safe command construction and execution facade for curated programs.
-This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values and providing a minimal async runtime for executing
-them with predictable semantics.
-"""
-# Public annotations use ``Program``. Keep it in module globals so
-# ``typing.get_type_hints`` can resolve the postponed public annotations.
-type _ArgValue = str | int | float | bool | Path
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-type _EnvMapping = cabc.Mapping[str, str] | None
-type _CwdType = str | Path | None
-_DEFAULT_CANCEL_GRACE = 0.5
-_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-_DEFAULT_ENCODING = "utf-8"
-_DEFAULT_ERROR_HANDLING = "replace"
-
-
-"""Safe command construction and execution facade for curated programs.
-This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values and providing a minimal async runtime for executing
-them with predictable semantics.
-"""
-# Public annotations use ``Program``. Keep it in module globals so
-# ``typing.get_type_hints`` can resolve the postponed public annotations.
-type _ArgValue = str | int | float | bool | Path
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-type _EnvMapping = cabc.Mapping[str, str] | None
-type _CwdType = str | Path | None
-_DEFAULT_CANCEL_GRACE = 0.5
-_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-_DEFAULT_ENCODING = "utf-8"
-_DEFAULT_ERROR_HANDLING = "replace"
-"""Safe command construction and execution facade for curated programs.
-This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values and providing a minimal async runtime for executing
-them with predictable semantics.
-"""
-# Public annotations use ``Program``. Keep it in module globals so
-# ``typing.get_type_hints`` can resolve the postponed public annotations.
-type _ArgValue = str | int | float | bool | Path
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-type _EnvMapping = cabc.Mapping[str, str] | None
-type _CwdType = str | Path | None
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a

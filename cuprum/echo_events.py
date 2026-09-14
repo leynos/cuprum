@@ -88,6 +88,7 @@ class EchoEvent:
     error_category: EchoErrorCategory
     dropped_bytes: int | None = None
 
+
 @dc.dataclass(frozen=True, slots=True)
 class RelayFallback:
     """One handled echo-disablement recorded on a command's result.

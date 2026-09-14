@@ -56,6 +56,7 @@ def _drain_config(
         stream=stream,
     )
 
+
 class _MetricsProbe:
     """Echo hook delegating to :class:`EchoMetricsHook` for one collector."""
 
@@ -66,6 +67,8 @@ class _MetricsProbe:
     def __call__(self, event: EchoEvent) -> None:
         """Increment the collector's echo counter for ``event``."""
         self._hook(event)
+
+
 def _run_drain(stream: EchoStream) -> None:
     """Run one drain whose echo path hits the sink's encoding limit."""
     sink = typ.cast("typ.IO[str]", _Cp1252TextOnlySink())
@@ -250,6 +253,7 @@ def test_failing_collector_does_not_break_the_drain() -> None:
     assert captured == "plain ś plain ń", (
         f"capture must survive a broken collector, found captured={captured!r}"
     )
+
 
 def test_metrics_hook_increments_once_per_disablement() -> None:
     """The existing EchoMetricsHook counts one increment per transition."""

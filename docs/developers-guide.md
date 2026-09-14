@@ -1111,12 +1111,14 @@ stream. This preserves multibyte characters that span read chunks.
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. That helper catches
-`UnicodeEncodeError` only: the first failure disables echo for the rest of that
-drain, logs one `WARNING` on the `cuprum.stream` logger with structured
-`cuprum_*` extras, and lets every other error propagate unchanged. Capture
-(`buffer.extend`) always runs before the echo step, so a rejected echo write
-never loses captured bytes, and the binary `.buffer` fast path inside
+`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
+module owns this write-side policy; `_streams` retains the drain lifecycle and
+re-exports `_write_chunk` for existing internal callers. Its `_echo_chunk`
+helper catches `UnicodeEncodeError` only: the first failure disables echo for
+the rest of that drain, logs one `WARNING` on the `cuprum.stream` logger with
+structured `cuprum_*` extras, and lets every other error propagate unchanged.
+Capture (`buffer.extend`) always runs before the echo step, so a rejected echo
+write never loses captured bytes, and the binary `.buffer` fast path inside
 `_write_chunk` is unchanged.
 
 The first failure is owned entirely by that one `_echo_chunk` transition: the
@@ -1129,7 +1131,6 @@ hook registry rather than a new phase, so consumers opt in by registering and
 unregistered callers pay nothing. Hook failures are reported and skipped,
 mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
 what a run captures.
-
 
 ### Result diagnostics ownership
 
