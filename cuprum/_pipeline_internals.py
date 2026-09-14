@@ -9,16 +9,16 @@ finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
 ``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
-``cuprum._pipeline_collect``, ``cuprum._pipeline_streams``,
-``cuprum._pipeline_types``, ``cuprum._pipeline_wait``,
-``cuprum._process_lifecycle``, ``cuprum._observability``, and
+``cuprum._pipeline_collect``, ``cuprum._pipeline_sink``,
+``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``cuprum._pipeline_wait``, ``cuprum._process_lifecycle``,
+``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
 ``cuprum._subprocess_execution``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import time
 import typing as typ
 from pathlib import Path
@@ -42,6 +42,11 @@ from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
+from cuprum._pipeline_sink import (
+    _close_pipeline_sink_session,
+    _pipeline_error_outcome,
+    _pipeline_result_outcome,
+)
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
@@ -57,11 +62,11 @@ from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.context import CuprumContext
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
-
-from cuprum.sinks import base as sinks
 
 __all__ = [
     "_await_pipeline_wait_result",
@@ -217,10 +222,7 @@ async def _run_spawned_pipeline(
     except _sh_module().TimeoutExpired as timeout_error:
         _close_pipeline_sink_session(
             sink_session,
-            outcome=sinks.SessionOutcome(
-                outcome=sinks.TerminalOutcome.TIMEOUT,
-                detail="timeout",
-            ),
+            outcome=_pipeline_error_outcome(timeout_error),
         )
         _report_pipeline_timeout_expiry(
             observations,
@@ -344,79 +346,6 @@ async def _spawn_and_drive_pipeline(
         spawn,
         _PipelineObservers(observations, pending_tasks),
     )
-
-
-def _pipeline_result_outcome(
-    stage_results: list[CommandResult],
-) -> sinks.SessionOutcome:
-    """Map a completed pipeline's stage results onto the terminal-outcome set.
-
-    A pipeline fails when any stage failed; the annotation reports the first
-    failing stage's exit code. A zero exit code for every stage is success.
-
-    Returns
-    -------
-    sinks.SessionOutcome
-        The terminal report for the pipeline.
-    """
-    failed = next((r for r in stage_results if r.exit_code != 0), None)
-    if failed is None:
-        return sinks.SessionOutcome(
-            outcome=sinks.TerminalOutcome.EXIT_ZERO,
-            exit_code=0,
-        )
-    return sinks.SessionOutcome(
-        outcome=sinks.TerminalOutcome.EXIT_NONZERO,
-        exit_code=failed.exit_code,
-    )
-
-
-def _pipeline_error_outcome(error: BaseException) -> sinks.SessionOutcome:
-    """Map a pipeline's terminal error onto the terminal-outcome set.
-
-    Mirrors the single-command mapping: only bounded categorical categories
-    reach the adapter, never exception text or argv.
-
-    Returns
-    -------
-    sinks.SessionOutcome
-        The terminal report for the pipeline.
-    """
-    timeout_expired = _sh_module().TimeoutExpired
-    match error:
-        case timeout_expired():
-            return sinks.SessionOutcome(
-                outcome=sinks.TerminalOutcome.TIMEOUT,
-                detail="timeout",
-            )
-        case asyncio.CancelledError():
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.CANCELLED)
-        case _:
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.ERROR)
-
-
-def _close_pipeline_sink_session(
-    session: sinks.OutputSession | None,
-    *,
-    outcome: sinks.SessionOutcome,
-) -> None:
-    """Finalize the pipeline's presentation-sink session on any terminal path.
-
-    The adapter's ``close`` is idempotent by protocol, so overlapping
-    terminal paths cannot double-annotate. Called synchronously on each
-    terminal path before the pending-task drains: the close is non-blocking
-    (a buffered write), and the drain that follows is the shielded step.
-
-    Parameters
-    ----------
-    session : sinks.OutputSession | None
-        The pipeline's active session, or ``None`` when no sink was given.
-    outcome : sinks.SessionOutcome
-        The terminal report for the pipeline.
-    """
-    if session is None:
-        return
-    session.close(outcome)
 
 
 def _run_pipeline_after_hooks(
