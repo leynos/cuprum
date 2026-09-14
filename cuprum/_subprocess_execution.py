@@ -47,12 +47,21 @@ class _SubprocessExecution:
     """Execution context bundle for subprocess spawning."""
 
     cmd: SafeCmd
+
     ctx: ExecutionContext
+
     capture: bool
+
     echo_stdout: bool
+
     echo_stderr: bool
+
+    max_echo_line_bytes: int | None
+
     timeout: float | None
+
     observation: _StageObservation
+
     stdin_data: bytes | None
 
     @property
@@ -140,6 +149,7 @@ def _build_stream_config(
     return _StreamConfig(
         capture_output=execution.capture,
         echo_output=execution.echo_stdout,
+        echo_max_line_bytes=execution.max_echo_line_bytes,
         sink=(
             execution.ctx.stdout_sink
             if execution.ctx.stdout_sink is not None

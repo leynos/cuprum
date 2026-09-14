@@ -368,6 +368,37 @@ when a call needs output behaviour that differs from the default.
   the use case for probes such as `cargo metadata --locked`, whose JSON
   document must stay out of a CI log. Capture is independent of echo: a stream
   that is not echoed is still captured while `capture=True`.
+- `max_echo_line_bytes` limits each mirrored logical line to that many bytes;
+  the limit includes retained child-output bytes, the encoded truncation
+  marker, and the line ending. It defaults to 64 KiB, protecting sinks such as
+  GitHub Actions job logs from oversized single lines. A truncated line receives
+  `… [truncated N bytes]` before its ending, where `N` is the number of
+  omitted child-output bytes. If a positive bound is too small to contain the
+  full marker or a complete `\r\n` ending, cuprum abbreviates the marker or
+  omits that ending so the echoed bytes still fit the bound. The marker is
+  encoded with the configured `encoding` and `errors` policy; an
+  ASCII-compatible `... [truncated N bytes]` marker is used when the encoding
+  cannot represent the ellipsis. Set it to `None` to restore the previous
+  chunk-for-chunk mirroring. This setting changes only the echoed copy:
+  `CommandResult` retains the complete captured bytes, including lines that
+  were truncated for the sink. `\n` and `\r\n` are recognized endings; split
+  `\r\n` reads are treated the same as a single read. For echoing, a trailing
+  `\r` is held while the next byte is pending; at EOF, or when the next byte is
+  not `\n`, it remains line data, and only `\r\n` terminates it. Bounded echo
+  also requires an encoding whose newline is a single raw `LF` byte; encodings
+  such as UTF-16, UTF-32, and stateful encodings are rejected when a bound is
+  set. Use `None` for unbounded echoing with those encodings.
+
+#### Observing echo truncation
+
+Register a hook with `cuprum.echo_observation.observe_echo` to observe echo
+events. A successfully written bounded line produces an `EchoEvent` with
+`error_category=EchoErrorCategory.TRUNCATED`, `stream` set to `stdout` or
+`stderr`, and `dropped_bytes` set to the number of child-output bytes omitted
+from that line. The event is emitted only after the complete truncated payload,
+including its marker and line ending, has been written successfully. A failed
+echo write therefore does not produce a truncation event. No events are emitted
+unless a hook is registered.
 
 If a text-only echo sink cannot represent the subprocess output (for example a
 CP1252 console receiving UTF-8 text), Cuprum no longer aborts the run with
@@ -448,6 +479,11 @@ If existing code constructs `IOOptions`, replace it with `RunOutputOptions`.
 and emits a `DeprecationWarning` on construction. Migrate by replacing
 `IOOptions(capture=..., echo=...)` usage with
 `RunOutputOptions(capture=..., echo=...)` passed as `output=...`.
+
+When migrating a caller that mirrors output, review its `max_echo_line_bytes`
+choice as well. The default protects the sink while capture remains complete,
+so a truncated echoed line does not truncate the `CommandResult`; use `None`
+only when the sink accepts unbounded lines.
 
 `RunOutputOptions(capture=True, echo=False)` is the default. Supply it
 explicitly only when overriding either flag.

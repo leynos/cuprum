@@ -475,11 +475,14 @@ configuration.
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
-`cuprum/_streams.py`:
+`cuprum/_line_splitting.py`, called by `cuprum/_streams.py`:
 
 - `_split_complete_lines(text)` splits text into completed lines, strips each
-  recognized line ending, and returns `(lines, remainder)`. The `remainder` is
-  the final partial line and never ends in `"\n"` or `"\r"`.
+  recognized line ending, and returns `(lines, remainder)`. The parser
+  recognizes only `"\n"`, `"\r"`, and `"\r\n"`; a terminal `"\r"` remains in
+  `remainder` until the next chunk establishes whether it begins `"\r\n"` or is
+  a standalone separator. At end of stream, that pending carriage return is
+  flushed as a line ending.
 - `_strip_line_ending(line)` removes at most one trailing `"\r\n"`, `"\n"`, or
   `"\r"` sequence. It does not normalize or edit interior text.
 
@@ -1052,7 +1055,26 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 read/echo/buffer loop behind both consume variants. It reads in `_READ_SIZE`
 chunks, extends the capture buffer when capturing, echoes each chunk to the
 configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing:
+callback for variant-specific processing. When `config.echo_max_line_bytes` is
+set, the echo side additionally splits raw bytes into logical lines and passes
+their bodies to the per-drain `_EchoLineLimiter` in
+`cuprum/_echo_truncation.py`:
+
+- the limiter keeps its byte count and dropped-byte count across reader chunks,
+  then resets both at each completed line;
+- it reserves room for the configured sink's encoded marker and line ending,
+  so the complete echoed line is no longer than the configured bound;
+- a trailing carriage return is held until the next byte identifies `\r\n`; if
+  the next byte is not `\n`, or the stream reaches EOF, it remains line data,
+  keeping CRLF accounting independent of read boundaries;
+- the limiter affects only the sink copy. `buffer.extend` runs first and the
+  capture buffer retains every child-output byte, including bytes omitted from
+  the mirrored prefix.
+
+`RunOutputOptions.max_echo_line_bytes` is copied through the command or
+pipeline execution configuration into `_StreamConfig.echo_max_line_bytes` for
+each echoed stream. The stream consumer owns the limiter; the pipeline pump
+continues to relay raw inter-stage bytes without applying an echo bound.
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -1068,7 +1090,14 @@ variants must layer behaviour through `on_chunk` rather than copying the loop.
 When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
 `config.encoding` and `config.errors`, then flushes that decoder at end of
-stream. This preserves multibyte characters that span read chunks.
+stream. This preserves multibyte characters that span read chunks. Bounded
+echoing passes only complete encoded characters to that decoder before the
+marker and ending; the marker uses the same encoding and error policy, with an
+ASCII-compatible fallback when the preferred ellipsis is not representable. For
+a positive bound too small for a complete marker or CRLF terminator, the marker
+is abbreviated or the terminator omitted so the payload stays bounded. `None`
+for `echo_max_line_bytes` bypasses the limiter and preserves the unbounded
+chunk path.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
@@ -1084,13 +1113,21 @@ never loses captured bytes, and the binary `.buffer` fast path inside
 The first failure is owned entirely by that one `_echo_chunk` transition: the
 `cuprum.stream` `WARNING` and the opt-in `cuprum.echo_observation.observe_echo`
 event are two projections of the same guard flip, emitted once per affected
-drain and never repeated by a later chunk or the final decoder flush. Because
-`ExecPhase` is a closed set that registered consumers match exhaustively, the
-echo channel carries its own `cuprum.echo_events.EchoEvent` type on its own
-hook registry rather than a new phase, so consumers opt in by registering and
-unregistered callers pay nothing. Hook failures are reported and skipped,
-mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
-what a run captures.
+drain and never repeated by a later chunk or the final decoder flush. A
+successful bounded truncation emits one echo event at line finalization with
+the closed `truncated` category and the numeric count of dropped child-output
+bytes. Because `ExecPhase` is a closed set that registered consumers match
+exhaustively, the echo channel carries its own `cuprum.echo_events.EchoEvent`
+type on its own hook registry rather than a new phase, so consumers opt in by
+registering and unregistered callers pay nothing. `EchoMetricsHook` projects
+successful bounded truncations to `cuprum_echo_truncations_total`, with the
+bounded `stream` label (`stdout` or `stderr`), and increments it once for each
+truncated line that was written successfully. The separate
+`cuprum_echo_encoding_failures_total` counter records the first
+`UnicodeEncodeError` for a drain, labelled by `stream` and
+`error_category="unicode_encode"`; it does not count successful truncations.
+Hook failures are reported and skipped, mirroring `cuprum.pump_observation`, so
+a broken metrics backend cannot change what a run captures.
 
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the

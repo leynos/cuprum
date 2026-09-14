@@ -66,6 +66,7 @@ def _timeout_free_config() -> _PipelineRunConfig:
         capture=True,
         echo_stdout=False,
         echo_stderr=False,
+        max_echo_line_bytes=None,
         timeout=None,
         stdout_sink=io.StringIO(),
         stderr_sink=io.StringIO(),

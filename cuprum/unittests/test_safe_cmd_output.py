@@ -129,6 +129,45 @@ def test_captures_and_echoes_stderr(
     assert captured.err.strip() == "err"
 
 
+def test_bounded_stderr_echo_keeps_complete_capture(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Public command execution bounds stderr echo without trimming capture."""
+    _, execute = execution_strategy
+    payload = "x" * 80 + "\n"
+    bound = 50
+    stderr_sink = io.StringIO()
+    command = python_builder(
+        "-c",
+        f"import sys; sys.stderr.write({payload!r})",
+    )
+
+    result = execute(
+        command,
+        {
+            "output": RunOutputOptions(
+                capture=True,
+                echo_stdout=False,
+                echo_stderr=True,
+                max_echo_line_bytes=bound,
+            ),
+            "context": ExecutionContext(stderr_sink=stderr_sink),
+        },
+    )
+
+    expected_echo = "x" * 25 + "… [truncated 55 bytes]\n"
+    assert result.ok is True, "the stderr-writing command must succeed"
+    assert result.stdout == "", "the command must not capture stdout"
+    assert result.stderr == payload, "capture must retain the complete stderr line"
+    assert stderr_sink.getvalue() == expected_echo, (
+        "stderr echo must retain the exact bounded prefix, marker, and newline"
+    )
+    assert len(stderr_sink.getvalue().encode()) <= bound, (
+        "the mirrored stderr bytes must not exceed max_echo_line_bytes"
+    )
+
+
 def test_echoes_when_requested(
     capfd: pytest.CaptureFixture[str],
     execution_strategy: tuple[str, ExecuteFn],
