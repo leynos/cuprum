@@ -3916,6 +3916,34 @@ pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
 
+### CommandResult timing and child-resource accounting
+
+`cuprum/_rusage.py` is the optional platform boundary for child-resource
+accounting. It detects whether `resource.getrusage(RUSAGE_CHILDREN)` exists,
+captures a normalized snapshot when it does, and returns `None` when the
+module, API, or snapshot call is unavailable. The direct-command path captures
+the before snapshot immediately before spawning and the after snapshot after
+the child has been reaped. User and system CPU times are reported as
+non-negative deltas; concurrent commands remain approximate because
+`RUSAGE_CHILDREN` is a process-global aggregate.
+
+`ru_maxrss` is a cumulative high-water mark rather than an accumulating
+counter. Subtracting two snapshots would therefore report zero for a later
+command whose peak is below an earlier child, so `max_rss_bytes` is left as
+`None` when this API is the only source available. Windows and other platforms
+without the resource API likewise return `None` for all three resource fields.
+Pipeline stages also leave them as `None`: concurrently reaped children cannot
+be attributed safely to individual stages.
+
+The execution boundary supplies the wall-clock callable used for
+`CommandResult.started_at`; direct commands and pipeline stages read it
+immediately before their respective spawn awaits. The monotonic start reading
+is taken at the same boundary and is paired with the exit reading to compute a
+non-negative `duration`. This keeps spawn-await latency inside the measured
+interval and leaves the clocks replaceable in tests. The public dataclass gives
+both timing fields a `0.0` default so legacy six-argument positional
+construction remains valid; normal execution always supplies measurements.
+
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the
 caller rather than threaded through a `timeout` parameter. The wait logic is
