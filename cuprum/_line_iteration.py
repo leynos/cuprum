@@ -119,6 +119,11 @@ async def _iter_line_events(
         ``CommandResult`` once the subprocess has exited.
     """
     from cuprum._line_stream import _line_event_queue
+    from cuprum._pipeline_types import _EventDetails
+
+    execution.observation.emit("plan", _EventDetails(pid=None))
+    for hook in tracking.execution_hooks.before_hooks:
+        hook(execution.cmd)
 
     queue = _line_event_queue()
     result_future: asyncio.Future[CommandResult] = (
@@ -207,7 +212,14 @@ async def _reconcile_line_stream(
     """
     if not result_future.done():
         coordinator.cancel()
-    await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
+    try:
+        await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
+    except BaseException as error:
+        # A published coordinator failure must not skip observe-hook cleanup.
+        # Passing it as the active error means a failing hook is grouped with,
+        # rather than replaces, the outcome that ended the run.
+        await _shielded_cleanup(_drain_line_stream_tasks(tracking.pending_tasks, error))
+        raise
     await _shielded_cleanup(_drain_line_stream_tasks(tracking.pending_tasks, failure))
 
 

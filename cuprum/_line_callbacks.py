@@ -32,7 +32,7 @@ from cuprum.lines import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_types import _StageObservation
+    from cuprum._pipeline_types import _EventDetails, _StageObservation
 
 
 def _stamp_line(
@@ -47,6 +47,13 @@ def _stamp_line(
         at=max(0.0, perf_counter() - started_at),
         text=line,
     )
+
+
+def _event_details(*, pid: int | None, line: str) -> _EventDetails:
+    """Build one deferred-import observe-event payload."""
+    from cuprum._pipeline_types import _EventDetails
+
+    return _EventDetails(pid=pid, line=line)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -97,7 +104,7 @@ def _compose_line_callbacks(
         if has_observe_hooks:
             observation.emit(
                 context.stream,
-                _EventDetailsShim(pid=context.pid, line=line).details,
+                _event_details(pid=context.pid, line=line),
             )
         if context.on_line is None:
             return None
@@ -157,15 +164,3 @@ def _fan_out_hooks(chain: cabc.Sequence[_LineHookFn]) -> _LineHookFn:
         return await_all(pending)
 
     return fan_out
-
-
-class _EventDetailsShim:
-    """Build the event details without importing the pipeline type eagerly."""
-
-    __slots__ = ("details",)
-
-    def __init__(self, *, pid: int | None, line: str) -> None:
-        """Construct the ``_EventDetails`` payload for one line event."""
-        from cuprum._pipeline_types import _EventDetails
-
-        self.details = _EventDetails(pid=pid, line=line)

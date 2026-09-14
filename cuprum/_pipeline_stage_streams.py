@@ -112,15 +112,16 @@ def _create_stage_capture_tasks(
     )
 
     if config.stderr_consumed:
+        stderr_config = dc.replace(
+            config.stream_config("stderr"),
+            stream=EchoStream.STDERR,
+        )
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
-                dc.replace(
-                    config.stderr_stream_config,
-                    stream=EchoStream.STDERR,
-                ),
+                stderr_config,
                 on_line=stderr_on_line,
-                read_size=config.stderr_stream_config.read_size,
+                read_size=stderr_config.read_size,
             ),
         )
 
@@ -140,12 +141,13 @@ def _create_stage_capture_tasks(
     )
 
     if config.stdout_consumed:
+        stdout_config = config.stream_config("stdout")
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
-                config.stream_config,
+                stdout_config,
                 on_line=stdout_on_line,
-                read_size=config.stream_config.read_size,
+                read_size=stdout_config.read_size,
             ),
         )
 
