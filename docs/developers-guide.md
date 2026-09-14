@@ -3901,9 +3901,9 @@ not obscure the documented ambiguity error.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -3911,9 +3911,24 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; and orchestration that coordinates them —
-spawning, wiring streams, and assembling the result — belongs in
+belong in `_subprocess_wait`; choosing each mirrored stream's destination and
+spawning the consumer tasks that drain into it belongs in
+`_subprocess_streams`; and orchestration that coordinates them — spawning,
+invoking that wiring, and assembling the result — belongs in
 `_subprocess_execution`.
+
+`cuprum/_subprocess_streams.py` holds the consumer wiring itself:
+`_resolve_stream_sink` picks the destination for one mirrored stream — a live
+presentation-sink session's log first, so mirrored output lands inside the
+adapter's framing (the GitHub Actions group, say) in the order the adapter
+received it, then the execution context's configured sink, then the process's
+own stream — `_create_stream_callback` builds the per-line observability hook,
+`_build_stream_config` assembles the stdout `_StreamConfig`, and
+`_spawn_stream_consumers` derives the stderr config from it and starts both
+reader tasks. It was split out of `_subprocess_execution` to keep both modules
+within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
+so callers and the tests that monkeypatch them by module path resolve the same
+names as before.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -3929,12 +3944,13 @@ promptly and discards output. `_await_capture_eof_grace` uses an injected
 waiter when supplied and otherwise delegates to the bounded `_await_eof_grace`;
 `_settle_consumers` is the single optional settlement boundary that sets the
 discard event before cancelling pending readers.
-`_build_stream_config(execution, discard_on_cancel)` passes that shared event
-into each stream's `_StreamConfig`, so timeout capture can retain buffered text
-while cancellation and failure cleanup can discard it. It was split out of
-`_subprocess_execution` so that module stays about orchestration; termination
-routes through `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a
-caller cancelling during the grace period cannot skip the `SIGKILL` escalation.
+`_build_stream_config(execution, discard_on_cancel)` (in
+`cuprum/_subprocess_streams.py`) passes that shared event into each stream's
+`_StreamConfig`, so timeout capture can retain buffered text while cancellation
+and failure cleanup can discard it. It was split out of `_subprocess_execution`
+so that module stays about orchestration; termination routes through
+`_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
+cancelling during the grace period cannot skip the `SIGKILL` escalation.
 
 The pipeline side has an analogous split. `cuprum/_pipeline_results.py` owns
 per-stage *reporting*: the terminal `exit` event a stage owes its observers

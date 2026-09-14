@@ -1312,7 +1312,14 @@ The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
 - `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+  assembling the result.
+- `cuprum/_subprocess_streams.py` owns stdout/stderr consumer wiring: choosing
+  the sink each mirrored stream drains to — a live presentation-sink session's
+  log, the execution context's configured sink, or the process's own stream —
+  and spawning the consumer tasks that drain into it. Split out of
+  `_subprocess_execution` to keep both modules within the project's module-size
+  ceiling; `_subprocess_execution` re-exports the wiring helpers, so callers
+  and monkeypatch targets resolve the same names as before.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the

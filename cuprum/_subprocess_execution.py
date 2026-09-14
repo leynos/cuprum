@@ -1,25 +1,30 @@
 """Internal subprocess execution machinery.
 
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
-stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``.
+stream consumers, and assembling the ``CommandResult``. The wiring itself —
+which destination each stream drains to, and the consumer tasks that do the
+draining — lives in ``cuprum._subprocess_streams``, re-exported here for the
+runs this module drives. The rules for ending a run — applying the deadline,
+terminating the process, and draining the stream consumers exactly once — live
+in ``cuprum._subprocess_wait``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import sys
 import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _resolve_stream_sink, _StreamConfig
-from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_streams import (
+    _build_stream_config,
+    _create_stream_callback,
+    _spawn_stream_consumers,
+)
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -35,11 +40,8 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
 
@@ -93,87 +95,6 @@ async def _spawn_subprocess(
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
-    )
-
-
-def _create_stream_callback(
-    observation: _StageObservation,
-    event_type: typ.Literal["stdout", "stderr"],
-    pid: int | None,
-) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
-
-
-def _spawn_stream_consumers(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-    *,
-    pid: int | None,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks."""
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_sink = _resolve_stream_sink(
-        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
-    )
-    stderr_config = dc.replace(
-        stream_config,
-        echo_output=execution.echo_stderr,
-        sink=stderr_sink,
-        stream=EchoStream.STDERR,
-    )
-    return (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-                read_size=stream_config.read_size,
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                stderr_config,
-                on_line=stderr_on_line,
-                read_size=stderr_config.read_size,
-            ),
-        ),
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context.
-
-    When a presentation-sink session is active, mirrored stdout is routed
-    through the session's log destination so it lands inside the adapter's
-    framing (for example, inside the GitHub Actions group) in the order the
-    adapter received it.
-
-    Returns
-    -------
-    _StreamConfig
-        The stream configuration for the run's stdout drain.
-    """
-    stdout_sink = _resolve_stream_sink(
-        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
-    )
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        sink=stdout_sink,
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        read_size=_current_read_size(),
     )
 
 
