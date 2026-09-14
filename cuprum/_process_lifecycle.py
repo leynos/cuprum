@@ -209,12 +209,11 @@ async def _spawn_pipeline_processes(
     started_at: list[float] = []
     wall_clock_started_at: list[float] = []
 
-    last_idx = len(observations) - 1
     try:
         for idx, observation in enumerate(observations):
             stream_fds = _get_stage_stream_fds(
                 idx,
-                last_idx,
+                len(observations) - 1,
                 stdout_capture_or_echo=config.stdout_capture_or_echo,
                 stderr_capture_or_echo=config.stderr_capture_or_echo,
             )
@@ -234,7 +233,7 @@ async def _spawn_pipeline_processes(
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
                 process,
                 config,
-                is_last_stage=(idx == last_idx),
+                is_last_stage=(idx == len(observations) - 1),
                 observation=observation,
             )
             stderr_tasks.append(stderr_task)
