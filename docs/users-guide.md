@@ -386,6 +386,17 @@ when a call needs output behaviour that differs from the default.
   `\r` is held while the next byte is pending; at EOF, or when the next byte is
   not `\n`, it remains line data, and only `\r\n` terminates it.
 
+#### Observing echo truncation
+
+Register a hook with `cuprum.echo_observation.observe_echo` to observe echo
+events. A successfully written bounded line produces an `EchoEvent` with
+`error_category=EchoErrorCategory.TRUNCATED`, `stream` set to `stdout` or
+`stderr`, and `dropped_bytes` set to the number of child-output bytes omitted
+from that line. The event is emitted only after the complete truncated payload,
+including its marker and line ending, has been written successfully. A failed
+echo write therefore does not produce a truncation event. No events are
+emitted unless a hook is registered.
+
 If a text-only echo sink cannot represent the subprocess output (for example a
 CP1252 console receiving UTF-8 text), Cuprum no longer aborts the run with
 `UnicodeEncodeError`. It disables echoing for only the affected stream
