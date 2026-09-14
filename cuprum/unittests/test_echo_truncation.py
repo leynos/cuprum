@@ -1,258 +1,151 @@
-r"""Property-based and example tests for the pure echo-truncation helpers.
-
-This module verifies :mod:`cuprum._echo_truncation` without subprocesses,
-asyncio streams, or sinks. ``_EchoLineLimiter`` bounds each mirrored line at a
-configured byte count, counts the dropped remainder, and reports the marker
-that the drain loop writes before the line ending. The Hypothesis properties
-prove the invariants: a bounded line never emits more than the bound, capture
-is unaffected because the limiter never sees it, and the marker count equals
-the bytes actually dropped. Example cases pin the normative boundaries:
-exactly-at-bound lines, one-byte-over lines, chunk-split lines, and multi-byte
-UTF-8 sequences straddling the cut.
-"""
+"""Unit contracts for bounded mirrored-line assembly."""
 
 from __future__ import annotations
 
 import pytest
-from hypothesis import HealthCheck, example, given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
-from cuprum._echo_truncation import _EchoLineLimiter, truncation_marker
-
-_PROPERTY_SETTINGS = settings(
-    deadline=None,
-    derandomize=True,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-    max_examples=30,
+from cuprum._echo_truncation import (
+    _EchoLineLimiter,
+    _FinishedEchoLine,
+    truncation_marker,
 )
 
 
-def _marker_length(encoding: str) -> int:
-    """Byte length of a marker reporting one dropped byte in *encoding*."""
-    return len(truncation_marker(1, encoding=encoding))
-
-
-def _marker_length_bound(dropped: int, encoding: str) -> int:
-    r"""Upper bound on the marker byte length for *dropped* dropped bytes.
-
-    The decimal rendering of *dropped* is at most ``len(str(dropped))``
-    digits, so this stays tight for the payloads the tests generate.
-
-    Returns
-    -------
-    int
-        The byte length of a marker reporting the maximum digit count.
-    """
-    digits = len(str(dropped))
-    return len(truncation_marker(10**digits - 1, encoding=encoding))
-
-
-def _feed(limiter: _EchoLineLimiter, payload: bytes) -> str:
-    """Feed *payload* to *limiter* as newline-terminated lines.
-
-    Returns
-    -------
-    str
-        The echoed text the drain loop would produce: kept bytes, the
-        truncation marker for each truncated line, and a line ending per
-        complete line.
-    """
-    pieces: list[bytes] = []
-    lines = payload.split(b"\n")
-    for line in lines[:-1]:  # the split leaves one empty trailing segment
-        kept = limiter.bound_line(line)
-        if kept:
-            pieces.append(kept)
-        marker = limiter.finish_line(encoding="utf-8")
-        if marker is not None:
-            pieces.append(marker)
-        pieces.append(b"\n")
-    return b"".join(pieces).decode("utf-8", errors="replace")
-
-
-@st.composite
-def _lines_and_bound(draw: st.DrawFn) -> tuple[bytes, int]:
-    """Generate a payload of newline-separated lines plus a byte bound."""
-    bound = draw(st.integers(min_value=1, max_value=64))
-    lines = draw(
-        st.lists(
-            st.binary(max_size=bound * 2 + 8),
-            min_size=1,
-            max_size=6,
-        ),
+def _finish(
+    line: bytes,
+    *,
+    bound: int,
+    ending: bytes = b"\n",
+    encoding: str = "utf-8",
+    errors: str = "strict",
+    is_text_sink: bool = False,
+) -> _FinishedEchoLine:
+    """Build one finished bounded echo line."""
+    limiter = _EchoLineLimiter(bound)
+    limiter.bound_line(line)
+    return limiter.finish_line(
+        ending=ending,
+        encoding=encoding,
+        errors=errors,
+        is_text_sink=is_text_sink,
     )
-    return b"\n".join(lines) + b"\n", bound
 
 
-@_PROPERTY_SETTINGS
-@given(case=_lines_and_bound())
-@example(case=(b"x" * 64 + b"\n", 64))
-@example(case=(b"x" * 65 + b"\n", 64))
-def test_bounded_lines_emit_at_most_bound_plus_marker(
-    case: tuple[bytes, int],
+def test_utf8_marker_keeps_the_ellipsis() -> None:
+    """UTF-8 uses the established ellipsis marker."""
+    assert truncation_marker(10, encoding="utf-8", errors="strict") == (
+        "… [truncated 10 bytes]".encode()
+    ), "UTF-8 must retain the established truncation marker"
+
+
+@pytest.mark.parametrize("encoding", ["ascii", "latin-1"])
+def test_unrepresentable_marker_uses_ascii_fallback(encoding: str) -> None:
+    """Single-byte encodings receive a representable marker without failure."""
+    marker = truncation_marker(10, encoding=encoding, errors="replace")
+
+    assert marker == b"... [truncated 10 bytes]", (
+        f"{encoding} must receive the ASCII fallback marker, got={marker!r}"
+    )
+
+
+@given(
+    line=st.binary(min_size=1, max_size=256),
+    bound=st.integers(min_value=1, max_value=128),
+)
+def test_finished_byte_sink_line_never_exceeds_its_bound(
+    line: bytes,
+    bound: int,
 ) -> None:
-    """Property: echoed lines never exceed the bound plus one marker.
+    """Every completed byte-sink line includes its marker and ending in the bound."""
+    finished = _finish(line, bound=bound)
 
-    Parameters
-    ----------
-    case : tuple[bytes, int]
-        A newline-terminated payload and the per-line byte bound.
-    """
-    payload, bound = case
-    limiter = _EchoLineLimiter(max_line_bytes=bound)
-
-    echoed = _feed(limiter, payload)
-
-    for line in echoed.split("\n")[:-1]:
-        # The bound counts raw child bytes; text-sink echoing decodes them,
-        # and an invalid byte becomes U+FFFD (three UTF-8 bytes), so the
-        # echoed text may expand up to three times the kept-byte count. The
-        # bound still holds for the raw child bytes the sink eventually
-        # renders; here we check the post-decode envelope.
-        assert len(line.encode()) <= bound * 3 + _marker_length_bound(
-            len(payload), "utf-8"
-        ), f"echoed line exceeded bound={bound} for payload={payload!r}"
-
-
-@_PROPERTY_SETTINGS
-@given(case=_lines_and_bound())
-def test_marker_reports_dropped_bytes(case: tuple[bytes, int]) -> None:
-    """Property: each marker count equals the bytes dropped from its line.
-
-    Parameters
-    ----------
-    case : tuple[bytes, int]
-        A newline-terminated payload and the per-line byte bound.
-    """
-    payload, bound = case
-    limiter = _EchoLineLimiter(max_line_bytes=bound)
-
-    echoed = _feed(limiter, payload)
-
-    # Count and compare in bytes: the bound is byte-based, so text decoding
-    # with replacement would obscure how many bytes each line contributed.
-    lines = payload[:-1].split(b"\n")
-    echoed_lines = echoed.split("\n")[:-1]
-    assert len(lines) == len(echoed_lines)
-    for original, mirrored in zip(lines, echoed_lines, strict=True):
-        dropped = max(len(original) - bound, 0)
-        if dropped:
-            assert mirrored.endswith(f"… [truncated {dropped} bytes]"), (
-                f"marker must report {dropped} dropped bytes for line={original!r}"
-            )
-            assert len(mirrored.encode()) <= bound * 3 + _marker_length_bound(
-                len(original), "utf-8"
-            ), (
-                "the mirrored line must stay near the bound even when invalid "
-                f"bytes decode to replacement characters for line={original!r}"
-            )
-        else:
-            assert mirrored == original.decode("utf-8", errors="replace"), (
-                f"untruncated line must mirror exactly for line={original!r}"
-            )
-
-
-@_PROPERTY_SETTINGS
-@given(case=_lines_and_bound())
-def test_limiter_resets_between_lines(case: tuple[bytes, int]) -> None:
-    """Property: the bound applies per line, never across lines.
-
-    Parameters
-    ----------
-    case : tuple[bytes, int]
-        A newline-terminated payload and the per-line byte bound.
-    """
-    payload, bound = case
-    limiter = _EchoLineLimiter(max_line_bytes=bound)
-
-    _feed(limiter, payload)
-
-    assert limiter.emitted_line_bytes == 0, (
-        "finish_line must reset emitted bytes for the next line"
+    assert len(finished.payload) <= bound, (
+        f"payload length={len(finished.payload)} exceeded bound={bound}"
     )
-    assert limiter.dropped_line_bytes == 0, (
-        "finish_line must reset dropped bytes for the next line"
+    assert finished.dropped_bytes >= 0, (
+        f"dropped byte count must be non-negative, got={finished.dropped_bytes}"
     )
+
+
+def test_one_byte_over_the_limit_reserves_marker_and_ending() -> None:
+    """One extra child byte never makes the mirrored line exceed its bound."""
+    finished = _finish(b"x" * 41, bound=40)
+
+    assert len(finished.payload) <= 40, (
+        f"one-byte overflow produced {len(finished.payload)} bytes"
+    )
+    assert finished.dropped_bytes > 0, "one-byte overflow must omit child bytes"
 
 
 @pytest.mark.parametrize(
-    ("dropped", "encoding", "expected"),
-    [
-        pytest.param(1, "utf-8", "… [truncated 1 bytes]", id="utf-8"),
-        pytest.param(0, "utf-8", "… [truncated 0 bytes]", id="zero"),
-    ],
+    ("line", "expected"),
+    [(b"x" * 273, 98), (b"x" * 274, 100)],
 )
-def test_truncation_marker_encodes_reported_count(
-    dropped: int,
-    encoding: str,
-    expected: str,
+def test_marker_recalculates_at_digit_width_transitions(
+    line: bytes,
+    expected: int,
 ) -> None:
-    """Example: the marker text states the dropped byte count."""
-    assert truncation_marker(dropped, encoding=encoding) == expected.encode(encoding)
+    """The marker budget is recalculated when dropped bytes grow another digit."""
+    finished = _finish(line, bound=200)
 
-
-def test_from_config_requires_echo_with_bound() -> None:
-    """The limiter exists only when echoing with a non-None bound."""
-    assert (
-        _EchoLineLimiter.from_config(
-            echo_output=True,
-            echo_max_line_bytes=None,
-        )
-        is None
+    assert finished.dropped_bytes == expected, (
+        f"expected {expected} dropped bytes, got={finished.dropped_bytes}"
     )
-    assert (
-        _EchoLineLimiter.from_config(
-            echo_output=False,
-            echo_max_line_bytes=64,
-        )
-        is None
+    assert f"truncated {expected} bytes".encode() in finished.payload, (
+        f"marker must report {expected} dropped bytes, got={finished.payload!r}"
     )
-    assert (
-        _EchoLineLimiter.from_config(
-            echo_output=False,
-            echo_max_line_bytes=None,
-        )
-        is None
+    assert len(truncation_marker(10, encoding="utf-8", errors="strict")) == (
+        len(truncation_marker(9, encoding="utf-8", errors="strict")) + 1
+    ), "the marker must account for the additional digit from 9 to 10"
+
+
+def test_limit_smaller_than_marker_still_stays_bounded() -> None:
+    """A tiny limit truncates the marker itself rather than overflowing a log line."""
+    finished = _finish(b"x" * 20, bound=5)
+
+    assert len(finished.payload) <= 5, (
+        f"tiny bound yielded {len(finished.payload)} bytes: {finished.payload!r}"
     )
-    assert _EchoLineLimiter.from_config(
-        echo_output=True, echo_max_line_bytes=64
-    ) == _EchoLineLimiter(64)
+    assert finished.dropped_bytes == 20, (
+        f"all source bytes must be counted as dropped, got={finished.dropped_bytes}"
+    )
 
 
-def test_utf8_sequence_straddling_bound_is_not_split() -> None:
-    """Example: a multi-byte UTF-8 character straddling the cut stays intact.
+def test_crlf_larger_than_the_bound_is_counted_as_dropped() -> None:
+    """A bound smaller than CRLF never overflows the echoed line."""
+    finished = _finish(b"", bound=1, ending=b"\r\n")
 
-    The bound cuts between bytes; the drain loop feeds kept bytes through the
-    incremental decoder, so the replacement behaviour of a split character is
-    a sink-level concern. What the limiter guarantees is that the cut never
-    emits more than the bound and never inflates the dropped count.
-    """
-    snowman = "☃".encode()  # three-byte UTF-8 sequence
-    limiter = _EchoLineLimiter(max_line_bytes=10)
-    payload = b"ab" + snowman + b"c" * 5  # 10 bytes exactly
-
-    kept = limiter.bound_line(payload)
-
-    assert len(kept) == 10
-    assert limiter.dropped_line_bytes == 0
-    assert kept == payload, "an exactly-at-bound line is mirrored whole"
+    assert len(finished.payload) <= 1, (
+        f"the CRLF edge case exceeded the one-byte bound: {finished.payload!r}"
+    )
+    assert finished.dropped_bytes == 2, (
+        "the omitted CRLF bytes must be included in the dropped-byte count, "
+        f"got={finished.dropped_bytes}"
+    )
 
 
-def test_utf8_sequence_straddling_bound_keeps_byte_prefix() -> None:
-    """Example: the cut lands inside a multi-byte UTF-8 sequence at the bound.
+def test_strict_utf8_text_prefix_never_ends_inside_a_character() -> None:
+    """A strict text sink receives only a complete UTF-8 character prefix."""
+    line = b"ab" + "☃".encode() + b"c" * 35
+    finished = _finish(line, bound=28, is_text_sink=True)
 
-    The bound is byte-based, so the cut can land between the bytes of one
-    character. The limiter guarantees a clean byte-prefix cut; the drain loop
-    feeds kept bytes through the incremental echo decoder, whose replacement
-    behaviour keeps the sink text valid without corrupting the stream.
-    """
-    snowman = "☃".encode()  # three-byte UTF-8 sequence
-    limiter = _EchoLineLimiter(max_line_bytes=10)
-    payload = b"ab" + snowman + b"c" * 8  # 13 bytes: cut lands inside ☃
+    text = finished.payload.decode("utf-8", "strict")
+    assert text.startswith("ab"), f"expected the safe prefix, got={text!r}"
+    assert "☃" not in text, f"split character must be omitted, got={text!r}"
+    assert finished.dropped_bytes == len(line) - 2, (
+        "moving to a character boundary must count every newly omitted byte"
+    )
 
-    kept = limiter.bound_line(payload)
 
-    assert len(kept) == 10, "the cut never exceeds the bound"
-    assert limiter.dropped_line_bytes == 3
-    assert kept[:2] == b"ab"
-    assert kept[2] == snowman[0], "cut keeps a byte prefix of the split sequence"
+def test_final_unterminated_line_includes_its_marker_in_the_bound() -> None:
+    """EOF finalization applies the same inclusive byte limit without an ending."""
+    finished = _finish(b"x" * 80, bound=40, ending=b"")
+
+    assert len(finished.payload) <= 40, (
+        f"unterminated echo length={len(finished.payload)} exceeded 40"
+    )
+    assert b"truncated " in finished.payload, (
+        f"EOF truncation must retain a marker when it fits, got={finished.payload!r}"
+    )

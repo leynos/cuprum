@@ -29,29 +29,38 @@ def _emit_completed_lines(
 
 
 def _split_complete_lines(text: str) -> tuple[list[str], str]:
-    """Split text into completed lines and a trailing partial line.
+    r"""Split text into completed lines and a trailing partial line.
 
     Parameters
     ----------
     text : str
-        Text to split using Python's universal line boundary rules.
+        Text to split using CR, LF, and CRLF line boundaries.
 
     Returns
     -------
     tuple[list[str], str]
         Completed lines with one trailing line ending removed from each line,
-        followed by the remaining partial line. The remainder is empty when
-        ``text`` ends with a line ending or contains no partial line.
+        followed by the remaining partial line. A terminal carriage return is
+        retained until a later chunk can determine whether it begins ``\r\n``.
     """
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return [], text
-
-    remainder = ""
-    if not _ends_with_line_ending(lines[-1]):
-        remainder = lines.pop()
-
-    return [_strip_line_ending(line) for line in lines], remainder
+    lines: list[str] = []
+    start = 0
+    index = 0
+    while index < len(text):
+        character = text[index]
+        match character:
+            case "\n":
+                lines.append(text[start:index])
+                start = index + 1
+            case "\r":
+                if index + 1 == len(text):
+                    return lines, text[start:]
+                lines.append(text[start:index])
+                if text[index + 1] == "\n":
+                    index += 1
+                start = index + 1
+        index += 1
+    return lines, text[start:]
 
 
 def _ends_with_line_ending(line: str) -> bool:

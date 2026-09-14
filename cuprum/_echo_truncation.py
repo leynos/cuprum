@@ -6,9 +6,9 @@ at a 64 KiB line). Capture stays byte-for-byte complete; only the mirrored copy
 is bounded. These helpers are pure so the drain loop and the tests agree on the
 truncation contract without subprocess I/O.
 
-A *segment* is the raw bytes of one line without its ``\n`` terminator, so a
-``\r\n`` ending leaves the carriage return in the segment and it counts
-towards the bound.
+A *segment* is the raw bytes of one line without its terminator. The stream
+drain identifies ``\r\n`` before a segment reaches this module, so the whole
+terminator is accounted for as a line ending.
 """
 
 from __future__ import annotations
@@ -16,9 +16,10 @@ from __future__ import annotations
 import dataclasses as dc
 
 _TRUNCATION_MARKER_TEMPLATE = "… [truncated {dropped} bytes]"
+_ASCII_TRUNCATION_MARKER_TEMPLATE = "... [truncated {dropped} bytes]"
 
 
-def truncation_marker(dropped: int, *, encoding: str) -> bytes:
+def truncation_marker(dropped: int, *, encoding: str, errors: str) -> bytes:
     """Encode the truncation marker for *dropped* bytes.
 
     Parameters
@@ -27,13 +28,37 @@ def truncation_marker(dropped: int, *, encoding: str) -> bytes:
         Number of bytes dropped from the mirrored line.
     encoding : str
         Encoding used for the echo sink.
+    errors : str
+        Error policy used if the ASCII fallback must be encoded.
 
     Returns
     -------
     bytes
         The encoded ``… [truncated N bytes]`` marker.
     """
-    return _TRUNCATION_MARKER_TEMPLATE.format(dropped=dropped).encode(encoding)
+    preferred = _TRUNCATION_MARKER_TEMPLATE.format(dropped=dropped)
+    try:
+        return preferred.encode(encoding)
+    except UnicodeEncodeError:
+        fallback = _ASCII_TRUNCATION_MARKER_TEMPLATE.format(dropped=dropped)
+        return fallback.encode(encoding, errors)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _FinishedEchoLine:
+    """Bytes ready for one echo write and the source bytes omitted from it."""
+
+    payload: bytes
+    dropped_bytes: int
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _EchoEncoding:
+    """Encoding settings used to assemble an echoed line."""
+
+    encoding: str
+    errors: str
+    is_text_sink: bool
 
 
 @dc.dataclass(slots=True)
@@ -47,8 +72,13 @@ class _EchoLineLimiter:
     """
 
     max_line_bytes: int
-    emitted_line_bytes: int = 0
-    dropped_line_bytes: int = 0
+    _line: bytearray = dc.field(default_factory=bytearray)
+    has_pending_carriage_return: bool = False
+
+    @property
+    def has_line_bytes(self) -> bool:
+        """Whether the current logical line has buffered source bytes."""
+        return bool(self._line)
 
     @classmethod
     def from_config(
@@ -75,56 +105,137 @@ class _EchoLineLimiter:
             return None
         return cls(max_line_bytes=echo_max_line_bytes)
 
-    def bound_line(self, segment: bytes) -> bytes:
-        r"""Return the prefix of *segment* that may still be mirrored.
+    def bound_line(self, segment: bytes) -> None:
+        """Accumulate raw bytes for the line whose bound is finalized later."""
+        if segment:
+            self._line.extend(segment)
 
-        The segment is a raw line body without its ``\n`` terminator. Bytes
-        beyond the bound are counted as dropped so the terminator handler can
-        emit the truncation marker before the line ending.
-
-        Parameters
-        ----------
-        segment : bytes
-            Raw bytes of the next (possibly partial) line segment.
-
-        Returns
-        -------
-        bytes
-            The bytes of *segment* still allowed through the bound.
-        """
-        room = self.max_line_bytes - self.emitted_line_bytes
-        if room <= 0:
-            self.dropped_line_bytes += len(segment)
-            return b""
-        if len(segment) <= room:
-            self.emitted_line_bytes += len(segment)
-            return segment
-        self.emitted_line_bytes = self.max_line_bytes
-        self.dropped_line_bytes += len(segment) - room
-        return segment[:room]
-
-    def finish_line(self, *, encoding: str) -> bytes | None:
-        """Return the marker to write before the line ending, if any.
-
-        Parameters
-        ----------
-        encoding : str
-            Encoding used for the echo sink; the marker is encoded with it.
+    def finish_line(
+        self,
+        *,
+        ending: bytes,
+        encoding: str,
+        errors: str,
+        is_text_sink: bool,
+    ) -> _FinishedEchoLine:
+        """Finish one line without exceeding its mirrored byte budget.
 
         Returns
         -------
-        bytes | None
-            The encoded truncation marker when bytes were dropped from the
-            line, otherwise ``None``. Both counters reset so the next line
-            starts from an empty bound.
+        _FinishedEchoLine
+            The bounded echo payload and its omitted source-byte count.
         """
-        if self.dropped_line_bytes == 0:
-            self.emitted_line_bytes = 0
-            return None
-        marker = truncation_marker(self.dropped_line_bytes, encoding=encoding)
-        self.emitted_line_bytes = 0
-        self.dropped_line_bytes = 0
+        line = bytes(self._line)
+        self._line.clear()
+        bounded_ending = ending if len(ending) <= self.max_line_bytes else b""
+        omitted_ending_bytes = len(ending) - len(bounded_ending)
+        if len(line) + len(ending) <= self.max_line_bytes:
+            return _FinishedEchoLine(line + bounded_ending, 0)
+        settings = _EchoEncoding(encoding, errors, is_text_sink)
+
+        retained, encoded = self._bounded_prefix(
+            line,
+            ending=bounded_ending,
+            omitted_ending_bytes=omitted_ending_bytes,
+            settings=settings,
+        )
+        dropped = len(line) - len(retained) + omitted_ending_bytes
+        marker = truncation_marker(
+            dropped,
+            encoding=settings.encoding,
+            errors=settings.errors,
+        )
+        remaining = self.max_line_bytes - len(encoded) - len(bounded_ending)
+        marker = _fit_marker(
+            marker,
+            budget=max(remaining, 0),
+            dropped=dropped,
+            settings=settings,
+        )
+        return _FinishedEchoLine(encoded + marker + bounded_ending, dropped)
+
+    def _bounded_prefix(
+        self,
+        line: bytes,
+        *,
+        ending: bytes,
+        omitted_ending_bytes: int,
+        settings: _EchoEncoding,
+    ) -> tuple[bytes, bytes]:
+        """Find a marker-consistent source prefix and its echoed bytes."""
+        dropped = len(line) + omitted_ending_bytes
+        for _ in range(16):
+            marker = truncation_marker(
+                dropped,
+                encoding=settings.encoding,
+                errors=settings.errors,
+            )
+            budget = max(self.max_line_bytes - len(ending) - len(marker), 0)
+            retained, encoded = _encode_prefix(
+                line,
+                budget=budget,
+                settings=settings,
+            )
+            updated_dropped = len(line) - len(retained) + omitted_ending_bytes
+            if updated_dropped == dropped:
+                return retained, encoded
+            dropped = updated_dropped
+        return retained, encoded
+
+
+def _encode_prefix(
+    line: bytes,
+    *,
+    budget: int,
+    settings: _EchoEncoding,
+) -> tuple[bytes, bytes]:
+    """Return the largest source prefix whose echoed bytes fit *budget*."""
+    if not settings.is_text_sink:
+        prefix = line[:budget]
+        return prefix, prefix
+
+    low = 0
+    high = min(len(line), budget)
+    best = (b"", b"")
+    while low <= high:
+        length = (low + high) // 2
+        prefix = line[:length]
+        try:
+            encoded = prefix.decode(settings.encoding, settings.errors).encode(
+                settings.encoding,
+                settings.errors,
+            )
+        except UnicodeError:
+            high = length - 1
+            continue
+        if len(encoded) <= budget:
+            best = (prefix, encoded)
+            low = length + 1
+        else:
+            high = length - 1
+    return best
+
+
+def _fit_marker(
+    marker: bytes,
+    *,
+    budget: int,
+    dropped: int,
+    settings: _EchoEncoding,
+) -> bytes:
+    """Fit a marker into its remaining budget without splitting text encoding."""
+    if len(marker) <= budget:
         return marker
+    fallback = _ASCII_TRUNCATION_MARKER_TEMPLATE.format(dropped=dropped).encode(
+        settings.encoding,
+        settings.errors,
+    )
+    _source, encoded = _encode_prefix(
+        fallback,
+        budget=budget,
+        settings=settings,
+    )
+    return encoded
 
 
 def _split_echo_segments(

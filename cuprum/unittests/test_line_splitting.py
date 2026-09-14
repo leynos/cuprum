@@ -519,8 +519,10 @@ def test_split_complete_lines_preserves_all_text(text: str) -> None:
 
 @_PROPERTY_SETTINGS
 @given(text=_text_with_line_endings())
-def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
-    """Property: the returned remainder is never a completed line.
+def test_split_complete_lines_remainder_keeps_only_a_pending_carriage_return(
+    text: str,
+) -> None:
+    """Property: a remainder retains CR only while its next byte is unknown.
 
     Parameters
     ----------
@@ -529,10 +531,10 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
     """
     _lines, remainder = _split_complete_lines(text)
 
-    assert not remainder.endswith(("\n", "\r")), (
-        "_split_complete_lines remainder must not end with a recognized line ending"
+    assert not remainder.endswith("\n"), (
+        "_split_complete_lines must never retain a completed LF line ending"
     )
-    if text.endswith(_LINE_ENDINGS):
+    if text.endswith(_LINE_ENDINGS) and not text.endswith("\r"):
         assert remainder == "", (
             "_split_complete_lines remainder must be empty when input ends with a "
             "recognized line ending"
@@ -540,16 +542,12 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
 
 
 @pytest.mark.parametrize("text", ["a\vb", "a\x85b", "a\u2028b"])
-def test_split_complete_lines_handles_python_line_boundaries(text: str) -> None:
-    """Example: Python-recognized line boundaries delimit completed lines."""
-    split_lines = text.splitlines(keepends=True)
-    expected_lines = [_strip_line_ending(line) for line in split_lines[:-1]]
-    expected_remainder = split_lines[-1]
-
+def test_split_complete_lines_preserves_non_crlf_separators(text: str) -> None:
+    """Example: non-CR/LF separators remain ordinary text."""
     lines, remainder = _split_complete_lines(text)
 
-    assert lines == expected_lines
-    assert remainder == expected_remainder
+    assert lines == [], f"only CR/LF must delimit lines for text={text!r}"
+    assert remainder == text, f"non-CR/LF text must remain buffered: {text!r}"
 
 
 @_PROPERTY_SETTINGS

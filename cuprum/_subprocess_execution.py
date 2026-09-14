@@ -65,7 +65,6 @@ class _SubprocessExecution:
     stdin_data: bytes | None
 
     @property
-
     def consumes_any_stream(self) -> bool:
         """Whether any stream must be consumed for capture or echo."""
         return self.capture or self.echo_stdout or self.echo_stderr

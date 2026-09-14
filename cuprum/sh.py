@@ -385,9 +385,7 @@ class StdinInput:
 
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
-    """Controls how a command's output streams are handled.
-
-    """
+    """Controls how a command's output streams are handled."""
 
     capture: bool = True
     echo: bool = False
@@ -419,6 +417,7 @@ class RunOutputOptions:
             )
             raise ValueError(msg)
 
+    @property
     def resolved_echo(self) -> tuple[bool, bool]:
         """The resolved ``(echo_stdout, echo_stderr)`` gates.
 
@@ -431,6 +430,7 @@ class RunOutputOptions:
         # is the constructor's contract, not something the declared types can
         # express to the type checker.
         return (self.echo_stdout, self.echo_stderr)  # ty: ignore[invalid-return-type]
+
 
 @dc.dataclass(frozen=True, slots=True)
 class IOOptions(RunOutputOptions):
@@ -578,11 +578,9 @@ class SafeCmd:
         repr=False,
         hash=False,
         compare=False,
-
     )
 
     @property
-
     def argv_with_program(self) -> tuple[str, ...]:
         """The program name followed by this command's arguments.
 
@@ -601,7 +599,7 @@ class SafeCmd:
         self,
         *,
         output: RunOutputOptions | None = None,
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
@@ -648,6 +646,7 @@ class SafeCmd:
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
 
+
 @dc.dataclass(frozen=True, slots=True)
 class Pipeline:
     """A sequence of SafeCmd stages connected via stdout/stdin piping."""
@@ -665,7 +664,6 @@ class Pipeline:
         return Pipeline.concat(self, other)
 
     @classmethod
-
     def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
         """Compose a pipeline from two stage operands.
 
@@ -689,7 +687,7 @@ class Pipeline:
         self,
         *,
         output: RunOutputOptions | None = None,
-        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]
+        timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
@@ -716,6 +714,7 @@ class Pipeline:
         return asyncio.run(
             self.run(output=out, timeout=timeout, context=context),
         )
+
 
 def make(
     program: Program,

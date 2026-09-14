@@ -33,13 +33,11 @@ class _PipelineRunConfig:
     stderr_sink: typ.IO[str]
 
     @property
-
     def stdout_capture_or_echo(self) -> bool:
         """Whether stdout must be consumed for capture or echo."""
         return self.capture or self.echo_stdout
 
     @property
-
     def stderr_capture_or_echo(self) -> bool:
         """Whether stderr must be consumed for capture or echo."""
         return self.capture or self.echo_stderr
@@ -67,6 +65,7 @@ class _PipelineRunConfig:
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
         )
+
 
 def _prepare_pipeline_config(
     *,

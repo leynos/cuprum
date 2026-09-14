@@ -116,9 +116,10 @@ class EchoMetricsHook:
         cannot fail a command that would otherwise have captured its output.
         See :func:`cuprum.echo_observation._emit_echo_event`.
         """
-        self._collector.inc_counter(
-            ECHO_ENCODING_FAILURES_TOTAL, 1.0, _event_labels(event)
-        )
+        if event.error_category is EchoErrorCategory.UNICODE_ENCODE:
+            self._collector.inc_counter(
+                ECHO_ENCODING_FAILURES_TOTAL, 1.0, _event_labels(event)
+            )
 
 
 def echo_metrics_hook(collector: MetricsCollector) -> EchoHook:

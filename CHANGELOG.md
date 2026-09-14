@@ -24,6 +24,16 @@
 
 ### Added
 
+- **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
+  64 KiB and limits each echoed logical line, including retained child bytes,
+  the encoded truncation marker, and its line ending. Captured output remains
+  complete. Set the option to `None` to restore chunk-for-chunk mirroring. The
+  preferred marker is `… [truncated N bytes]`; sinks whose encoding cannot
+  represent the ellipsis receive the ASCII-compatible `... [truncated N bytes]`
+  marker instead. A bound too small for the complete marker or a CRLF ending
+  abbreviates the echoed marker or omits the ending to preserve the bound.
+  Truncation is also reported through the echo observation channel with its
+  stream and dropped-byte count.
 - **Per-stream echo control while capturing:** `RunOutputOptions` accepts
   `echo_stdout` and `echo_stderr`, each defaulting to the existing `echo`
   shorthand, so a caller can capture a stream silently while the other still

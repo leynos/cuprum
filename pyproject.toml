@@ -215,7 +215,7 @@ ignore-one-line-docstrings = true
 max-complexity = 8
 
 [tool.ruff.lint.pylint]
-max-args = 5
+max-args = 4
 max-bool-expr = 2
 max-locals = 10
 

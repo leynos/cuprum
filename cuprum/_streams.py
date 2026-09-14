@@ -266,8 +266,23 @@ def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
     if limiter is None:
         _echo_write(state, chunk)
         return
-    for body, ending in _split_echo_segments(chunk):
+    data = _prepend_pending_carriage_return(limiter, chunk)
+    for body, ending in _split_echo_segments(data):
         _echo_bounded_segment(state, limiter, body, ending)
+
+
+def _prepend_pending_carriage_return(
+    limiter: _EchoLineLimiter,
+    chunk: bytes,
+) -> bytes:
+    """Hold a chunk-final CR until its line-ending role is known."""
+    prefix = b"\r" if limiter.has_pending_carriage_return else b""
+    limiter.has_pending_carriage_return = False
+    data = prefix + chunk
+    if data.endswith(b"\r"):
+        limiter.has_pending_carriage_return = True
+        return data[:-1]
+    return data
 
 
 def _echo_bounded_segment(
@@ -276,40 +291,34 @@ def _echo_bounded_segment(
     body: bytes,
     ending: bytes | None,
 ) -> None:
-    """Mirror one bounded segment, truncating it at the configured bound.
-
-    Parameters
-    ----------
-    state : _DrainState
-        State carried through the stream-drain loop.
-    limiter : _EchoLineLimiter
-        Per-line byte accounting shared by the segments of one stream.
-    body : bytes
-        Raw line body without its terminator.
-    ending : bytes | None
-        The raw line ending, or ``None`` for the trailing pair when the
-        chunk ends mid-line.
-    """
-    kept = limiter.bound_line(body)
-    untruncated = kept == body and limiter.dropped_line_bytes == 0
-    if untruncated and ending is not None:
-        # Untruncated line: mirror body and terminator in the single
-        # write an unbounded echo would have made. Text sinks rely on
-        # one write per line (#348); a sink that rejects the payload
-        # must see exactly the line it cannot encode, not a fragment
-        # without its terminator.
-        _echo_write(state, kept + ending)
-        # *dropped* is zero here, so the reset cannot emit a marker.
-        limiter.finish_line(encoding=state.config.encoding)
-        return
-    if kept:
-        _echo_write(state, kept)
+    """Accumulate one segment and mirror its completed line within the bound."""
+    limiter.bound_line(body)
     if ending is None:
         return
-    marker = limiter.finish_line(encoding=state.config.encoding)
-    if marker is not None:
-        _echo_write(state, marker)
-    _echo_write(state, ending)
+    _write_finished_echo_line(state, limiter, ending)
+
+
+def _write_finished_echo_line(
+    state: _DrainState,
+    limiter: _EchoLineLimiter,
+    ending: bytes,
+) -> None:
+    """Write one finalized bounded echo line and observe a successful trim."""
+    finished = limiter.finish_line(
+        ending=ending,
+        encoding=state.config.encoding,
+        errors=state.config.errors,
+        is_text_sink=state.echo_decoder is not None,
+    )
+    _echo_write(state, finished.payload)
+    if finished.dropped_bytes:
+        _emit_echo_event(
+            EchoEvent(
+                stream=state.config.stream,
+                error_category=EchoErrorCategory.TRUNCATED,
+                dropped_bytes=finished.dropped_bytes,
+            ),
+        )
 
 
 def _echo_write(
@@ -358,10 +367,13 @@ def _flush_echo_decoder(
     state: _DrainState,
 ) -> None:
     """Flush a text-only echo decoder at end of stream."""
-    if state.echo_limiter is not None:
-        marker = state.echo_limiter.finish_line(encoding=state.config.encoding)
-        if marker is not None:
-            _echo_write(state, marker)
+    limiter = state.echo_limiter
+    if limiter is not None:
+        if limiter.has_pending_carriage_return:
+            limiter.bound_line(b"\r")
+            limiter.has_pending_carriage_return = False
+        if limiter.has_line_bytes:
+            _write_finished_echo_line(state, limiter, b"")
     if state.echo_decoder is not None:
         _echo_write(state, b"", final=True)
 

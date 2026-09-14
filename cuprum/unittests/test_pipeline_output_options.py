@@ -430,6 +430,7 @@ def test_pipeline_rejects_output_combined_with_flat_kwargs() -> None:
         with pytest.raises(TypeError, match="unexpected keyword"):
             run_sync(**unknown_output_kwargs)
 
+
 @pytest.mark.parametrize("invalid_bound", [0, -1, True])
 def test_run_output_options_rejects_invalid_echo_bound(
     invalid_bound: int | bool,
@@ -507,3 +508,64 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     assert result.stages[1].exit_code == 0, (
         f"capture={capture}: stage 1 exit_code mismatch"
     )
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
+def test_safe_command_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
+    """SafeCmd public entry points retain capture while bounding mirrored output."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    payload = "x" * 80 + "\n"
+    sink = io.StringIO()
+    options = RunOutputOptions(capture=True, echo=True, max_echo_line_bytes=50)
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        command = python("-c", f"import sys; sys.stdout.write({payload!r})")
+        if is_sync:
+            result = command.run_sync(
+                output=options,
+                context=ExecutionContext(stdout_sink=sink),
+            )
+        else:
+            result = asyncio.run(
+                command.run(
+                    output=options,
+                    context=ExecutionContext(stdout_sink=sink),
+                )
+            )
+
+    assert result.stdout == payload, "public execution must capture the complete line"
+    assert "truncated " in sink.getvalue(), "public echo must report truncation"
+    assert len(sink.getvalue().encode()) <= 50, "public echo must honour the bound"
+
+
+@pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
+def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
+    """Pipeline public entry points propagate the output bound to the final sink."""
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    payload = "x" * 80 + "\n"
+    sink = io.StringIO()
+    options = RunOutputOptions(capture=True, echo=True, max_echo_line_bytes=50)
+    pipeline = python("-c", f"import sys; sys.stdout.write({payload!r})") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        if is_sync:
+            result = pipeline.run_sync(
+                output=options,
+                context=ExecutionContext(stdout_sink=sink),
+            )
+        else:
+            result = asyncio.run(
+                pipeline.run(
+                    output=options,
+                    context=ExecutionContext(stdout_sink=sink),
+                )
+            )
+
+    assert result.stdout == payload, "pipeline capture must retain the complete line"
+    assert "truncated " in sink.getvalue(), "pipeline echo must report truncation"
+    assert len(sink.getvalue().encode()) <= 50, "pipeline echo must honour bound"

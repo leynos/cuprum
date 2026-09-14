@@ -44,7 +44,7 @@ class EchoStream(enum.StrEnum):
 
 
 class EchoErrorCategory(enum.StrEnum):
-    """Why an echo write failed, as a closed set of categories.
+    """Why an echo event occurred, as a closed set of categories.
 
     Examples
     --------
@@ -55,18 +55,22 @@ class EchoErrorCategory(enum.StrEnum):
     """
 
     UNICODE_ENCODE = "unicode_encode"
+    TRUNCATED = "truncated"
 
 
 @dc.dataclass(frozen=True, slots=True)
 class EchoEvent:
-    """A stream-echo failure reported to registered echo hooks.
+    """A stream-echo event reported to registered echo hooks.
 
     Attributes
     ----------
     stream:
         Which output stream the failing echo belonged to.
     error_category:
-        The closed-set category naming why the echo write failed.
+        The closed-set category naming why the event occurred.
+    dropped_bytes:
+        Child-output bytes omitted from a successfully truncated echo line,
+        otherwise ``None``.
 
     Examples
     --------
@@ -82,6 +86,7 @@ class EchoEvent:
 
     stream: EchoStream
     error_category: EchoErrorCategory
+    dropped_bytes: int | None = None
 
 
 type EchoHook = cabc.Callable[[EchoEvent], None]
