@@ -10,6 +10,7 @@ failure instead.
 from __future__ import annotations
 
 import dataclasses as dc
+import types
 import typing as typ
 
 import pytest
@@ -20,7 +21,6 @@ from tests.helpers.maturin import maturin_script_locatable, toolchain_available
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
-    import types
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -43,7 +43,11 @@ def _stub_toolchain(
 
     ``importlib.import_module`` is intercepted for ``maturin`` alone and
     delegates everything else, so patching it cannot disturb an unrelated
-    import that happens to run while the patch is active.
+    import that happens to run while the patch is active. The ``maturin``
+    answer is a stand-in rather than the installed package: the conjunction
+    under test must not turn on whether this interpreter happens to have
+    maturin, which would make a degraded environment look like a broken gate.
+    The gated build tests cover the real import, and skip when it is absent.
     """
     monkeypatch.setattr(
         maturin_helper.shutil,
@@ -54,10 +58,12 @@ def _stub_toolchain(
     real_import = maturin_helper.importlib.import_module
 
     def fake_import(name: str, package: str | None = None) -> types.ModuleType:
-        """Fail the maturin import on request; import anything else for real."""
-        if name == "maturin" and not maturin_imports:
-            msg = "No module named 'maturin'"
-            raise ImportError(msg)
+        """Answer the maturin probe from the case; import anything else for real."""
+        if name == "maturin":
+            if not maturin_imports:
+                msg = "No module named 'maturin'"
+                raise ImportError(msg)
+            return types.ModuleType("maturin")
         return real_import(name, package)
 
     monkeypatch.setattr(maturin_helper.importlib, "import_module", fake_import)

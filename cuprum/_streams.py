@@ -26,8 +26,7 @@ from cuprum._echo_truncation import (
     _split_echo_segments,
     _validate_bounded_echo_encoding,
 )
-from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
-from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
+from cuprum._line_splitting import _split_complete_lines, _strip_line_ending
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -53,6 +52,20 @@ if typ.TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger("cuprum.stream")
+
+# A per-line sink either returns ``None`` — it only fans out to observe hooks
+# or a user callback — or an awaitable, which is how the ``lines()`` driver's
+# bounded queue slows the read loop instead of dropping an event or retaining
+# it without limit. :func:`_emit_line` bridges the two.
+type _LineSink = cabc.Callable[[str], cabc.Awaitable[None] | None]
+type _ChunkSink = cabc.Callable[[bytes], cabc.Awaitable[None]]
+
+
+async def _emit_line(sink: _LineSink, line: str) -> None:
+    """Invoke a line sink, awaiting it when it applies backpressure."""
+    outcome = sink(line)
+    if outcome is not None:
+        await outcome
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -82,8 +95,9 @@ class _DrainState:
     buffer: bytearray | None
 
     echo_decoder: codecs.IncrementalDecoder | None
-
-    on_chunk: cabc.Callable[[bytes], None] | None
+    # Awaited between chunks, so a sink that must apply backpressure to the
+    # producer can hold the read loop rather than buffer without bound.
+    on_chunk: _ChunkSink | None
     # Payload of the frozen wrapper above: mutated in place once echo is
     # disabled, so the same drain shares the flag across its loop and final
     # decoder flush without rebinding this frozen field.
@@ -104,7 +118,7 @@ async def _consume_stream(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    on_line: cabc.Callable[[str], None] | None = None,
+    on_line: _LineSink | None = None,
     read_size: int = _READ_SIZE,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
@@ -112,12 +126,9 @@ async def _consume_stream(
         return await _consume_stream_without_lines(stream, config, read_size=read_size)
     return await _consume_stream_with_lines(
         stream,
-        _LineConsumption(
-            config=config,
-            on_line=on_line,
-            read_size=read_size,
-            drain=_drain,
-        ),
+        config,
+        on_line=on_line,
+        read_size=read_size,
     )
 
 
@@ -125,7 +136,7 @@ async def _drain(
     stream: asyncio.StreamReader,
     config: _StreamConfig,
     *,
-    on_chunk: cabc.Callable[[bytes], None] | None = None,
+    on_chunk: _ChunkSink | None = None,
     read_size: int = _READ_SIZE,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
@@ -212,7 +223,7 @@ async def _drain_chunks(
         if state.config.echo_output:
             _echo_chunk(state, chunk)
         if state.on_chunk is not None:
-            state.on_chunk(chunk)
+            await state.on_chunk(chunk)
 
 
 async def _consume_stream_without_lines(
@@ -225,6 +236,58 @@ async def _consume_stream_without_lines(
     if stream is None:
         return "" if config.capture_output else None
     return await _drain(stream, config, read_size=read_size)
+
+async def _consume_stream_with_lines(
+    stream: asyncio.StreamReader | None,
+    config: _StreamConfig,
+    *,
+    on_line: _LineSink,
+    read_size: int,
+) -> str | None:
+    """Read from a subprocess stream while emitting decoded output lines.
+
+    Each emitted line is awaited through :func:`_emit_line`, so a sink that
+    needs to wait for its consumer holds the read loop instead of queueing
+    output without bound — an ``_READ_SIZE`` chunk can carry thousands of lines,
+    so the bound cannot be enforced between reads alone.
+
+    Returns
+    -------
+    str | None
+        The captured text when the config captures output, and ``None`` when it
+        does not. A ``stream`` of ``None`` — an unobserved pipe — captures the
+        empty string in that case, matching the capture of a child that wrote
+        nothing.
+    """
+    if stream is None:
+        return "" if config.capture_output else None
+
+    decoder = _incremental_decoder(config)
+    pending_text = ""
+
+    async def feed_decoder(chunk: bytes) -> None:
+        """Feed a chunk to the incremental decoder and emit complete lines."""
+        nonlocal pending_text
+        pending_text = await _emit_completed_lines(
+            pending_text + decoder.decode(chunk),
+            on_line=on_line,
+        )
+
+    captured = await _drain(
+        stream,
+        config,
+        on_chunk=feed_decoder,
+        read_size=read_size,
+    )
+
+    pending_text = await _emit_completed_lines(
+        pending_text + decoder.decode(b"", final=True),
+        on_line=on_line,
+    )
+    if pending_text:
+        await _emit_line(on_line, _strip_line_ending(pending_text))
+
+    return captured
 
 
 def _write_chunk(
@@ -376,6 +439,25 @@ def _flush_echo_decoder(state: _DrainState) -> None:
             _write_finished_echo_line(state, limiter, b"")
     if state.echo_decoder is not None:
         _echo_write(state, b"", final=True)
+
+async def _emit_completed_lines(
+    text: str,
+    *,
+    on_line: _LineSink,
+) -> str:
+    """Emit complete lines from text and return the remaining partial line.
+
+    The pure splitting rules live in ``cuprum._line_splitting``; this is the
+    drain-side emitter, which awaits each sink call so a sink that must apply
+    backpressure to the producer holds the read loop instead of letting the
+    lines queue without bound. See :func:`_emit_line`.
+    """
+    lines, remainder = _split_complete_lines(text)
+
+    for line in lines:
+        await _emit_line(on_line, line)
+
+    return remainder
 
 
 __all__ = [

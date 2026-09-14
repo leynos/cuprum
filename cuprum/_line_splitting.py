@@ -4,28 +4,13 @@ The drain loop emits decoded text to line observers in complete lines and
 mirrors each line's terminator handling, so the rules for recognizing and
 stripping line endings live in one pure module both the loop and its tests
 can depend on.
+
+Only the splitting rules live here. Emitting the split lines is the drain
+loop's job and awaits each sink so a slow consumer can apply backpressure, so
+``cuprum._streams`` owns that half (``_emit_completed_lines``).
 """
 
 from __future__ import annotations
-
-import typing as typ
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-
-def _emit_completed_lines(
-    text: str,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str:
-    """Emit complete lines from text and return the remaining partial line."""
-    lines, remainder = _split_complete_lines(text)
-
-    for line in lines:
-        on_line(line)
-
-    return remainder
 
 
 def _split_complete_lines(text: str) -> tuple[list[str], str]:
