@@ -48,6 +48,18 @@ class PumpCallCounts(typ.TypedDict, total=False):
     python_pump: int
 
 
+class _ClosingRustPumpDescriptors(typ.TypedDict, total=False):
+    """Descriptors recorded by the closing Rust-pump double.
+
+    Attributes
+    ----------
+    writer_fd : int
+        Writer descriptor passed to the Rust-pump double.
+    """
+
+    writer_fd: int
+
+
 def _make_writer_toggle_failure(
     reader_fd: int,
     error_class: type[OSError] | type[ValueError],
@@ -251,7 +263,9 @@ async def _run_with_inline_executor(awaitable: cabc.Awaitable[object]) -> None:
     await _run_with_inline_executor_returning(awaitable)
 
 
-def install_closing_rust_pump(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+def install_closing_rust_pump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _ClosingRustPumpDescriptors:
     """Patch the native pump to consume the writer FD, as Rust does.
 
     Parameters
@@ -261,10 +275,10 @@ def install_closing_rust_pump(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]
 
     Returns
     -------
-    dict[str, int]
+    _ClosingRustPumpDescriptors
         Populated with ``writer_fd``, the descriptor the pump received.
     """
-    received: dict[str, int] = {}
+    received: _ClosingRustPumpDescriptors = {}
 
     def closing_rust_pump(reader_fd: int, writer_fd: int) -> int:
         """Record the writer descriptor and close it, mirroring ``OwnedFd``."""

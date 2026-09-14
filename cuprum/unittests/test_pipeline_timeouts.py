@@ -24,7 +24,7 @@ import pytest
 from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
@@ -80,27 +80,6 @@ def _pipeline_timeout_sync(
     with pytest.raises(TimeoutExpired) as exc_info:
         pipeline.run_sync(**kwargs)
     return exc_info.value, set()
-
-
-async def _run_zero_timeout_case(
-    pipeline: Pipeline,
-    created: list[asyncio.Task[None]],
-) -> None:
-    """Time out immediately, then inspect pumps before the loop closes.
-
-    ``asyncio.run`` cancels everything still pending during shutdown, so a
-    stranded pump looks settled from outside. The assertion has to happen
-    while the loop is still live.
-    """
-    with pytest.raises(TimeoutExpired):
-        await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
-
-    assert created, "the pipeline must create an inter-stage pump to reconcile"
-    for index, task in enumerate(created):
-        assert task.done(), (
-            f"pump {index} was left unsettled after the immediate timeout: "
-            "nothing reconciled the pumps the caller owns"
-        )
 
 
 @pytest.fixture(params=["async", "sync"], ids=["run()", "run_sync()"])
@@ -180,6 +159,31 @@ def test_pipeline_non_positive_timeout_at_public_boundary(
 # -- Inter-stage pump ownership on the immediate path -------------------------
 
 
+async def _assert_immediate_timeout_reconciles_pumps(
+    pipeline: Pipeline,
+    *,
+    created: list[asyncio.Task[None]],
+    timed_out_processes: list[asyncio.subprocess.Process],
+) -> None:
+    """Assert the immediate timeout settles pumps before reaping its stages."""
+    with pytest.raises(TimeoutExpired):
+        await pipeline.run(timeout=0, output=RunOutputOptions(capture=False))
+
+    # The assertion above deliberately runs while both stages remain alive so
+    # their blocked pipe does not hide detached-pump cleanup. Reap them before
+    # closing this event loop: asyncio otherwise retains subprocess transport
+    # waiter tasks until their 30-second sleeps naturally finish.
+    try:
+        assert created, "the pipeline must create an inter-stage pump to reconcile"
+        for index, task in enumerate(created):
+            assert task.done(), (
+                f"pump {index} was left unsettled after the immediate timeout: "
+                "nothing reconciled the pumps the caller owns"
+            )
+    finally:
+        await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
+
+
 def test_zero_timeout_reconciles_pipe_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -192,12 +196,16 @@ def test_zero_timeout_reconciles_pipe_tasks(
     writes more than a pipe buffer holds and the second never reads, leaving
     the pump genuinely blocked when the deadline fires.
     """
+    # This test owns the deliberately blocked pump until its ownership
+    # assertion. Native-pump cleanup has dedicated lifecycle coverage; forcing
+    # this fixture to the Python path keeps its subprocess reaping local.
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "python")
     get_stream_backend.cache_clear()
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
     created: list[asyncio.Task[None]] = []
     events: list[ExecEvent] = []
+    timed_out_processes: list[asyncio.subprocess.Process] = []
     real_create = _pipeline_collect._create_pipe_tasks
 
     def spy(
@@ -206,13 +214,14 @@ def test_zero_timeout_reconciles_pipe_tasks(
         observations: tuple[_StageObservation, ...],
         native_pump_cleanup_grace: float,
     ) -> list[asyncio.Task[None]]:
-        """Record the pumps the pipeline creates so they can be inspected."""
+        """Record the created pumps and stages for assertions and local cleanup."""
         tasks = real_create(
             processes,
             observations=observations,
             native_pump_cleanup_grace=native_pump_cleanup_grace,
         )
         created.extend(tasks)
+        timed_out_processes.extend(processes)
         return tasks
 
     async def no_termination(
@@ -220,7 +229,7 @@ def test_zero_timeout_reconciles_pipe_tasks(
         cancel_grace: float,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        _ = (processes, cancel_grace)
+        del processes, cancel_grace
         await asyncio.sleep(0)
 
     pipeline = python(
@@ -236,7 +245,13 @@ def test_zero_timeout_reconciles_pipe_tasks(
             scoped(ScopeConfig(allowlist=frozenset([python_program]))),
             sh.observe(events.append),
         ):
-            asyncio.run(_run_zero_timeout_case(pipeline, created))
+            asyncio.run(
+                _assert_immediate_timeout_reconciles_pumps(
+                    pipeline,
+                    created=created,
+                    timed_out_processes=timed_out_processes,
+                )
+            )
     finally:
         get_stream_backend.cache_clear()
         for pid in started_pids(events):

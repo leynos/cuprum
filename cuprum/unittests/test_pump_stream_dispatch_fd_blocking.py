@@ -14,7 +14,11 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -23,7 +27,6 @@ from cuprum.unittests._pump_stream_dispatch_support import (
     PumpCallCounts,
     _fake_python_fallback,
     _make_blocking_fd_spy,
-    _make_writer_toggle_failure,
     _nonblocking_pipe_pair,
     _ReaderWithoutPause,
     _run_with_inline_executor,
@@ -38,6 +41,42 @@ pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 
 class TestPumpStreamDispatch:
     """Unit integration tests for ``_pump_stream_dispatch`` FD toggling."""
+
+    def test_paused_reader_callbacks_settle_before_native_handoff(self) -> None:
+        """Queued transport delivery completes before native pumping begins."""
+
+        async def settle_handoff() -> list[str]:
+            """Queue transport delivery and return the observed hand-off order."""
+            events: list[str] = []
+            asyncio.get_running_loop().call_soon(events.append, "reader_callback")
+            await _pipeline_streams._settle_paused_reader_callbacks()
+            events.append("native_handoff")
+            return events
+
+        assert asyncio.run(settle_handoff()) == ["reader_callback", "native_handoff"], (
+            "queued reader delivery must populate its buffer before native I/O"
+        )
+
+    def test_buffered_reader_transfers_before_native_handoff(self) -> None:
+        """Buffered asyncio data is delivered before native pumping begins."""
+
+        async def inspect_buffer() -> tuple[bytes, bytes]:
+            """Report the delivered bytes and the cleared hand-off buffer."""
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"buffered")
+            reader.feed_eof()
+            writer = mock.MagicMock(spec=asyncio.StreamWriter)
+            writer.drain = mock.AsyncMock()
+            await _pipeline_streams._drain_reader_buffer(
+                reader,
+                writer,
+            )
+            delivered = writer.write.call_args.args[0]
+            return delivered, await reader.read()
+
+        assert asyncio.run(inspect_buffer()) == (b"buffered", b""), (
+            "native preparation must transfer buffered data before clearing it"
+        )
 
     def test_dispatch_sets_rust_fds_blocking_before_native_pump(
         self,
@@ -220,10 +259,15 @@ class TestPumpStreamDispatch:
             )
 
             calls: PumpCallCounts = {"python_pump": 0}
+
+            def fail_worker_blocking_mode(**_kwargs: object) -> typ.NoReturn:
+                """Decline worker-only blocking-mode preparation."""
+                raise OSError
+
             monkeypatch.setattr(
-                os,
-                "set_blocking",
-                _make_writer_toggle_failure(read_fd, OSError),
+                _pipeline_stream_native_cleanup._BlockingModeGuard,
+                "engage",
+                fail_worker_blocking_mode,
             )
             configure_pump_stream_dispatch_for_testing(
                 python_pump=lambda reader, writer: _fake_python_fallback(

@@ -14,6 +14,7 @@ responsible for moving and collecting bytes once those streams exist.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import functools
 import logging
@@ -42,11 +43,11 @@ from cuprum._pipeline_stream_native_cleanup import (
     _run_rust_pump_with_blocking_fds,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
+from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
 
     from cuprum._pipeline_types import _StageObservation
@@ -159,8 +160,6 @@ async def _pump_over_raw_fds(
     handoff: _RustPumpHandoff,
 ) -> bool:
     """Transfer a hop after acquiring the reader and descriptor hand-off."""
-    # Flush any bytes asyncio already buffered in the StreamReader
-    # before the Rust pump takes over the raw file descriptor.
     reader_pause = _pause_reader_transport(reader)
     if not reader_pause.may_hand_off:
         _log_rust_pump_declined(
@@ -172,7 +171,6 @@ async def _pump_over_raw_fds(
     except BaseException:
         _resume_reader_transport(reader_pause.resume)
         raise
-
     try:
         # These duplicates outlive the caller-facing task. They carry the
         # blocking-mode state that only the completion callback may restore
@@ -197,39 +195,49 @@ async def _pump_over_raw_fds(
     return True
 
 
+async def _settle_paused_reader_callbacks() -> None:
+    """Let callbacks queued before a transport pause finish filling its buffer."""
+    loop = asyncio.get_running_loop()
+    settled = loop.create_future()
+    loop.call_soon(settled.set_result, None)
+    await settled
+
+
 async def _drain_reader_buffer(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
 ) -> None:
-    """Flush bytes already buffered in *reader* to *writer*."""
-    # StreamReader._buffer is a CPython-private bytearray populated by the
-    # event loop before our coroutine is scheduled.  The Rust pump reads from
-    # the raw FD and would skip those bytes, so we flush them here first.
-    # getattr gracefully degrades to a no-op if the attribute is absent (e.g.
-    # on PyPy or future CPython versions that rename or remove _buffer).
+    """Deliver asyncio-buffered bytes before handing its descriptor to Rust."""
+    await _settle_paused_reader_callbacks()
+    # The raw descriptor cannot replay bytes the StreamReader already owns.
+    # ``getattr`` leaves the native path available on compatible reader types
+    # without this CPython implementation detail.
     buffered: bytearray | None = getattr(reader, "_buffer", None)
     if not buffered:
         return
-    if writer is not None:
-        try:
+    try:
+        if writer is not None:
             writer.write(bytes(buffered))
             await writer.drain()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-    # Clear unconditionally so the Rust pump does not re-read stale data.
+    except (BrokenPipeError, ConnectionResetError):
+        # A closed downstream has a known discard outcome; the native worker
+        # still drains the unread descriptor so the upstream cannot block.
+        pass
     buffered.clear()
 
 
 async def _run_python_pump(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    read_size: int,
 ) -> None:
     """Run the configured Python pump implementation."""
     python_pump = _PUMP_STREAM_DISPATCH_TEST_HOOKS.python_pump
     if python_pump is not None:
         await python_pump(reader, writer)
         return
-    await _pump_stream(reader, writer)
+    await _pump_stream(reader, writer, read_size=read_size)
 
 
 async def _try_rust_pump(
@@ -275,10 +283,12 @@ async def _pump_stream_dispatch(
     writer: asyncio.StreamWriter | None,
     *,
     cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
+    read_size: int | None = None,
 ) -> None:
     """Route inter-stage pump to the Rust or Python implementation."""
+    active_read_size = _current_read_size() if read_size is None else read_size
     if reader is None:
-        await _run_python_pump(reader, writer)
+        await _run_python_pump(reader, writer, read_size=active_read_size)
         return
 
     backend = get_stream_backend()
@@ -289,7 +299,7 @@ async def _pump_stream_dispatch(
     ):
         return
 
-    await _run_python_pump(reader, writer)
+    await _run_python_pump(reader, writer, read_size=active_read_size)
 
 
 def _create_pipe_tasks(
@@ -304,5 +314,6 @@ def _create_pipe_tasks(
         functools.partial(
             _pump_stream_dispatch,
             cleanup_grace_s=native_pump_cleanup_grace,
+            read_size=_current_read_size(),
         ),
     )

@@ -123,13 +123,15 @@ def run_successful_hop(
 
     _, python_program = python_catalogue()
     catalogue = combine_programs_into_catalogue(
-        ECHO,
         python_program,
         project_name="rust-pump-span-behaviour",
     )
-    echo = sh.make(ECHO, catalogue=catalogue)
     python = sh.make(python_program, catalogue=catalogue)
-    pipeline = echo("-n", "rust-pump-span-behaviour") | python(
+    payload = "rust-pump-span-behaviour" * 16_384
+    pipeline = python(
+        "-c",
+        "import sys; sys.stdout.buffer.write(b'rust-pump-span-behaviour' * 16_384)",
+    ) | python(
         "-c",
         "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
     )
@@ -141,7 +143,7 @@ def run_successful_hop(
         with (
             observe_pump_span(tracer),
             scoped(
-                ScopeConfig(allowlist=frozenset((ECHO, python_program))),
+                ScopeConfig(allowlist=frozenset((python_program,))),
             ),
         ):
             result = pipeline.run_sync()
@@ -149,7 +151,7 @@ def run_successful_hop(
         _check_rust_available.cache_clear()
         get_stream_backend.cache_clear()
 
-    if result.stdout != "rust-pump-span-behaviour":
+    if result.stdout != payload:
         pytest.fail("the public pipeline must transfer its stdout through the Rust hop")
 
 

@@ -131,9 +131,10 @@ def fixture_recorded_pumps(
         writer: object,
         *,
         cleanup_grace_s: float,
+        read_size: int | None = None,
     ) -> None:
         """Record which pair of handles this hop was given."""
-        del cleanup_grace_s
+        del cleanup_grace_s, read_size
         await asyncio.sleep(0)
         recorded.append(
             (

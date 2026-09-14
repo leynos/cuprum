@@ -54,6 +54,7 @@ from cuprum import (
     scoped,
     sh,
 )
+from cuprum._streams_pump import _READ_SIZE, _current_read_size, _override_read_size
 
 type TeeMode = typ.Literal["echo", "capture", "tee"]
 type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
@@ -76,6 +77,7 @@ class TeeProfileWorkerResult(typ.TypedDict):
     with_line_callbacks: bool
     backend: BackendName
     repeat_count: int
+    read_size: int
     wall_time_seconds: float
     lock_wait_seconds: float
     reentrant_rejection_count: int
@@ -83,6 +85,16 @@ class TeeProfileWorkerResult(typ.TypedDict):
     exit_code: int
     captured_output_length: int
     stdout_line_count: int
+
+
+def _validate_repeat_count(repeat_count: int) -> None:
+    """Validate the bounded worker repeat count."""
+    if repeat_count < 1:
+        msg = f"repeat-count must be >= 1, got {repeat_count}"
+        raise ValueError(msg)
+    if repeat_count > _MAX_REPEAT_COUNT:
+        msg = f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {repeat_count}"
+        raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -96,6 +108,7 @@ class TeeProfileWorkerConfig:
     with_line_callbacks: bool
     backend: BackendName
     repeat_count: int
+    read_size: int = _READ_SIZE
     encoding: str = "utf-8"
     errors: str = "replace"
 
@@ -118,13 +131,9 @@ class TeeProfileWorkerConfig:
         if self.stages < 1:
             msg = f"stages must be >= 1, got {self.stages}"
             raise ValueError(msg)
-        if self.repeat_count < 1:
-            msg = f"repeat-count must be >= 1, got {self.repeat_count}"
-            raise ValueError(msg)
-        if self.repeat_count > _MAX_REPEAT_COUNT:
-            msg = (
-                f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {self.repeat_count}"
-            )
+        _validate_repeat_count(self.repeat_count)
+        if self.read_size < 1:
+            msg = f"read-size must be >= 1, got {self.read_size}"
             raise ValueError(msg)
 
     def _validate_enum_fields(self) -> None:
@@ -400,6 +409,7 @@ def _build_worker_result(
         "with_line_callbacks": config.with_line_callbacks,
         "backend": config.backend,
         "repeat_count": config.repeat_count,
+        "read_size": _current_read_size(),
         "wall_time_seconds": wall_time_seconds,
         "lock_wait_seconds": metrics.lock_wait_seconds,
         "reentrant_rejection_count": metrics.reentrant_rejection_count,
@@ -452,14 +462,15 @@ def run_tee_profile_worker(
     metrics_state = selector.metrics_state
     metrics_state.reset()
     timing = _TimingContext(timer=timer, started=timer())
-    totals = _run_repeat_loop(config, selector)
-    metrics = metrics_state.snapshot()
-    return _build_worker_result(
-        config,
-        timing=timing,
-        totals=totals,
-        metrics=metrics,
-    )
+    with _override_read_size(config.read_size):
+        totals = _run_repeat_loop(config, selector)
+        metrics = metrics_state.snapshot()
+        return _build_worker_result(
+            config,
+            timing=timing,
+            totals=totals,
+            metrics=metrics,
+        )
 
 
 def _scenario_label(config: TeeProfileWorkerConfig) -> str:
@@ -478,6 +489,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--line-callbacks", action="store_true")
     parser.add_argument("--backend", choices=sorted(_VALID_BACKENDS), default="auto")
     parser.add_argument("--repeat-count", type=int, default=1)
+    parser.add_argument("--read-size", type=int, default=_READ_SIZE)
     parser.add_argument("--encoding", default="utf-8")
     parser.add_argument("--errors", default="replace")
     parser.add_argument("--output", type=pth.Path)
@@ -508,6 +520,7 @@ def main() -> int:
             with_line_callbacks=args.line_callbacks,
             backend=args.backend,
             repeat_count=args.repeat_count,
+            read_size=args.read_size,
             encoding=args.encoding,
             errors=args.errors,
         )

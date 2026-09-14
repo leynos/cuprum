@@ -244,6 +244,7 @@ def _force_rust_pump_path(
                 return None
 
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+
     configure_pump_stream_dispatch_for_testing(raw_fd_extractor=extract_raw_fd)
     set_rust_availability_for_testing(is_available=True)
     _check_rust_available.cache_clear()

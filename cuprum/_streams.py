@@ -26,11 +26,8 @@ from cuprum._echo_truncation import (
     _split_echo_segments,
     _validate_bounded_echo_encoding,
 )
-from cuprum._line_splitting import (
-    _emit_completed_lines,
-    _split_complete_lines,
-    _strip_line_ending,
-)
+from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
+from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -42,9 +39,17 @@ from cuprum._streams_pump import (
 )
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import _emit_echo_event
+from cuprum.stream_events import StreamOperation, StreamOperationOutcome
+from cuprum.stream_observation import (
+    _complete_stream_operation,
+    _record_stream_read,
+    _start_stream_operation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.stream_observation import _StreamOperationMeasurement
 
 
 _LOGGER = logging.getLogger("cuprum.stream")
@@ -59,15 +64,12 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
-    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
-    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
-    # accepting a line past a size limit (GitHub Actions job logs end at a
-    # 64 KiB line) while capture stays byte-for-byte complete.
+    # Profiled private read size; production callers use the default.
+    read_size: int = _READ_SIZE
+    # Byte cap per echoed line; capture remains byte-for-byte complete.
     echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
-    # Which output stream this config drains, for bounded echo observability.
-    # Defaults to stdout because every production call site names the stderr
-    # config explicitly when it replaces the stdout one.
+    # Drained output stream for bounded-echo observability.
     stream: EchoStream = EchoStream.STDOUT
 
 
@@ -103,11 +105,20 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested."""
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config)
-    return await _consume_stream_with_lines(stream, config, on_line=on_line)
+        return await _consume_stream_without_lines(stream, config, read_size=read_size)
+    return await _consume_stream_with_lines(
+        stream,
+        _LineConsumption(
+            config=config,
+            on_line=on_line,
+            read_size=read_size,
+            drain=_drain,
+        ),
+    )
 
 
 async def _drain(
@@ -115,16 +126,9 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
+    read_size: int = _READ_SIZE,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
-    # This is the single source of truth for the consume mechanics shared by
-    # :func:`_consume_stream_without_lines` and
-    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
-    # the capture buffer when capturing, echo each chunk to the configured
-    # sink when echoing, then hand the chunk to ``on_chunk`` for
-    # variant-specific processing (for example incremental line decoding).
-    # Fixes to the loop must be made here so the capture path and the
-    # line-emitting path cannot drift.
     if config.echo_output and config.echo_max_line_bytes is not None:
         _validate_bounded_echo_encoding(config.encoding, config.errors)
     buffer = bytearray() if config.capture_output else None
@@ -142,18 +146,44 @@ async def _drain(
         echo_guard,
         echo_limiter=echo_limiter,
     )
-    reached_eof = await _drain_chunks(stream, state)
+    measurement = _start_stream_operation(StreamOperation.DRAIN)
+    try:
+        reached_eof = await _drain_chunks(
+            stream,
+            state,
+            read_size=read_size,
+            measurement=measurement,
+        )
+        if reached_eof:
+            return _finish_drain(state, measurement, reached_eof=True)
+    except BaseException:
+        _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
+        raise
+    return _finish_drain(state, measurement, reached_eof=False)
+
+
+def _finish_drain(
+    state: _DrainState,
+    measurement: _StreamOperationMeasurement | None,
+    *,
+    reached_eof: bool,
+) -> str | None:
+    """Complete one drain and return any captured text."""
     if not reached_eof:
-        if buffer is None or _discard_on_cancel(config):
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
+        if state.buffer is None or _discard_on_cancel(state.config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
-        return buffer.decode(config.encoding, errors=config.errors)
-
+        return state.buffer.decode(state.config.encoding, errors=state.config.errors)
     _flush_echo_decoder(state)
-
-    if buffer is None:
-        return None
-    return buffer.decode(config.encoding, errors=config.errors)
+    captured = None
+    if state.buffer is not None:
+        captured = state.buffer.decode(
+            state.config.encoding,
+            errors=state.config.errors,
+        )
+    _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
+    return captured
 
 
 def _discard_on_cancel(config: _StreamConfig) -> bool:
@@ -164,13 +194,17 @@ def _discard_on_cancel(config: _StreamConfig) -> bool:
 async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
+    *,
+    read_size: int,
+    measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(_READ_SIZE)
+            chunk = await stream.read(read_size)
         except asyncio.CancelledError:
             return False
+        _record_stream_read(measurement, chunk)
         if not chunk:
             return True
         if state.buffer is not None:
@@ -184,44 +218,13 @@ async def _drain_chunks(
 async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
+    *,
+    read_size: int,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config)
-
-
-async def _consume_stream_with_lines(
-    stream: asyncio.StreamReader | None,
-    config: _StreamConfig,
-    *,
-    on_line: cabc.Callable[[str], None],
-) -> str | None:
-    """Read from a subprocess stream while emitting decoded output lines."""
-    if stream is None:
-        return "" if config.capture_output else None
-
-    decoder = _incremental_decoder(config)
-    pending_text = ""
-
-    def feed_decoder(chunk: bytes) -> None:
-        """Feed a chunk to the incremental decoder and emit complete lines."""
-        nonlocal pending_text
-        pending_text = _emit_completed_lines(
-            pending_text + decoder.decode(chunk),
-            on_line=on_line,
-        )
-
-    captured = await _drain(stream, config, on_chunk=feed_decoder)
-
-    pending_text = _emit_completed_lines(
-        pending_text + decoder.decode(b"", final=True),
-        on_line=on_line,
-    )
-    if pending_text:
-        on_line(_strip_line_ending(pending_text))
-
-    return captured
+    return await _drain(stream, config, read_size=read_size)
 
 
 def _write_chunk(
@@ -340,9 +343,7 @@ def _echo_write(
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
     except UnicodeEncodeError as exc:
         state.echo_guard.disabled = True
-        # The warning and the observation are two projections of the same
-        # first-failure transition; neither retries after this point because
-        # the guard above already disables every later echo write.
+        # The first failure emits both projections; the guard prevents retries.
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
@@ -364,9 +365,7 @@ def _echo_write(
     return True
 
 
-def _flush_echo_decoder(
-    state: _DrainState,
-) -> None:
+def _flush_echo_decoder(state: _DrainState) -> None:
     """Flush a text-only echo decoder at end of stream."""
     limiter = state.echo_limiter
     if limiter is not None:

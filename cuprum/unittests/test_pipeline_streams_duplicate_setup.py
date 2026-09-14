@@ -195,16 +195,13 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
 def test_reader_duplication_failure_retains_its_original_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A reader-duplication failure leaves no callback-owned descriptor open."""
-    error = OSError("reader cannot be duplicated")
-
-    def fail_reader_duplication(_fd: int) -> typ.NoReturn:
-        """Fail before a reader duplicate exists."""
-        raise error
-
+    """A failed worker-descriptor opening has no callback-owned state FDs."""
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup.os, "dup", fail_reader_duplication
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        lambda **_kwargs: None,
     )
+
     with owned_fds() as (reader_fd, writer_fd):
         handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
             reader_fd=reader_fd,
@@ -216,29 +213,31 @@ def test_reader_duplication_failure_retains_its_original_error(
         ) as exc_info:
             _pipeline_stream_native_cleanup._duplicate_rust_pump_state_fds(handoff)
 
-    assert exc_info.value.error is error, "the wrapper must retain the reader error"
+    assert (
+        str(exc_info.value.error) == "could not create native pump worker descriptors"
+    ), "the wrapper must identify failed independent descriptor creation"
 
 
 def test_writer_duplication_failure_closes_the_reader_duplicate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A writer-duplication failure rolls back the already-created reader FD."""
-    original_dup = os.dup
+    """A writer-open failure rolls back the already-opened reader descriptor."""
+    original_open = os.open
     duplicated_readers: list[int] = []
-    error = OSError("writer cannot be duplicated")
+    error = OSError("writer cannot be opened")
 
-    def duplicate_reader_then_fail_writer(fd: int) -> int:
-        """Create the first duplicate and fail the second call."""
+    def open_reader_then_fail_writer(path: str, flags: int) -> int:
+        """Open the reader worker descriptor and fail opening the writer one."""
         if duplicated_readers:
             raise error
-        duplicate = original_dup(fd)
+        duplicate = original_open(path, flags)
         duplicated_readers.append(duplicate)
         return duplicate
 
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup.os,
-        "dup",
-        duplicate_reader_then_fail_writer,
+        "open",
+        open_reader_then_fail_writer,
     )
     with owned_fds() as (reader_fd, writer_fd):
         handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
@@ -251,7 +250,9 @@ def test_writer_duplication_failure_closes_the_reader_duplicate(
         ) as exc_info:
             _pipeline_stream_native_cleanup._duplicate_rust_pump_state_fds(handoff)
 
-    assert exc_info.value.error is error, "the wrapper must retain the writer error"
+    assert (
+        str(exc_info.value.error) == "could not create native pump worker descriptors"
+    ), "the wrapper must identify failed independent descriptor creation"
     with pytest.raises(OSError, match="Bad file descriptor"):
         os.fstat(duplicated_readers[0])
 

@@ -40,6 +40,7 @@ from cuprum._pipeline_stream_fds import (
     _close_rust_reader_fd,
     _close_rust_state_fd,
     _close_rust_writer_fd,
+    _open_native_pump_worker_fds,
     _resume_reader_transport,
     _suppressed_teardown_failure,
 )
@@ -149,20 +150,15 @@ def _submit_rust_pump(
 def _duplicate_rust_pump_state_fds(
     handoff: _RustPumpHandoff,
 ) -> tuple[int, int]:
-    """Duplicate the descriptors whose state the completion callback owns."""
-    try:
-        reader_fd = os.dup(handoff.reader_fd)
-    except (OSError, ValueError) as error:
+    """Open state descriptors independent from asyncio's transport descriptors."""
+    worker_fds = _open_native_pump_worker_fds(
+        reader_fd=handoff.reader_fd,
+        writer_fd=handoff.writer_fd,
+    )
+    if worker_fds is None:
+        error = OSError("could not create native pump worker descriptors")
         raise _RustPumpStateDuplicationError(error) from error
-    try:
-        writer_fd = os.dup(handoff.writer_fd)
-    except (OSError, ValueError) as error:
-        _close_rust_reader_fd(reader_fd)
-        raise _RustPumpStateDuplicationError(error) from error
-    except BaseException:
-        _close_rust_reader_fd(reader_fd)
-        raise
-    return reader_fd, writer_fd
+    return worker_fds.reader_fd, worker_fds.writer_fd
 
 
 def _engage_rust_pump_blocking_mode(

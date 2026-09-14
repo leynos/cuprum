@@ -16,13 +16,48 @@ must not reuse the writer afterwards.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import dataclasses as dc
 import enum
 import logging
+import typing as typ
 
-_READ_SIZE = 4096
+from cuprum.pump_observation import _current_pump_event_exec_id
+from cuprum.stream_events import StreamOperation, StreamOperationOutcome
+from cuprum.stream_observation import (
+    _complete_stream_operation,
+    _record_stream_read,
+    _start_stream_operation,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.stream_observation import _StreamOperationMeasurement
+
+_READ_SIZE = 65536
 _POST_CLOSE_DRAIN_TIMEOUT_S = 0.25
 _LOGGER = logging.getLogger(__name__)
+_ACTIVE_READ_SIZE: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "cuprum_active_read_size",
+    default=_READ_SIZE,
+)
+
+
+def _current_read_size() -> int:
+    """Return the task-local read size active for this execution."""
+    return _ACTIVE_READ_SIZE.get()
+
+
+@contextlib.contextmanager
+def _override_read_size(read_size: int) -> cabc.Iterator[None]:
+    """Use ``read_size`` for one benchmark worker without shared mutation."""
+    token = _ACTIVE_READ_SIZE.set(read_size)
+    try:
+        yield
+    finally:
+        _ACTIVE_READ_SIZE.reset(token)
 
 
 @dc.dataclass(slots=True)
@@ -30,6 +65,7 @@ class _DrainProgress:
     """Track bytes discarded by a cancellable reader drain."""
 
     discarded_bytes: int = 0
+    measurement: _StreamOperationMeasurement | None = None
 
 
 class _WriteOutcome(enum.Enum):
@@ -54,62 +90,124 @@ class _WriteOutcome(enum.Enum):
 async def _pump_stream(
     reader: asyncio.StreamReader | None,
     writer: asyncio.StreamWriter | None,
+    *,
+    read_size: int = _READ_SIZE,
 ) -> None:
     """Stream stdout into stdin with backpressure via ``drain``.
 
     When the downstream stdin closes early (for example because the next stage
     terminates), this helper continues draining stdout to avoid deadlocking
     upstream stages.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the active task is cancelled while pumping.
     """
-    if reader is None:
-        await _close_stream_writer(writer)
-        return
+    measurement = _start_stream_operation(
+        StreamOperation.PIPELINE_TRANSFER,
+        exec_id=_current_pump_event_exec_id(),
+    )
+    outcome = StreamOperationOutcome.EOF
 
     try:
-        await _relay_chunks(reader, writer)
+        try:
+            if reader is not None:
+                outcome = await _relay_chunks(
+                    reader,
+                    writer,
+                    read_size=read_size,
+                    measurement=measurement,
+                )
+        finally:
+            _LOGGER.debug("stream_writer_close_start")
+            await _close_stream_writer(writer)
+    except asyncio.CancelledError:
+        outcome = StreamOperationOutcome.CANCELLED
+        raise
+    except BaseException:
+        outcome = StreamOperationOutcome.FAILED
+        raise
     finally:
-        _LOGGER.debug("stream_writer_close_start")
-        await _close_stream_writer(writer)
+        _complete_stream_operation(measurement, outcome)
 
 
 async def _relay_chunks(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter | None,
-) -> None:
+    *,
+    read_size: int = _READ_SIZE,
+    measurement: _StreamOperationMeasurement | None = None,
+) -> StreamOperationOutcome:
     """Copy chunks downstream; drain to EOF with no writer, bounded after a close."""
     if writer is None:
-        await _drain_stream_reader(reader, _DrainProgress())
-        return
+        await _drain_stream_reader(
+            reader,
+            _DrainProgress(measurement=measurement),
+            read_size=read_size,
+        )
+        return StreamOperationOutcome.EOF
     while True:
-        chunk = await reader.read(_READ_SIZE)
+        chunk = await reader.read(read_size)
+        _record_stream_read(measurement, chunk)
         if not chunk:
-            return
+            return StreamOperationOutcome.EOF
         if await _write_to_stream_writer(writer, chunk) is _WriteOutcome.CLOSED:
             break
-    discarded_bytes = await _drain_stream_reader_bounded(reader)
+    discarded_bytes, timed_out = await _drain_stream_reader_bounded_result(
+        reader,
+        read_size=read_size,
+        measurement=measurement,
+    )
     _LOGGER.debug(
         "stream_downstream_closed discarded_bytes=%s",
         discarded_bytes,
         extra={"cuprum_discarded_bytes": discarded_bytes},
     )
+    if timed_out:
+        return StreamOperationOutcome.POST_CLOSE_DRAIN_TIMEOUT
+    return StreamOperationOutcome.DOWNSTREAM_CLOSED
 
 
 async def _drain_stream_reader(
     reader: asyncio.StreamReader,
     progress: _DrainProgress,
+    *,
+    read_size: int = _READ_SIZE,
 ) -> int:
     """Consume the reader to EOF, discarding the data and returning byte count."""
-    while chunk := await reader.read(_READ_SIZE):
+    while True:
+        chunk = await reader.read(read_size)
+        _record_stream_read(progress.measurement, chunk)
+        if not chunk:
+            return progress.discarded_bytes
         progress.discarded_bytes += len(chunk)
-    return progress.discarded_bytes
 
 
-async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
+async def _drain_stream_reader_bounded(
+    reader: asyncio.StreamReader,
+    *,
+    read_size: int = _READ_SIZE,
+) -> int:
     """Best-effort drain after downstream closure without waiting forever."""
-    progress = _DrainProgress()
+    discarded_bytes, _ = await _drain_stream_reader_bounded_result(
+        reader,
+        read_size=read_size,
+    )
+    return discarded_bytes
+
+
+async def _drain_stream_reader_bounded_result(
+    reader: asyncio.StreamReader,
+    *,
+    read_size: int = _READ_SIZE,
+    measurement: _StreamOperationMeasurement | None = None,
+) -> tuple[int, bool]:
+    """Drain after closure and report its partial byte count and timeout state."""
+    progress = _DrainProgress(measurement=measurement)
     try:
-        return await asyncio.wait_for(
-            _drain_stream_reader(reader, progress),
+        discarded_bytes = await asyncio.wait_for(
+            _drain_stream_reader(reader, progress, read_size=read_size),
             timeout=_POST_CLOSE_DRAIN_TIMEOUT_S,
         )
     except TimeoutError:
@@ -118,7 +216,8 @@ async def _drain_stream_reader_bounded(reader: asyncio.StreamReader) -> int:
             _POST_CLOSE_DRAIN_TIMEOUT_S,
             extra={"cuprum_timeout_s": _POST_CLOSE_DRAIN_TIMEOUT_S},
         )
-        return progress.discarded_bytes
+        return progress.discarded_bytes, True
+    return discarded_bytes, False
 
 
 async def _write_to_stream_writer(
@@ -191,6 +290,7 @@ __all__ = [
     "_DrainProgress",
     "_WriteOutcome",
     "_close_stream_writer",
+    "_current_read_size",
     "_drain_stream_reader",
     "_drain_stream_reader_bounded",
     "_log_suppressed_stream_close_error",
