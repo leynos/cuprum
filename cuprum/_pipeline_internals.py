@@ -9,9 +9,10 @@ finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
 ``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
-``cuprum._pipeline_collect``, ``cuprum._pipeline_sink``,
-``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
+``cuprum._pipeline_collect``, ``cuprum._pipeline_sink`` (the pipeline's
+result mapping), ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 ``cuprum._pipeline_wait``, ``cuprum._process_lifecycle``,
+``cuprum._sink_lifecycle`` (the sink session it brackets the run with),
 ``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
 ``cuprum._subprocess_execution``.
@@ -42,11 +43,7 @@ from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
-from cuprum._pipeline_sink import (
-    _close_pipeline_sink_session,
-    _pipeline_error_outcome,
-    _pipeline_result_outcome,
-)
+from cuprum._pipeline_sink import _pipeline_result_outcome
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
@@ -58,6 +55,7 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import _close_sink_session, _outcome_for_error
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
@@ -194,9 +192,9 @@ async def _finalize_pipeline_timeout(
 ) -> None:
     """Report a pipeline timeout and finalize its sink and observe tasks."""
     observations = observers.observations
-    _close_pipeline_sink_session(
+    _close_sink_session(
         config.sink_session,
-        outcome=_pipeline_error_outcome(timeout_error),
+        outcome=_outcome_for_error(timeout_error),
     )
     _report_pipeline_timeout_expiry(
         observations,
@@ -255,9 +253,9 @@ async def _run_spawned_pipeline(
         )
         raise
     except BaseException as run_error:
-        _close_pipeline_sink_session(
+        _close_sink_session(
             sink_session,
-            outcome=_pipeline_error_outcome(run_error),
+            outcome=_outcome_for_error(run_error),
         )
         # One shielded unit: shielding the two separately would let a
         # cancellation landing between them abandon the observe-hook drain.
@@ -277,7 +275,7 @@ async def _run_spawned_pipeline(
         stage_results,
         pending_tasks,
     )
-    _close_pipeline_sink_session(
+    _close_sink_session(
         sink_session,
         outcome=_pipeline_result_outcome(stage_results),
     )
@@ -348,9 +346,9 @@ async def _spawn_and_drive_pipeline(
             idle=config.idle,
         )
     except BaseException as spawn_error:
-        _close_pipeline_sink_session(
+        _close_sink_session(
             config.sink_session,
-            outcome=_pipeline_error_outcome(spawn_error),
+            outcome=_outcome_for_error(spawn_error),
         )
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(

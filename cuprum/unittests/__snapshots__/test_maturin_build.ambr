@@ -45,6 +45,7 @@
       'cuprum/_process_lifecycle.py',
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.cpython-<platform>.so',
+      'cuprum/_sink_lifecycle.py',
       'cuprum/_stream_echo.py',
       'cuprum/_stream_line_boundaries.py',
       'cuprum/_stream_line_consumer.py',
