@@ -8,8 +8,8 @@ import typing as typ
 
 import pytest
 
-from cuprum._streams import _drain, _StreamConfig
-from cuprum.echo_events import EchoStream
+from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
+from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -123,10 +123,17 @@ def _config_with_stream(
     )
 
 
+_EXPECTED_STDOUT_FALLBACK = RelayFallback(
+    stream=EchoStream.STDOUT,
+    error_category=EchoErrorCategory.UNICODE_ENCODE,
+)
+
+
 def test_binary_buffer_sink_receives_original_bytes() -> None:
     """A sink with a writable binary buffer gets raw bytes, no diagnostics."""
     sink = _BinaryBufferSink()
     chunks = ("safé ".encode(), "wörld ś".encode())
+    relay_diagnostics = _RelayDiagnostics()
 
     captured = asyncio.run(
         _drain(
@@ -134,14 +141,17 @@ def test_binary_buffer_sink_receives_original_bytes() -> None:
             _config_with_stream(
                 typ.cast("typ.IO[str]", sink), capture=False, echo=True
             ),
+            relay_diagnostics=relay_diagnostics,
         ),
     )
+    relay_diagnostics.settle()
 
     assert captured is None
     assert b"".join(sink.buffer.raw) == b"".join(chunks), (
         "the binary fast path must forward the original child bytes unchanged"
     )
     assert sink.text_writes == [], "no text write may be attempted"
+    assert relay_diagnostics.snapshot() == ()
 
 
 def test_text_only_failure_records_once_across_all_surfaces(
@@ -150,14 +160,17 @@ def test_text_only_failure_records_once_across_all_surfaces(
     """One disablement yields one warning with categorical extras only."""
     sink = _Cp1252TextOnlySink()
     chunks = (b"plain ", "ś".encode(), b" tail")
+    relay_diagnostics = _RelayDiagnostics()
 
     with caplog.at_level(logging.WARNING, logger="cuprum.stream"):
         captured = asyncio.run(
             _drain(
                 _reader(chunks),
                 _config_with_stream(typ.cast("typ.IO[str]", sink)),
+                relay_diagnostics=relay_diagnostics,
             ),
         )
+    relay_diagnostics.settle()
 
     assert captured == b"".join(chunks).decode("utf-8", errors="replace"), (
         "capture must complete even though the sink rejected the output"
@@ -186,11 +199,13 @@ def test_text_only_failure_records_once_across_all_surfaces(
     assert "cuprum_encoding" not in fields
     assert "cuprum_sink_type" not in fields
     assert "cuprum_error_type" not in fields
+    assert relay_diagnostics.snapshot() == (_EXPECTED_STDOUT_FALLBACK,)
 
 
 def test_drain_collects_diagnostics_without_observers_or_capture() -> None:
     """Diagnostics are collected with no observer registered, no capture."""
     sink = _Cp1252TextOnlySink()
+    relay_diagnostics = _RelayDiagnostics()
 
     with _null_scope():
         captured = asyncio.run(
@@ -199,13 +214,16 @@ def test_drain_collects_diagnostics_without_observers_or_capture() -> None:
                 _config_with_stream(
                     typ.cast("typ.IO[str]", sink), capture=False, echo=True
                 ),
+                relay_diagnostics=relay_diagnostics,
             ),
         )
+    relay_diagnostics.settle()
 
     assert captured is None, "capture-disabled drains still return None"
     assert sink.attempts == ["ś"], (
         "the disablement must be the first and only echo attempt"
     )
+    assert relay_diagnostics.snapshot() == (_EXPECTED_STDOUT_FALLBACK,)
 
 
 def test_non_encoding_sink_error_still_propagates() -> None:

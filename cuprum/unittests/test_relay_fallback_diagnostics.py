@@ -15,7 +15,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RelayFallback, TimeoutExpired
+from cuprum import ExecEvent, RelayFallback, TimeoutExpired, observe
 from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
 from cuprum.echo_observation import observe_echo
 from cuprum.sh import CommandResult, ExecutionContext, RunOutputOptions
@@ -23,6 +23,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.sh import SafeCmd
 
@@ -211,22 +212,48 @@ def test_concurrent_commands_do_not_share_diagnostics(
 
 def test_nested_commands_keep_their_own_diagnostics(
     python_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
 ) -> None:
-    """A command nested after another does not inherit its diagnostics."""
+    """A nested run does not leak diagnostics into its active outer run."""
     rejecting = _Cp1252TextOnlySink()
     accepting = _PassthroughSink()
 
     async def run_case() -> tuple[tuple[RelayFallback, ...], tuple[RelayFallback, ...]]:
-        """Run a healthy command, then a failing one, in one context."""
-        with observe_echo(lambda _event: None):
-            outer = await python_builder("-c", "print('outer plain')").run(
-                output=RunOutputOptions(capture=True, echo=True),
-                context=_echo_context(typ.cast("typ.IO[str]", accepting)),
-            )
-            inner = await python_builder("-c", f"print('{_NON_ENCODABLE}')").run(
+        """Run the failing command from the active outer command's start hook."""
+        ready_path = tmp_path / "nested-inner-complete"
+        outer_source = (
+            "import pathlib\n"
+            "import time\n"
+            f"ready = pathlib.Path({str(ready_path)!r})\n"
+            "while not ready.exists():\n"
+            "    time.sleep(0.01)\n"
+            "print('outer plain', flush=True)\n"
+        )
+        inner_source = (
+            f"import pathlib; print({_NON_ENCODABLE!r}, flush=True); "
+            f"pathlib.Path({str(ready_path)!r}).touch()"
+        )
+        inner: CommandResult | None = None
+        is_outer_started = False
+
+        async def run_inner_at_outer_start(event: ExecEvent) -> None:
+            """Start the inner command once the outer process is alive."""
+            nonlocal inner, is_outer_started
+            if event.phase != "start" or is_outer_started:
+                return
+            is_outer_started = True
+            inner = await python_builder("-c", inner_source).run(
                 output=RunOutputOptions(capture=True, echo=True),
                 context=_echo_context(typ.cast("typ.IO[str]", rejecting)),
             )
+
+        with observe_echo(lambda _event: None), observe(run_inner_at_outer_start):
+            outer = await python_builder("-c", outer_source).run(
+                output=RunOutputOptions(capture=True, echo=True),
+                context=_echo_context(typ.cast("typ.IO[str]", accepting)),
+            )
+        assert is_outer_started, "the nested run must start from the outer process"
+        assert inner is not None, "the outer start hook must complete the inner run"
         return outer.relay_fallbacks, inner.relay_fallbacks
 
     outer_fallbacks, inner_fallbacks = asyncio.run(run_case())
@@ -235,6 +262,48 @@ def test_nested_commands_keep_their_own_diagnostics(
     assert inner_fallbacks == (_EXPECTED_STDOUT_FALLBACK,), (
         f"the inner run must own its record, got {inner_fallbacks!r}"
     )
+
+
+def test_result_orders_mixed_stream_fallbacks(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """One result orders independently disabled stdout before stderr."""
+    stdout_sink = _Cp1252TextOnlySink()
+    stderr_sink = _Cp1252TextOnlySink()
+    stdout_payload = f"stdout {_NON_ENCODABLE}\n"
+    stderr_payload = f"stderr {_NON_ENCODABLE}\n"
+
+    async def run_case() -> tuple[CommandResult, list[EchoEvent]]:
+        """Emit unencodable text on both output streams."""
+        events: list[EchoEvent] = []
+        source = (
+            f"import sys; sys.stdout.write({stdout_payload!r}); sys.stdout.flush(); "
+            f"sys.stderr.write({stderr_payload!r}); sys.stderr.flush()"
+        )
+        with observe_echo(events.append):
+            result = await python_builder("-c", source).run(
+                output=RunOutputOptions(capture=True, echo=True),
+                context=ExecutionContext(
+                    stdout_sink=typ.cast("typ.IO[str]", stdout_sink),
+                    stderr_sink=typ.cast("typ.IO[str]", stderr_sink),
+                ),
+            )
+        return result, events
+
+    result, events = asyncio.run(run_case())
+
+    assert result.stdout == stdout_payload
+    assert result.stderr == stderr_payload
+    assert result.relay_fallbacks == (
+        _EXPECTED_STDOUT_FALLBACK,
+        _EXPECTED_STDERR_FALLBACK,
+    )
+    assert {event.stream for event in events} == {EchoStream.STDOUT, EchoStream.STDERR}
+    assert all(
+        event.error_category is EchoErrorCategory.UNICODE_ENCODE for event in events
+    )
+    assert stdout_sink.attempts == [stdout_payload]
+    assert stderr_sink.attempts == [stderr_payload]
 
 
 def test_timeout_with_pre_expiry_disablement_observes_event(
