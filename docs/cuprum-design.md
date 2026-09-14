@@ -968,14 +968,14 @@ accounted as part of the ending when the following read supplies `\n`.
 A third reason the parent reads a child's stream is idle reporting: when
 `idle_after` is set, a run-owned heartbeat emits one keepalive line for every
 interval in which no monitored stream produces output, and any non-empty read
-resets the timer. The line reports the absence of observed output — it is
-not a deadlock or CPU diagnosis, it never terminates a child, and it never
-extends a timeout. For a single command either stream resets it; for a
-pipeline only the final stage's stdout and every stage's stderr do, never an
-inter-stage transfer, hence the label `pipeline output idle`. The line goes to
-the parent's stderr sink, resolved at emission time, so it never enters
-capture, echo, line observers, or the activity tracker. An `on_idle` callback
-is synchronous and replaces the built-in renderer rather than joining it.
+resets the timer. The line reports the absence of observed output — it is not a
+deadlock or CPU diagnosis, it never terminates a child, and it never extends a
+timeout. For a single command either stream resets it; for a pipeline only the
+final stage's stdout and every stage's stderr do, never an inter-stage
+transfer, hence the label `pipeline output idle`. The line goes to the parent's
+stderr sink, resolved at emission time, so it never enters capture, echo, line
+observers, or the activity tracker. An `on_idle` callback is synchronous and
+replaces the built-in renderer rather than joining it.
 
 Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
@@ -990,9 +990,9 @@ independently becomes a `PIPE` or `DEVNULL` according to its own
 parent-consumption gate (capture, that stream's echo, or idle reporting). For a
 pipeline, the stdout of a non-final stage is always a `PIPE` so that it can
 relay into the next stage, while the stdout of the final stage and the stderr
-of every stage follow their own independent gates.
-`capture` remains a single joint switch, so both streams are still captured when
-`capture=True` even if neither echoes. The flow ends at the stream consumers:
+of every stage follow their own independent gates. `capture` remains a single
+joint switch, so both streams are still captured when `capture=True` even if
+neither echoes. The flow ends at the stream consumers:
 `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 

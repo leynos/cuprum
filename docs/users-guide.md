@@ -334,8 +334,8 @@ and echo semantics and returns a structured `CommandResult`:
   while still capturing them when `capture=True`; configured text sinks
   preserve multibyte characters split across subprocess reads.
 - `output=RunOutputOptions(idle_after=30.0)` reports a child that has produced
-  no output on either stream for that many seconds, and keeps reporting for each
-  further interval of silence; see
+  no output on either stream for that many seconds, and keeps reporting for
+  each further interval of silence; see
   [Idle heartbeat for quiet children](#idle-heartbeat-for-quiet-children).
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
@@ -539,8 +539,8 @@ both the captured and the mirrored bytes exactly as they were.
 A pipeline has one aggregate clock rather than one per stage, because the
 parent only observes its outward-facing output: the final stage's stdout and
 every stage's stderr. Bytes handed from one stage to the next are not the
-parent's business, so a busy producer feeding a slow consumer does not defer the
-report. The aggregate labels itself accordingly:
+parent's business, so a busy producer feeding a slow consumer does not defer
+the report. The aggregate labels itself accordingly:
 
 ```text
 [cuprum] pipeline output idle (idle 30s, total 4m10s)
@@ -569,8 +569,8 @@ disables idle reporting for the remainder of that run and logs one sanitized
 is unchanged, and capture and echo are unaffected. `KeyboardInterrupt` and
 `SystemExit` are not absorbed. If the callback should have been asynchronous,
 Cuprum closes the coroutine it returns and reports that once, in the same
-sanitized way. A destination that refuses the built-in line disables the channel
-the same way, rather than failing the run.
+sanitized way. A destination that refuses the built-in line disables the
+channel the same way, rather than failing the run.
 
 Idle reporting is off by default: without `idle_after`, a run creates no timer,
 no watchdog task, and no pipe it was not already reading. Enabling it does not
@@ -578,11 +578,11 @@ change what a run retains. `capture=False, echo=False, idle_after=30.0` drains
 the child's streams in order to watch them but stores nothing, so
 `CommandResult.stdout` and `.stderr` stay `None`.
 
-`idle_after` must be finite and strictly positive; zero, negative values, `NaN`,
-and infinity raise `ValueError`. `on_idle` must be callable and synchronous, and
-supplying it without an interval raises `ValueError`; a non-callable or
-detectably asynchronous callback (including an object with an `async def`
-`__call__`) raises `TypeError`.
+`idle_after` must be finite and strictly positive; zero, negative values,
+`NaN`, and infinity raise `ValueError`. `on_idle` must be callable and
+synchronous, and supplying it without an interval raises `ValueError`; a
+non-callable or detectably asynchronous callback (including an object with an
+`async def` `__call__`) raises `TypeError`.
 
 The heartbeat reports an absence of observed output, not an absence of
 progress: a quiet child may be compiling, waiting on a lock, or blocked on a
