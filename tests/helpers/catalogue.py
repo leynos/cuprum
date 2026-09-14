@@ -8,7 +8,7 @@ import typing as typ
 from pathlib import Path
 
 from cuprum import sh
-from cuprum.catalogue import ProgramCatalogue, ProjectSettings
+from cuprum.catalogue import ProgramCatalogue
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -41,13 +41,12 @@ def python_catalogue() -> tuple[ProgramCatalogue, Program]:
         The catalogue and the Python program it allowlists.
     """
     python_program = Program(str(Path(sys.executable)))
-    project = ProjectSettings(
+    catalogue = ProgramCatalogue.from_programs(
+        python_program,
         name="runtime-tests",
-        programs=(python_program,),
         documentation_locations=("docs/users-guide.md#execution-runtime",),
-        noise_rules=(),
     )
-    return ProgramCatalogue(projects=(project,)), python_program
+    return catalogue, python_program
 
 
 def python_builder() -> cabc.Callable[..., SafeCmd]:
@@ -112,10 +111,8 @@ def combine_programs_into_catalogue(
         Catalogue containing all programs under a single project.
 
     """
-    project = ProjectSettings(
+    return ProgramCatalogue.from_programs(
+        *programs,
         name=project_name,
-        programs=programs,
         documentation_locations=documentation_locations,
-        noise_rules=(),
     )
-    return ProgramCatalogue(projects=(project,))

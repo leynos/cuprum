@@ -20,6 +20,10 @@ The invariants checked here are:
 - A program owned by two projects is rejected with
   ``DuplicateProgramError`` carrying the contested program and the name
   of the project that registered it first.
+- ``ProgramCatalogue.from_programs`` is a faithful shorthand for the
+  single-project construction it replaces: both forms agree on the
+  allowlist and on every resolved entry, and a repeated program is
+  rejected with ``DuplicateProgramError``.
 """
 
 from __future__ import annotations
@@ -174,4 +178,57 @@ def test_duplicate_program_ownership_raises_structured_error(
     assert exc.value.program == contested, "Error must carry the contested program"
     assert exc.value.owner == owner_name, (
         "Error must name the project that registered the program first"
+    )
+
+
+@settings(max_examples=200)
+@given(
+    programs=st.lists(_PROGRAM_NAMES, min_size=1, max_size=12, unique=True),
+    name=_PROJECT_NAMES,
+)
+def test_from_programs_matches_explicit_single_project_construction(
+    programs: list[str],
+    name: str,
+) -> None:
+    """The shorthand agrees with the construction it replaces."""
+    shorthand = ProgramCatalogue.from_programs(*programs, name=name)
+    explicit = ProgramCatalogue(
+        projects=(
+            ProjectSettings(
+                name=name,
+                programs=tuple(Program(program) for program in programs),
+            ),
+        )
+    )
+
+    assert shorthand.allowlist == explicit.allowlist, (
+        "Both forms must allowlist the same programs"
+    )
+    for program in programs:
+        assert shorthand.lookup(program) == explicit.lookup(program), (
+            "Both forms must resolve identical entries"
+        )
+
+
+@settings(max_examples=200)
+@given(
+    programs=st.lists(_PROGRAM_NAMES, min_size=1, max_size=8, unique=True),
+    data=st.data(),
+)
+def test_from_programs_repeated_program_raises_structured_error(
+    programs: list[str],
+    data: st.DataObject,
+) -> None:
+    """Repeating a program in the shorthand fails, naming the first owner."""
+    repeated = data.draw(st.sampled_from(programs), label="repeated program")
+    position = data.draw(
+        st.integers(min_value=0, max_value=len(programs)),
+        label="insertion position",
+    )
+    sequence = [*programs[:position], repeated, *programs[position:]]
+
+    with pytest.raises(DuplicateProgramError) as exc:
+        ProgramCatalogue.from_programs(*sequence)
+    assert exc.value.program == Program(repeated), (
+        "Error must carry the repeated program"
     )
