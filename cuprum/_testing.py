@@ -38,9 +38,9 @@ from cuprum._streams import (
     _close_stream_writer,
     _consume_stream,
     _pump_stream,
+    _RelayDiagnostics,
     _StreamConfig,
     _write_chunk,
-    _RelayDiagnostics,
 )
 from cuprum.sh import _resolve_timeout
 

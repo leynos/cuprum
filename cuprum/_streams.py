@@ -23,15 +23,11 @@ from cuprum._echo_relay import (
     _echo_chunk,
     _echo_decoder,
     _flush_echo_decoder,
-    _incremental_decoder,
     _write_chunk,
 )
 from cuprum._echo_truncation import _EchoLineLimiter, _validate_bounded_echo_encoding
-from cuprum._line_splitting import (
-    _emit_completed_lines,
-    _split_complete_lines,
-    _strip_line_ending,
-)
+from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
+from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -153,7 +149,6 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
-    read_size: int = _READ_SIZE,
     relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream, teeing to sink when requested.
@@ -170,15 +165,16 @@ async def _consume_stream(
         return await _consume_stream_without_lines(
             stream,
             config,
-            read_size=read_size,
             relay_diagnostics=relay_diagnostics,
         )
     return await _consume_stream_with_lines(
         stream,
-        config,
-        on_line=on_line,
-        read_size=read_size,
-        relay_diagnostics=relay_diagnostics,
+        _LineConsumption(
+            config=config,
+            on_line=on_line,
+            drain=_drain,
+            relay_diagnostics=relay_diagnostics,
+        ),
     )
 
 
@@ -187,7 +183,6 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
-    read_size: int = _READ_SIZE,
     relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
@@ -222,7 +217,6 @@ async def _drain(
         reached_eof = await _drain_chunks(
             stream,
             state,
-            read_size=read_size,
             measurement=measurement,
         )
         if reached_eof:
@@ -266,13 +260,12 @@ async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
     *,
-    read_size: int,
     measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(read_size)
+            chunk = await stream.read(state.config.read_size)
         except asyncio.CancelledError:
             return False
         _record_stream_read(measurement, chunk)
@@ -290,7 +283,6 @@ async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    read_size: int,
     relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
@@ -299,50 +291,8 @@ async def _consume_stream_without_lines(
     return await _drain(
         stream,
         config,
-        read_size=read_size,
         relay_diagnostics=relay_diagnostics,
     )
-
-
-async def _consume_stream_with_lines(
-    stream: asyncio.StreamReader | None,
-    config: _StreamConfig,
-    *,
-    on_line: cabc.Callable[[str], None],
-    read_size: int,
-    relay_diagnostics: _RelayDiagnostics | None = None,
-) -> str | None:
-    """Read from a subprocess stream while emitting decoded output lines."""
-    if stream is None:
-        return "" if config.capture_output else None
-
-    decoder = _incremental_decoder(config)
-    pending_text = ""
-
-    def feed_decoder(chunk: bytes) -> None:
-        """Feed a chunk to the incremental decoder and emit complete lines."""
-        nonlocal pending_text
-        pending_text = _emit_completed_lines(
-            pending_text + decoder.decode(chunk),
-            on_line=on_line,
-        )
-
-    captured = await _drain(
-        stream,
-        config,
-        on_chunk=feed_decoder,
-        read_size=read_size,
-        relay_diagnostics=relay_diagnostics,
-    )
-
-    pending_text = _emit_completed_lines(
-        pending_text + decoder.decode(b"", final=True),
-        on_line=on_line,
-    )
-    if pending_text:
-        on_line(_strip_line_ending(pending_text))
-
-    return captured
 
 
 __all__ = [
