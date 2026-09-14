@@ -235,6 +235,14 @@ This task is complete only when:
   focused stream suites passed (70 tests). The queued CodeRabbit review remains
   the pending acceptance step.
 
+- [x] 2026-09-14 CrossHair and native-pump test-support follow-up: replaced
+  the stale Python 3.15 CrossHair skip claim with the shared import-probe
+  contract, including the early-beta scope of `CALL_KW`. Replaced the
+  closing-pump double's open descriptor dictionary with a private, typed,
+  pre-call-empty record that captures `writer_fd`. `make check-fmt`, focused
+  `ty`, the FD-ownership regression, `make markdownlint`, and `make nixie`
+  passed. The queued CodeRabbit review remains the pending acceptance step.
+
 - [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
   reader-descriptor hand-off with worker-owned duplicates, preserved buffered
   reader bytes and Python fallback, and proved cleanup across completion,

@@ -1548,9 +1548,12 @@ These invariants are verified at two levels:
     --analysis_kind asserts
   ```
 
-  CrossHair is a development dependency only. The property module skips
-  symbolic checks on Python 3.15, where CrossHair cannot yet trace the
-  `CALL_KW` opcode (tracked in issue `#109`).
+  CrossHair is a development dependency only. The property module probes it at
+  import time and skips symbolic checks only when the probe raises
+  `ImportError` or `crosshair.tracers.TraceException`, leaving `check_states`
+  unavailable. Every other probe failure propagates. The `CALL_KW` tracer gap
+  (tracked in issue `#109`) affects early Python 3.15 betas, not every Python
+  3.15 interpreter.
 
 When changing `_build_final_results`, run both verification paths before
 committing.
