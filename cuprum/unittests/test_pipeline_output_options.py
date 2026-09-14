@@ -322,8 +322,8 @@ def test_run_output_options_echo_shorthand_resolves_both_streams() -> None:
     """Construction with only ``echo=True`` resolves both streams to ``True``."""
     options = RunOutputOptions(capture=True, echo=True)
 
-    assert options.echo_stdout is True
-    assert options.echo_stderr is True
+    assert options.echo_stdout is True, "echo=True must enable stdout echoing"
+    assert options.echo_stderr is True, "echo=True must enable stderr echoing"
 
 
 def test_run_output_options_per_stream_override_takes_precedence() -> None:
@@ -375,7 +375,7 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     assert result.stdout == "legacy", "the deprecated flags must still capture output"
 
 
-@dc.dataclass(frozen=True)
+@dc.dataclass(frozen=True, slots=True)
 class _EchoRoutingCase:
     """Expected capture values for one pipeline echo-routing run."""
 
@@ -533,7 +533,7 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     )
 
 
-@dc.dataclass
+@dc.dataclass(frozen=True, slots=True)
 class _BoundedEchoCase:
     """Shared input and expected output for public bounded-echo tests."""
 

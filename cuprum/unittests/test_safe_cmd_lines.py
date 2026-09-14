@@ -21,7 +21,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, ScopeConfig, scoped
+from cuprum import RunOutputOptions, ScopeConfig, before, observe, scoped
 from cuprum.sh import ExecutionContext, LineStream
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -29,6 +29,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
     from cuprum.sh import CommandResult, SafeCmd
 
@@ -90,7 +91,9 @@ def test_lines_preserve_per_stream_order_with_monotonic_at(
         """Iterate the stream, then return events and the result."""
         stream = command.lines()
         events = [event async for event in stream]
-        assert stream.result is not None
+        assert stream.result is not None, (
+            "a completed line stream must expose its CommandResult"
+        )
         return events, stream.result
 
     events, result = asyncio.run(collect())
@@ -134,6 +137,64 @@ def test_lines_keep_capture_and_echo(
     assert sink.getvalue() == "captured line\n", (
         f"echo must survive iteration, got {sink.getvalue()!r}"
     )
+
+
+def test_lines_observe_without_capture_or_echo(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Line iteration keeps both pipes open when it is their only consumer."""
+    command = python_builder(
+        "-c",
+        "import sys; print('out'); print('err', file=sys.stderr)",
+    )
+
+    async def collect() -> tuple[list[LineEvent], CommandResult]:
+        """Collect line events and the completed stream result."""
+        stream = command.lines(output=RunOutputOptions(capture=False, echo=False))
+        events = [event async for event in stream]
+        assert stream.result is not None, (
+            "a completed line stream must expose its CommandResult"
+        )
+        return events, stream.result
+
+    events, result = asyncio.run(collect())
+
+    observed = {(event.stream, event.text) for event in events}
+    assert observed == {("stdout", "out"), ("stderr", "err")}, (
+        f"lines() must observe both streams with capture and echo off, got {observed!r}"
+    )
+    assert result.stdout is None, "capture=False must leave stdout unset"
+    assert result.stderr is None, "capture=False must leave stderr unset"
+
+
+def test_lines_defer_hooks_until_iteration(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Constructing or closing an unstarted stream runs no execution hooks."""
+    command = python_builder("-c", "print('unused')")
+    before_calls: list[SafeCmd] = []
+    phases: list[str] = []
+
+    def before_hook(cmd: SafeCmd) -> None:
+        """Record a deferred before-hook invocation."""
+        before_calls.append(cmd)
+
+    def observe_hook(event: ExecEvent) -> None:
+        """Record an observe-hook event phase."""
+        phases.append(event.phase)
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([command.program]))),
+        before(before_hook),
+        observe(observe_hook),
+    ):
+        stream = command.lines()
+        assert not before_calls, "constructing lines() must not run before hooks"
+        assert not phases, "constructing lines() must not emit a plan event"
+        asyncio.run(stream.aclose())
+
+    assert not before_calls, "closing an unstarted stream must not run before hooks"
+    assert not phases, "closing an unstarted stream must not emit observe events"
 
 
 def test_lines_on_line_callback_receives_events(

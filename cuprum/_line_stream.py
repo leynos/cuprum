@@ -135,16 +135,16 @@ async def _start_line_stream_run(
         The spawned run, with the process, its task ownership, the queue,
         and the monotonic start reference.
     """
-    process = await _spawn_subprocess(execution)
-    started_at = time.perf_counter()
     # Frozen dataclass: the stamped execution carries the start reference the
     # composed callbacks read, and the caller's ``on_line`` chained ahead of
     # this driver's queue sink, so it is rebuilt rather than mutated.
     execution = dc.replace(
         execution,
-        started_at=started_at,
         on_line=_chain_line_hooks((execution.on_line, _queue_line_sink(queue))),
     )
+    process = await _spawn_subprocess(execution)
+    started_at = time.perf_counter()
+    execution = dc.replace(execution, started_at=started_at)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
     discard_on_cancel = asyncio.Event()
@@ -237,33 +237,32 @@ async def _drain_after_exit(
         try:
             await run.tasks.stdin_task
         except BaseException:
-            await _shielded_cleanup(
-                _drain_stream_consumers(
-                    run.tasks.consumers,
-                    _DrainContext(
-                        capture=False,
-                        pid=pid,
-                        observation=execution.observation,
-                        discard_on_cancel=run.tasks.discard_on_cancel,
-                    ),
-                )
-            )
+            await _discard_drain(run, pid, execution)
             raise
     try:
         return await asyncio.gather(*run.tasks.consumers)
     except BaseException:
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                run.tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=run.tasks.discard_on_cancel,
-                ),
-            )
-        )
+        await _discard_drain(run, pid, execution)
         raise
+
+
+async def _discard_drain(
+    run: _LineStreamRun,
+    pid: int | None,
+    execution: _SubprocessExecution,
+) -> tuple[str | None, str | None]:
+    """Discard and reconcile the line stream's consumers after a failure."""
+    return await _shielded_cleanup(
+        _drain_stream_consumers(
+            run.tasks.consumers,
+            _DrainContext(
+                capture=False,
+                pid=pid,
+                observation=execution.observation,
+                discard_on_cancel=run.tasks.discard_on_cancel,
+            ),
+        )
+    )
 
 
 async def _coordinate_line_stream(
