@@ -16,7 +16,7 @@ import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams import _consume_stream, _resolve_stream_sink, _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
@@ -117,14 +117,8 @@ def _spawn_stream_consumers(
     """Spawn stdout and stderr stream consumer tasks."""
     stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
     stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_sink = (
-        execution.sink_session.log
-        if execution.sink_session is not None
-        else (
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        )
+    stderr_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stderr_sink, sys.stderr
     )
     stderr_config = dc.replace(
         stream_config,
@@ -168,14 +162,8 @@ def _build_stream_config(
     _StreamConfig
         The stream configuration for the run's stdout drain.
     """
-    stdout_sink = (
-        execution.sink_session.log
-        if execution.sink_session is not None
-        else (
-            execution.ctx.stdout_sink
-            if execution.ctx.stdout_sink is not None
-            else sys.stdout
-        )
+    stdout_sink = _resolve_stream_sink(
+        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
     )
     return _StreamConfig(
         capture_output=execution.capture,

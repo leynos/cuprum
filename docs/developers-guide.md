@@ -3945,6 +3945,13 @@ pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
 
+`cuprum/_pipeline_sink.py` holds the pipeline's presentation-sink session
+lifecycle, split out of `_pipeline_internals` on the same grounds: mapping a
+terminal event onto the bounded `SessionOutcome` set
+(`_pipeline_result_outcome`, `_pipeline_error_outcome`) and closing the
+adapter's session on every exit path (`_close_pipeline_sink_session`). The
+single-command counterparts of those helpers stay in `cuprum/sh.py`.
+
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the
 caller rather than threaded through a `timeout` parameter. The wait logic is

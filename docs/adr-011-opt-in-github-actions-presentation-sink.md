@@ -113,7 +113,6 @@ overlapping terminal paths cannot double-annotate.
 Echoed output reaches the adapter only when a run echoes (`echo=True` or a
 pipeline's stage streams); capture is unaffected in every configuration.
 
-
 ### Activation: environment-gated, adapter-local
 
 Per issue #360, `GitHubActionsSink` is inactive by default outside GitHub
