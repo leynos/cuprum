@@ -98,12 +98,12 @@ async def _consume_at_read_size(
         sink=io.StringIO(),
         encoding="utf-8",
         errors="replace",
+        read_size=read_size,
     )
     return await _consume_stream(
         reader,
         config,
         on_line=None if lines is None else lines.append,
-        read_size=read_size,
     )
 
 

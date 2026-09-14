@@ -82,6 +82,8 @@ class _StreamConsumerSpawnContext:
     stream_config: _StreamConfig
     pid: int | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -153,7 +155,6 @@ def _spawn_stream_consumers(
                 process.stdout,
                 stream_config,
                 on_line=stdout_on_line,
-                read_size=stream_config.read_size,
                 relay_diagnostics=relay_diagnostics[0],
             ),
         ),
@@ -162,7 +163,6 @@ def _spawn_stream_consumers(
                 process.stderr,
                 stderr_config,
                 on_line=stderr_on_line,
-                read_size=stderr_config.read_size,
                 relay_diagnostics=relay_diagnostics[1],
             ),
         ),

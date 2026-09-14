@@ -67,6 +67,7 @@ def _get_stage_stream_fds(
     )
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
+
 def _create_stage_line_observer(
     observation: _StageObservation,
     pid: int | None,
@@ -81,6 +82,8 @@ def _create_stage_line_observer(
         observation.emit(stream_name, _EventDetails(pid=pid, line=line))
 
     return emit_line
+
+
 def _create_stage_capture_tasks(
     process: asyncio.subprocess.Process,
     config: _PipelineRunConfig,
@@ -113,7 +116,6 @@ def _create_stage_capture_tasks(
                     stream=EchoStream.STDERR,
                 ),
                 on_line=stderr_on_line,
-                read_size=config.stderr_stream_config.read_size,
                 relay_diagnostics=stderr_relay_diagnostics,
             ),
         )
@@ -135,7 +137,6 @@ def _create_stage_capture_tasks(
                 process.stdout,
                 config.stream_config,
                 on_line=stdout_on_line,
-                read_size=config.stream_config.read_size,
                 relay_diagnostics=stdout_relay_diagnostics,
             ),
         )
