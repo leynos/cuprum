@@ -96,10 +96,6 @@ class _MirrorCursor:
         if chunk:
             self.is_mid_line = not chunk.endswith(b"\n")
 
-    def is_open(self) -> bool:
-        """Return whether the mirrored sink is mid-line."""
-        return self.is_mid_line
-
 
 async def _consume_stream(
     stream: asyncio.StreamReader | None,

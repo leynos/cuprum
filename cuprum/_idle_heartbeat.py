@@ -250,7 +250,9 @@ def _build_idle_monitor(
             diagnostic=_IdleDiagnostic(
                 subject=subject,
                 destination=_LiveSink(sink),
-                is_line_open=mirror.is_open,
+                # Read at emission time, so the diagnostic sees where the echo
+                # sink is *now* rather than where it was when the run started.
+                is_line_open=lambda: mirror.is_mid_line,
             ),
         ),
         mirror=mirror,
@@ -332,18 +334,20 @@ def _is_async_callback(callback: object) -> bool:
 
 def _report_driver_failure(outcome: object) -> None:
     """Report a driver task that ended for a reason other than a stop."""
-    if not isinstance(outcome, BaseException):
-        return
-    if isinstance(outcome, asyncio.CancelledError):
-        return
-    _LOGGER.warning(
-        "idle_heartbeat_failed error=%s",
-        type(outcome).__name__,
-        extra={
-            "cuprum_action": "idle_heartbeat_failed",
-            "cuprum_error_type": type(outcome).__name__,
-        },
-    )
+    match outcome:
+        case BaseException() if not isinstance(outcome, asyncio.CancelledError):
+            _LOGGER.warning(
+                "idle_heartbeat_failed error=%s",
+                type(outcome).__name__,
+                extra={
+                    "cuprum_action": "idle_heartbeat_failed",
+                    "cuprum_error_type": type(outcome).__name__,
+                },
+            )
+        case _:
+            # The gather result of a driver that simply ended, or the
+            # ``CancelledError`` every ordinary stop produces: not a failure.
+            return
 
 
 __all__ = [
