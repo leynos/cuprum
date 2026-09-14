@@ -14,6 +14,7 @@ import sys
 import time
 import typing as typ
 
+from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
@@ -35,8 +36,6 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-
-from cuprum._pipeline_types import _EventDetails
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
@@ -112,6 +111,7 @@ async def _spawn_subprocess(
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
     )
+
 
 def _build_stream_config(
     execution: _SubprocessExecution,

@@ -64,6 +64,7 @@ def _get_stage_stream_fds(
     stderr = asyncio.subprocess.PIPE if stderr_consumed else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
+
 @dc.dataclass(frozen=True, slots=True)
 class _StageCaptureRequest:
     """Everything the capture-task builder needs for one stage.
@@ -88,6 +89,8 @@ class _StageCaptureRequest:
     observation: _StageObservation
     is_last_stage: bool
     started_at: float
+
+
 def _create_stage_capture_tasks(
     request: _StageCaptureRequest,
 ) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
