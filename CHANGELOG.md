@@ -24,6 +24,31 @@
 
 ### Added
 
+- **Idle heartbeat for quiet children:** `RunOutputOptions` accepts
+  `idle_after` and `on_idle`, so a run that produces no output for a given
+  number of seconds says so instead of leaving a blank CI log to be interpreted.
+  With `idle_after` set and no callback, Cuprum writes one bounded keepalive
+  line — `[cuprum] still running cargo (idle 30s, total 4m10s)`, at most 512
+  bytes including its newline, ASCII-safe and control-safe — to the parent's
+  stderr, reporting the total elapsed time and the time since the last observed
+  output and repeating for each further interval of silence; any output on a
+  monitored stream resets the interval. `on_idle` receives the same two durations
+  as a synchronous `(elapsed_total, elapsed_idle)` callback and replaces the
+  built-in line rather than joining it. A callback that raises an ordinary
+  exception, or a diagnostic destination that refuses the line, disables the
+  channel for the remainder of that run with one sanitized `cuprum.idle`
+  warning; the child's exit status, capture, and echo are unchanged, and
+  `KeyboardInterrupt` and `SystemExit` are not absorbed. A pipeline reports one
+  aggregate clock over its outward-facing output — the final stage's stdout and
+  every stage's stderr, never inter-stage transfers — labelled
+  `pipeline output idle`. The feature is off by default, adds no timer, task, or
+  pipe to a run that does not ask for it, never terminates a process, and never
+  extends a timeout. A run may watch its streams without retaining them:
+  `capture=False, echo=False, idle_after=…` drains them while leaving `stdout`
+  and `stderr` as `None`. The heartbeat reports absent output, not absent
+  progress, so it is never a deadlock diagnosis
+  ([#359](https://github.com/leynos/cuprum/issues/359)).
+
 - **Per-stream echo control while capturing:** `RunOutputOptions` accepts
   `echo_stdout` and `echo_stderr`, each defaulting to the existing `echo`
   shorthand, so a caller can capture a stream silently while the other still
