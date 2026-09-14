@@ -147,7 +147,8 @@ def test_idle_reporting_returns_exactly_what_a_quiet_run_returns(
         "print('problem', file=sys.stderr)"
     )
     command = python_builder("-c", source)
-    context = ExecutionContext(stderr_sink=io.StringIO())
+    sink = io.StringIO()
+    context = ExecutionContext(stderr_sink=sink)
 
     quiet = asyncio.run(command.run(output=RunOutputOptions(capture=capture)))
     watching = asyncio.run(
@@ -169,7 +170,7 @@ def test_idle_reporting_returns_exactly_what_a_quiet_run_returns(
         assert watching.stdout is None, (
             f"capture must not be forced on for capture={capture}: {watching.stdout!r}"
         )
-    assert keepalives(context.stderr_sink), (
+    assert keepalives(sink), (
         f"the diagnostic must have gone to the parent's own sink for capture={capture}"
     )
 

@@ -61,9 +61,7 @@ def _get_stage_stream_fds(
         if idx != last_idx or consumes_stdout
         else asyncio.subprocess.DEVNULL
     )
-    stderr = (
-        asyncio.subprocess.PIPE if consumes_stderr else asyncio.subprocess.DEVNULL
-    )
+    stderr = asyncio.subprocess.PIPE if consumes_stderr else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 

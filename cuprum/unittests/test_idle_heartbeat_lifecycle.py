@@ -306,8 +306,12 @@ def test_timeout_keeps_the_heartbeat_out_of_the_reported_output(
         )
 
     assert keepalives(sink), "the timeout run must still have been reported"
-    assert "[cuprum]" not in (caught.value.output or ""), (
-        f"the keepalive must not be reported as child output: {caught.value.output!r}"
+    reported = caught.value.output or ""
+    assert isinstance(reported, str), (
+        f"a capturing timeout must report text, got {reported!r}"
+    )
+    assert "[cuprum]" not in reported, (
+        f"the keepalive must not be reported as child output: {reported!r}"
     )
 
 
