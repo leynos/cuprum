@@ -12,7 +12,7 @@ from unittest import mock
 import pytest
 
 from benchmarks import PtyBlackholeStateError, sinks
-from cuprum.sh import RunOutputOptions, TimeoutExpired
+from cuprum.sh import RunOutputOptions, TimeoutExpired, _run_label
 from cuprum.sinks import (
     GitHubActionsSink,
     OutputSession,
@@ -85,6 +85,16 @@ class _RecordingSink:
         return self.last_session
 
 
+def _recorded_outcome(adapter: _RecordingSink) -> SessionOutcome:
+    """Return the outcome recorded by the adapter's most recent session."""
+    session = adapter.last_session
+    assert session is not None, "the run must have opened a sink session"
+    assert session.closed_with is not None, (
+        "every terminal path must close the sink session"
+    )
+    return session.closed_with
+
+
 # ---------------------------------------------------------------------------
 # Run-level sink session lifecycle
 # ---------------------------------------------------------------------------
@@ -118,7 +128,11 @@ def test_sink_declining_activation_is_a_no_op() -> None:
     assert result.stdout == "declined\n"
     assert adapter.opened == 1
     assert adapter.started_with is not None
-    assert adapter.started_with.label.endswith("python")
+    # Compare against the command's own argv and the runner's own label
+    # derivation so the assertion holds for any interpreter spelling
+    # (``python3.12``, ``/usr/bin/python``, …) rather than a fixed name.
+    assert adapter.started_with.argv == command.argv_with_program
+    assert adapter.started_with.label == _run_label(command, None)
 
 
 def test_sink_session_opens_once_and_closes_on_success() -> None:
@@ -131,11 +145,9 @@ def test_sink_session_opens_once_and_closes_on_success() -> None:
     assert result.ok is True
     assert adapter.opened == 1
     assert adapter.started_with is not None
-    session = adapter.last_session
-    assert session is not None
-    assert session.closed_with is not None
-    assert session.closed_with.outcome == TerminalOutcome.EXIT_ZERO
-    assert session.closed_with.exit_code == 0
+    outcome = _recorded_outcome(adapter)
+    assert outcome.outcome == TerminalOutcome.EXIT_ZERO
+    assert outcome.exit_code == 0
 
 
 def test_sink_session_closes_on_nonzero_exit() -> None:
@@ -147,11 +159,9 @@ def test_sink_session_closes_on_nonzero_exit() -> None:
 
     assert result.ok is False
     assert result.exit_code == 3
-    session = adapter.last_session
-    assert session is not None
-    assert session.closed_with is not None
-    assert session.closed_with.outcome == TerminalOutcome.EXIT_NONZERO
-    assert session.closed_with.exit_code == 3
+    outcome = _recorded_outcome(adapter)
+    assert outcome.outcome == TerminalOutcome.EXIT_NONZERO
+    assert outcome.exit_code == 3
 
 
 def test_sink_session_closes_on_timeout() -> None:
@@ -165,11 +175,9 @@ def test_sink_session_closes_on_timeout() -> None:
             timeout=0.1,
         )
 
-    session = adapter.last_session
-    assert session is not None
-    assert session.closed_with is not None
-    assert session.closed_with.outcome == TerminalOutcome.TIMEOUT
-    assert session.closed_with.exit_code is None
+    outcome = _recorded_outcome(adapter)
+    assert outcome.outcome == TerminalOutcome.TIMEOUT
+    assert outcome.exit_code is None
 
 
 def test_sink_session_label_prefers_title() -> None:
@@ -235,16 +243,6 @@ def _gha_sink(*, force: bool = False) -> tuple[GitHubActionsSink, io.StringIO]:
     return sink, buffer
 
 
-def _open_session(argv: tuple[str, ...]) -> tuple[GitHubActionsSink, io.StringIO]:
-    """Open one adapter session over a fresh in-memory buffer."""
-    buffer = io.StringIO()
-    sink = GitHubActionsSink(typ.cast("typ.IO[str]", buffer))
-    sink.open_session(
-        SessionStart(label="project: program", argv=argv),
-    )
-    return sink, buffer
-
-
 def _open_gha_session(
     argv: tuple[str, ...],
     *,
@@ -263,62 +261,48 @@ def _open_gha_session(
 # ---------------------------------------------------------------------------
 
 
-def test_unsetting_github_actions_keeps_sink_inactive(
+@pytest.mark.parametrize(
+    ("github_actions", "force", "expected_active"),
+    [
+        pytest.param(None, False, False, id="unset-declines"),
+        pytest.param("true", False, True, id="true-activates"),
+        pytest.param(None, True, True, id="force-activates-without-env"),
+        pytest.param("1", False, False, id="one-does-not-activate"),
+        pytest.param("TRUE", False, False, id="upper-true-does-not-activate"),
+        pytest.param("True", False, False, id="title-true-does-not-activate"),
+        pytest.param("false", False, False, id="false-does-not-activate"),
+        pytest.param("", False, False, id="empty-does-not-activate"),
+    ],
+)
+def test_sink_activation_follows_environment_and_force(
     monkeypatch: pytest.MonkeyPatch,
+    github_actions: str | None,
+    force: bool,
+    *,
+    expected_active: bool,
 ) -> None:
-    """Outside Actions, a non-forced sink declines and writes nothing."""
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    sink, buffer = _gha_sink()
+    """Only an exact ``true`` or an explicit ``force`` activates the sink.
 
-    session = sink.open_session(SessionStart(label="project: program", argv=("cmd",)))
-
-    assert session is None
-    assert buffer.getvalue() == ""
-
-
-def test_github_actions_true_activates_the_sink(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GITHUB_ACTIONS=true activates the sink without force."""
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    sink, buffer = _gha_sink()
+    Every other value — including the runner-adjacent spellings ``1``,
+    ``TRUE``, and ``True`` — leaves the sink inactive and silent, so runs keep
+    their plain parent-facing output.
+    """
+    if github_actions is None:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_ACTIONS", github_actions)
+    sink, buffer = _gha_sink(force=force)
 
     session = sink.open_session(SessionStart(label="project: program", argv=("hi",)))
 
-    assert session is not None
+    if not expected_active:
+        assert session is None, "a non-enabling configuration must decline"
+        assert buffer.getvalue() == "", "an inactive sink must write nothing"
+        return
+    assert session is not None, "an enabling configuration must return a session"
     session.open_group()
     token = session.stop_token
     assert buffer.getvalue() == f"::group::hi\n::stop-commands::{token}\n"
-
-
-def test_force_activates_the_sink_outside_github_actions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """force=True activates the sink even with GITHUB_ACTIONS unset."""
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    sink, buffer = _gha_sink(force=True)
-
-    session = sink.open_session(SessionStart(label="project: program", argv=("hi",)))
-
-    assert session is not None
-    session.open_group()
-    token = session.stop_token
-    assert buffer.getvalue() == f"::group::hi\n::stop-commands::{token}\n"
-
-
-@pytest.mark.parametrize("value", ["1", "TRUE", "True", "false", ""])
-def test_non_enabling_environment_values_keep_sink_inactive(
-    monkeypatch: pytest.MonkeyPatch,
-    value: str,
-) -> None:
-    """Only the runner's exact 'true' value activates; others decline."""
-    monkeypatch.setenv("GITHUB_ACTIONS", value)
-    sink, buffer = _gha_sink()
-
-    session = sink.open_session(SessionStart(label="project: program", argv=("cmd",)))
-
-    assert session is None
-    assert buffer.getvalue() == ""
 
 
 def test_inactive_sink_leaves_runner_output_unframed(
