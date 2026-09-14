@@ -19,7 +19,7 @@ def _split_complete_lines(text: str) -> tuple[list[str], str]:
     Parameters
     ----------
     text : str
-        Text to split using CR, LF, and CRLF line boundaries.
+        Text to split using Python's universal line boundary rules.
 
     Returns
     -------
@@ -28,30 +28,45 @@ def _split_complete_lines(text: str) -> tuple[list[str], str]:
         followed by the remaining partial line. A terminal carriage return is
         retained until a later chunk can determine whether it begins ``\r\n``.
     """
-    lines: list[str] = []
-    start = 0
-    index = 0
-    while index < len(text):
-        character = text[index]
-        match character:
-            case "\n":
-                lines.append(text[start:index])
-                start = index + 1
-            case "\r":
-                if index + 1 == len(text):
-                    return lines, text[start:]
-                lines.append(text[start:index])
-                if text[index + 1] == "\n":
-                    index += 1
-                start = index + 1
-        index += 1
-    return lines, text[start:]
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return [], text
+
+    remainder = ""
+    if _should_hold_trailing_line(lines[-1]):
+        remainder = lines.pop()
+
+    return [_strip_line_ending(line) for line in lines], remainder
+
+
+def _should_hold_trailing_line(line: str) -> bool:
+    """Return whether a trailing line needs the next decoded chunk."""
+    return not _ends_with_line_ending(line) or line.endswith("\r")
+
+
+def _ends_with_line_ending(line: str) -> bool:
+    """Return whether ``line`` ends with a Python-recognized line boundary."""
+    return line.endswith(_LINE_BOUNDARY_CHARACTERS)
 
 
 def _strip_line_ending(line: str) -> str:
-    r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
+    r"""Strip one trailing ``str.splitlines()`` boundary from ``line``."""
     if line.endswith("\r\n"):
         return line[:-2]
-    if line.endswith(("\n", "\r")):
+    if line.endswith(_LINE_BOUNDARY_CHARACTERS):
         return line[:-1]
     return line
+
+
+_LINE_BOUNDARY_CHARACTERS = (
+    "\n",
+    "\r",
+    "\v",
+    "\f",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
