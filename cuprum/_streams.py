@@ -2,7 +2,8 @@
 
 The pure-Python home for consuming a subprocess's stdout/stderr.
 ``_consume_stream`` and the shared ``_drain`` loop decode bytes, optionally tee
-each chunk to a sink, capture the text, and emit decoded lines. The writer side
+each chunk to a sink, capture the text, and emit decoded lines; the bounded echo
+renderer those two call into lives in ``cuprum._stream_echo``. The writer side
 that pumps one pipeline stage's stdout into the next stage's stdin lives in
 ``cuprum._streams_pump`` and is re-exported here (``_pump_stream``,
 ``_close_stream_writer``, ``_write_to_stream_writer``, ``_WriteOutcome``,
@@ -16,20 +17,24 @@ must not reuse the writer afterwards.
 from __future__ import annotations
 
 import asyncio
-import codecs
 import dataclasses as dc
-import logging
 import typing as typ
 
 from cuprum._echo_truncation import (
     _EchoLineLimiter,
-    _split_echo_segments,
     _validate_bounded_echo_encoding,
 )
 from cuprum._line_splitting import (
     _emit_completed_lines,
     _split_complete_lines,
     _strip_line_ending,
+)
+from cuprum._stream_echo import (
+    _echo_chunk,
+    _echo_decoder,
+    _flush_echo_decoder,
+    _incremental_decoder,
+    _write_chunk,
 )
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
@@ -40,14 +45,11 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
-from cuprum.echo_observation import _emit_echo_event
+from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
+    import codecs
     import collections.abc as cabc
-
-
-_LOGGER = logging.getLogger("cuprum.stream")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -257,166 +259,6 @@ async def _consume_stream_with_lines(
         on_line(_strip_line_ending(pending_text))
 
     return captured
-
-
-def _write_chunk(
-    config: _StreamConfig,
-    chunk: bytes,
-    *,
-    decoder: codecs.IncrementalDecoder | None = None,
-    final: bool = False,
-) -> None:
-    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
-
-    For stdio echo this blocking write is acceptable; future slow-sink handling
-    can layer on a background writer if needed.
-    """
-    buffer = getattr(config.sink, "buffer", None)
-    if buffer is not None:
-        buffer.write(chunk)
-        buffer.flush()
-        return
-    text = (
-        chunk.decode(config.encoding, errors=config.errors)
-        if decoder is None
-        else decoder.decode(chunk, final=final)
-    )
-    if text:
-        config.sink.write(text)
-    config.sink.flush()
-
-
-def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create an incremental decoder configured for a stream invocation."""
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)
-
-
-def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
-    """Create the decoder needed by a text-only echo sink, if any."""
-    if not config.echo_output or getattr(config.sink, "buffer", None) is not None:
-        return None
-    return _incremental_decoder(config)
-
-
-def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
-    """Echo *chunk* to the sink, honouring the per-line byte bound when set."""
-    if state.echo_guard.disabled:
-        return
-    limiter = state.echo_limiter
-    if limiter is None:
-        _echo_write(state, chunk)
-        return
-    data = _prepend_pending_carriage_return(limiter, chunk)
-    for body, ending in _split_echo_segments(data):
-        _echo_bounded_segment(state, limiter, body, ending)
-
-
-def _prepend_pending_carriage_return(
-    limiter: _EchoLineLimiter,
-    chunk: bytes,
-) -> bytes:
-    """Hold a chunk-final CR until its line-ending role is known."""
-    prefix = b"\r" if limiter.has_pending_carriage_return else b""
-    limiter.has_pending_carriage_return = False
-    data = prefix + chunk
-    if data.endswith(b"\r"):
-        limiter.has_pending_carriage_return = True
-        return data[:-1]
-    return data
-
-
-def _echo_bounded_segment(
-    state: _DrainState,
-    limiter: _EchoLineLimiter,
-    body: bytes,
-    ending: bytes | None,
-) -> None:
-    """Accumulate one segment and mirror its completed line within the bound."""
-    limiter.bound_line(body)
-    if ending is None:
-        return
-    _write_finished_echo_line(state, limiter, ending)
-
-
-def _write_finished_echo_line(
-    state: _DrainState,
-    limiter: _EchoLineLimiter,
-    ending: bytes,
-) -> None:
-    """Write one finalized bounded echo line and observe a successful trim."""
-    finished = limiter.finish_line(
-        ending=ending,
-        encoding=state.config.encoding,
-        errors=state.config.errors,
-        is_text_sink=state.echo_decoder is not None,
-    )
-    was_written = _echo_write(state, finished.payload)
-    if was_written and finished.dropped_bytes:
-        _emit_echo_event(
-            EchoEvent(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.TRUNCATED,
-                dropped_bytes=finished.dropped_bytes,
-            ),
-        )
-
-
-def _echo_write(
-    state: _DrainState,
-    chunk: bytes,
-    *,
-    final: bool = False,
-) -> bool:
-    """Write one echo payload and report whether the sink accepted it."""
-    if state.echo_guard.disabled:
-        return False
-    try:
-        _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
-        mirror = state.config.mirror
-        if mirror is not None:
-            # Only a chunk that reached the sink moves the cursor: a write that
-            # raised left the sink where it was.
-            mirror.note(chunk)
-    except UnicodeEncodeError as exc:
-        state.echo_guard.disabled = True
-        # The warning and the observation are two projections of the same
-        # first-failure transition; neither retries after this point because
-        # the guard above already disables every later echo write.
-        _emit_echo_event(
-            EchoEvent(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.UNICODE_ENCODE,
-            ),
-        )
-        _LOGGER.warning(
-            "echo_disabled encoding=%s error=%s",
-            state.config.encoding,
-            type(exc).__name__,
-            exc_info=exc,
-            extra={
-                "cuprum_encoding": state.config.encoding,
-                "cuprum_sink_type": type(state.config.sink).__name__,
-                "cuprum_error_type": type(exc).__name__,
-            },
-        )
-        return False
-    return True
-
-
-def _flush_echo_decoder(
-    state: _DrainState,
-) -> None:
-    """Flush a text-only echo decoder at end of stream."""
-    limiter = state.echo_limiter
-    if limiter is not None:
-        if limiter.has_pending_carriage_return:
-            limiter.bound_line(b"\r")
-            limiter.has_pending_carriage_return = False
-        if limiter.has_line_bytes:
-            _write_finished_echo_line(state, limiter, b"")
-    if state.echo_decoder is not None:
-        _echo_write(state, b"", final=True)
 
 
 __all__ = [

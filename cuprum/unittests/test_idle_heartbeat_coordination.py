@@ -30,7 +30,7 @@ from tests.helpers.idle import IdleRecorder, keepalives, pending_tasks
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import Pipeline, SafeCmd
+    from cuprum.sh import Pipeline, PipelineResult, SafeCmd
     from tests.helpers.catalogue import PythonCatalogue
 
 _PIPELINE_LABEL = "pipeline output idle"
@@ -51,7 +51,7 @@ def python(python_catalogue_env: PythonCatalogue) -> cabc.Callable[..., SafeCmd]
 
 @contextlib.contextmanager
 def _allowlisted(env: PythonCatalogue) -> cabc.Iterator[None]:
-    """Authorise the interpreter for the pipeline about to run."""
+    """Authorize the interpreter for the pipeline about to run."""
     with scoped(ScopeConfig(allowlist=frozenset([env.program]))):
         yield
 
@@ -205,7 +205,7 @@ def test_pipeline_fail_fast_leaves_no_watchdog_behind(
         consumer="import sys, time; sys.stdin.read(); time.sleep(2)",
     )
 
-    async def exercise() -> tuple[object, list[asyncio.Task[object]]]:
+    async def exercise() -> tuple[PipelineResult, list[asyncio.Task[object]]]:
         """Run a failing pipeline and survey the loop once it has settled."""
         with _allowlisted(python_catalogue_env):
             result = await pipeline.run(
