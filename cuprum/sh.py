@@ -15,6 +15,7 @@ import typing as typ
 import warnings
 from pathlib import Path
 
+from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -379,19 +380,36 @@ class RunOutputOptions:
     echo_stderr:
         When ``True`` tee stderr to the parent process; ``None`` inherits
         ``echo``. Takes precedence over ``echo`` for stderr alone.
+    idle_after:
+        Seconds of silence, measured across both streams, before the run
+        reports that it is still running. ``None`` (the default) disables idle
+        reporting and costs nothing: no watchdog, no timer, no extra pipe.
+        The interval must be finite and strictly positive. Reporting describes
+        the absence of observed output — never a deadlock diagnosis — and can
+        neither terminate the child nor extend its timeout.
+    on_idle:
+        Synchronous ``(elapsed_total, elapsed_idle)`` callback, in seconds,
+        invoked once per idle interval in place of the built-in stderr
+        keepalive. It must not block for long: it runs on the run's own event
+        loop. Requires ``idle_after``.
 
     Examples
     --------
-    >>> RunOutputOptions(capture=True, echo=True)
-    RunOutputOptions(capture=True, echo=True, echo_stdout=True, echo_stderr=True)
-    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False)
-    RunOutputOptions(capture=True, echo=True, echo_stdout=False, echo_stderr=True)
+    >>> options = RunOutputOptions(capture=True, echo=True)
+    >>> options.resolved_echo
+    (True, True)
+    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False).resolved_echo
+    (False, True)
+    >>> RunOutputOptions(capture=False, idle_after=30.0).capture
+    False
     """
 
     capture: bool = True
     echo: bool = False
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
+    idle_after: float | None = None
+    on_idle: cabc.Callable[[float, float], None] | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -405,6 +423,7 @@ class RunOutputOptions:
             "echo_stderr",
             self.echo if self.echo_stderr is None else self.echo_stderr,
         )
+        _validate_idle_options(self.idle_after, self.on_idle)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:

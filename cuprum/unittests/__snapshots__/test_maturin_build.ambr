@@ -11,6 +11,8 @@
       'cuprum/_backend.py',
       'cuprum/_concurrent_config.py',
       'cuprum/_constants.py',
+      'cuprum/_idle_diagnostic.py',
+      'cuprum/_idle_heartbeat.py',
       'cuprum/_observability.py',
       'cuprum/_pipeline_collect.py',
       'cuprum/_pipeline_config.py',
