@@ -51,10 +51,12 @@
   each stream; capture and echo stay governed by the usual `RunOutputOptions`
   and are not disabled by iterating. After iteration completes, the returned
   `LineStream` exposes the run's `CommandResult` on its `result` attribute.
-  Cancelling a task iterating `lines()`, breaking out of the loop, or closing
-  the stream tears the subprocess down the same way a cancelled `run()` does:
-  `SIGTERM`, the cancel grace wait, then `SIGKILL`. Timeouts behave identically
-  to `run()`.
+  Cancelling a task that is iterating `lines()`, or closing the `LineStream` via
+  `aclose()` or an `async with` block, tears the subprocess down the same way
+  a cancelled `run()` does: `SIGTERM`, the cancel grace wait, then `SIGKILL`.
+  Breaking out of the loop on its own does not: `async for` never closes a
+  custom iterator, so the stream must be closed. Timeouts behave identically to
+  `run()`.
 - **`LineEvent`:** The frozen payload a line observer receives, carrying
   `stream`, `at`, and `text`.
 - **`LineHook`:** The synchronous callable type a line observer must satisfy.

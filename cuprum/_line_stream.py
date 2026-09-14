@@ -2,9 +2,14 @@
 
 Owns the coordination behind ``SafeCmd.lines()``. The subprocess, its stream
 consumers, its deadline, and the teardown rules are the same primitives
-``SafeCmd.run()`` uses; the only addition is an :class:`asyncio.Queue` fed by
-the composed per-line callback, so a caller iterating lines is decoupled from
-the drain without forking the run semantics.
+``SafeCmd.run()`` uses, reached through the same builders; the addition is a
+finite :class:`asyncio.Queue` fed by a per-line callback chained ahead of the
+caller's own ``on_line``, so a caller iterating lines is decoupled from the
+drain without forking the run semantics.
+
+That queue is what bounds retention. The sink awaits ``queue.put``, and the
+drain loop awaits the sink, so a caller that iterates slowly pauses the read
+rather than letting a chatty child accumulate events in memory.
 
 The consumer tasks are registered in ``_RunTaskOwnership.consumers``, so the
 shared reconciliation cancels and drains them exactly once on every exit
@@ -19,9 +24,10 @@ import dataclasses as dc
 import time
 import typing as typ
 
-from cuprum._line_callbacks import _LineEmissionContext
+from cuprum._line_callbacks import _chain_line_hooks
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_consumers import _spawn_stream_consumers
 from cuprum._subprocess_execution import (
     _build_stream_config,
     _spawn_subprocess,
@@ -46,19 +52,18 @@ from cuprum._subprocess_wait import (
 from cuprum.lines import LineEvent
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-    from cuprum._streams import _StreamConfig
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult
 
-# The queue item is a line event while the run streams, and the module-level
-# sentinel object exactly once, when the coordinator finishes. A dedicated
-# sentinel rather than ``None`` keeps a future ``None``-carrying event from
-# being ambiguous.
+# The queue item is a line event while the run streams, and the run's
+# ``CommandResult`` exactly once, when the coordinator finishes; the result
+# doubles as the sentinel that ends iteration.
 type _LineQueueItem = LineEvent | CommandResult
 
-_LINES_FINALIZATION_ERROR = "line stream finalization failed"
-_LINES_LOGGER_NAME = "cuprum.lines"
+# Finite on purpose. The sink awaits ``queue.put``, so a caller iterating
+# slowly stops the consumers reading the pipe instead of letting a chatty child
+# grow the queue without bound.
+_LINE_QUEUE_CAPACITY = 256
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -86,100 +91,32 @@ class _LineStreamRun:
     started_at: float
 
 
-def _queue_line_sink(
-    queue: asyncio.Queue[_LineQueueItem],
-) -> cabc.Callable[[LineEvent], None]:
-    """Return a hook that posts one ``LineEvent`` to the queue."""
-
-    def enqueue(event: LineEvent) -> None:
-        """Post one stamped line to the consumer queue."""
-        queue.put_nowait(event)
-
-    return enqueue
+def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
+    """Return the finite queue one ``lines()`` iteration consumes."""
+    return asyncio.Queue(maxsize=_LINE_QUEUE_CAPACITY)
 
 
-def _spawn_line_consumers(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-    *,
-    emission: _LineEmissionContext,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr consumers that feed the line queue.
+def _queue_line_sink(queue: asyncio.Queue[_LineQueueItem]) -> _LineHookFn:
+    """Return an asynchronous hook that posts each ``LineEvent`` to the queue.
 
-    The consumer configuration mirrors ``run()``'s streamed path exactly —
-    capture and echo are ``execution``'s, the stderr sink override included —
-    so iterating lines never silently disables capture or echo.
+    Asynchronous rather than a synchronous ``put_nowait`` because the queue is
+    finite: a full queue parks the stream consumer until the iterator drains a
+    slot, so ``lines()`` applies backpressure to the child instead of dropping
+    events or retaining them without limit. A synchronous sink could only
+    raise ``asyncio.QueueFull`` out of the drain loop.
 
     Returns
     -------
-    tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
-        The stdout and stderr consumer tasks, each feeding *emission*'s
-        queue sink.
+    _LineHookFn
+        The hook that posts one event to *queue*, awaiting a free slot when the
+        queue is full.
     """
-    stdout_on_line = _composed_stream_callback(
-        execution, "stdout", dc.replace(emission, stream="stdout")
-    )
-    stderr_on_line = _composed_stream_callback(
-        execution, "stderr", dc.replace(emission, stream="stderr")
-    )
-    stderr_config = _stderr_stream_config(execution, stream_config)
-    return _start_line_consumer_tasks(
-        process, stream_config, stderr_config, (stdout_on_line, stderr_on_line)
-    )
 
+    async def enqueue(event: LineEvent) -> None:
+        """Post one stamped line to the consumer queue."""
+        await queue.put(event)
 
-def _composed_stream_callback(
-    execution: _SubprocessExecution,
-    stream: typ.Literal["stdout", "stderr"],
-    emission: _LineEmissionContext,
-) -> cabc.Callable[[str], None] | None:
-    """Build the composed per-line callback for one stream."""
-    from cuprum._subprocess_execution import _create_stream_callback
-
-    return _create_stream_callback(execution.observation, stream, emission)
-
-
-def _stderr_stream_config(
-    execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-) -> _StreamConfig:
-    """Return the stderr config with ``run()``'s sink override applied."""
-    import sys
-
-    from cuprum.echo_events import EchoStream
-
-    return dc.replace(
-        stream_config,
-        sink=(
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        ),
-        stream=EchoStream.STDERR,
-    )
-
-
-def _start_line_consumer_tasks(
-    process: asyncio.subprocess.Process,
-    stdout_config: _StreamConfig,
-    stderr_config: _StreamConfig,
-    callbacks: tuple[
-        cabc.Callable[[str], None] | None, cabc.Callable[[str], None] | None
-    ],
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Start the stdout and stderr consumer tasks with their callbacks."""
-    from cuprum._streams import _consume_stream
-
-    stdout_on_line, stderr_on_line = callbacks
-    return (
-        asyncio.create_task(
-            _consume_stream(process.stdout, stdout_config, on_line=stdout_on_line),
-        ),
-        asyncio.create_task(
-            _consume_stream(process.stderr, stderr_config, on_line=stderr_on_line),
-        ),
-    )
+    return enqueue
 
 
 async def _start_line_stream_run(
@@ -201,8 +138,13 @@ async def _start_line_stream_run(
     process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
     # Frozen dataclass: the stamped execution carries the start reference the
-    # composed callbacks read, so it is rebuilt rather than mutated.
-    execution = dc.replace(execution, started_at=started_at)
+    # composed callbacks read, and the caller's ``on_line`` chained ahead of
+    # this driver's queue sink, so it is rebuilt rather than mutated.
+    execution = dc.replace(
+        execution,
+        started_at=started_at,
+        on_line=_chain_line_hooks((execution.on_line, _queue_line_sink(queue))),
+    )
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
     discard_on_cancel = asyncio.Event()
@@ -211,16 +153,13 @@ async def _start_line_stream_run(
         stdin_task=_spawn_stdin_writer(
             process, execution.stdin_data, execution.observation
         ),
-        consumers=_spawn_line_consumers(
+        # The same consumer builder ``run()`` uses, so iterating lines can
+        # never silently diverge from it on capture, echo, or sink selection.
+        consumers=_spawn_stream_consumers(
             process,
             execution,
             stream_config,
-            emission=_LineEmissionContext(
-                stream="stdout",
-                pid=pid,
-                on_line=_queue_line_sink(queue),
-                started_at=started_at,
-            ),
+            pid=pid,
         ),
         discard_on_cancel=discard_on_cancel,
     )
@@ -338,14 +277,34 @@ async def _coordinate_line_stream(
     Every failure path still reconciles the process and the stream tasks
     through the shared helpers before the error is published on the future,
     so the consuming iterator never waits on work that has already ended.
+
+    The result is the sentinel that ends iteration, and it is queued before it
+    is published, so a waiter that wins the race on the future can still read
+    it off the queue.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        When the iterator cancels this coordinator as teardown. Re-raised
+        rather than published, so a plain ``aclose()`` never hands the caller a
+        ``CancelledError`` they did not issue.
     """
     try:
         result = await _run_to_command_result(run, execution)
+    except asyncio.CancelledError:
+        # Teardown, never a caller-requested cancellation: the iterator cancels
+        # this coordinator only after it has stopped consuming. Re-raised so the
+        # task ends cancelled instead of publishing a ``CancelledError`` the
+        # caller would meet as an exception from a plain ``aclose()``.
+        raise
     except BaseException as error:  # ruff: ignore[blind-except] - any failure must reach the consumer
         result_future.set_exception(error)
         return
-    # The result itself ends iteration; posting it doubles as the sentinel.
-    queue.put_nowait(result)
+    # Awaited, not ``put_nowait``: the queue is finite, and a caller that has
+    # paused mid-iteration can leave it full. Dropping the result would strand
+    # the iterator, so the post waits for the slot the ``break`` path ends by
+    # cancelling this coordinator.
+    await queue.put(result)
     result_future.set_result(result)
 
 

@@ -501,10 +501,27 @@ async def observe() -> None:
     assert [event.text for event in events] == ["hello"]
 ```
 
-Cancelling a task that is iterating `lines()`, breaking out of the loop, or
-closing the `LineStream` tears the subprocess down the same way a cancelled
-`run()` does: `SIGTERM`, a short grace period, then `SIGKILL`. Timeouts behave
-identically to `run()`.
+Cancelling a task that is iterating `lines()`, or closing the `LineStream` via
+`aclose()` or an `async with` block, tears the subprocess down the same way a
+cancelled `run()` does: `SIGTERM`, a short grace period, then `SIGKILL`.
+Breaking out of the loop on its own does not stop the subprocess: `async for`
+never closes a custom iterator, so the stream must be closed to guarantee
+teardown. Timeouts behave identically to `run()`.
+
+When the loop may exit early, use the stream as an async context manager so
+leaving the block closes it:
+
+```python
+from cuprum import ECHO, sh
+
+
+async def first_line_only() -> None:
+    cmd = sh.make(ECHO)("hello", "line-level")
+    async with cmd.lines() as stream:
+        async for event in stream:
+            print(event.text)
+            break
+```
 
 The callback alternative shares one decode pass with the structured `stdout`/
 `stderr` observe events, so registering both delivers each line twice: once as

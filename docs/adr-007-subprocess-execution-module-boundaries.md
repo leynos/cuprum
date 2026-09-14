@@ -202,3 +202,28 @@ allow terminated-process readers the bounded EOF-grace window before settling
 them, while non-capturing cleanup settles promptly without that window and
 discards output. Cancellation during capture grace still settles the consumers
 before propagating, so process cleanup cannot leave stream readers pending.
+
+## Addendum (2026-09-14): move stream-consumer wiring into `_subprocess_consumers`
+
+Line observation gave `_subprocess_execution.py` a per-line callback to compose
+as well as a consumer to spawn, and the module crossed the 400-line policy
+limit again (423 lines). `_spawn_stream_consumers` and its helper
+`_create_stream_callback` — the two functions that decide what reads each pipe
+and which callbacks see the lines — moved to `cuprum/_subprocess_consumers.py`.
+
+The composition root keeps spawning and coordination, and imports
+`_spawn_stream_consumers` for its own call site, so the execution module
+remains the place to look for how a run is driven. `SafeCmd.lines()` reaches
+the same consumers through `cuprum._line_stream`, which imports the helper from
+the new definition site rather than through a re-export, matching the
+`_resolve_timeout` precedent above. `_create_stream_callback` leaves the
+execution module's `__all__` with its definition, since nothing imports it from
+there.
+
+Two consequences are worth recording. Tests that stand in for a reader now patch
+`cuprum._subprocess_consumers._consume_stream`: a call site resolves the name
+from its own module globals, so the stand-in has to be installed where the call
+is made. And because both the single-command and the line-iteration paths now
+reach the consumers through one module, a patched reader covers both.
+Observable behaviour is unchanged: `SafeCmd.run()` results, cancellation,
+timeout translation, and line observation all behave as before.

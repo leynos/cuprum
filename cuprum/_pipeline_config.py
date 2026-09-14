@@ -1,5 +1,4 @@
 """Pipeline execution configuration helpers."""
-
 from __future__ import annotations
 
 import dataclasses as dc
@@ -10,6 +9,7 @@ from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
@@ -32,6 +32,7 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    on_line: _LineHookFn | None = None
 
     @property
     def stdout_capture_or_echo(self) -> bool:
@@ -42,6 +43,20 @@ class _PipelineRunConfig:
     def stderr_capture_or_echo(self) -> bool:
         """Whether stderr must be consumed for capture or echo."""
         return self.capture or self.echo_stderr
+
+    @property
+    def stdout_consumed(self) -> bool:
+        """Whether the final stage's stdout must be read at all.
+
+        A registered ``on_line`` observes the final stage's stdout too, so it
+        keeps the pipe and its consumer even when capture and echo are both off.
+        """
+        return self.stdout_capture_or_echo or self.on_line is not None
+
+    @property
+    def stderr_consumed(self) -> bool:
+        """Whether every stage's stderr must be read at all."""
+        return self.stderr_capture_or_echo or self.on_line is not None
 
     @property
     def stream_config(self) -> _StreamConfig:
@@ -101,4 +116,5 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        on_line=output.on_line,
     )
