@@ -551,12 +551,22 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
         )
 
 
-@pytest.mark.parametrize("text", ["a\vb", "a\x85b", "a\u2028b"])
+@pytest.mark.parametrize(
+    "text",
+    ["a\vb", "a\x85b", "a\u2028b", "a\v", "a\x85", "a\u2028"],
+)
 def test_split_complete_lines_handles_python_line_boundaries(text: str) -> None:
     """Example: Python-recognized line boundaries delimit completed lines."""
     split_lines = text.splitlines(keepends=True)
-    expected_lines = [_strip_line_ending(line) for line in split_lines[:-1]]
-    expected_remainder = split_lines[-1]
+    if not split_lines:
+        expected_lines = []
+        expected_remainder = text
+    elif split_lines[-1].endswith(_LINE_ENDINGS):
+        expected_lines = [_strip_line_ending(line) for line in split_lines]
+        expected_remainder = ""
+    else:
+        expected_lines = [_strip_line_ending(line) for line in split_lines[:-1]]
+        expected_remainder = split_lines[-1]
 
     lines, remainder = _split_complete_lines(text)
 

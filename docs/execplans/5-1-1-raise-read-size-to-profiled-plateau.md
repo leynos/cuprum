@@ -225,6 +225,16 @@ This task is complete only when:
   branch was force-with-lease published as `92390072`; CodeRabbit review
   `f0713b24` is queued for PR #321 and remains the sole pending acceptance step.
 
+- [x] 2026-09-14 Terminal-completion follow-up: moved final capture decoding
+  before drain EOF completion so strict decoding and final echo flush failures
+  emit one `FAILED` aggregate operation rather than an erroneous `EOF` followed
+  by failure. Extended the direct production-path observer tests for invalid
+  and valid strict UTF-8, and corrected the line-boundary test oracle so
+  terminal vertical-tab, NEL, and line-separator boundaries produce an empty
+  remainder. `make check-fmt`, `make typecheck`, `make lint`, and the five
+  focused stream suites passed (70 tests). The queued CodeRabbit review remains
+  the pending acceptance step.
+
 - [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
   reader-descriptor hand-off with worker-owned duplicates, preserved buffered
   reader bytes and Python fallback, and proved cleanup across completion,
@@ -773,6 +783,16 @@ This task is complete only when:
   only when a safe descriptor hand-off cannot be prepared, and preserves the
   existing downstream-close drain contract. Date/Author: 2026-09-14,
   implementation agent. No public interface or read-size change.
+
+- Decision D34: commit a drain EOF observation only after all final drain work
+  succeeds. Rationale: capture decoding is part of a completed drain, so a
+  strict decoding failure cannot truthfully report EOF. Keeping final decode
+  and echo-decoder flushing inside `_drain`'s established `BaseException` path
+  preserves cancellation handling while reporting exactly one `FAILED` terminal
+  event for finalization failures. The line-boundary change repairs only the
+  expected-value oracle; production boundary handling already completed all
+  supported terminal separators. Date/Author: 2026-09-14, implementation agent.
+  No public interface or read-size change.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small

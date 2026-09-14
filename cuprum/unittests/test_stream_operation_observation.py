@@ -6,6 +6,8 @@ import asyncio
 import io
 import typing as typ
 
+import pytest
+
 from cuprum import stream_observation
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._streams_pump import _pump_stream
@@ -22,8 +24,6 @@ from cuprum.stream_observation import observe_stream_operation
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
 
 
 class _Reader:
@@ -115,14 +115,14 @@ class _MetricRecorder:
         self.calls.append((name, value, dict(labels)))
 
 
-def _drain_config() -> _StreamConfig:
+def _drain_config(*, errors: str = "replace") -> _StreamConfig:
     """Build a capture-only configuration for direct drain tests."""
     return _StreamConfig(
         capture_output=True,
         echo_output=False,
         sink=io.StringIO(),
         encoding="utf-8",
-        errors="replace",
+        errors=errors,
     )
 
 
@@ -146,6 +146,50 @@ def test_drain_emits_exact_aggregate_completion() -> None:
     assert event.bytes_consumed == 5, "event must count all returned payload bytes"
     assert event.read_operations == 3, "event must count chunks and EOF"
     assert event.duration_s >= 0, "duration must use a monotonic clock"
+
+
+def test_drain_strict_decode_failure_emits_failed_completion() -> None:
+    """Strict final decoding fails before drain completion reports EOF."""
+    seen = []
+
+    with (
+        observe_stream_operation(seen.append),
+        pytest.raises(UnicodeDecodeError),
+    ):
+        asyncio.run(
+            _drain(
+                typ.cast("asyncio.StreamReader", _Reader((b"\xff",))),
+                _drain_config(errors="strict"),
+            )
+        )
+
+    assert len(seen) == 1, "a failed strict drain must emit one completion"
+    event = seen[0]
+    assert event.operation is StreamOperation.DRAIN, "event must identify draining"
+    assert event.outcome is StreamOperationOutcome.FAILED, (
+        "strict decode failure must report FAILED"
+    )
+
+
+def test_drain_strict_decode_success_emits_eof_completion() -> None:
+    """Strict final decoding reports EOF only after successful capture decode."""
+    seen = []
+
+    with observe_stream_operation(seen.append):
+        captured = asyncio.run(
+            _drain(
+                typ.cast("asyncio.StreamReader", _Reader((b"valid",))),
+                _drain_config(errors="strict"),
+            )
+        )
+
+    assert captured == "valid", "strict decoding must preserve valid UTF-8"
+    assert len(seen) == 1, "a successful strict drain must emit one completion"
+    event = seen[0]
+    assert event.operation is StreamOperation.DRAIN, "event must identify draining"
+    assert event.outcome is StreamOperationOutcome.EOF, (
+        "successful strict decoding must report EOF"
+    )
 
 
 def test_pump_emits_exact_aggregate_completion() -> None:

@@ -64,18 +64,12 @@ class _StreamConfig:
     sink: typ.IO[str]
     encoding: str
     errors: str
-    # The active private profiling read size. Production callers retain the
-    # default while benchmark workers inject a task-local value.
+    # Profiled private read size; production callers use the default.
     read_size: int = _READ_SIZE
-    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
-    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
-    # accepting a line past a size limit (GitHub Actions job logs end at a
-    # 64 KiB line) while capture stays byte-for-byte complete.
+    # Byte cap per echoed line; capture remains byte-for-byte complete.
     echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
-    # Which output stream this config drains, for bounded echo observability.
-    # Defaults to stdout because every production call site names the stderr
-    # config explicitly when it replaces the stdout one.
+    # Drained output stream for bounded-echo observability.
     stream: EchoStream = EchoStream.STDOUT
 
 
@@ -135,14 +129,6 @@ async def _drain(
     read_size: int = _READ_SIZE,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
-    # This is the single source of truth for the consume mechanics shared by
-    # :func:`_consume_stream_without_lines` and
-    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
-    # the capture buffer when capturing, echo each chunk to the configured
-    # sink when echoing, then hand the chunk to ``on_chunk`` for
-    # variant-specific processing (for example incremental line decoding).
-    # Fixes to the loop must be made here so the capture path and the
-    # line-emitting path cannot drift.
     if config.echo_output and config.echo_max_line_bytes is not None:
         _validate_bounded_echo_encoding(config.encoding, config.errors)
     buffer = bytearray() if config.capture_output else None
@@ -168,22 +154,36 @@ async def _drain(
             read_size=read_size,
             measurement=measurement,
         )
+        if reached_eof:
+            return _finish_drain(state, measurement, reached_eof=True)
     except BaseException:
         _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
         raise
+    return _finish_drain(state, measurement, reached_eof=False)
+
+
+def _finish_drain(
+    state: _DrainState,
+    measurement: _StreamOperationMeasurement | None,
+    *,
+    reached_eof: bool,
+) -> str | None:
+    """Complete one drain and return any captured text."""
     if not reached_eof:
         _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
-        if buffer is None or _discard_on_cancel(config):
+        if state.buffer is None or _discard_on_cancel(state.config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
-        return buffer.decode(config.encoding, errors=config.errors)
-
+        return state.buffer.decode(state.config.encoding, errors=state.config.errors)
     _flush_echo_decoder(state)
+    captured = None
+    if state.buffer is not None:
+        captured = state.buffer.decode(
+            state.config.encoding,
+            errors=state.config.errors,
+        )
     _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
-
-    if buffer is None:
-        return None
-    return buffer.decode(config.encoding, errors=config.errors)
+    return captured
 
 
 def _discard_on_cancel(config: _StreamConfig) -> bool:
@@ -343,9 +343,7 @@ def _echo_write(
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
     except UnicodeEncodeError as exc:
         state.echo_guard.disabled = True
-        # The warning and the observation are two projections of the same
-        # first-failure transition; neither retries after this point because
-        # the guard above already disables every later echo write.
+        # The first failure emits both projections; the guard prevents retries.
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
@@ -367,9 +365,7 @@ def _echo_write(
     return True
 
 
-def _flush_echo_decoder(
-    state: _DrainState,
-) -> None:
+def _flush_echo_decoder(state: _DrainState) -> None:
     """Flush a text-only echo decoder at end of stream."""
     limiter = state.echo_limiter
     if limiter is not None:
