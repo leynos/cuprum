@@ -1589,6 +1589,12 @@ and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
 `_pipeline_internals` calls into `_pipeline_results` on both the success and
 the timeout paths, so a stage never reports a `timeout` and then falls silent.
 
+`cuprum._pipeline_sink` owns the pipeline's presentation-sink session
+lifecycle, split out for the same reason: it maps a terminal event onto the
+bounded `SessionOutcome` set (`_pipeline_result_outcome`,
+`_pipeline_error_outcome`) and closes the adapter's session on every exit path
+(`_close_pipeline_sink_session`).
+
 Error propagation policy (to be finalized, but roughly):
 
 - Pipelines fail fast: once any stage exits non-zero, Cuprum terminates every
