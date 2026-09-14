@@ -35,6 +35,7 @@ from cuprum._pipeline_pipe_tasks import (
 from cuprum._pipeline_stream_fds import (
     _extract_stream_fd,
     _pause_reader_transport,
+    _ReaderPause,
     _resume_reader_transport,
     _suppressed_teardown_failure,
 )
@@ -161,6 +162,14 @@ async def _pump_over_raw_fds(
 ) -> bool:
     """Transfer a hop after acquiring the reader and descriptor hand-off."""
     reader_pause = _pause_reader_transport(reader)
+    if (
+        reader_pause.closing_transport
+        and _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor is not None
+    ):
+        # The dispatch seam supplies descriptors it owns, so a reader whose
+        # transport is already closing no longer invalidates this hand-off.
+        # Nothing was paused, so the permitted verdict carries no resume.
+        reader_pause = _ReaderPause(may_hand_off=True)
     if not reader_pause.may_hand_off:
         _log_rust_pump_declined(
             reader_pause.decline_reason or RustPumpDeclineReason.READER_PAUSE_FAILED,
