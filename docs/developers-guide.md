@@ -1119,9 +1119,15 @@ the closed `truncated` category and the numeric count of dropped child-output
 bytes. Because `ExecPhase` is a closed set that registered consumers match
 exhaustively, the echo channel carries its own `cuprum.echo_events.EchoEvent`
 type on its own hook registry rather than a new phase, so consumers opt in by
-registering and unregistered callers pay nothing. Hook failures are reported
-and skipped, mirroring `cuprum.pump_observation`, so a broken metrics backend
-cannot change what a run captures.
+registering and unregistered callers pay nothing. `EchoMetricsHook` projects
+successful bounded truncations to `cuprum_echo_truncations_total`, with the
+bounded `stream` label (`stdout` or `stderr`), and increments it once for each
+truncated line that was written successfully. The separate
+`cuprum_echo_encoding_failures_total` counter records the first
+`UnicodeEncodeError` for a drain, labelled by `stream` and
+`error_category="unicode_encode"`; it does not count successful truncations.
+Hook failures are reported and skipped, mirroring `cuprum.pump_observation`, so
+a broken metrics backend cannot change what a run captures.
 
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
