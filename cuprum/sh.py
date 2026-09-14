@@ -385,7 +385,28 @@ class StdinInput:
 
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
-    """Controls how a command's output streams are handled."""
+    """Configure captured and mirrored command output.
+
+    Parameters
+    ----------
+    capture : bool, default=True
+        Store stdout and stderr on the returned result. Capture is independent
+        of echoing, so a captured stream can remain silent and an echoed stream
+        can be left uncaptured.
+    echo : bool, default=False
+        Shorthand for enabling both ``echo_stdout`` and ``echo_stderr`` unless
+        either stream has an explicit override.
+    echo_stdout : bool | None, default=None
+        Whether stdout is mirrored to the execution context's stdout sink.
+        ``None`` inherits ``echo``.
+    echo_stderr : bool | None, default=None
+        Whether stderr is mirrored to the execution context's stderr sink.
+        ``None`` inherits ``echo``.
+    max_echo_line_bytes : int | None, default=64 * 1024
+        Inclusive byte bound for every echoed line, including its retained
+        bytes, truncation marker, and terminator. ``None`` restores unbounded,
+        chunk-for-chunk mirroring; captured output always remains complete.
+    """
 
     capture: bool = True
     echo: bool = False
@@ -603,7 +624,37 @@ class SafeCmd:
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command asynchronously with predictable cancellation."""
+        """Execute the command asynchronously with predictable cancellation.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. Its 64 KiB default bounds each mirrored
+            line without affecting capture; set ``max_echo_line_bytes=None``
+            for unbounded mirroring.
+        timeout : float | None, default=None
+            Maximum execution time in seconds. An explicit value overrides the
+            timeout in ``context``.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
+
+        Returns
+        -------
+        CommandResult
+            The command outcome, including complete captured streams when
+            ``output.capture`` is true.
+
+        Raises
+        ------
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        UnicodeEncodeError
+            If text stdin cannot be encoded by the execution context.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through execution helpers
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
@@ -641,7 +692,36 @@ class SafeCmd:
         context: ExecutionContext | None = None,
         stdin: StdinInput | None = None,
     ) -> CommandResult:
-        """Execute the command synchronously."""
+        """Execute the command synchronously.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. The default limits each mirrored line to
+            64 KiB; ``max_echo_line_bytes=None`` restores unbounded echoing
+            while preserving the same capture contract.
+        timeout : float | None, default=None
+            Maximum execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        stdin : StdinInput | None, default=None
+            Optional bytes or text supplied to the child process's stdin.
+
+        Returns
+        -------
+        CommandResult
+            The command outcome, including complete captured streams when
+            enabled.
+
+        Raises
+        ------
+        PermissionError
+            If the command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        UnicodeEncodeError
+            If text stdin cannot be encoded by the execution context.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
         )
@@ -691,7 +771,38 @@ class Pipeline:
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline asynchronously with streaming and backpressure."""
+        """Execute the pipeline asynchronously with streaming and backpressure.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings for every observed pipeline stream. The
+            default bounds each echoed line to 64 KiB; ``None`` for
+            ``max_echo_line_bytes`` restores unbounded mirroring without
+            changing capture.
+        timeout : float | None, default=None
+            Maximum pipeline execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        **deprecated_flags : bool
+            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
+            combine them with ``output``.
+
+        Returns
+        -------
+        PipelineResult
+            The outcome for every stage and complete captured streams when
+            capture is enabled.
+
+        Raises
+        ------
+        ValueError
+            If ``output`` is combined with deprecated flags.
+        PermissionError
+            If a pipeline command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through pipeline helpers
         out = _resolve_pipeline_output(output, deprecated_flags)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
@@ -709,7 +820,37 @@ class Pipeline:
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline synchronously via ``asyncio.run``."""
+        """Execute the pipeline synchronously via ``asyncio.run``.
+
+        Parameters
+        ----------
+        output : RunOutputOptions | None, default=None
+            Capture and echo settings. The 64 KiB default bounds mirrored lines;
+            ``max_echo_line_bytes=None`` restores unbounded echoing while
+            leaving captured output complete.
+        timeout : float | None, default=None
+            Maximum pipeline execution time in seconds.
+        context : ExecutionContext | None, default=None
+            Execution settings, including echo sinks and text encoding.
+        **deprecated_flags : bool
+            Deprecated ``capture`` and ``echo`` keyword arguments. Do not
+            combine them with ``output``.
+
+        Returns
+        -------
+        PipelineResult
+            The outcome for every stage and complete captured streams when
+            capture is enabled.
+
+        Raises
+        ------
+        ValueError
+            If ``output`` is combined with deprecated flags.
+        PermissionError
+            If a pipeline command is not allowed by the active scope.
+        TimeoutError
+            If execution exceeds the effective timeout.
+        """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         out = _resolve_pipeline_output(output, deprecated_flags)
         return asyncio.run(
             self.run(output=out, timeout=timeout, context=context),

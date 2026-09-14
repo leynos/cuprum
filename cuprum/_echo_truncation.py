@@ -13,6 +13,7 @@ terminator is accounted for as a line ending.
 
 from __future__ import annotations
 
+import codecs
 import dataclasses as dc
 
 _TRUNCATION_MARKER_TEMPLATE = "… [truncated {dropped} bytes]"
@@ -61,6 +62,15 @@ class _EchoEncoding:
     is_text_sink: bool
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _LineFinalization:
+    """Source accounting and echoed terminator for one completed line."""
+
+    source_bytes: int
+    ending: bytes
+    omitted_ending_bytes: int
+
+
 @dc.dataclass(slots=True)
 class _EchoLineLimiter:
     r"""Track per-line byte accounting for one echoing stream.
@@ -73,12 +83,13 @@ class _EchoLineLimiter:
 
     max_line_bytes: int
     _line: bytearray = dc.field(default_factory=bytearray)
+    _source_line_bytes: int = 0
     has_pending_carriage_return: bool = False
 
     @property
     def has_line_bytes(self) -> bool:
         """Whether the current logical line has buffered source bytes."""
-        return bool(self._line)
+        return self._source_line_bytes > 0
 
     @classmethod
     def from_config(
@@ -106,9 +117,11 @@ class _EchoLineLimiter:
         return cls(max_line_bytes=echo_max_line_bytes)
 
     def bound_line(self, segment: bytes) -> None:
-        """Accumulate raw bytes for the line whose bound is finalized later."""
-        if segment:
-            self._line.extend(segment)
+        """Account for source bytes while retaining only the bounded prefix."""
+        self._source_line_bytes += len(segment)
+        remaining = self.max_line_bytes - len(self._line)
+        if remaining > 0:
+            self._line.extend(segment[:remaining])
 
     def finish_line(
         self,
@@ -127,56 +140,66 @@ class _EchoLineLimiter:
         """
         line = bytes(self._line)
         self._line.clear()
-        bounded_ending = ending if len(ending) <= self.max_line_bytes else b""
-        omitted_ending_bytes = len(ending) - len(bounded_ending)
-        if len(line) + len(ending) <= self.max_line_bytes:
-            return _FinishedEchoLine(line + bounded_ending, 0)
+        source_line_bytes = self._source_line_bytes
+        self._source_line_bytes = 0
+        finalization = _LineFinalization(
+            source_bytes=source_line_bytes,
+            ending=ending if len(ending) <= self.max_line_bytes else b"",
+            omitted_ending_bytes=len(ending)
+            if len(ending) > self.max_line_bytes
+            else 0,
+        )
+        if source_line_bytes + len(ending) <= self.max_line_bytes:
+            return _FinishedEchoLine(line + finalization.ending, 0)
         settings = _EchoEncoding(encoding, errors, is_text_sink)
 
         retained, encoded = self._bounded_prefix(
             line,
-            ending=bounded_ending,
-            omitted_ending_bytes=omitted_ending_bytes,
+            finalization=finalization,
             settings=settings,
         )
-        dropped = len(line) - len(retained) + omitted_ending_bytes
+        dropped = finalization.source_bytes - len(retained)
+        dropped += finalization.omitted_ending_bytes
         marker = truncation_marker(
             dropped,
             encoding=settings.encoding,
             errors=settings.errors,
         )
-        remaining = self.max_line_bytes - len(encoded) - len(bounded_ending)
+        remaining = self.max_line_bytes - len(encoded) - len(finalization.ending)
         marker = _fit_marker(
             marker,
             budget=max(remaining, 0),
             dropped=dropped,
             settings=settings,
         )
-        return _FinishedEchoLine(encoded + marker + bounded_ending, dropped)
+        return _FinishedEchoLine(encoded + marker + finalization.ending, dropped)
 
     def _bounded_prefix(
         self,
         line: bytes,
         *,
-        ending: bytes,
-        omitted_ending_bytes: int,
+        finalization: _LineFinalization,
         settings: _EchoEncoding,
     ) -> tuple[bytes, bytes]:
         """Find a marker-consistent source prefix and its echoed bytes."""
-        dropped = len(line) + omitted_ending_bytes
+        dropped = finalization.source_bytes + finalization.omitted_ending_bytes
         for _ in range(16):
             marker = truncation_marker(
                 dropped,
                 encoding=settings.encoding,
                 errors=settings.errors,
             )
-            budget = max(self.max_line_bytes - len(ending) - len(marker), 0)
+            budget = max(
+                self.max_line_bytes - len(finalization.ending) - len(marker),
+                0,
+            )
             retained, encoded = _encode_prefix(
                 line,
                 budget=budget,
                 settings=settings,
             )
-            updated_dropped = len(line) - len(retained) + omitted_ending_bytes
+            updated_dropped = finalization.source_bytes - len(retained)
+            updated_dropped += finalization.omitted_ending_bytes
             if updated_dropped == dropped:
                 return retained, encoded
             dropped = updated_dropped
@@ -194,25 +217,26 @@ def _encode_prefix(
         prefix = line[:budget]
         return prefix, prefix
 
-    low = 0
-    high = min(len(line), budget)
+    decoder = codecs.getincrementaldecoder(settings.encoding)(
+        errors=settings.errors,
+    )
+    encoded_prefix = bytearray()
     best = (b"", b"")
-    while low <= high:
-        length = (low + high) // 2
-        prefix = line[:length]
+    for length, byte in enumerate(line, start=1):
         try:
-            encoded = prefix.decode(settings.encoding, settings.errors).encode(
+            decoded = decoder.decode(bytes((byte,)), final=False)
+            encoded = decoded.encode(
                 settings.encoding,
                 settings.errors,
             )
         except UnicodeError:
-            high = length - 1
+            break
+        encoded_prefix.extend(encoded)
+        if decoder.getstate()[0]:
             continue
-        if len(encoded) <= budget:
-            best = (prefix, encoded)
-            low = length + 1
-        else:
-            high = length - 1
+        if len(encoded_prefix) > budget:
+            break
+        best = (line[:length], bytes(encoded_prefix))
     return best
 
 

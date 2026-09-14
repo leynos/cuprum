@@ -310,8 +310,8 @@ def _write_finished_echo_line(
         errors=state.config.errors,
         is_text_sink=state.echo_decoder is not None,
     )
-    _echo_write(state, finished.payload)
-    if finished.dropped_bytes:
+    was_written = _echo_write(state, finished.payload)
+    if was_written and finished.dropped_bytes:
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
@@ -326,17 +326,10 @@ def _echo_write(
     chunk: bytes,
     *,
     final: bool = False,
-) -> None:
-    """Write one bounded echo payload, disabling echo if the sink rejects it.
-
-    A text-only sink whose encoding cannot represent the subprocess output
-    raises ``UnicodeEncodeError`` mid-drain. Letting that escape would abort
-    stream consumption and lose the captured output, so the failure disables
-    echoing for the rest of this drain (once per stream) while capture
-    continues. Every other failure still propagates.
-    """
+) -> bool:
+    """Write one echo payload and report whether the sink accepted it."""
     if state.echo_guard.disabled:
-        return
+        return False
     try:
         _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
     except UnicodeEncodeError as exc:
@@ -361,6 +354,8 @@ def _echo_write(
                 "cuprum_error_type": type(exc).__name__,
             },
         )
+        return False
+    return True
 
 
 def _flush_echo_decoder(

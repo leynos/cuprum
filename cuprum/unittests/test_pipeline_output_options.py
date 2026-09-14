@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import dataclasses as dc
 import io
 import typing as typ
 
@@ -14,10 +15,12 @@ from hypothesis import strategies as st
 from cuprum import ECHO, Program, ScopeConfig, scoped, sh
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
+    CommandResult,
     ExecutionContext,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
+    SafeCmd,
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
@@ -369,45 +372,62 @@ def test_pipeline_flat_capture_echo_kwargs_are_deprecated() -> None:
     assert result.stdout == "legacy", "the deprecated flags must still capture output"
 
 
+@dc.dataclass(frozen=True)
+class _EchoRoutingCase:
+    """Expected capture values for one pipeline echo-routing run."""
+
+    capture: bool
+    expected_stdout: str | None
+    expected_stderr: str | None
+
+
 class TestPipelineEchoRouting:
     """Verify per-stream echo routing through pipeline execution."""
 
     @staticmethod
     @pytest.mark.usefixtures("stream_backend")
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(
+                _EchoRoutingCase(
+                    capture=True,
+                    expected_stdout="out\n",
+                    expected_stderr="",
+                ),
+                id="capture",
+            ),
+            pytest.param(
+                _EchoRoutingCase(
+                    capture=False,
+                    expected_stdout=None,
+                    expected_stderr=None,
+                ),
+                id="echo-only",
+            ),
+        ],
+    )
     @pytest.mark.parametrize("stream", ["stdout", "stderr"])
-    def test_pipeline_per_stream_echo_is_independent(
+    def test_pipeline_per_stream_echo_respects_capture_setting(
         python_catalogue_env: PythonCatalogue,
         *,
+        case: _EchoRoutingCase,
         stream: str,
     ) -> None:
-        """Pipeline echo of one stream leaves the other out of the parent."""
+        """Pipeline echo routing preserves the selected capture contract."""
         result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
             python_catalogue_env,
-            capture=True,
+            capture=case.capture,
             stream=stream,
         )
 
         assert result.ok is True, "the pipeline should succeed"
-        assert result.stdout == "out\n", "capture must return the final stage stdout"
-        _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
-
-    @staticmethod
-    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
-    def test_pipeline_echo_only_keeps_capture_off(
-        python_catalogue_env: PythonCatalogue,
-        *,
-        stream: str,
-    ) -> None:
-        """capture=False with one echo gate streams that stream and captures none."""
-        result, stdout_sink, stderr_sink = _run_per_stream_echo_pipeline(
-            python_catalogue_env,
-            capture=False,
-            stream=stream,
+        assert result.final.stdout == case.expected_stdout, (
+            f"capture={case.capture}: final stdout mismatch"
         )
-
-        assert result.ok is True, "the pipeline should succeed"
-        assert result.final.stdout is None, "capture=False must leave stdout unset"
-        assert result.final.stderr is None, "capture=False must leave stderr unset"
+        assert result.final.stderr == case.expected_stderr, (
+            f"capture={case.capture}: final stderr mismatch"
+        )
         _assert_only_selected_stream_echoed(stream, stdout_sink, stderr_sink)
 
 
@@ -510,33 +530,87 @@ def test_pipeline_stdio_policy_streams_intermediate_stdout_end_to_end(
     )
 
 
+@dc.dataclass
+class _BoundedEchoCase:
+    """Shared input and expected output for public bounded-echo tests."""
+
+    payload: str
+    bound: int
+    expected_echo: str
+    sink: io.StringIO
+    options: RunOutputOptions
+
+
+def _bounded_echo_case() -> _BoundedEchoCase:
+    """Build the common bounded output options and exact expected echo."""
+    payload = "x" * 80 + "\n"
+    bound = 50
+    return _BoundedEchoCase(
+        payload=payload,
+        bound=bound,
+        expected_echo="x" * 25 + "… [truncated 55 bytes]\n",
+        sink=io.StringIO(),
+        options=RunOutputOptions(
+            capture=True,
+            echo=True,
+            max_echo_line_bytes=bound,
+        ),
+    )
+
+
+def _assert_bounded_public_echo(
+    result: CommandResult | PipelineResult,
+    case: _BoundedEchoCase,
+) -> None:
+    """Assert a public execution captures and echoes the shared case exactly."""
+    assert result.ok is True, "the public execution should succeed"
+    assert result.stdout == case.payload, "capture must retain the complete line"
+    assert case.sink.getvalue() == case.expected_echo, (
+        "echo must retain the exact bounded prefix, marker, and newline"
+    )
+    assert len(case.sink.getvalue().encode()) <= case.bound, (
+        "the echoed bytes must not exceed max_echo_line_bytes"
+    )
+
+
+def _execute_bounded_command(
+    command: SafeCmd,
+    *,
+    is_sync: bool,
+    case: _BoundedEchoCase,
+) -> CommandResult:
+    """Execute one SafeCmd through its selected public entry point."""
+    context = ExecutionContext(stdout_sink=case.sink)
+    if is_sync:
+        return command.run_sync(output=case.options, context=context)
+    return asyncio.run(command.run(output=case.options, context=context))
+
+
+def _execute_bounded_pipeline(
+    pipeline: Pipeline,
+    *,
+    is_sync: bool,
+    case: _BoundedEchoCase,
+) -> PipelineResult:
+    """Execute one Pipeline through its selected public entry point."""
+    context = ExecutionContext(stdout_sink=case.sink)
+    if is_sync:
+        return pipeline.run_sync(output=case.options, context=context)
+    return asyncio.run(pipeline.run(output=case.options, context=context))
+
+
 @pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
 def test_safe_command_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
     """SafeCmd public entry points retain capture while bounding mirrored output."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
-    payload = "x" * 80 + "\n"
-    sink = io.StringIO()
-    options = RunOutputOptions(capture=True, echo=True, max_echo_line_bytes=50)
+    case = _bounded_echo_case()
+    command = python("-c", f"import sys; sys.stdout.write({case.payload!r})")
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        command = python("-c", f"import sys; sys.stdout.write({payload!r})")
-        if is_sync:
-            result = command.run_sync(
-                output=options,
-                context=ExecutionContext(stdout_sink=sink),
-            )
-        else:
-            result = asyncio.run(
-                command.run(
-                    output=options,
-                    context=ExecutionContext(stdout_sink=sink),
-                )
-            )
+        result = _execute_bounded_command(command, is_sync=is_sync, case=case)
 
-    assert result.stdout == payload, "public execution must capture the complete line"
-    assert "truncated " in sink.getvalue(), "public echo must report truncation"
-    assert len(sink.getvalue().encode()) <= 50, "public echo must honour the bound"
+    _assert_bounded_public_echo(result, case)
 
 
 @pytest.mark.parametrize("is_sync", [False, True], ids=["run", "run-sync"])
@@ -544,28 +618,13 @@ def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
     """Pipeline public entry points propagate the output bound to the final sink."""
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
-    payload = "x" * 80 + "\n"
-    sink = io.StringIO()
-    options = RunOutputOptions(capture=True, echo=True, max_echo_line_bytes=50)
-    pipeline = python("-c", f"import sys; sys.stdout.write({payload!r})") | python(
+    case = _bounded_echo_case()
+    pipeline = python("-c", f"import sys; sys.stdout.write({case.payload!r})") | python(
         "-c",
         "import sys; sys.stdout.write(sys.stdin.read())",
     )
 
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
-        if is_sync:
-            result = pipeline.run_sync(
-                output=options,
-                context=ExecutionContext(stdout_sink=sink),
-            )
-        else:
-            result = asyncio.run(
-                pipeline.run(
-                    output=options,
-                    context=ExecutionContext(stdout_sink=sink),
-                )
-            )
+        result = _execute_bounded_pipeline(pipeline, is_sync=is_sync, case=case)
 
-    assert result.stdout == payload, "pipeline capture must retain the complete line"
-    assert "truncated " in sink.getvalue(), "pipeline echo must report truncation"
-    assert len(sink.getvalue().encode()) <= 50, "pipeline echo must honour bound"
+    _assert_bounded_public_echo(result, case)

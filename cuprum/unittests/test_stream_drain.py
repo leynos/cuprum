@@ -373,6 +373,28 @@ def test_drain_truncates_unterminated_trailing_line_at_eof() -> None:
     )
 
 
+def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
+    """capture=False does not require retaining an oversized unfinished line."""
+    bound = 50
+    payload = b"z" * (2 * 1024 * 1024)
+    chunks = tuple(
+        payload[start : start + 8192] for start in range(0, len(payload), 8192)
+    )
+    sink = io.StringIO()
+
+    captured = asyncio.run(
+        _drain(
+            _reader(chunks),
+            _config(sink, capture=False, echo=True, max_line_bytes=bound),
+        ),
+    )
+
+    assert captured is None, "echo-only drains must not create captured output"
+    assert len(sink.getvalue().encode()) <= bound, (
+        "the unfinished echoed line must remain bounded without capture"
+    )
+
+
 def test_drain_truncates_multi_byte_utf8_straddling_the_bound() -> None:
     """A cut inside a multi-byte sequence keeps the echoed text decodable."""
     snowman = "☃".encode()
@@ -447,6 +469,32 @@ class _Cp1252TextOnlySink:
 
     def flush(self) -> None:
         """Model the flush call on a text stream."""
+
+
+def test_rejected_bounded_echo_does_not_observe_truncation() -> None:
+    """A sink-rejected bounded write emits only its encoding-failure event."""
+    sink = _Cp1252TextOnlySink()
+    events = []
+    payload = "ś".encode() + b"x" * 80 + b"\n"
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=True,
+        echo_max_line_bytes=50,
+        sink=typ.cast("typ.IO[str]", sink),
+        encoding="utf-8",
+        errors="strict",
+    )
+
+    with observe_echo(events.append):
+        captured = asyncio.run(_drain(_reader((payload,)), config))
+
+    assert captured == payload.decode(), "capture must retain the rejected line"
+    assert [event.error_category for event in events] == [
+        EchoErrorCategory.UNICODE_ENCODE
+    ], f"only the failed write must be observed, got={events!r}"
+    assert len(sink.attempts) == 1, (
+        "disabled echo must not retry later writes or the final decoder flush"
+    )
 
 
 def test_bounded_echo_writes_untruncated_line_in_one_payload() -> None:

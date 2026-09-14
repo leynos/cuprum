@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -13,23 +15,33 @@ from cuprum._echo_truncation import (
 )
 
 
+@dc.dataclass(frozen=True)
+class _FinishOptions:
+    """Options for one bounded-line finalization."""
+
+    ending: bytes = b"\n"
+    encoding: str = "utf-8"
+    errors: str = "strict"
+    is_text_sink: bool = False
+
+
+_DEFAULT_FINISH_OPTIONS = _FinishOptions()
+
+
 def _finish(
     line: bytes,
     *,
     bound: int,
-    ending: bytes = b"\n",
-    encoding: str = "utf-8",
-    errors: str = "strict",
-    is_text_sink: bool = False,
+    options: _FinishOptions = _DEFAULT_FINISH_OPTIONS,
 ) -> _FinishedEchoLine:
     """Build one finished bounded echo line."""
     limiter = _EchoLineLimiter(bound)
     limiter.bound_line(line)
     return limiter.finish_line(
-        ending=ending,
-        encoding=encoding,
-        errors=errors,
-        is_text_sink=is_text_sink,
+        ending=options.ending,
+        encoding=options.encoding,
+        errors=options.errors,
+        is_text_sink=options.is_text_sink,
     )
 
 
@@ -113,9 +125,22 @@ def test_limit_smaller_than_marker_still_stays_bounded() -> None:
     )
 
 
+def test_limiter_keeps_only_a_bounded_unterminated_prefix() -> None:
+    """Source-byte accounting does not retain an oversized unfinished line."""
+    limiter = _EchoLineLimiter(50)
+    limiter.bound_line(b"x" * 4096)
+
+    assert limiter._source_line_bytes == 4096, (
+        "the limiter must retain the full source-byte count for its marker"
+    )
+    assert len(limiter._line) == 50, (
+        "the limiter must retain no more than the configured echoed prefix"
+    )
+
+
 def test_crlf_larger_than_the_bound_is_counted_as_dropped() -> None:
     """A bound smaller than CRLF never overflows the echoed line."""
-    finished = _finish(b"", bound=1, ending=b"\r\n")
+    finished = _finish(b"", bound=1, options=_FinishOptions(ending=b"\r\n"))
 
     assert len(finished.payload) <= 1, (
         f"the CRLF edge case exceeded the one-byte bound: {finished.payload!r}"
@@ -129,7 +154,7 @@ def test_crlf_larger_than_the_bound_is_counted_as_dropped() -> None:
 def test_strict_utf8_text_prefix_never_ends_inside_a_character() -> None:
     """A strict text sink receives only a complete UTF-8 character prefix."""
     line = b"ab" + "☃".encode() + b"c" * 35
-    finished = _finish(line, bound=28, is_text_sink=True)
+    finished = _finish(line, bound=28, options=_FinishOptions(is_text_sink=True))
 
     text = finished.payload.decode("utf-8", "strict")
     assert text.startswith("ab"), f"expected the safe prefix, got={text!r}"
@@ -139,9 +164,21 @@ def test_strict_utf8_text_prefix_never_ends_inside_a_character() -> None:
     )
 
 
+def test_strict_utf8_text_prefix_keeps_the_longest_valid_boundary() -> None:
+    """A complete multi-byte character is retained when it fits the budget."""
+    snowman = "☃".encode()
+    line = b"ab" + snowman + b"x" * 40
+    finished = _finish(line, bound=32, options=_FinishOptions(is_text_sink=True))
+
+    assert finished.payload.startswith(b"ab" + snowman), (
+        "the largest valid prefix must retain the complete fitting snowman, "
+        f"got={finished.payload!r}"
+    )
+
+
 def test_final_unterminated_line_includes_its_marker_in_the_bound() -> None:
     """EOF finalization applies the same inclusive byte limit without an ending."""
-    finished = _finish(b"x" * 80, bound=40, ending=b"")
+    finished = _finish(b"x" * 80, bound=40, options=_FinishOptions(ending=b""))
 
     assert len(finished.payload) <= 40, (
         f"unterminated echo length={len(finished.payload)} exceeded 40"

@@ -1,8 +1,9 @@
-"""Metrics adapter for stream-echo failure events.
+"""Metrics adapter for stream-echo failure and truncation events.
 
 Counts how often a text-only echo sink rejected the subprocess output, per
-output stream. The fact is otherwise visible only as a single ``WARNING`` log
-record on ``cuprum.stream``, which dashboards cannot aggregate.
+output stream, and how often a bounded echoed line was successfully truncated.
+Those facts are otherwise visible only through a ``WARNING`` log record or the
+echo observation hook, which dashboards cannot aggregate.
 
 The hook consumes :class:`~cuprum.echo_events.EchoEvent` values from
 :func:`~cuprum.echo_observation.observe_echo`. It reuses the
@@ -47,6 +48,9 @@ category the counter counts. The label exists so a future failure category
 extends the metric rather than silently mixing into this series.
 """
 
+ECHO_TRUNCATIONS_TOTAL = "cuprum_echo_truncations_total"
+"""Successfully written bounded echo lines, labelled by ``stream``."""
+
 
 def _event_labels(event: EchoEvent) -> dict[str, str]:
     """Return the bounded label set for ``event``.
@@ -71,13 +75,20 @@ def _event_labels(event: EchoEvent) -> dict[str, str]:
     return {"stream": stream, "error_category": category}
 
 
+def _truncation_labels(event: EchoEvent) -> dict[str, str]:
+    """Return the bounded stream label for a successful truncation."""
+    stream = str(event.stream) if isinstance(event.stream, EchoStream) else "unknown"
+    return {"stream": stream}
+
+
 class EchoMetricsHook:
-    """Echo observation hook that counts encoding failures per stream.
+    """Echo observation hook that records bounded echo outcomes.
 
     The hook emits ``cuprum_echo_encoding_failures_total``: incremented once
     per first ``UnicodeEncodeError`` on a drain's echo path, labelled ``stream``
     with ``stdout`` or ``stderr`` and ``error_category`` with
-    ``unicode_encode``.
+    ``unicode_encode``. It also emits ``cuprum_echo_truncations_total`` once
+    per successfully written truncation, labelled only by ``stream``.
 
     A drain that has already disabled echo emits nothing further, so repeated
     chunks after the first failure do not compound the count.
@@ -120,6 +131,12 @@ class EchoMetricsHook:
             self._collector.inc_counter(
                 ECHO_ENCODING_FAILURES_TOTAL, 1.0, _event_labels(event)
             )
+        elif event.error_category is EchoErrorCategory.TRUNCATED:
+            self._collector.inc_counter(
+                ECHO_TRUNCATIONS_TOTAL,
+                1.0,
+                _truncation_labels(event),
+            )
 
 
 def echo_metrics_hook(collector: MetricsCollector) -> EchoHook:
@@ -141,6 +158,7 @@ def echo_metrics_hook(collector: MetricsCollector) -> EchoHook:
 
 __all__ = [
     "ECHO_ENCODING_FAILURES_TOTAL",
+    "ECHO_TRUNCATIONS_TOTAL",
     "EchoMetricsHook",
     "echo_metrics_hook",
 ]
