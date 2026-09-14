@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import time
 import typing as typ
 
@@ -186,6 +187,59 @@ def _build_spawn_observations(
     return observations
 
 
+@dc.dataclass(slots=True)
+class _SpawnedPipelineStages:
+    """Resources accumulated while spawning pipeline stages."""
+
+    processes: list[asyncio.subprocess.Process] = dc.field(default_factory=list)
+    stderr_tasks: list[asyncio.Task[str | None] | None] = dc.field(default_factory=list)
+    stdout_task: asyncio.Task[str | None] | None = None
+    started_at: list[float] = dc.field(default_factory=list)
+    relay_diagnostics_by_stage: list[
+        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
+    ] = dc.field(default_factory=list)
+
+
+async def _spawn_pipeline_stages(
+    resources: _SpawnedPipelineStages,
+    observations: tuple[_StageObservation, ...],
+    config: _PipelineRunConfig,
+) -> None:
+    """Spawn stages and accumulate their runtime resources."""
+    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
+
+    last_idx = len(observations) - 1
+    for idx, observation in enumerate(observations):
+        stream_fds = _get_stage_stream_fds(
+            idx,
+            last_idx,
+            stdout_capture_or_echo=config.stdout_capture_or_echo,
+            stderr_capture_or_echo=config.stderr_capture_or_echo,
+        )
+        process = await asyncio.create_subprocess_exec(
+            *observation.cmd.argv_with_program,
+            stdin=stream_fds.stdin,
+            stdout=stream_fds.stdout,
+            stderr=stream_fds.stderr,
+            env=_merge_env(config.ctx.env),
+            cwd=_cwd_arg(config.ctx.cwd),
+        )
+        resources.processes.append(process)
+        resources.started_at.append(time.perf_counter())
+        observation.emit("start", _EventDetails(pid=process.pid))
+
+        stage_tasks = _create_stage_capture_tasks(
+            process,
+            config,
+            is_last_stage=(idx == last_idx),
+            observation=observation,
+        )
+        resources.stderr_tasks.append(stage_tasks[0])
+        resources.relay_diagnostics_by_stage.append(stage_tasks[2])
+        if stage_tasks[1] is not None:
+            resources.stdout_task = stage_tasks[1]
+
+
 async def _spawn_pipeline_processes(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
@@ -198,70 +252,29 @@ async def _spawn_pipeline_processes(
     list[float],
     list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]],
 ]:
-    """Start subprocesses for each stage and wire up capture tasks.
-
-    Returns
-    -------
-    Tuple of the stage processes, per-stage stderr capture tasks, the
-    final stage's stdout capture task, stage start timestamps, and one
-    per-stage ``(stderr, stdout)`` pair of relay diagnostics collectors.
-    The pair is ``(None, None)`` when the stage captured nothing and
-    ``(stderr, None)`` for every non-final stage.
-    """
-    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
-
+    """Start subprocesses and wire up their capture tasks."""
     if observations is None:
         observations = _build_spawn_observations(parts, config)
 
-    processes: list[asyncio.subprocess.Process] = []
-    stderr_tasks: list[asyncio.Task[str | None] | None] = []
-    stdout_task: asyncio.Task[str | None] | None = None
-    started_at: list[float] = []
-    relay_diagnostics_by_stage: list[
-        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
-    ] = []
-
-    last_idx = len(observations) - 1
+    resources = _SpawnedPipelineStages()
     try:
-        for idx, observation in enumerate(observations):
-            stream_fds = _get_stage_stream_fds(
-                idx,
-                last_idx,
-                stdout_capture_or_echo=config.stdout_capture_or_echo,
-                stderr_capture_or_echo=config.stderr_capture_or_echo,
-            )
-            process = await asyncio.create_subprocess_exec(
-                *observation.cmd.argv_with_program,
-                stdin=stream_fds.stdin,
-                stdout=stream_fds.stdout,
-                stderr=stream_fds.stderr,
-                env=_merge_env(config.ctx.env),
-                cwd=_cwd_arg(config.ctx.cwd),
-            )
-            processes.append(process)
-            started_at.append(time.perf_counter())
-            observation.emit("start", _EventDetails(pid=process.pid))
-
-            stage_tasks = _create_stage_capture_tasks(
-                process,
-                config,
-                is_last_stage=(idx == last_idx),
-                observation=observation,
-            )
-            stderr_tasks.append(stage_tasks[0])
-            relay_diagnostics_by_stage.append(stage_tasks[2])
-            if stage_tasks[1] is not None:
-                stdout_task = stage_tasks[1]
+        await _spawn_pipeline_stages(resources, observations, config)
     except BaseException:
         await _cleanup_spawned_processes(
-            processes,
-            stderr_tasks,
-            stdout_task,
+            resources.processes,
+            resources.stderr_tasks,
+            resources.stdout_task,
             config.ctx.cancel_grace,
         )
         raise
 
-    return processes, stderr_tasks, stdout_task, started_at, relay_diagnostics_by_stage
+    return (
+        resources.processes,
+        resources.stderr_tasks,
+        resources.stdout_task,
+        resources.started_at,
+        resources.relay_diagnostics_by_stage,
+    )
 
 
 async def _terminate_process_via_wait_task(

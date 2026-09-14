@@ -67,7 +67,20 @@ def _get_stage_stream_fds(
     )
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
+def _create_stage_line_observer(
+    observation: _StageObservation,
+    pid: int | None,
+    stream_name: typ.Literal["stderr", "stdout"],
+) -> cabc.Callable[[str], None] | None:
+    """Create a line observer when stage hooks are configured."""
+    if not observation.hooks.observe_hooks:
+        return None
 
+    def emit_line(line: str) -> None:
+        """Emit one captured stream line."""
+        observation.emit(stream_name, _EventDetails(pid=pid, line=line))
+
+    return emit_line
 def _create_stage_capture_tasks(
     process: asyncio.subprocess.Process,
     config: _PipelineRunConfig,
@@ -83,15 +96,11 @@ def _create_stage_capture_tasks(
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
-    stderr_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
-
-        def stderr_on_line(line: str) -> None:
-            """Emit a stderr observe event for each captured line."""
-            observation.emit(
-                "stderr",
-                _EventDetails(pid=process.pid, line=line),
-            )
+    stderr_on_line = _create_stage_line_observer(
+        observation,
+        process.pid,
+        "stderr",
+    )
 
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
     if config.stderr_capture_or_echo:
@@ -112,15 +121,11 @@ def _create_stage_capture_tasks(
     if not is_last_stage:
         return stderr_task, stdout_task, (stderr_relay_diagnostics, None)
 
-    stdout_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
-
-        def stdout_on_line(line: str) -> None:
-            """Emit a stdout observe event for each captured line."""
-            observation.emit(
-                "stdout",
-                _EventDetails(pid=process.pid, line=line),
-            )
+    stdout_on_line = _create_stage_line_observer(
+        observation,
+        process.pid,
+        "stdout",
+    )
 
     stdout_relay_diagnostics: _RelayDiagnostics | None = None
     if config.stdout_capture_or_echo:
