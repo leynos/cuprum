@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from cuprum import ECHO, sh
+from cuprum import ECHO, _pipeline_stage_streams, _process_lifecycle, sh
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
 from cuprum.sh import RunOutputOptions
 
@@ -90,3 +90,58 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
         "a cooperative stage must not need escalation to kill"
     )
     assert spawned[0].wait_calls >= 1, "the terminated stage must be awaited"
+
+
+def test_spawn_pipeline_processes_records_times_before_stage_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each stage samples both clocks before awaiting its subprocess spawn."""
+    events: list[str] = []
+
+    def monotonic_clock() -> float:
+        """Record the monotonic stage-start sample."""
+        events.append("monotonic")
+        return 10.0
+
+    def wall_clock() -> float:
+        """Record the wall-clock stage-start sample."""
+        events.append("wall")
+        return 20.0
+
+    async def fake_create_subprocess_exec(
+        *_: object,
+        **__: object,
+    ) -> _StubSpawnProcess:
+        """Assert that both start-time samples precede stage spawning."""
+        events.append("spawn")
+        assert events == ["monotonic", "wall", "spawn"]
+        await asyncio.sleep(0)
+        return _StubSpawnProcess(pid=12345)
+
+    def fake_create_stage_capture_tasks(
+        *_: object,
+        **__: object,
+    ) -> tuple[None, None]:
+        """Avoid stream-task setup in this spawn-boundary test."""
+        return None, None
+
+    config = _prepare_pipeline_config(
+        output=RunOutputOptions(capture=False, echo=False),
+        timeout=None,
+        context=None,
+    )
+    monkeypatch.setattr(_process_lifecycle.time, "perf_counter", monotonic_clock)
+    monkeypatch.setattr(sh.time, "time", wall_clock)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        _pipeline_stage_streams,
+        "_create_stage_capture_tasks",
+        fake_create_stage_capture_tasks,
+    )
+
+    *_, started_at, wall_clock_started_at = asyncio.run(
+        _spawn_pipeline_processes((sh.make(ECHO)("quiet"),), config),
+    )
+
+    assert started_at == [10.0]
+    assert wall_clock_started_at == [20.0]

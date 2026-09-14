@@ -141,8 +141,8 @@ class CommandResult:
     duration:
         Monotonic process duration in seconds.
     max_rss_bytes:
-        Maximum-resident-set-size delta in bytes. ``None`` on Windows and
-        platforms that cannot provide child resource accounting.
+        Unavailable because child-resource RSS is a cumulative high-water mark
+        that cannot be attributed safely to one command.
     user_cpu_seconds:
         User CPU-time delta in seconds. ``None`` on Windows and platforms that
         cannot provide child resource accounting.
@@ -158,8 +158,8 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
-    started_at: float
-    duration: float
+    started_at: float = 0.0
+    duration: float = 0.0
     max_rss_bytes: int | None = None
     user_cpu_seconds: float | None = None
     system_cpu_seconds: float | None = None

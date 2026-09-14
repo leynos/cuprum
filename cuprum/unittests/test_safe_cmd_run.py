@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, sh
+from cuprum import ECHO, _subprocess_execution, sh
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -91,10 +91,10 @@ def test_captures_output_and_exit_code(
 
 
 @_posix_only
-def test_records_child_resource_usage(
+def test_records_child_cpu_usage_without_attributable_rss(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """An isolated child allocation populates POSIX resource accounting."""
+    """An isolated child has CPU usage but no attributable RSS high-water mark."""
     command = python_builder(
         "-c",
         "payload = bytearray(512 * 1024 * 1024); print(len(payload))",
@@ -102,12 +102,59 @@ def test_records_child_resource_usage(
 
     result = command.run_sync()
 
-    assert result.max_rss_bytes is not None
-    assert result.max_rss_bytes > 0
+    assert result.max_rss_bytes is None
     assert result.user_cpu_seconds is not None
     assert result.user_cpu_seconds >= 0
     assert result.system_cpu_seconds is not None
     assert result.system_cpu_seconds >= 0
+
+
+def test_records_start_times_before_subprocess_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct execution samples both clocks before awaiting subprocess spawn."""
+    events: list[str] = []
+
+    def monotonic_clock() -> float:
+        """Record the monotonic start-time sample."""
+        events.append("monotonic")
+        return 10.0
+
+    def wall_clock() -> float:
+        """Record the wall-clock start-time sample."""
+        events.append("wall")
+        return 20.0
+
+    async def fake_spawn(_: object) -> object:
+        """Assert that both start-time samples precede spawning."""
+        events.append("spawn")
+        assert events == ["monotonic", "wall", "spawn"]
+        await asyncio.sleep(0)
+        return type("Process", (), {"pid": 123})()
+
+    async def fake_run_without_streams(
+        _: object,
+        __: object,
+    ) -> tuple[int, float]:
+        """Return a deterministic successful completion."""
+        await asyncio.sleep(0)
+        return 0, 13.0
+
+    monkeypatch.setattr(_subprocess_execution.time, "perf_counter", monotonic_clock)
+    monkeypatch.setattr(sh.time, "time", wall_clock)
+    monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
+    monkeypatch.setattr(
+        _subprocess_execution,
+        "_run_subprocess_without_streams",
+        fake_run_without_streams,
+    )
+
+    result = asyncio.run(
+        sh.make(ECHO)("quiet").run(output=sh.RunOutputOptions(capture=False)),
+    )
+
+    assert result.started_at == pytest.approx(20.0)
+    assert result.duration == pytest.approx(3.0)
 
 
 def test_applies_env_overrides(

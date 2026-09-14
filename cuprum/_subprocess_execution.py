@@ -326,9 +326,9 @@ async def _run_subprocess_without_streams(
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     rusage_before = capture_child_rusage()
-    process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
-    wall_clock_started_at = time.time()
+    wall_clock_started_at = execution.observation.wall_clock()
+    process = await _spawn_subprocess(execution)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 
