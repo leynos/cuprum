@@ -9,7 +9,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_native_cleanup
+from cuprum import _pipeline_native_pump_runtime, _pipeline_stream_native_cleanup
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.pump_span_events import (
     NATIVE_PUMP_BUFFER_SIZE,
@@ -188,7 +188,7 @@ def test_rejected_executor_submission_ends_failed_span(
         """Reject executor acceptance after the hop span opens."""
         with (
             mock.patch.object(
-                _pipeline_stream_native_cleanup._NATIVE_PUMP_EXECUTOR,
+                _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME.executor,
                 "submit",
                 side_effect=RuntimeError("executor rejected the worker"),
             ),

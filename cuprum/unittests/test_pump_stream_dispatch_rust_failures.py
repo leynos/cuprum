@@ -11,8 +11,8 @@ from unittest import mock
 import pytest
 
 from cuprum import (
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
-    _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
 from cuprum.unittests._pump_stream_dispatch_support import (
@@ -126,8 +126,8 @@ async def _run_with_native_load_failure(
 ) -> None:
     """Run an awaitable with native-load failures published by the executor."""
     with mock.patch.object(
-        _pipeline_stream_native_cleanup,
-        "_NATIVE_PUMP_EXECUTOR",
+        _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME,
+        "executor",
         _NativeLoadFailureExecutor(),
     ):
         await awaitable

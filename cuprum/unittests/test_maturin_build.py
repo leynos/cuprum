@@ -145,6 +145,9 @@ def test_maturin_wheel_build_snapshot(
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
     )
+    assert not any(
+        entry.startswith("cuprum/unittests/") for entry in snapshot_payload["entries"]
+    ), "distribution wheels must exclude the in-package unittest suite"
     # The generator version is pinned by the assertion above, so the snapshot
     # compares the redacted placeholder instead of the raw version string and
     # stays stable across maturin bumps.

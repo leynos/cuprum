@@ -18,6 +18,7 @@ from cuprum import (
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
+from cuprum._pipeline_native_pump_runtime import _NativePumpRuntime
 from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
@@ -63,13 +64,15 @@ class _InlineNativePumpExecutor:
 
     def submit(
         self,
-        function: cabc.Callable[..., int],
-        *args: object,
+        function: cabc.Callable[[int, int], int],
+        /,
+        reader_fd: int,
+        writer_fd: int,
     ) -> cf.Future[int]:
         """Run the worker now and return its already-settled future."""
         future: cf.Future[int] = cf.Future()
         try:
-            future.set_result(function(*args))
+            future.set_result(function(reader_fd, writer_fd))
         except BaseException as error:  # ruff: ignore[blind-except] - the double publishes every worker failure through its Future
             future.set_exception(error)
         return future
@@ -78,7 +81,13 @@ class _InlineNativePumpExecutor:
 class _RejectingNativePumpExecutor:
     """Refuse every native-pump work submission."""
 
-    def submit(self, _function: object, *_args: object) -> typ.NoReturn:
+    def submit(
+        self,
+        _function: cabc.Callable[[int, int], int],
+        /,
+        _reader_fd: int,
+        _writer_fd: int,
+    ) -> typ.NoReturn:
         """Raise the stable rejection used by the hand-off test."""
         raise _ExecutorRejectedError
 
@@ -229,12 +238,11 @@ def test_executor_rejection_emits_no_submitted_outcome(
     ) -> None:
         """Reject the executor call before it accepts the duplicate."""
         await asyncio.sleep(0)
-        with mock.patch.object(
-            _pipeline_stream_native_cleanup,
-            "_NATIVE_PUMP_EXECUTOR",
-            _RejectingNativePumpExecutor(),
-        ):
-            _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(state)
+        runtime = _NativePumpRuntime(_RejectingNativePumpExecutor(), set())
+        _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(
+            state,
+            runtime=runtime,
+        )
 
     with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
         with pytest.raises(OSError, match="executor is unavailable"):
@@ -295,16 +303,18 @@ def test_accepted_submission_emits_submitted_after_the_worker_accepts(
         state: _pipeline_stream_native_cleanup._RustPumpState,
     ) -> bool:
         """Run the submitted callable inline while preserving its copied context."""
-        with mock.patch.object(
-            _pipeline_stream_native_cleanup,
-            "_NATIVE_PUMP_EXECUTOR",
-            _InlineNativePumpExecutor(),
-        ):
-            future, cleanup_complete = (
-                _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(state)
+        runtime = _NativePumpRuntime(_InlineNativePumpExecutor(), set())
+        future, cleanup_complete = (
+            _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(
+                state,
+                runtime=runtime,
             )
-            await asyncio.wrap_future(future)
-            await cleanup_complete
+        )
+        await asyncio.wrap_future(future)
+        await cleanup_complete
+        assert not runtime.retained_futures, (
+            "the injected runtime must release its settled native worker"
+        )
         return True
 
     import cuprum._streams_rs as streams_rs

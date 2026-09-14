@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 from cuprum import (
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
@@ -274,8 +275,8 @@ async def _cancel_before_native_worker_settles(
     ):
         del read_write_fd, write_read_fd
         with mock.patch.object(
-            _pipeline_stream_native_cleanup,
-            "_NATIVE_PUMP_EXECUTOR",
+            _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME,
+            "executor",
             native_pump,
         ):
             task = asyncio.create_task(

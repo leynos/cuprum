@@ -16,6 +16,8 @@ from cuprum import (
     ExecutionContext,
     ScopeConfig,
     TimeoutExpired,
+    _pipeline_collect,
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
@@ -90,8 +92,12 @@ def test_sync_cancellation_returns_before_late_native_worker_settles(
         """Model Rust borrowing the reader and owning the submitted writer."""
         lifecycle.native_fds.append((reader_fd, writer_fd))
         lifecycle.worker_started.set()
-        if not lifecycle.release_worker.wait(timeout=5.0):
-            lifecycle.release_worker.wait()
+        deadline = time.monotonic() + 5.0
+        if not lifecycle.release_worker.wait(
+            timeout=max(0.0, deadline - time.monotonic())
+        ):
+            msg = "late native worker was not released before its deadline"
+            raise TimeoutError(msg)
         os.close(writer_fd)
         return 0
 
@@ -173,7 +179,12 @@ def _install_sync_pipeline_worker(
         """Hold the native duplicates until the test releases Rust ownership."""
         lifecycle.native_fds.append((reader_fd, writer_fd))
         lifecycle.worker_started.set()
-        lifecycle.release_worker.wait()
+        deadline = time.monotonic() + 5.0
+        if not lifecycle.release_worker.wait(
+            timeout=max(0.0, deadline - time.monotonic())
+        ):
+            msg = "synchronous pipeline worker was not released before its deadline"
+            raise TimeoutError(msg)
         os.close(writer_fd)
         lifecycle.worker_finished.set()
         return 0
@@ -287,6 +298,17 @@ def _assert_late_pipeline_completion(
     )
 
 
+def _assert_held_native_descriptors_are_valid(
+    lifecycle: _ExecutorLifecycle,
+) -> None:
+    """Confirm that the blocked worker still owns usable native duplicates."""
+    assert len(lifecycle.native_fds) == 1, (
+        "the worker must retain both native descriptor duplicates"
+    )
+    for native_fd in lifecycle.native_fds[0]:
+        os.fstat(native_fd)
+
+
 def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -298,6 +320,8 @@ def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
         monkeypatch,
         lifecycle,
     )
+    create_pipe_tasks = mock.Mock(wraps=_pipeline_collect._create_pipe_tasks)
+    monkeypatch.setattr(_pipeline_collect, "_create_pipe_tasks", create_pipe_tasks)
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
     _enable_rust_raw_fd_path(sync_run)
     caller = threading.Thread(
@@ -314,12 +338,14 @@ def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
         assert sync_run.rust_attempts == [None], (
             "the pipeline must take the Rust raw-FD path"
         )
-        assert len(lifecycle.native_fds) == 1, (
-            "the worker must retain both native descriptor duplicates"
+        assert create_pipe_tasks.call_args is not None, (
+            "the pipeline must create its inter-stage pump tasks"
         )
-        native_reader_fd, native_writer_fd = lifecycle.native_fds[0]
-        os.fstat(native_reader_fd)
-        os.fstat(native_writer_fd)
+        assert (
+            create_pipe_tasks.call_args.kwargs["native_pump_cleanup_grace"]
+            == _SYNC_PIPELINE_CLEANUP_GRACE_S
+        ), "the pipeline must pass its configured native cleanup grace to each hop"
+        _assert_held_native_descriptors_are_valid(lifecycle)
         assert not lifecycle.restored.is_set(), (
             "descriptor restoration must remain deferred while Rust owns duplicates"
         )
@@ -343,7 +369,7 @@ def _install_blocking_pump(
 def _wait_for_deferred_cleanup() -> bool:
     """Wait for the completion callback to discard its retained worker future."""
     deadline = time.monotonic() + 5.0
-    while _pipeline_stream_native_cleanup._NATIVE_PUMP_FUTURES:
+    while _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME.retained_futures:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.01)

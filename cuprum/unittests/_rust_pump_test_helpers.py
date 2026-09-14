@@ -16,6 +16,7 @@ import dataclasses as dc
 import os
 import sys
 import threading
+import time
 import types
 import typing as typ
 
@@ -95,8 +96,10 @@ class HeldNativePump:
         """Hold native descriptor ownership until ``release`` is set."""
         del reader_fd, writer_fd
         self.started.set()
-        if not self.release.wait(timeout=5.0):
-            self.release.wait()
+        deadline = time.monotonic() + 5.0
+        if not self.release.wait(timeout=max(0.0, deadline - time.monotonic())):
+            msg = "held native worker was not released before its deadline"
+            raise TimeoutError(msg)
         self.finished.set()
         return 0
 
@@ -440,7 +443,10 @@ def run_failing_pump_on_a_cancelled_hop(monkeypatch: pytest.MonkeyPatch) -> None
         """Fail after the cancellation has been delivered."""
         del reader_fd, writer_fd
         worker_started.set()
-        release.wait(timeout=5.0)
+        deadline = time.monotonic() + 5.0
+        if not release.wait(timeout=max(0.0, deadline - time.monotonic())):
+            msg = "cancelled native worker was not released before its deadline"
+            raise TimeoutError(msg)
         msg = "the pump failed while the hop was being cancelled"
         raise OSError(msg)
 

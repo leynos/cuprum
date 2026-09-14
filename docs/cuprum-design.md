@@ -2721,22 +2721,22 @@ sequenceDiagram
         Executor->>Executor: Rust closes submitted writer duplicate
         Executor-->>Callback: Future completion
         Callback->>Callback: _close_rust_reader_fd()
-        Callback->>Transport: _restore_rust_pump_state()
+        Callback->>Transport: blocking_mode_guard.restore()
         Callback->>Callback: Close callback-owned state descriptors
-        Callback->>Transport: _resume_reader_transport()
+        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
         Callback-->>Pump: cleanup_complete
         Pump-->>Caller: Original CancelledError
     else Grace expires first
         Pump-->>Caller: Original CancelledError
-        Pump->>Pump: _log_native_pump_cleanup_grace_expired()
+        Pump->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_grace_expired")
         Note over Executor,Callback: Duplicated descriptors remain quarantined
         Executor->>Executor: Rust closes submitted writer duplicate
         Executor-->>Callback: Late future completion
         Callback->>Callback: _close_rust_reader_fd()
-        Callback->>Transport: _restore_rust_pump_state()
+        Callback->>Transport: blocking_mode_guard.restore()
         Callback->>Callback: Close callback-owned state descriptors
-        Callback->>Transport: _resume_reader_transport()
-        Callback->>Pump: _log_native_pump_cleanup_deferred()
+        Callback->>Transport: loop.call_soon_threadsafe(_resume_reader_after_rust_pump_cleanup)
+        Callback->>Pump: _log_native_pump_cleanup(_LOGGER, "cleanup_deferred")
     end
 ```
 

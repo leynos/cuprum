@@ -15,6 +15,7 @@ from cuprum import (
     ECHO,
     ExecutionContext,
     ScopeConfig,
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     scoped,
@@ -172,7 +173,7 @@ async def _wait_for_deferred_native_pump_cleanup() -> None:
     """Wait for the deferred worker callback to complete descriptor cleanup."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 5.0
-    while _pipeline_stream_native_cleanup._NATIVE_PUMP_FUTURES:
+    while _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME.retained_futures:
         if loop.time() >= deadline:
             pytest.fail("the deferred native-pump cleanup callback did not finish")
         await asyncio.sleep(0.01)

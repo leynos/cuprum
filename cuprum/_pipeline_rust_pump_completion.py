@@ -12,16 +12,11 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
-from cuprum._pipeline_stream_fds import _suppressed_teardown_failure
 from cuprum.pump_span_events import PumpHopOutcome
-from cuprum.pump_span_observation import _close_pump_hop_spans
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
     import logging
-
-    from cuprum.pump_span_observation import _PumpHopSpans
 
 
 class _CancellationAwarePumpState(typ.Protocol):
@@ -50,13 +45,12 @@ class _CompletedPumpFuture(typ.Protocol):
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _RustPumpCompletion[StateT: _CancellationAwarePumpState]:
-    """Resources whose lifetime ends when the native worker settles."""
+class _RustPumpCompletionHooks:
+    """Terminal callbacks owned by the native-pump lifecycle boundary."""
 
-    cleanup_complete: asyncio.Future[None]
-    pump_hop_spans: _PumpHopSpans
-    state: StateT
-    restore_state: cabc.Callable[[StateT], None]
+    close_spans: cabc.Callable[[PumpHopOutcome, int | None], None]
+    restore_state: cabc.Callable[[], None]
+    signal_completion: cabc.Callable[[], None]
 
 
 def _classify_pump_outcome(
@@ -81,34 +75,24 @@ def _classify_pump_outcome(
 def _complete_rust_pump[StateT: _CancellationAwarePumpState](
     completed: _CompletedPumpFuture,
     *,
-    completion: _RustPumpCompletion[StateT],
+    state: StateT,
+    hooks: _RustPumpCompletionHooks,
     logger: logging.Logger,
 ) -> None:
-    """Close spans and restore asyncio state after the worker settles."""
+    """Run shared terminal handling through caller-owned cleanup hooks."""
     outcome: PumpHopOutcome = PumpHopOutcome.CANCELLED
     total_bytes: int | None = None
     try:
-        outcome, total_bytes = _classify_pump_outcome(completed, completion.state)
+        outcome, total_bytes = _classify_pump_outcome(completed, state)
         if outcome is PumpHopOutcome.FAILED_AFTER_CANCEL:
             error = completed.exception()
             if error is not None:
                 _pump_obs._log_native_pump_failed_after_cancel(logger, error)
     finally:
         try:
-            _close_pump_hop_spans(
-                completion.pump_hop_spans,
-                outcome=outcome,
-                total_bytes=total_bytes,
-            )
+            hooks.close_spans(outcome, total_bytes)
         finally:
             try:
-                with _suppressed_teardown_failure(
-                    logger,
-                    "restore_state",
-                    OSError,
-                    ValueError,
-                ):
-                    completion.restore_state(completion.state)
+                hooks.restore_state()
             finally:
-                if not completion.cleanup_complete.done():
-                    completion.cleanup_complete.set_result(None)
+                hooks.signal_completion()

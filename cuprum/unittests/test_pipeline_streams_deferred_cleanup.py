@@ -6,22 +6,24 @@ import asyncio
 import logging
 import os
 import threading
+import time
 import typing as typ
 from unittest import mock
 
 import pytest
 
 from cuprum import (
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
 from cuprum.pump_observation import observe_pump
-from cuprum.unittests.test_pipeline_streams_cancellation import (
-    _install_fake_pump,
-    _MidTransferContext,
-    _RecordingGuard,
+from cuprum.unittests._rust_pump_test_helpers import (
+    RecordingGuard,
+    install_fake_pump,
 )
+from cuprum.unittests.test_pipeline_streams_cancellation import _MidTransferContext
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -50,7 +52,7 @@ class _FailingDeferredGuard:
 async def _cancel_until_cleanup_grace_expires(
     context: _MidTransferContext,
     *,
-    guard: _RecordingGuard | _FailingDeferredGuard,
+    guard: RecordingGuard | _FailingDeferredGuard,
 ) -> tuple[_pipeline_stream_native_cleanup._RustPumpState, asyncio.Task[None]]:
     """Return caller cancellation before releasing a held native worker."""
     reader_fd, writer_fd = os.pipe()
@@ -89,7 +91,7 @@ async def _wait_for_native_pump_cleanup() -> None:
     """Wait until the worker callback has discarded its retained future."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 5.0
-    while _pipeline_stream_native_cleanup._NATIVE_PUMP_FUTURES:
+    while _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME.retained_futures:
         if loop.time() >= deadline:
             pytest.fail("the deferred native-pump completion callback did not finish")
         await asyncio.sleep(0.01)
@@ -105,8 +107,10 @@ def _blocking_pump(
         """Hold native descriptors until the test explicitly releases them."""
         native_fds.append((reader_fd, writer_fd))
         context.worker_started.set()
-        if not context.release.wait(timeout=5.0):
-            context.release.wait()
+        deadline = time.monotonic() + 5.0
+        if not context.release.wait(timeout=max(0.0, deadline - time.monotonic())):
+            msg = "deferred native worker was not released before its deadline"
+            raise TimeoutError(msg)
         os.close(writer_fd)
         context.worker_finished.set()
         return 0
@@ -133,7 +137,7 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
     close_state_fd = mock.Mock(
         wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
     )
-    _install_fake_pump(monkeypatch, _blocking_pump(context, native_fds))
+    install_fake_pump(monkeypatch, _blocking_pump(context, native_fds))
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup,
         "_close_rust_reader_fd",
@@ -147,7 +151,7 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
 
     async def exercise() -> None:
         """Assert the bounded result and deferred descriptor ownership."""
-        guard = _RecordingGuard(events)
+        guard = RecordingGuard(events)
         state, _task = await _cancel_until_cleanup_grace_expires(
             context,
             guard=guard,
@@ -200,7 +204,7 @@ def test_deferred_callback_suppresses_descriptor_restore_failure(
         worker_finished=threading.Event(),
         release=threading.Event(),
     )
-    _install_fake_pump(monkeypatch, _blocking_pump(context, []))
+    install_fake_pump(monkeypatch, _blocking_pump(context, []))
 
     async def exercise() -> None:
         """Run the deferred cleanup through a restore failure."""

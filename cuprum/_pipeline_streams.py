@@ -21,6 +21,12 @@ import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
+from cuprum._pipeline_native_pump_types import (
+    _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
+    _RustPumpBlockingModeError,
+    _RustPumpHandoff,
+    _RustPumpStateDuplicationError,
+)
 from cuprum._pipeline_pipe_tasks import (
     _create_pipe_tasks as _create_pipe_tasks_with_context,
 )
@@ -31,12 +37,8 @@ from cuprum._pipeline_stream_fds import (
     _suppressed_teardown_failure,
 )
 from cuprum._pipeline_stream_native_cleanup import (
-    _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
     _create_rust_pump_state,
     _run_rust_pump_with_blocking_fds,
-    _RustPumpBlockingModeError,
-    _RustPumpHandoff,
-    _RustPumpStateDuplicationError,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome

@@ -18,8 +18,8 @@ from unittest import mock
 import pytest
 
 from cuprum import (
+    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
-    _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
 from cuprum._testing import (
@@ -233,8 +233,8 @@ async def _run_with_inline_executor_returning(
             return future
 
     with mock.patch.object(
-        _pipeline_stream_native_cleanup,
-        "_NATIVE_PUMP_EXECUTOR",
+        _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME,
+        "executor",
         _InlineExecutor(),
     ):
         return await awaitable

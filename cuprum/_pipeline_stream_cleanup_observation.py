@@ -175,7 +175,9 @@ def _log_native_pump_failed_after_cancel(
 class _DeferredNativePumpCleanupState(typ.Protocol):
     """State that records whether callback-owned cleanup was deferred."""
 
-    was_deferred: bool
+    def defer_cleanup(self) -> bool:
+        """Atomically mark deferred cleanup unless worker completion won."""
+        raise NotImplementedError
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -192,15 +194,16 @@ def _defer_native_pump_cleanup(
     *,
     wait: _NativePumpCleanupWait,
     started_at: float,
-) -> None:
+) -> bool:
     """Mark callback-owned cleanup deferred and report its caller-bound expiry."""
-    if wait.state is not None:
-        wait.state.was_deferred = True
+    if wait.state is not None and not wait.state.defer_cleanup():
+        return False
     _log_native_pump_cleanup(
         wait.logger,
         "cleanup_grace_expired",
         max(0.0, wait.monotonic_clock() - started_at),
     )
+    return True
 
 
 async def _await_native_pump_cleanup(
