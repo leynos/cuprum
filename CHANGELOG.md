@@ -24,6 +24,16 @@
 
 ### Added
 
+- **`ProgramCatalogue.from_programs()`:** Build the single-project catalogue
+  that a standalone script needs from its programs alone — for example
+  `ProgramCatalogue.from_programs("git", "cargo")` — instead of spelling out
+  `ProjectSettings` and the `ProgramCatalogue(projects=(...))` wrapper.
+  Programs may be `Program` values or strings, the default project name joins
+  their base names with `-`, and `name=` overrides it. An empty call raises
+  `ValueError`, while a repeated program still raises `DuplicateProgramError`.
+  `ProjectSettings.documentation_locations` and `noise_rules` now default to
+  empty tuples, so a project that needs neither can omit them
+  ([#396](https://github.com/leynos/cuprum/issues/396)).
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,
   the encoded truncation marker, and its line ending. Captured output remains

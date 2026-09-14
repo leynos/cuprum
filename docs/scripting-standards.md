@@ -53,13 +53,11 @@ as a default.
 from __future__ import annotations
 
 from pathlib import Path
-from cuprum import ExecutionContext, Program, scoped
-from _cuprum_helpers import build_catalogue, build_commands
+from cuprum import ExecutionContext, Program, ProgramCatalogue, scoped, sh
 
 TOFU = Program("tofu")
-CATALOGUE = build_catalogue(TOFU)
-COMMANDS = build_commands(catalogue=CATALOGUE, programs=(TOFU,))
-tofu = COMMANDS[TOFU]
+CATALOGUE = ProgramCatalogue.from_programs(TOFU)
+tofu = sh.make(TOFU, catalogue=CATALOGUE)
 
 
 def main() -> int:
@@ -98,13 +96,11 @@ from typing import Annotated
 
 import cyclopts
 from cyclopts import App, Parameter
-from cuprum import ExecutionContext, Program, scoped
-from _cuprum_helpers import build_catalogue, build_commands
+from cuprum import ExecutionContext, Program, ProgramCatalogue, scoped, sh
 
 TOFU = Program("tofu")
-CATALOGUE = build_catalogue(TOFU)
-COMMANDS = build_commands(catalogue=CATALOGUE, programs=(TOFU,))
-tofu = COMMANDS[TOFU]
+CATALOGUE = ProgramCatalogue.from_programs(TOFU)
+tofu = sh.make(TOFU, catalogue=CATALOGUE)
 
 # Map INPUT_<PARAM> → function parameter without additional glue
 app = App(config=cyclopts.config.Env("INPUT_", command=False))
@@ -201,55 +197,31 @@ allowlisted `Program` values, run via `run_sync()`/`run()`, and inspect
 - Migration note: this is a breaking behaviour change from Plumbum, where
   commands were implicitly available.
 
-### Shared helper pattern
-
-Prefer a small helper module so script examples focus on command usage instead
-of repeating catalogue boilerplate.
-
-```python
-# scripts/_cuprum_helpers.py
-from __future__ import annotations
-
-from collections.abc import Iterable
-
-from cuprum import Program, ProgramCatalogue, ProjectSettings, SafeCmd, sh
-
-
-def build_catalogue(*programs: Program) -> ProgramCatalogue:
-    return ProgramCatalogue(
-        projects=(
-            ProjectSettings(
-                name="repo-scripts",
-                programs=tuple(programs),
-                documentation_locations=("docs/scripting-standards.md",),
-                noise_rules=(),
-            ),
-        )
-    )
-
-
-def build_commands(
-    *,
-    catalogue: ProgramCatalogue,
-    programs: Iterable[Program],
-) -> dict[Program, SafeCmd]:
-    return {program: sh.make(program, catalogue=catalogue) for program in programs}
-```
-
 ### Program declarations and command builders
 
+`ProgramCatalogue.from_programs()` builds the single-project catalogue that
+most scripts need, so a script declares its programs once, builds each command
+from the catalogue, and needs no private helper module to do either:
+
 ```python
-from cuprum import Program
-from _cuprum_helpers import build_catalogue, build_commands
+from cuprum import Program, ProgramCatalogue, sh
 
 GIT = Program("git")
 GREP = Program("grep")
 
-CATALOGUE = build_catalogue(GIT, GREP)
-COMMANDS = build_commands(catalogue=CATALOGUE, programs=(GIT, GREP))
-git = COMMANDS[GIT]
-grep = COMMANDS[GREP]
+CATALOGUE = ProgramCatalogue.from_programs(GIT, GREP)
+git = sh.make(GIT, catalogue=CATALOGUE)
+grep = sh.make(GREP, catalogue=CATALOGUE)
 ```
+
+The default project name joins the programs' base names with `-`, giving
+`git-grep` here; pass `name=` to choose your own, and
+`documentation_locations=` or `noise_rules=` to attach project metadata. Calling
+`from_programs()` with no programs raises `ValueError`, and repeating a
+program raises `DuplicateProgramError`. Reach for `ProjectSettings` and
+`ProgramCatalogue(projects=...)` directly only when a script needs more than
+one project, because a multi-project catalogue must state which project owns
+each program.
 
 ### Command execution and failure handling
 
@@ -382,13 +354,18 @@ from typing import Annotated
 
 import cyclopts
 from cyclopts import App, Parameter
-from cuprum import ExecutionContext, Program, scoped
-from _cuprum_helpers import build_catalogue, build_commands
+from cuprum import (
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    scoped,
+    sh,
+)
 
 GIT = Program("git")
-CATALOGUE = build_catalogue(GIT)
-COMMANDS = build_commands(catalogue=CATALOGUE, programs=(GIT,))
-git = COMMANDS[GIT]
+CATALOGUE = ProgramCatalogue.from_programs(GIT)
+git = sh.make(GIT, catalogue=CATALOGUE)
 
 app = App(config=cyclopts.config.Env("INPUT_", command=False))
 
