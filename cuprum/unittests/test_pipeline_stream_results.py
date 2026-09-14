@@ -34,7 +34,8 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import SafeCmd
+    from cuprum.echo_events import EchoEvent
+    from cuprum.sh import PipelineResult, SafeCmd
 
 _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
 
@@ -373,16 +374,23 @@ def test_pipeline_stage_results_keep_stage_order(
 ) -> None:
     """Stage order is preserved while diagnostics stay per stage."""
     rejecting = _Cp1252TextOnlySink()
+    first_stderr = "wörld ś\n"
+    second_stderr = "zażółć\n"
 
-    async def run_case() -> tuple[
-        int, tuple[RelayFallback, ...], tuple[RelayFallback, ...]
-    ]:
+    async def run_case() -> tuple[PipelineResult, list[EchoEvent]]:
         """Run a two-stage pipeline echoing every stderr to one sink."""
-        with observe_echo(lambda _event: None):
-            pipeline = python_builder(
-                "-c", "import sys; sys.stderr.write('wörld ś\n'); print('mid')"
-            ) | python_builder(
-                "-c", "import sys; sys.stderr.write('zażółć\n'); print('done')"
+        events: list[EchoEvent] = []
+        first_source = (
+            f"import sys; sys.stderr.write({first_stderr!r}); "
+            "sys.stderr.flush(); print('mid', flush=True)"
+        )
+        second_source = (
+            f"import sys; sys.stdin.read(); sys.stderr.write({second_stderr!r}); "
+            'sys.stderr.flush(); print("done", flush=True)'
+        )
+        with observe_echo(events.append):
+            pipeline = python_builder("-c", first_source) | python_builder(
+                "-c", second_source
             )
             result = await pipeline.run(
                 output=RunOutputOptions(capture=True, echo=True),
@@ -390,18 +398,31 @@ def test_pipeline_stage_results_keep_stage_order(
                     stderr_sink=typ.cast("typ.IO[str]", rejecting),
                 ),
             )
-        return (
-            len(result.stages),
-            result.stages[0].relay_fallbacks,
-            result.stages[1].relay_fallbacks,
-        )
+        return result, events
 
-    stage_count, first_fallbacks, second_fallbacks = asyncio.run(run_case())
+    result, events = asyncio.run(run_case())
 
-    assert stage_count == 2, "stage order and count must be preserved"
-    assert first_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
-        f"the first stage's stderr failure must be recorded, got {first_fallbacks!r}"
+    assert len(result.stages) == 2, "stage order and count must be preserved"
+    assert result.stages[0].exit_code == 0, "the first stage must succeed"
+    assert result.stages[1].exit_code == 0, "the second stage must succeed"
+    assert result.stages[0].stderr == first_stderr, (
+        f"the first stage must retain its stderr, got {result.stages[0].stderr!r}"
     )
-    assert second_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
-        f"the second stage's stderr failure must be recorded, got {second_fallbacks!r}"
+    assert result.stages[1].stderr == second_stderr, (
+        f"the second stage must retain its stderr, got {result.stages[1].stderr!r}"
+    )
+    assert len(events) == 2, f"each stderr drain must emit once, got {events!r}"
+    assert all(event.stream is EchoStream.STDERR for event in events), (
+        f"only stderr drains must emit echo events, got {events!r}"
+    )
+    assert result.stages[0].relay_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
+        "the first stage's stderr failure must be recorded, "
+        f"got {result.stages[0].relay_fallbacks!r}"
+    )
+    assert result.stages[1].relay_fallbacks == (_EXPECTED_STDERR_FALLBACK,), (
+        "the second stage's stderr failure must be recorded, "
+        f"got {result.stages[1].relay_fallbacks!r}"
+    )
+    assert len(rejecting.attempts) == 2, (
+        f"each stage must make one independent echo attempt, got {rejecting.attempts!r}"
     )
