@@ -186,18 +186,19 @@ def _relay_fallbacks_for_result(
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     rusage_before = capture_child_rusage()
-    process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
+    # The published result timestamp is a separate reading from the monotonic
+    # one above: ``started_at`` is a monotonic reference the line stamps and
+    # the duration are measured against, while this is the wall-clock instant
+    # the result reports to callers. Both are sampled before the spawn await,
+    # so a run's recorded duration includes the time the spawn itself blocked.
+    wall_clock_started_at = execution.observation.wall_clock()
     # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
     # consumers read ``started_at`` off it when stamping each ``LineEvent``.
     # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
     # uptime rather than seconds since this command started.
     execution = dc.replace(execution, started_at=started_at)
-    # The published result timestamp is a separate reading from the monotonic
-    # one above: ``started_at`` is a monotonic reference the line stamps and
-    # the duration are measured against, while this is the wall-clock instant
-    # the result reports to callers.
-    wall_clock_started_at = time.time()
+    process = await _spawn_subprocess(execution)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 

@@ -2,7 +2,8 @@
 
 The POSIX ``resource`` module reports aggregate accounting for all reaped
 children.  This module isolates the optional platform boundary and converts
-``ru_maxrss`` into bytes before callers calculate a bounded delta.
+``ru_maxrss`` into bytes for snapshots, while callers retain only attributable
+CPU deltas.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ class _ChildRusageSnapshot:
 
 @dc.dataclass(frozen=True, slots=True)
 class ChildResourceUsage:
-    """Non-negative child-resource deltas from two snapshots."""
+    """Attributable child-resource deltas from two snapshots."""
 
-    max_rss_bytes: int
+    max_rss_bytes: int | None
     user_cpu_seconds: float
     system_cpu_seconds: float
 
@@ -68,11 +69,13 @@ def child_rusage_delta(
     before: _ChildRusageSnapshot | None,
     after: _ChildRusageSnapshot | None,
 ) -> ChildResourceUsage | None:
-    """Return non-negative child-resource deltas, when both snapshots exist."""
+    """Return CPU deltas without attributing a high-water RSS measurement."""
     if before is None or after is None:
         return None
     return ChildResourceUsage(
-        max_rss_bytes=max(0, after.max_rss_bytes - before.max_rss_bytes),
+        # RUSAGE_CHILDREN.ru_maxrss is a high-water mark over all reaped
+        # children, so subtracting snapshots cannot identify this command.
+        max_rss_bytes=None,
         user_cpu_seconds=max(0.0, after.user_cpu_seconds - before.user_cpu_seconds),
         system_cpu_seconds=max(
             0.0,
