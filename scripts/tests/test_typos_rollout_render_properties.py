@@ -87,7 +87,6 @@ _shared_settings = settings(
     # bound; cold imports make Hypothesis's default deadline non-deterministic.
     deadline=None,
     max_examples=50,
-    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

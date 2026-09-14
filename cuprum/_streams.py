@@ -26,11 +26,8 @@ from cuprum._echo_truncation import (
     _split_echo_segments,
     _validate_bounded_echo_encoding,
 )
-from cuprum._line_splitting import (
-    _emit_completed_lines,
-    _split_complete_lines,
-    _strip_line_ending,
-)
+from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
+from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams_pump import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
@@ -121,9 +118,12 @@ async def _consume_stream(
         return await _consume_stream_without_lines(stream, config, read_size=read_size)
     return await _consume_stream_with_lines(
         stream,
-        config,
-        on_line=on_line,
-        read_size=read_size,
+        _LineConsumption(
+            config=config,
+            on_line=on_line,
+            read_size=read_size,
+            drain=_drain,
+        ),
     )
 
 
@@ -225,45 +225,6 @@ async def _consume_stream_without_lines(
     if stream is None:
         return "" if config.capture_output else None
     return await _drain(stream, config, read_size=read_size)
-
-
-async def _consume_stream_with_lines(
-    stream: asyncio.StreamReader | None,
-    config: _StreamConfig,
-    *,
-    on_line: cabc.Callable[[str], None],
-    read_size: int,
-) -> str | None:
-    """Read from a subprocess stream while emitting decoded output lines."""
-    if stream is None:
-        return "" if config.capture_output else None
-
-    decoder = _incremental_decoder(config)
-    pending_text = ""
-
-    def feed_decoder(chunk: bytes) -> None:
-        """Feed a chunk to the incremental decoder and emit complete lines."""
-        nonlocal pending_text
-        pending_text = _emit_completed_lines(
-            pending_text + decoder.decode(chunk),
-            on_line=on_line,
-        )
-
-    captured = await _drain(
-        stream,
-        config,
-        on_chunk=feed_decoder,
-        read_size=read_size,
-    )
-
-    pending_text = _emit_completed_lines(
-        pending_text + decoder.decode(b"", final=True),
-        on_line=on_line,
-    )
-    if pending_text:
-        on_line(_strip_line_ending(pending_text))
-
-    return captured
 
 
 def _write_chunk(

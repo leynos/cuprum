@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 _LINE_BOUNDARY_CHARACTERS = (
     "\n",
     "\r",
@@ -50,6 +55,18 @@ def _split_complete_lines(
     return [_strip_line_ending(line) for line in lines], remainder
 
 
+def _emit_completed_lines(
+    text: str,
+    *,
+    on_line: cabc.Callable[[str], None],
+) -> str:
+    """Emit complete lines and return the trailing incomplete fragment."""
+    lines, remainder = _split_complete_lines(text, final=False)
+    for line in lines:
+        on_line(line)
+    return remainder
+
+
 def _should_hold_trailing_line(line: str, *, final: bool) -> bool:
     """Return whether a trailing line needs the next decoded chunk."""
     if not _ends_with_line_ending(line):
@@ -71,4 +88,4 @@ def _strip_line_ending(line: str) -> str:
     return line
 
 
-__all__ = ["_split_complete_lines", "_strip_line_ending"]
+__all__ = ["_emit_completed_lines", "_split_complete_lines", "_strip_line_ending"]

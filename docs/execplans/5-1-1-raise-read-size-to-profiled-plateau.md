@@ -5,7 +5,14 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE
+Status: IN PROGRESS
+
+Reopened 2026-09-14 for a maintenance rebase onto `origin/main` at `c7aa2bdf`.
+The 39 replayed commits retained the upstream bounded-echo and timeout-fixture
+improvements alongside this plan's read-size injection, completed-operation
+telemetry, and worker-owned native reader-descriptor handoff. Deterministic
+revalidation passed; force-with-lease publication and the refreshed CodeRabbit
+review remain pending.
 
 Reopened and completed 2026-09-07: Linux AUTO pipeline revalidation exposed
 that the native pump received an asyncio-owned reader descriptor. The
@@ -205,6 +212,17 @@ This task is complete only when:
   citations in `Context and orientation`.
 
 ## Progress
+
+- [x] 2026-09-14 Maintenance rebase: rebased onto `origin/main` at `c7aa2bdf`.
+  Inspected conflicts retained upstream stream-policy, timeout-cleanup, and
+  documentation improvements with the branch's benchmark and native-handoff
+  contracts. No package lockfile conflicted, so no lockfile rebuild was needed.
+  `git range-diff` confirms the substantive replay. Revalidation passed
+  `make check-fmt`, `make test`, `make typecheck`, `make lint`,
+  `make markdownlint`, and `make nixie`; the regenerated Maturin snapshot and a
+  real nonzero-byte native hop span cover the changed module boundaries.
+  Force-with-lease publication and the refreshed CodeRabbit review remain
+  pending.
 
 - [x] 2026-09-07 Native-pump ownership correction: replaced the unsafe raw
   reader-descriptor hand-off with worker-owned duplicates, preserved buffered
@@ -742,6 +760,18 @@ This task is complete only when:
   borrow its reader and consume its writer. Date/Author: 2026-09-07,
   implementation agent. This is a private ownership correction; it adds no
   public configuration or dependency.
+
+- Decision D33: settle queued reader callbacks, then transfer owned buffered
+  bytes exactly once before native raw-FD pumping. Rationale: an asyncio
+  transport can have a callback already queued when it is paused. Settling that
+  callback makes the `StreamReader` buffer authoritative; delivering its bytes
+  to the downstream writer before clearing the buffer gives a completed
+  transfer outcome without asking Rust to replay bytes asyncio already
+  consumed. Rust then receives independent worker descriptors only for the
+  remaining raw stream. This retains native pumping for a live pipe, falls back
+  only when a safe descriptor hand-off cannot be prepared, and preserves the
+  existing downstream-close drain contract. Date/Author: 2026-09-14,
+  implementation agent. No public interface or read-size change.
 
 - Decision D20: disable the Hypothesis deadline for scenario-matrix ordering.
   Rationale: the property validates deterministic ordering across a small

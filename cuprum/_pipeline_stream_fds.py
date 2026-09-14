@@ -242,10 +242,12 @@ def _close_rust_writer_fd(writer_fd: int) -> None:
     with contextlib.suppress(OSError):
         os.close(writer_fd)
 
+
 def _close_native_pump_worker_fd(worker_fd: int) -> None:
     """Close a worker-owned reader descriptor after native pumping settles."""
     with contextlib.suppress(OSError):
         os.close(worker_fd)
+
 
 def _close_native_pump_worker_fds(worker_fds: _NativePumpWorkerFds) -> None:
     """Close both worker descriptors before abandoning native preparation."""
@@ -305,12 +307,14 @@ def _suppressed_teardown_failure(
                 },
             )
 
+
 @dc.dataclass(frozen=True, slots=True)
 class _NativePumpWorkerFds:
     """Worker descriptors prepared for native pipeline pumping."""
 
     reader_fd: int
     writer_fd: int
+
 
 def _open_native_pump_worker_fds(
     *,
@@ -338,6 +342,7 @@ def _open_native_pump_worker_fds(
         reader_fd=worker_reader_fd,
         writer_fd=worker_writer_fd,
     )
+
 
 def _duplicate_native_pump_worker_fds(
     *,

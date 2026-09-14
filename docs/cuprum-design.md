@@ -2646,10 +2646,12 @@ Python's built-in I/O operations.
 
 The Python pipeline retains ownership of the original reader and writer
 descriptors held by the asyncio transports. Before native I/O starts, it pauses
-the reader transport, completes the hand-off of bytes already buffered in the
-`StreamReader`, and creates worker-owned duplicates for both descriptors. The
-buffer is not cleared until its transfer outcome is known. Rust borrows the
-worker reader duplicate without closing it; it consumes the worker writer
+the reader transport and lets callbacks queued before the pause settle. If the
+`StreamReader` has bytes in `_buffer`, the hand-off delivers them once to the
+downstream writer and clears the buffer only after delivery succeeds or
+downstream closure is known. The native worker then handles the remaining raw
+bytes. It receives worker-owned duplicates for both descriptors: Rust borrows
+the worker reader duplicate without closing it; it consumes the worker writer
 duplicate and closes it on every exit path. The Python hand-off owner closes
 the reader duplicate after the worker settles, and closes either duplicate
 itself when preparation or executor submission fails. On Windows the shim
@@ -2683,18 +2685,20 @@ path is testable without a live pump:
 - `_paused_reader` — a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation, so a
   resume can never be skipped. Exactly one resume fires per pause attempt, but
-  not always at block exit. A transport exposing no `pause_reading` needs none.
-  A `pause_reading()` that *raises* gets one corrective `resume_reading()`
-  immediately, at the failure site rather than at block exit, because the
-  transport may have set its paused flag before whatever raised — leaving a
-  reader nobody resumes while the Python fallback reads a descriptor nothing is
-  watching. Having already been corrected, it is not resumed again on exit. It
-  yields the pause outcome, whose `decline_reason` is `None` when the
-  descriptor may be handed to the Rust pump — a failed pause sets
-  `reader_pause_failed`, because asyncio may still be consuming the reader, and
-  the caller falls back to the Python pump rather than racing it. A transport
-  with no `pause_reading` leaves `decline_reason` `None`, since it has no
-  callbacks to suspend. A transport with `pause_reading` but no
+  not always at block exit. The caller settles callbacks queued before the
+  pause and completes the one-time delivery of any bytes in `_buffer` before
+  handing descriptors to the worker. A transport exposing no `pause_reading`
+  needs none. A `pause_reading()` that *raises* gets one corrective
+  `resume_reading()` immediately, at the failure site rather than at block
+  exit, because the transport may have set its paused flag before whatever
+  raised — leaving a reader nobody resumes while the Python fallback reads a
+  descriptor nothing is watching. Having already been corrected, it is not
+  resumed again on exit. It yields the pause outcome, whose `decline_reason` is
+  `None` when the descriptor may be handed to the Rust pump — a failed pause
+  sets `reader_pause_failed`, because asyncio may still be consuming the
+  reader, and the caller falls back to the Python pump rather than racing it. A
+  transport with no `pause_reading` leaves `decline_reason` `None`, since it
+  has no callbacks to suspend. A transport with `pause_reading` but no
   `resume_reading` sets `reader_unresumable` and is never paused: the pause
   hook shows callbacks that would race the pump, yet pausing it could never be
   undone, and the Python fallback reads the same stream and would wait forever

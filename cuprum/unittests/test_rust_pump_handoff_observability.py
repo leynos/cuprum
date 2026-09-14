@@ -1,18 +1,28 @@
-"""Production-path events for Rust worker-descriptor hand-off boundaries."""
+"""Production-path events for Rust writer-resource hand-off boundaries."""
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures as cf
 import contextlib
+import logging
 import os
+import sys
 import typing as typ
 from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
-from cuprum.pump_events import PumpEvent, RustPumpDeclineReason, RustPumpHandoffOutcome
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
+from cuprum._pipeline_native_pump_runtime import _NativePumpRuntime
+from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
+from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
+from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -25,6 +35,22 @@ class _NoopGuard:
         """Restore nothing after a deliberately isolated submission attempt."""
 
 
+class _BlockingSetupError(OSError):
+    """Signal a duplicate that cannot be switched to blocking mode."""
+
+    def __init__(self) -> None:
+        """Initialize the test double's stable diagnostic message."""
+        super().__init__("blocking mode is unavailable")
+
+
+class _DuplicateWriterError(OSError):
+    """Signal a writer descriptor that cannot be duplicated."""
+
+    def __init__(self) -> None:
+        """Initialize the test double's stable diagnostic message."""
+        super().__init__("writer descriptor cannot be duplicated")
+
+
 class _ExecutorRejectedError(OSError):
     """Signal an executor that rejects native pump submission."""
 
@@ -33,9 +59,42 @@ class _ExecutorRejectedError(OSError):
         super().__init__("executor is unavailable")
 
 
+class _InlineNativePumpExecutor:
+    """Submit a native-pump double synchronously with concurrent-Future semantics."""
+
+    def submit(
+        self,
+        function: cabc.Callable[[int, int], int],
+        /,
+        reader_fd: int,
+        writer_fd: int,
+    ) -> cf.Future[int]:
+        """Run the worker now and return its already-settled future."""
+        future: cf.Future[int] = cf.Future()
+        try:
+            future.set_result(function(reader_fd, writer_fd))
+        except BaseException as error:  # ruff: ignore[blind-except] - the double publishes every worker failure through its Future
+            future.set_exception(error)
+        return future
+
+
+class _RejectingNativePumpExecutor:
+    """Refuse every native-pump work submission."""
+
+    def submit(
+        self,
+        _function: cabc.Callable[[int, int], int],
+        /,
+        _reader_fd: int,
+        _writer_fd: int,
+    ) -> typ.NoReturn:
+        """Raise the stable rejection used by the hand-off test."""
+        raise _ExecutorRejectedError
+
+
 @contextlib.contextmanager
 def _pipe_fds() -> cabc.Iterator[tuple[int, int]]:
-    """Yield a pipe pair and close whichever descriptors remain Python-owned."""
+    """Yield a pipe pair and release any descriptor neither worker owns."""
     reader_fd, writer_fd = os.pipe()
     try:
         yield reader_fd, writer_fd
@@ -45,22 +104,18 @@ def _pipe_fds() -> cabc.Iterator[tuple[int, int]]:
                 os.close(fd)
 
 
-def _state(reader_fd: int, writer_fd: int) -> _pipeline_streams._RustPumpState:
-    """Build worker-owned state with no transport callback."""
-    worker_fds = _pipeline_stream_fds._open_native_pump_worker_fds(
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
-    )
-    assert worker_fds is not None, "Linux tests require worker FD preparation"
-    return _pipeline_streams._RustPumpState(
-        reader_fd=worker_fds.reader_fd,
-        writer_fd=worker_fds.writer_fd,
+def _state(
+    reader_fd: int,
+    writer_fd: int,
+) -> _pipeline_stream_native_cleanup._RustPumpState:
+    """Build state with no transport callback outside this hand-off seam."""
+    return _pipeline_stream_native_cleanup._RustPumpState(
+        reader_fd=os.dup(reader_fd),
+        writer_fd=os.dup(writer_fd),
         blocking_mode_guard=typ.cast(
-            "_pipeline_streams._BlockingModeGuard", _NoopGuard()
+            "_pipeline_stream_fds._BlockingModeGuard", _NoopGuard()
         ),
         resume_reader=None,
-        close_reader_fd=True,
-        close_writer_fd=True,
     )
 
 
@@ -73,36 +128,103 @@ def _handoff_outcomes(events: list[PumpEvent]) -> list[RustPumpHandoffOutcome]:
     ]
 
 
-def test_blocking_setup_failure_reports_a_decline(
+def test_blocking_setup_failure_emits_its_bounded_handoff_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Worker blocking failure declines before the Rust ownership boundary."""
+    """A pre-handoff blocking refusal records its bounded failure outcome."""
     events: list[PumpEvent] = []
 
-    def reject_worker_blocking_mode(**_kwargs: object) -> typ.NoReturn:
-        """Reject preparation before any worker descriptor reaches Rust."""
-        msg = "blocking mode is unavailable"
-        raise OSError(msg)
+    def reject_duplicate_blocking_mode(**_kwargs: object) -> typ.NoReturn:
+        """Reject descriptor state setup before native ownership begins."""
+        raise _BlockingSetupError
 
     monkeypatch.setattr(
         _pipeline_stream_fds._BlockingModeGuard,
         "engage",
-        reject_worker_blocking_mode,
+        reject_duplicate_blocking_mode,
     )
     with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
         result = asyncio.run(
             _pipeline_streams._pump_over_raw_fds(
                 reader=typ.cast("asyncio.StreamReader", object()),
                 writer=None,
-                reader_fd=reader_fd,
-                writer_fd=writer_fd,
+                handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
+                    reader_fd=reader_fd,
+                    writer_fd=writer_fd,
+                    cleanup_grace_s=0.5,
+                ),
             )
         )
+        os.fstat(writer_fd)
 
     assert result is False, "blocking setup failure must decline the Rust pump"
-    assert [(event.phase, event.reason) for event in events] == [
-        ("declined", RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
-    ], "a preparation decline must retain its bounded routing reason"
+    assert _handoff_outcomes(events) == [
+        RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED
+    ], "blocking refusal must retain its documented bounded hand-off outcome"
+
+
+def test_duplicate_writer_failure_emits_one_bounded_outcome(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed duplicate records its outcome without transferring ownership."""
+    caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
+    events: list[PumpEvent] = []
+    collector = RecordingCollector()
+    restore = mock.Mock()
+    resume_reader = mock.Mock()
+
+    def fail_duplicate(writer_fd: int) -> typ.NoReturn:
+        """Fail before a duplicate writer resource exists."""
+        del writer_fd
+        raise _DuplicateWriterError
+
+    with (
+        _pipe_fds() as (reader_fd, writer_fd),
+        observe_pump(events.append),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        state = _state(reader_fd, writer_fd)
+        state.blocking_mode_guard = typ.cast(
+            "_pipeline_stream_fds._BlockingModeGuard",
+            restore,
+        )
+        state.resume_reader = resume_reader
+        monkeypatch.setattr(_pipeline_stream_native_cleanup.os, "dup", fail_duplicate)
+
+        async def start_with_duplicate_failure() -> None:
+            """Start the hand-off from a running event loop."""
+            await asyncio.sleep(0)
+            with pytest.raises(_DuplicateWriterError, match="cannot be duplicated"):
+                _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(state)
+
+        asyncio.run(start_with_duplicate_failure())
+        os.fstat(writer_fd)
+
+    restore.restore.assert_called_once_with()
+    resume_reader.assert_called_once_with()
+    assert _handoff_outcomes(events) == [
+        RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED
+    ], "duplicate failure must emit exactly its matching hand-off outcome"
+    assert collector.counters == [
+        (
+            RUST_PUMP_HANDOFF_TOTAL,
+            1.0,
+            {"outcome": RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED},
+        )
+    ], "duplicate failure must increment one bounded hand-off metric"
+    records = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("cuprum_action") == "rust_pump_handoff_failed"
+    ]
+    assert len(records) == 1, "duplicate failure must produce one hand-off record"
+    assert records[0]["cuprum_phase"] == "duplicate_writer", (
+        "duplicate failure must keep the existing bounded diagnostic phase"
+    )
+    assert records[0]["cuprum_error_type"] == "_DuplicateWriterError", (
+        "duplicate diagnostic must retain the error category"
+    )
 
 
 def test_executor_rejection_emits_no_submitted_outcome(
@@ -111,32 +233,58 @@ def test_executor_rejection_emits_no_submitted_outcome(
     """A rejected submission records only the rejection outcome."""
     events: list[PumpEvent] = []
 
-    async def reject_submission(state: _pipeline_streams._RustPumpState) -> None:
-        """Reject the executor call before it accepts worker-owned resources."""
+    async def reject_submission(
+        state: _pipeline_stream_native_cleanup._RustPumpState,
+    ) -> None:
+        """Reject the executor call before it accepts the duplicate."""
         await asyncio.sleep(0)
-        loop = asyncio.get_running_loop()
-
-        def reject(
-            executor: object,
-            function: object,
-            *args: object,
-        ) -> typ.NoReturn:
-            """Model an executor that cannot accept this work item."""
-            del executor, function, args
-            raise _ExecutorRejectedError
-
-        with mock.patch.object(loop, "run_in_executor", side_effect=reject):
-            _pipeline_streams._submit_rust_pump(loop=loop, state=state)
+        runtime = _NativePumpRuntime(_RejectingNativePumpExecutor(), set())
+        _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(
+            state,
+            runtime=runtime,
+        )
 
     with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
         with pytest.raises(OSError, match="executor is unavailable"):
             asyncio.run(reject_submission(_state(reader_fd, writer_fd)))
-        os.fstat(reader_fd)
         os.fstat(writer_fd)
 
     assert _handoff_outcomes(events) == [
         RustPumpHandoffOutcome.EXECUTOR_SUBMISSION_REJECTED
     ], "rejection must emit no submitted outcome"
+
+
+def test_module_import_failure_restores_and_closes_state_before_emitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing native shim reconciles paused state before its hand-off event."""
+    events: list[PumpEvent] = []
+    restore = mock.Mock()
+    resume_reader = mock.Mock()
+
+    with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
+        state = _state(reader_fd, writer_fd)
+        state.blocking_mode_guard = typ.cast(
+            "_pipeline_stream_fds._BlockingModeGuard",
+            restore,
+        )
+        state.resume_reader = resume_reader
+        monkeypatch.setitem(sys.modules, "cuprum._streams_rs", None)
+
+        with pytest.raises(ModuleNotFoundError):
+            _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(state)
+
+        for state_fd in (state.reader_fd, state.writer_fd):
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(state_fd)
+        os.fstat(reader_fd)
+        os.fstat(writer_fd)
+
+    restore.restore.assert_called_once_with()
+    resume_reader.assert_called_once_with()
+    assert _handoff_outcomes(events) == [RustPumpHandoffOutcome.NATIVE_LOAD_FAILED], (
+        "module import failure must emit its bounded hand-off outcome after cleanup"
+    )
 
 
 def test_accepted_submission_emits_submitted_after_the_worker_accepts(
@@ -145,40 +293,35 @@ def test_accepted_submission_emits_submitted_after_the_worker_accepts(
     """A successfully accepted work item emits one submitted outcome."""
     events: list[PumpEvent] = []
 
-    def close_received_writer(reader_fd: int, writer_fd: int) -> int:
-        """Model Rust consuming its worker writer after executor acceptance."""
+    def close_received_duplicate(reader_fd: int, writer_fd: int) -> int:
+        """Model Rust consuming the duplicate after executor acceptance."""
         del reader_fd
         os.close(writer_fd)
         return 0
 
-    async def accept_submission(state: _pipeline_streams._RustPumpState) -> bool:
-        """Run the submitted callable inline while preserving copied context."""
-        loop = asyncio.get_running_loop()
-
-        def accept(
-            executor: object,
-            function: cabc.Callable[..., object],
-            *args: object,
-        ) -> asyncio.Future[int]:
-            """Return a future after the worker callable accepts its resources."""
-            del executor
-            future = loop.create_future()
-            future.set_result(typ.cast("int", function(*args)))
-            return future
-
-        with mock.patch.object(loop, "run_in_executor", side_effect=accept):
-            future = _pipeline_streams._submit_rust_pump(loop=loop, state=state)
-            assert future is not None, "accepted submission must return its future"
-            await future
-        _pipeline_streams._restore_rust_pump_state(state)
+    async def accept_submission(
+        state: _pipeline_stream_native_cleanup._RustPumpState,
+    ) -> bool:
+        """Run the submitted callable inline while preserving its copied context."""
+        runtime = _NativePumpRuntime(_InlineNativePumpExecutor(), set())
+        future, cleanup_complete = (
+            _pipeline_stream_native_cleanup._start_rust_pump_with_cleanup(
+                state,
+                runtime=runtime,
+            )
+        )
+        await asyncio.wrap_future(future)
+        await cleanup_complete
+        assert not runtime.retained_futures, (
+            "the injected runtime must release its settled native worker"
+        )
         return True
 
     import cuprum._streams_rs as streams_rs
 
-    monkeypatch.setattr(streams_rs, "rust_pump_stream", close_received_writer)
+    monkeypatch.setattr(streams_rs, "rust_pump_stream", close_received_duplicate)
     with _pipe_fds() as (reader_fd, writer_fd), observe_pump(events.append):
         assert asyncio.run(accept_submission(_state(reader_fd, writer_fd))) is True
-        os.fstat(reader_fd)
         os.fstat(writer_fd)
 
     assert _handoff_outcomes(events) == [RustPumpHandoffOutcome.SUBMITTED], (

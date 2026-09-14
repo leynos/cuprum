@@ -14,24 +14,24 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _pipeline_stream_fds, _pipeline_streams
+from cuprum import (
+    _pipeline_stream_fds,
+    _pipeline_stream_native_cleanup,
+    _pipeline_streams,
+)
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
 )
 from cuprum.unittests._pump_stream_dispatch_support import (
-    _WRITER_TOGGLE_FAILURE,
     PumpCallCounts,
     _fake_python_fallback,
     _make_blocking_fd_spy,
     _nonblocking_pipe_pair,
     _ReaderWithoutPause,
     _run_with_inline_executor,
-    _run_with_inline_executor_returning,
     _WriterWithoutPause,
-    bypass_reader_drain,
     clear_backend_caches,
-    install_closing_rust_pump,
 )
 
 __all__ = ["clear_backend_caches"]
@@ -41,6 +41,42 @@ pytestmark = pytest.mark.usefixtures("clear_backend_caches")
 
 class TestPumpStreamDispatch:
     """Unit integration tests for ``_pump_stream_dispatch`` FD toggling."""
+
+    def test_paused_reader_callbacks_settle_before_native_handoff(self) -> None:
+        """Queued transport delivery completes before native pumping begins."""
+
+        async def settle_handoff() -> list[str]:
+            """Queue transport delivery and return the observed hand-off order."""
+            events: list[str] = []
+            asyncio.get_running_loop().call_soon(events.append, "reader_callback")
+            await _pipeline_streams._settle_paused_reader_callbacks()
+            events.append("native_handoff")
+            return events
+
+        assert asyncio.run(settle_handoff()) == ["reader_callback", "native_handoff"], (
+            "queued reader delivery must populate its buffer before native I/O"
+        )
+
+    def test_buffered_reader_transfers_before_native_handoff(self) -> None:
+        """Buffered asyncio data is delivered before native pumping begins."""
+
+        async def inspect_buffer() -> tuple[bytes, bytes]:
+            """Report the delivered bytes and the cleared hand-off buffer."""
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"buffered")
+            reader.feed_eof()
+            writer = mock.MagicMock(spec=asyncio.StreamWriter)
+            writer.drain = mock.AsyncMock()
+            await _pipeline_streams._drain_reader_buffer(
+                reader,
+                writer,
+            )
+            delivered = writer.write.call_args.args[0]
+            return delivered, await reader.read()
+
+        assert asyncio.run(inspect_buffer()) == (b"buffered", b""), (
+            "native preparation must transfer buffered data before clearing it"
+        )
 
     def test_dispatch_sets_rust_fds_blocking_before_native_pump(
         self,
@@ -188,19 +224,22 @@ class TestPumpStreamDispatch:
                 _pipeline_streams._run_rust_pump(
                     reader=reader,
                     writer=None,
-                    reader_fd=1,
-                    writer_fd=2,
+                    handoff=_pipeline_streams._RustPumpHandoff(
+                        reader_fd=1,
+                        writer_fd=2,
+                        cleanup_grace_s=0.5,
+                    ),
                 )
             )
         )
 
         assert call_order == ["pause", "drain", "restore", "resume"]
 
-    def test_dispatch_preserves_transport_modes_when_worker_toggle_fails(
+    def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A worker toggle failure must select fallback without touching transports."""
+        """A writer toggle failure must roll back any reader blocking change."""
         monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
         set_rust_availability_for_testing(is_available=True)
 
@@ -221,14 +260,14 @@ class TestPumpStreamDispatch:
 
             calls: PumpCallCounts = {"python_pump": 0}
 
-            def fail_worker_toggle(**_kwargs: object) -> object:
-                """Reject preparation after both worker descriptors exist."""
-                raise OSError(_WRITER_TOGGLE_FAILURE)
+            def fail_worker_blocking_mode(**_kwargs: object) -> typ.NoReturn:
+                """Decline worker-only blocking-mode preparation."""
+                raise OSError
 
             monkeypatch.setattr(
-                _pipeline_stream_fds._BlockingModeGuard,
+                _pipeline_stream_native_cleanup._BlockingModeGuard,
                 "engage",
-                fail_worker_toggle,
+                fail_worker_blocking_mode,
             )
             configure_pump_stream_dispatch_for_testing(
                 python_pump=lambda reader, writer: _fake_python_fallback(
@@ -241,13 +280,13 @@ class TestPumpStreamDispatch:
             asyncio.run(_pipeline_streams._pump_stream_dispatch(reader, writer))
 
             assert calls["python_pump"] == 1, (
-                "expected Python fallback when worker blocking toggle fails"
+                "expected Python fallback when writer blocking toggle fails"
             )
             assert not os.get_blocking(read_fd), (
-                "expected reader transport FD to remain non-blocking after fallback"
+                "expected reader FD blocking mode to be restored after fallback"
             )
             assert not os.get_blocking(write_fd), (
-                "expected writer transport FD to remain non-blocking after fallback"
+                "expected writer FD to remain in its original non-blocking mode"
             )
 
     def test_dispatch_uses_rust_when_reader_transport_cannot_pause(
@@ -267,12 +306,33 @@ class TestPumpStreamDispatch:
             del read_write_fd, write_read_fd
             calls: PumpCallCounts = {"rust_pump": 0, "python_pump": 0}
 
+            def fake_rust_pump_stream(reader_fd: int, writer_fd: int) -> int:
+                """Stand in for the Rust pump and record that it ran.
+
+                Returns
+                -------
+                int
+                    Always ``0`` to mimic a successful native pump.
+                """
+                assert reader_fd != read_fd, (
+                    "expected a duplicate rather than the transport reader FD"
+                )
+                # Rust borrows its reader and consumes its writer. Both are
+                # duplicated so cancellation can quarantine native I/O from
+                # asyncio-owned transport descriptors.
+                assert writer_fd != write_fd, (
+                    "expected a duplicate rather than the transport writer FD"
+                )
+                calls["rust_pump"] += 1
+                os.close(writer_fd)
+                return 0
+
             import cuprum._streams_rs as streams_rs
 
             monkeypatch.setattr(
                 streams_rs,
                 "rust_pump_stream",
-                _make_blocking_fd_spy(calls, read_fd, write_fd),
+                fake_rust_pump_stream,
             )
             monkeypatch.setattr(
                 _pipeline_streams,
@@ -307,71 +367,3 @@ class TestPumpStreamDispatch:
         assert calls["python_pump"] == 0, (
             "did not expect Python fallback when Rust pump succeeds"
         )
-
-    def test_rust_pump_receives_worker_fds_not_transport_fds(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Rust receives worker FDs, leaving transport descriptors intact.
-
-        The double closes what it receives, as ``rust_pump_stream`` does, so
-        handing over the transport's own descriptor would surface as ``EBADF``.
-
-        Parameters
-        ----------
-        monkeypatch : pytest.MonkeyPatch
-            Fixture used to override the native pump and FD extraction.
-        """
-        received = install_closing_rust_pump(monkeypatch)
-        bypass_reader_drain(monkeypatch)
-        close_reader = mock.Mock(wraps=_pipeline_streams._close_native_pump_worker_fd)
-        monkeypatch.setattr(
-            _pipeline_streams, "_close_native_pump_worker_fd", close_reader
-        )
-
-        with _nonblocking_pipe_pair() as (
-            read_fd,
-            read_write_fd,
-            write_read_fd,
-            write_fd,
-        ):
-            del read_write_fd, write_read_fd
-            reader = typ.cast("asyncio.StreamReader", object())
-            writer = mock.MagicMock(spec=asyncio.StreamWriter)
-            writer.wait_closed = mock.AsyncMock()
-
-            handled = asyncio.run(
-                _run_with_inline_executor_returning(
-                    _pipeline_streams._run_rust_pump(
-                        reader=reader,
-                        writer=writer,
-                        reader_fd=read_fd,
-                        writer_fd=write_fd,
-                    )
-                )
-            )
-
-            assert handled is True, "expected the native pump path to report success"
-            assert received["reader_fd"] != read_fd, (
-                "Rust must receive a worker reader, never the transport descriptor"
-            )
-            assert received["writer_fd"] != write_fd, (
-                "Rust must receive a duplicate, never the transport's descriptor"
-            )
-            assert not os.get_blocking(read_fd), (
-                "the original reader transport FD must remain non-blocking"
-            )
-            os.fstat(read_fd)
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(received["reader_fd"])
-            close_reader.assert_called_once_with(received["reader_fd"])
-            try:  # the duplicate's close must not take the original with it
-                os.fstat(write_fd)
-            except OSError as exc:  # pragma: no cover - failure path only
-                pytest.fail(
-                    f"transport writer FD must stay valid after the native "
-                    f"pump closed its duplicate, got {exc!r}"
-                )
-            assert writer.close.called, (
-                "the asyncio writer must still be closed to signal EOF"
-            )

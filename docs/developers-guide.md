@@ -465,12 +465,14 @@ Line callbacks in the Python stream backend use two pure helpers from
 
 - `_split_complete_lines(text, *, final=True)` splits text into completed
   lines, strips each recognized line ending, and returns `(lines, remainder)`.
-  With `final=False`, a trailing `"\r"` remains in `remainder` so a following
-  `"\n"` can complete the CRLF pair; the default final call strips that
-  boundary. The line consumer flushes its incremental decoder before making
-  that final call.
-- `_strip_line_ending(line)` removes at most one trailing `"\r\n"`, `"\n"`, or
-  `"\r"` sequence. It does not normalize or edit interior text.
+  The recognized boundaries match `str.splitlines()`: CRLF, LF, CR, VT, FF, FS,
+  GS, RS, NEL, LS, and PS. With `final=False`, a trailing `"\r"` remains in
+  `remainder` so a following `"\n"` can complete the CRLF pair; the default
+  final call strips that boundary. The line consumer flushes its incremental
+  decoder before making that final call.
+- `_strip_line_ending(line)` removes at most one trailing CRLF pair or one of
+  the individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does
+  not normalize or edit interior text.
 
 These helpers are re-exported from `cuprum/_testing.py` so tests can state the
 contract directly without driving subprocess I/O. Keep them private to the
@@ -766,19 +768,22 @@ partial-failure paths in one place rather than inlined in the pump:
   never changed to blocking mode.
 - `_paused_reader` is a context manager that pauses the reader transport and
   resumes it on every exit path, including exceptions and cancellation. Only a
-  pause that took effect is resumed. It yields whether the descriptor may be
-  handed over after already-buffered reader bytes have been accounted for: a
-  *failed* pause answers `False`, because asyncio may still be consuming the
-  reader, and the caller falls back to the Python pump rather than racing it. A
-  transport exposing no pause hooks answers `True`, since there are no
-  callbacks to suspend. A transport with `pause_reading()` but no
-  `resume_reading()` answers `False`: pausing it could not be undone.
+  pause that took effect is resumed. The caller settles callbacks queued before
+  the pause and completes the one-time delivery of any bytes in
+  `StreamReader._buffer` before handing descriptors over. A *failed* pause
+  answers `False`, because asyncio may still be consuming the reader, and the
+  caller falls back to the Python pump rather than racing it. A transport
+  exposing no pause hooks answers `True`, since there are no callbacks to
+  suspend. A transport with `pause_reading()` but no `resume_reading()` answers
+  `False`: pausing it could not be undone.
 
-Before native I/O begins, the reader transport is paused and bytes already in
-`StreamReader._buffer` are handed off without clearing them until the transfer
-outcome is known. The worker then receives a duplicate reader and duplicate
-writer descriptor. Rust borrows the reader duplicate and consumes the writer
-duplicate. After the worker settles, Python closes the remaining reader
+Before native I/O begins, the reader transport is paused and callbacks queued
+before the pause are allowed to settle. If `StreamReader._buffer` contains
+bytes, the hand-off delivers them once to the downstream writer and clears the
+buffer only after delivery succeeds or downstream closure is known. The worker
+then receives a duplicate reader and duplicate writer descriptor and handles
+the remaining raw bytes. Rust borrows the reader duplicate and consumes the
+writer duplicate. After the worker settles, Python closes the remaining reader
 duplicate; it closes the writer duplicate itself only when preparation or
 executor submission fails. If any preparation step cannot be completed safely,
 dispatch falls back to the Python pump.
