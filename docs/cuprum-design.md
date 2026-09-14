@@ -1016,11 +1016,12 @@ Implementation notes (current state):
   convenience.
 - `started_at` is a wall-clock timestamp and `duration` is a monotonic duration
   in seconds. The resource fields are `None` on Windows and any platform that
-  cannot expose child resource accounting. For an isolated command, their POSIX
-  values derive from `RUSAGE_CHILDREN` snapshots; concurrent commands are an
-  approximation because the counter is process-global, and the RSS figure is a
-  maximum-based delta. Pipeline-stage resource fields are always `None` because
-  concurrent reaping cannot be attributed to individual stages.
+  cannot expose child resource accounting. For an isolated command, the CPU
+  fields derive from `RUSAGE_CHILDREN` snapshots; concurrent commands are an
+  approximation because the counter is process-global. `max_rss_bytes` remains
+  `None` because `ru_maxrss` is a cumulative high-water mark and cannot be
+  attributed to an individual command. Pipeline-stage resource fields are always
+  `None` because concurrent reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
 - Environment overrides are supplied via an `ExecutionContext` and merged on top
