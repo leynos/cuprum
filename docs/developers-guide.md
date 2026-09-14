@@ -1107,6 +1107,10 @@ echoed all count as activity, while EOF and parent-generated diagnostics do
 not. The callback receives no child bytes: it exists to reset a timer, not to
 observe output.
 
+The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
+write, the incremental decoder, and the mirror cursor; the drain loop in
+`cuprum/_streams.py` only reads the bytes and owns the state it renders.
+
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through

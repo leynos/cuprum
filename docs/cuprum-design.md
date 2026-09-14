@@ -2131,7 +2131,9 @@ are:
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
-for compatibility.
+for compatibility. The bounded echo renderer sits beside the drain loop in
+`cuprum/_stream_echo.py`, which owns the sink write, the incremental decoder,
+and the cursor recording where a mirrored sink ended up.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The
@@ -2145,10 +2147,10 @@ captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
 
 The bounded echo path is deliberately a Python consumer concern. When
-`RunOutputOptions.max_echo_line_bytes` is set, `_streams.py` splits raw reads
-with `_echo_truncation.py` and keeps a per-stream limiter across chunks. The
-limiter reserves space for the encoded truncation marker and line ending, so
-each mirrored line stays within the inclusive byte bound; it resets its body
+`RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw
+reads with `_echo_truncation.py` and keeps a per-stream limiter across chunks.
+The limiter reserves space for the encoded truncation marker and line ending,
+so each mirrored line stays within the inclusive byte bound; it resets its body
 and dropped-byte counters at every line boundary. A carriage return is held
 until the next byte identifies CRLF, which keeps a CRLF ending equivalent when
 reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
