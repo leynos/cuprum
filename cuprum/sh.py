@@ -15,6 +15,7 @@ import typing as typ
 import warnings
 from pathlib import Path
 
+from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -60,29 +61,6 @@ type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
-_DEFAULT_CANCEL_GRACE = 0.5
-_DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
-_DEFAULT_ENCODING = "utf-8"
-_DEFAULT_ERROR_HANDLING = "replace"
-
-
-from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
-
-"""Safe command construction and execution facade for curated programs.
-This module focuses on the typed core: building ``SafeCmd`` instances from
-curated ``Program`` values and providing a minimal async runtime for executing
-them with predictable semantics.
-"""
-# Public annotations use ``Program``. Keep it in module globals so
-# ``typing.get_type_hints`` can resolve the postponed public annotations.
-    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime
-type _ArgValue = str | int | float | bool | Path
-type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
-type _EnvMapping = cabc.Mapping[str, str] | None
-type _CwdType = str | Path | None
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
 # Names the aggregate raised when draining observe-hook tasks fails while a

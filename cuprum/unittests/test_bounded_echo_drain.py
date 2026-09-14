@@ -6,6 +6,8 @@ import asyncio
 import io
 import typing as typ
 
+import pytest
+
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.echo_events import EchoErrorCategory
 from cuprum.echo_observation import observe_echo
@@ -65,6 +67,40 @@ def test_echo_only_unterminated_line_keeps_a_bounded_mirror() -> None:
     assert len(sink.getvalue().encode()) <= _BOUND, (
         "the unfinished echoed line must remain bounded without capture"
     )
+
+
+def test_bounded_echo_rejects_utf16_before_draining() -> None:
+    """Bounded raw-line echo rejects UTF-16 before it can corrupt a sink."""
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=True,
+        echo_max_line_bytes=_BOUND,
+        sink=io.StringIO(),
+        encoding="utf-16",
+        errors="strict",
+    )
+
+    with pytest.raises(ValueError, match="ASCII-compatible stateless encoding"):
+        asyncio.run(_drain(_reader(("payload".encode("utf-16"),)), config))
+
+
+def test_unbounded_utf16_echo_remains_supported() -> None:
+    """Unbounded echo retains the existing UTF-16 streaming behaviour."""
+    payload = "payload".encode("utf-16")
+    sink = io.StringIO()
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=True,
+        echo_max_line_bytes=None,
+        sink=sink,
+        encoding="utf-16",
+        errors="strict",
+    )
+
+    captured = asyncio.run(_drain(_reader((payload,)), config))
+
+    assert captured == "payload", "unbounded capture must decode the full payload"
+    assert sink.getvalue() == "payload", "unbounded echo must still mirror UTF-16"
 
 
 class _Cp1252TextOnlySink:

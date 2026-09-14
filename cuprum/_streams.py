@@ -21,7 +21,11 @@ import dataclasses as dc
 import logging
 import typing as typ
 
-from cuprum._echo_truncation import _EchoLineLimiter, _split_echo_segments
+from cuprum._echo_truncation import (
+    _EchoLineLimiter,
+    _split_echo_segments,
+    _validate_bounded_echo_encoding,
+)
 from cuprum._line_splitting import (
     _emit_completed_lines,
     _split_complete_lines,
@@ -121,6 +125,8 @@ async def _drain(
     # variant-specific processing (for example incremental line decoding).
     # Fixes to the loop must be made here so the capture path and the
     # line-emitting path cannot drift.
+    if config.echo_output and config.echo_max_line_bytes is not None:
+        _validate_bounded_echo_encoding(config.encoding, config.errors)
     buffer = bytearray() if config.capture_output else None
     echo_decoder = _echo_decoder(config)
     echo_guard = _EchoGuard()

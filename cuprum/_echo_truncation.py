@@ -18,6 +18,7 @@ import dataclasses as dc
 
 _TRUNCATION_MARKER_TEMPLATE = "… [truncated {dropped} bytes]"
 _ASCII_TRUNCATION_MARKER_TEMPLATE = "... [truncated {dropped} bytes]"
+_STATEFUL_BOUNDED_ECHO_ENCODINGS = frozenset({"hz", "utf_7", "utf_8_sig"})
 
 
 def truncation_marker(dropped: int, *, encoding: str, errors: str) -> bytes:
@@ -43,6 +44,22 @@ def truncation_marker(dropped: int, *, encoding: str, errors: str) -> bytes:
     except UnicodeEncodeError:
         fallback = _ASCII_TRUNCATION_MARKER_TEMPLATE.format(dropped=dropped)
         return fallback.encode(encoding, errors)
+
+
+def _validate_bounded_echo_encoding(encoding: str, errors: str) -> None:
+    """Reject codecs that cannot safely represent raw bounded-line segments."""
+    codec = codecs.lookup(encoding)
+    newline = "\n".encode(codec.name, errors)
+    is_stateful = (
+        codec.name in _STATEFUL_BOUNDED_ECHO_ENCODINGS
+        or codec.name.startswith("iso2022_")
+    )
+    if is_stateful or newline != b"\n":
+        msg = (
+            "bounded echo requires an ASCII-compatible stateless encoding; "
+            f"got {encoding!r}. Set max_echo_line_bytes=None to echo it unbounded."
+        )
+        raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -220,15 +237,15 @@ def _encode_prefix(
     decoder = codecs.getincrementaldecoder(settings.encoding)(
         errors=settings.errors,
     )
+    encoder = codecs.getincrementalencoder(settings.encoding)(
+        errors=settings.errors,
+    )
     encoded_prefix = bytearray()
     best = (b"", b"")
     for length, byte in enumerate(line, start=1):
         try:
             decoded = decoder.decode(bytes((byte,)), final=False)
-            encoded = decoded.encode(
-                settings.encoding,
-                settings.errors,
-            )
+            encoded = encoder.encode(decoded, final=False)
         except UnicodeError:
             break
         encoded_prefix.extend(encoded)

@@ -690,8 +690,9 @@ def test_bounded_echo_observes_successful_truncation() -> None:
     assert dropped_bytes is not None, (
         f"event must report an omitted-byte count, got={events[0]!r}"
     )
-    assert dropped_bytes > 0, (
-        f"event must report omitted child bytes, got={events[0]!r}"
+    assert dropped_bytes == 55, (
+        "an 80-byte line with a 50-byte echoed payload budget must omit 55 "
+        f"child bytes, got={dropped_bytes}"
     )
 
 
