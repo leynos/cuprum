@@ -5,33 +5,22 @@
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
-- **Partial capture on timeout:** A capturing `run()` or `run_sync()` that times
-  out now reports text for both streams, preserving partial output when readers
-  have not yet observed EOF. The bounded drain grace avoids dependence on
-  event-loop scheduling while leaving non-capturing teardown prompt
-  ([#292](https://github.com/leynos/cuprum/issues/292)).
-
-- **Repeated cancellation during teardown:** Repeated cancellation arriving
-  during timeout or fail-fast teardown no longer strands a `SIGTERM`-immune
-  child process; the shielded teardown wait is now retried until it completes,
-  so the `SIGKILL` escalation and reap always run
-  ([#271](https://github.com/leynos/cuprum/pull/271)).
-- Cleanup now completes before a cancellation arriving mid-cleanup propagates.
-  Stream consumers, the stdin writer, and background observe-hook tasks are
-  reconciled through a shielded, cancellation-resistant wait, so a cancelled
-  run no longer unwinds while the tasks it owns are still live
-  ([#271](https://github.com/leynos/cuprum/pull/271)).
-- An observe hook raising on a pipeline stage's terminal `exit` event during a
-  timeout no longer replaces the `TimeoutExpired` nor stops the remaining
-  stages emitting their `exit` events
-  ([#271](https://github.com/leynos/cuprum/pull/271)).
-- `TracingHook` no longer accumulates span entries for executions that never
-  emit an `exit` event (external cancellation, a stdin-writer failure, or a
-  terminal `teardown_error`); the registry of open spans is now bounded and
-  evicts the oldest, ending it as failed
-  ([#271](https://github.com/leynos/cuprum/pull/271)).
-
-[^2]: <https://github.com/leynos/cuprum/issues/356>
+- **Capture preserved when echo sinks reject unicode:** A text-only echo sink
+  whose encoding cannot represent the subprocess output (for example a Windows
+  CP1252 console echoing UTF-8 `ś`/`ń`) no longer aborts stream draining with
+  an escaping `UnicodeEncodeError`. Echoing is disabled for only the affected
+  stream while capture completes, a `cuprum.stream` `WARNING` records the first
+  failure, sinks exposing a binary `buffer` keep receiving the original bytes,
+  and other I/O errors still propagate [^1]. Registering `EchoMetricsHook` via
+  `cuprum.echo_observation.observe_echo` additionally counts one
+  `cuprum_echo_encoding_failures_total` increment per affected stream, labelled
+  only by the bounded `stream` (`stdout` or `stderr`) and `error_category`
+  (`unicode_encode`) values; the hook is opt-in and no payload or sink metadata
+  becomes a metric label.
+- **`IOOptions(echo=True)` echoes again:** The deprecated compatibility alias
+  overrode the new per-stream resolver with a warning-only initializer, so
+  `IOOptions(echo=True)` left both streams silent. It now resolves the
+  inherited per-stream fields before emitting the deprecation warning.
 
 ### Added
 
@@ -248,3 +237,5 @@
   terminal `teardown_error`); the registry of open spans is now bounded and
   evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
+[^1]: <https://github.com/leynos/cuprum/issues/348>
+[^2]: <https://github.com/leynos/cuprum/issues/356>

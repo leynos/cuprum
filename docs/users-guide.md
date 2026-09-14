@@ -464,7 +464,6 @@ categorical values (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
 emitted and no telemetry dependency is added. A failing metrics collector is
 reported and skipped rather than changing the run's capture behaviour.
 
-
 ### Echo-fallback diagnostics on `CommandResult`
 
 The same handled disablement is also reported on the result itself. Every
