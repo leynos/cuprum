@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import sys
 import threading
 import typing as typ
 
@@ -189,6 +190,30 @@ def test_from_programs_derives_name_from_program_base_names() -> None:
     )
     assert absolute.lookup("/usr/bin/git").project_name == "git", (
         "Absolute paths must reduce to their base name"
+    )
+
+
+def test_from_programs_derives_windows_base_name_on_any_host() -> None:
+    """A drive path reduces to its base name regardless of host platform."""
+    windows_path = r"C:\tools\git.exe"
+    catalogue = ProgramCatalogue.from_programs(windows_path, "cargo")
+
+    assert catalogue.lookup(windows_path).project_name == "git.exe-cargo", (
+        "Windows drive paths must reduce to their base name on every host"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows treats a backslash as a path separator",
+)
+def test_from_programs_keeps_posix_backslash_in_base_name() -> None:
+    """Only Windows drive paths are re-parsed; POSIX names keep a backslash."""
+    program = r"weird\name"
+    catalogue = ProgramCatalogue.from_programs(program)
+
+    assert catalogue.lookup(program).project_name == program, (
+        "A POSIX filename containing a backslash must not be split on it"
     )
 
 

@@ -215,7 +215,7 @@ grep = sh.make(GREP, catalogue=CATALOGUE)
 ```
 
 The default project name joins the programs' base names with `-`, giving
-`git-grep` here; pass `name=` to choose your own, and
+`git-grep` here; pass `name=` to supply an explicit project name, and
 `documentation_locations=` or `noise_rules=` to attach project metadata. Calling
 `from_programs()` with no programs raises `ValueError`, and repeating a
 program raises `DuplicateProgramError`. Reach for `ProjectSettings` and

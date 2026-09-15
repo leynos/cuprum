@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 
 from cuprum.program import Program
@@ -24,18 +24,24 @@ def _coerce_program(raw: Program | str) -> Program:
 
 
 def _derive_project_name(programs: cabc.Iterable[Program | str]) -> str:
-    """Return a deterministic project name from the programs' base names.
+    r"""Return a deterministic project name from the programs' base names.
 
     Absolute paths reduce to their final path component so a catalogue built
     from ``/usr/bin/python3`` is named after ``python3`` rather than the whole
-    invocation path.
+    invocation path. Windows drive paths reduce the same way on every host,
+    while a POSIX filename containing a literal backslash keeps it.
 
     Returns
     -------
     str
         The programs' base names joined with ``-``.
     """
-    return "-".join(Path(program).name for program in programs)
+    return "-".join(
+        PureWindowsPath(program).name
+        if PureWindowsPath(program).drive
+        else Path(program).name
+        for program in programs
+    )
 
 
 class UnknownProgramError(LookupError):
@@ -180,7 +186,7 @@ class ProgramCatalogue:
         """Build a single-project catalogue from the given programs.
 
         A convenience for standalone scripts that run one or two programs and
-        would otherwise spell out ``ProgramSettings`` and ``ProgramCatalogue``
+        would otherwise spell out ``ProjectSettings`` and ``ProgramCatalogue``
         by hand.
 
         Parameters

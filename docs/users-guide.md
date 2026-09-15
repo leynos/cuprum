@@ -78,7 +78,7 @@ CATALOGUE = ProgramCatalogue(
 - Programs may be `Program` values or strings. Absolute paths are recorded as
   given, so `/usr/bin/git` allowlists that path rather than the name `git`.
 - The project name defaults to the programs' base names joined with `-`, giving
-  `git-cargo` above. Pass `name=` to choose your own.
+  `git-cargo` above. Pass `name=` to supply an explicit project name.
 - `documentation_locations=` and `noise_rules=` are forwarded to the project.
   Both now default to `()` on `ProjectSettings`, so a project that needs
   neither can omit them.
