@@ -12,6 +12,7 @@ import typing as typ
 import pytest
 
 from cuprum import _pipeline_streams
+from cuprum._pipeline_stream_fds import _ReaderPause
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -243,4 +244,51 @@ class TestPumpStreamDispatch:
         assert observed == [17], (
             "the dispatch seam must retain the explicit benchmark read size, "
             f"got {observed}"
+        )
+
+
+class TestTestOwnedDescriptorHandoff:
+    """A closing-reader decline yields only to the test-owned descriptor seam."""
+
+    @staticmethod
+    def _closing_pause() -> _ReaderPause:
+        """Return the decline a closing reader transport produces."""
+        return _ReaderPause(
+            decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+            closing_transport=True,
+        )
+
+    def test_closing_pause_stays_declined_without_a_test_extractor(self) -> None:
+        """A real hand-off keeps refusing a reader whose transport is closing."""
+        assert (
+            _pipeline_streams._PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor is None
+        ), "this case describes the unstubbed descriptor supply"
+        closing = self._closing_pause()
+
+        permitted = _pipeline_streams._permit_test_owned_descriptor_handoff(closing)
+
+        assert permitted is closing, (
+            "without a stubbed supply the decline must pass through untouched"
+        )
+        assert not permitted.may_hand_off, "a closing reader cannot lend its FD"
+        assert permitted.decline_reason is RustPumpDeclineReason.READER_PAUSE_FAILED, (
+            "the unstubbed decline must keep its pause-failure reason"
+        )
+
+    def test_closing_pause_is_permitted_for_a_test_owned_extractor(self) -> None:
+        """The seam lends its own descriptors, so the closing veto cannot apply."""
+        configure_pump_stream_dispatch_for_testing(
+            raw_fd_extractor=lambda _stream: 7,
+        )
+
+        permitted = _pipeline_streams._permit_test_owned_descriptor_handoff(
+            self._closing_pause()
+        )
+
+        assert permitted.may_hand_off, "a stubbed supply must permit the hand-off"
+        assert permitted.decline_reason is None, (
+            "a permitted hand-off must drop the decline reason"
+        )
+        assert permitted.resume is None, (
+            "nothing was paused, so the permitted verdict carries no resume"
         )
