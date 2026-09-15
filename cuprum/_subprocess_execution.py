@@ -14,10 +14,11 @@ import sys
 import time
 import typing as typ
 
-from cuprum._pipeline_types import _EventDetails, _StageObservation
+from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _StreamConfig
+from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum._subprocess_consumers import _spawn_stream_consumers
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
@@ -35,11 +36,10 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
+    from cuprum._pipeline_types import _StageObservation
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -64,11 +64,31 @@ class _SubprocessExecution:
     observation: _StageObservation
 
     stdin_data: bytes | None
+    on_line: _LineHookFn | None = None
+    # Monotonic reference the per-line ``at`` stamps are measured from; taken
+    # once at spawn so every line of a run shares one time base.
+    started_at: float = 0.0
+
+    @property
+    def stdout_consumed(self) -> bool:
+        """Whether stdout must be read for capture, echo, or line observation.
+
+        A registered ``on_line`` observes both streams, so it keeps the pipe
+        open and the consumer running even when capture and echo are both off.
+        Without that, ``run(output=RunOutputOptions(on_line=...))`` would attach
+        stdout to ``DEVNULL`` and silently deliver nothing.
+        """
+        return self.capture or self.echo_stdout or self.on_line is not None
+
+    @property
+    def stderr_consumed(self) -> bool:
+        """Whether stderr must be read for capture, echo, or line observation."""
+        return self.capture or self.echo_stderr or self.on_line is not None
 
     @property
     def consumes_any_stream(self) -> bool:
-        """Whether any stream must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout or self.echo_stderr
+        """Whether any stream must be consumed for capture, echo, or lines."""
+        return self.stdout_consumed or self.stderr_consumed
 
 
 async def _spawn_subprocess(
@@ -79,68 +99,17 @@ async def _spawn_subprocess(
         *execution.cmd.argv_with_program,
         stdout=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stdout
+            if execution.stdout_consumed
             else asyncio.subprocess.DEVNULL
         ),
         stderr=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stderr
+            if execution.stderr_consumed
             else asyncio.subprocess.DEVNULL
         ),
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
-    )
-
-
-def _create_stream_callback(
-    observation: _StageObservation,
-    event_type: typ.Literal["stdout", "stderr"],
-    pid: int | None,
-) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
-
-
-def _spawn_stream_consumers(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-    *,
-    pid: int | None,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks."""
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_config = dc.replace(
-        stream_config,
-        echo_output=execution.echo_stderr,
-        sink=(
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        ),
-        stream=EchoStream.STDERR,
-    )
-    return (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-                read_size=stream_config.read_size,
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                stderr_config,
-                on_line=stderr_on_line,
-                read_size=stderr_config.read_size,
-            ),
-        ),
     )
 
 
@@ -326,6 +295,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
+    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
+    # consumers read ``started_at`` off it when stamping each ``LineEvent``. Left
+    # at its ``0.0`` default, every ``at`` would be the machine's monotonic
+    # uptime rather than seconds since this command started.
+    execution = dc.replace(execution, started_at=started_at)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 
@@ -385,7 +359,6 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 __all__ = [
     "_SubprocessExecution",
     "_build_stream_config",
-    "_create_stream_callback",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",

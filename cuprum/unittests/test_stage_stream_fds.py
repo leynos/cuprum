@@ -55,76 +55,79 @@ def _stage_positions() -> list[tuple[int, int]]:
 
 @pytest.mark.parametrize(("idx", "last_idx"), _stage_positions())
 @pytest.mark.parametrize(
-    ("stdout_capture_or_echo", "stderr_capture_or_echo"),
+    ("stdout_consumed", "stderr_consumed"),
     list(itertools.product([False, True], repeat=2)),
 )
 def test_stage_stream_fds_full_domain(
     idx: int,
     last_idx: int,
     *,
-    stdout_capture_or_echo: bool,
-    stderr_capture_or_echo: bool,
+    stdout_consumed: bool,
+    stderr_consumed: bool,
 ) -> None:
     """Property: the canonical policy holds across the full input domain."""
     fds = _get_stage_stream_fds(
         idx,
         last_idx,
-        stdout_capture_or_echo=stdout_capture_or_echo,
-        stderr_capture_or_echo=stderr_capture_or_echo,
+        stdout_consumed=stdout_consumed,
+        stderr_consumed=stderr_consumed,
     )
 
     assert fds.stdin == _expected_stdin(idx), (
         f"stdin mismatch for idx={idx}, last_idx={last_idx}, "
-        f"stdout_capture_or_echo={stdout_capture_or_echo}, "
-        f"stderr_capture_or_echo={stderr_capture_or_echo}"
+        f"stdout_consumed={stdout_consumed}, "
+        f"stderr_consumed={stderr_consumed}"
     )
     assert fds.stdout == _expected_stdout(
         idx,
         last_idx,
-        consume_stdout=stdout_capture_or_echo,
+        consume_stdout=stdout_consumed,
     ), (
         f"stdout mismatch for idx={idx}, last_idx={last_idx}, "
-        f"stdout_capture_or_echo={stdout_capture_or_echo}, "
-        f"stderr_capture_or_echo={stderr_capture_or_echo}"
+        f"stdout_consumed={stdout_consumed}, "
+        f"stderr_consumed={stderr_consumed}"
     )
-    assert fds.stderr == _expected_stderr(consume_stderr=stderr_capture_or_echo), (
+    assert fds.stderr == _expected_stderr(consume_stderr=stderr_consumed), (
         f"stderr mismatch for idx={idx}, last_idx={last_idx}, "
-        f"stdout_capture_or_echo={stdout_capture_or_echo}, "
-        f"stderr_capture_or_echo={stderr_capture_or_echo}"
+        f"stdout_consumed={stdout_consumed}, "
+        f"stderr_consumed={stderr_consumed}"
     )
 
 
 @pytest.mark.parametrize(
-    ("capture", "echo"), list(itertools.product([False, True], repeat=2))
+    ("capture", "echo", "has_on_line"),
+    list(itertools.product([False, True], repeat=3)),
 )
 def test_final_stage_agrees_with_single_process_policy(
     *,
     capture: bool,
     echo: bool,
+    has_on_line: bool,
 ) -> None:
     """Example: the final pipeline stage matches the single-command policy.
 
     ``_spawn_subprocess`` selects ``PIPE`` for stdout and stderr exactly when
-    ``capture or echo`` and ``DEVNULL`` otherwise; the final pipeline stage
-    must agree on those overlapping cases.
+    the corresponding stream is consumed — by capture, by echo, or by a
+    registered ``on_line`` — and ``DEVNULL`` otherwise; the final pipeline
+    stage must agree on those overlapping cases.
     """
-    consume = capture or echo
-    single_process_flag = _PIPE if consume else _DEVNULL
+    consumed = capture or echo or has_on_line
+    single_process_flag = _PIPE if consumed else _DEVNULL
 
     fds = _get_stage_stream_fds(
         0,
         0,
-        stdout_capture_or_echo=consume,
-        stderr_capture_or_echo=consume,
+        stdout_consumed=consumed,
+        stderr_consumed=consumed,
     )
 
     assert fds.stdout == single_process_flag, (
         f"final-stage stdout mismatch for capture={capture}, echo={echo}, "
-        f"single_process_flag={single_process_flag!r}"
+        f"has_on_line={has_on_line}, single_process_flag={single_process_flag!r}"
     )
     assert fds.stderr == single_process_flag, (
         f"final-stage stderr mismatch for capture={capture}, echo={echo}, "
-        f"single_process_flag={single_process_flag!r}"
+        f"has_on_line={has_on_line}, single_process_flag={single_process_flag!r}"
     )
 
 
@@ -135,8 +138,8 @@ def test_intermediate_stage_always_pipes_stdout() -> None:
         fds = _get_stage_stream_fds(
             1,
             2,
-            stdout_capture_or_echo=consume,
-            stderr_capture_or_echo=consume,
+            stdout_consumed=consume,
+            stderr_consumed=consume,
         )
         assert fds.stdout == _PIPE, (
             f"intermediate-stage stdout mismatch for capture_or_echo={consume}"

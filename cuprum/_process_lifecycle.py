@@ -197,7 +197,10 @@ async def _spawn_pipeline_processes(
     list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
-    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
+    from cuprum._pipeline_stage_streams import (
+        _create_stage_capture_tasks,
+        _StageCaptureRequest,
+    )
 
     if observations is None:
         observations = _build_spawn_observations(parts, config)
@@ -213,8 +216,8 @@ async def _spawn_pipeline_processes(
             stream_fds = _get_stage_stream_fds(
                 idx,
                 last_idx,
-                stdout_capture_or_echo=config.stdout_capture_or_echo,
-                stderr_capture_or_echo=config.stderr_capture_or_echo,
+                stdout_consumed=config.stdout_consumed,
+                stderr_consumed=config.stderr_consumed,
             )
             process = await asyncio.create_subprocess_exec(
                 *observation.cmd.argv_with_program,
@@ -229,10 +232,13 @@ async def _spawn_pipeline_processes(
             observation.emit("start", _EventDetails(pid=process.pid))
 
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
-                process,
-                config,
-                is_last_stage=(idx == last_idx),
-                observation=observation,
+                _StageCaptureRequest(
+                    process=process,
+                    config=config,
+                    observation=observation,
+                    is_last_stage=(idx == last_idx),
+                    started_at=started_at[-1],
+                ),
             )
             stderr_tasks.append(stderr_task)
             if new_stdout_task is not None:

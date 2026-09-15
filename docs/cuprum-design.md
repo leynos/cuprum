@@ -982,6 +982,69 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
+shorthand independently, so a command can capture stdout silently while stderr
+still mirrors to the log. Capture stays a single joint switch — `capture=True`
+keeps both streams captured even when neither echoes.
+
+`RunOutputOptions.max_echo_line_bytes` bounds only the mirrored copy. Its
+default is 64 KiB, and the bound includes retained child bytes, the encoded
+`… [truncated N bytes]` marker (or its ASCII-compatible fallback), and the `\n`/
+`\r\n` ending. `capture=True` still retains the complete stream, and
+`max_echo_line_bytes=None` restores chunk-for-chunk mirroring. CRLF recognition
+is independent of read boundaries, so a `\r` held at the end of one read is
+accounted as part of the ending when the following read supplies `\n`. The
+bound follows the mirroring, not the call: a `SafeCmd.lines()` iteration that
+enables echo bounds its mirrored lines the same way, while `on_line` observers
+receive the line the child wrote, because line observation reads the decoded
+stream rather than the mirrored copy. Only the copy is shortened; capture
+remains byte-for-byte complete on every path.
+
+Line observation is an independent pipe-consumption reason. `SafeCmd.lines()`
+chains its queue sink before spawning so it receives stdout and stderr even
+when capture and echo are disabled; the final result still leaves both captured
+fields as `None` in that configuration.
+
+Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+stream consumers
+
+For screen readers: The following flowchart shows how per-stream echo
+resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
+`RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
+independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
+consume those gates: `_spawn_subprocess` for a single command and
+`_get_stage_stream_fds` for a pipeline. For a single command, each stream
+independently becomes a `PIPE` or `DEVNULL` according to its own
+capture-or-echo-or-line-observation gate. `SafeCmd.lines()` adds its queue
+observer before spawning, so both streams remain `PIPE` for line delivery even
+when `capture=False` and echo is disabled; the resulting `CommandResult` still
+has `None` for both captured fields. For a pipeline, the stdout of a non-final
+stage is always a `PIPE` so that it can relay into the next stage, while the
+stdout of the final stage and the stderr of every stage follow their own
+independent gates. `capture` remains a single joint switch, so both streams are
+still captured when `capture=True` even if neither echoes. The flow ends at the
+stream consumers: `_spawn_stream_consumers` for a single command and
+`_create_stage_capture_tasks` for pipeline stages.
+
+```mermaid
+flowchart TD
+    A[RunOutputOptions] --> B[__post_init__ resolves echo_stdout and echo_stderr from echo]
+    B --> C{Execution path}
+    C -->|single command| D[_spawn_subprocess]
+    C -->|pipeline| E[_get_stage_stream_fds]
+    D --> F{capture, stream echo, or line observation enabled}
+    F -->|stdout gate| G[stdout PIPE or DEVNULL]
+    F -->|stderr gate| H[stderr PIPE or DEVNULL]
+    G --> I[_spawn_stream_consumers]
+    H --> I
+    E --> J[non-final stdout always PIPE for relay]
+    E --> K[final stdout and every stderr use independent gates]
+    J --> L[_create_stage_capture_tasks]
+    K --> L
+    I --> M[Capture remains joint when capture is true]
+    L --> M
+```
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -1291,8 +1354,14 @@ from the `_TimeoutFallback`.
 The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
-- `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+- `cuprum/_subprocess_execution.py` owns runner orchestration and spawning: it
+  drives a run to completion and assembles the `CommandResult`.
+- `cuprum/_subprocess_consumers.py` owns what reads each pipe: it pairs the
+  spawned process's stdout and stderr with their consumer tasks, and composes
+  each stream's per-line callback from the observe hooks and the caller's
+  `on_line`. Both `SafeCmd.run()` and `SafeCmd.lines()` reach it, so line
+  observation is wired in exactly one place. Split out of
+  `_subprocess_execution` to keep that module under the module-size limit.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
@@ -2134,6 +2203,35 @@ does not remove the Python implementation's allocation or GIL costs:
 
 - approximately 16,000 round-trips through the Python event loop;
 - approximately 16,000 `bytes` object allocations;
+
+That hook awaits each per-line sink, so a sink that must apply backpressure
+holds the read loop rather than letting lines queue without bound; a single
+`_READ_SIZE` chunk can carry thousands of lines, so the bound cannot be
+enforced between reads alone. Two modules divide the work: `_streams.py` owns
+the awaited emitter (`_emit_completed_lines()`) beside `_drain()`, while
+`cuprum/_line_splitting.py` owns the pure splitting rules, so the rules can be
+tested directly and the loop and its tests cannot drift apart. The emitter
+stays with the loop because awaiting a sink is the loop's contract, not a
+splitting rule.
+
+The bounded echo path is deliberately a Python consumer concern. When
+`RunOutputOptions.max_echo_line_bytes` is set, `_streams.py` splits raw reads
+with `_echo_truncation.py` and keeps a per-stream limiter across chunks. The
+limiter reserves space for the encoded truncation marker and line ending, so
+each mirrored line stays within the inclusive byte bound; it resets its body
+and dropped-byte counters at every line boundary. A carriage return is held
+until the next byte identifies CRLF, which keeps a CRLF ending equivalent when
+reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
+remains line data. The limiter never sees the capture buffer: complete child
+output remains owned by `_drain()`'s capture path. Text sinks receive complete
+characters through the configured incremental decoder, while sinks exposing
+`.buffer` receive the kept raw bytes and marker bytes. The marker follows the
+configured encoding and error policy, using an ASCII-compatible fallback when
+the preferred ellipsis cannot be represented; `None` leaves the existing
+unbounded echo path unchanged. For a positive bound too small for a complete
+marker or CRLF terminator, it abbreviates the marker or omits the terminator to
+preserve the inclusive bound.
+
 - repeated buffer copying between Python and OS buffers;
 - Global Interpreter Lock (GIL) contention when multiple asyncio tasks compete
   for CPU.
@@ -2156,6 +2254,10 @@ operations. Both pathways remain available and are treated as first-class:
 - The existing asyncio-based implementation;
 - Used when the Rust extension is unavailable or explicitly disabled;
 - Remains the reference implementation for behavioural correctness.
+- Owns line-level observation: `SafeCmd.lines()` and the `on_line` option
+  deliver decoded `LineEvent` values stamped with a monotonic arrival time, and
+  any registered line callback keeps a stream on the Python pathway because the
+  incremental decoder and per-line fan-out have no Rust counterpart.
 
 **Rust pathway (`cuprum._streams_rs`):**
 
@@ -2215,6 +2317,92 @@ flowchart TD
     H --> I
     H -. exposes .-> J
     J -. Phase 2 candidate .-> G
+```
+
+For screen readers: The following state diagram shows the lifecycle of a
+`SafeCmd.lines()` iteration. It moves from creation through the first
+`__anext__()` call to the streaming state, then ends either by publishing the
+`CommandResult` and closing, or — when iteration breaks, the stream is closed,
+or the caller is cancelled — by tearing the child process down through the
+existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
+the stream closes.
+
+Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+streaming to completion, timeout, or cancellation-driven teardown
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: SafeCmd.lines()
+    Created --> Running: first __anext__()
+    Running --> Streaming: subprocess and consumers active
+    Streaming --> Streaming: yield LineEvent
+    Streaming --> Completed: CommandResult published
+    Completed --> Closed: result exposed
+    Streaming --> Cancelling: break, aclose(), or cancellation
+    Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
+    Terminated --> Closed: consumers drained
+    Streaming --> TimedOut: timeout
+    TimedOut --> Terminated: existing timeout termination path
+    Closed --> [*]
+```
+
+For screen readers: The following flowchart shows how each decoded output line
+is fanned out to observe hooks, the synchronous line hook, the line-stream
+queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
+and queue produce `LineEvent` records for their respective consumers.
+
+Figure 11: Line observation fan-out from decoded output to lifecycle events,
+line events, capture, and echo
+
+```mermaid
+flowchart LR
+    decoded[Decoded output line] --> compose[_compose_line_callbacks]
+    compose --> observe[Observe hooks]
+    compose --> hook[RunOutputOptions.on_line]
+    compose --> queue[LineStream queue]
+    observe --> exec[ExecEvent]
+    hook --> event[LineEvent]
+    queue --> event
+    event --> consumer[Async iterator consumer]
+    decoded --> capture[Capture]
+    decoded --> echo[Echo]
+```
+
+For screen readers: The following sequence diagram shows one full
+`SafeCmd.lines()` iteration. The caller receives a `LineStream` from
+`SafeCmd.lines()`, each `__anext__()` call drives a coordinator that spawns the
+subprocess and starts the stdout and stderr consumers, decoded `LineEvent`
+values are enqueued and yielded as they arrive, and after the process exits the
+consumers are drained, the `CommandResult` is published, and iteration ends with
+`StopAsyncIteration` before the caller reads the `result` attribute.
+
+Figure 12: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+per-line events to the published `CommandResult` and `StopAsyncIteration`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant LineStream
+    participant Coordinator
+    participant Process
+    participant Consumers
+
+    Caller->>SafeCmd: lines(output, timeout, context, stdin)
+    SafeCmd-->>Caller: LineStream
+    Caller->>LineStream: __anext__()
+    LineStream->>Coordinator: start line stream
+    Coordinator->>Process: spawn subprocess
+    Coordinator->>Consumers: consume stdout and stderr
+    loop decoded lines
+        Consumers->>LineStream: enqueue LineEvent(stream, at, text)
+        LineStream-->>Caller: LineEvent
+    end
+    Process-->>Coordinator: exit
+    Coordinator->>Consumers: drain consumers
+    Coordinator->>LineStream: publish CommandResult
+    LineStream-->>Caller: StopAsyncIteration
+    Caller->>LineStream: result
 ```
 
 ### 13.3 API Boundary
@@ -2882,9 +3070,12 @@ Both pathways are tested as first-class implementations:
   output through real pipeline execution under both backends;
 - pure line-splitting property tests in
   `cuprum/unittests/test_line_splitting.py` cover `_split_complete_lines()` and
-  `_strip_line_ending()` from `cuprum/_stream_line_boundaries.py`, proving that
+  `_strip_line_ending()` from `cuprum/_line_splitting.py`, proving that
   line-callback text is not dropped, that recognized line endings are stripped
-  consistently, and that trailing partial lines remain buffered;
+  consistently, and that trailing partial lines remain buffered. The pure rules
+  live in `_line_splitting.py` so both the drain loop and its tests can depend
+  on them without importing the loop; `cuprum/_streams.py` re-exports them and
+  owns the drain-side emitter that awaits each result;
 - CrossHair symbolically checks bounded PEP 316 contracts for the same
   line-splitting invariants. These checks are development-only and skip on
   Python versions where CrossHair cannot trace the active bytecode set.
