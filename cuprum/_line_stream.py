@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import time
 import typing as typ
+from time import perf_counter
 
 from cuprum._line_callbacks import _chain_line_hooks
 from cuprum._pipeline_types import _EventDetails
@@ -49,9 +49,12 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.lines import LineEvent
+from cuprum.line_stream_events import LineStreamEvent, LineStreamSink
+from cuprum.line_stream_observation import _emit_line_stream_event
+from cuprum.lines import LineEvent, LineStreamName
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecId
     from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult
 
@@ -64,6 +67,79 @@ type _LineQueueItem = LineEvent | CommandResult
 # slowly stops the consumers reading the pipe instead of letting a chatty child
 # grow the queue without bound.
 _LINE_QUEUE_CAPACITY = 256
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _LineStreamEventDetails:
+    """Optional bounded fields attached to one line-stream lifecycle event."""
+
+    stream: LineStreamName | None = None
+    sink: LineStreamSink | None = None
+    error: BaseException | None = None
+    queue_size: int | None = None
+
+
+@dc.dataclass(slots=True)
+class _LineStreamTelemetry:
+    """Emit correlated, bounded lifecycle details for one line-stream run."""
+
+    exec_id: ExecId
+    queue_capacity: int
+    pid: int | None = None
+    is_queue_saturated: bool = False
+
+    def emit(
+        self,
+        phase: typ.Literal[
+            "spawned",
+            "queue_saturated",
+            "sink_failed",
+            "timeout",
+            "cancelled",
+            "teardown_started",
+            "teardown_completed",
+            "completed",
+        ],
+        details: _LineStreamEventDetails | None = None,
+    ) -> None:
+        """Publish one lifecycle boundary without carrying decoded text."""
+        event_details = details or _LineStreamEventDetails()
+        _emit_line_stream_event(
+            LineStreamEvent(
+                phase=phase,
+                exec_id=self.exec_id,
+                pid=self.pid,
+                stream=event_details.stream,
+                sink=event_details.sink,
+                queue_size=event_details.queue_size,
+                queue_capacity=(
+                    self.queue_capacity
+                    if event_details.queue_size is not None
+                    else None
+                ),
+                error_type=(
+                    type(event_details.error).__name__
+                    if event_details.error is not None
+                    else None
+                ),
+            )
+        )
+
+    def report_queue_saturation(
+        self,
+        queue: asyncio.Queue[_LineQueueItem],
+        event: LineEvent,
+    ) -> None:
+        """Report a transition into bounded queue backpressure."""
+        if queue.full() and not self.is_queue_saturated:
+            self.is_queue_saturated = True
+            self.emit(
+                "queue_saturated",
+                _LineStreamEventDetails(
+                    stream=event.stream,
+                    queue_size=queue.qsize(),
+                ),
+            )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -89,6 +165,7 @@ class _LineStreamRun:
     tasks: _RunTaskOwnership
     queue: asyncio.Queue[_LineQueueItem]
     started_at: float
+    telemetry: _LineStreamTelemetry
 
 
 def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
@@ -96,7 +173,10 @@ def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
     return asyncio.Queue(maxsize=_LINE_QUEUE_CAPACITY)
 
 
-def _queue_line_sink(queue: asyncio.Queue[_LineQueueItem]) -> _LineHookFn:
+def _queue_line_sink(
+    queue: asyncio.Queue[_LineQueueItem],
+    telemetry: _LineStreamTelemetry | None = None,
+) -> _LineHookFn:
     """Return an asynchronous hook that posts each ``LineEvent`` to the queue.
 
     Asynchronous rather than a synchronous ``put_nowait`` because the queue is
@@ -114,9 +194,46 @@ def _queue_line_sink(queue: asyncio.Queue[_LineQueueItem]) -> _LineHookFn:
 
     async def enqueue(event: LineEvent) -> None:
         """Post one stamped line to the consumer queue."""
+        if telemetry is not None:
+            telemetry.report_queue_saturation(queue, event)
         await queue.put(event)
+        if telemetry is not None:
+            telemetry.is_queue_saturated = False
 
     return enqueue
+
+
+def _observed_line_hook(
+    hook: _LineHookFn,
+    sink: LineStreamSink,
+    telemetry: _LineStreamTelemetry,
+) -> _LineHookFn:
+    """Wrap one delivery hook so its failure is correlated before it escapes."""
+
+    async def deliver(event: LineEvent) -> None:
+        """Deliver one event while preserving the hook's failure semantics."""
+        try:
+            outcome = hook(event)
+            if outcome is not None:
+                await outcome
+        except asyncio.CancelledError:
+            telemetry.emit(
+                "cancelled",
+                _LineStreamEventDetails(stream=event.stream, sink=sink),
+            )
+            raise
+        except BaseException as error:
+            telemetry.emit(
+                "sink_failed",
+                _LineStreamEventDetails(
+                    stream=event.stream,
+                    sink=sink,
+                    error=error,
+                ),
+            )
+            raise
+
+    return deliver
 
 
 async def _start_line_stream_run(
@@ -138,15 +255,24 @@ async def _start_line_stream_run(
     # Frozen dataclass: the stamped execution carries the start reference the
     # composed callbacks read, and the caller's ``on_line`` chained ahead of
     # this driver's queue sink, so it is rebuilt rather than mutated.
-    execution = dc.replace(
-        execution,
-        on_line=_chain_line_hooks((execution.on_line, _queue_line_sink(queue))),
+    telemetry = _LineStreamTelemetry(
+        exec_id=execution.observation.exec_id,
+        queue_capacity=queue.maxsize,
     )
+    hooks: list[_LineHookFn] = []
+    if execution.on_line is not None:
+        hooks.append(_observed_line_hook(execution.on_line, "callback", telemetry))
+    hooks.append(
+        _observed_line_hook(_queue_line_sink(queue, telemetry), "queue", telemetry)
+    )
+    execution = dc.replace(execution, on_line=_chain_line_hooks(hooks))
     process = await _spawn_subprocess(execution)
-    started_at = time.perf_counter()
+    started_at = perf_counter()
     execution = dc.replace(execution, started_at=started_at)
     pid = process.pid
+    telemetry.pid = pid
     execution.observation.emit("start", _EventDetails(pid=pid))
+    telemetry.emit("spawned")
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
     tasks = _RunTaskOwnership(
@@ -168,6 +294,7 @@ async def _start_line_stream_run(
         tasks=tasks,
         queue=queue,
         started_at=started_at,
+        telemetry=telemetry,
     )
 
 
@@ -185,6 +312,11 @@ async def _wait_for_line_stream_exit(
     -------
     tuple[int, float, str | None, str | None]
         The exit code, exit timestamp, and captured stdout/stderr.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        If the caller cancels line iteration while the subprocess is running.
     """
     pid = run.process.pid
     try:
@@ -193,6 +325,8 @@ async def _wait_for_line_stream_exit(
             execution,
         )
     except TimeoutError as exc:
+        run.telemetry.emit("timeout", _LineStreamEventDetails(error=exc))
+        run.telemetry.emit("teardown_started")
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
                 run.tasks,
@@ -204,13 +338,16 @@ async def _wait_for_line_stream_exit(
                 ),
             )
         )
+        run.telemetry.emit("teardown_completed")
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
             stderr_text=stderr_text,
             timeout=execution.timeout,
         )
-    except BaseException:
+    except asyncio.CancelledError:
+        run.telemetry.emit("cancelled")
+        run.telemetry.emit("teardown_started")
         await _shielded_cleanup(
             _reconcile_run_tasks(
                 run.tasks,
@@ -222,6 +359,22 @@ async def _wait_for_line_stream_exit(
                 ),
             )
         )
+        run.telemetry.emit("teardown_completed")
+        raise
+    except BaseException:
+        run.telemetry.emit("teardown_started")
+        await _shielded_cleanup(
+            _reconcile_run_tasks(
+                run.tasks,
+                _DrainContext(
+                    capture=False,
+                    pid=pid,
+                    observation=execution.observation,
+                    discard_on_cancel=run.tasks.discard_on_cancel,
+                ),
+            )
+        )
+        run.telemetry.emit("teardown_completed")
         raise
     stdout_text, stderr_text = await _drain_after_exit(run, pid, execution)
     return exit_code, exited_at, stdout_text, stderr_text
@@ -252,7 +405,8 @@ async def _discard_drain(
     execution: _SubprocessExecution,
 ) -> tuple[str | None, str | None]:
     """Discard and reconcile the line stream's consumers after a failure."""
-    return await _shielded_cleanup(
+    run.telemetry.emit("teardown_started")
+    result = await _shielded_cleanup(
         _drain_stream_consumers(
             run.tasks.consumers,
             _DrainContext(
@@ -263,6 +417,8 @@ async def _discard_drain(
             ),
         )
     )
+    run.telemetry.emit("teardown_completed")
+    return result
 
 
 async def _coordinate_line_stream(
@@ -295,6 +451,7 @@ async def _coordinate_line_stream(
         # this coordinator only after it has stopped consuming. Re-raised so the
         # task ends cancelled instead of publishing a ``CancelledError`` the
         # caller would meet as an exception from a plain ``aclose()``.
+        run.telemetry.emit("cancelled")
         raise
     except BaseException as error:  # ruff: ignore[blind-except] - any failure must reach the consumer
         result_future.set_exception(error)
@@ -334,6 +491,7 @@ async def _run_to_command_result(
             exc,
         )
 
+    run.telemetry.emit("completed")
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

@@ -1,4 +1,12 @@
-"""Pipeline execution configuration helpers."""
+"""Normalize output options and execution context for pipeline execution.
+
+``_PipelineRunConfig`` carries the resolved ``RunOutputOptions``, including
+``on_line``, alongside context-derived stream settings. Its
+``stdout_consumed`` and ``stderr_consumed`` decisions keep a stream readable
+when capture, echo, or line observation needs it. ``stream_config("stdout")``
+and ``stream_config("stderr")`` supply the stream-specific capture, echo,
+sink, encoding, and error configuration consumed by pipeline stream tasks.
+"""
 
 from __future__ import annotations
 

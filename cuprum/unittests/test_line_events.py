@@ -15,6 +15,7 @@ from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 type _LineConsumer = cabc.Callable[[str], None]
 
 if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent
     from cuprum.sh import SafeCmd
 
@@ -87,6 +88,21 @@ def test_compose_fans_out_to_user_callback_with_stream_tag(
     assert received[0].at == pytest.approx(1.0)
 
 
+def test_compose_fans_out_to_observe_output_event() -> None:
+    """The unit composition path retains the stream and decoded line payload."""
+    observed: list[ExecEvent] = []
+    callback = _compose_line_callbacks(
+        _make_observation((observed.append,)),
+        _LineEmissionContext(stream="stdout", pid=42, on_line=None, started_at=0.0),
+    )
+
+    typ.cast("_LineConsumer", callback)("observed")
+
+    assert [(event.phase, event.pid, event.line) for event in observed] == [
+        ("stdout", 42, "observed"),
+    ], f"observe output event must retain decoded stream data, got {observed!r}"
+
+
 class _NullCmd:
     """Command stand-in for the observation."""
 
@@ -110,9 +126,15 @@ class _NullProject:
     name = "test-project"
 
 
-def _make_observation() -> _StageObservation:
-    """Build a minimal observation with no observe hooks."""
-    hooks = _ExecutionHooks(before_hooks=(), after_hooks=(), observe_hooks=())
+def _make_observation(
+    observe_hooks: tuple[cabc.Callable[[ExecEvent], None], ...] = (),
+) -> _StageObservation:
+    """Build a minimal observation with the requested observe hooks."""
+    hooks = _ExecutionHooks(
+        before_hooks=(),
+        after_hooks=(),
+        observe_hooks=observe_hooks,
+    )
     return _StageObservation(
         cmd=typ.cast("SafeCmd", _NullCmd()),
         hooks=hooks,
