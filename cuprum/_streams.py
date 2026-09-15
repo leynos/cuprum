@@ -167,6 +167,9 @@ async def _drain(
         )
         if reached_eof:
             return _finish_drain(state, measurement, reached_eof=True)
+    except asyncio.CancelledError:
+        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
+        raise
     except BaseException:
         _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
         raise
