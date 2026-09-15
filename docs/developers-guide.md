@@ -2477,17 +2477,16 @@ callback code from replacing or moving the actual owned resource out of the
 scope. The normal path explicitly drops the writer after the callback; unwind
 relies on automatic RAII. Reserve `cuprum_native_io::borrow` for resources
 whose ownership stays with the caller. Python callers must therefore fully
-relinquish the writer descriptor supplied to
-`pump_stream`/`rust_pump_stream`. The pipeline caller passes worker-owned
-duplicates of both asyncio transport descriptors: asyncio keeps and closes the
-originals, Rust borrows the reader duplicate without closing it, and Rust
-closes the received writer duplicate on drop to signal EOF. The Python hand-off
-owner closes the reader duplicate after the worker settles. The two descriptor
-numbers in each pair must never be shared between those owners. The helper's
-safety contract obliges the caller to guarantee each `fd` is a valid open
-descriptor (or Windows handle) for the duration of the call and that ownership
-remains with the caller; in return the helper guarantees it never closes the
-borrowed reader `fd`.
+relinquish the writer descriptor supplied to `pump_stream`/`rust_pump_stream`.
+The pipeline caller passes worker-owned duplicates of both asyncio transport
+descriptors: asyncio keeps and closes the originals, Rust borrows the reader
+duplicate without closing it, and Rust closes the received writer duplicate on
+drop to signal EOF. The Python hand-off owner closes the reader duplicate after
+the worker settles. The two descriptor numbers in each pair must never be
+shared between those owners. The helper's safety contract obliges the caller to
+guarantee each `fd` is a valid open descriptor (or Windows handle) for the
+duration of the call and that ownership remains with the caller; in return the
+helper guarantees it never closes the borrowed reader `fd`.
 
 The Windows-handle wording above describes direct Rust extension calls. The
 pipeline dispatcher declines Windows asyncio subprocess-pipe handles with
