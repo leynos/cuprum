@@ -184,7 +184,7 @@ git, rsync, and tar commands.
 The library includes typed argument helpers:
 
 - `safe_path()` produces a `SafePath` by validating filesystem paths. It
-  rejects empty strings, NUL characters, and `..` segments. By default it
+  rejects empty strings, NUL characters, and `..` segments. By default, it
   requires absolute paths; set `allow_relative=True` to permit relative paths.
 - `git_ref()` produces a `GitRef` by validating git ref names. It rejects
   whitespace, leading `-`, `..`, `//`, `@{`, trailing `.lock`, trailing `.`,
@@ -676,18 +676,18 @@ internally via `asyncio.run()`.
 
 ## Execution context and hooks
 
-Cuprum provides `CuprumContext` to scope allowlists and execution hooks across
-your application. Contexts are backed by a `ContextVar`, giving you automatic
-isolation across threads and async tasks.
+Cuprum provides `CuprumContext` to scope allowlists and execution hooks.
+Contexts are backed by a `ContextVar`, which provides automatic isolation
+across threads and async tasks.
 
 **Upgrade note (v0.2.0):** `scoped()` now accepts a single `ScopeConfig`
-argument instead of keyword parameters. Update calls like
-`with scoped(allowlist=...)` to `with scoped(ScopeConfig(allowlist=...))`.
+argument instead of keyword parameters. Use
+`with scoped(ScopeConfig(allowlist=...))`.
 
 See the [0.2.0 migration guide](migration-0.2.0.md) for the optional aggregate
 Python stream-operation observation API.
 
-When you call `SafeCmd.run()` or `run_sync()`, Cuprum automatically:
+When `SafeCmd.run()` or `run_sync()` is called, Cuprum automatically:
 
 1. Checks the current context's allowlist and raises `ForbiddenProgramError` if
    the program is not permitted.
@@ -1523,7 +1523,7 @@ asyncio.run(main())
 Configure execution via the `ConcurrentConfig` dataclass:
 
 ```python
-from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
+from cuprum import ECHO, ConcurrentConfig, ScopeConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(10)]
@@ -1535,7 +1535,7 @@ config = ConcurrentConfig(
     fail_fast=False,  # Continue after failures (default)
 )
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     result = run_concurrent_sync(*commands, config=config)
 ```
 
@@ -1558,12 +1558,12 @@ Pass a `ConcurrentConfig` with `concurrency=N` to limit parallel execution.
 This uses an `asyncio.Semaphore` internally:
 
 ```python
-from cuprum import ECHO, ConcurrentConfig, run_concurrent_sync, scoped, sh
+from cuprum import ECHO, ConcurrentConfig, ScopeConfig, run_concurrent_sync, scoped, sh
 
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(10)]
 
-with scoped(allowlist=frozenset([ECHO])):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
     # At most 3 commands run simultaneously
     result = run_concurrent_sync(*commands, config=ConcurrentConfig(concurrency=3))
 ```
@@ -1578,9 +1578,9 @@ compacted `results`, whereas `failure_submission_indices` recovers the original
 submission positions:
 
 ```python
-from cuprum import run_concurrent_sync, scoped
+from cuprum import ScopeConfig, run_concurrent_sync, scoped
 
-with scoped(allowlist=...):
+with scoped(ScopeConfig(allowlist=...)):
     result = run_concurrent_sync(cmd1, cmd2, cmd3)
 
 if not result.ok:
@@ -1595,9 +1595,9 @@ Enable `fail_fast=True` in the config to cancel remaining commands after the
 first failure:
 
 ```python
-from cuprum import ConcurrentConfig, run_concurrent_sync, scoped
+from cuprum import ConcurrentConfig, ScopeConfig, run_concurrent_sync, scoped
 
-with scoped(allowlist=...):
+with scoped(ScopeConfig(allowlist=...)):
     result = run_concurrent_sync(*commands, config=ConcurrentConfig(fail_fast=True))
 
 if not result.ok:
@@ -1621,7 +1621,7 @@ Commands share the execution context, so all commands see the same hooks and
 allowlist:
 
 ```python
-from cuprum import ECHO, before, run_concurrent_sync, scoped, sh
+from cuprum import ECHO, ScopeConfig, before, run_concurrent_sync, scoped, sh
 
 
 def log_start(cmd) -> None:
@@ -1631,7 +1631,7 @@ def log_start(cmd) -> None:
 echo = sh.make(ECHO)
 commands = [echo("-n", f"task-{i}") for i in range(3)]
 
-with scoped(allowlist=frozenset([ECHO])), before(log_start):
+with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), before(log_start):
     # log_start fires for each command
     result = run_concurrent_sync(*commands)
 ```
