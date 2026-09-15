@@ -295,7 +295,19 @@ def test_pipeline_run_sync_failure_semantics(
     assert len(result.stages) == len(stage_codes)
 
     for idx, expected_code in enumerate(stage_codes):
-        exit_code = result.stages[idx].exit_code
+        stage = result.stages[idx]
+        exit_code = stage.exit_code
+        assert stage.started_at > 0, f"stage {idx} must retain its wall-clock start"
+        assert stage.duration >= 0, f"stage {idx} must retain a non-negative duration"
+        assert stage.max_rss_bytes is None, (
+            f"stage {idx} must not claim aggregate child RSS"
+        )
+        assert stage.user_cpu_seconds is None, (
+            f"stage {idx} must not claim aggregate child user CPU"
+        )
+        assert stage.system_cpu_seconds is None, (
+            f"stage {idx} must not claim aggregate child system CPU"
+        )
         if expect_failure_index is not None and idx < expect_failure_index:
             assert exit_code in {expected_code, -15}, (
                 "an upstream stage must either complete before fail-fast or be "
