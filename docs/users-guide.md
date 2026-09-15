@@ -47,6 +47,49 @@ release. The callable form remains a compatibility path during the transition;
 both forms return the same read-only mapping, and attempts to mutate it fail as
 before.
 
+### Building a catalogue for a single project
+
+Most scripts run one or two programs under a single project.
+`ProgramCatalogue.from_programs()` builds that catalogue in one call, so a
+script does not have to spell out `ProjectSettings` and the
+`ProgramCatalogue(projects=(...))` wrapper by hand:
+
+```python
+from cuprum import ProgramCatalogue
+
+CATALOGUE = ProgramCatalogue.from_programs("git", "cargo")
+```
+
+That is equivalent to:
+
+```python
+from cuprum import Program, ProgramCatalogue, ProjectSettings
+
+CATALOGUE = ProgramCatalogue(
+    projects=(
+        ProjectSettings(
+            name="git-cargo",
+            programs=(Program("git"), Program("cargo")),
+        ),
+    ),
+)
+```
+
+- Programs may be `Program` values or strings. Absolute paths are recorded as
+  given, so `/usr/bin/git` allowlists that path rather than the name `git`.
+- The project name defaults to the programs' base names joined with `-`, giving
+  `git-cargo` above. Pass `name=` to supply an explicit project name.
+- `documentation_locations=` and `noise_rules=` are forwarded to the project.
+  Both now default to `()` on `ProjectSettings`, so a project that needs
+  neither can omit them.
+- Calling `from_programs()` with no programs raises `ValueError`, and supplying
+  the same program twice raises `DuplicateProgramError`, exactly as the full
+  constructor does.
+
+Keep using `ProjectSettings` and `ProgramCatalogue(projects=(...))` directly
+when a script needs several projects, because ownership of each program must
+then be stated explicitly.
+
 ### Handling duplicate catalogue entries
 
 Catalogue construction rejects ambiguous project metadata before any command is

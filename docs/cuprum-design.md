@@ -241,8 +241,16 @@ surface. Each entry belongs to a `ProjectSettings` record that holds:
 
 - `programs`: curated `Program` values owned by the project;
 - `documentation_locations`: runbooks or background docs for reviewers and
-  operators;
-- `noise_rules`: output patterns downstream loggers may drop to cut chatter.
+  operators, defaulting to an empty tuple;
+- `noise_rules`: output patterns downstream loggers may drop to cut chatter,
+  defaulting to an empty tuple.
+
+`ProgramCatalogue.from_programs()` builds the single-project catalogue that a
+standalone script needs — a project owning the given programs, named after
+their base names unless the caller supplies one — without requiring the caller
+to state `ProjectSettings` and the `ProgramCatalogue(projects=(...))` wrapper.
+Multi-project catalogues continue to use the explicit form so that ownership of
+each program is stated.
 
 Cuprum ships with `DEFAULT_CATALOGUE`, anchored by the `core-ops` project and
 extended with project-specific metadata. The catalogue rejects unknown

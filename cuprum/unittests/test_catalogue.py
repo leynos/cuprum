@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import sys
 import threading
 import typing as typ
 
@@ -155,6 +156,97 @@ def test_coercion_accepts_program_and_string() -> None:
         "Program instance must be accepted by is_allowed"
     )
     assert DEFAULT_CATALOGUE.is_allowed("echo"), "Raw strings should also be accepted"
+
+
+def test_project_settings_defaults_to_empty_metadata() -> None:
+    """A project may declare only a name and its programs."""
+    project = ProjectSettings(name="bare", programs=(Program("tool"),))
+
+    assert project.documentation_locations == (), "Docs links should default to empty"
+    assert project.noise_rules == (), "Noise rules should default to empty"
+
+
+def test_from_programs_builds_single_project_catalogue() -> None:
+    """The convenience constructor allowlists every supplied program."""
+    catalogue = ProgramCatalogue.from_programs("git", "cargo")
+
+    assert catalogue.allowlist == frozenset({Program("git"), Program("cargo")}), (
+        "Allowlist must contain exactly the supplied programs"
+    )
+    for program in ("git", "cargo"):
+        assert catalogue.is_allowed(program), "Coerced string should be allowed"
+        assert catalogue.lookup(program).program == Program(program), (
+            "Lookup must resolve the supplied program"
+        )
+
+
+def test_from_programs_derives_name_from_program_base_names() -> None:
+    """The default project name joins the programs' base names."""
+    catalogue = ProgramCatalogue.from_programs("git", "cargo")
+    absolute = ProgramCatalogue.from_programs("/usr/bin/git")
+
+    assert catalogue.lookup("git").project_name == "git-cargo", (
+        "Default name must join base names with a hyphen"
+    )
+    assert absolute.lookup("/usr/bin/git").project_name == "git", (
+        "Absolute paths must reduce to their base name"
+    )
+
+
+def test_from_programs_derives_windows_base_name_on_any_host() -> None:
+    """A drive path reduces to its base name regardless of host platform."""
+    windows_path = r"C:\tools\git.exe"
+    catalogue = ProgramCatalogue.from_programs(windows_path, "cargo")
+
+    assert catalogue.lookup(windows_path).project_name == "git.exe-cargo", (
+        "Windows drive paths must reduce to their base name on every host"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows treats a backslash as a path separator",
+)
+def test_from_programs_keeps_posix_backslash_in_base_name() -> None:
+    """Only Windows drive paths are re-parsed; POSIX names keep a backslash."""
+    program = r"weird\name"
+    catalogue = ProgramCatalogue.from_programs(program)
+
+    assert catalogue.lookup(program).project_name == program, (
+        "A POSIX filename containing a backslash must not be split on it"
+    )
+
+
+def test_from_programs_accepts_explicit_name_and_metadata() -> None:
+    """A caller-supplied name overrides the derived default."""
+    catalogue = ProgramCatalogue.from_programs(
+        Program("git"),
+        name="repo-tools",
+        documentation_locations=("docs/scripting-standards.md",),
+        noise_rules=(r"^hint:",),
+    )
+
+    project = catalogue.visible_settings["repo-tools"]
+    assert project.documentation_locations == ("docs/scripting-standards.md",), (
+        "Docs links must be carried into the project"
+    )
+    assert project.noise_rules == (r"^hint:",), "Noise rules must be carried over"
+
+
+def test_from_programs_requires_at_least_one_program() -> None:
+    """An empty call is a usage error rather than an empty catalogue."""
+    with pytest.raises(ValueError, match="at least one program"):
+        ProgramCatalogue.from_programs()
+
+
+def test_from_programs_rejects_duplicate_programs() -> None:
+    """Repeated programs fail exactly as the full constructor does."""
+    with pytest.raises(DuplicateProgramError, match="git") as exc:
+        ProgramCatalogue.from_programs("git", "git")
+    assert exc.value.program == Program("git"), "Error must carry the contested program"
+    assert exc.value.owner == "git-git", (
+        "Error must name the project that registered the program first"
+    )
 
 
 def test_program_hash_and_equality_usage() -> None:

@@ -104,6 +104,14 @@ compromising explicitness.
   documenting when to avoid the sugar.
 - [ ] 3.2.2. Supply static-analysis support (type stubs or a mypy plugin) that
   keeps attribute-style commands type-safe; include sample configuration.
+- [x] 3.2.3. Add `ProgramCatalogue.from_programs()` so a standalone script can
+  build a single-project catalogue without spelling out `ProjectSettings` and
+  the `ProgramCatalogue(projects=(...))` wrapper
+  ([#396](https://github.com/leynos/cuprum/issues/396)).
+  - [x] Accept programs as `Program` values or strings, derive the default
+    project name from their base names, and reject an empty call.
+  - [x] Default `ProjectSettings.documentation_locations` and `noise_rules` to
+    empty tuples so a one-program project needs no ceremony.
 
 ### 3.3. Configuration and policy
 

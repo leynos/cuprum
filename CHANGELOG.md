@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0]
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
@@ -24,6 +24,16 @@
 
 ### Added
 
+- **`ProgramCatalogue.from_programs()`:** Build the single-project catalogue
+  that a standalone script needs from its programs alone — for example
+  `ProgramCatalogue.from_programs("git", "cargo")` — instead of spelling out
+  `ProjectSettings` and the `ProgramCatalogue(projects=(...))` wrapper.
+  Programs may be `Program` values or strings, the default project name joins
+  their base names with `-`, and `name=` overrides it. An empty call raises
+  `ValueError`, while a repeated program still raises `DuplicateProgramError`.
+  `ProjectSettings.documentation_locations` and `noise_rules` now default to
+  empty tuples, so a project that needs neither can omit them
+  ([#396](https://github.com/leynos/cuprum/issues/396)).
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,
   the encoded truncation marker, and its line ending. Captured output remains
@@ -164,6 +174,12 @@
   contributor changes can now fail the spelling gate on source-code drift
   ([#259](https://github.com/leynos/cuprum/pull/259)).
 
+- **Environment overlays (breaking):** Document that scoped `env(...)` overlays
+  resolve against the live `os.environ` at subprocess spawn time, so callers
+  that depended on an import-time or scope-entry snapshot must pass explicit
+  values through the overlay or `ExecutionContext.env` instead
+  ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
+
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
@@ -199,16 +215,3 @@
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
 [^1]: <https://github.com/leynos/cuprum/issues/348>
-
-## [0.2.0] - 2026-06-21
-
-<!-- markdownlint-disable-next-line MD024 -->
-### Changed
-
-- **Environment overlays (breaking):** Document that scoped `env(...)` overlays
-  resolve against the live `os.environ` at subprocess spawn time, so callers
-  that depended on an import-time or scope-entry snapshot must pass explicit
-  values through the overlay or `ExecutionContext.env` instead
-  ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
-
-[0.2.0]: https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6

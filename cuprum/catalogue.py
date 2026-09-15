@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 
 from cuprum.program import Program
@@ -20,6 +21,27 @@ from cuprum.program import Program
 def _coerce_program(raw: Program | str) -> Program:
     """Return input as Program for type narrowing; no transformation performed."""
     return Program(raw)
+
+
+def _derive_project_name(programs: cabc.Iterable[Program | str]) -> str:
+    r"""Return a deterministic project name from the programs' base names.
+
+    Absolute paths reduce to their final path component so a catalogue built
+    from ``/usr/bin/python3`` is named after ``python3`` rather than the whole
+    invocation path. Windows drive paths reduce the same way on every host,
+    while a POSIX filename containing a literal backslash keeps it.
+
+    Returns
+    -------
+    str
+        The programs' base names joined with ``-``.
+    """
+    return "-".join(
+        PureWindowsPath(program).name
+        if PureWindowsPath(program).drive
+        else Path(program).name
+        for program in programs
+    )
 
 
 class UnknownProgramError(LookupError):
@@ -73,12 +95,16 @@ class DuplicateProgramError(ValueError):
 
 @dc.dataclass(frozen=True, slots=True)
 class ProjectSettings:
-    """Metadata shared by a project's curated programs."""
+    """Metadata shared by a project's curated programs.
+
+    ``documentation_locations`` and ``noise_rules`` default to empty tuples so
+    a small script can declare a project from its name and programs alone.
+    """
 
     name: str
     programs: tuple[Program, ...]
-    documentation_locations: tuple[str, ...]
-    noise_rules: tuple[str, ...]
+    documentation_locations: tuple[str, ...] = ()
+    noise_rules: tuple[str, ...] = ()
 
     def owns(self, program: Program) -> bool:
         """Return True when the program belongs to this project.
@@ -148,6 +174,68 @@ class ProgramCatalogue:
         self._program_to_project = self._index_programs(self._projects)
         self._allowlist = frozenset(self._program_to_project)
         self._visible_settings_cache = _VisibleSettings(self._projects)
+
+    @classmethod
+    def from_programs(
+        cls,
+        *programs: Program | str,
+        name: str | None = None,
+        documentation_locations: tuple[str, ...] = (),
+        noise_rules: tuple[str, ...] = (),
+    ) -> ProgramCatalogue:
+        """Build a single-project catalogue from the given programs.
+
+        A convenience for standalone scripts that run one or two programs and
+        would otherwise spell out ``ProjectSettings`` and ``ProgramCatalogue``
+        by hand.
+
+        Parameters
+        ----------
+        *programs : Program | str
+            Programs to allowlist. Strings are coerced to ``Program``, so
+            bare names and absolute paths are both accepted.
+        name : str | None, optional
+            Project name for the resulting catalogue. When ``None``, the
+            programs' base names joined with ``-`` are used instead, so
+            ``from_programs("/usr/bin/git", "cargo")`` is named
+            ``git-cargo``.
+        documentation_locations : tuple[str, ...], optional
+            Documentation references for the project.
+        noise_rules : tuple[str, ...], optional
+            Regular expressions for output lines a logger may drop.
+
+        Returns
+        -------
+        ProgramCatalogue
+            A catalogue whose sole project owns every supplied program.
+
+        Raises
+        ------
+        ValueError
+            If no programs are supplied.
+        DuplicateProgramError
+            If the same program is supplied more than once.
+
+        Examples
+        --------
+        >>> from cuprum import ProgramCatalogue
+        >>> catalogue = ProgramCatalogue.from_programs("git", "cargo")
+        >>> sorted(catalogue.allowlist)
+        ['cargo', 'git']
+        >>> catalogue.lookup("git").project_name
+        'git-cargo'
+        """  # ruff: ignore[docstring-extraneous-exception] - DuplicateProgramError propagates from the constructor
+        if not programs:
+            msg = "from_programs requires at least one program"
+            raise ValueError(msg)
+        coerced = tuple(_coerce_program(program) for program in programs)
+        project = ProjectSettings(
+            name=_derive_project_name(coerced) if name is None else name,
+            programs=coerced,
+            documentation_locations=documentation_locations,
+            noise_rules=noise_rules,
+        )
+        return cls(projects=(project,))
 
     @property
     def allowlist(self) -> frozenset[Program]:
