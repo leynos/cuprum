@@ -2322,9 +2322,10 @@ flowchart TD
 For screen readers: The following state diagram shows the lifecycle of a
 `SafeCmd.lines()` iteration. It moves from creation through the first
 `__anext__()` call to the streaming state, then ends either by publishing the
-`CommandResult` and closing, or — on timeout or caller cancellation — by
-tearing the child process down through the existing SIGTERM, grace-wait, and
-SIGKILL path before the consumers drain and the stream closes.
+`CommandResult` and closing, or — when iteration breaks, the stream is closed,
+or the caller is cancelled — by tearing the child process down through the
+existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
+the stream closes.
 
 Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
@@ -2337,13 +2338,34 @@ stateDiagram-v2
     Streaming --> Streaming: yield LineEvent
     Streaming --> Completed: CommandResult published
     Completed --> Closed: result exposed
-    Streaming --> Cancelling: aclose() or cancellation
-    Streaming --> Streaming: break (stream still open)
+    Streaming --> Cancelling: break, aclose(), or cancellation
     Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
     Terminated --> Closed: consumers drained
     Streaming --> TimedOut: timeout
     TimedOut --> Terminated: existing timeout termination path
     Closed --> [*]
+```
+
+For screen readers: The following flowchart shows how each decoded output line
+is fanned out to observe hooks, the synchronous line hook, the line-stream
+queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
+and queue produce `LineEvent` records for their respective consumers.
+
+Figure 11: Line observation fan-out from decoded output to lifecycle events,
+line events, capture, and echo
+
+```mermaid
+flowchart LR
+    decoded[Decoded output line] --> compose[_compose_line_callbacks]
+    compose --> observe[Observe hooks]
+    compose --> hook[RunOutputOptions.on_line]
+    compose --> queue[LineStream queue]
+    observe --> exec[ExecEvent]
+    hook --> event[LineEvent]
+    queue --> event
+    event --> consumer[Async iterator consumer]
+    decoded --> capture[Capture]
+    decoded --> echo[Echo]
 ```
 
 For screen readers: The following sequence diagram shows one full
@@ -2354,7 +2376,7 @@ values are enqueued and yielded as they arrive, and after the process exits the
 consumers are drained, the `CommandResult` is published, and iteration ends with
 `StopAsyncIteration` before the caller reads the `result` attribute.
 
-Figure 11: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 12: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
