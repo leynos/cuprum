@@ -15,17 +15,11 @@
 //! Splice requires at least one pipe endpoint. Regular files, most sockets,
 //! and other file descriptor types return `EINVAL` and trigger the fallback.
 
+use cuprum_native_io::{AsStream, BorrowedStream, borrow};
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd};
 
 use crate::errors::PumpError;
 use crate::io_utils::read_raw_fd;
-
-/// Flag for splice: move pages instead of copying (advisory).
-const SPLICE_F_MOVE: libc::c_uint = 0x01;
-
-/// Flag for splice: more data will be sent (for TCP corking).
-const SPLICE_F_MORE: libc::c_uint = 0x04;
 
 /// Attempt to pump data using `splice()`. Returns None if splice is not supported.
 ///
@@ -41,12 +35,12 @@ const SPLICE_F_MORE: libc::c_uint = 0x04;
 /// - `Some(Err(e))`: Fatal I/O error occurred
 /// - `None`: splice not supported for these FDs; caller should use read/write
 pub(crate) fn try_splice_pump(
-    reader: &OwnedFd,
-    writer: &OwnedFd,
+    reader: &impl AsStream,
+    writer: &impl AsStream,
     chunk_size: usize,
 ) -> Option<Result<u64, PumpError>> {
-    let reader_fd = reader.as_raw_fd();
-    let writer_fd = writer.as_raw_fd();
+    let reader_fd = borrow(reader);
+    let writer_fd = borrow(writer);
 
     // The first splice call detects support: `EINVAL` here means the FD
     // types cannot splice and the caller must fall back to read/write. Once
@@ -66,27 +60,12 @@ pub(crate) fn try_splice_pump(
 /// write policies in [`crate::io_utils`]: a signal delivered mid-transfer
 /// re-issues the splice rather than surfacing a spurious failure that would
 /// abort an otherwise-healthy pump.
-fn splice_once(fd_in: libc::c_int, fd_out: libc::c_int, len: usize) -> Result<usize, PumpError> {
-    let flags = SPLICE_F_MOVE | SPLICE_F_MORE;
-    splice_once_with(|| {
-        // SAFETY: splice is a well-defined syscall; null offsets are valid for pipes.
-        let result = unsafe {
-            libc::splice(
-                fd_in,
-                std::ptr::null_mut(), // No offset for pipes
-                fd_out,
-                std::ptr::null_mut(), // No offset for pipes
-                len,
-                flags,
-            )
-        };
-
-        if result >= 0 {
-            Ok(result)
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    })
+fn splice_once(
+    fd_in: BorrowedStream<'_>,
+    fd_out: BorrowedStream<'_>,
+    len: usize,
+) -> Result<usize, PumpError> {
+    splice_once_with(|| cuprum_native_io::splice_once(fd_in, fd_out, len))
 }
 
 /// Retry an interrupted splice syscall and map its result into [`PumpError`].
@@ -121,8 +100,8 @@ fn splice_once_with(
 /// reader so upstream does not block, then reports the bytes transferred so
 /// far.
 fn splice_loop(
-    fd_in: libc::c_int,
-    fd_out: libc::c_int,
+    fd_in: BorrowedStream<'_>,
+    fd_out: BorrowedStream<'_>,
     chunk_size: usize,
     first: Result<usize, PumpError>,
 ) -> Result<u64, PumpError> {
@@ -178,7 +157,7 @@ fn accumulate_splices(
 /// canonical raw-fd read helper, so interrupted reads (`EINTR`) retry
 /// instead of silently ending the drain, end of file terminates it, and
 /// any other error propagates.
-fn drain_reader(fd_in: libc::c_int, chunk_size: usize) -> Result<(), PumpError> {
+fn drain_reader(fd_in: BorrowedStream<'_>, chunk_size: usize) -> Result<(), PumpError> {
     let mut buf = vec![0_u8; chunk_size];
     loop {
         let n = read_raw_fd(fd_in, &mut buf)?;
