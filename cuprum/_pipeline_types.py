@@ -27,7 +27,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
@@ -181,6 +180,17 @@ class _StageObservation:
 
 
 @dc.dataclass(frozen=True, slots=True)
+class _PipelineWaitResult:
+    """Exit codes and timing captured once a pipeline finishes waiting."""
+
+    exit_codes: tuple[int, ...]
+    failure_index: int | None
+    started_at: tuple[float, ...]
+    ended_at: tuple[float | None, ...]
+    wall_clock_started_at: tuple[float, ...]
+
+
+@dc.dataclass(frozen=True, slots=True)
 class _PipelineStageResultInputs:
     """Aggregated wait outcome and captured output for stage results."""
 
@@ -198,13 +208,16 @@ class _StageWaitContext:
     rather than aliasing it, which is what stops its live bookkeeping writing
     back through this supposedly frozen record.
 
-    ``started_at`` is what stage durations are measured from. ``observations``
-    provides the wait path with the hook set and stage execution token for the
-    fail-fast report. It remains optional so transition tests and the symbolic
-    model can construct a context without observability state.
+    ``started_at`` is the monotonic time stage durations are measured from;
+    ``wall_clock_started_at`` is the corresponding public result timestamp.
+    ``observations`` provides the wait path with the hook set and stage
+    execution token for the fail-fast report. It remains optional so transition
+    tests and the symbolic model can construct a context without observability
+    state.
     """
 
     started_at: tuple[float, ...]
+    wall_clock_started_at: tuple[float, ...] = ()
     observations: tuple[_StageObservation, ...] = ()
 
 

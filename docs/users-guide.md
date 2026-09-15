@@ -392,7 +392,27 @@ and echo semantics and returns a structured `CommandResult`:
     The same settings are used when `StdinInput.text` is encoded for
     subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
-  success.
+  success. `started_at` records the wall-clock start time and `duration`
+  records elapsed monotonic seconds.
+- `user_cpu_seconds` and `system_cpu_seconds` are populated from POSIX
+  child-resource accounting for an isolated command when the platform provides
+  it. The CPU fields are deltas from `RUSAGE_CHILDREN` snapshots and are
+  approximate under `run_concurrent` because the counter is process-global.
+  `max_rss_bytes` is `None`: `ru_maxrss` is a cumulative high-water mark, so it
+  cannot be attributed safely to one command. All three resource fields are
+  `None` on Windows and platforms without the required resource API, and
+  pipeline-stage resource fields are always `None` because concurrently reaped
+  stages cannot be attributed safely.
+
+### Upgrading `CommandResult` consumers
+
+`started_at` and `duration` are public fields on the dataclass with `0.0`
+defaults, so existing six-argument positional construction remains valid.
+Results produced by command execution supply measured values. Code that
+serializes or displays resource fields should preserve `None` as unavailable:
+POSIX child accounting supplies the CPU deltas for isolated commands, while
+Windows, unsupported platforms, and pipeline stages do not supply resource
+figures.
 
 ### Output options
 

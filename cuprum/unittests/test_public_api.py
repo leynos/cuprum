@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 
+import pytest
+
 import cuprum as c
 from cuprum import (
     context,
@@ -84,6 +86,25 @@ def test_public_catalogue_behaviour_via_reexports() -> None:
     assert not c.DEFAULT_CATALOGUE.is_allowed("definitely-not-allowed"), (
         "Unknown program should not be allowlisted"
     )
+
+
+def test_command_result_exposes_execution_measurements() -> None:
+    """``CommandResult`` keeps exit semantics while exposing measurements."""
+    fields = {field.name for field in dc.fields(c.CommandResult)}
+
+    assert {
+        "started_at",
+        "duration",
+        "max_rss_bytes",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+    } <= fields
+    legacy_result = c.CommandResult(c.ECHO, (), 0, 1, "", "")
+    assert legacy_result.started_at == pytest.approx(0.0)
+    assert legacy_result.duration == pytest.approx(0.0)
+    assert legacy_result.ok is True
+    assert c.CommandResult(c.ECHO, (), 0, 1, "", "", 0.0, 0.0).ok is True
+    assert c.CommandResult(c.ECHO, (), 1, 1, "", "", 0.0, 0.0).ok is False
 
 
 def test_exec_id_keeps_its_positional_slot() -> None:
