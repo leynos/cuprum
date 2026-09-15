@@ -114,7 +114,9 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     ) -> _StubSpawnProcess:
         """Assert that both start-time samples precede stage spawning."""
         events.append("spawn")
-        assert events == ["monotonic", "wall", "spawn"]
+        assert events == ["monotonic", "wall", "spawn"], (
+            "stage start clocks must be sampled before subprocess spawn"
+        )
         await asyncio.sleep(0)
         return _StubSpawnProcess(pid=12345)
 
@@ -143,5 +145,7 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
         _spawn_pipeline_processes((sh.make(ECHO)("quiet"),), config),
     )
 
-    assert started_at == [10.0]
-    assert wall_clock_started_at == [20.0]
+    assert started_at == [10.0], "pipeline must return each monotonic stage start"
+    assert wall_clock_started_at == [20.0], (
+        "pipeline must return each wall-clock stage start"
+    )
