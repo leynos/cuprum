@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, _subprocess_execution, sh
+from cuprum import ECHO, _rusage, _subprocess_execution, sh
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -82,12 +82,12 @@ def test_captures_output_and_exit_code(
     assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
-    assert result.started_at > 0
-    assert result.duration >= 0
+    assert result.started_at > 0, "every command result must record a wall-clock start"
+    assert result.duration >= 0, "every command result must report a duration"
     if sys.platform == "win32":
-        assert result.max_rss_bytes is None
-        assert result.user_cpu_seconds is None
-        assert result.system_cpu_seconds is None
+        assert result.max_rss_bytes is None, "Windows must not report child RSS"
+        assert result.user_cpu_seconds is None, "Windows must not report child CPU"
+        assert result.system_cpu_seconds is None, "Windows must not report child CPU"
 
 
 @_posix_only
@@ -97,16 +97,46 @@ def test_records_child_cpu_usage_without_attributable_rss(
     """An isolated child has CPU usage but no attributable RSS high-water mark."""
     command = python_builder(
         "-c",
-        "payload = bytearray(512 * 1024 * 1024); print(len(payload))",
+        "print('resource-probe')",
     )
 
     result = command.run_sync()
 
-    assert result.max_rss_bytes is None
-    assert result.user_cpu_seconds is not None
-    assert result.user_cpu_seconds >= 0
-    assert result.system_cpu_seconds is not None
-    assert result.system_cpu_seconds >= 0
+    assert result.max_rss_bytes is None, "aggregate RSS cannot identify one child"
+    assert result.user_cpu_seconds is not None, "POSIX must expose child user CPU"
+    assert result.user_cpu_seconds >= 0, "child user CPU must be non-negative"
+    assert result.system_cpu_seconds is not None, "POSIX must expose child system CPU"
+    assert result.system_cpu_seconds >= 0, "child system CPU must be non-negative"
+
+
+def test_publishes_cpu_deltas_from_direct_execution_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct execution publishes the CPU deltas from its rusage boundaries."""
+    snapshots = [
+        _rusage._ChildRusageSnapshot(0, 1.25, 2.5),
+        _rusage._ChildRusageSnapshot(0, 4.75, 8.0),
+    ]
+
+    def capture_snapshot() -> _rusage._ChildRusageSnapshot:
+        """Return the next controlled accounting boundary."""
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(
+        _subprocess_execution,
+        "capture_child_rusage",
+        capture_snapshot,
+    )
+
+    result = sh.make(ECHO)("resource-probe").run_sync()
+
+    assert result.max_rss_bytes is None, "aggregate RSS cannot identify one child"
+    assert result.user_cpu_seconds == pytest.approx(3.5), (
+        "direct execution must publish the measured user CPU delta"
+    )
+    assert result.system_cpu_seconds == pytest.approx(5.5), (
+        "direct execution must publish the measured system CPU delta"
+    )
 
 
 def test_records_start_times_before_subprocess_spawn(
@@ -128,7 +158,9 @@ def test_records_start_times_before_subprocess_spawn(
     async def fake_spawn(_: object) -> object:
         """Assert that both start-time samples precede spawning."""
         events.append("spawn")
-        assert events == ["monotonic", "wall", "spawn"]
+        assert events == ["monotonic", "wall", "spawn"], (
+            "direct start clocks must be sampled before subprocess spawn"
+        )
         await asyncio.sleep(0)
         return type("Process", (), {"pid": 123})()
 
@@ -153,8 +185,12 @@ def test_records_start_times_before_subprocess_spawn(
         sh.make(ECHO)("quiet").run(output=sh.RunOutputOptions(capture=False)),
     )
 
-    assert result.started_at == pytest.approx(20.0)
-    assert result.duration == pytest.approx(3.0)
+    assert result.started_at == pytest.approx(20.0), (
+        "direct result must retain the injected wall-clock start"
+    )
+    assert result.duration == pytest.approx(3.0), (
+        "direct result duration must use the injected monotonic timestamps"
+    )
 
 
 def test_applies_env_overrides(
