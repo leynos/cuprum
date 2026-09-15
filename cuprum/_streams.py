@@ -16,16 +16,16 @@ must not reuse the writer afterwards.
 from __future__ import annotations
 
 import asyncio
-import codecs
 import dataclasses as dc
-import logging
 import typing as typ
 
-from cuprum._echo_truncation import (
-    _EchoLineLimiter,
-    _split_echo_segments,
-    _validate_bounded_echo_encoding,
+from cuprum._echo_relay import (
+    _echo_chunk,
+    _echo_decoder,
+    _flush_echo_decoder,
+    _write_chunk,
 )
+from cuprum._echo_truncation import _EchoLineLimiter, _validate_bounded_echo_encoding
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams_pump import (
@@ -37,8 +37,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
-from cuprum.echo_observation import _emit_echo_event
+from cuprum.echo_events import EchoStream, RelayFallback
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
     _complete_stream_operation,
@@ -47,12 +46,10 @@ from cuprum.stream_observation import (
 )
 
 if typ.TYPE_CHECKING:
+    import codecs
     import collections.abc as cabc
 
     from cuprum.stream_observation import _StreamOperationMeasurement
-
-
-_LOGGER = logging.getLogger("cuprum.stream")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -66,10 +63,15 @@ class _StreamConfig:
     errors: str
     # Profiled private read size; production callers use the default.
     read_size: int = _READ_SIZE
-    # Byte cap per echoed line; capture remains byte-for-byte complete.
+    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
+    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
+    # accepting a line past a size limit (GitHub Actions job logs end at a
+    # 64 KiB line) while capture stays byte-for-byte complete.
     echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
-    # Drained output stream for bounded-echo observability.
+    # Which output stream this config drains, for bounded echo observability.
+    # Defaults to stdout because every production call site names the stderr
+    # config explicitly when it replaces the stdout one.
     stream: EchoStream = EchoStream.STDOUT
 
 
@@ -89,8 +91,50 @@ class _DrainState:
     # decoder flush without rebinding this frozen field.
 
     echo_guard: _EchoGuard
-
+    # Caller-owned result diagnostics: the collector a command hands to this
+    # drain so a handled echo disablement can be surfaced on that command's
+    # ``CommandResult.relay_fallbacks`` without touching the shared echo-hook
+    # registry, which cannot attribute events to nested or concurrent runs.
+    relay_diagnostics: _RelayDiagnostics
     echo_limiter: _EchoLineLimiter | None = None
+
+
+@dc.dataclass(slots=True)
+class _RelayDiagnostics:
+    """Per-drain collector for handled echo-disablement records.
+
+    One collector belongs to one command stream. Because the echo guard stops
+    any later echo write after the first handled failure, a drain appends at
+    most one :class:`~cuprum.echo_events.RelayFallback` here.
+    """
+
+    fallbacks: list[RelayFallback] = dc.field(default_factory=list)
+    is_settled: bool = False
+
+    def settle(self) -> None:
+        """Publish the collected records for the owning command's result.
+
+        Idempotent: the reconciliation paths run exactly once per drain, and a
+        second call keeps whichever record list that call captured.
+        """
+        self.is_settled = True
+
+    def snapshot(self) -> tuple[RelayFallback, ...]:
+        """Return the collected records, or ``()`` before the drain settled.
+
+        A drain that never settled — cancelled or abandoned during teardown —
+        leaves its records unread: those diagnostics remain on the echo
+        observation channel, so callers on a non-result path see ``()``.
+
+        Returns
+        -------
+        tuple[RelayFallback, ...]
+            The records collected before settlement, empty when the drain
+            never settled or recorded nothing.
+        """
+        if not self.is_settled:
+            return ()
+        return tuple(self.fallbacks)
 
 
 @dc.dataclass(slots=True)
@@ -105,18 +149,31 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
-    read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
-    """Read from a subprocess stream, teeing to sink when requested."""
+    """Read from a subprocess stream, teeing to sink when requested.
+
+    ``relay_diagnostics`` defaults to a fresh collector, so a caller that does
+    not own result diagnostics still gets a correct drain.
+
+    Returns
+    -------
+    str | None
+        The captured text, or ``None`` when capture is disabled.
+    """
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config, read_size=read_size)
+        return await _consume_stream_without_lines(
+            stream,
+            config,
+            relay_diagnostics=relay_diagnostics,
+        )
     return await _consume_stream_with_lines(
         stream,
         _LineConsumption(
             config=config,
             on_line=on_line,
-            read_size=read_size,
             drain=_drain,
+            relay_diagnostics=relay_diagnostics,
         ),
     )
 
@@ -126,9 +183,17 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
-    read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
+    # This is the single source of truth for the consume mechanics shared by
+    # :func:`_consume_stream_without_lines` and
+    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
+    # the capture buffer when capturing, echo each chunk to the configured
+    # sink when echoing, then hand the chunk to ``on_chunk`` for
+    # variant-specific processing (for example incremental line decoding).
+    # Fixes to the loop must be made here so the capture path and the
+    # line-emitting path cannot drift.
     if config.echo_output and config.echo_max_line_bytes is not None:
         _validate_bounded_echo_encoding(config.encoding, config.errors)
     buffer = bytearray() if config.capture_output else None
@@ -144,6 +209,7 @@ async def _drain(
         echo_decoder,
         on_chunk,
         echo_guard,
+        relay_diagnostics or _RelayDiagnostics(),
         echo_limiter=echo_limiter,
     )
     measurement = _start_stream_operation(StreamOperation.DRAIN)
@@ -151,7 +217,6 @@ async def _drain(
         reached_eof = await _drain_chunks(
             stream,
             state,
-            read_size=read_size,
             measurement=measurement,
         )
         if reached_eof:
@@ -195,13 +260,12 @@ async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
     *,
-    read_size: int,
     measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(read_size)
+            chunk = await stream.read(state.config.read_size)
         except asyncio.CancelledError:
             return False
         _record_stream_read(measurement, chunk)
@@ -219,168 +283,22 @@ async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    read_size: int,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config, read_size=read_size)
-
-
-def _write_chunk(
-    config: _StreamConfig,
-    chunk: bytes,
-    *,
-    decoder: codecs.IncrementalDecoder | None = None,
-    final: bool = False,
-) -> None:
-    """Write a bytes chunk to a sink synchronously, avoiding extra encoding.
-
-    For stdio echo this blocking write is acceptable; future slow-sink handling
-    can layer on a background writer if needed.
-    """
-    buffer = getattr(config.sink, "buffer", None)
-    if buffer is not None:
-        buffer.write(chunk)
-        buffer.flush()
-        return
-    text = (
-        chunk.decode(config.encoding, errors=config.errors)
-        if decoder is None
-        else decoder.decode(chunk, final=final)
+    return await _drain(
+        stream,
+        config,
+        relay_diagnostics=relay_diagnostics,
     )
-    if text:
-        config.sink.write(text)
-    config.sink.flush()
-
-
-def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:
-    """Create an incremental decoder configured for a stream invocation."""
-    decoder_factory = codecs.getincrementaldecoder(config.encoding)
-    return decoder_factory(errors=config.errors)
-
-
-def _echo_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder | None:
-    """Create the decoder needed by a text-only echo sink, if any."""
-    if not config.echo_output or getattr(config.sink, "buffer", None) is not None:
-        return None
-    return _incremental_decoder(config)
-
-
-def _echo_chunk(state: _DrainState, chunk: bytes) -> None:
-    """Echo *chunk* to the sink, honouring the per-line byte bound when set."""
-    if state.echo_guard.disabled:
-        return
-    limiter = state.echo_limiter
-    if limiter is None:
-        _echo_write(state, chunk)
-        return
-    data = _prepend_pending_carriage_return(limiter, chunk)
-    for body, ending in _split_echo_segments(data):
-        _echo_bounded_segment(state, limiter, body, ending)
-
-
-def _prepend_pending_carriage_return(
-    limiter: _EchoLineLimiter,
-    chunk: bytes,
-) -> bytes:
-    """Hold a chunk-final CR until its line-ending role is known."""
-    prefix = b"\r" if limiter.has_pending_carriage_return else b""
-    limiter.has_pending_carriage_return = False
-    data = prefix + chunk
-    if data.endswith(b"\r"):
-        limiter.has_pending_carriage_return = True
-        return data[:-1]
-    return data
-
-
-def _echo_bounded_segment(
-    state: _DrainState,
-    limiter: _EchoLineLimiter,
-    body: bytes,
-    ending: bytes | None,
-) -> None:
-    """Accumulate one segment and mirror its completed line within the bound."""
-    limiter.bound_line(body)
-    if ending is None:
-        return
-    _write_finished_echo_line(state, limiter, ending)
-
-
-def _write_finished_echo_line(
-    state: _DrainState,
-    limiter: _EchoLineLimiter,
-    ending: bytes,
-) -> None:
-    """Write one finalized bounded echo line and observe a successful trim."""
-    finished = limiter.finish_line(
-        ending=ending,
-        encoding=state.config.encoding,
-        errors=state.config.errors,
-        is_text_sink=state.echo_decoder is not None,
-    )
-    was_written = _echo_write(state, finished.payload)
-    if was_written and finished.dropped_bytes:
-        _emit_echo_event(
-            EchoEvent(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.TRUNCATED,
-                dropped_bytes=finished.dropped_bytes,
-            ),
-        )
-
-
-def _echo_write(
-    state: _DrainState,
-    chunk: bytes,
-    *,
-    final: bool = False,
-) -> bool:
-    """Write one echo payload and report whether the sink accepted it."""
-    if state.echo_guard.disabled:
-        return False
-    try:
-        _write_chunk(state.config, chunk, decoder=state.echo_decoder, final=final)
-    except UnicodeEncodeError as exc:
-        state.echo_guard.disabled = True
-        # The first failure emits both projections; the guard prevents retries.
-        _emit_echo_event(
-            EchoEvent(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.UNICODE_ENCODE,
-            ),
-        )
-        _LOGGER.warning(
-            "echo_disabled encoding=%s error=%s",
-            state.config.encoding,
-            type(exc).__name__,
-            exc_info=exc,
-            extra={
-                "cuprum_encoding": state.config.encoding,
-                "cuprum_sink_type": type(state.config.sink).__name__,
-                "cuprum_error_type": type(exc).__name__,
-            },
-        )
-        return False
-    return True
-
-
-def _flush_echo_decoder(state: _DrainState) -> None:
-    """Flush a text-only echo decoder at end of stream."""
-    limiter = state.echo_limiter
-    if limiter is not None:
-        if limiter.has_pending_carriage_return:
-            limiter.bound_line(b"\r")
-            limiter.has_pending_carriage_return = False
-        if limiter.has_line_bytes:
-            _write_finished_echo_line(state, limiter, b"")
-    if state.echo_decoder is not None:
-        _echo_write(state, b"", final=True)
 
 
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_RelayDiagnostics",
     "_StreamConfig",
     "_WriteOutcome",
     "_close_stream_writer",

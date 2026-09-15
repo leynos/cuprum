@@ -1,10 +1,12 @@
-"""The task-lifecycle contracts a pipeline's byte movement depends on.
+"""The task-lifecycle and result-ownership contracts a pipeline depends on.
 
 ``cuprum._pipeline_stream_results`` owns result collection and teardown,
 while ``cuprum._pipeline_streams`` creates one pump task per adjacent stage
 pair.  ``_surface_unexpected_pipe_failures`` then determines which outcomes
-must reach the caller. These tests stay separate from descriptor-lifecycle
-fault injection because they exercise task bookkeeping rather than FD hand-off.
+must reach the caller, and each stage's ``CommandResult`` owns the relay
+fallbacks of its own streams. These tests stay separate from
+descriptor-lifecycle fault injection because they exercise task bookkeeping
+and per-stage result assembly rather than FD hand-off.
 """
 
 from __future__ import annotations

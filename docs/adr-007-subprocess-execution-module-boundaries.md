@@ -202,3 +202,41 @@ allow terminated-process readers the bounded EOF-grace window before settling
 them, while non-capturing cleanup settles promptly without that window and
 discards output. Cancellation during capture grace still settles the consumers
 before propagating, so process cleanup cannot leave stream readers pending.
+
+## Addendum (2026-09-15): streamed relay diagnostics ownership
+
+The per-command echo fallback diagnostics introduced a small refinement to the
+Option B boundaries while preserving the public execution contract.
+
+- `cuprum/_subprocess_stream_run.py` owns streamed single-command execution.
+  `_StreamConsumerSpawnContext` passes the stream configuration, process
+  identifier, and per-stream `_RelayDiagnostics` collectors to the consumers.
+  `_RunTaskOwnership` retains those consumers and collectors until the single
+  success or teardown reconciliation point, so concurrent and nested runs do
+  not share result state.
+- `_process_lifecycle.py` uses `_SpawnedPipelineStages` while starting a
+  pipeline. It retains each process, capture task, start timestamp, and the
+  per-stage stderr/final-stage-stdout collector pair. The pipeline collection
+  path settles and reads those collectors after output tasks settle, and the
+  result builder assigns each stage only the records owned by its streams.
+- `RelayFallback` is the result vocabulary: a frozen two-field record holding
+  only `EchoStream` and `EchoErrorCategory` categorical values. A successful
+  `CommandResult` exposes its records through the trailing defaulted
+  `relay_fallbacks` field, in stdout-then-stderr order. A pipeline preserves
+  stage order, with final-stage stdout records followed by that stage's stderr
+  records; intermediate stages have no result stdout stream.
+- A handled text-sink `UnicodeEncodeError` is a first-failure transition for
+  one drain. It disables later echo writes, preserves capture, emits the
+  existing `EchoEvent`, and appends one `RelayFallback`. The warning, event,
+  and record use closed categorical values only; rejected payloads, sink
+  metadata, exception data, and command arguments remain outside every
+  reporting surface.
+- Timeout and cancellation do not produce a `CommandResult`, so no
+  `relay_fallbacks` tuple is surfaced on those paths. Reconciliation still
+  settles the owned stream tasks, and an `EchoEvent` emitted before teardown
+  remains observable through `observe_echo`.
+
+This keeps execution ownership explicit: collectors are caller-owned state
+handed into drains, not global observation state, while the existing
+`observe_echo` channel remains the event projection for consumers that need
+transition timing.

@@ -35,7 +35,7 @@ async def _consume_lines(payload: bytes) -> tuple[str | None, list[str]]:
     return captured, lines
 
 
-def _config() -> _StreamConfig:
+def _config(*, read_size: int = _READ_SIZE) -> _StreamConfig:
     """Return a UTF-8 config that captures output without echoing it."""
     return _StreamConfig(
         capture_output=True,
@@ -43,6 +43,7 @@ def _config() -> _StreamConfig:
         sink=io.StringIO(),
         encoding="utf-8",
         errors="strict",
+        read_size=read_size,
     )
 
 
@@ -62,7 +63,7 @@ def test_consume_stream_forwards_explicit_read_size_to_every_reader_call() -> No
     async def consume() -> tuple[str | None, list[int]]:
         """Consume a recording reader with a deliberately non-default size."""
         reader = _RecordingReader(b"firstsecond")
-        captured = await _consume_stream(reader, _config(), read_size=17)
+        captured = await _consume_stream(reader, _config(read_size=17))
         return captured, reader.read_sizes
 
     captured, read_sizes = asyncio.run(consume())
