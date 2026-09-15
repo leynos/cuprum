@@ -19,6 +19,7 @@ answers with an awaitable holds the read loop: that is what lets the
 from __future__ import annotations
 
 import dataclasses as dc
+import inspect
 import typing as typ
 
 from cuprum.lines import (
@@ -147,10 +148,14 @@ def _chain_line_hooks(
 def _fan_out_hooks(chain: cabc.Sequence[_LineHookFn]) -> _LineHookFn:
     """Return one hook that delivers every event to each hook in *chain*."""
 
-    async def await_all(pending: cabc.Iterable[cabc.Awaitable[None]]) -> None:
+    async def await_all(pending: cabc.Sequence[cabc.Awaitable[None]]) -> None:
         """Await every deferred hook, in registration order."""
-        for outcome in pending:
-            await outcome
+        for index, outcome in enumerate(pending):
+            try:
+                await outcome
+            except BaseException:
+                _close_skipped_hook_outcomes(pending[index + 1 :])
+                raise
 
     def fan_out(event: LineEvent) -> _LineHookOutcome:
         """Deliver one event to every hook, in registration order."""
@@ -164,3 +169,10 @@ def _fan_out_hooks(chain: cabc.Sequence[_LineHookFn]) -> _LineHookFn:
         return await_all(pending)
 
     return fan_out
+
+
+def _close_skipped_hook_outcomes(pending: cabc.Iterable[cabc.Awaitable[None]]) -> None:
+    """Close unawaited coroutines left after an earlier hook failure."""
+    for outcome in pending:
+        if inspect.iscoroutine(outcome):
+            outcome.close()

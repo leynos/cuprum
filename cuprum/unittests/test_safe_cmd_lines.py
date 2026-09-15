@@ -18,6 +18,7 @@ import asyncio
 import io
 import sys
 import typing as typ
+from collections import Counter
 
 import pytest
 
@@ -48,6 +49,8 @@ def _two_stream_script() -> str:
         "print('e1', file=sys.stderr, flush=True)\n"
         "print('o2', flush=True)\n"
         "print('e2', file=sys.stderr, flush=True)\n"
+        "print('o1', flush=True)\n"
+        "print('e1', file=sys.stderr, flush=True)\n"
     )
 
 
@@ -100,13 +103,15 @@ def test_lines_preserve_per_stream_order_with_monotonic_at(
 
     stdout = [event.text for event in events if event.stream == "stdout"]
     stderr = [event.text for event in events if event.stream == "stderr"]
-    assert stdout == ["o1", "o2"], f"stdout order broken: {stdout!r}"
-    assert stderr == ["e1", "e2"], f"stderr order broken: {stderr!r}"
+    assert stdout == ["o1", "o2", "o1"], f"stdout order broken: {stdout!r}"
+    assert stderr == ["e1", "e2", "e1"], f"stderr order broken: {stderr!r}"
     stamps = [event.at for event in events]
     assert stamps == sorted(stamps), f"at must be non-decreasing: {stamps!r}"
-    assert all(event.at >= 0.0 for event in events)
-    assert result is not None
-    assert result.ok
+    assert all(event.at >= 0.0 for event in events), (
+        f"line timestamps must be non-negative, got {stamps!r}"
+    )
+    assert result is not None, "line iteration must return a command result"
+    assert result.ok, f"line iteration command must succeed, got {result!r}"
 
 
 def test_lines_keep_capture_and_echo(
@@ -197,31 +202,111 @@ def test_lines_defer_hooks_until_iteration(
     assert not phases, "closing an unstarted stream must not emit observe events"
 
 
+def test_lines_started_stream_emits_lifecycle_and_output_events(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Starting iteration emits one correlated lifecycle with both outputs."""
+    command = python_builder("-c", _two_stream_script())
+    observed: list[ExecEvent] = []
+
+    async def collect() -> list[LineEvent]:
+        """Iterate the started stream while observation is active."""
+        stream = command.lines()
+        return [event async for event in stream]
+
+    with observe(observed.append):
+        lines = asyncio.run(collect())
+
+    output_events = [event for event in observed if event.phase in {"stdout", "stderr"}]
+    assert [event.phase for event in observed[:2]] == ["plan", "start"], (
+        f"iteration must plan and start before output, got {observed!r}"
+    )
+    assert observed[-1].phase == "exit", (
+        f"completion must follow all output, got {observed!r}"
+    )
+    assert observed.index(observed[-1]) > max(
+        index
+        for index, event in enumerate(observed)
+        if event.phase in {"stdout", "stderr"}
+    ), "exit must follow every output event"
+    assert len({event.exec_id for event in observed}) == 1, (
+        f"one line-stream run must share one exec_id, got {observed!r}"
+    )
+    assert [event.line for event in output_events if event.phase == "stdout"] == [
+        "o1",
+        "o2",
+        "o1",
+    ], f"stdout output records lost ordering: {output_events!r}"
+    assert [event.line for event in output_events if event.phase == "stderr"] == [
+        "e1",
+        "e2",
+        "e1",
+    ], f"stderr output records lost ordering: {output_events!r}"
+    assert [event.text for event in lines if event.stream == "stdout"] == [
+        "o1",
+        "o2",
+        "o1",
+    ], f"line iterator stdout payloads differ: {lines!r}"
+    assert [event.text for event in lines if event.stream == "stderr"] == [
+        "e1",
+        "e2",
+        "e1",
+    ], f"line iterator stderr payloads differ: {lines!r}"
+
+
 def test_lines_on_line_callback_receives_events(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """The on_line option delivers LineEvents during run()."""
-    events: list[LineEvent] = []
-    command = python_builder(
-        "-c",
-        "import sys; print('cb out'); print('cb err', file=sys.stderr)",
-    )
+    """Both output channels see ordered lines from one real subprocess."""
+    line_events: list[LineEvent] = []
+    observe_events: list[ExecEvent] = []
+    command = python_builder("-c", _two_stream_script())
 
-    asyncio.run(
-        command.run(
-            output=RunOutputOptions(
-                on_line=events.append,
-            ),
-            context=ExecutionContext(
-                stderr_sink=typ.cast("typ.IO[str]", io.StringIO()),
-            ),
+    with observe(observe_events.append):
+        asyncio.run(
+            command.run(
+                output=RunOutputOptions(on_line=line_events.append),
+                context=ExecutionContext(
+                    stderr_sink=typ.cast("typ.IO[str]", io.StringIO()),
+                ),
+            )
         )
-    )
 
-    texts = {(event.stream, event.text) for event in events}
-    assert ("stdout", "cb out") in texts
-    assert ("stderr", "cb err") in texts
-    assert all(event.at >= 0.0 for event in events)
+    expected = Counter({
+        ("stdout", "o1"): 2,
+        ("stdout", "o2"): 1,
+        ("stderr", "e1"): 2,
+        ("stderr", "e2"): 1,
+    })
+    output_events = [
+        event for event in observe_events if event.phase in {"stdout", "stderr"}
+    ]
+    assert Counter((event.stream, event.text) for event in line_events) == expected, (
+        f"on_line must receive every decoded line, got {line_events!r}"
+    )
+    assert Counter((event.phase, event.line) for event in output_events) == expected, (
+        f"observe must receive every output event, got {output_events!r}"
+    )
+    for stream, expected_texts in (
+        ("stdout", ["o1", "o2", "o1"]),
+        ("stderr", ["e1", "e2", "e1"]),
+    ):
+        assert [
+            event.text for event in line_events if event.stream == stream
+        ] == expected_texts, (
+            f"on_line must preserve {stream} order, got {line_events!r}"
+        )
+        assert [
+            event.line for event in output_events if event.phase == stream
+        ] == expected_texts, (
+            f"observe must preserve {stream} order, got {output_events!r}"
+        )
+    assert all(event.at >= 0.0 for event in line_events), (
+        f"line callback timestamps must be non-negative, got {line_events!r}"
+    )
+    assert [event.at for event in line_events] == sorted(
+        event.at for event in line_events
+    ), f"line callback timestamps must be non-decreasing, got {line_events!r}"
 
 
 def test_lines_cancellation_kills_child(
@@ -362,7 +447,7 @@ def test_run_on_line_observes_without_capture_or_echo(
     assert observed == {("stdout", "out"), ("stderr", "err")}, (
         f"on_line must observe both streams with capture and echo off, got {observed!r}"
     )
-    assert result is not None
+    assert result is not None, "run() must return a completed command result"
     assert result.stdout is None, "capture=False must leave stdout unset"
     assert result.stderr is None, "capture=False must leave stderr unset"
 
@@ -374,6 +459,28 @@ def test_line_event_queue_is_finite() -> None:
     assert _LINE_QUEUE_CAPACITY > 0, "a bounded queue needs a positive capacity"
     assert _line_event_queue().maxsize == _LINE_QUEUE_CAPACITY, (
         "the driver must consume the bounded queue, not an unbounded one"
+    )
+
+
+def test_lines_stamp_events_from_the_spawn_clock(
+    monkeypatch: pytest.MonkeyPatch,
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The line event clock subtracts the reference stamped after spawning."""
+    from cuprum import _line_callbacks, _line_stream
+
+    monkeypatch.setattr(_line_stream, "perf_counter", lambda: 40.0)
+    monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
+    command = python_builder("-c", "print('clock')")
+
+    async def collect() -> list[LineEvent]:
+        """Iterate the command and retain its one clock-stamped event."""
+        return [event async for event in command.lines()]
+
+    events = asyncio.run(collect())
+
+    assert [event.at for event in events] == [3.25], (
+        f"line timestamps must use the injected spawn reference, got {events!r}"
     )
 
 
@@ -491,7 +598,7 @@ def test_lines_behaviour_streams_tags_and_text(
     assert ("stdout", "o2") in observed
     assert ("stderr", "e1") in observed
     assert ("stderr", "e2") in observed
-    assert len(observed) == 4
+    assert len(observed) == 6
 
 
 def test_lines_allowlist_is_enforced(

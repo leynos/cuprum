@@ -7,6 +7,7 @@ import collections.abc as cabc
 import dataclasses as dc
 import io
 import typing as typ
+from collections import Counter
 
 import pytest
 from hypothesis import given, settings
@@ -637,19 +638,21 @@ def test_pipeline_public_output_bound_reaches_echo_sink(is_sync: bool) -> None:
 # from the intermediate stage's; the consumer relays stdin and adds its own
 # stderr line, so every stage contributes an observable stderr event.
 _LINE_OBSERVATION_PRODUCER = (
-    "import sys; print('p-out'); print('p-err', file=sys.stderr)"
+    "import sys; print('p-out'); print('p-out'); print('p-err', file=sys.stderr); "
+    "print('p-err', file=sys.stderr)"
 )
 _LINE_OBSERVATION_CONSUMER = (
-    "import sys; sys.stdout.write(sys.stdin.read()); print('c-err', file=sys.stderr)"
+    "import sys; sys.stdout.write(sys.stdin.read()); print('c-err', file=sys.stderr); "
+    "print('c-err', file=sys.stderr)"
 )
 
 # The final stage's stdout, plus every stage's stderr. The intermediate stage's
 # stdout is relayed into the next stage rather than observed.
-_EXPECTED_OBSERVED_LINES = {
-    ("stdout", "p-out"),
-    ("stderr", "p-err"),
-    ("stderr", "c-err"),
-}
+_EXPECTED_OBSERVED_LINES = Counter({
+    ("stdout", "p-out"): 2,
+    ("stderr", "p-err"): 2,
+    ("stderr", "c-err"): 2,
+})
 
 
 def _line_observation_pipeline() -> tuple[Pipeline, frozenset[Program]]:
@@ -681,7 +684,7 @@ def test_pipeline_on_line_observes_without_capture_or_echo() -> None:
             ),
         )
 
-    observed = {(event.stream, event.text) for event in events}
+    observed = Counter((event.stream, event.text) for event in events)
     assert observed == _EXPECTED_OBSERVED_LINES, (
         f"on_line must observe the final stdout and every stderr, got {observed!r}"
     )
@@ -717,13 +720,13 @@ def test_pipeline_on_line_composes_with_capture_and_echo() -> None:
             ),
         )
 
-    observed = {(event.stream, event.text) for event in events}
+    observed = Counter((event.stream, event.text) for event in events)
     assert observed == _EXPECTED_OBSERVED_LINES, (
         f"capture and echo must not suppress line observation, got {observed!r}"
     )
-    assert result.stdout == "p-out\n", (
+    assert result.stdout == "p-out\np-out\n", (
         f"capture must still return the final stage stdout, got {result.stdout!r}"
     )
-    assert stdout_sink.getvalue() == "p-out\n", (
+    assert stdout_sink.getvalue() == "p-out\np-out\n", (
         f"echo must still reach the configured sink, got {stdout_sink.getvalue()!r}"
     )
