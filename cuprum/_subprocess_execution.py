@@ -331,9 +331,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     process = await _spawn_subprocess(execution)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
-
-    # Left as None by the direct path, which captures nothing; the stream path
-    # overwrites them with whatever it captured before returning.
+    # The direct path captures nothing; the stream path overwrites these values.
     stdout_text: str | None = None
     stderr_text: str | None = None
     try:
