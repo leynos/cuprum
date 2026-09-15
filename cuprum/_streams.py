@@ -51,7 +51,6 @@ if typ.TYPE_CHECKING:
 
     from cuprum.stream_observation import _StreamOperationMeasurement
 
-
 _LOGGER = logging.getLogger("cuprum.stream")
 
 

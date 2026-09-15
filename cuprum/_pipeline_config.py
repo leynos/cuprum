@@ -6,11 +6,14 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._sink_lifecycle import _open_sink_session
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import ExecutionContext, RunOutputOptions
+
+from cuprum.sinks import base as sinks
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -32,6 +35,7 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    sink_session: sinks.OutputSession | None
 
     @property
     def stdout_capture_or_echo(self) -> bool:
@@ -45,12 +49,21 @@ class _PipelineRunConfig:
 
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
+        """Build the stdout stream configuration for the final pipeline stage.
+
+        When a presentation-sink session is active, mirrored stdout routes
+        through the session's log destination so it lands inside the
+        adapter's framing in the order the adapter received it.
+        """
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stdout,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stdout_sink,
+            sink=(
+                self.sink_session.log
+                if self.sink_session is not None
+                else self.stdout_sink
+            ),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
@@ -58,12 +71,21 @@ class _PipelineRunConfig:
 
     @property
     def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage."""
+        """Build the stderr stream configuration for a pipeline stage.
+
+        Mirrored stderr routes through an active presentation-sink session for
+        the same reason as stdout: the adapter's framing must bracket every
+        mirrored stream.
+        """
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stderr,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stderr_sink,
+            sink=(
+                self.sink_session.log
+                if self.sink_session is not None
+                else self.stderr_sink
+            ),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
@@ -92,6 +114,10 @@ def _prepare_pipeline_config(
     # separate arguments; the developer guide forbids parallel internal
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
+    sink_session = _open_sink_session(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
+    )
     return _PipelineRunConfig(
         ctx=ctx,
         capture=output.capture,
@@ -101,4 +127,5 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        sink_session=sink_session,
     )

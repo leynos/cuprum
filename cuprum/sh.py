@@ -34,6 +34,13 @@ from cuprum._pipeline_internals import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import (
+    _close_sink_session,
+    _command_session_start,
+    _open_sink_session,
+    _outcome_for_error,
+    _outcome_for_result,
+)
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
@@ -56,6 +63,11 @@ from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
+# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
+from cuprum.sinks import (
+    base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
+
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
@@ -63,6 +75,8 @@ type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
+
+
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
@@ -317,6 +331,7 @@ class _ExecutionTracking:
 
     execution_hooks: _ExecutionHooks
     pending_tasks: list[asyncio.Task[None]]
+    sink_session: sinks.OutputSession | None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -384,6 +399,12 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+    sink : sinks.OutputSink | None, default=None
+        Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
+        given, it may reframe the parent-facing output of this run (for
+        example, a GitHub Actions group); the default ``None`` keeps the
+        plain two-stream behaviour. An adapter is inactive for a run when it
+        declines activation, in which case output is unchanged.
     """
 
     capture: bool = True
@@ -391,6 +412,7 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+    sink: sinks.OutputSink | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -557,7 +579,15 @@ async def _execute_with_hooks(
                 message=_COMMAND_FINALIZATION_ERROR,
             )
         )
+        _close_sink_session(
+            execution.sink_session,
+            outcome=_outcome_for_error(run_error),
+        )
         raise
+    _close_sink_session(
+        execution.sink_session,
+        outcome=_outcome_for_result(result),
+    )
     await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
     return result
 
@@ -641,6 +671,10 @@ class SafeCmd:
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
+            sink_session=_open_sink_session(
+                out.sink,
+                _command_session_start(self, out.sink),
+            ),
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
         observation.emit("plan", _EventDetails(pid=None))
@@ -655,6 +689,7 @@ class SafeCmd:
                 echo_stdout=out.resolved_echo[0],
                 echo_stderr=out.resolved_echo[1],
                 max_echo_line_bytes=out.max_echo_line_bytes,
+                sink_session=tracking.sink_session,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,

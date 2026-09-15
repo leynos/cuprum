@@ -982,6 +982,26 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Beyond the tee sinks above, a run may opt into a *presentation sink* through
+`RunOutputOptions.sink` (see ADR-011). A presentation sink reshapes the
+parent-facing output — framing it in a GitHub Actions log group and annotating
+failures — without changing capture, success semantics, or the returned result.
+The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
+one session before the subprocess starts, route echoed output through the
+session's `log` writer, and close the session exactly once per terminal path
+with a bounded categorical outcome. All presentation knowledge
+(workflow-command syntax, escaping, injection shielding) stays inside the
+adapter; runs without a sink are unchanged. The single-command and pipeline
+runners share this contract, and both close the session through the same
+shielded finalization that reconciles observe-hook tasks, so cancellation
+cannot abandon the framing part-way.
+
+Activation policy is also adapter-local: `GitHubActionsSink` reads
+`GITHUB_ACTIONS` from the parent environment at `open_session` time and
+declines activation (returning `None`) unless it holds the runner's `true`
+value, unless the caller passes `force=True`; the execution layer itself never
+inspects the environment.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -1292,7 +1312,14 @@ The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
 - `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+  assembling the result.
+- `cuprum/_subprocess_streams.py` owns stdout/stderr consumer wiring: choosing
+  the sink each mirrored stream drains to — a live presentation-sink session's
+  log, the execution context's configured sink, or the process's own stream —
+  and spawning the consumer tasks that drain into it. Split out of
+  `_subprocess_execution` to keep both modules within the project's module-size
+  ceiling; `_subprocess_execution` re-exports the wiring helpers, so callers
+  and monkeypatch targets resolve the same names as before.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
@@ -1407,6 +1434,14 @@ terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
 and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
 `_pipeline_internals` calls into `_pipeline_results` on both the success and
 the timeout paths, so a stage never reports a `timeout` and then falls silent.
+
+`cuprum._sink_lifecycle` owns the presentation-sink session lifecycle the two
+runners share: opening a session before the work starts and calling its eager
+framing hook (`_open_sink_session`), closing it on every exit path
+(`_close_sink_session`), and mapping a result or an error onto the bounded
+`SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
+`cuprum._pipeline_sink` keeps only the pipeline-specific part of that mapping,
+`_pipeline_result_outcome`, which reports the first failing stage's exit code.
 
 Error propagation policy (to be finalized, but roughly):
 
