@@ -298,6 +298,7 @@ def test_result_orders_mixed_stream_fallbacks(
         _EXPECTED_STDOUT_FALLBACK,
         _EXPECTED_STDERR_FALLBACK,
     )
+    assert len(events) == 2
     assert {event.stream for event in events} == {EchoStream.STDOUT, EchoStream.STDERR}
     assert all(
         event.error_category is EchoErrorCategory.UNICODE_ENCODE for event in events
