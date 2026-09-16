@@ -153,8 +153,8 @@ impl NativePumpModel {
         })
     }
 
-    #[cfg(feature = "loom-defect-fixture")]
     /// Create an explicitly selected defective model for non-vacuity evidence.
+    #[cfg(feature = "loom-defect-fixture")]
     #[must_use]
     pub fn with_double_close_defect() -> Arc<Self> {
         Arc::new(Self {
@@ -173,7 +173,6 @@ impl NativePumpModel {
         native: NativeOutcome,
     ) -> Option<JoinHandle<()>> {
         if model.was_cancelled.load(Ordering::Acquire) {
-            model.finish_without_worker(NativeOutcome::Failed);
             return None;
         }
         if matches!(outcome, SubmissionOutcome::Failed) {

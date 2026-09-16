@@ -126,3 +126,12 @@ def test_selected_bounds_rejects_partial_or_zero_overrides(
 
     with pytest.raises(loom_driver.LoomRunError, match="Specify all positive"):
         loom_driver._selected_bounds(arguments)
+
+
+def test_run_loom_rejects_an_unknown_mode(loom_driver: types.ModuleType) -> None:
+    """Programmatic callers cannot bypass the command-line mode choices."""
+    with pytest.raises(ValueError, match="unsupported Loom mode"):
+        loom_driver.run_loom(
+            mode="unknown",
+            bounds=loom_driver.LoomBounds(1, 1, 1),
+        )
