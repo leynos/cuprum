@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import typing as typ
 from pathlib import Path
 
 import yaml
@@ -14,34 +13,49 @@ WORKFLOW_PATH = ROOT / ".github" / "workflows" / "loom.yml"
 DRIVER_PATH = ROOT / "scripts" / "run_loom.py"
 
 
-def _load() -> dict[typ.Any, typ.Any]:
+def _object_mapping(value: object, description: str) -> dict[object, object]:
+    """Validate one dynamically parsed YAML mapping without using ``Any``."""
+    assert isinstance(value, dict), f"{description} must be a mapping"
+    return value
+
+
+def _string_mapping(value: object, description: str) -> dict[str, object]:
+    """Validate one YAML mapping whose consumers require string keys."""
+    mapping = _object_mapping(value, description)
+    assert all(isinstance(key, str) for key in mapping), (
+        f"{description} must use string keys"
+    )
+    return {str(key): item for key, item in mapping.items()}
+
+
+def _load() -> dict[object, object]:
     """Parse the scheduled workflow without losing YAML's ``on`` key."""
-    workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-    assert isinstance(workflow, dict), "the Loom workflow must parse to a mapping"
-    return workflow
+    workflow: object = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    return _object_mapping(workflow, "the Loom workflow")
 
 
-def _triggers(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+def _triggers(workflow: dict[object, object]) -> dict[object, object]:
     """Return the trigger mapping despite PyYAML's YAML 1.1 boolean key."""
     triggers = workflow.get("on", workflow.get(True))
-    assert isinstance(triggers, dict), "the Loom workflow must declare triggers"
-    return triggers
+    return _object_mapping(triggers, "the Loom workflow triggers")
 
 
-def _loom_job(workflow: dict[typ.Any, typ.Any]) -> dict[str, object]:
+def _loom_job(workflow: dict[object, object]) -> dict[str, object]:
     """Return the single bounded-model job with validated mapping shape."""
-    jobs = workflow.get("jobs")
-    assert isinstance(jobs, dict), "the Loom workflow must declare jobs"
+    jobs = _object_mapping(workflow.get("jobs"), "the Loom workflow jobs")
     job = jobs.get("loom")
-    assert isinstance(job, dict), "the Loom workflow must define the loom job"
-    return typ.cast("dict[str, object]", job)
+    return _string_mapping(job, "the Loom workflow loom job")
 
 
 def _run_steps(job: dict[str, object]) -> list[dict[str, object]]:
     """Return run steps from a valid job definition."""
     steps = job.get("steps")
     assert isinstance(steps, list), "the Loom job must declare steps"
-    return [step for step in steps if isinstance(step, dict) and "run" in step]
+    return [
+        _string_mapping(step, "a Loom workflow step")
+        for step in steps
+        if isinstance(step, dict) and "run" in step
+    ]
 
 
 def test_schedule_dispatch_permissions_and_concurrency_are_fixed() -> None:
@@ -94,12 +108,10 @@ def test_execution_step_runs_the_driver_and_driver_executes_loom() -> None:
 
 def test_smoke_job_uses_the_same_loom_shape_and_driver() -> None:
     """Relevant pull requests compile and execute the smaller deterministic set."""
-    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    assert isinstance(ci, dict), "ci.yml must parse to a mapping"
-    jobs = ci.get("jobs")
-    assert isinstance(jobs, dict), "ci.yml must declare jobs"
+    ci: object = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    jobs = _object_mapping(_object_mapping(ci, "ci.yml").get("jobs"), "ci.yml jobs")
     smoke = jobs.get("loom-smoke")
-    assert isinstance(smoke, dict), "ci.yml must define loom-smoke"
+    smoke = _string_mapping(smoke, "ci.yml loom-smoke")
     assert smoke.get("needs") == "changes", "smoke must await path detection"
     assert smoke.get("if") == "needs.changes.outputs.rust == 'true'", (
         "smoke must run for Rust and Loom changes"
@@ -108,16 +120,21 @@ def test_smoke_job_uses_the_same_loom_shape_and_driver() -> None:
     assert smoke.get("timeout-minutes") == 10, "smoke needs an explicit budget"
     steps = smoke.get("steps")
     assert isinstance(steps, list), "smoke must declare steps"
-    cache_step = next(
-        step for step in steps if step.get("name") == "Compute cache keys"
+    cache_step = _string_mapping(
+        next(step for step in steps if step.get("name") == "Compute cache keys"),
+        "the smoke job must compute cache keys",
     )
-    assert cache_step["with"]["compiler-shape"] == "loom", (
+    cache_inputs = _string_mapping(cache_step["with"], "the cache-key inputs")
+    assert cache_inputs["compiler-shape"] == "loom", (
         "smoke must use the isolated Loom cache family"
     )
-    run_step = next(
-        step for step in steps if step.get("name") == "Run Loom smoke models"
+    run_step = _string_mapping(
+        next(step for step in steps if step.get("name") == "Run Loom smoke models"),
+        "the smoke job must execute Loom models",
     )
+    smoke_command = run_step["run"]
+    assert isinstance(smoke_command, str), "the smoke run step must be a script"
     assert script_runs_command(
-        run_step["run"],
+        smoke_command,
         "uv run scripts/run_loom.py --mode smoke --summary loom-summary.md",
     ), "smoke must execute the bounded Loom driver"

@@ -24,6 +24,8 @@ kernel read or fairness of an arbitrary scheduler.
 | Executor worker     | `_submit_rust_pump` and `rust_pump_stream`                                 | native worker actor               | accepting the writer duplicate, then reporting a terminal I/O outcome  |
 | Completion callback | `_complete_rust_pump` and `_finalize_native_pump_resources`                | completion/observer actor         | `_cleanup_lock` admits the first cleanup and sets `_cleanup_completed` |
 
+_Table 1: Production actors and model linearization points._
+
 | Shared resource     | Production representation                | Model representation         | Ownership transition                             |
 | ------------------- | ---------------------------------------- | ---------------------------- | ------------------------------------------------ |
 | Duplicate writer FD | `_NativePumpFds.writer_fd`               | `DescriptorRecord` close log | callback -> worker -> exactly one close          |
@@ -31,6 +33,8 @@ kernel read or fairness of an arbitrary scheduler.
 | Blocking-mode guard | `_BlockingModeGuard`                     | `blocking_restored` flag     | restored only after worker settlement            |
 | Cancellation        | `_RustPumpState.was_cancelled`           | Loom atomic                  | event loop records request before classification |
 | Cleanup-once state  | `_cleanup_completed` and `_cleanup_lock` | Loom atomic plus Loom mutex  | first settled cleanup wins                       |
+
+_Table 2: Production resources and model ownership transitions._
 
 The model invokes `pump_machine::advance` for normal and downstream-close
 outcomes, and invokes the same `model_pump_stream` helper that mirrors

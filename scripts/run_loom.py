@@ -18,6 +18,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOOM_MANIFEST = Path("rust/cuprum-rust/Cargo.toml")
 LOOM_TARGET = "loom"
+VALID_MODES = frozenset(("smoke", "full"))
 _DISCOVERY_RE = re.compile(r"^(?P<count>\d+) tests?, \d+ benchmarks$", re.MULTILINE)
 _EXECUTION_RE = re.compile(
     r"test result: (?:ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed;"
@@ -112,11 +113,27 @@ class LoomRunError(RuntimeError):
         return cls("Loom target executed zero tests; refusing a vacuous run")
 
 
+class LoomModeError(ValueError):
+    """Report an unsupported Loom execution mode."""
+
+    @classmethod
+    def unsupported(cls, mode: str) -> LoomModeError:
+        """Build the error for a caller bypassing command-line mode choices."""
+        return cls(f"unsupported Loom mode: {mode}")
+
+
 def _bounds_for_mode(mode: str) -> LoomBounds:
     """Return the repository's explicit exploration budget for ``mode``."""
+    _validate_mode(mode)
     if mode == "smoke":
         return LoomBounds(max_preemptions=2, max_branches=300, max_threads=3)
     return LoomBounds(max_preemptions=3, max_branches=2_000, max_threads=3)
+
+
+def _validate_mode(mode: str) -> None:
+    """Reject programmatic execution modes outside the fixed lane set."""
+    if mode not in VALID_MODES:
+        raise LoomModeError.unsupported(mode)
 
 
 def _environment(bounds: LoomBounds) -> dict[str, str]:
@@ -158,7 +175,10 @@ def _run(
             env=environment,
         )
     except subprocess.CalledProcessError as error:
-        diagnostic = error.stderr or error.stdout or "no process output"
+        diagnostic = (
+            "\n".join(output for output in (error.stdout, error.stderr) if output)
+            or "no process output"
+        )
         raise LoomRunError.command_failed(command, diagnostic) from error
 
 
@@ -192,6 +212,7 @@ def _count_executed(output: str) -> int:
 
 def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
     """Discover then execute the non-empty Loom target under explicit bounds."""
+    _validate_mode(mode)
     selected_bounds = bounds or _bounds_for_mode(mode)
     environment = _environment(selected_bounds)
     started_at = time.monotonic()

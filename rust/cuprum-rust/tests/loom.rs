@@ -97,6 +97,28 @@ fn cancellation_before_after_and_repeated_submission_are_safe() {
 }
 
 #[test]
+fn cancellation_before_submission_remains_released() {
+    loom::model(|| {
+        let state = NativePumpModel::new();
+        state.cancel();
+
+        let worker = NativePumpModel::submit(
+            &state,
+            SubmissionOutcome::Submitted,
+            NativeOutcome::Succeeded,
+        );
+
+        assert!(worker.is_none(), "cancelled work must not spawn a worker");
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.terminal,
+            _rust_backend_native::loom_model::TerminalState::Released
+        );
+        assert_safe_terminal(snapshot);
+    });
+}
+
+#[test]
 fn downstream_close_remains_terminal_under_competing_observers() {
     model_submission_and_cleanup(
         SubmissionOutcome::Submitted,
