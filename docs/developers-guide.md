@@ -3940,9 +3940,10 @@ and every stage's stderr are piped only when their own parent-consumption gate
 is true. `_PipelineRunConfig` builds a `_StreamConfig` per stream so both
 streams can share capture while differing in echo, attaches the idle monitor's
 `note_activity` callback as the `activity` hook on final-stage stdout and every
-stage's stderr, and gives the stderr config the shared `mirror` cursor: stderr
-is the echo that shares the parent's stderr sink, so it is the one a keepalive
-can strand mid-line.
+stage's stderr, and gives each config the shared `mirror` cursor when that
+stream's resolved sink is the keepalive's own destination: stderr normally, and
+final-stage stdout too when the caller points both sinks at one object, since
+either echo can then strand a keepalive mid-line.
 
 ## Subprocess execution module boundaries
 

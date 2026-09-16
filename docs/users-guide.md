@@ -574,10 +574,12 @@ stderr — `ExecutionContext.stderr_sink` when configured, otherwise the live
 The line is at most 512 bytes including its newline, ASCII-safe, and limited to
 a single line whatever the programme name contains. It is never written into
 captured stdout or stderr, into the observers that watch the child's lines, or
-into the activity tracker that decides whether the child is quiet. Only the
-echo of the child's own stderr shares the keepalive's destination, so the
-renderer starts a fresh line when that echo ended mid-line and otherwise leaves
-both the captured and the mirrored bytes exactly as they were.
+into the activity tracker that decides whether the child is quiet. Any echo
+whose sink *is* the keepalive's destination can share it — the child's own
+stderr does by default, and a caller who points `stdout_sink` and `stderr_sink`
+at the same object adds its stdout — so the renderer starts a fresh line when
+such an echo ended mid-line and otherwise leaves both the captured and the
+mirrored bytes exactly as they were.
 
 A pipeline has one aggregate clock rather than one per stage, because the
 parent only observes its outward-facing output: the final stage's stdout and

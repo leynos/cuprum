@@ -49,15 +49,22 @@
   disables the channel for the remainder of that run with one sanitized
   `cuprum.idle` warning; the child's exit status, capture, and echo are
   unchanged, and `KeyboardInterrupt` and `SystemExit` are not absorbed. A
-  pipeline reports one aggregate clock over its outward-facing output — the
-  final stage's stdout and every stage's stderr, never inter-stage transfers —
-  labelled `pipeline output idle`. The feature is off by default, adds no
-  timer, task, or pipe to a run that does not ask for it, never terminates a
-  process, and never extends a timeout. A run may watch its streams without
-  retaining them: `capture=False, echo=False, idle_after=…` drains them while
-  leaving `stdout` and `stderr` as `None`. The heartbeat reports absent output,
-  not absent progress, so it is never a deadlock diagnosis
-  ([#359](https://github.com/leynos/cuprum/issues/359)).
+  callback that returns a value instead of `None` — including a synchronous
+  wrapper around an asynchronous one, which returns a coroutine — is reported
+  once and then silences the channel for the remainder of the run, on the same
+  terms as a raising callback rather than repeating the report every interval.
+  The keepalive starts a fresh line whenever the echo it would otherwise join
+  ended mid-line, including when a caller points `stdout_sink` and
+  `stderr_sink` at one sink and the child's newline-less stdout shares the
+  diagnostic's destination. A pipeline reports one aggregate clock over its
+  outward-facing output — the final stage's stdout and every stage's stderr,
+  never inter-stage transfers — labelled `pipeline output idle`. The feature is
+  off by default, adds no timer, task, or pipe to a run that does not ask for
+  it, never terminates a process, and never extends a timeout. A run may watch
+  its streams without retaining them: `capture=False, echo=False, idle_after=…`
+  drains them while leaving `stdout` and `stderr` as `None`. The heartbeat
+  reports absent output, not absent progress, so it is never a deadlock
+  diagnosis ([#359](https://github.com/leynos/cuprum/issues/359)).
 
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,
