@@ -18,7 +18,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from cuprum.unittests._timeout_lane_support import (
+from cuprum.unittests._coverage_timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
     OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
     required_ceiling,
