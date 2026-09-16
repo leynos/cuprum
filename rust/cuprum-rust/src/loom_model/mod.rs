@@ -191,15 +191,15 @@ impl NativePumpModel {
         outcome: SubmissionOutcome,
         native: NativeOutcome,
     ) -> Result<Option<JoinHandle<Result<(), ModelError>>>, ModelError> {
-        if model.was_cancelled.load(Ordering::Acquire) {
-            return Ok(None);
-        }
         if matches!(outcome, SubmissionOutcome::Failed) {
             model.finish_without_worker(NativeOutcome::Failed)?;
             return Ok(None);
         }
         {
             let mut lifecycle = model.lock_lifecycle()?;
+            if model.was_cancelled.load(Ordering::Acquire) {
+                return Ok(None);
+            }
             lifecycle.writer.hand_to_worker();
             lifecycle.worker_active = true;
             lifecycle.terminal = TerminalState::Submitted;
