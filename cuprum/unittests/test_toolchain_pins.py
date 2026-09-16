@@ -247,8 +247,8 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
 
     environment = job.get("env")
     assert isinstance(environment, dict), "the lint-test job must declare env"
-    assert environment.get("MDTABLEFIX_VERSION") == "0.5.1", (
-        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.5.1"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.6.0", (
+        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.6.0"
     )
     assert "MDTABLEFIX_RUST_VERSION" not in environment, (
         "the lint-test CI mapping must not retain the removed formatter source "
