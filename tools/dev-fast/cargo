@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Cargo executable adapter used only by Linux `maturin develop` invocations.
+#
+# Maturin accepts the Cargo executable through CARGO but cannot itself pass
+# Cargo's configuration-file form of --config.  This is intentionally a small
+# POSIX adapter, rather than a project automation script: it must replace
+# itself with Cargo so the selected executable's argv and exit status survive
+# unchanged.  Make confines it to the Linux dev-fast route; unsupported hosts
+# keep the stable backend and never execute this file.
+
+set -euo pipefail
+
+if [ -z "${DEV_FAST_CARGO:-}" ]; then
+  printf '%s\n' 'dev-fast: DEV_FAST_CARGO must name one Cargo executable' >&2
+  exit 2
+fi
+
+if [ -z "${DEV_FAST_CONFIG:-}" ] || [ ! -f "$DEV_FAST_CONFIG" ]; then
+  printf '%s\n' 'dev-fast: DEV_FAST_CONFIG must name the approved configuration file' >&2
+  exit 2
+fi
+
+for argument in "$@"; do
+  case "$argument" in
+    --config | --config=*)
+      printf '%s\n' 'dev-fast: Cargo configuration is selected by this adapter' >&2
+      exit 2
+      ;;
+  esac
+done
+
+# Cargo-invoked build scripts inherit CARGO.  Point them to the injected real
+# executable so they cannot recursively enter this adapter.
+export CARGO="$DEV_FAST_CARGO"
+exec "$DEV_FAST_CARGO" --config "$DEV_FAST_CONFIG" "$@"

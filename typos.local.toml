@@ -42,6 +42,15 @@ ignore = [
   '--artifact-server-path(?:[=\s"`]|$)',
   '`color`',
   '\brust-analyzer\b',
+  # mold is the fixed name of the approved external linker and its release
+  # archive. These patterns retain ordinary en-GB prose checking.
+  '`mold`',
+  '\bmissing_mold\b',
+  '"mold"',
+  '\bmold 2\.41\.0\b',
+  '"mold\\t--version"',
+  '\bmold-\$\{version\}-\$\{architecture\}-linux\.tar\.gz\b',
+  '\btools/mold/',
 ]
 
 # ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
