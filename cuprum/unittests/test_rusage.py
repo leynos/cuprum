@@ -94,6 +94,35 @@ def test_capture_normalizes_platform_rss_units(
     )
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected_rss_bytes"),
+    [("linux", 4096), ("darwin", 4)],
+)
+def test_wait4_usage_normalizes_platform_rss_units(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    expected_rss_bytes: int,
+) -> None:
+    """Child-specific wait4 usage preserves the platform RSS unit contract."""
+    usage = types.SimpleNamespace(ru_maxrss=4, ru_utime=1.25, ru_stime=2.5)
+    monkeypatch.setattr(_rusage.sys, "platform", platform)
+
+    assert _rusage.resource_usage_from_wait4(usage) == _rusage.ChildResourceUsage(
+        max_rss_bytes=expected_rss_bytes,
+        user_cpu_seconds=1.25,
+        system_cpu_seconds=2.5,
+    )
+
+
+def test_wait4_measurement_is_unavailable_without_wait4(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Platforms without a child-specific reaper do not claim direct usage."""
+    monkeypatch.delattr(_rusage.os, "wait4")
+
+    assert _rusage.wait4_resource_measurement_available() is False
+
+
 def test_delta_requires_two_snapshots() -> None:
     """Missing accounting boundaries cannot produce a resource delta."""
     snapshot = _snapshot()

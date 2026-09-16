@@ -1015,13 +1015,17 @@ Implementation notes (current state):
   `user_cpu_seconds`, and `system_cpu_seconds`, plus an `ok` helper for
   convenience.
 - `started_at` is a wall-clock timestamp and `duration` is a monotonic duration
-  in seconds. The resource fields are `None` on Windows and any platform that
-  cannot expose child resource accounting. For an isolated command, the CPU
-  fields derive from `RUSAGE_CHILDREN` snapshots; concurrent commands are an
-  approximation because the counter is process-global. `max_rss_bytes` remains
-  `None` because `ru_maxrss` is a cumulative high-water mark and cannot be
-  attributed to an individual command. Pipeline-stage resource fields are always
-  `None` because concurrent reaping cannot be attributed to individual stages.
+  in seconds. On Linux and macOS, the direct-command path owns the child reap
+  through `os.wait4`, so it can report that child's user CPU time, system CPU
+  time, and maximum RSS. Linux reports `ru_maxrss` in KiB and macOS reports it
+  in bytes; both are normalized to `max_rss_bytes` in bytes. This path never
+  subtracts process-global `RUSAGE_CHILDREN.ru_maxrss` high-water marks. On
+  platforms without the child-specific wait interface, the CPU fields use the
+  existing aggregate `RUSAGE_CHILDREN` fallback and are approximate under
+  `run_concurrent`; `max_rss_bytes` remains `None`. Windows and platforms
+  without child-resource accounting return `None` for all three resource
+  fields. Pipeline-stage resource fields are always `None` because concurrent
+  reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
 - Environment overrides are supplied via an `ExecutionContext` and merged on top

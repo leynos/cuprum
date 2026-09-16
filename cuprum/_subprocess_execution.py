@@ -1,10 +1,4 @@
-"""Internal subprocess execution machinery.
-
-Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
-stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``.
-"""
+"""Internal subprocess execution machinery for ``SafeCmd.run()``."""
 
 from __future__ import annotations
 
@@ -14,9 +8,9 @@ import sys
 import time
 import typing as typ
 
+from cuprum import _wait4_process
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._rusage import capture_child_rusage, child_rusage_delta
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
@@ -76,21 +70,25 @@ async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
     """Spawn an async subprocess with configured I/O and environment."""
-    return await asyncio.create_subprocess_exec(
-        *execution.cmd.argv_with_program,
-        stdout=(
-            asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stdout
-            else asyncio.subprocess.DEVNULL
-        ),
-        stderr=(
-            asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stderr
-            else asyncio.subprocess.DEVNULL
-        ),
-        stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
-        env=_merge_env(execution.ctx.env),
-        cwd=_cwd_arg(execution.ctx.cwd),
+    return await _wait4_process.spawn_direct_process(
+        _wait4_process.DirectProcessConfig(
+            argv=execution.cmd.argv_with_program,
+            stdout=(
+                asyncio.subprocess.PIPE
+                if execution.capture or execution.echo_stdout
+                else asyncio.subprocess.DEVNULL
+            ),
+            stderr=(
+                asyncio.subprocess.PIPE
+                if execution.capture or execution.echo_stderr
+                else asyncio.subprocess.DEVNULL
+            ),
+            stdin=(
+                asyncio.subprocess.PIPE if execution.stdin_data is not None else None
+            ),
+            env=_merge_env(execution.ctx.env),
+            cwd=_cwd_arg(execution.ctx.cwd),
+        )
     )
 
 
@@ -325,7 +323,7 @@ async def _run_subprocess_without_streams(
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
-    rusage_before = capture_child_rusage()
+    rusage_before = _wait4_process.capture_resource_before_spawn()
     started_at = time.perf_counter()
     wall_clock_started_at = execution.observation.wall_clock()
     process = await _spawn_subprocess(execution)
@@ -363,7 +361,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             exc,
         )
 
-    rusage = child_rusage_delta(rusage_before, capture_child_rusage())
+    rusage = _wait4_process.resource_usage_for(process, rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

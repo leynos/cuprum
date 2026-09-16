@@ -48,6 +48,7 @@
       'cuprum/_subprocess_wait.py',
       'cuprum/_testing.py',
       'cuprum/_timeout_reporting.py',
+      'cuprum/_wait4_process.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/_support.py',
       'cuprum/adapters/_tracing_native_pump_cleanup.py',

@@ -1,15 +1,17 @@
 """Portable snapshots of child-process resource accounting.
 
 The POSIX ``resource`` module reports aggregate accounting for all reaped
-children.  This module isolates the optional platform boundary and converts
-``ru_maxrss`` into bytes for snapshots, while callers retain only attributable
-CPU deltas.
+children, while ``wait4`` returns usage for the child it reaps. This module
+isolates both optional boundaries, normalizing direct-child RSS to bytes and
+leaving aggregate snapshots CPU-only.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import sys
+import typing as typ
 
 try:
     import resource
@@ -28,11 +30,27 @@ class _ChildRusageSnapshot:
 
 @dc.dataclass(frozen=True, slots=True)
 class ChildResourceUsage:
-    """Attributable child-resource deltas from two snapshots."""
+    """Resource usage attributable to one completed child where available."""
 
     max_rss_bytes: int | None
     user_cpu_seconds: float
     system_cpu_seconds: float
+
+
+class _Wait4Usage(typ.Protocol):
+    """Attributes supplied by the resource record returned from ``wait4``."""
+
+    @property
+    def ru_maxrss(self) -> int:
+        """Maximum RSS reported by the reaped child."""
+
+    @property
+    def ru_utime(self) -> float:
+        """User CPU time reported by the reaped child."""
+
+    @property
+    def ru_stime(self) -> float:
+        """System CPU time reported by the reaped child."""
 
 
 def child_resource_measurement_available() -> bool:
@@ -41,6 +59,27 @@ def child_resource_measurement_available() -> bool:
         resource is not None
         and hasattr(resource, "RUSAGE_CHILDREN")
         and hasattr(resource, "getrusage")
+    )
+
+
+def wait4_resource_measurement_available() -> bool:
+    """Return whether this platform can reap one child with its usage."""
+    return (
+        (sys.platform.startswith("linux") or sys.platform == "darwin")
+        and hasattr(os, "wait4")
+        and hasattr(os, "waitstatus_to_exitcode")
+    )
+
+
+def resource_usage_from_wait4(usage: _Wait4Usage) -> ChildResourceUsage:
+    """Normalize the child-specific resource usage returned by ``os.wait4``."""
+    max_rss_bytes = int(usage.ru_maxrss)
+    if sys.platform.startswith("linux"):
+        max_rss_bytes *= 1024
+    return ChildResourceUsage(
+        max_rss_bytes=max(0, max_rss_bytes),
+        user_cpu_seconds=max(0.0, float(usage.ru_utime)),
+        system_cpu_seconds=max(0.0, float(usage.ru_stime)),
     )
 
 
