@@ -79,7 +79,7 @@ fn error_filter_keeps_ordinary_fatal_write_context() {
         let outcome = write_all_unix_with(b"payload", |_chunk| {
             Err(io::Error::from(io::ErrorKind::Other))
         });
-        assert!(outcome.is_err(), "a non-nonfatal write error is fatal",);
+        assert!(outcome.is_err(), "a non-nonfatal write error is fatal");
     });
 
     assert!(
