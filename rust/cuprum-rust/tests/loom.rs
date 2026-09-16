@@ -157,6 +157,21 @@ fn cancellation_before_submission_remains_released() {
             _rust_backend_native::loom_model::TerminalState::Released
         );
         assert_safe_terminal(snapshot);
+
+        let failed_submission =
+            NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed)
+                .expect("failed submission must preserve lifecycle state");
+        assert!(
+            failed_submission.is_none(),
+            "failed submission spawns no worker"
+        );
+        assert_eq!(
+            state
+                .snapshot()
+                .expect("snapshot must observe the settled lifecycle")
+                .terminal,
+            _rust_backend_native::loom_model::TerminalState::Released
+        );
     });
 }
 
