@@ -1,4 +1,4 @@
-"""Internal subprocess execution machinery.
+"""Internal subprocess execution machinery for ``SafeCmd.run()``.
 
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
@@ -7,7 +7,9 @@ consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
 run loop that waits for exit and reconciles the consumer tasks lives in
 ``cuprum._subprocess_stream_run``, and the consumer construction those two
 drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
-importers of this module keep working unchanged.
+importers of this module keep working unchanged. Timing and child resource
+usage are measured here, with ``cuprum._wait4_process`` owning the direct
+child's ``wait4`` reap and the aggregate fallback.
 """
 
 from __future__ import annotations
@@ -17,10 +19,10 @@ import dataclasses as dc
 import time
 import typing as typ
 
+from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._rusage import capture_child_rusage, child_rusage_delta
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
@@ -108,21 +110,25 @@ async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
     """Spawn an async subprocess with configured I/O and environment."""
-    return await asyncio.create_subprocess_exec(
-        *execution.cmd.argv_with_program,
-        stdout=(
-            asyncio.subprocess.PIPE
-            if execution.consumes_stdout
-            else asyncio.subprocess.DEVNULL
-        ),
-        stderr=(
-            asyncio.subprocess.PIPE
-            if execution.consumes_stderr
-            else asyncio.subprocess.DEVNULL
-        ),
-        stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
-        env=_merge_env(execution.ctx.env),
-        cwd=_cwd_arg(execution.ctx.cwd),
+    # ``consumes_stdout``/``consumes_stderr`` fold in the idle monitor as well as
+    # capture and echo, so a run the watchdog narrates keeps its pipes.
+    return await _wait4_process.spawn_direct_process(
+        _wait4_process.DirectProcessConfig(
+            argv=execution.cmd.argv_with_program,
+            stdout=(
+                asyncio.subprocess.PIPE
+                if execution.consumes_stdout
+                else asyncio.subprocess.DEVNULL
+            ),
+            stderr=(
+                asyncio.subprocess.PIPE
+                if execution.consumes_stderr
+                else asyncio.subprocess.DEVNULL
+            ),
+            stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
+            env=_merge_env(execution.ctx.env),
+            cwd=_cwd_arg(execution.ctx.cwd),
+        )
     )
 
 
@@ -185,7 +191,7 @@ def _relay_fallbacks_for_result(
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
-    rusage_before = capture_child_rusage()
+    rusage_before = _wait4_process.capture_resource_before_spawn()
     started_at = time.perf_counter()
     # The published result timestamp is a separate reading from the monotonic
     # one above: ``started_at`` is a monotonic reference the line stamps and
@@ -240,7 +246,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         # entirely; repeats are no-ops.
         await _shielded_cleanup(_stop_idle_monitor(execution.idle))
 
-    rusage = child_rusage_delta(rusage_before, capture_child_rusage())
+    rusage = _wait4_process.resource_usage_for(process, rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

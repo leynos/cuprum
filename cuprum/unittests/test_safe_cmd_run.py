@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, _rusage, _subprocess_execution, sh
+from cuprum import ECHO, _rusage, _subprocess_execution, _wait4_process, sh
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -27,9 +27,9 @@ if typ.TYPE_CHECKING:
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
 
-_posix_only = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="asserts POSIX child resource accounting",
+_wait4_only = pytest.mark.skipif(
+    not (sys.platform.startswith("linux") or sys.platform == "darwin"),
+    reason="asserts direct-child wait4 resource accounting",
 )
 
 
@@ -90,22 +90,30 @@ def test_captures_output_and_exit_code(
         assert result.system_cpu_seconds is None, "Windows must not report child CPU"
 
 
-@_posix_only
-def test_records_child_cpu_usage_without_attributable_rss(
+@_wait4_only
+def test_records_direct_child_resource_usage(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
-    """An isolated child has CPU usage but no attributable RSS high-water mark."""
+    """An isolated allocating child reports its own peak RSS and CPU usage."""
+    allocation_bytes = 8 * 1024 * 1024
     command = python_builder(
         "-c",
-        "print('resource-probe')",
+        (
+            f"allocation = bytearray({allocation_bytes}); "
+            "allocation[::4096] = b'x' * len(allocation[::4096]); "
+            "print('resource-probe')"
+        ),
     )
 
     result = command.run_sync()
 
-    assert result.max_rss_bytes is None, "aggregate RSS cannot identify one child"
-    assert result.user_cpu_seconds is not None, "POSIX must expose child user CPU"
-    assert result.user_cpu_seconds >= 0, "child user CPU must be non-negative"
-    assert result.system_cpu_seconds is not None, "POSIX must expose child system CPU"
+    assert result.max_rss_bytes is not None, "wait4 must expose direct-child RSS"
+    assert result.max_rss_bytes >= allocation_bytes, (
+        "direct-child RSS must include the touched allocation"
+    )
+    assert result.user_cpu_seconds is not None, "wait4 must expose child user CPU"
+    assert result.user_cpu_seconds > 0, "allocating child must consume user CPU"
+    assert result.system_cpu_seconds is not None, "wait4 must expose child system CPU"
     assert result.system_cpu_seconds >= 0, "child system CPU must be non-negative"
 
 
@@ -122,10 +130,11 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
         """Return the next controlled accounting boundary."""
         return snapshots.pop(0)
 
+    monkeypatch.setattr(_wait4_process, "capture_child_rusage", capture_snapshot)
     monkeypatch.setattr(
-        _subprocess_execution,
-        "capture_child_rusage",
-        capture_snapshot,
+        _wait4_process,
+        "wait4_resource_measurement_available",
+        lambda: False,
     )
 
     result = sh.make(ECHO)("resource-probe").run_sync()

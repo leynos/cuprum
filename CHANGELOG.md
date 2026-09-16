@@ -76,13 +76,14 @@
   empty tuples, so a project that needs neither can omit them
   ([#396](https://github.com/leynos/cuprum/issues/396)).
 - **Command execution measurements:** `CommandResult` now includes the
-  wall-clock `started_at` timestamp and monotonic `duration`, plus optional
-  child user and system CPU-time fields where POSIX resource accounting is
-  available. `max_rss_bytes` remains `None` because `RUSAGE_CHILDREN.ru_maxrss`
-  is a cumulative high-water mark that cannot be attributed safely to one
-  command; all three resource fields are also `None` on Windows and for
-  pipeline stages. Existing six-argument positional construction remains valid,
-  with timing fields defaulting to `0.0`.
+  wall-clock `started_at` timestamp and monotonic `duration`, plus child user,
+  system CPU-time, and maximum RSS fields where the platform can attribute
+  usage to the reaped child. Linux and macOS direct commands use child-specific
+  `wait4` results; Linux RSS is normalized from KiB to bytes and macOS RSS is
+  already in bytes. Platforms without that interface retain aggregate CPU-only
+  accounting and leave `max_rss_bytes` as `None`; Windows and pipeline stages
+  leave all three resource fields as `None`. Existing six-argument positional
+  construction remains valid, with timing fields defaulting to `0.0`.
 - **Idle heartbeat for quiet children:** `RunOutputOptions` accepts
   `idle_after` and `on_idle`, so a run that produces no output for a given
   number of seconds says so instead of leaving a blank CI log to be
@@ -119,6 +120,7 @@
   `write` and `flush` must return promptly. The heartbeat reports absent
   output, not absent progress, so it is never a deadlock diagnosis
   ([#359](https://github.com/leynos/cuprum/issues/359)).
+
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,
   the encoded truncation marker, and its line ending. Captured output remains

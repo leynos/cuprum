@@ -410,25 +410,28 @@ and echo semantics and returns a structured `CommandResult`:
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
   success. `started_at` records the wall-clock start time and `duration`
   records elapsed monotonic seconds.
-- `user_cpu_seconds` and `system_cpu_seconds` are populated from POSIX
-  child-resource accounting for an isolated command when the platform provides
-  it. The CPU fields are deltas from `RUSAGE_CHILDREN` snapshots and are
-  approximate under `run_concurrent` because the counter is process-global.
-  `max_rss_bytes` is `None`: `ru_maxrss` is a cumulative high-water mark, so it
-  cannot be attributed safely to one command. All three resource fields are
-  `None` on Windows and platforms without the required resource API, and
-  pipeline-stage resource fields are always `None` because concurrently reaped
-  stages cannot be attributed safely.
+- On Linux and macOS, direct commands report `user_cpu_seconds`,
+  `system_cpu_seconds`, and `max_rss_bytes` from the specific child returned by
+  the platform's `wait4` operation. Linux `ru_maxrss` is converted from KiB to
+  bytes; macOS reports bytes directly. The implementation does not subtract
+  process-global `RUSAGE_CHILDREN.ru_maxrss` high-water marks. On platforms
+  without the child-specific wait interface, CPU fields may use the aggregate
+  `RUSAGE_CHILDREN` fallback and are approximate under `run_concurrent`, while
+  `max_rss_bytes` remains `None`. Windows and platforms without child-resource
+  accounting return `None` for all three fields. Pipeline-stage resource fields
+  are always `None` because concurrently reaped stages cannot be attributed
+  safely.
 
 ### Upgrading `CommandResult` consumers
 
 `started_at` and `duration` are public fields on the dataclass with `0.0`
 defaults, so existing six-argument positional construction remains valid.
-Results produced by command execution supply measured values. Code that
-serializes or displays resource fields should preserve `None` as unavailable:
-POSIX child accounting supplies the CPU deltas for isolated commands, while
-Windows, unsupported platforms, and pipeline stages do not supply resource
-figures.
+Results produced by command execution supply measured values where the platform
+can attribute them. Code that serializes or displays resource fields should
+preserve `None` as unavailable: Linux and macOS direct commands provide
+per-child CPU and RSS figures, the aggregate POSIX fallback can provide only
+approximate CPU deltas under concurrent execution, and Windows, unsupported
+resource APIs, and pipeline stages may not provide resource figures.
 
 ### Output options
 

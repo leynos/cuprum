@@ -676,6 +676,24 @@ combined boundary in `_pipeline_types`.
   `_WriteOutcome.CLOSED` when the downstream pipe closes early. The caller
   keeps writer ownership and closes it exactly once.
 
+### Direct-child resource accounting
+
+The direct-command path uses `cuprum._wait4_process` on Linux and macOS. Its
+POSIX `Popen` wrapper connects the child pipes to asyncio while keeping one
+owner for the child reap; that owner calls `os.wait4` and returns the usage for
+the specific child. The result builder uses that usage for user CPU time,
+system CPU time, and maximum RSS. Linux `ru_maxrss` values are converted from
+KiB to bytes; macOS values are already bytes. Do not add a second waiter or
+derive RSS by subtracting `RUSAGE_CHILDREN.ru_maxrss` snapshots, because the
+latter is a process-global high-water mark.
+
+Platforms without the wait4 path retain the aggregate `RUSAGE_CHILDREN`
+fallback for CPU deltas and leave maximum RSS unavailable. Windows and
+platforms without child-resource accounting leave all three resource fields
+unavailable. Pipeline stages always leave all resource fields as `None`: their
+children are reaped concurrently, so process-global resource data cannot be
+assigned safely to an individual stage.
+
 `SafeCmd.run()` enforces the allowlist, then collects hooks from the current
 context, emits the `plan` event, runs before-hooks, and delegates subprocess
 execution to `_execute_with_hooks`. Pipeline execution follows the same
@@ -4862,22 +4880,23 @@ session.
 
 ### CommandResult timing and child-resource accounting
 
-`cuprum/_rusage.py` is the optional platform boundary for child-resource
-accounting. It detects whether `resource.getrusage(RUSAGE_CHILDREN)` exists,
-captures a normalized snapshot when it does, and returns `None` when the
-module, API, or snapshot call is unavailable. The direct-command path captures
-the before snapshot immediately before spawning and the after snapshot after
-the child has been reaped. User and system CPU times are reported as
-non-negative deltas; concurrent commands remain approximate because
-`RUSAGE_CHILDREN` is a process-global aggregate.
+`cuprum/_rusage.py` is the optional platform boundary for aggregate
+child-resource accounting. It detects whether `resource.getrusage` with
+`RUSAGE_CHILDREN` exists, captures normalized snapshots when it does, and
+returns `None` when the module, API, or snapshot call is unavailable. The
+direct-command path on Linux and macOS instead uses `cuprum._wait4_process`:
+its sole child-reap owner calls `os.wait4` and returns usage for that specific
+child. The result builder uses that usage for user and system CPU time and
+maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
 
-`ru_maxrss` is a cumulative high-water mark rather than an accumulating
-counter. Subtracting two snapshots would therefore report zero for a later
-command whose peak is below an earlier child, so `max_rss_bytes` is left as
-`None` when this API is the only source available. Windows and other platforms
-without the resource API likewise return `None` for all three resource fields.
-Pipeline stages also leave them as `None`: concurrently reaped children cannot
-be attributed safely to individual stages.
+The direct wait4 path never derives RSS by subtracting snapshots, because
+`ru_maxrss` is a process-global high-water mark rather than an accumulating
+counter. Platforms without that path retain aggregate `RUSAGE_CHILDREN` CPU
+deltas, which are approximate under concurrent execution, and leave
+`max_rss_bytes` as `None`. Windows and platforms without child-resource
+accounting leave all three resource fields as `None`. Pipeline stages also
+leave them as `None`: concurrently reaped children cannot be attributed safely
+to individual stages.
 
 The execution boundary supplies the wall-clock callable used for
 `CommandResult.started_at`; direct commands and pipeline stages read it
