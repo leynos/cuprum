@@ -1,0 +1,31 @@
+---
+name: Set up Linux dev-fast prerequisites
+description: Install the pinned Cranelift component and checksum-verified mold binary.
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned backend and linker
+      shell: bash
+      run: |
+        set -euo pipefail
+        toolchain='nightly-2026-08-23'
+        component='rustc-codegen-cranelift'
+        version="$(tr -d '\r\n' < tools/mold/VERSION)"
+        case "$(uname -m)" in
+          x86_64|amd64) architecture=x86_64 ;;
+          aarch64|arm64) architecture=aarch64 ;;
+          *) echo "unsupported mold architecture: $(uname -m)" >&2; exit 1 ;;
+        esac
+        archive="mold-${version}-${architecture}-linux.tar.gz"
+        expected="$(awk -v archive="${archive}" '$2 == archive { print $1 }' tools/mold/SHA256SUMS)"
+        test "$(printf '%s\n' "${expected}" | sed '/^$/d' | wc -l)" -eq 1
+        rustup toolchain install "${toolchain}" --profile minimal
+        rustup component add "${component}" --toolchain "${toolchain}"
+        curl --fail --location --silent --show-error \
+          --output "${RUNNER_TEMP}/${archive}" \
+          "https://github.com/rui314/mold/releases/download/v${version}/${archive}"
+        printf '%s  %s\n' "${expected}" "${RUNNER_TEMP}/${archive}" | sha256sum --check --status
+        mkdir --parents "${HOME}/.local"
+        tar --extract --gzip --strip-components=1 --directory "${HOME}/.local" \
+          --file "${RUNNER_TEMP}/${archive}"
+        echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"

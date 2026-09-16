@@ -2,6 +2,7 @@
 name = "cuprum-streams"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 license = "ISC"
 description = "Safe stream orchestration for Cuprum"
 publish = false

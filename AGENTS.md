@@ -226,8 +226,14 @@ working on the Rust portions of the project:
 - The project toolchain stays pinned to Rust `1.85.0` and declares `rustfmt`,
   `clippy`, and `rust-analyzer`. CI also provisions `nightly-2026-05-28` for
   the maintenance formatter, then restores the project toolchain. The current
-  `fmt` and `check-fmt` recipes still use the project toolchain; the nightly is
-  not a build, test, lint, or documentation toolchain.
+  `fmt` and `check-fmt` recipes still use the project toolchain. Linux-only
+  debug Rust work additionally uses the separately pinned dev-fast nightly
+  through `tools/dev-fast/config.toml`; run `make dev-fast-check` first. The
+  stable toolchain remains mandatory for release, coverage, Whitaker, the
+  explicit `make msrv-check` verification target, and the macOS and Windows
+  platform alternatives. All Rust packages inherit Cargo's
+  `rust-version = "1.85.0"` contract, which also keeps MSRV-aware Clippy
+  findings valid when debug linting uses the maintenance nightly.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions
