@@ -15,6 +15,17 @@ import dataclasses as dc
 from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 
+from cuprum._catalogue_defaults import (
+    CORE_OPS_PROJECT,
+    DEFAULT_PROJECT_DATA,
+    DOC_TOOL,
+    DOCUMENTATION_PROJECT,
+    ECHO,
+    GIT,
+    LS,
+    RSYNC,
+    TAR,
+)
 from cuprum.program import Program
 
 
@@ -122,7 +133,18 @@ class ProjectSettings:
     noise_rules: tuple[str, ...] = ()
 
     def owns(self, program: Program) -> bool:
-        """Return whether ``program`` belongs to this project."""
+        """Return True when the program belongs to this project.
+
+        Parameters
+        ----------
+        program : Program
+            The program to test for membership in this project.
+
+        Returns
+        -------
+        bool
+            True if the program is one of this project's programs.
+        """
         return program in self.programs
 
 
@@ -135,7 +157,13 @@ class ProgramEntry:
 
     @property
     def project_name(self) -> str:
-        """The name of the project that registered this program."""
+        """The owning project's name.
+
+        Returns
+        -------
+        str
+            The name of the project that registered this program.
+        """
         return self.project.name
 
 
@@ -183,20 +211,12 @@ class ProgramCatalogue:
     ) -> ProgramCatalogue:
         """Build a single-project catalogue from the given programs.
 
-        A convenience for standalone scripts that run one or two programs and
-        would otherwise spell out ``ProjectSettings`` and ``ProgramCatalogue``
-        by hand.
-
         Parameters
         ----------
         *programs : Program | str
-            Programs to allowlist. Strings are coerced to ``Program``, so
-            bare names and absolute paths are both accepted.
+            Programs to allowlist; bare names and absolute paths are accepted.
         name : str | None, optional
-            Project name for the resulting catalogue. When ``None``, the
-            programs' base names joined with ``-`` are used instead, so
-            ``from_programs("/usr/bin/git", "cargo")`` is named
-            ``git-cargo``.
+            Project name, derived from the programs' base names when omitted.
         documentation_locations : tuple[str, ...], optional
             Documentation references for the project.
         noise_rules : tuple[str, ...], optional
@@ -205,14 +225,14 @@ class ProgramCatalogue:
         Returns
         -------
         ProgramCatalogue
-            A catalogue whose sole project owns every supplied program.
+            A catalogue whose sole project owns the supplied programs.
 
         Raises
         ------
         ValueError
             If no programs are supplied.
         DuplicateProgramError
-            If the same program is supplied more than once.
+            If a program is supplied more than once.
 
         Examples
         --------
@@ -346,29 +366,14 @@ class ProgramCatalogue:
         return program_map
 
 
-CORE_OPS_PROJECT = "core-ops"
-DOCUMENTATION_PROJECT = "docs"
-
-ECHO = Program("echo")
-GIT = Program("git")
-LS = Program("ls")
-RSYNC = Program("rsync")
-TAR = Program("tar")
-DOC_TOOL = Program("mdbook")
-
-DEFAULT_PROJECTS: tuple[ProjectSettings, ...] = (
+DEFAULT_PROJECTS: tuple[ProjectSettings, ...] = tuple(
     ProjectSettings(
-        name=CORE_OPS_PROJECT,
-        programs=(ECHO, GIT, LS, RSYNC, TAR),
-        documentation_locations=("docs/users-guide.md#program-catalogue",),
-        noise_rules=(r"^progress:", r"^note:"),
-    ),
-    ProjectSettings(
-        name=DOCUMENTATION_PROJECT,
-        programs=(DOC_TOOL,),
-        documentation_locations=("https://docs.example.invalid/cuprum/catalogue",),
-        noise_rules=(r"^\[INFO\]",),
-    ),
+        name=name,
+        programs=programs,
+        documentation_locations=documentation_locations,
+        noise_rules=noise_rules,
+    )
+    for name, programs, documentation_locations, noise_rules in DEFAULT_PROJECT_DATA
 )
 
 DEFAULT_CATALOGUE = ProgramCatalogue(projects=DEFAULT_PROJECTS)
