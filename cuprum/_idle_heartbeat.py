@@ -110,6 +110,11 @@ class _IdleNotifier:
     reporting* failed, and a diagnostic that raised on every interval would
     bury the live log it exists to keep legible.
 
+    A callback that *returns a value* is silenced on the same terms. It has
+    already broken the synchronous, ``None``-returning contract, so repeating
+    the report on every further interval would bury the log for exactly the
+    same reason -- the one report is the whole diagnosis.
+
     Cancellation, ``KeyboardInterrupt``, and ``SystemExit`` are not ordinary
     failures and are never converted here; they escape this call unchanged.
     """
@@ -120,24 +125,33 @@ class _IdleNotifier:
     def __call__(self, elapsed_total: float, elapsed_idle: float) -> bool:
         """Emit one notification; return whether more may follow."""
         try:
-            self._emit(elapsed_total, elapsed_idle)
+            return self._emit(elapsed_total, elapsed_idle)
         except Exception as exc:  # ruff: ignore[blind-except] - the report is sanitized by design: only the error type is named.
             _report_notification_failure(type(exc).__name__)
             return False
-        return True
 
-    def _emit(self, elapsed_total: float, elapsed_idle: float) -> None:
-        """Render the built-in diagnostic or invoke the caller's callback."""
+    def _emit(self, elapsed_total: float, elapsed_idle: float) -> bool:
+        """Render the built-in diagnostic or invoke the caller's callback.
+
+        Returns
+        -------
+        bool
+            Whether further notifications may follow. Only a callback that
+            returned a value ends the channel; the built-in renderer and a
+            callback returning ``None`` both leave it running.
+        """
         callback = self.callback
         if callback is None:
             self.diagnostic.write(
                 elapsed_total=elapsed_total,
                 elapsed_idle=elapsed_idle,
             )
-            return
+            return True
         result = typ.cast("object", callback(elapsed_total, elapsed_idle))
         if result is not None:
             _report_callback_result(result)
+            return False
+        return True
 
 
 @dc.dataclass(slots=True)

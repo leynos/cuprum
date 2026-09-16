@@ -205,13 +205,59 @@ def test_accidental_coroutine_return_is_closed_and_reported(
         diagnostic=_IdleDiagnostic(_idle_subject(_PROGRAM), destination=_LiveSink()),
     )
     with caplog.at_level("WARNING", logger="cuprum.idle"):
-        assert notifier(30.0, 30.0) is True, "a returned value is not a failure"
+        assert notifier(30.0, 30.0) is False, (
+            "a callback that returned a value has broken the synchronous, "
+            "None-returning contract; no further notification may follow"
+        )
     assert inspect.getcoroutinestate(returned) == inspect.CORO_CLOSED, (
         "the returned coroutine must be closed"
     )
     assert [record.getMessage() for record in caplog.records] == [
         "idle_callback_returned_value result_type=coroutine"
     ], f"expected one report of the return value, got {caplog.records!r}"
+
+
+def test_a_value_returning_callback_silences_the_watchdog(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Example: the value-return report closes the channel, so it cannot flood.
+
+    The notifier only *reports* the broken return; the monitor is what acts on
+    it, stopping the schedule exactly as it does for a raising callback. Pinned
+    through the monitor because that is the pair the flood came from: a report
+    that left the watchdog running would repeat on every further interval.
+    """
+    calls = 0
+
+    def on_idle(_total: float, _idle: float) -> object:
+        """Return a value on every call, the way a broken wrapper does."""
+        nonlocal calls
+        calls += 1
+        return "oops"
+
+    async def exercise() -> None:
+        """Drive one monitor past several deadlines with the broken callback."""
+        clock = ControllableMonotonicClock()
+        monitor = _build_idle_monitor(
+            _INTERVAL,
+            typ.cast("cabc.Callable[[float, float], None]", on_idle),
+            _idle_subject(_PROGRAM),
+        )
+        assert monitor is not None, "an interval must build a monitor"
+        monitor.clock = clock
+        monitor.launch()
+        for _ in range(5):
+            clock.advance(_INTERVAL)
+            monitor.poll()
+        await _stop_idle_monitor(monitor)
+
+    with caplog.at_level("WARNING", logger="cuprum.idle"):
+        asyncio.run(exercise())
+
+    assert calls == 1, "five due deadlines must not re-invoke a broken callback"
+    assert [record.getMessage() for record in caplog.records] == [
+        "idle_callback_returned_value result_type=str"
+    ], f"exactly one report must be emitted, got {caplog.records!r}"
 
 
 def test_controlled_30_60_90_sequence_reports_exactly_twice() -> None:
