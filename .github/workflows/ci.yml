@@ -497,7 +497,7 @@ jobs:
           install-binstall: 'false'
 
       # The full Python suite exercises the native mdtablefix file selector.
-      # Restoring the tool cache is an optimisation, not a prerequisite.
+      # Restoring the tool cache is an optimization, not a prerequisite.
       - name: Install mdtablefix
         if: matrix.python-suite
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11

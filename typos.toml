@@ -3,7 +3,6 @@
 
 [files]
 extend-exclude = [
-    "*.ambr",
     ".git",
     ".hypothesis",
     ".pytest_cache",
@@ -22,6 +21,7 @@ extend-exclude = [
     "package-lock.json",
     "pnpm-lock.yaml",
     "target",
+    "tests/behaviour/__snapshots__/test_stream_fidelity.ambr",
     "typos.local.toml",
     "typos.toml",
     "uv.lock",
