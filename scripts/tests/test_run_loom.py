@@ -135,3 +135,14 @@ def test_run_loom_rejects_an_unknown_mode(loom_driver: types.ModuleType) -> None
             mode="unknown",
             bounds=loom_driver.LoomBounds(1, 1, 1),
         )
+
+
+def test_run_loom_rejects_a_non_positive_programmatic_bound(
+    loom_driver: types.ModuleType,
+) -> None:
+    """Direct callers cannot silently remove the configured exploration budget."""
+    with pytest.raises(loom_driver.LoomRunError, match="Specify all positive"):
+        loom_driver.run_loom(
+            mode="smoke",
+            bounds=loom_driver.LoomBounds(0, 1, 1),
+        )

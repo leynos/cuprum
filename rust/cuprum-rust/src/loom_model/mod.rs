@@ -129,6 +129,7 @@ struct Lifecycle {
     cleanup_completed: bool,
     blocking_restored: bool,
     reader_resumed: bool,
+    reader_closes: usize,
     worker_active: bool,
     released_while_worker_active: bool,
     observer_saw_completion: bool,
@@ -142,6 +143,7 @@ impl Lifecycle {
             cleanup_completed: false,
             blocking_restored: false,
             reader_resumed: false,
+            reader_closes: 0,
             worker_active: false,
             released_while_worker_active: false,
             observer_saw_completion: false,
@@ -243,7 +245,7 @@ impl NativePumpModel {
         let lifecycle = self.lock_lifecycle()?;
         Ok(LifecycleSnapshot {
             writer_closes: lifecycle.writer.closes,
-            reader_closes: borrowed_reader_close_count()?,
+            reader_closes: lifecycle.reader_closes,
             was_cancelled: self.was_cancelled.load(Ordering::Acquire),
             cleanup_count: self.cleanup_count.load(Ordering::Acquire),
             blocking_restored: lifecycle.blocking_restored,
@@ -256,9 +258,11 @@ impl NativePumpModel {
 
     fn run_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         drive_production_pump_machine(native);
+        let reader_closes = borrowed_reader_close_count()?;
         {
             let mut lifecycle = self.lock_lifecycle()?;
             lifecycle.worker_active = false;
+            lifecycle.reader_closes = reader_closes;
             lifecycle.terminal = TerminalState::WorkerFinished(native);
         }
         self.completion_notified.store(true, Ordering::Release);
