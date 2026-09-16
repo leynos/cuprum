@@ -3,24 +3,28 @@
 Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
 stream consumers, and assembling the ``CommandResult``. The rules for ending a
 run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``.
+consumers exactly once — live in ``cuprum._subprocess_wait``, and the consumer
+construction those helpers drive lives in ``cuprum._subprocess_streams``,
+re-exported here so importers of this module keep working unchanged.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import sys
 import time
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _StreamConfig
-from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_streams import (
+    _build_stream_config,
+    _create_stream_callback,
+    _spawn_stream_consumers,
+)
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -35,11 +39,8 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
@@ -89,82 +90,6 @@ async def _spawn_subprocess(
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
-    )
-
-
-def _create_stream_callback(
-    observation: _StageObservation,
-    event_type: typ.Literal["stdout", "stderr"],
-    pid: int | None,
-) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
-
-
-def _spawn_stream_consumers(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    stream_config: _StreamConfig,
-    *,
-    pid: int | None,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks."""
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_config = dc.replace(
-        stream_config,
-        echo_output=execution.echo_stderr,
-        sink=(
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        ),
-        stream=EchoStream.STDERR,
-        # Only the stderr echo shares a destination with the keepalive, so it
-        # alone can leave a line for the diagnostic to trip over.
-        mirror=execution.idle.mirror if execution.idle is not None else None,
-    )
-    return (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-                read_size=stream_config.read_size,
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                stderr_config,
-                on_line=stderr_on_line,
-                read_size=stderr_config.read_size,
-            ),
-        ),
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context."""
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        sink=(
-            execution.ctx.stdout_sink
-            if execution.ctx.stdout_sink is not None
-            else sys.stdout
-        ),
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        read_size=_current_read_size(),
-        activity=execution.idle.note_activity if execution.idle is not None else None,
     )
 
 

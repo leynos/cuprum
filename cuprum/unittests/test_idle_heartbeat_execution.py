@@ -244,3 +244,48 @@ def test_a_caller_callback_displaces_the_built_in_renderer(
     assert not keepalives(sink), (
         f"both renderers ran for sink={sink.getvalue()!r}; the callback replaces it"
     )
+
+
+def test_a_shared_sink_keeps_the_keepalive_on_its_own_line(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A newline-less stdout echo must not become the keepalive's own line.
+
+    Both sinks pointing at one object is a supported configuration, and it is
+    the only way a stdout echo can reach the keepalive's destination. Echo is
+    left unbounded because the bounded renderer already holds an unfinished
+    line back; unbounded echo writes each chunk as it arrives, so the cursor is
+    the only thing standing between the two.
+    """
+    sink = io.StringIO()
+    command = python_builder(
+        "-c",
+        "import sys, time\n"
+        "sys.stdout.write('partial')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.45)\n"
+        "sys.stdout.write('\\n')\n"
+        "sys.stdout.flush()\n",
+    )
+
+    asyncio.run(
+        command.run(
+            output=RunOutputOptions(
+                echo=True,
+                idle_after=0.12,
+                max_echo_line_bytes=None,
+            ),
+            context=ExecutionContext(stdout_sink=sink, stderr_sink=sink),
+        ),
+    )
+
+    lines = keepalives(sink)
+    assert lines, f"the quiet tail must still be reported for {sink.getvalue()!r}"
+    for line in lines:
+        assert line.startswith("[cuprum]"), (
+            "the keepalive must begin its own line rather than continue the "
+            f"child's unfinished one: {line!r}"
+        )
+    assert sink.getvalue().startswith("partial\n"), (
+        f"the child's own bytes must be unchanged: {sink.getvalue()!r}"
+    )
