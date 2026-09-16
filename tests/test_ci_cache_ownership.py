@@ -207,6 +207,8 @@ def test_saves_happen_only_on_trunk_and_only_after_a_miss() -> None:
             collapsed = " ".join(condition.split())
             message = f"{workflow_name}:{job_name} save must declare inputs"
             required = list(SAVE_GUARD_CLAUSES)
+            if workflow_name == "loom.yml":
+                required[0] = "github.event_name == 'schedule'"
             if _key_name(_key_of(step, message)) not in ROLLING_KEYS:
                 required.append(MISS_GUARD_CLAUSE)
             missing = [clause for clause in required if clause not in collapsed]

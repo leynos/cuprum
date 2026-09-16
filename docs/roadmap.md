@@ -488,6 +488,17 @@ consumed-writer invariants.
     close race and assert clean shutdown without late duplicate closure; the
     ownership contract is recorded in the developers' guide and ADR-002.
 
+
+- [x] 8.1.2. Add bounded Loom verification for the native-pump lifecycle.
+  - Completion evidence (2026-09-16): the dedicated model target exercises the
+    event-loop, executor-worker, and completion-callback ownership hand-off
+    under `--cfg loom`; it runs a small smoke budget for relevant pull requests
+    and a larger daily budget at 17:15 UTC plus an on-demand manual budget.
+    The model is separately
+    deliverable from [issue #379][issue-379]: it reuses the audited
+    borrowed-reader and pump-state seams where available, but does not wait for
+    the full unsafe-code extraction. Loom complements Verus/Kani, Miri, and the
+    native and Python integration regressions rather than replacing them.
 ### 8.2. Restore Python-frame attribution in perf captures
 
 This step removes a tooling gap that weakens the evidence base future phases
@@ -621,3 +632,5 @@ subprocess-capture half is already closed.
     canonical Python fallback, with the boundary recorded in the developers'
     guide. The current implementation needs no new Rust telemetry and no
     per-read cross-language call.
+
+[issue-379]: https://github.com/leynos/cuprum/issues/379

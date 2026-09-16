@@ -47,6 +47,9 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
     "dependabot-automerge.yml": {
         ".github/workflows/dependabot-automerge.yml",
     },
+    "loom.yml": {
+        ".github/actions/setup-rust",
+    },
     "mutation-testing.yml": {
         ".github/workflows/mutation-mutmut.yml",
     },

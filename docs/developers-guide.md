@@ -3036,6 +3036,57 @@ Rust-level tests for safe stream policy live with `cuprum-streams` under
 decoder, parsing, state-machine, and adapter logic where Python integration
 tests would only cover a few examples.
 
+### Loom native-pump lifecycle models
+
+The native-pump hand-off crosses the Python event loop, an executor worker, and
+a completion callback. The bounded model in `rust/cuprum-rust/tests/loom.rs`
+represents those actors explicitly and maps each resource and transition to
+production code in [Native-pump Loom model](design-loom-native-pump-model.md).
+It uses Loom's replacement mutex, atomics, cell, and thread primitives for the
+modelled state, then reuses the production `pump_machine::advance` transition
+function and the `with_borrowed_reader` `ManuallyDrop` ownership model. It does
+not introduce concurrency primitives into the synchronous production
+splice/read-write loop.
+
+Run the full bounded set locally with:
+
+```bash
+make loom
+```
+
+The driver first lists the dedicated `--test loom` target, then executes it with
+`RUSTFLAGS="--cfg loom -D warnings"`. It rejects a zero discovered or executed
+count, so a dependency-only or `--no-run` check cannot look healthy. The
+regular smoke lane uses at most two pre-emptions, 300 branches, and four
+threads; `.github/workflows/loom.yml` uses three pre-emptions, 2,000 branches,
+and four threads. The full lane runs every day at 17:15 UTC and on manual
+dispatch. To reproduce a bounded counterexample, pass all three explicit
+overrides, such as
+`uv run scripts/run_loom.py --mode full --max-preemptions 3
+--max-branches 2000 --max-threads 4`.
+UTC is deliberate: the slot does not preserve a Europe/London wall-clock time
+through daylight-saving transitions.
+
+Loom's compiler cache uses the `loom` build shape and its own sccache family.
+The full schedule is the sole writer; pull-request smoke runs restore that
+family. A full run writes `loom-summary.md` to the Actions summary with the
+commit, Rust tool versions, selected mode, actual test count, bounds, and
+elapsed time. On a failure, retain the command output and reproduce with the
+same `LOOM_MAX_PREEMPTIONS`, `LOOM_MAX_BRANCHES`, and `LOOM_MAX_THREADS`; Loom
+also supports `LOOM_CHECKPOINT_FILE`, `LOOM_LOG=trace`, and `LOOM_LOCATION=1`
+to isolate a counterexample. Triage the failed workflow in the normal CI
+failure path; it deliberately creates no duplicate issues.
+
+The claim is limited. These are safety checks over bounded interleavings of the
+modelled ownership state: one closer owns the duplicate writer, the reader
+stays borrowed, and cleanup cannot release resources while the worker is
+active. They do not verify kernel I/O, asyncio, the GIL, uninstrumented Rust,
+or third-party internals. They also do not prove liveness: an actual blocking
+read can fail to return, and Loom does not assume an unfair scheduler will run
+an actor. Loom complements the existing Verus/Kani and Miri work and the native
+and Python integration regressions; it does not replace them.
+
+
 Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
 development dependency. Prefer generated payloads and small helper functions
 that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
