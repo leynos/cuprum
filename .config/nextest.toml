@@ -1,0 +1,5 @@
+# Per-test allowance < global-timeout < cargo watchdog; see the developers'
+# guide's "Test timeouts: the tiers this repository sets" section for rationale.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+global-timeout = "20m"

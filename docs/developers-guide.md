@@ -590,6 +590,42 @@ the same key twice. PyYAML otherwise keeps the last value silently, so a job
 declaring `runs-on` twice could carry a paid label in the discarded half while
 every placement contract read the other. New workflow readers use it too.
 
+### Test timeouts: the tiers this repository sets
+
+The coverage lanes contain four timeout tiers in this order: per-test allowance
+< global-timeout < cargo watchdog < job ceiling. The first two live in
+`.config/nextest.toml`; the third is the shared coverage action's cargo
+watchdog; and the fourth is GitHub Actions' job timer. The contract in
+`cuprum/unittests/test_timeout_ordering_contract.py` pins the first three
+relationships.
+
+Table 3: Coverage timeout tiers
+
+| Tier               | Configuration key or environment variable | Value  | Scope                                        |
+| ------------------ | ----------------------------------------- | ------ | -------------------------------------------- |
+| Per-test allowance | `profile.default.slow-timeout`            | 300 s  | One Rust test                                |
+| Whole-run budget   | `profile.default.global-timeout`          | 1200 s | One nextest run                              |
+| Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`             | 2700 s | One coverage action cargo call               |
+| Job ceiling        | `timeout-minutes`                         | 65 m   | The `coverage` job and its trunk counterpart |
+
+The 300 s per-test allowance is `period = "60s"` multiplied by
+`terminate-after = 5`, so nextest kills a hung test after it has reported the
+test as slow. The 1200 s global budget contains that allowance while remaining
+well inside the cargo watchdog. The 2700 s watchdog was sized from roughly
+fifty successful runs: the worst coverage step was 418 s in run 34071469378,
+the worst trunk coverage step was 322 s in run 34062626757, and run 34067223641
+measured the worst work outside the watchdog. None was a genuinely cold build.
+
+The watchdog must satisfy
+`watchdog >= global-timeout + termination + cold build`. Termination is the
+largest configured `slow-timeout.grace-period`, with a 60 s floor. The coverage
+jobs currently declare a 65-minute job ceiling in `ci.yml` and
+`coverage-main.yml`; the earlier 60-minute figure is stale.
+
+The coverage action uses `language: mixed`, so nextest does not bound the
+Python half of the suite. `pytest-timeout` sets that per-test budget separately
+through `timeout = 30` in `pyproject.toml`.
+
 ### Concurrency
 
 `ci.yml` declares one constant, `LINUX_RUNNER_VCPUS`, equal to the vCPU count of

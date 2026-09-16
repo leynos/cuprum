@@ -1,11 +1,10 @@
 """Contract for the timers that can end a coverage run.
 
 Four independent budgets can end a coverage lane, each set somewhere
-different, and they only work if each sits above the one inside it. Two
-of the four apply here: the shared coverage action's wall-clock watchdog
-on the ``cargo`` invocation, and the job's own ``timeout-minutes``. The
-two nextest tiers do not, because there is no ``.config/nextest.toml``
-for anyone to have set them in.
+different, and they only work if each sits above the one inside it:
+nextest's per-test allowance and whole-run budget, the shared coverage
+action's wall-clock watchdog on the ``cargo`` invocation, and the job's
+own ``timeout-minutes``.
 
 Both coverage lanes ran on the action's 1,800 s default until this
 contract was written, and nothing in this repository mentioned it. A
@@ -28,13 +27,11 @@ import typing as typ
 
 import pytest
 
-from cuprum.unittests._timeout_lane_support import (
+from cuprum.unittests._coverage_timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
     COVERAGE_ACTION,
     COVERAGE_WORKFLOWS,
-    EXPECTED_WATCHDOG_SECONDS,
     OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
-    WATCHDOG_VARIABLE,
     CoverageLane,
     Workflow,
     _cargo_manifest_of,
@@ -43,7 +40,15 @@ from cuprum.unittests._timeout_lane_support import (
     lanes_in,
     required_ceiling,
 )
-from tests.helpers.docs import repo_root
+from cuprum.unittests._timeout_lane_support import (
+    EXPECTED_WATCHDOG_SECONDS,
+    NEXTEST_CONFIG,
+    WATCHDOG_VARIABLE,
+    _default_nextest_profile,
+    _slow_timeout_of,
+    global_timeout_seconds,
+    largest_per_test_allowance_seconds,
+)
 
 REQUIRED_CONDITIONS: typ.Final[dict[tuple[str, str], tuple[object, object]]] = {
     (".github/workflows/ci.yml", "coverage"): (
@@ -140,26 +145,41 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
     )
 
 
-def test_the_nextest_tiers_are_absent_rather_than_unset() -> None:
-    """The inner two tiers do not exist here, and their absence is a gap.
+def test_the_nextest_tiers_are_explicitly_set() -> None:
+    """The default profile declares both inner timeout tiers in full."""
+    profile = _default_nextest_profile()
+    slow_timeout = _slow_timeout_of(profile)
+    for key in ("period", "terminate-after"):
+        assert key in slow_timeout, (
+            f"{NEXTEST_CONFIG} must set [profile.default].slow-timeout.{key}"
+        )
+    assert "global-timeout" in profile, (
+        f"{NEXTEST_CONFIG} must set [profile.default].global-timeout"
+    )
 
-    The canonical section has four tiers because nextest contributes two
-    of them: a per-test allowance and a whole-run budget. There is no
-    `.config/nextest.toml` in this repository, so neither is set.
 
-    That is recorded rather than asserted away. Adding the file would
-    give a hung test a bound that names the test rather than `cargo`, and
-    this test exists to fail when it appears, so the budgets arrive with
-    the guide updated in the same change rather than unbounded beneath a
-    watchdog sized for neither.
-    """
-    config = repo_root() / ".config" / "nextest.toml"
-    assert not config.is_file(), (
-        "a nextest configuration has appeared; set a per-test slow-timeout "
-        "and a global-timeout in it, check the global-timeout sits above the "
-        "largest per-test allowance (period multiplied by terminate-after) "
-        "and inside the cargo watchdog, and update the developers' guide's "
-        "timeout section in the same change"
+def test_the_nextest_global_timeout_contains_the_per_test_allowance() -> None:
+    """A whole-run budget must outlast a test's termination budget."""
+    assert global_timeout_seconds() > largest_per_test_allowance_seconds(), (
+        f"{NEXTEST_CONFIG}'s global-timeout must exceed its largest per-test "
+        "allowance (slow-timeout.period multiplied by terminate-after)"
+    )
+
+
+def test_the_nextest_global_timeout_stays_inside_the_cargo_watchdog() -> None:
+    """The watchdog must remain an outer tier rather than pre-empting nextest."""
+    assert global_timeout_seconds() < EXPECTED_WATCHDOG_SECONDS, (
+        f"{NEXTEST_CONFIG}'s global-timeout must stay below the "
+        f"{EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog"
+    )
+
+
+def test_the_nextest_slow_timeout_terminates_hung_tests() -> None:
+    """Slow warnings must eventually kill the test that caused them."""
+    assert "terminate-after" in _slow_timeout_of(_default_nextest_profile()), (
+        f"{NEXTEST_CONFIG} must set "
+        "[profile.default].slow-timeout.terminate-after so a hung test is "
+        "killed rather than reported slow indefinitely"
     )
 
 
