@@ -65,9 +65,7 @@ impl BufferBucket {
     }
 
     /// The rounded size in bytes.
-    const fn bytes(self) -> usize {
-        self.0
-    }
+    const fn bytes(self) -> usize { self.0 }
 }
 
 #[cfg(test)]

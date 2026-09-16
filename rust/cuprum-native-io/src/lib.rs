@@ -18,13 +18,14 @@ mod fd_ownership_model;
 
 #[cfg(unix)]
 pub use std::os::fd::{AsFd as AsStream, BorrowedFd as BorrowedStream, OwnedFd as OwnedStream};
-#[cfg(windows)]
-pub use std::os::windows::io::{
-    AsHandle as AsStream, BorrowedHandle as BorrowedStream, OwnedHandle as OwnedStream,
-};
-
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(windows)]
+pub use std::os::windows::io::{
+    AsHandle as AsStream,
+    BorrowedHandle as BorrowedStream,
+    OwnedHandle as OwnedStream,
+};
 #[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, RawHandle};
 

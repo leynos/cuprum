@@ -13,9 +13,7 @@ use super::{
 struct Resource<'a>(&'a Cell<u8>);
 
 impl Drop for Resource<'_> {
-    fn drop(&mut self) {
-        self.0.set(self.0.get() + 1);
-    }
+    fn drop(&mut self) { self.0.set(self.0.get() + 1); }
 }
 
 #[kani::proof]

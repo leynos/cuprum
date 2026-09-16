@@ -15,11 +15,11 @@
 //! Splice requires at least one pipe endpoint. Regular files, most sockets,
 //! and other file descriptor types return `EINVAL` and trigger the fallback.
 
-use cuprum_native_io::{AsStream, BorrowedStream, borrow};
 use std::io;
 
-use crate::errors::PumpError;
-use crate::io_utils::read_raw_fd;
+use cuprum_native_io::{AsStream, BorrowedStream, borrow};
+
+use crate::{errors::PumpError, io_utils::read_raw_fd};
 
 /// Attempt to pump data using `splice()`. Returns None if splice is not supported.
 ///

@@ -69,14 +69,10 @@ impl PumpState {
     }
 
     /// Bytes confirmed written downstream so far.
-    pub(crate) const fn total_written(self) -> u64 {
-        self.total_written
-    }
+    pub(crate) const fn total_written(self) -> u64 { self.total_written }
 
     /// Whether the writer is still accepting data.
-    pub(crate) const fn writer_open(self) -> bool {
-        self.writer_open
-    }
+    pub(crate) const fn writer_open(self) -> bool { self.writer_open }
 }
 
 /// Whether the pump loop continues or stops after an iteration.
