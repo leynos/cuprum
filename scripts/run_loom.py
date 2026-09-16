@@ -69,57 +69,69 @@ class LoomRunResult:
         ))
 
 
-class LoomRunError(RuntimeError):
+class LoomError(Exception):
+    """Base error for all bounded Loom driver failures."""
+
+
+class LoomRunError(LoomError, RuntimeError):
     """Report a failed, incomplete, or vacuous Loom model execution."""
 
     @classmethod
     def command_failed(cls, command: list[str], diagnostic: str) -> LoomRunError:
         """Build the error for Cargo's model failure or exploration exhaustion."""
-        return cls(f"Loom command failed ({' '.join(command)}):\n{diagnostic}")
+        message = f"Loom command failed ({' '.join(command)}):\n{diagnostic}"
+        return cls(message)
 
     @classmethod
     def discovery_unreadable(cls, output: str) -> LoomRunError:
         """Build the error for an unparsable test-discovery result."""
-        return cls(f"Could not determine Loom test discovery from:\n{output}")
+        message = f"Could not determine Loom test discovery from:\n{output}"
+        return cls(message)
 
     @classmethod
     def execution_unreadable(cls, output: str) -> LoomRunError:
         """Build the error for an unparsable test-execution result."""
-        return cls(f"Could not determine Loom test execution from:\n{output}")
+        message = f"Could not determine Loom test execution from:\n{output}"
+        return cls(message)
 
     @classmethod
     def test_count_mismatch(cls, discovered: int, executed: int) -> LoomRunError:
         """Build the error when discovery and execution select different tests."""
-        return cls(
+        message = (
             f"Loom discovery found {discovered} tests but execution ran {executed}"
         )
+        return cls(message)
 
     @classmethod
     def invalid_bound_override(cls) -> LoomRunError:
         """Build the error for an incomplete or non-positive bound override."""
-        return cls(
+        message = (
             "Specify all positive --max-preemptions, --max-branches, and "
             "--max-threads values together"
         )
+        return cls(message)
 
     @classmethod
     def zero_discovered_tests(cls) -> LoomRunError:
         """Build the error for an empty Loom target discovery."""
-        return cls("Loom target discovered zero tests; refusing a vacuous run")
+        message = "Loom target discovered zero tests; refusing a vacuous run"
+        return cls(message)
 
     @classmethod
     def zero_executed_tests(cls) -> LoomRunError:
         """Build the error for a green run that executed no Loom models."""
-        return cls("Loom target executed zero tests; refusing a vacuous run")
+        message = "Loom target executed zero tests; refusing a vacuous run"
+        return cls(message)
 
 
-class LoomModeError(ValueError):
+class LoomModeError(LoomError, ValueError):
     """Report an unsupported Loom execution mode."""
 
     @classmethod
     def unsupported(cls, mode: str) -> LoomModeError:
         """Build the error for a caller bypassing command-line mode choices."""
-        return cls(f"unsupported Loom mode: {mode}")
+        message = f"unsupported Loom mode: {mode}"
+        return cls(message)
 
 
 def _bounds_for_mode(mode: str) -> LoomBounds:

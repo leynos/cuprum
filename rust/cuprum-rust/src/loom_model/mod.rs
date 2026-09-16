@@ -8,10 +8,29 @@
 mod sync;
 
 use cuprum_native_io::loom_support::borrowed_reader_close_count as native_borrowed_reader_close_count;
-use cuprum_streams::loom_support::{
-    drive_downstream_close, drive_failed_pump, drive_successful_pump,
-};
-use sync::{Arc, AtomicBool, AtomicUsize, Cell, JoinHandle, Mutex, Ordering, thread};
+use cuprum_streams::loom_support::{drive_downstream_close, drive_successful_pump};
+use sync::{Arc, AtomicBool, AtomicUsize, Cell, JoinHandle, Mutex, MutexGuard, Ordering, thread};
+
+/// Error returned when the bounded model cannot preserve its own invariants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelError {
+    /// A Loom mutex became poisoned by an earlier model panic.
+    LockPoisoned,
+    /// The ownership model's close count cannot fit the host's `usize`.
+    CloseCountOutOfRange,
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::LockPoisoned => "a Loom lifecycle mutex was poisoned",
+            Self::CloseCountOutOfRange => "the modelled close count exceeded usize",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for ModelError {}
 
 /// Result supplied by the explicit native-I/O environment actor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,46 +190,60 @@ impl NativePumpModel {
         model: &Arc<Self>,
         outcome: SubmissionOutcome,
         native: NativeOutcome,
-    ) -> Option<JoinHandle<()>> {
+    ) -> Result<Option<JoinHandle<Result<(), ModelError>>>, ModelError> {
         if model.was_cancelled.load(Ordering::Acquire) {
-            return None;
+            return Ok(None);
         }
         if matches!(outcome, SubmissionOutcome::Failed) {
-            model.finish_without_worker(NativeOutcome::Failed);
-            return None;
+            model.finish_without_worker(NativeOutcome::Failed)?;
+            return Ok(None);
         }
         {
-            let mut lifecycle = model.cleanup_lock.lock().expect("model lock poisoned");
+            let mut lifecycle = model.lock_lifecycle()?;
             lifecycle.writer.hand_to_worker();
             lifecycle.worker_active = true;
             lifecycle.terminal = TerminalState::Submitted;
         }
         let worker = Arc::clone(model);
-        Some(thread::spawn(move || worker.run_worker(native)))
+        Ok(Some(thread::spawn(move || worker.run_worker(native))))
     }
 
     /// Model a cancellation request from the Python event-loop task.
-    pub fn cancel(&self) {
+    pub fn cancel(&self) -> Result<(), ModelError> {
         self.was_cancelled.store(true, Ordering::Release);
-        self.complete_if_safe();
+        let should_notify = {
+            let mut lifecycle = self.lock_lifecycle()?;
+            if lifecycle.terminal == TerminalState::Pending {
+                self.complete_locked(&mut lifecycle);
+                true
+            } else {
+                false
+            }
+        };
+        if should_notify {
+            self.completion_notified.store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     /// Model a completion callback or cleanup waiter observing settlement.
-    pub fn observe_completion(&self) {
-        if self.completion_notified.load(Ordering::Acquire) {
-            let mut lifecycle = self.cleanup_lock.lock().expect("model lock poisoned");
-            lifecycle.observer_saw_completion = lifecycle.cleanup_completed;
+    pub fn observe_completion(&self) -> Result<(), ModelError> {
+        while !self.completion_notified.load(Ordering::Acquire) {
+            thread::yield_now();
         }
-        self.complete_if_safe();
+        let mut lifecycle = self.lock_lifecycle()?;
+        lifecycle.observer_saw_completion = true;
+        self.complete_locked(&mut lifecycle);
+        Ok(())
     }
 
     /// Return the model's post-join observable state.
     #[must_use]
-    pub fn snapshot(&self) -> LifecycleSnapshot {
-        let lifecycle = self.cleanup_lock.lock().expect("model lock poisoned");
-        LifecycleSnapshot {
+    pub fn snapshot(&self) -> Result<LifecycleSnapshot, ModelError> {
+        let lifecycle = self.lock_lifecycle()?;
+        Ok(LifecycleSnapshot {
             writer_closes: lifecycle.writer.closes,
-            reader_closes: borrowed_reader_close_count(),
+            reader_closes: borrowed_reader_close_count()?,
             was_cancelled: self.was_cancelled.load(Ordering::Acquire),
             cleanup_count: self.cleanup_count.load(Ordering::Acquire),
             blocking_restored: lifecycle.blocking_restored,
@@ -218,29 +251,37 @@ impl NativePumpModel {
             released_while_worker_active: lifecycle.released_while_worker_active,
             observer_saw_completion: lifecycle.observer_saw_completion,
             terminal: lifecycle.terminal,
-        }
+        })
     }
 
-    fn run_worker(&self, native: NativeOutcome) {
+    fn run_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         drive_production_pump_machine(native);
         {
-            let mut lifecycle = self.cleanup_lock.lock().expect("model lock poisoned");
+            let mut lifecycle = self.lock_lifecycle()?;
             lifecycle.worker_active = false;
             lifecycle.terminal = TerminalState::WorkerFinished(native);
         }
-        self.complete_if_safe();
+        self.completion_notified.store(true, Ordering::Release);
+        Ok(())
     }
 
-    fn finish_without_worker(&self, native: NativeOutcome) {
+    fn finish_without_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         {
-            let mut lifecycle = self.cleanup_lock.lock().expect("model lock poisoned");
+            let mut lifecycle = self.lock_lifecycle()?;
             lifecycle.terminal = TerminalState::WorkerFinished(native);
         }
-        self.complete_if_safe();
+        self.complete_if_safe()?;
+        self.completion_notified.store(true, Ordering::Release);
+        Ok(())
     }
 
-    fn complete_if_safe(&self) {
-        let mut lifecycle = self.cleanup_lock.lock().expect("model lock poisoned");
+    fn complete_if_safe(&self) -> Result<(), ModelError> {
+        let mut lifecycle = self.lock_lifecycle()?;
+        self.complete_locked(&mut lifecycle);
+        Ok(())
+    }
+
+    fn complete_locked(&self, lifecycle: &mut Lifecycle) {
         if lifecycle.cleanup_completed || lifecycle.worker_active {
             return;
         }
@@ -251,18 +292,23 @@ impl NativePumpModel {
         lifecycle.cleanup_completed = true;
         lifecycle.terminal = TerminalState::Released;
         self.cleanup_count.fetch_add(1, Ordering::AcqRel);
-        self.completion_notified.store(true, Ordering::Release);
+    }
+
+    fn lock_lifecycle(&self) -> Result<MutexGuard<'_, Lifecycle>, ModelError> {
+        self.cleanup_lock
+            .lock()
+            .map_err(|_| ModelError::LockPoisoned)
     }
 }
 
-fn borrowed_reader_close_count() -> usize {
-    native_borrowed_reader_close_count()
+fn borrowed_reader_close_count() -> Result<usize, ModelError> {
+    Ok(native_borrowed_reader_close_count())
 }
 
 fn drive_production_pump_machine(native: NativeOutcome) {
     match native {
         NativeOutcome::Succeeded => drive_successful_pump(),
         NativeOutcome::DownstreamClosed => drive_downstream_close(),
-        NativeOutcome::Failed => drive_failed_pump(),
+        NativeOutcome::Failed => {}
     }
 }
