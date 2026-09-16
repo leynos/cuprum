@@ -16,6 +16,8 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
 - [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
+- [ADR-012: Durable benchmark-gate telemetry sink](adr-011-benchmark-gate-telemetry-sink.md)
+- [ADR-013: Actions-runner integration harness](adr-012-actions-runner-integration-harness.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -4311,6 +4313,18 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
+The same step also publishes the decision outside GitHub as
+`benchmark_gate_decisions_total`, carrying the three values it already
+computed. The step summary is durable only for as long as the run record is, so
+the counter is what makes the trend — in particular the share of runs recorded
+as `skip-detector-failed` — queryable and alertable.
+[ADR-011](adr-011-benchmark-gate-telemetry-sink.md) records the decision and
+[CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
+operational contract: label vocabulary, query surface, retention, alerting, and
+what happens when the sink is unreachable. The push is gated on a repository
+secret and fails open, so a fork, a revoked token, or a sink outage costs one
+`::notice` line and never blocks the gate.
+
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
 only spends benchmark minutes on a diff nobody will merge; a cancelled `main`
@@ -4357,6 +4371,18 @@ the other does not see:
   the opposite verdict, would contain the same words. The script touches only
   `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what makes
   running it outside Actions evidence rather than simulation.
+
+Those suites still stop short of the boundary. None of them executes
+`dorny/paths-filter`, so none can fail when the pinned action's output name,
+its offline behaviour, or an event payload disagrees with what the contract
+tests assume. `tests/integration/test_workflow_integration.py`, over
+`tests/helpers/act_harness.py`, runs the real `changes` job under `act` for
+relevant, irrelevant, mixed, and empty changed-path sets, a push, and a failing
+detector, and asserts the filter's `bench` output and the gate table the job
+wrote. [ADR-012](adr-012-actions-runner-integration-harness.md) records why the
+boundary is exercised rather than inferred, and
+[the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
+covers running it by hand.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern

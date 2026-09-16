@@ -28,6 +28,9 @@ open each document.
 - [Native-pump Loom model](design-loom-native-pump-model.md) - the bounded
   production correspondence, assumptions, and safety claims for native-pump
   concurrency checks.
+- [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) - the
+  benchmark-gate counter's label vocabulary, query surface, retention window,
+  alerting rule, and fail-open degradation.
 
 ## Design and decisions
 
@@ -62,6 +65,12 @@ open each document.
 - [ADR-013: Opt-in GitHub Actions presentation sink][adr-013] - accepted
   decision to frame runs in Actions log groups and annotate failures through an
   opt-in presentation sink.
+- [ADR-012: Durable benchmark-gate telemetry sink][adr-012] - accepted decision
+  to publish a bounded benchmark-gate counter to Grafana Cloud over OTLP,
+  secret-gated and fail-open.
+- [ADR-013: Actions-runner integration harness][adr-013] - accepted decision to
+  verify the `changes` job boundary with a pytest-driven `act` harness rather
+  than by reading the workflow source.
 
 ## Planning and validation references
 
@@ -92,6 +101,8 @@ open each document.
 [adr-011]: adr-011-audited-rust-boundaries.md
 [adr-012]: adr-012-linux-dev-fast-routing.md
 [adr-013]: adr-013-opt-in-github-actions-presentation-sink.md
+[adr-012]: adr-011-benchmark-gate-telemetry-sink.md
+[adr-013]: adr-012-actions-runner-integration-harness.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [rust-boundary-verification]: rust-boundary-verification.md
