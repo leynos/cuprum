@@ -1481,20 +1481,6 @@ Benchmarks (`benchmarks/`):
 - `benchmarks/_tee_profile_worker_backend.py` — backend selection for the tee
   hot-path profiling worker (`_EnvBackendSelector` and its supporting state).
 
-Spelling policy (`scripts/`):
-
-- `scripts/typos_rollout_dictionary.py` — the shared dictionary model, TOML
-  parsing, and merging; standard library only.
-- `scripts/typos_rollout_refresh.py` — cache freshness policy: HTTP validator
-  metadata, local mtime comparison, and the conditional HTTPS fetch with its
-  stale-cache fallback. Redirect handling and degradation telemetry are owned by
-  `scripts/typos_rollout_degradation.py`.
-- `scripts/typos_rollout_degradation.py` — the HTTPS-only redirect policy and
-  bounded refresh-degradation counters, exposed through `reset_degradations()`
-  and `degradation_snapshot()`.
-- `scripts/typos_rollout.py` remains the rendering module and public façade,
-  re-exporting the API so callers keep one entry point.
-
 Test helpers:
 
 - `cuprum/unittests/test_maturin_pins.py` — reads and validates the
@@ -2415,15 +2401,15 @@ against the pure model in `fd_ownership_model.rs` — gated
 too — where `ModelFd` records a close on drop instead of issuing one. The
 `ManuallyDrop` wrapper, the closure call, and the early-exit edge are all real
 Rust, so Rust's own drop elaboration decides the outcome rather than any
-hand-written accounting. Because Kani compiles panics as aborts, the unwind
-path is modelled with `?`: a `?` early return and a real unwind both leave the
-frame without running the statements that follow the operation, so
-reintroducing the superseded trailing-`mem::forget` makes the proof fail (that
-mutation was run to confirm the proof is not vacuous). Being a bounded model
-checker, Kani establishes this over an explicitly bounded state space — the two
-exit modes, and at most three repeated borrows — rather than for all
-executions. Active verification tracking, including whether Verus adds anything
-beyond the Kani model once that model is complete, lives in issue `#89`.
+handwritten accounting. Because Kani compiles panics as aborts, the unwind path
+is modelled with `?`: a `?` early return and a real unwind both leave the frame
+without running the statements that follow the operation, so reintroducing the
+superseded trailing-`mem::forget` makes the proof fail (that mutation was run
+to confirm the proof is not vacuous). Being a bounded model checker, Kani
+establishes this over an explicitly bounded state space — the two exit modes,
+and at most three repeated borrows — rather than for all executions. Active
+verification tracking, including whether Verus adds anything beyond the Kani
+model once that model is complete, lives in issue `#89`.
 
 ### Python-side native pump descriptor lifetime
 
@@ -3048,46 +3034,38 @@ by absolute `ACTIONLINT` path, so checkout contents cannot shadow `make`.
 
 ### Spelling policy
 
-The lint and Markdown gates run pinned `typos` 1.48.0 with British English and
-Oxford `-ize` conventions. The single spelling recipe checks tracked Markdown,
-Python, and Rust files, so the policy governs code identifiers, comments,
-docstrings, string fixtures, and prose. Only spellings required by external
-contracts or deliberate spelling-test fixtures are exempt.
+`make spelling` is the whole gate. It runs the shared
+[typos-config-builder](https://github.com/leynos/typos-config-builder) at the
+version pinned by `TYPOS_CONFIG_BUILDER_VERSION`, which regenerates
+`typos.toml`, runs the shared phrase check, then runs Typos itself with British
+English and Oxford `-ize` conventions. `--scope all` passes every tracked file,
+so the policy governs code identifiers, comments, docstrings, string fixtures,
+and prose. Only spellings required by external contracts or deliberate
+spelling-test fixtures are exempt. `make lint` and `make markdownlint` both
+depend on this recipe.
 
-Before checking the repository, the generator refreshes the shared/base
-en-GB-oxendict dictionary into an untracked local cache only when the authority
-is newer, then merges `typos.local.toml`. The generated `typos.toml` is
-reviewed and committed so a clean, network-restricted checkout can still
-enforce the last known-good policy.
+`typos.toml` is regenerated from the live shared dictionary and the
+`typos.local.toml` overlay on every run, so it is never drift checked in CI. A
+shared dictionary change reaches this repository on its next run without any
+change here. Never edit `typos.toml` by hand.
 
 Put an unavoidable external-contract spelling or a deliberate spelling-test
-fixture in `typos.local.toml` as a narrowly anchored `[patterns].ignore` entry.
+fixture in `typos.local.toml` as a narrowly anchored `[patterns] ignore` entry.
 Document the specific upstream contract or fixture beside the entry. Do not
-accept a globally incorrect Oxford form under `[words].accepted`, and never
-edit generated entries in `typos.toml` by hand. Regenerate after changing the
-overlay:
+accept a globally incorrect Oxford form under `[words] accepted`.
 
-```bash
-uv run scripts/generate_typos_config.py
-```
+A mask that should relax documentation without relaxing source belongs under
+`[patterns] markdown_only`. The builder withholds each listed expression from
+the merged `[default]` ignore set and renders it under a `[type.markdown]`
+table scoped to `*.md` instead. This repository confines the fenced-block and
+inline code span masks that way, because ADR 009 requires Oxford spelling in
+source identifiers and masking code spans everywhere would let a misspelled
+identifier through.
 
-Run `make spelling` to verify the generated configuration and all three file
-types. The gate also runs the helper's Python 3.13 tests with at least 90% line
-coverage.
-
-The cache refresh in `scripts/typos_rollout_refresh.py` fetches the shared
-dictionary only over HTTPS and delegates redirect enforcement to
-`scripts/typos_rollout_degradation.py`. Its dedicated
-`_HttpsOnlyRedirectHandler` refuses any redirect that would downgrade the
-connection to plain HTTP before urllib reissues the request, so a compromised
-or misconfigured upstream cannot silently serve the dictionary in cleartext.
-Refresh degradations — a rejected HTTPS-downgrade redirect, falling back to a
-stale cache after a failed refresh, or reusing the cache in offline mode — are
-counted by the bounded, fixed-key counters in
-`scripts/typos_rollout_degradation.py` and reported through structured
-`logging` warnings (or info, for the offline case). Those log records never
-include the request URL; they carry only the event name and non-sensitive
-context such as the rejected redirect's scheme or the triggering error's type.
+The builder fetches the shared dictionary over HTTPS only, refuses any redirect
+that would downgrade the connection to plain HTTP, binds its cache to the
+content digest, falls back to a valid stale cache on a transient failure, and
+reports each of those decisions through structured logging.
 
 Ruff and ty are invoked through pinned `uv tool run` commands rather than
 floating host tools. `RUFF` expands to
@@ -3752,7 +3730,7 @@ test still represents a genuine compile-time error.
 
 A fail case that pins an encapsulation boundary must include the real module
 under test with `#[path]` rather than restating its shape, because a
-hand-written copy would only prove the copy private.
+handwritten copy would only prove the copy private.
 
 Such a fixture may legitimately need to silence a lint the throwaway crate
 trybuild builds cannot configure — that crate inherits no `[lints]` table, so

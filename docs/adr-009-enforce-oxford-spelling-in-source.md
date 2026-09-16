@@ -25,19 +25,22 @@ cannot always be changed without breaking their contracts.
 ## Decision
 
 Apply en-GB-oxendict spelling to code identifiers, comments, docstrings, string
-fixtures, and prose in maintained Markdown, Python, and Rust files. Extend the
-single `Makefile` `spelling` recipe to pass tracked `*.md`, `*.py`, and `*.rs`
-files to the pinned `typos` version. Keep `make lint` and `make markdownlint`
-wired to that recipe so local and Continuous Integration (CI) enforcement use
-one policy.
+fixtures, and prose in maintained Markdown, Python, and Rust files. Keep the
+single `Makefile` `spelling` recipe as the one enforcement path, and keep
+`make lint` and `make markdownlint` wired to it so local and Continuous
+Integration (CI) enforcement use one policy.
 
 Correct repository-owned source spelling before enabling the wider gate. When
 an external wire format, API, command-line option, or deliberate test fixture
 must retain a spelling that the shared dictionary rejects, add a narrowly
 anchored ignore pattern to `typos.local.toml` and document the specific
-contract beside it. Regenerate tracked `typos.toml` through
-`scripts/generate_typos_config.py`; do not accept globally incorrect forms or
-edit the generated file by hand.
+contract beside it. `make spelling` regenerates `typos.toml` on every run; do
+not accept globally incorrect forms or edit the generated file by hand.
+
+The Markdown-only scoping this decision relies on — fenced blocks and inline
+code spans masked in documentation but not in source — is now expressed through
+the `[patterns] markdown_only` key of `typos-config-builder`, which renders
+those masks under a `[type.markdown]` table instead of `[default]`.
 
 ## Consequences
 

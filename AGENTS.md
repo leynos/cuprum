@@ -18,8 +18,8 @@
 - **Use consistent spelling and grammar.** Code identifiers, comments,
   docstrings, and prose must use en-GB-oxendict ("-ize" / "-yse" / "-our")
   spelling and grammar, except where an external API requires another spelling.
-  The pinned `typos` spelling gate in `make lint` and `make markdownlint`
-  checks tracked Markdown, Python, and Rust files.
+  The `make spelling` gate, which `make lint` and `make markdownlint` both
+  depend on, checks every tracked file.
 - **Document public APIs comprehensively.** Public functions, classes, and
   methods must have comprehensive NumPy-style docstrings, including clear
   examples that demonstrate usage and outcome where appropriate.
@@ -99,7 +99,7 @@
     `make fmt` to apply fixes).
 - For Markdown files (`.md` only):
   - **Linting:** Passes markdown lint checks (`make markdownlint`).
-  - **Spelling:** Passes the en-GB-oxendict `typos` gate included in
+  - **Spelling:** Passes the en-GB-oxendict `make spelling` gate included in
     `make markdownlint` and `make lint`.
   - **Mermaid diagrams:** Passes validation using nixie (`make nixie`).
 - **Committing:**
@@ -352,14 +352,21 @@ working on the Rust portions of the project:
 
 ## Markdown guidance
 
-- Validate Markdown files using `make markdownlint`; this also runs the pinned
-  en-GB-oxendict `typos` spelling gate across tracked Markdown, Python, and
-  Rust files.
-- The spelling configuration `typos.toml` is generated. Put narrow
-  repository-only exceptions for unavoidable external contracts in
-  `typos.local.toml`, document the upstream contract beside each exception,
-  then regenerate with `uv run scripts/generate_typos_config.py`; never edit
-  generated entries by hand.
+- Validate Markdown files using `make markdownlint`; this also runs the
+  en-GB-oxendict `make spelling` gate across every tracked file.
+- Enforce spelling with `make spelling`. It regenerates `typos.toml` from the
+  live shared estate dictionary and the `typos.local.toml` overlay on every
+  run, so `typos.toml` is never drift checked in Continuous Integration (CI).
+  Put narrow repository-only exceptions for unavoidable external contracts in
+  `typos.local.toml`, document the upstream contract beside each exception, and
+  never edit generated entries by hand.
+- Masks that must relax documentation without relaxing source, such as fenced
+  and inline code spans, belong under `[patterns] markdown_only` in
+  `typos.local.toml`. Architecture decision record (ADR) 009 keeps Oxford
+  spelling in source identifiers, so those masks are rendered under a
+  Markdown-scoped table rather than the default one.
+- Shared `[phrases.corrections]` policy is enforced by the gate's phrase stage
+  before Typos. Correct genuine maintained prose rather than masking it.
 - Run `make fmt` after documentation changes to format Markdown and fix table
   markup.
 - Validate Mermaid diagrams in Markdown by running `make nixie`.

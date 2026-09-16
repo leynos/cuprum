@@ -130,9 +130,6 @@ extend-ignore = [
 # Same rationale as above: the teardown test polls a cross-process marker
 # file that no asyncio primitive can observe.
 "cuprum/unittests/test_pipeline_teardown_cancellation.py" = ["blocking-path-method-in-async-function"]
-# Test-support conftest outside the test globs: stub protocol methods need
-# instance-method shape (OpenerDirector) and asserts are test assertions.
-"scripts/tests/conftest.py" = ["assert", "no-self-use"]
 "cuprum/unittests/*_test_helpers.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "cuprum/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]

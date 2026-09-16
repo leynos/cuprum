@@ -6,7 +6,7 @@
 //! close in a [`CloseLog`] instead of issuing one. Everything else — the
 //! [`ManuallyDrop`] wrapper, the closure call, the early-exit edge — is real
 //! Rust, so Rust's own drop elaboration decides the outcome rather than any
-//! hand-written accounting.
+//! handwritten accounting.
 //!
 //! # Modelling the unwind edge
 //!

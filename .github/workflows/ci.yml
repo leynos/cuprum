@@ -19,7 +19,7 @@ permissions:
 # One run per ref. Superseded pull-request runs are cancelled, because a
 # stale run only spends paid benchmark minutes on a diff nobody will merge.
 # Runs on `main` are not cancelled once started: each one republishes the
-# `benchmark-ratchet-main-baseline` artifact that pull-request runs compare
+# `benchmark-ratchet-main-baseline` artefact that pull-request runs compare
 # against, and a half-finished run would leave the baseline behind head.
 #
 # That is the whole of what this buys. GitHub replaces a *pending* run when a
@@ -27,7 +27,7 @@ permissions:
 # queued, so this is not an ordering guarantee: two merges in quick
 # succession may still publish out of commit order, and a superseded pending
 # run publishes nothing at all. Anything that needs monotonic baselines has
-# to enforce it where the artifact is written, not here.
+# to enforce it where the artefact is written, not here.
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -1071,7 +1071,7 @@ jobs:
   # benchmark-ratchet can skip docs-only and Dependabot-batch pull
   # requests. Runs on every event (cheap, GitHub-hosted) so that the
   # `needs` edge never leaves benchmark-ratchet skipped on pushes to
-  # main, where the baseline artifact must stay fresh.
+  # main, where the baseline artefact must stay fresh.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -1165,7 +1165,7 @@ jobs:
     # Benchmarks are the estate's dominant paid-runner cost, and most CI
     # runs (Dependabot dev-dependency bumps, docs edits) cannot change
     # pipeline throughput. Successful pushes to main always run so the ratchet
-    # baseline artifact is refreshed for every merge. A failed detector skips
+    # baseline artefact is refreshed for every merge. A failed detector skips
     # every event, rather than spending paid-runner time on an ungated run.
     if: >-
       needs.changes.result == 'success' && (github.event_name != 'pull_request' ||
@@ -1285,7 +1285,7 @@ jobs:
           mkdir -p "${artifact_dir}"
 
           # `--run-status completed` rather than the default `success`: the
-          # baseline artifact records what a main run measured, and a run
+          # baseline artefact records what a main run measured, and a run
           # that failed its own ratchet is exactly the one whose sample the
           # window must not lose. Filtering on success is what let a single
           # anomalously fast measurement stay the bar (issue #219).
@@ -1302,7 +1302,7 @@ jobs:
             status=$?
             if [[ "${status}" -eq 3 ]]; then
               echo "baseline_available=false" >> "${GITHUB_OUTPUT}"
-              echo "No previous completed main benchmark baseline artifact is available."
+              echo "No previous completed main benchmark baseline artefact is available."
             else
               exit "${status}"
             fi
@@ -1350,7 +1350,7 @@ jobs:
 
           run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
 
-          # Stage the files the baseline artifact publishes before the
+          # Stage the files the baseline artefact publishes before the
           # comparison can fail the step. A main run that measures a
           # slowdown must still record its sample: dropping it is what
           # biased the old baseline towards the low tail of the noise.
@@ -1363,7 +1363,7 @@ jobs:
             local status=0
             pushd "${GITHUB_WORKSPACE}" >/dev/null
             # The window is the bar; the single-sample baseline is the
-            # fallback for a first run, an expired artifact, or a window
+            # fallback for a first run, an expired artefact, or a window
             # emptied by a benchmark-profile change.
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/ratchet_rust_performance.py \
@@ -1522,7 +1522,7 @@ jobs:
             cat "${artifact_dir}/comparison-summary.md" >> "${GITHUB_STEP_SUMMARY}"
           fi
 
-      - name: Upload benchmark ratchet artifacts
+      - name: Upload benchmark ratchet artefacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
