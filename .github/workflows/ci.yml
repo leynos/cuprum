@@ -282,7 +282,10 @@ jobs:
         # from the workspace, so the rules and ignores match `make markdownlint`.
         uses: DavidAnson/markdownlint-cli2-action@4580e1612f6407034edd6c0e4e316d725920867b  # v24.2.0
         with:
-          globs: '**/*.md'
+          globs: |
+            **/*.md
+            **/*.markdown
+            **/*.mdx
 
       - name: Run lint
         run: /usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint

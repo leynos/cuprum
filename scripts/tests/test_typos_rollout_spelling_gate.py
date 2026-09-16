@@ -220,6 +220,7 @@ class TestSpellingGate:
             (".md", "Use `--artifact-name` to organize output.\n"),
             (".md", _spelling_fixture("```text\norgani", "se\n```\n")),
             (".md", "The API returns a `color` value.\n"),
+            (".py", 'FORCE_COLOR = "1"\n'),
             (".py", "build_native_wheel_artifact()\n"),
             (".md", "Pass `--artifact-server-path` to the external client.\n"),
             (
@@ -251,3 +252,21 @@ class TestSpellingGate:
         assert result.returncode == 0, (
             f"expected documented exceptions to pass: {output}"
         )
+
+    def test_spelling_gate_rejects_unscoped_us_spelling(
+        self,
+        script_directory: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The external variable exemption must not accept ordinary US prose."""
+        us_spelling = _spelling_fixture("colo", "r")
+        fixture = tmp_path / f"ordinary-{us_spelling}.md"
+        fixture.write_text(
+            f"Choose this {us_spelling} for the output.\n", encoding="utf-8"
+        )
+
+        result = _run_spelling_gate(script_directory.parent, fixture)
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, f"expected spelling failure, got: {output}"
+        assert us_spelling in output, f"expected the ordinary spelling in: {output}"

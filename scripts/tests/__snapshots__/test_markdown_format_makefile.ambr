@@ -1,0 +1,23 @@
+# serializer version: 1
+# name: test_makefile_uses_local_tools_and_the_shared_linter_selector
+  dict({
+    'leading_dash_safe': True,
+    'linter_commands': dict({
+      'check': 'unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) < "$$markdown_files"',
+      'fix': 'unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) --fix < "$$markdown_files"',
+    }),
+    'linter_extensions': tuple(
+      'md',
+      'markdown',
+      'mdx',
+    ),
+    'native_extensions': '--md-exts md,markdown,mdx',
+    'regular_files_only': True,
+    'selector_flags': tuple(
+      '--cached',
+      '--others',
+      '--exclude-standard',
+    ),
+    'symlinks_excluded': True,
+  })
+# ---

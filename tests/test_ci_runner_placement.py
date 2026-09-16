@@ -342,16 +342,20 @@ def test_markdown_lint_runs_through_the_pinned_action() -> None:
         for step in steps("ci.yml", "lint-test")
         if str(step.get("uses", "")).startswith("DavidAnson/markdownlint-cli2-action@")
     ]
-    assert len(lint_steps) == 1, "ci.yml:lint-test must lint Markdown with the action once"
+    assert len(lint_steps) == 1, (
+        "ci.yml:lint-test must lint Markdown with the action once"
+    )
     reference = str(lint_steps[0]["uses"]).split("@", 1)[1]
     assert re.fullmatch(r"[0-9a-f]{40}", reference), (
         "ci.yml:lint-test must pin the markdownlint-cli2 action to a full SHA"
     )
     inputs = lint_steps[0].get("with")
     assert isinstance(inputs, dict), "ci.yml:lint-test action step must carry inputs"
-    assert inputs.get("globs") == "**/*.md", (
-        "ci.yml:lint-test must lint every Markdown file"
-    )
+    assert str(inputs.get("globs", "")).splitlines() == [
+        "**/*.md",
+        "**/*.markdown",
+        "**/*.mdx",
+    ], "ci.yml:lint-test must lint every supported Markdown extension"
     script = next(
         step["run"]
         for step in steps("ci.yml", "lint-test")
