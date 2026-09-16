@@ -22,9 +22,33 @@ _OPERATORS = frozenset({"&", "&&", ";", "|", "||"})
 _KEYWORDS = frozenset({"if", "then", "elif", "else", "do"})
 
 
-def _shell_tokens(line: str, *, preserve_quotes: bool = False) -> list[str]:
-    """Tokenize one shell line, optionally retaining quote delimiters."""
-    lexer = shlex.shlex(line, posix=not preserve_quotes, punctuation_chars=True)
+def _shell_tokens(line: str) -> list[str]:
+    """Tokenize one shell line into shell words, splitting operators."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    return list(lexer)
+
+
+def _quoted_shell_tokens(line: str) -> list[str]:
+    """Tokenize one shell line retaining quote delimiters, for comparison.
+
+    Only ever compared with :func:`_shell_tokens`, never executed, so the
+    tokens need only line up positionally with that pass. This one is
+    deliberately non-``posix`` and does not split punctuation, because `shlex`
+    cannot lex a double-quoted command substitution that way: the ordinary
+    assignment ``payload="$(mktemp)"`` raises ``ValueError: No closing
+    quotation``, which would make a whole workflow line unreadable by every
+    caller that scans a script. Callers require equal token counts before
+    comparing, so a differing split is reported as "cannot be compared"
+    instead of being silently misaligned.
+
+    Returns
+    -------
+    list[str]
+        One entry per shell word, with any quote delimiters retained.
+    """
+    lexer = shlex.shlex(line, posix=False, punctuation_chars=False)
     lexer.whitespace_split = True
     lexer.commenters = "#"
     return list(lexer)
@@ -37,7 +61,7 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
 
 def _quoted_heredoc_operator_indices(line: str, tokens: list[str]) -> frozenset[int]:
     """Return token positions whose ``<<`` spelling came from quoted text."""
-    quoted_tokens = _shell_tokens(line, preserve_quotes=True)
+    quoted_tokens = _quoted_shell_tokens(line)
     if len(tokens) != len(quoted_tokens):
         return frozenset()
     return frozenset(

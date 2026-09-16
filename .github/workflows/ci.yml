@@ -1179,7 +1179,12 @@ jobs:
       # then skips for a reason that has nothing to do with the diff, and a
       # summary that stops being written precisely when the gate misbehaves
       # records the runs that needed no explanation.
+      #
+      # The three bounded values are published as step outputs so the
+      # telemetry step below transports them rather than recomputing the
+      # decision. One computation cannot disagree with itself.
       - name: Record the benchmark gate decision
+        id: gate
         if: ${{ !cancelled() }}
         env:
           EVENT: ${{ github.event_name }}
@@ -1217,6 +1222,82 @@ jobs:
           notice+=" detector_status=${detector_status}"
           notice+=" decision=${decision}"
           printf '%s\n' "${notice}"
+          {
+            printf 'event_class=%s\n' "${event_class}"
+            printf 'detector_status=%s\n' "${detector_status}"
+            printf 'decision=%s\n' "${decision}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # The step summary is durable only for as long as the run record is, so
+      # nothing aggregates the gate across runs: "is `skip-detector-failed`
+      # becoming more frequent?" — the case where performance was silently
+      # not measured — is answerable only by paging through the Actions UI,
+      # and no alert can be attached to it.
+      #
+      # The three values were already computed above and every one is a closed
+      # set, so the metric is bounded by construction: no changed file path,
+      # command line, commit SHA, run identifier, or timestamp reaches a
+      # label. The push is best-effort in both directions — a fork without the
+      # secret sends nothing and a revoked token or a sink outage costs one
+      # notice — because telemetry must never gate the product's own CI. In
+      # particular a failed publish must not fail `changes`, which would skip
+      # `benchmark-ratchet` and stop the baseline being refreshed.
+      #
+      # `aggregationTemporality: 2` is cumulative and is not a preference:
+      # Grafana Cloud's Prometheus translation drops non-cumulative monotonic
+      # sums, so a delta payload is accepted, acknowledged, and discarded.
+      # `startTimeUnixNano` equal to `timeUnixNano` declares a reset at an
+      # unknown start time, which is what lets one series accumulate across
+      # runs. Deliberately no `service.instance.id`: the translation turns it
+      # into an `instance` label, giving the counter one series per run rather
+      # than one series per verdict.
+      - name: Publish the benchmark gate decision
+        if: ${{ env.SINK_TOKEN != '' && !cancelled() }}
+        continue-on-error: true
+        env:
+          SINK_ENDPOINT: ${{ vars.BENCHMARK_TELEMETRY_ENDPOINT }}
+          SINK_INSTANCE_ID: ${{ vars.BENCHMARK_TELEMETRY_INSTANCE_ID }}
+          SINK_TOKEN: ${{ secrets.BENCHMARK_TELEMETRY_TOKEN }}
+          EVENT_CLASS: ${{ steps.gate.outputs.event_class }}
+          DETECTOR_STATUS: ${{ steps.gate.outputs.detector_status }}
+          DECISION: ${{ steps.gate.outputs.decision }}
+        run: |
+          set -euo pipefail
+          now="$(date +%s)000000000"
+          payload="$(mktemp)"
+          curlrc="$(mktemp)"
+          trap 'rm -f "${payload}" "${curlrc}"' EXIT
+          printf '%s\n' \
+            '{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name",' \
+            '"value":{"stringValue":"cuprum-ci"}},{"key":"service.namespace",' \
+            '"value":{"stringValue":"cuprum"}}]},"scopeMetrics":[{"metrics":[' \
+            '{"name":"benchmark_gate_decisions_total","sum":{"isMonotonic":true,' \
+            '"aggregationTemporality":2,"dataPoints":[{"startTimeUnixNano":' \
+            "\"${now}\",\"timeUnixNano\":\"${now}\",\"asInt\":\"1\"," \
+            '"attributes":[{"key":"event_class","value":{"stringValue":' \
+            "\"${EVENT_CLASS}\"}},{\"key\":\"detector_status\"," \
+            '"value":{"stringValue":' \
+            "\"${DETECTOR_STATUS}\"}},{\"key\":\"decision\",\"value\":" \
+            "{\"stringValue\":\"${DECISION}\"}}]}]}}]}]}]}" \
+            > "${payload}"
+          # The credential goes in a config file, not on the command line:
+          # `--user` would publish it in the process arguments, where any other
+          # process on the runner can read it. `mktemp` creates the file 0600.
+          printf 'user = "%s:%s"\n' "${SINK_INSTANCE_ID}" "${SINK_TOKEN}" \
+            > "${curlrc}"
+          status=0
+          curl --config "${curlrc}" \
+            --fail-with-body --silent --show-error --max-time 20 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data-binary "@${payload}" \
+            "${SINK_ENDPOINT}" || status=$?
+          if [ "${status}" -ne 0 ]; then
+            printf '::notice title=benchmark-gate-telemetry::'
+            printf 'benchmark_gate_decisions_total push failed (curl exit %s)' \
+              "${status}"
+            printf '\n'
+          fi
 
   loom-smoke:
     name: Loom model smoke test

@@ -11,3 +11,5 @@ self-hosted-runner:
 
 config-variables:
   - CODESCENE_CLI_SHA256
+  - BENCHMARK_TELEMETRY_ENDPOINT
+  - BENCHMARK_TELEMETRY_INSTANCE_ID

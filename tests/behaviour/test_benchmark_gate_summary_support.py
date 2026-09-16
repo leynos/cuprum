@@ -57,11 +57,14 @@ class Summary:
         Canonical Markdown table emitted by the workflow summary script.
     metric : dict[str, str]
         Bounded labels emitted in the workflow annotation.
+    outputs : dict[str, str]
+        Step outputs the script published for downstream steps to transport.
     """
 
     fields: dict[str, str]
     table: str
     metric: dict[str, str]
+    outputs: dict[str, str]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -95,6 +98,7 @@ def _execute_summary_script(
     event: str,
     detector: Detector,
     summary_path: pth.Path,
+    output_path: pth.Path,
     workflow_data: Workflow,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
@@ -106,6 +110,7 @@ def _execute_summary_script(
             "BENCH": detector.bench,
             "DETECTOR": detector.outcome,
             "GITHUB_STEP_SUMMARY": str(summary_path),
+            "GITHUB_OUTPUT": str(output_path),
         },
         capture_output=True,
         text=True,
@@ -117,7 +122,7 @@ def _execute_summary_script(
     return completed
 
 
-def _parse_summary(*, emitted: str, stdout: str) -> Summary:
+def _parse_summary(*, emitted: str, outputs: dict[str, str], stdout: str) -> Summary:
     """Parse the summary table and workflow annotation."""
     rows = [
         line
@@ -152,6 +157,7 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
         fields=dict(zip(_FIELD_NAMES, values, strict=True)),
         table="\n".join(rows),
         metric=metric,
+        outputs=outputs,
     )
 
 
@@ -183,12 +189,27 @@ def run_summary_script(
     """
     summary_path = tmp_path / "step-summary.md"
     summary_path.touch()
+    output_path = tmp_path / "step-output.txt"
+    output_path.touch()
     completed = _execute_summary_script(
         event=event,
         detector=detector,
         summary_path=summary_path,
+        output_path=output_path,
         workflow_data=workflow_data,
     )
     return _parse_summary(
-        emitted=summary_path.read_text(encoding="utf-8"), stdout=completed.stdout
+        emitted=summary_path.read_text(encoding="utf-8"),
+        outputs=_read_outputs(output_path),
+        stdout=completed.stdout,
     )
+
+
+def _read_outputs(path: pth.Path) -> dict[str, str]:
+    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``."""
+    pairs = (
+        line.split("=", maxsplit=1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    return dict(pairs)
