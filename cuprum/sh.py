@@ -544,6 +544,51 @@ def _prepare_execution_observation(
     )
 
 
+# ruff: ignore[too-many-arguments]  # the six inputs are one run's resolved state, carried together rather than derived
+def _build_subprocess_execution(
+    cmd: SafeCmd,
+    context: ExecutionContext,
+    output: RunOutputOptions,
+    *,
+    timeout: float | None,
+    observation: _StageObservation,
+    stdin_data: bytes | None,
+) -> _SubprocessExecution:
+    """Bundle everything one command's execution needs, before it spawns.
+
+    The idle monitor is part of the bundle rather than an execution-time
+    argument because its presence is what decides whether the child's stdout
+    and stderr are piped for activity observation. Deferring it would leave
+    the spawn unable to make that choice.
+
+    Returns
+    -------
+    _SubprocessExecution
+        The resolved execution bundle, ready for ``_execute_with_hooks``.
+    """
+    return _SubprocessExecution(
+        cmd=cmd,
+        ctx=context,
+        capture=output.capture,
+        echo_stdout=output.resolved_echo[0],
+        echo_stderr=output.resolved_echo[1],
+        max_echo_line_bytes=output.max_echo_line_bytes,
+        timeout=timeout,
+        observation=observation,
+        stdin_data=stdin_data,
+        # Built here, during the parent's own preparation, but armed by the run
+        # itself, once the child is actually running: everything that precedes
+        # the spawn is the parent's work, and must not read as the child's
+        # silence.
+        idle=_build_idle_monitor(
+            output.idle_after,
+            output.on_idle,
+            _idle_subject(str(cmd.program)),
+            context.stderr_sink,
+        ),
+    )
+
+
 async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
@@ -675,25 +720,13 @@ class SafeCmd:
             hook(self)
         return await _execute_with_hooks(
             self,
-            _SubprocessExecution(
-                cmd=self,
-                ctx=ctx,
-                capture=out.capture,
-                echo_stdout=out.resolved_echo[0],
-                echo_stderr=out.resolved_echo[1],
-                max_echo_line_bytes=out.max_echo_line_bytes,
+            _build_subprocess_execution(
+                self,
+                ctx,
+                out,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
-                # Built here but armed by the run itself, once the child is
-                # actually running: everything above this line is the parent's
-                # work, and must not read as the child's silence.
-                idle=_build_idle_monitor(
-                    out.idle_after,
-                    out.on_idle,
-                    _idle_subject(str(self.program)),
-                    ctx.stderr_sink,
-                ),
             ),
             tracking,
         )
