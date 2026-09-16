@@ -1,17 +1,26 @@
 //! Direct tests for descriptor-backed I/O helper contracts.
 
-use std::io;
-use std::os::fd::OwnedFd;
+use std::{io, os::fd::OwnedFd};
 
 use proptest::prelude::*;
+use rstest::{fixture, rstest};
 
 use super::{
-    PumpError, WriteOutcome, classify_write_outcome, classify_write_with, handle_write,
-    map_short_write_error, read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
+    PumpError,
+    WriteOutcome,
+    classify_write_outcome,
+    classify_write_with,
+    handle_write,
+    map_short_write_error,
+    read_raw_fd,
+    read_raw_fd_with,
+    read_stream,
+    write_all_unix_with,
 };
-use crate::pump_machine::WriteEvent;
-use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
-use rstest::{fixture, rstest};
+use crate::{
+    pump_machine::WriteEvent,
+    test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to},
+};
 
 /// A fresh `pipe(2)` pair (`read_end`, `write_end`) for descriptor-backed
 /// tests, so the shared setup lives in one place rather than a repeated

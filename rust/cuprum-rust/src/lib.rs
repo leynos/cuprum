@@ -6,8 +6,7 @@
 
 use cuprum_native_io::PlatformFd;
 use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyValueError, prelude::*};
 mod errors;
 #[cfg(test)]
 mod fd_tests;
@@ -30,9 +29,7 @@ fn validate_buffer_size(size: i64) -> PyResult<BufferSize> {
 #[must_use]
 #[doc(hidden)]
 #[pyfunction]
-pub const fn is_available() -> bool {
-    true
-}
+pub const fn is_available() -> bool { true }
 
 #[expect(
     clippy::allow_attributes,

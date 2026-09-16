@@ -6,8 +6,9 @@
 //! real panic-unwind are proved by this model: native regressions exercise
 //! those paths, including the historical trailing-`mem::forget` mistake.
 
-use crate::memory::with_retained_owner;
 use core::cell::Cell;
+
+use crate::memory::with_retained_owner;
 
 /// Records how many times the modelled descriptor was closed.
 ///
@@ -26,13 +27,9 @@ impl CloseLog {
     }
 
     /// Number of closes recorded so far.
-    pub(crate) const fn closes(self) -> u32 {
-        self.closes.into_inner()
-    }
+    pub(crate) const fn closes(self) -> u32 { self.closes.into_inner() }
 
-    fn record_close(&self) {
-        self.closes.set(self.closes.get().saturating_add(1));
-    }
+    fn record_close(&self) { self.closes.set(self.closes.get().saturating_add(1)); }
 }
 
 /// A modelled *owning* descriptor handle.
@@ -47,15 +44,11 @@ pub(crate) struct ModelFd<'log> {
 
 impl<'log> ModelFd<'log> {
     /// Reconstruct an owning handle that reports closes to `log`.
-    pub(crate) const fn new(log: &'log CloseLog) -> Self {
-        Self { log }
-    }
+    pub(crate) const fn new(log: &'log CloseLog) -> Self { Self { log } }
 }
 
 impl Drop for ModelFd<'_> {
-    fn drop(&mut self) {
-        self.log.record_close();
-    }
+    fn drop(&mut self) { self.log.record_close(); }
 }
 
 /// Represents an ordinary operation error, not panic-unwind.
@@ -118,8 +111,9 @@ mod tests {
     //! Concrete unit tests for the ownership model, mirroring the bounded
     //! Kani proofs so the contract is exercised by `make test` as well.
 
-    use super::{CloseLog, ExitMode, ModelFd, model_consume_stream, model_pump_stream};
     use rstest::rstest;
+
+    use super::{CloseLog, ExitMode, ModelFd, model_consume_stream, model_pump_stream};
 
     #[rstest]
     #[case(ExitMode::Normal)]

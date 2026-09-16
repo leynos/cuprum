@@ -1,8 +1,8 @@
 //! Map safe stream errors to Python exceptions without losing OS codes.
-use cuprum_streams::PumpError;
-use pyo3::PyErr;
-use pyo3::exceptions::PyOSError;
 use std::io;
+
+use cuprum_streams::PumpError;
+use pyo3::{PyErr, exceptions::PyOSError};
 
 pub(crate) fn pump_error_to_py_err(err: PumpError) -> PyErr {
     match err {
@@ -38,9 +38,7 @@ fn strip_os_error_suffix(message: &str, code: i32) -> String {
 /// through `io::ErrorKind`, taken from the authoritative source rather than a
 /// parallel table.
 #[cfg(unix)]
-fn os_error_to_py_err(code: i32, strerror: String) -> PyErr {
-    PyOSError::new_err((code, strerror))
-}
+fn os_error_to_py_err(code: i32, strerror: String) -> PyErr { PyOSError::new_err((code, strerror)) }
 
 /// Build a Python `OSError` from a Win32 error code and its message.
 ///
@@ -103,9 +101,11 @@ fn raw_os_error_parts(err: &io::Error) -> Option<(i32, String)> {
 mod tests {
     //! Unit tests for the canonical `PumpError` taxonomy: variant mapping,
     //! the non-fatal write predicate, and stable display messages.
-    use super::PumpError;
-    use rstest::rstest;
     use std::io;
+
+    use rstest::rstest;
+
+    use super::PumpError;
 
     #[test]
     fn io_errors_round_trip_their_kind() {
@@ -252,8 +252,8 @@ mod tests {
     fn a_synthesized_error_has_no_code_to_preserve(#[case] err: io::Error) {
         assert!(
             super::raw_os_error_parts(&err).is_none(),
-            "an error with no raw_os_error must select PyO3's ErrorKind mapping \
-             rather than a fabricated code: {err:?}",
+            "an error with no raw_os_error must select PyO3's ErrorKind mapping rather than a \
+             fabricated code: {err:?}",
         );
     }
 

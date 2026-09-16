@@ -27,15 +27,14 @@ pub(crate) fn with_retained_owner<T, R>(value: T, operation: impl FnOnce(&mut T)
 #[cfg(test)]
 mod tests {
     //! Real unwinding through the production retention frame.
-    use super::with_retained_owner;
     use core::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    use super::with_retained_owner;
+
     struct Close<'a>(&'a Cell<u32>);
     impl Drop for Close<'_> {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
+        fn drop(&mut self) { self.0.set(self.0.get() + 1); }
     }
 
     #[test]

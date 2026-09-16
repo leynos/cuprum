@@ -44,6 +44,8 @@ DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_F
 DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)" | grep -q '^$(DEV_FAST_CRANELIFT_COMPONENT)' || { printf 'install %s for %s before using dev-fast\n' "$(DEV_FAST_CRANELIFT_COMPONENT)" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }
 DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
 DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
+RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28
+RUSTFMT_CARGO ?= $(CARGO) +$(RUSTFMT_TOOLCHAIN)
 WHITAKER ?= whitaker
 BUILD_JOBS ?=
 RUST_FLAGS ?= -D warnings
@@ -253,13 +255,13 @@ endif
 fmt: ruff ## Format sources
 	$(RUFF) format
 	$(RUFF) check --select I --fix
-	cd $(RUST_DIR) && $(CARGO) fmt --all
+	cd $(RUST_DIR) && $(RUSTFMT_CARGO) fmt --all
 	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
 	$(call run_markdownlint_files,$(MDLINT_FIX_COMMAND))
 
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
-	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
+	cd $(RUST_DIR) && $(RUSTFMT_CARGO) fmt --all -- --check
 	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
 
 test-markdown-format: ## Validate the Markdown formatting Makefile contract

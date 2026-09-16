@@ -8,15 +8,23 @@
 //! production filters and that the pump/consume loops record `total_bytes` and
 //! retry counts on their span.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Debug;
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    fmt::Debug,
+    sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError},
+};
 
-use tracing::field::{Field, Visit};
-use tracing::level_filters::LevelFilter;
-use tracing::span::{Attributes, Id, Record};
-use tracing::subscriber::{Interest, NoSubscriber};
-use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
+use tracing::{
+    Dispatch,
+    Event,
+    Level,
+    Metadata,
+    Subscriber,
+    field::{Field, Visit},
+    level_filters::LevelFilter,
+    span::{Attributes, Id, Record},
+    subscriber::{Interest, NoSubscriber},
+};
 
 /// A captured event: its level, the field names reachable from the active span
 /// stack when it was emitted, and the values it carried itself.
@@ -184,9 +192,7 @@ impl Subscriber for FilterCapture {
     }
 
     /// Add the entered span to the active context stack.
-    fn enter(&self, span: &Id) {
-        lock(&self.state).stack.push(span.into_u64());
-    }
+    fn enter(&self, span: &Id) { lock(&self.state).stack.push(span.into_u64()); }
 
     /// Remove the most recently entered matching span from the context stack.
     fn exit(&self, span: &Id) {
@@ -209,9 +215,7 @@ struct DormantSubscriber;
 
 impl Subscriber for DormantSubscriber {
     /// Keep the retained guard dormant so it never receives events.
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        false
-    }
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool { false }
 
     /// Disable callsites while this is the registry's only dispatch.
     fn max_level_hint(&self) -> Option<LevelFilter> {
@@ -221,9 +225,7 @@ impl Subscriber for DormantSubscriber {
     }
 
     /// Produce inert span identifiers because the guard retains no span state.
-    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
-        NoSubscriber::new().new_span(attrs)
-    }
+    fn new_span(&self, attrs: &Attributes<'_>) -> Id { NoSubscriber::new().new_span(attrs) }
 
     /// Ignore records because the dormant guard retains no span state.
     fn record(&self, _span: &Id, _values: &Record<'_>) {}

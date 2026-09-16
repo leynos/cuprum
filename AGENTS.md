@@ -179,22 +179,31 @@ working on the Rust portions of the project:
   - `make check-fmt` executes:
 
     ```sh
-    cargo fmt --all -- --check
+    cargo +nightly-2026-05-28 fmt --all -- --check
     ```
 
     validating formatting across the Rust workspace without modifying files.
-  - `make lint` executes:
+  - `make lint` executes its Rustdoc and Clippy steps through
+    `RUST_DEBUG_CARGO`, then runs Whitaker separately:
 
     ```sh
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-    cargo clippy --all-targets --all-features -- -D warnings
-    RUSTFLAGS="-D warnings" whitaker --all -- --all-targets --all-features
+    cd rust && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" \
+      $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && \
+      $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
+    cd rust && $(LOCAL_TOOL_ENV) \
+      RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \
+      $(WHITAKER_CARGO_FLAGS)
     yamllint --config-file .yamllint.yml .github/workflows
     actionlint
     ```
 
-    linting every target with all features enabled, denying all Clippy
-    warnings, and validating GitHub Actions workflows. Keep `.yamllint.yml`
+    On Linux, `RUST_DEBUG_CARGO` selects `nightly-2026-08-23` with the explicit
+    `tools/dev-fast/config.toml` fragment; elsewhere it selects the prescribed
+    Cargo route. Whitaker never receives that fragment. The protected coverage,
+    release, verification, and MSRV paths also retain their separate toolchain
+    and linker policy. The target lints every target with all features enabled,
+    denies all Clippy warnings, and validates GitHub Actions workflows. Keep
+    `.yamllint.yml`
     compatible with GitHub's unquoted `on` trigger key and require each
     workflow to begin with `---`. CI must install
     yamllint with `uv tool` and use the pinned, checksum-verified actionlint
@@ -207,19 +216,20 @@ working on the Rust portions of the project:
     ```
 
     running the Rust test suite with warnings denied. Use `make fmt`
-    (`cargo fmt --all`) to apply formatting fixes reported by the formatter
-    check alongside the Python and Markdown formatters.
+    (`cargo +nightly-2026-05-28 fmt --all`) to apply formatting fixes reported
+    by the formatter check alongside the Python and Markdown formatters.
 - The project toolchain stays pinned to Rust `1.85.0` and declares `rustfmt`,
   `clippy`, and `rust-analyzer`. CI also provisions `nightly-2026-05-28` for
   the maintenance formatter, then restores the project toolchain. The current
-  `fmt` and `check-fmt` recipes still use the project toolchain. Linux-only
-  debug Rust work additionally uses the separately pinned dev-fast nightly
-  through `tools/dev-fast/config.toml`; run `make dev-fast-check` first. The
-  stable toolchain remains mandatory for release, coverage, Whitaker, the
-  explicit `make msrv-check` verification target, and the macOS and Windows
-  platform alternatives. All Rust packages inherit Cargo's
-  `rust-version = "1.85.0"` contract, which also keeps MSRV-aware Clippy
-  findings valid when debug linting uses the dev-fast nightly.
+  `fmt` and `check-fmt` recipes explicitly select the pinned nightly only for
+  formatting. Linux-only debug Rust work additionally uses the separately
+  pinned dev-fast nightly through `tools/dev-fast/config.toml`; run
+  `make dev-fast-check` first. The stable toolchain remains mandatory for
+  release, coverage, Whitaker, the explicit `make msrv-check` verification
+  target, and the macOS and Windows platform alternatives. All Rust packages
+  inherit Cargo's `rust-version = "1.85.0"` contract, which also keeps
+  MSRV-aware Clippy findings valid when debug linting uses the dev-fast
+  nightly.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions

@@ -1,5 +1,6 @@
 //! Semantic errors for safe stream orchestration.
 use std::io;
+
 use thiserror::Error;
 
 /// Semantic error for stream pump and consume operations.
