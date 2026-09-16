@@ -41,7 +41,6 @@ concurrency:
 env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
-  MARKDOWNLINT_VERSION: '0.20.0'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
   # the job is actually billed for. Raising the label means raising this too.
