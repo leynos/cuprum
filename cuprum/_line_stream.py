@@ -49,7 +49,11 @@ from cuprum._subprocess_wait import (
     _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.line_stream_events import LineStreamEvent, LineStreamSink
+from cuprum.line_stream_events import (
+    LineStreamEvent,
+    LineStreamPhase,
+    LineStreamSink,
+)
 from cuprum.line_stream_observation import _emit_line_stream_event
 from cuprum.lines import LineEvent, LineStreamName
 
@@ -90,16 +94,7 @@ class _LineStreamTelemetry:
 
     def emit(
         self,
-        phase: typ.Literal[
-            "spawned",
-            "queue_saturated",
-            "sink_failed",
-            "timeout",
-            "cancelled",
-            "teardown_started",
-            "teardown_completed",
-            "completed",
-        ],
+        phase: LineStreamPhase,
         details: _LineStreamEventDetails | None = None,
     ) -> None:
         """Publish one lifecycle boundary without carrying decoded text."""
@@ -134,7 +129,7 @@ class _LineStreamTelemetry:
         if queue.full() and not self.is_queue_saturated:
             self.is_queue_saturated = True
             self.emit(
-                "queue_saturated",
+                LineStreamPhase.QUEUE_SATURATED,
                 _LineStreamEventDetails(
                     stream=event.stream,
                     queue_size=queue.qsize(),
@@ -198,7 +193,7 @@ def _queue_line_sink(
             telemetry.report_queue_saturation(queue, event)
         await queue.put(event)
         if telemetry is not None:
-            telemetry.is_queue_saturated = False
+            telemetry.is_queue_saturated = queue.full()
 
     return enqueue
 
@@ -218,13 +213,13 @@ def _observed_line_hook(
                 await outcome
         except asyncio.CancelledError:
             telemetry.emit(
-                "cancelled",
+                LineStreamPhase.CANCELLED,
                 _LineStreamEventDetails(stream=event.stream, sink=sink),
             )
             raise
         except BaseException as error:
             telemetry.emit(
-                "sink_failed",
+                LineStreamPhase.SINK_FAILED,
                 _LineStreamEventDetails(
                     stream=event.stream,
                     sink=sink,
@@ -272,7 +267,7 @@ async def _start_line_stream_run(
     pid = process.pid
     telemetry.pid = pid
     execution.observation.emit("start", _EventDetails(pid=pid))
-    telemetry.emit("spawned")
+    telemetry.emit(LineStreamPhase.SPAWNED)
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
     tasks = _RunTaskOwnership(
@@ -325,8 +320,8 @@ async def _wait_for_line_stream_exit(
             execution,
         )
     except TimeoutError as exc:
-        run.telemetry.emit("timeout", _LineStreamEventDetails(error=exc))
-        run.telemetry.emit("teardown_started")
+        run.telemetry.emit(LineStreamPhase.TIMEOUT, _LineStreamEventDetails(error=exc))
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
         stdout_text, stderr_text = await _shielded_cleanup(
             _reconcile_run_tasks(
                 run.tasks,
@@ -338,7 +333,7 @@ async def _wait_for_line_stream_exit(
                 ),
             )
         )
-        run.telemetry.emit("teardown_completed")
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
@@ -346,8 +341,8 @@ async def _wait_for_line_stream_exit(
             timeout=execution.timeout,
         )
     except asyncio.CancelledError:
-        run.telemetry.emit("cancelled")
-        run.telemetry.emit("teardown_started")
+        run.telemetry.emit(LineStreamPhase.CANCELLED)
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
         await _shielded_cleanup(
             _reconcile_run_tasks(
                 run.tasks,
@@ -359,10 +354,10 @@ async def _wait_for_line_stream_exit(
                 ),
             )
         )
-        run.telemetry.emit("teardown_completed")
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         raise
     except BaseException:
-        run.telemetry.emit("teardown_started")
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
         await _shielded_cleanup(
             _reconcile_run_tasks(
                 run.tasks,
@@ -374,7 +369,7 @@ async def _wait_for_line_stream_exit(
                 ),
             )
         )
-        run.telemetry.emit("teardown_completed")
+        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         raise
     stdout_text, stderr_text = await _drain_after_exit(run, pid, execution)
     return exit_code, exited_at, stdout_text, stderr_text
@@ -405,7 +400,7 @@ async def _discard_drain(
     execution: _SubprocessExecution,
 ) -> tuple[str | None, str | None]:
     """Discard and reconcile the line stream's consumers after a failure."""
-    run.telemetry.emit("teardown_started")
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
     result = await _shielded_cleanup(
         _drain_stream_consumers(
             run.tasks.consumers,
@@ -417,7 +412,7 @@ async def _discard_drain(
             ),
         )
     )
-    run.telemetry.emit("teardown_completed")
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
     return result
 
 
@@ -451,7 +446,7 @@ async def _coordinate_line_stream(
         # this coordinator only after it has stopped consuming. Re-raised so the
         # task ends cancelled instead of publishing a ``CancelledError`` the
         # caller would meet as an exception from a plain ``aclose()``.
-        run.telemetry.emit("cancelled")
+        run.telemetry.emit(LineStreamPhase.CANCELLED)
         raise
     except BaseException as error:  # ruff: ignore[blind-except] - any failure must reach the consumer
         result_future.set_exception(error)
@@ -491,7 +486,7 @@ async def _run_to_command_result(
             exc,
         )
 
-    run.telemetry.emit("completed")
+    run.telemetry.emit(LineStreamPhase.COMPLETED)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(

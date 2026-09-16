@@ -19,9 +19,9 @@ LINE_STREAM_EVENTS_TOTAL = "cuprum_line_stream_events_total"
 
 _UNKNOWN = "unknown"
 _NONE = "none"
-_PHASES = frozenset(typ.get_args(LineStreamPhase))
+_PHASES = frozenset(phase.value for phase in LineStreamPhase)
 _STREAMS = frozenset(("stdout", "stderr"))
-_SINKS = frozenset(typ.get_args(LineStreamSink))
+_SINKS = frozenset(typ.get_args(LineStreamSink.__value__))
 
 
 def _label(value: object | None, allowed: frozenset[str]) -> str:
@@ -32,7 +32,13 @@ def _label(value: object | None, allowed: frozenset[str]) -> str:
 
 
 class LineStreamMetricsHook:
-    """Count line-stream lifecycle events with bounded categorical labels."""
+    """Count line-stream lifecycle events with bounded categorical labels.
+
+    Parameters
+    ----------
+    collector
+        The metrics collector that receives one counter increment per event.
+    """
 
     def __init__(self, collector: MetricsCollector) -> None:
         """Store the thread-safe metrics collector."""
@@ -52,7 +58,18 @@ class LineStreamMetricsHook:
 
 
 def line_stream_metrics_hook(collector: MetricsCollector) -> LineStreamHook:
-    """Return a lifecycle hook that projects events into ``collector``."""
+    """Return a lifecycle hook that projects events into ``collector``.
+
+    Parameters
+    ----------
+    collector
+        The metrics collector that receives line-stream event counters.
+
+    Returns
+    -------
+    LineStreamHook
+        A synchronous hook that records bounded lifecycle labels.
+    """
     return LineStreamMetricsHook(collector)
 
 
