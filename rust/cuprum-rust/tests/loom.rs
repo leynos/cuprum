@@ -25,6 +25,10 @@ fn assert_safe_terminal(snapshot: LifecycleSnapshot) {
         !snapshot.released_while_worker_active,
         "cleanup cannot release a descriptor while native work may use it"
     );
+    assert!(
+        snapshot.observer_saw_completion,
+        "the completion observer must receive the worker settlement notification"
+    );
 }
 
 fn model_submission_and_cleanup(
@@ -36,21 +40,35 @@ fn model_submission_and_cleanup(
     loom::model(move || {
         let state = NativePumpModel::new();
         if cancel_before_submission {
-            state.cancel();
+            state
+                .cancel()
+                .expect("event-loop cancellation must be modelled");
         }
-        let worker = NativePumpModel::submit(&state, submission, native);
+        let worker = NativePumpModel::submit(&state, submission, native)
+            .expect("submission model must preserve lifecycle state");
         if cancel_after_submission {
-            state.cancel();
-            state.cancel();
+            state.cancel().expect("first cancellation must be modelled");
+            state
+                .cancel()
+                .expect("repeated cancellation must be modelled");
         }
         let observer = state.clone();
         let observer = loom::thread::spawn(move || observer.observe_completion());
         if let Some(worker) = worker {
-            worker.join().expect("worker actor must finish");
+            worker
+                .join()
+                .expect("worker actor must finish")
+                .expect("worker actor must preserve lifecycle state");
         }
-        observer.join().expect("observer actor must finish");
-        state.observe_completion();
-        assert_safe_terminal(state.snapshot());
+        observer
+            .join()
+            .expect("observer actor must finish")
+            .expect("observer actor must preserve lifecycle state");
+        assert_safe_terminal(
+            state
+                .snapshot()
+                .expect("snapshot must observe the settled lifecycle"),
+        );
     });
 }
 
@@ -100,16 +118,26 @@ fn cancellation_before_after_and_repeated_submission_are_safe() {
 fn cancellation_before_submission_remains_released() {
     loom::model(|| {
         let state = NativePumpModel::new();
-        state.cancel();
+        state
+            .cancel()
+            .expect("event-loop cancellation must be modelled");
 
         let worker = NativePumpModel::submit(
             &state,
             SubmissionOutcome::Submitted,
             NativeOutcome::Succeeded,
-        );
+        )
+        .expect("submission model must preserve lifecycle state");
 
         assert!(worker.is_none(), "cancelled work must not spawn a worker");
-        let snapshot = state.snapshot();
+        let observer = state.clone();
+        loom::thread::spawn(move || observer.observe_completion())
+            .join()
+            .expect("observer actor must finish")
+            .expect("observer actor must preserve lifecycle state");
+        let snapshot = state
+            .snapshot()
+            .expect("snapshot must observe the settled lifecycle");
         assert_eq!(
             snapshot.terminal,
             _rust_backend_native::loom_model::TerminalState::Released
@@ -135,8 +163,13 @@ fn deliberate_double_close_fixture_is_detected() {
     loom::model(|| {
         let state = NativePumpModel::with_double_close_defect();
         let worker =
-            NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed);
+            NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed)
+                .expect("failed submission must preserve lifecycle state");
         assert!(worker.is_none());
-        assert_safe_terminal(state.snapshot());
+        assert_safe_terminal(
+            state
+                .snapshot()
+                .expect("snapshot must observe the settled lifecycle"),
+        );
     });
 }

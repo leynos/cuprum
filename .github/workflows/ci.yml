@@ -1160,7 +1160,7 @@ jobs:
               - '.github/workflows/loom.yml'
               - '.github/workflows/ci.yml'
               - '.github/actions/cache-keys/action.yml'
-              - '.github/actions/setup-sccache/'
+              - '.github/actions/setup-sccache/**'
 
       # A skipped job is indistinguishable from a broken gate in the run
       # list, so record the decision where a maintainer auditing paid-runner
