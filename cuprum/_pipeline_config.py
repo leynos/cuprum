@@ -13,6 +13,7 @@ from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._streams import _MirrorCursor
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
@@ -59,6 +60,7 @@ class _PipelineRunConfig:
             errors=self.ctx.errors,
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stdout_sink),
         )
 
     @property
@@ -73,10 +75,28 @@ class _PipelineRunConfig:
             errors=self.ctx.errors,
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
-            # The keepalive shares the stderr sink, so this is the echo that
-            # can strand it at the end of an unfinished line.
-            mirror=self.idle.mirror if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stderr_sink),
         )
+
+    def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
+        """Return the cursor for an echo whose sink is the keepalive's own.
+
+        The cursor tracks where the keepalive's destination ended up, not which
+        stream wrote there: a caller may point both sinks at one object, and
+        then a newline-less final-stage stdout echo strands the diagnostic
+        exactly as a stderr one would. Resolved sinks are compared, because
+        that is where the bytes land.
+
+        Returns
+        -------
+        _MirrorCursor | None
+            The run's cursor when *sink* is the diagnostic destination, or
+            ``None`` when this echo cannot reach the keepalive.
+        """
+        idle = self.idle
+        if idle is None or sink is not self.stderr_sink:
+            return None
+        return idle.mirror
 
 
 def _prepare_pipeline_config(

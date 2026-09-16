@@ -176,6 +176,53 @@ def test_stage_stderr_defers_the_aggregate(
     )
 
 
+def test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line(
+    python_catalogue_env: PythonCatalogue,
+    python: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The final stage's stdout echo can strand the aggregate keepalive too.
+
+    A caller may point both sinks at one object, and then the pipeline's own
+    outward-facing stdout is written to the keepalive's destination. Echo is
+    unbounded so each chunk lands as it arrives, leaving the cursor as the only
+    guard against continuing the child's unfinished line.
+    """
+    sink = io.StringIO()
+    pipeline = _two_stage(
+        python,
+        producer="print('upstream')",
+        consumer=(
+            "import sys, time;"
+            "sys.stdout.write('partial-final');"
+            "sys.stdout.flush();"
+            "time.sleep(0.5);"
+            "sys.stdout.write('\\n');"
+            "sys.stdout.flush()"
+        ),
+    )
+
+    with _allowlisted(python_catalogue_env):
+        pipeline.run_sync(
+            output=RunOutputOptions(
+                echo=True,
+                idle_after=_INTERVAL,
+                max_echo_line_bytes=None,
+            ),
+            context=ExecutionContext(stdout_sink=sink, stderr_sink=sink),
+        )
+
+    lines = keepalives(sink)
+    assert lines, f"the quiet tail must still be reported for {sink.getvalue()!r}"
+    for line in lines:
+        assert line.startswith("[cuprum]"), (
+            "the aggregate keepalive must begin its own line rather than "
+            f"continue the final stage's unfinished one: {line!r}"
+        )
+    assert sink.getvalue().startswith("partial-final\n"), (
+        f"the stage's own bytes must be unchanged: {sink.getvalue()!r}"
+    )
+
+
 def test_pipeline_consumption_policy_follows_the_idle_gate() -> None:
     """The stage-stream policy counts a watchdog as a reason to drain."""
     quiet = _prepare_pipeline_config(
