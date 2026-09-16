@@ -330,16 +330,40 @@ def _nextest_installers(workflow_name: str, job_name: str) -> list[str]:
     ]
 
 
-def test_lint_tool_install_is_version_pinned() -> None:
-    """Keep the npm Markdown linter on a reproducible release."""
+def test_markdown_lint_runs_through_the_pinned_action() -> None:
+    """Keep the Markdown linter on a reproducible, SHA-pinned release.
+
+    The estate's markdown-formatting-baseline rule requires CI to lint
+    Markdown through the upstream markdownlint-cli2 action rather than a
+    shell install, so the pin lives on the action reference.
+    """
+    lint_steps = [
+        step
+        for step in steps("ci.yml", "lint-test")
+        if str(step.get("uses", "")).startswith("DavidAnson/markdownlint-cli2-action@")
+    ]
+    assert len(lint_steps) == 1, (
+        "ci.yml:lint-test must lint Markdown with the action once"
+    )
+    reference = str(lint_steps[0]["uses"]).split("@", 1)[1]
+    assert re.fullmatch(r"[0-9a-f]{40}", reference), (
+        "ci.yml:lint-test must pin the markdownlint-cli2 action to a full SHA"
+    )
+    inputs = lint_steps[0].get("with")
+    assert isinstance(inputs, dict), "ci.yml:lint-test action step must carry inputs"
+    assert str(inputs.get("globs", "")).splitlines() == [
+        "**/*.md",
+        "**/*.markdown",
+        "**/*.mdx",
+    ], "ci.yml:lint-test must lint every supported Markdown extension"
     script = next(
         step["run"]
         for step in steps("ci.yml", "lint-test")
         if step.get("name") == "Install CLI tools"
     )
     assert isinstance(script, str), "ci.yml:Install CLI tools must run a script"
-    assert "markdownlint-cli2@${MARKDOWNLINT_VERSION}" in script, (
-        "ci.yml:Install CLI tools must pin markdownlint-cli2"
+    assert "markdownlint-cli2" not in script, (
+        "ci.yml:Install CLI tools must not install markdownlint-cli2 from npm"
     )
 
 

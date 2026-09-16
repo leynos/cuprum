@@ -2929,27 +2929,27 @@ The short version is:
 - `$(DF12_PYLINT)` enables every message shipped by
   `df12-python-lints` v0.3.0 under CPython 3.14 while retaining Cuprum's
   `py-version = "3.12"` semantic baseline.
-- `$(AMBRLEAKS)` scans `cuprum/unittests` and `tests`; exact deterministic
-  fixture values that resemble secrets belong in `ambrleaks.toml`.
+- `$(AMBRLEAKS)` scans `cuprum/unittests`, `scripts/tests`, and `tests`; exact
+  deterministic fixture values that resemble secrets belong in `ambrleaks.toml`.
 
 ### Markdown formatting
 
-`make fmt` runs `mdformat-all`, which applies `mdtablefix` with
-`--wrap --renumber --breaks --ellipsis --fences --in-place` before applying
+`make fmt` runs `mdtablefix` directly with
+`--wrap --renumber --breaks --ellipsis --fences --in-place`, then applies
 `markdownlint-cli2 --fix`. `mdtablefix` therefore owns table padding and
-paragraph wrapping, while `make markdownlint` verifies the result.
+paragraph wrapping, while `markdownlint-cli2` owns its rule fixes. Both stages
+cover `.md`, `.markdown`, and `.mdx` files.
 
-`make check-fmt` passes repository Markdown files to
-`scripts/check-markdown-format.sh`. Because `mdtablefix` has no check-only
-mode, the checker formats temporary copies and compares them with the source
-files; it never modifies the worktree. It accepts exact LF or CRLF output, but
-rejects mixed line endings. Run `make test-markdown-format` after changing the
-checker.
+`make check-fmt` uses `mdtablefix --check` directly, so it does not modify the
+worktree. Its `--git --include-untracked` selector covers Git-tracked and
+nonignored untracked regular Markdown files while excluding ignored files and
+symbolic links. Run `make test-markdown-format` after changing this Makefile
+contract.
 
 The gate installs the `mdtablefix` version pinned by `MDTABLEFIX_VERSION` in
 `.github/workflows/ci.yml` through the
 `leynos/shared-actions/.github/actions/install-mdtablefix` action. The action
-requires `mdtablefix` 0.5.1 or later, installs only a matching prebuilt
+requires `mdtablefix` 0.6.0 or later, installs only a matching prebuilt
 release, and fails closed when the runner has no supported archive; it never
 builds the formatter from source. Cuprum's project toolchain remains Rust
 1.85.0.
@@ -2958,7 +2958,7 @@ Install the pinned prebuilt version locally with `cargo-binstall` so formatter
 output matches CI:
 
 ```bash
-MDTABLEFIX_VERSION=0.5.1
+MDTABLEFIX_VERSION=0.6.0
 cargo binstall --no-confirm --locked --disable-strategies compile \
   --install-path "$HOME/.local/bin" "mdtablefix@${MDTABLEFIX_VERSION}"
 ```
@@ -2991,7 +2991,8 @@ make lint
    `$(PYLINT_TARGETS)` appended.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
    the same targets.
-5. The CPython 3.14 `ambrleaks` scanner over both Syrupy snapshot roots.
+5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
+   test roots.
 
 Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
@@ -3000,14 +3001,13 @@ assertion, alias, suppression rationale, or dispatch structure instead.
 
 ### Markdown linting
 
-The `markdownlint` target lints exactly the Markdown files tracked by Git. The
-recipe feeds `git ls-files -z '*.md'` through `xargs -0` to `markdownlint-cli2`
-with `$(LOCAL_TOOL_ENV)` applied to both pipeline stages, so the tool resolves
-from `~/.local/bin` or `~/.bun/bin` even under a minimal `PATH`, arguments with
-spaces survive intact, and untracked scratch files can never fail the gate. The
-`.vtcode/**` directory is excluded in `.markdownlint-cli2.jsonc` as
-session-scratch content. The target then runs the shared `spelling` recipe, so
-one invocation covers both Markdown structure and en-GB-oxendict spelling.
+The `markdownlint` target lints `.md`, `.markdown`, and `.mdx` files with
+`markdownlint-cli2` resolved through `$(LOCAL_TOOL_ENV)`, so the tool resolves
+from `~/.local/bin` or `~/.bun/bin` even under a minimal `PATH`. Its glob set
+matches the CI action and `.markdownlint-cli2.jsonc` honours `.gitignore`; the
+configuration also excludes session scratch directories such as `.vtcode/**`.
+The target then runs the shared `spelling` recipe, so one invocation covers
+both Markdown structure and en-GB-oxendict spelling.
 
 ### GitHub Actions workflow linting
 
@@ -3157,7 +3157,7 @@ a separate house style. The imported policy consists of:
 - A PyPy-backed Pylint invocation through the pinned shim repository.
 - Every `df12-python-lints` v0.3.0 message, including `R9112`, executed under
   CPython 3.14.
-- `ambrleaks` coverage for both in-package and behavioural Syrupy snapshots.
+- `ambrleaks` coverage for unit, script, and behavioural Syrupy snapshots.
 
 This means new code should prefer:
 

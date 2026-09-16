@@ -247,8 +247,8 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
 
     environment = job.get("env")
     assert isinstance(environment, dict), "the lint-test job must declare env"
-    assert environment.get("MDTABLEFIX_VERSION") == "0.5.1", (
-        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.5.1"
+    assert environment.get("MDTABLEFIX_VERSION") == "0.6.0", (
+        "the lint-test CI mapping must set env.MDTABLEFIX_VERSION to 0.6.0"
     )
     assert "MDTABLEFIX_RUST_VERSION" not in environment, (
         "the lint-test CI mapping must not retain the removed formatter source "
@@ -325,20 +325,20 @@ def test_interrogate_targets_override_reaches_the_lint_recipe() -> None:
     )
 
 
-def test_markdownlint_lints_tracked_files_through_the_local_tool_path() -> None:
-    """The markdownlint recipe pipes tracked files with the local tool PATH."""
+def test_markdownlint_selects_regular_markdown_files_with_local_tools() -> None:
+    """The recipe selects every supported regular file through the local PATH."""
     recipes = _expanded_make_recipes(repo_root(), targets=("markdownlint",))
-    assert "git ls-files -z '*.md'" in recipes, (
-        "make markdownlint must lint exactly the tracked Markdown files"
+    assert "--cached --others --exclude-standard" in recipes, (
+        "markdownlint must include untracked files and exclude ignored files"
     )
-    assert re.search(r'PATH="[^"]+" git ls-files', recipes) is not None, (
-        "LOCAL_TOOL_ENV must reach the git side of the pipeline"
+    assert "'*.md' '*.markdown' '*.mdx'" in recipes, (
+        "markdownlint must select every supported Markdown extension"
     )
-    assert "| PATH=" in recipes, (
-        "LOCAL_TOOL_ENV must reach the xargs side so a clean PATH resolves the tool"
+    assert '[ -f "$markdown_file" ] && [ ! -L "$markdown_file" ]' in recipes, (
+        "markdownlint must restrict selection to regular, non-symlink files"
     )
-    assert "xargs -0 markdownlint-cli2" in recipes, (
-        "the pipeline must run markdownlint-cli2 over the null-delimited file list"
+    assert re.search(r'PATH="[^"]+" xargs -0 -r markdownlint-cli2', recipes), (
+        "markdownlint must resolve its executable through LOCAL_TOOL_ENV"
     )
 
 

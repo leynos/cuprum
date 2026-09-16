@@ -12,6 +12,8 @@ accepted = []
 
 [patterns]
 ignore = [
+  # markdownlint-cli2 follows this fixed external environment variable.
+  '\bFORCE_COLOR\b',
   # GitHub's Actions API and the established CLI expose these literal names.
   '"artifacts"',
   '"artifact"',
