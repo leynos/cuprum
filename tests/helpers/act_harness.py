@@ -20,16 +20,16 @@ checkout. See `docs/adr-012-actions-runner-integration-harness.md` for why the
 harness exists and `docs/local-validation-of-github-actions-with-act-and-pytest.md`
 for the manual recipe it automates.
 
-Three modules, one seam each: this one says what a scenario *is*, and neither
-asks whether the host can run one (`tests.helpers.act_runtime`) nor how to read
-`act`'s output (`tests.helpers.act_stream`).
+Four modules, one seam each: this one says what a scenario *is*. It never asks
+whether the host can run one (`tests.helpers.act_runtime`), how to read `act`'s
+output (`tests.helpers.act_stream`), or how the workflow it runs is derived from
+the repository's own (`tests.helpers.act_workflow`).
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import json
-import shutil
 import typing as typ
 
 from cuprum.sh import ExecutionContext
@@ -43,6 +43,11 @@ from tests.helpers.act_runtime import (
     run,
 )
 from tests.helpers.act_stream import ActRun
+from tests.helpers.act_workflow import (
+    break_detector_step,
+    copy_actions,
+    copy_workflow,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -51,10 +56,13 @@ __all__ = (
     "ACT_AVAILABLE_ENV",
     "CHANGES_JOB",
     "CI_WORKFLOW",
+    "DEFAULT_BRANCH",
     "IMAGE",
     "SKIP_REASON_ENV",
     "ActRun",
     "Event",
+    "branch",
+    "break_detector",
     "commit_paths",
     "event_payload",
     "harness_skip_reason",
@@ -65,6 +73,10 @@ __all__ = (
 
 #: The workflow under test, relative to the repository root.
 CI_WORKFLOW = ".github/workflows/ci.yml"
+#: The branch `prepare_repository` leaves checked out. It is the base every
+#: pull-request scenario branches from, and it matches the
+#: `repository.default_branch` the payload builder declares.
+DEFAULT_BRANCH = "main"
 #: The job that owns the benchmark gate decision.
 CHANGES_JOB = "changes"
 #: The pinned runner image. `act` maps a workflow's `runs-on` label onto this
@@ -196,7 +208,7 @@ def prepare_repository(root: pth.Path, worktree: pth.Path) -> pth.Path:
         ``root``, with one commit holding the staged workflow.
     """
     root.mkdir(parents=True, exist_ok=True)
-    git(root, "init", "--initial-branch=main", "--quiet")
+    git(root, "init", f"--initial-branch={DEFAULT_BRANCH}", "--quiet")
     stage_repository(root, worktree)
     # The scenario repository is what `dorny/paths-filter` diffs, and it binds
     # no remote: with an empty `github.token` the action resolves its base from
@@ -205,6 +217,28 @@ def prepare_repository(root: pth.Path, worktree: pth.Path) -> pth.Path:
     git(root, "add", "--all")
     git_commit(root, message="stage the workflow under test")
     return root
+
+
+def branch(repository: pth.Path, name: str) -> None:
+    """Create ``name`` off the current commit and check it out.
+
+    The checked-out branch is what the detector diffs, not `github.sha`: with
+    an empty `github.token` the pinned `dorny/paths-filter` falls back to
+    `git diff <base> <current-branch>`. A scenario that wants the relevant and
+    mixed changed-path sets therefore has to move the repository onto a branch
+    whose name is not the default branch — otherwise the action diffs the
+    default branch against a commit that already contains every scenario
+    commit, observes no changes at all, and reports `bench=false` for a
+    scenario that is plainly relevant.
+
+    Parameters
+    ----------
+    repository : pathlib.Path
+        Repository to branch. It must be clean and on the default branch.
+    name : str
+        Branch name to create and check out.
+    """
+    git(repository, "checkout", "--quiet", "-b", name)
 
 
 def stage_repository(target: pth.Path, worktree: pth.Path) -> None:
@@ -223,11 +257,8 @@ def stage_repository(target: pth.Path, worktree: pth.Path) -> None:
     worktree : pathlib.Path
         Repository to copy from.
     """
-    (target / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(worktree / CI_WORKFLOW, target / CI_WORKFLOW)
-    source = worktree / ".github" / "actions"
-    if source.is_dir():
-        shutil.copytree(source, target / ".github" / "actions", dirs_exist_ok=True)
+    copy_workflow(target, worktree, CI_WORKFLOW)
+    copy_actions(target, worktree)
 
 
 def commit_paths(repository: pth.Path, paths: list[str], *, message: str) -> str:
@@ -263,6 +294,32 @@ def commit_paths(repository: pth.Path, paths: list[str], *, message: str) -> str
         target.write_text(f"{path}\n", encoding="utf-8")
     git(repository, "add", "--all")
     git_commit(repository, message=message, allow_empty=True)
+    return git(repository, "rev-parse", "HEAD").strip()
+
+
+def break_detector(repository: pth.Path) -> str:
+    """Make the pinned `dorny/paths-filter` step fail, and commit that.
+
+    The detector-failure path is the one the gate exists for: when the detector
+    fails, `bench` is empty rather than `false`, and the gate's decision has to
+    say so rather than mistake "no answer" for "no relevant changes". Covering
+    it means producing a real failure, not a mocked one; the edit itself lives
+    in `tests.helpers.act_workflow`, and this wraps it in the commit that makes
+    it a scenario's changed-path set.
+
+    Parameters
+    ----------
+    repository : pathlib.Path
+        Scenario repository holding the staged workflow.
+
+    Returns
+    -------
+    str
+        The new commit's SHA, so the caller can report it as the event head.
+    """
+    break_detector_step(repository, CI_WORKFLOW)
+    git(repository, "add", "--all")
+    git_commit(repository, message="break the detector")
     return git(repository, "rev-parse", "HEAD").strip()
 
 
