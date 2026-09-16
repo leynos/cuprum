@@ -526,7 +526,9 @@ without polling the child itself. This stage gives output silence a bounded,
 opt-in voice on the parent's stderr, without turning the runner into a
 supervisor: the heartbeat reports an absence of observed output, never an
 absence of progress, and never terminates a child or extends a timeout. It is
-the second half of lading `#251`.
+the second half of
+[leynos/lading#251](https://github.com/leynos/lading/issues/251), whose
+subprocess-capture half is already closed.
 
 - [x] 9.1.1. Add `RunOutputOptions(idle_after=…, on_idle=…)` and the
   `cuprum/_idle_heartbeat.py` state machine behind it.

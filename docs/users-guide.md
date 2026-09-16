@@ -596,6 +596,16 @@ arguments, both in seconds: the total elapsed time for the run, and the time
 since the last observed output. It is called synchronously on the run's own
 event loop, so it must not block; hand long work to another task.
 
+The same requirement applies to the destination itself. The built-in renderer
+writes and flushes `ExecutionContext.stderr_sink` on that loop too, so a sink
+whose `write` or `flush` blocks delays the parent's stream reads, timeout
+handling, and cancellation for as long as it takes to return. A destination
+that is slow — a network log, a lock held by another process — should be
+wrapped in a queue that a separate task drains, so the write the run performs
+is a prompt handoff. There is deliberately no timeout around the write: a
+synchronous call cannot be interrupted from the same loop, so a bound there
+would change what the sink is promised without ever enforcing it.
+
 ```python
 from cuprum import Program, RunOutputOptions, sh
 

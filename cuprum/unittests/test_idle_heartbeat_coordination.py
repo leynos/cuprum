@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import io
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -100,32 +101,66 @@ def test_pipeline_reports_its_own_aggregate_subject(
 def test_inter_stage_transfers_do_not_defer_the_aggregate(
     python_catalogue_env: PythonCatalogue,
     python: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
 ) -> None:
-    """Only the outward-facing output resets the pipeline's single clock."""
+    """Only the outward-facing output resets the pipeline's single clock.
+
+    The ordering is pinned by a signal rather than by a wall-clock threshold:
+    the producer writes a marker file as it exits, which is the moment its
+    inter-stage stdout closes, and the callback samples whether that marker
+    already exists *at the instant it fires*. A report that lands with the
+    marker still absent was produced while the transfers were flowing, which is
+    exactly what an inter-stage transfer must not prevent.
+
+    The sample has to be taken inside the callback. Sampling it from the test's
+    own loop instead would be confounded rather than merely imprecise: the
+    callback runs synchronously on that loop, so nothing outside it — including
+    the marker poll — can observe the file until the callback has returned, and
+    the flag would read ``True`` however late the report arrived.
+    """
+    marker = tmp_path / "producer-finished"
     recorder = IdleRecorder()
-    # The producer talks for a full second, but every byte of it is handed to
-    # the next stage rather than to the parent; the consumer stays silent until
-    # the producer is done.
+    producer_still_talking: list[bool] = []
+
+    def on_idle(elapsed_total: float, elapsed_idle: float) -> None:
+        """Record the notification and whether the producer had already left."""
+        producer_still_talking.append(not marker.exists())
+        recorder(elapsed_total, elapsed_idle)
+
+    # The producer talks for two seconds, but every byte of it is handed to the
+    # next stage rather than to the parent; the consumer stays silent until the
+    # producer is done.
     producer = (
-        "import time\n"
-        "for _ in range(20):\n"
+        "import pathlib, time\n"
+        "for _ in range(40):\n"
         "    print('tick', flush=True)\n"
         "    time.sleep(0.05)\n"
-        "time.sleep(0.2)\n"
+        f"pathlib.Path({str(marker)!r}).write_text('done')\n"
     )
     consumer = "import sys, time; sys.stdin.read(); time.sleep(0.4); print('done')"
     pipeline = _two_stage(python, producer=producer, consumer=consumer)
 
-    with _allowlisted(python_catalogue_env):
-        pipeline.run_sync(
-            output=RunOutputOptions(idle_after=_INTERVAL, on_idle=recorder),
-            context=ExecutionContext(stderr_sink=io.StringIO()),
-        )
+    async def exercise() -> None:
+        """Run the pipeline to completion on a real event loop."""
+        with _allowlisted(python_catalogue_env):
+            await pipeline.run(
+                output=RunOutputOptions(idle_after=_INTERVAL, on_idle=on_idle),
+                context=ExecutionContext(stderr_sink=io.StringIO()),
+            )
 
-    assert recorder.seen, "a pipeline quiet on its outward streams must be reported"
-    assert recorder.first_total() < 0.9, (
-        "an inter-stage transfer must not defer the aggregate clock; the first "
-        f"report must land while the producer is still talking: {recorder.seen!r}"
+    asyncio.run(exercise())
+
+    # Every two-second talk at a 0.2s interval is ten reports if the clock
+    # never moves; a clock that the transfers reset produces none at all,
+    # because the producer's last tick would push the deadline past its own
+    # exit. Asserting a comfortable fraction of the expected count rather than
+    # all of it keeps the claim the same while tolerating a poll or two delayed
+    # by the parent's own spawn work.
+    talking_reports = sum(producer_still_talking)
+    assert talking_reports >= 3, (
+        "an inter-stage transfer must not defer the aggregate clock; reports "
+        "must land while the producer is still talking, rather than only once "
+        f"it has finished: {recorder.seen!r}"
     )
 
 

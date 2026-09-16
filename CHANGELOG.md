@@ -62,9 +62,14 @@
   off by default, adds no timer, task, or pipe to a run that does not ask for
   it, never terminates a process, and never extends a timeout. A run may watch
   its streams without retaining them: `capture=False, echo=False, idle_after=…`
-  drains them while leaving `stdout` and `stderr` as `None`. The heartbeat
-  reports absent output, not absent progress, so it is never a deadlock
-  diagnosis ([#359](https://github.com/leynos/cuprum/issues/359)).
+  drains them while leaving `stdout` and `stderr` as `None`. A value that
+  converts to a float but is not one — the string `"30"`, say — is normalized
+  at construction rather than accepted and then left for the schedule's
+  arithmetic to reject from inside the run. The built-in line is written to the
+  configured `stderr_sink` synchronously on the run's event loop, so that sink's
+  `write` and `flush` must return promptly. The heartbeat reports absent
+  output, not absent progress, so it is never a deadlock diagnosis
+  ([#359](https://github.com/leynos/cuprum/issues/359)).
 
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,

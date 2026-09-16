@@ -250,6 +250,11 @@ class ExecutionContext:
         Text sink for echoing stdout; defaults to the active ``sys.stdout``.
     stderr_sink:
         Text sink for echoing stderr; defaults to the active ``sys.stderr``.
+        It also receives the idle heartbeat's keepalive line, written and
+        flushed synchronously on the run's event loop, so its ``write`` and
+        ``flush`` must return promptly: a sink that blocks delays the run's
+        stream reads, timeout handling, and cancellation. Hand a slow
+        destination to a queue that another task drains.
     encoding:
         Character encoding used when decoding subprocess output.
     errors:
@@ -430,7 +435,13 @@ class RunOutputOptions:
             "echo_stderr",
             self.echo if self.echo_stderr is None else self.echo_stderr,
         )
-        _validate_idle_options(self.idle_after, self.on_idle)
+        # Stored normalized, so the schedule's arithmetic sees the float the
+        # contract promises rather than whatever coerced to one here.
+        object.__setattr__(
+            self,
+            "idle_after",
+            _validate_idle_options(self.idle_after, self.on_idle),
+        )
 
         if self.max_echo_line_bytes is None:
             return

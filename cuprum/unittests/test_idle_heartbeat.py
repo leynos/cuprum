@@ -39,6 +39,26 @@ def test_non_numeric_intervals_rejected(interval: object) -> None:
         RunOutputOptions(idle_after=typ.cast("float", interval))
 
 
+@pytest.mark.parametrize("interval", ["30", 30, "30.5", b"30"])
+def test_coercible_intervals_are_normalized_at_construction(
+    interval: object,
+) -> None:
+    """Example: an interval is stored as the float the schedule will use.
+
+    ``_IdleSchedule.start`` evaluates ``now + interval``. Anything that merely
+    *converts* to a float would raise ``TypeError`` from the watchdog's own
+    task, after the child had already been spawned, so normalization has to
+    happen here where the caller can still see it.
+    """
+    options = RunOutputOptions(idle_after=typ.cast("float", interval))
+    assert isinstance(options.idle_after, float), (
+        f"the stored interval must already be a float, got {options.idle_after!r}"
+    )
+    assert options.idle_after == float(typ.cast("float", interval)), (
+        "normalization must preserve the interval's value"
+    )
+
+
 def test_callback_requires_an_interval() -> None:
     """Example: ``on_idle`` without ``idle_after`` is rejected, not ignored."""
     with pytest.raises(ValueError, match="on_idle requires idle_after"):

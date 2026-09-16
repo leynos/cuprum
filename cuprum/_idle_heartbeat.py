@@ -276,8 +276,15 @@ def _build_idle_monitor(
 def _validate_idle_options(
     interval: float | None,
     on_idle: cabc.Callable[[float, float], None] | None,
-) -> None:
-    """Validate one output options object's idle contract.
+) -> float | None:
+    """Validate one output options object's idle contract, normalizing it.
+
+    The normalized interval is returned rather than merely checked, because it
+    is what the schedule later does arithmetic on: ``_IdleSchedule.start``
+    evaluates ``now + interval``, so a value that converts to a float but is
+    not one — the string ``"30"``, say — would raise ``TypeError`` from inside
+    the run's driver, after the child had already been spawned. Validation is
+    the last point at which that is still the caller's error to see.
 
     Parameters
     ----------
@@ -286,6 +293,11 @@ def _validate_idle_options(
         reporting entirely.
     on_idle : collections.abc.Callable[[float, float], None] | None
         The caller's synchronous notification callback, if any.
+
+    Returns
+    -------
+    float | None
+        *interval* as a finite float, or ``None`` when reporting is disabled.
 
     Raises
     ------
@@ -303,13 +315,15 @@ def _validate_idle_options(
         if on_idle is not None:
             msg = "on_idle requires idle_after to be set"
             raise ValueError(msg)
-        return
+        return None
     if _is_async_callback(on_idle):
         msg = "on_idle must be a synchronous callback"
         raise TypeError(msg)
-    if _resolve_idle_interval(interval) <= 0:
+    seconds = _resolve_idle_interval(interval)
+    if seconds <= 0:
         msg = f"idle_after must be strictly positive, got {interval!r}"
         raise ValueError(msg)
+    return seconds
 
 
 def _resolve_idle_interval(interval: float) -> float:
