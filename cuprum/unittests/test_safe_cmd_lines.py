@@ -114,6 +114,40 @@ def test_lines_preserve_per_stream_order_with_monotonic_at(
     assert result.ok, f"line iteration command must succeed, got {result!r}"
 
 
+def test_lines_publish_nonzero_result_with_captured_output(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A completed non-zero command exposes its lines and captured result."""
+    command = python_builder(
+        "-c",
+        "import sys; print('out'); print('err', file=sys.stderr); sys.exit(7)",
+    )
+
+    async def collect() -> tuple[list[LineEvent], CommandResult]:
+        """Iterate to completion and retain the non-zero command result."""
+        stream = command.lines()
+        events = [event async for event in stream]
+        assert stream.result is not None, (
+            "a completed non-zero line stream must expose its CommandResult"
+        )
+        return events, stream.result
+
+    events, result = asyncio.run(collect())
+
+    assert Counter((event.stream, event.text) for event in events) == {
+        ("stdout", "out"): 1,
+        ("stderr", "err"): 1,
+    }, f"line iteration must retain both output streams, got {events!r}"
+    assert result.exit_code == 7, f"non-zero exit code must be retained, got {result!r}"
+    assert not result.ok, f"non-zero command result must not be ok, got {result!r}"
+    assert result.stdout == "out\n", (
+        f"stdout capture must survive non-zero completion, got {result.stdout!r}"
+    )
+    assert result.stderr == "err\n", (
+        f"stderr capture must survive non-zero completion, got {result.stderr!r}"
+    )
+
+
 def test_lines_keep_capture_and_echo(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
@@ -598,7 +632,7 @@ def test_lines_behaviour_streams_tags_and_text(
     assert ("stdout", "o2") in observed
     assert ("stderr", "e1") in observed
     assert ("stderr", "e2") in observed
-    assert len(observed) == 6
+    assert len(observed) == 6, f"expected 6 line events, got {observed!r}"
 
 
 def test_lines_allowlist_is_enforced(

@@ -2322,10 +2322,11 @@ flowchart TD
 For screen readers: The following state diagram shows the lifecycle of a
 `SafeCmd.lines()` iteration. It moves from creation through the first
 `__anext__()` call to the streaming state, then ends either by publishing the
-`CommandResult` and closing, or — when iteration breaks, the stream is closed,
-or the caller is cancelled — by tearing the child process down through the
+`CommandResult` and closing, or — when an enclosing `async with` scope exits
+after incomplete iteration, the caller explicitly awaits `stream.aclose()`, or
+the caller is cancelled — by tearing the child process down through the
 existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
-the stream closes.
+the stream closes. A bare `async for` break does not close the custom iterator.
 
 Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
@@ -2338,7 +2339,7 @@ stateDiagram-v2
     Streaming --> Streaming: yield LineEvent
     Streaming --> Completed: CommandResult published
     Completed --> Closed: result exposed
-    Streaming --> Cancelling: break, aclose(), or cancellation
+    Streaming --> Cancelling: async with LineStream exit, await stream.aclose(), or cancellation
     Cancelling --> Terminated: SIGTERM, grace wait, SIGKILL if needed
     Terminated --> Closed: consumers drained
     Streaming --> TimedOut: timeout

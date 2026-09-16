@@ -1,4 +1,15 @@
-"""Registration and fail-open emission for line-stream lifecycle events."""
+"""Registration and fail-open emission for line-stream lifecycle events.
+
+Examples
+--------
+Register a scoped observer while iterating a configured command::
+
+    events = []
+    with observe_line_stream(events.append):
+        async with command.lines() as stream:
+            async for event in stream:
+                consume(event)
+"""
 
 from __future__ import annotations
 
@@ -21,7 +32,19 @@ _line_stream_hooks: ContextVar[tuple[LineStreamHook, ...]] = ContextVar(
 
 
 class LineStreamHookRegistration:
-    """Scoped registration handle for one line-stream lifecycle hook."""
+    """Scoped registration handle for one line-stream lifecycle hook.
+
+    Attributes
+    ----------
+    _detached
+        Whether the registration has already restored its prior context state.
+
+    Notes
+    -----
+    Entering the registration leaves its hook active in the current context.
+    Exiting the scope or calling :meth:`detach` restores the exact hook set
+    that preceded registration.
+    """
 
     __slots__ = ("_detached", "_token")
 
@@ -60,10 +83,17 @@ def observe_line_stream(hook: LineStreamHook) -> LineStreamHookRegistration:
     translation, or cancellation. Prefer a ``with`` block so registration is
     restored in the same context that installed it.
 
+    Parameters
+    ----------
+    hook
+        A synchronous callable that receives each :class:`LineStreamEvent` in
+        the active context.
+
     Returns
     -------
     LineStreamHookRegistration
-        A scoped registration that detaches the hook.
+        A scoped registration that detaches the hook on scope exit or explicit
+        :meth:`LineStreamHookRegistration.detach`.
     """
     return LineStreamHookRegistration(hook)
 
@@ -96,11 +126,9 @@ def _invoke_line_stream_hook(hook: LineStreamHook, event: LineStreamEvent) -> No
     try:
         outcome = hook(event)
     except Exception as exc:
-        _LOGGER.warning(
-            "line_stream_observer_failed phase=%s error=%s",
+        _LOGGER.exception(
+            "line_stream_observer_failed phase=%s",
             event.phase,
-            type(exc).__name__,
-            exc_info=True,
             extra={
                 "cuprum_action": "line_stream_observer_failed",
                 "cuprum_phase": event.phase,

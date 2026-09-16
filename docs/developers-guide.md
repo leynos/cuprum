@@ -495,15 +495,16 @@ configuration.
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
-`cuprum/_stream_line_boundaries.py`:
+`cuprum/_line_splitting.py`:
 
-- `_split_complete_lines(text, *, final=True)` splits text into completed
-  lines, strips each recognized line ending, and returns `(lines, remainder)`.
-  The recognized boundaries match `str.splitlines()`: CRLF, LF, CR, VT, FF, FS,
-  GS, RS, NEL, LS, and PS. With `final=False`, a trailing `"\r"` remains in
-  `remainder` so a following `"\n"` can complete the CRLF pair; the default
-  final call strips that boundary. The line consumer flushes its incremental
-  decoder before making that final call.
+- `_split_complete_lines(text)` calls
+  `text.splitlines(keepends=True)` and returns completed decoded lines plus a
+  trailing partial remainder. It strips one recognized line terminator from
+  each completed line. The recognized boundaries match `str.splitlines()`:
+  CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, LS, and PS. A trailing `"\r"` remains
+  in `remainder` so a following `"\n"` can complete the CRLF pair. The stream
+  consumer flushes its incremental decoder before stripping a final pending
+  terminator.
 - `_strip_line_ending(line)` removes at most one trailing CRLF pair or one of
   the individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does
   not normalize or edit interior text.
@@ -3926,6 +3927,8 @@ cancellation, explicit close, and other early exits use the same termination
 and drain rules as `run()`.
 
 The implementation boundaries are deliberately narrow:
+
+Table 1: Line-observation implementation boundaries
 
 | Module                                                               | Responsibility                                                                                                                                          |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |

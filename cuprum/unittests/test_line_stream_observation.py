@@ -16,7 +16,11 @@ from cuprum.adapters.line_stream_metrics import (
 )
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
 from cuprum.events import new_exec_id
-from cuprum.line_stream_events import LineStreamEvent
+from cuprum.line_stream_events import (
+    LineStreamEvent,
+    LineStreamPhase,
+    LineStreamSink,
+)
 from cuprum.line_stream_observation import _emit_line_stream_event
 from cuprum.lines import LineEvent
 from cuprum.sh import TimeoutExpired
@@ -27,6 +31,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent
     from cuprum.line_stream_events import LineStreamHook
+    from cuprum.lines import LineStreamName
     from cuprum.sh import SafeCmd
 
 
@@ -172,6 +177,9 @@ def test_queue_saturation_reports_bounded_queue_details() -> None:
         await asyncio.sleep(0)
         queue.get_nowait()
         await pending
+        assert telemetry.is_queue_saturated, (
+            "the state remains saturated when the parked line refills the queue"
+        )
 
     with observe_line_stream(seen.append):
         asyncio.run(exercise())
@@ -275,11 +283,11 @@ def test_metrics_labels_stay_bounded_for_publicly_constructed_events() -> None:
     """Metrics never turn identifiers, errors, or queue details into labels."""
     collector = _RecordingCollector()
     event = LineStreamEvent(
-        phase=typ.cast("typ.Any", "unbounded-phase"),
+        phase=typ.cast("LineStreamPhase", "unbounded-phase"),
         exec_id=new_exec_id(),
         pid=98765,
-        stream=typ.cast("typ.Any", "unbounded-stream"),
-        sink=typ.cast("typ.Any", "unbounded-sink"),
+        stream=typ.cast("LineStreamName", "unbounded-stream"),
+        sink=typ.cast("LineStreamSink", "unbounded-sink"),
         queue_size=999,
         queue_capacity=1000,
         error_type="UnboundedErrorName",
@@ -298,12 +306,36 @@ def test_metrics_labels_stay_bounded_for_publicly_constructed_events() -> None:
     )
 
 
+def test_metrics_preserve_each_valid_sink_label() -> None:
+    """Metrics retain both values from the closed line-sink vocabulary."""
+    collector = _RecordingCollector()
+
+    for sink in typ.get_args(LineStreamSink.__value__):
+        LineStreamMetricsHook(collector)(
+            LineStreamEvent(
+                phase=LineStreamPhase.SPAWNED,
+                exec_id=new_exec_id(),
+                pid=1,
+                sink=sink,
+            )
+        )
+
+    assert [labels["sink"] for _name, labels in collector.counters] == [
+        "callback",
+        "queue",
+    ], f"metrics must preserve valid sink labels, got {collector.counters!r}"
+
+
 def test_telemetry_observer_failure_is_logged_without_masking_delivery(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A broken lifecycle observer is logged and does not stop later observers."""
     seen: list[LineStreamEvent] = []
-    event = LineStreamEvent(phase="spawned", exec_id=new_exec_id(), pid=1)
+    event = LineStreamEvent(
+        phase=LineStreamPhase.SPAWNED,
+        exec_id=new_exec_id(),
+        pid=1,
+    )
 
     def fail(_event: LineStreamEvent) -> None:
         """Raise as a broken telemetry backend would."""
