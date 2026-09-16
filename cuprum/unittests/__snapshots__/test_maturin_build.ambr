@@ -10,6 +10,7 @@
       'cuprum/__init__.py',
       'cuprum/_backend.py',
       'cuprum/_catalogue_defaults.py',
+      'cuprum/_catalogue_helpers.py',
       'cuprum/_concurrent_config.py',
       'cuprum/_constants.py',
       'cuprum/_echo_truncation.py',

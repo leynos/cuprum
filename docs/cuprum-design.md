@@ -249,8 +249,9 @@ surface. Each entry belongs to a `ProjectSettings` record that holds:
 standalone script needs — a project owning the given programs, named after
 their base names unless the caller supplies one — without requiring the caller
 to state `ProjectSettings` and the `ProgramCatalogue(projects=(...))` wrapper.
-Multi-project catalogues continue to use the explicit form so that ownership of
-each program is stated.
+`ProgramCatalogue.from_project()` supplies the same convenience when the caller
+already holds a complete `ProjectSettings` record. Multi-project catalogues
+continue to use the explicit form so that ownership of each program is stated.
 
 Cuprum ships with `DEFAULT_CATALOGUE`, anchored by the `core-ops` project and
 extended with project-specific metadata. The catalogue rejects unknown

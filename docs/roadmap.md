@@ -112,6 +112,10 @@ compromising explicitness.
     project name from their base names, and reject an empty call.
   - [x] Default `ProjectSettings.documentation_locations` and `noise_rules` to
     empty tuples so a one-program project needs no ceremony.
+- [x] 3.2.4. Add `ProgramCatalogue.from_project()` so callers with a prepared
+  `ProjectSettings` can build a single-project catalogue without repeating the
+  `ProgramCatalogue(projects=(...))` wrapper
+  ([#374](https://github.com/leynos/cuprum/issues/374)).
 
 ### 3.3. Configuration and policy
 

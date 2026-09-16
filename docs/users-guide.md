@@ -90,6 +90,18 @@ Keep using `ProjectSettings` and `ProgramCatalogue(projects=(...))` directly
 when a script needs several projects, because ownership of each program must
 then be stated explicitly.
 
+When a caller already has a `ProjectSettings`,
+`ProgramCatalogue.from_project(settings)` preserves its name, allowlist, and
+metadata without re-stating the single-project wrapper:
+
+```python
+settings = ProjectSettings(
+    name="rust-test-gates",
+    programs=(Program("cargo"),),
+)
+catalogue = ProgramCatalogue.from_project(settings)
+```
+
 ### Handling duplicate catalogue entries
 
 Catalogue construction rejects ambiguous project metadata before any command is

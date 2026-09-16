@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-from pathlib import Path, PureWindowsPath
+import typing as typ
 from types import MappingProxyType
 
 from cuprum._catalogue_defaults import (
@@ -26,33 +26,10 @@ from cuprum._catalogue_defaults import (
     RSYNC,
     TAR,
 )
-from cuprum.program import Program
+from cuprum._catalogue_helpers import coerce_program, derive_project_name
 
-
-def _coerce_program(raw: Program | str) -> Program:
-    """Return input as Program for type narrowing; no transformation performed."""
-    return Program(raw)
-
-
-def _derive_project_name(programs: cabc.Iterable[Program | str]) -> str:
-    r"""Return a deterministic project name from the programs' base names.
-
-    Absolute paths reduce to their final path component so a catalogue built
-    from ``/usr/bin/python3`` is named after ``python3`` rather than the whole
-    invocation path. Windows drive paths reduce the same way on every host,
-    while a POSIX filename containing a literal backslash keeps it.
-
-    Returns
-    -------
-    str
-        The programs' base names joined with ``-``.
-    """
-    return "-".join(
-        PureWindowsPath(program).name
-        if PureWindowsPath(program).drive
-        else Path(program).name
-        for program in programs
-    )
+if typ.TYPE_CHECKING:
+    from cuprum.program import Program
 
 
 class UnknownProgramError(LookupError):
@@ -118,13 +95,11 @@ class ProjectSettings:
     programs : tuple[Program, ...]
         Curated programs owned by the project.
     documentation_locations : tuple[str, ...]
-        Runbook or reference links for reviewers and operators, read by
-        consumers through ``visible_settings``. An empty tuple means the
-        project declares no documentation references.
+        Runbook/reference links visible through ``visible_settings``. Empty means no
+        documentation references are declared.
     noise_rules : tuple[str, ...]
-        Output patterns a downstream logger may drop. Cuprum stores but does
-        not apply them. An empty tuple means no output lines are marked as
-        noise for the project.
+        Patterns a logger may drop; Cuprum stores them but does not apply them.
+        Empty means no project output lines are marked as noise.
     """
 
     name: str
@@ -246,14 +221,41 @@ class ProgramCatalogue:
         if not programs:
             msg = "from_programs requires at least one program"
             raise ValueError(msg)
-        coerced = tuple(_coerce_program(program) for program in programs)
+        coerced = tuple(coerce_program(program) for program in programs)
         project = ProjectSettings(
-            name=_derive_project_name(coerced) if name is None else name,
+            name=derive_project_name(coerced) if name is None else name,
             programs=coerced,
             documentation_locations=documentation_locations,
             noise_rules=noise_rules,
         )
         return cls(projects=(project,))
+
+    @classmethod
+    def from_project(cls, settings: ProjectSettings) -> ProgramCatalogue:
+        """Build a catalogue containing a supplied project.
+
+        Parameters
+        ----------
+        settings : ProjectSettings
+            The sole project to register.
+
+        Returns
+        -------
+        ProgramCatalogue
+            A catalogue exposing the supplied project's allowlist and metadata.
+
+        Raises
+        ------
+        DuplicateProgramError
+            If ``settings`` declares a program more than once.
+
+        Examples
+        --------
+        >>> settings = ProjectSettings(name="tools", programs=(Program("git"),))
+        >>> ProgramCatalogue.from_project(settings).is_allowed("git")
+        True
+        """  # ruff: ignore[docstring-extraneous-exception] - DuplicateProgramError propagates from the constructor
+        return cls(projects=(settings,))
 
     @property
     def allowlist(self) -> frozenset[Program]:
@@ -280,7 +282,7 @@ class ProgramCatalogue:
         bool
             True if the program is present in the curated allowlist.
         """
-        program_value = _coerce_program(program)
+        program_value = coerce_program(program)
         return program_value in self._allowlist
 
     def lookup(self, program: Program | str) -> ProgramEntry:
@@ -301,7 +303,7 @@ class ProgramCatalogue:
         UnknownProgramError
             If the program is not present in the catalogue allowlist.
         """
-        program_value = _coerce_program(program)
+        program_value = coerce_program(program)
         project = self._program_to_project.get(program_value)
         if project is None:
             msg = f"Program '{program_value}' is not in the catalogue allowlist"
