@@ -41,7 +41,6 @@ concurrency:
 env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
-  MARKDOWNLINT_VERSION: '0.20.0'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
   # the job is actually billed for. Raising the label means raising this too.
@@ -59,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MBAKE_VERSION: '1.4.6'
-      MDTABLEFIX_VERSION: '0.5.1'
+      MDTABLEFIX_VERSION: '0.6.0'
       WHITAKER_INSTALLER_VERSION: '0.2.7'
       UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
       UV_TOOL_DIR: ${{ github.workspace }}/.uv-tools
@@ -206,7 +205,6 @@ jobs:
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
-          npm install -g "markdownlint-cli2@${MARKDOWNLINT_VERSION}"
 
       # Merman CLI 0.7.0 needs Rust 1.95+, while the project gates must keep
       # running with the supported Rust 1.85.0 toolchain below.
@@ -276,6 +274,19 @@ jobs:
       - name: Check formatting
         run: make check-fmt
 
+      - name: Lint Markdown
+        # The upstream action rather than an installation of our own: its
+        # release carries the linter's whole dependency graph, so nothing is
+        # resolved from the registry at run time, and Dependabot manages the
+        # pin alongside the other actions. It reads .markdownlint-cli2.jsonc
+        # from the workspace, so the rules and ignores match `make markdownlint`.
+        uses: DavidAnson/markdownlint-cli2-action@4580e1612f6407034edd6c0e4e316d725920867b  # v24.2.0
+        with:
+          globs: |
+            **/*.md
+            **/*.markdown
+            **/*.mdx
+
       - name: Run lint
         run: /usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint
 
@@ -342,6 +353,8 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     runs-on: ubicloud-standard-2
     timeout-minutes: 45
+    env:
+      MDTABLEFIX_VERSION: '0.6.0'
     strategy:
       fail-fast: false
       matrix:
@@ -482,6 +495,14 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      # The full Python suite exercises the native mdtablefix file selector.
+      # Restoring the tool cache is an optimisation, not a prerequisite.
+      - name: Install mdtablefix
+        if: matrix.python-suite
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Run typechecker
         run: make typecheck
@@ -848,6 +869,7 @@ jobs:
       RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
+      MDTABLEFIX_VERSION: '0.6.0'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
@@ -958,6 +980,13 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      # Coverage runs the full Python suite, including native selector parity.
+      # The restored tool cache is optional, so provision the pinned binary.
+      - name: Install mdtablefix
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml

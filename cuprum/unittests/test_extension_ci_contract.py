@@ -41,6 +41,7 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
     },
     "coverage-main.yml": {
         ".github/actions/generate-coverage",
+        ".github/actions/install-mdtablefix",
         ".github/actions/setup-rust",
         ".github/actions/upload-codescene-coverage",
     },

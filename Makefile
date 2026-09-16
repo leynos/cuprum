@@ -1,9 +1,18 @@
 MDLINT ?= markdownlint-cli2
+# `make fmt` and `make check-fmt` call mdtablefix directly. `--git` selects the
+# Markdown files Git tracks and `--include-untracked` adds the untracked files
+# Git does not ignore, so a new document is formatted before it is staged.
+# Both modes need mdtablefix 0.6.0 or later; CI pins the version at the
+# install-mdtablefix step.
+MDTABLEFIX ?= mdtablefix
+MDTABLEFIX_SELECT = --git --include-untracked
+MDTABLEFIX_EXTENSIONS = --md-exts md,markdown,mdx
+MDTABLEFIX_RULES = --wrap --renumber --breaks --ellipsis --fences
+MARKDOWN_GLOBS = '*.md' '*.markdown' '*.mdx'
 NIXIE ?= nixie
-MDFORMAT_ALL ?= mdformat-all
 YAMLLINT ?= yamllint
 ACTIONLINT ?= actionlint
-TOOLS = $(MDFORMAT_ALL) $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
+TOOLS = $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
@@ -130,11 +139,12 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
-# Existing tracked Markdown files, NUL-delimited for safe transport to the
-# formatter. `pipefail` preserves the check-fmt gate's fail-closed behaviour
-# when Git cannot enumerate its index.
-MD_FILES_FIND = bash -o pipefail -c 'git ls-files -z -- "$$1" | while IFS= read -r -d "" markdown_file; do if [ -e "$$markdown_file" ]; then printf "%s\0" "$$markdown_file"; fi; done' -- '*.md'
-
+# `git ls-files` covers tracked files and nonignored untracked files without
+# traversing ignored paths. The shell filter keeps only regular non-symlink
+# files, and prefixes a leading dash so the linter cannot parse it as an option.
+MDLINT_FILES_FIND = bash -o pipefail -c 'git ls-files -z --cached --others --exclude-standard -- "$$@" | while IFS= read -r -d "" markdown_file; do if [ -f "$$markdown_file" ] && [ ! -L "$$markdown_file" ]; then case "$$markdown_file" in -*) printf "./%s\0" "$$markdown_file" ;; *) printf "%s\0" "$$markdown_file" ;; esac; fi; done' -- $(MARKDOWN_GLOBS)
+MDLINT_FIX_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) --fix < "$$markdown_files"
+MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) < "$$markdown_files"
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
@@ -186,6 +196,17 @@ define ensure_tool_venv
 	}
 endef
 
+define run_markdownlint_files
+	@markdown_files="$$(mktemp)" || exit $$?; \
+	trap 'rm -f "$$markdown_files"' 0; \
+	if ! $(MDLINT_FILES_FIND) > "$$markdown_files"; then \
+		exit 1; \
+	fi; \
+	if [ -s "$$markdown_files" ]; then \
+		$(1); \
+	fi
+endef
+
 ifneq ($(strip $(TOOLS)),)
 $(TOOLS): ## Verify required CLI tools
 	$(call ensure_tool,$@)
@@ -198,29 +219,22 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 endif
 
-fmt: ruff $(MDFORMAT_ALL) ## Format sources
+fmt: ruff ## Format sources
 	$(RUFF) format
 	$(RUFF) check --select I --fix
 	cd $(RUST_DIR) && $(CARGO) fmt --all
-	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
+	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
+	$(call run_markdownlint_files,$(MDLINT_FIX_COMMAND))
 
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
 	cd $(RUST_DIR) && $(CARGO) fmt --all -- --check
-	@markdown_files="$$(mktemp)" || exit $$?; \
-	trap 'rm -f "$$markdown_files"' 0; \
-	if ! $(MD_FILES_FIND) > "$$markdown_files"; then \
-		exit 1; \
-	fi; \
-	xargs -0 sh -c '\
-		if [ "$$#" -gt 0 ]; then \
-			scripts/check-markdown-format.sh "$$@"; \
-		fi' sh < "$$markdown_files"
+	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
 
-test-markdown-format: ## Validate the Markdown formatter checker
+test-markdown-format: ## Validate the Markdown formatting Makefile contract
 	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \
-		--with pytest==9.0.2 --with hypothesis==6.151.9 \
-		python -m pytest scripts/tests/test_check_markdown_format.py -c /dev/null \
+		--with pytest==9.0.2 --with hypothesis==6.151.9 --with syrupy==6.0.0 \
+		python -m pytest scripts/tests/test_markdown_format_makefile.py -c /dev/null \
 		--rootdir=. -p no:cacheprovider
 
 lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
@@ -228,7 +242,7 @@ lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub 
 python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
-	$(AMBRLEAKS) cuprum/unittests tests
+	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 
 rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
@@ -255,7 +269,7 @@ typecheck: build ## Run typechecking
 	$(TY) check --python .venv
 
 markdownlint: $(MDLINT) ## Lint Markdown files
-	$(LOCAL_TOOL_ENV) git ls-files -z '*.md' | $(LOCAL_TOOL_ENV) xargs -0 $(MDLINT)
+	$(call run_markdownlint_files,$(MDLINT_CHECK_COMMAND))
 	+$(MAKE) spelling
 
 spelling: $(SPELLING_HELPER_TARGET) _run_spelling_gate ## Enforce en-GB-oxendict spelling in prose and source
