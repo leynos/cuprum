@@ -1,9 +1,16 @@
 MDLINT ?= markdownlint-cli2
+# `make fmt` and `make check-fmt` call mdtablefix directly. `--git` selects the
+# Markdown files Git tracks and `--include-untracked` adds the untracked files
+# Git does not ignore, so a new document is formatted before it is staged.
+# Both modes need mdtablefix 0.6.0 or later; CI pins the version at the
+# install-mdtablefix step.
+MDTABLEFIX ?= mdtablefix
+MDTABLEFIX_SELECT = --git --include-untracked
+MDTABLEFIX_RULES = --wrap --renumber --breaks --ellipsis --fences
 NIXIE ?= nixie
-MDFORMAT_ALL ?= mdformat-all
 YAMLLINT ?= yamllint
 ACTIONLINT ?= actionlint
-TOOLS = $(MDFORMAT_ALL) $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
+TOOLS = $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
@@ -198,11 +205,12 @@ $(VENV_TOOLS): ## Verify required CLI tools in venv
 	$(call ensure_tool_venv,$@)
 endif
 
-fmt: ruff $(MDFORMAT_ALL) ## Format sources
+fmt: ruff ## Format sources
 	$(RUFF) format
 	$(RUFF) check --select I --fix
 	cd $(RUST_DIR) && $(CARGO) fmt --all
-	$(LOCAL_TOOL_ENV) $(MDFORMAT_ALL)
+	$(MDTABLEFIX) --in-place $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
+	@unset FORCE_COLOR; $(MDLINT) --fix "**/*.md"
 
 check-fmt: ruff ## Verify formatting
 	$(RUFF) format --check
@@ -216,6 +224,7 @@ check-fmt: ruff ## Verify formatting
 		if [ "$$#" -gt 0 ]; then \
 			scripts/check-markdown-format.sh "$$@"; \
 		fi' sh < "$$markdown_files"
+	$(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_RULES)
 
 test-markdown-format: ## Validate the Markdown formatter checker
 	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \
