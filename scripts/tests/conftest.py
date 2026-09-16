@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-from pathlib import Path
 
 import pytest
 
@@ -13,6 +12,9 @@ from scripts.markdown_format_test_support import (
     create_format_gate_repository,
     write_markdown_formatter_stubs,
 )
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dc.dataclass(frozen=True, slots=True)
