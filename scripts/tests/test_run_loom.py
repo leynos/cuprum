@@ -2,19 +2,60 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import importlib
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests replace the fixed driver command.
-import types
+import typing as typ
 from pathlib import Path
 
 import pytest
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _LoomBounds:
+    """Structural test double for the driver's immutable exploration bounds."""
+
+    max_preemptions: int
+    max_branches: int
+    max_threads: int
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _LoomCliOptions:
+    """Typed options accepted by the driver's bound-selection helper."""
+
+    max_preemptions: int | None
+    max_branches: int | None
+    max_threads: int | None
+
+
+class _LoomRunResult(typ.Protocol):
+    """The result fields asserted by the driver contract tests."""
+
+    discovered_tests: int
+    executed_tests: int
+
+
+class LoomDriver(typ.Protocol):
+    """Typed surface imported from the standalone Loom driver."""
+
+    LoomBounds: type[_LoomBounds]
+    LoomRunError: type[Exception]
+
+    def run_loom(
+        self, *, mode: str, bounds: _LoomBounds | None = None
+    ) -> _LoomRunResult:
+        """Run the dedicated Loom target."""
+
+    def _selected_bounds(self, arguments: _LoomCliOptions) -> _LoomBounds | None:
+        """Validate a complete command-line override."""
+
+
 @pytest.fixture(name="loom_driver")
-def loom_driver_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+def loom_driver_fixture(monkeypatch: pytest.MonkeyPatch) -> LoomDriver:
     """Import the standalone driver through its runtime top-level path."""
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
-    return importlib.import_module("run_loom")
+    return typ.cast("LoomDriver", importlib.import_module("run_loom"))
 
 
 def _completed(command: list[str], output: str) -> subprocess.CompletedProcess[str]:
@@ -24,7 +65,7 @@ def _completed(command: list[str], output: str) -> subprocess.CompletedProcess[s
 
 def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
     monkeypatch: pytest.MonkeyPatch,
-    loom_driver: types.ModuleType,
+    loom_driver: LoomDriver,
 ) -> None:
     """The driver discovers and executes the dedicated cfg(loom) target."""
     commands: list[list[str]] = []
@@ -68,7 +109,7 @@ def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
 
 def test_run_loom_rejects_a_green_zero_test_execution(
     monkeypatch: pytest.MonkeyPatch,
-    loom_driver: types.ModuleType,
+    loom_driver: LoomDriver,
 ) -> None:
     """A target that compiles but executes no models is a driver failure."""
 
@@ -96,7 +137,7 @@ def test_run_loom_rejects_a_green_zero_test_execution(
 
 def test_run_loom_reports_cargo_failure_details(
     monkeypatch: pytest.MonkeyPatch,
-    loom_driver: types.ModuleType,
+    loom_driver: LoomDriver,
 ) -> None:
     """Counterexamples and bound exhaustion remain visible in the failure."""
 
@@ -115,10 +156,10 @@ def test_run_loom_reports_cargo_failure_details(
 
 
 def test_selected_bounds_rejects_partial_or_zero_overrides(
-    loom_driver: types.ModuleType,
+    loom_driver: LoomDriver,
 ) -> None:
     """Overrides cannot accidentally turn a bounded model into an invalid run."""
-    arguments = types.SimpleNamespace(
+    arguments = _LoomCliOptions(
         max_preemptions=1,
         max_branches=None,
         max_threads=3,
@@ -128,7 +169,7 @@ def test_selected_bounds_rejects_partial_or_zero_overrides(
         loom_driver._selected_bounds(arguments)
 
 
-def test_run_loom_rejects_an_unknown_mode(loom_driver: types.ModuleType) -> None:
+def test_run_loom_rejects_an_unknown_mode(loom_driver: LoomDriver) -> None:
     """Programmatic callers cannot bypass the command-line mode choices."""
     with pytest.raises(ValueError, match="unsupported Loom mode"):
         loom_driver.run_loom(
@@ -138,7 +179,7 @@ def test_run_loom_rejects_an_unknown_mode(loom_driver: types.ModuleType) -> None
 
 
 def test_run_loom_rejects_a_non_positive_programmatic_bound(
-    loom_driver: types.ModuleType,
+    loom_driver: LoomDriver,
 ) -> None:
     """Direct callers cannot silently remove the configured exploration budget."""
     with pytest.raises(loom_driver.LoomRunError, match="Specify all positive"):

@@ -13,7 +13,6 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import pytest
 
-from cuprum import _rust_backend
 from cuprum.adapters.tracing_memory import InMemoryTracer
 from cuprum.pump_span_events import PumpHopOutcome
 from tests.behaviour._rust_pump_span_support import run_cancelled_hop
@@ -30,7 +29,6 @@ def test_cancelled_pump_trace_matches_the_loom_transition_mapping(
     and ``observe_pump_span`` through ``run_cancelled_hop``.
     """
     tracer = InMemoryTracer()
-    monkeypatch.setattr(_rust_backend, "is_available", lambda: True)
 
     trace = run_cancelled_hop(tracer, monkeypatch)
 

@@ -177,12 +177,38 @@ fn cancellation_before_submission_remains_released() {
 
 #[test]
 fn downstream_close_remains_terminal_under_competing_observers() {
-    model_submission_and_cleanup(
-        SubmissionOutcome::Submitted,
-        NativeOutcome::DownstreamClosed,
-        false,
-        false,
-    );
+    model(|| {
+        let state = NativePumpModel::new();
+        let worker = NativePumpModel::submit(
+            &state,
+            SubmissionOutcome::Submitted,
+            NativeOutcome::DownstreamClosed,
+        )
+        .expect("submission model must preserve lifecycle state")
+        .expect("downstream-close outcome must start a worker");
+        worker
+            .join()
+            .expect("worker actor must finish")
+            .expect("worker actor must preserve lifecycle state");
+
+        let first_observer = state.clone();
+        let first_observer = loom::thread::spawn(move || first_observer.observe_completion());
+        let second_observer = state.clone();
+        let second_observer = loom::thread::spawn(move || second_observer.observe_completion());
+        first_observer
+            .join()
+            .expect("first observer actor must finish")
+            .expect("first observer actor must preserve lifecycle state");
+        second_observer
+            .join()
+            .expect("second observer actor must finish")
+            .expect("second observer actor must preserve lifecycle state");
+        assert_safe_terminal(
+            state
+                .snapshot()
+                .expect("snapshot must observe the settled lifecycle"),
+        );
+    });
 }
 
 #[cfg(feature = "loom-defect-fixture")]
