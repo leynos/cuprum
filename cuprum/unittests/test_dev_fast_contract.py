@@ -281,6 +281,7 @@ def test_ci_provisions_only_the_pinned_linux_prerequisites() -> None:
     workflow = (repo_root() / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "nightly-2026-08-23" in action
     assert "rustc-codegen-cranelift" in action
+    assert 'rustup component add "${component}" clippy' in action
     assert 'archive="mold-${version}-${architecture}-linux.tar.gz"' in action
     assert "sha256sum --check --status" in action
     assert "cargo install" not in action
