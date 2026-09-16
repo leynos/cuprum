@@ -1347,7 +1347,27 @@ The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
 - `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+  assembling the `CommandResult`. It remains the composition root for a run: it
+  decides whether each stream is consumed, and it is where the consumer tasks
+  are created from the configs built for it.
+- `cuprum/_subprocess_streams.py` owns single-command stream-consumer
+  *construction*. It builds the stdout `_StreamConfig`, derives the stderr
+  config from it, and spawns the pair of consumer tasks. Fixing the stderr
+  config's echo, sink, and `EchoStream.STDERR` on the derived config is what
+  keeps the two streams distinguishable when both sinks resolve to one object.
+  It is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`.
+  This boundary exists to keep `_subprocess_execution` within the Pylint module
+  ceiling once the idle-heartbeat wiring joined the stream configs; see the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-16.
+- `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
+  validation and normalization, the `_IdleSchedule` state machine that decides
+  when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
+  lifecycle, and the activity and mirror cursors the stream consumers drive.
+- `cuprum/_idle_diagnostic.py` owns the heartbeat's *presentation*: rendering
+  one bounded, ASCII-safe keepalive line, resolving and writing it to the
+  parent's diagnostic sink, and the failure policy when that write raises.
+  Nothing there reads a clock, a process, or a child's output.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the

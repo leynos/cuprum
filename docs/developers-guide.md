@@ -3948,9 +3948,11 @@ either echo can then strand a keepalive mid-line.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. The two idle-heartbeat modules,
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -3958,9 +3960,23 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; and orchestration that coordinates them —
-spawning, wiring streams, and assembling the result — belongs in
-`_subprocess_execution`.
+belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
+deciding which streams are consumed, and assembling the result — belongs in
+`_subprocess_execution`; and single-command stream-consumer construction
+belongs in `_subprocess_streams`. The idle heartbeat's timing belongs in
+`_idle_heartbeat` and its rendering and write-failure policy in
+`_idle_diagnostic`.
+
+`cuprum/_subprocess_execution.py` stays the composition root. It is what calls
+`_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
+a change in *which* streams a run consumes is an orchestration change and
+belongs there, while a change to how one `_StreamConfig` is assembled or how
+its consumer task is created belongs in `_subprocess_streams`. The split is
+what keeps the execution module under the Pylint module ceiling now that the
+idle-heartbeat wiring reaches into the stream configs; see the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-09-16 for why this boundary was accepted after an earlier, differently
+shaped one was withdrawn.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
