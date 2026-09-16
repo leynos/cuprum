@@ -99,6 +99,21 @@ class ProjectSettings:
 
     ``documentation_locations`` and ``noise_rules`` default to empty tuples so
     a small script can declare a project from its name and programs alone.
+
+    Attributes
+    ----------
+    name : str
+        The project's descriptive name.
+    programs : tuple[Program, ...]
+        Curated programs owned by the project.
+    documentation_locations : tuple[str, ...]
+        Runbook or reference links for reviewers and operators, read by
+        consumers through ``visible_settings``. An empty tuple means the
+        project declares no documentation references.
+    noise_rules : tuple[str, ...]
+        Output patterns a downstream logger may drop. Cuprum stores but does
+        not apply them. An empty tuple means no output lines are marked as
+        noise for the project.
     """
 
     name: str
@@ -107,18 +122,7 @@ class ProjectSettings:
     noise_rules: tuple[str, ...] = ()
 
     def owns(self, program: Program) -> bool:
-        """Return True when the program belongs to this project.
-
-        Parameters
-        ----------
-        program : Program
-            The program to test for membership in this project.
-
-        Returns
-        -------
-        bool
-            True if the program is one of this project's programs.
-        """
+        """Return whether ``program`` belongs to this project."""
         return program in self.programs
 
 
@@ -131,13 +135,7 @@ class ProgramEntry:
 
     @property
     def project_name(self) -> str:
-        """The owning project's name.
-
-        Returns
-        -------
-        str
-            The name of the project that registered this program.
-        """
+        """The name of the project that registered this program."""
         return self.project.name
 
 
