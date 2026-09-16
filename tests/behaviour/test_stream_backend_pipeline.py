@@ -12,12 +12,15 @@ import typing as typ
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import ECHO, ScopeConfig, TimeoutExpired, _rust_backend, scoped, sh
+from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import StreamBackend, _check_rust_available, get_stream_backend
 from cuprum._testing import (
     force_python_pump_fallback,
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
+)
+from tests.behaviour._native_pipeline_hand_off import (
+    assert_repeated_native_pipeline_hand_off,
 )
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
@@ -91,27 +94,10 @@ def test_auto_backend_repeated_native_pipeline_hand_off(
     assert active_backend is StreamBackend.RUST, (
         "the Linux hand-off regression requires AUTO to resolve to Rust"
     )
-    for attempt in range(16):
-        pipeline, allowlist = _make_echo_python_pipeline(
-            "import sys; sys.stdout.write(sys.stdin.read().upper())",
-        )
-        with scoped(ScopeConfig(allowlist=allowlist)):
-            try:
-                result = pipeline.run_sync(timeout=2.0)
-            except TimeoutExpired as error:
-                pytest.fail(
-                    "AUTO native pipeline hand-off exceeded its local deadline "
-                    f"(attempt={attempt}, backend={active_backend.value}, "
-                    f"task={pipeline!r}, error={error!r})",
-                )
-        assert result.stdout == "HELLO", (
-            f"attempt {attempt} with backend={active_backend.value} lost "
-            "pipeline output"
-        )
-        assert result.ok, (
-            f"attempt {attempt} with backend={active_backend.value} had a "
-            "non-zero stage"
-        )
+    assert_repeated_native_pipeline_hand_off(
+        active_backend,
+        _make_echo_python_pipeline,
+    )
 
 
 @scenario(
