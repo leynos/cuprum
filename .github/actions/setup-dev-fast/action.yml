@@ -20,7 +20,7 @@ runs:
         expected="$(awk -v archive="${archive}" '$2 == archive { print $1 }' tools/mold/SHA256SUMS)"
         test "$(printf '%s\n' "${expected}" | sed '/^$/d' | wc -l)" -eq 1
         rustup toolchain install "${toolchain}" --profile minimal
-        rustup component add "${component}" --toolchain "${toolchain}"
+        rustup component add "${component}" clippy --toolchain "${toolchain}"
         curl --fail --location --silent --show-error \
           --output "${RUNNER_TEMP}/${archive}" \
           "https://github.com/rui314/mold/releases/download/v${version}/${archive}"
