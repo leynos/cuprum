@@ -1,11 +1,16 @@
 """Binary tool installation must reject mismatches and never source-build."""
 
+from __future__ import annotations
+
 import hashlib
-from pathlib import Path
+import typing as typ
 
 import pytest
 
 from scripts import install_boundary_kani as installer
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_cached_binary_must_match_digest(tmp_path: Path) -> None:

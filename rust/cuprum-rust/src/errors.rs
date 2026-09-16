@@ -7,7 +7,9 @@ use std::io;
 pub(crate) fn pump_error_to_py_err(err: PumpError) -> PyErr {
     match err {
         PumpError::Io(io_err) => io_error_to_py_err(io_err),
-        other @ (PumpError::LengthOverflow | PumpError::BufferRangeExceeded) => {
+        other @ (PumpError::LengthOverflow
+        | PumpError::BufferRangeExceeded
+        | PumpError::BufferAllocationFailed) => {
             PyOSError::new_err(other.py_os_error_message().unwrap_or("stream pump failed"))
         }
     }
@@ -163,6 +165,23 @@ mod tests {
         assert_eq!(
             PumpError::from(io::Error::other("boom")).py_os_error_message(),
             None,
+        );
+    }
+
+    #[test]
+    fn allocation_failure_is_fatal_and_stably_messaged() {
+        // The allocation paths reserve fallibly so this variant is reachable
+        // rather than the process aborting; it must stay out of the non-fatal
+        // write classification and carry the message the Python boundary
+        // raises.
+        assert!(!PumpError::BufferAllocationFailed.is_nonfatal_write());
+        assert_eq!(
+            PumpError::BufferAllocationFailed.to_string(),
+            "failed to allocate the stream buffer",
+        );
+        assert_eq!(
+            PumpError::BufferAllocationFailed.py_os_error_message(),
+            Some("failed to allocate the stream buffer"),
         );
     }
 

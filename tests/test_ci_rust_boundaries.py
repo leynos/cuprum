@@ -1,11 +1,19 @@
 """Keep formal boundary validation hosted, bounded, and free of target archives."""
 
+from __future__ import annotations
+
 import shlex
 from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests.helpers.ci_workflows import cache_paths, cache_steps, job, steps
+from tests.helpers.ci_workflows import (
+    cache_paths,
+    cache_steps,
+    job,
+    step_inputs,
+    steps,
+)
 
 WORKFLOW = "rust-boundaries.yml"
 
@@ -40,6 +48,24 @@ def test_expensive_boundary_checks_are_scheduled_or_manual() -> None:
     assert isinstance(matrix, dict), "extended matrix must be a mapping"
     assert strategy["max-parallel"] == 1, "heavy proof jobs must run serially"
     assert set(matrix["check"]) == {"kani", "miri"}, "a required verifier disappeared"
+
+
+@pytest.mark.parametrize("name", ["native", "verus", "extended"])
+def test_boundary_checkouts_do_not_persist_credentials(name: str) -> None:
+    """Keep the checkout token out of .git/config where built code could read it."""
+    checkouts = [
+        step
+        for step in steps(WORKFLOW, name)
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert checkouts, f"{name} must check the repository out for its boundary checks"
+    for checkout in checkouts:
+        inputs = step_inputs(
+            checkout, f"{WORKFLOW}:{name} checkout must declare inputs"
+        )
+        assert inputs.get("persist-credentials") is False, (
+            f"{name} must set persist-credentials: false"
+        )
 
 
 @pytest.mark.parametrize("name", ["native", "verus", "extended"])

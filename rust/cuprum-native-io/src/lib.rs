@@ -177,10 +177,11 @@ pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
 /// Observe whether a descriptor is currently open, for native regressions.
 ///
 /// This observation grants no ownership or lifetime guarantee and must never
-/// be used to justify subsequent raw-resource reconstruction.
-#[cfg(unix)]
+/// be used to justify subsequent raw-resource reconstruction. It is test
+/// support, so it is neither exported nor compiled into the shipped library.
+#[cfg(all(test, unix))]
 #[must_use]
-pub fn fd_is_open(fd: i32) -> bool {
+pub(crate) fn fd_is_open(fd: i32) -> bool {
     loop {
         // SAFETY: F_GETFD accepts arbitrary descriptor integers, has no pointer
         // argument, and reports EBADF without touching memory for closed FDs.
@@ -198,5 +199,7 @@ pub fn fd_is_open(fd: i32) -> bool {
 mod ownership_tests;
 #[cfg(windows)]
 mod windows;
+#[cfg(all(test, windows))]
+pub(crate) use windows::fd_is_open;
 #[cfg(windows)]
-pub use windows::{fd_is_open, pipe, read_once, write_once};
+pub use windows::{pipe, read_once, write_once};

@@ -11,6 +11,8 @@ Verus's September 2026 archive does not include the solver. The version follows
 its upstream ``source/tools/get-z3.sh``; the SHA-256 is the release asset digest.
 """
 
+from __future__ import annotations
+
 import zipfile
 
 from install_boundary_kani import ROOT, checked_download

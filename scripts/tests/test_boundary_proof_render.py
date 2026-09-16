@@ -1,5 +1,7 @@
 """Guard the correspondence between Verus inputs and production kernels."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from scripts import render_boundary_proofs as renderer
 
 SOURCE = Path(__file__).resolve().parents[2] / "rust/cuprum-native-io/src/progress.rs"
+MEMORY = Path(__file__).resolve().parents[2] / "rust/cuprum-native-io/src/memory.rs"
 
 
 def test_production_fault_reaches_verus_input() -> None:
@@ -31,6 +34,31 @@ def test_changed_signature_fails_closed(signature: str) -> None:
     source = SOURCE.read_text(encoding="utf-8").replace(signature, "-> bool {")
     with pytest.raises(ValueError, match="production signature changed"):
         renderer.render(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("pub const fn count() {}", id="absent"),
+        pytest.param(
+            "#[cfg(test)]\nmod first;\n#[cfg(test)]\nmod second;\n",
+            id="duplicated",
+        ),
+    ],
+)
+def test_ambiguous_test_boundary_fails_closed(source: str) -> None:
+    """An absent or duplicated marker must not silently truncate the module."""
+    with pytest.raises(ValueError, match="exactly one test-module boundary"):
+        renderer._production_half(source)
+
+
+def test_memory_assessment_carries_no_test_module() -> None:
+    """The memory proof renders production retention, not its tests."""
+    production = renderer._production_half(MEMORY.read_text(encoding="utf-8"))
+    assert "with_retained_owner" in production, (
+        "the memory proof lost the retention kernel it exists to verify"
+    )
+    assert "#[cfg(test)]" not in production, "the test module leaked into the proof"
 
 
 def test_executable_bodies_are_preserved() -> None:

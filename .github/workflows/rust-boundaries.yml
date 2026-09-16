@@ -43,6 +43,10 @@ jobs:
       RUSTFLAGS: '-D warnings'
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        with:
+          # The job builds and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
       - name: Compute shared dependency cache keys
         uses: ./.github/actions/cache-keys
         with:
@@ -106,6 +110,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        with:
+          # The job builds and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
       - name: Compute shared dependency cache keys
         uses: ./.github/actions/cache-keys
         with:
@@ -184,6 +192,10 @@ jobs:
       CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        with:
+          # The job builds and runs repository code, so the checkout token
+          # must not stay in .git/config where that code could reach it.
+          persist-credentials: false
       - name: Compute shared dependency cache keys
         uses: ./.github/actions/cache-keys
         with:

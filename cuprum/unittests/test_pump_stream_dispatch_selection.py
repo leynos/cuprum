@@ -7,12 +7,13 @@ backend overrides, forced fallback to Python, and forced-rust error handling.
 from __future__ import annotations
 
 import asyncio
+import os
 import typing as typ
 
 import pytest
 
 from cuprum import _pipeline_streams
-from cuprum._pipeline_stream_fds import _ReaderPause
+from cuprum._pipeline_stream_fds import _pause_reader_transport, _ReaderPause
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
@@ -291,4 +292,47 @@ class TestTestOwnedDescriptorHandoff:
         )
         assert permitted.resume is None, (
             "nothing was paused, so the permitted verdict carries no resume"
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="Unix read-pipe close contract")
+    def test_real_closing_transport_is_permitted_for_a_test_extractor(self) -> None:
+        """The real pause producer, not just a hand-built one, reaches the seam.
+
+        The cases above construct ``_ReaderPause`` themselves, so a change to
+        the transport inspection that produces it would leave them green. This
+        case closes an actual transport and gives its pause to the seam.
+        """
+        configure_pump_stream_dispatch_for_testing(
+            raw_fd_extractor=lambda _stream: 7,
+        )
+
+        async def exercise() -> _ReaderPause:
+            """Close a live read-pipe transport and take the pause it yields."""
+            reader_fd, writer_fd = os.pipe()
+            try:
+                with os.fdopen(reader_fd, "rb", buffering=0) as read_pipe:
+                    reader = asyncio.StreamReader()
+                    protocol = asyncio.StreamReaderProtocol(reader)
+                    transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+                        lambda: protocol, read_pipe
+                    )
+                    transport.close()
+                    return _pause_reader_transport(reader)
+            finally:
+                os.close(writer_fd)
+
+        pause = asyncio.run(exercise())
+
+        assert pause.closing_transport, (
+            "the real producer must mark the close the seam may overrule"
+        )
+        assert not pause.may_hand_off, "a closing transport must first decline"
+
+        permitted = _pipeline_streams._permit_test_owned_descriptor_handoff(pause)
+
+        assert permitted.may_hand_off, (
+            "the stubbed descriptor supply must overrule the closing decline"
+        )
+        assert permitted.decline_reason is None, (
+            "a permitted hand-off must drop the decline reason"
         )

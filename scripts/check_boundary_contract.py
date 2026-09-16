@@ -10,7 +10,10 @@ the real library and integration-test targets reject unsafe code. Cargo keeps
 its shared package cache. Only build output uses a separate target directory.
 """
 
+from __future__ import annotations
+
 import shutil
+import sys
 import tomllib
 from pathlib import Path
 
@@ -111,10 +114,14 @@ def main() -> None:
     logs = ROOT / "rust/target/boundary-verification"
     logs.mkdir(parents=True, exist_ok=True)
     code, output = _compile(workspace)
-    (logs / "safe-positive.log").write_text(output, encoding="utf-8")
+    baseline_log = logs / "safe-positive.log"
+    baseline_log.write_text(output, encoding="utf-8")
     if code != 0:
-        msg = "safe baseline did not compile; see safe-positive.log"
-        raise RuntimeError(msg)
+        print(
+            f"safe baseline did not compile (cargo exit {code}); see {baseline_log}",
+            file=sys.stderr,
+        )
+        raise SystemExit(code)
     targets = ("src/lib.rs", "tests/compile_tests.rs", "tests/future_target.rs")
     for target in targets:
         _check_target(workspace, workspace / "cuprum-streams" / target, logs)

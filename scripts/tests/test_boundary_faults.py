@@ -1,8 +1,26 @@
 """Fault injection fails closed when the production correspondence changes."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
 import pytest
 
+from scripts import check_boundary_faults as faults
 from scripts.check_boundary_faults import mutate
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_the_harness_launches_the_pinned_installer_versions() -> None:
+    """A drifted pin must fail here rather than at verifier launch."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    assert f"KANI_VERSION = {faults.KANI_VERSION}" in makefile, (
+        "the harness Kani pin drifted from the Makefile's installer"
+    )
+    assert f"cuprum-verus-{faults.VERUS_VERSION}" in makefile, (
+        "the harness Verus root drifted from the Makefile's installer"
+    )
 
 
 @pytest.mark.parametrize("source", ["absent", "old old"])

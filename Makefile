@@ -342,7 +342,7 @@ help: ## Show available targets
 # Boundary verifiers use their own pinned binary toolchains; normal gates keep
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
 PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
-PROVER_TOOLS = uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
+PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
@@ -351,10 +351,10 @@ KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.ka
 .PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
 install-verus: ## Install the checksum-verified prebuilt Verus release
 	$(PROVER_TOOLS) verus install --install-dir $(VERUS_INSTALL_DIR)
-	uv run python scripts/install_boundary_z3.py
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_z3.py
 
 boundary-verus: ## Verify actual production length/accounting kernels
-	uv run python scripts/render_boundary_proofs.py
+	$(UV_RUN_ENV) uv run python scripts/render_boundary_proofs.py
 	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
 
 boundary-kani: ## Check bounded native ownership and existing policy proofs
@@ -371,7 +371,7 @@ boundary-test: ## Run isolated native integration and verification-tool contract
 
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
-	uv run python scripts/install_boundary_kani.py
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_kani.py
 	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" cargo kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
 
 .PHONY: boundary-contract
