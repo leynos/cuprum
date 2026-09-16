@@ -268,7 +268,9 @@ impl NativePumpModel {
     fn finish_without_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         {
             let mut lifecycle = self.lock_lifecycle()?;
-            lifecycle.terminal = TerminalState::WorkerFinished(native);
+            if !lifecycle.cleanup_completed {
+                lifecycle.terminal = TerminalState::WorkerFinished(native);
+            }
         }
         self.complete_if_safe()?;
         self.completion_notified.store(true, Ordering::Release);

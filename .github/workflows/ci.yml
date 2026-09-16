@@ -1299,7 +1299,13 @@ jobs:
 
       - name: Record Loom model summary
         if: always()
-        run: cat loom-summary.md >> "${GITHUB_STEP_SUMMARY}"
+        run: |
+          if [[ -f loom-summary.md ]]; then
+            cat loom-summary.md >> "${GITHUB_STEP_SUMMARY}"
+          else
+            printf '### Loom model summary\n\nThe Loom driver did not start.\n' \
+              >> "${GITHUB_STEP_SUMMARY}"
+          fi
 
   benchmark-ratchet:
     # The ratchet compares each scenario's within-run `rust_mean / python_mean`
