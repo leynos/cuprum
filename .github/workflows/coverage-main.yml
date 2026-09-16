@@ -36,6 +36,7 @@ permissions:
 env:
   CACHE_GENERATION: v1
   UBUNTU_RELEASE: ubuntu2404
+  MDTABLEFIX_VERSION: '0.6.0'
   # This job now compiles and runs the Rust suite under instrumentation, so it
   # is bounded by the same vCPU budget as the pull-request coverage job.
   LINUX_RUNNER_VCPUS: '2'
@@ -170,6 +171,13 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      # Trunk coverage runs the same native selector parity test as PR coverage.
+      # The restored tool cache is optional, so provision the pinned binary.
+      - name: Install mdtablefix
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Install code
         run: make build

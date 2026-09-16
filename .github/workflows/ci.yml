@@ -353,6 +353,8 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     runs-on: ubicloud-standard-2
     timeout-minutes: 45
+    env:
+      MDTABLEFIX_VERSION: '0.6.0'
     strategy:
       fail-fast: false
       matrix:
@@ -493,6 +495,14 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      # The full Python suite exercises the native mdtablefix file selector.
+      # Restoring the tool cache is an optimisation, not a prerequisite.
+      - name: Install mdtablefix
+        if: matrix.python-suite
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Run typechecker
         run: make typecheck
@@ -859,6 +869,7 @@ jobs:
       RUN_RUST_CARGO_WAIT_TIMEOUT: '2700'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
+      MDTABLEFIX_VERSION: '0.6.0'
     steps:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
@@ -969,6 +980,13 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      # Coverage runs the full Python suite, including native selector parity.
+      # The restored tool cache is optional, so provision the pinned binary.
+      - name: Install mdtablefix
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
