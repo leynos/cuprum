@@ -150,11 +150,13 @@ def test_alternating_streams_share_one_activity_clock(
         ),
     )
 
-    # Each stream's write ends a quiet spell, and every ending shows up as a
-    # notification reporting less idle time than the one before it. A per-stream
-    # clock could still produce one of those; two of them, one per stream, can
-    # only come from both streams feeding the same deadline.
-    assert recorder.resets() >= 2, (
+    # Each stream's write ends a quiet spell, and each ending restarts the idle
+    # clock at the moment that write arrived. A per-stream clock could explain
+    # one restart; two distinct restart times, one per stream, can only come
+    # from both streams feeding the same deadline. Counting restarts rather
+    # than notifications keeps this true when a loaded machine folds two writes
+    # into a single late notification.
+    assert len(recorder.write_origins()) >= 2, (
         "each stream's output must defer the shared deadline for "
         f"notifications={recorder.seen!r}"
     )

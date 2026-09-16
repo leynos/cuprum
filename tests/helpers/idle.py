@@ -79,6 +79,42 @@ class IdleRecorder:
             1 for earlier, later in itertools.pairwise(self.idles()) if later < earlier
         )
 
+    def write_origins(self, *, quantum: float = 0.05) -> list[float]:
+        """Return the distinct times the child's output moved the idle clock.
+
+        Every notification reports the total elapsed time and the idle age it
+        observed, so the moment the idle clock last restarted is recoverable as
+        their difference. Readings that agree to within *quantum* describe the
+        same restart.
+
+        This counts writes, not notifications, which is what makes it usable
+        under load. A starved heartbeat may notify twice as slowly as its
+        interval, folding two writes into one notification; `resets` then sees
+        a single fall where two writes arrived, but the timestamps reported for
+        those notifications still record both restarts.
+
+        Parameters
+        ----------
+        quantum
+            Tolerance, in seconds, for treating two readings as the same
+            restart.
+
+        Returns
+        -------
+        list[float]
+            One entry per write the run observed, ascending. The quiet phase
+            before the child's first write reports the run's own start and is
+            not counted.
+        """
+        origins: list[float] = []
+        for total, idle in self.seen:
+            origin = total - idle
+            if origin <= quantum:
+                continue
+            if not origins or origin > origins[-1] + quantum:
+                origins.append(origin)
+        return origins
+
     def reset_after_output(self) -> bool:
         """Report whether a later idle age is smaller than an earlier one.
 
