@@ -44,13 +44,14 @@ actions because Loom cannot schedule them directly.
 
 ## Model set and bounds
 
-Each model has at most three actors: the initiating event-loop task, one native
-worker, and one completion observer. The normal and downstream-close traces use
-at most three pump-machine transitions; failed hand-off and native-failure
-traces use no synthetic I/O. The driver sets `LOOM_MAX_PREEMPTIONS`,
-`LOOM_MAX_BRANCHES`, and `LOOM_MAX_THREADS`; the smoke lane uses 2, 300, and 3,
-while daily/manual runs use 3, 2,000, and 3. Reaching a Loom bound is a failed
-or incomplete result, never evidence of exhaustive exploration.
+Each model has at most four actors: the initiating event-loop task, one native
+worker, and up to two completion observers. The normal and downstream-close
+traces use at most three pump-machine transitions; failed hand-off and
+native-failure traces use no synthetic I/O. The driver sets
+`LOOM_MAX_PREEMPTIONS`, `LOOM_MAX_BRANCHES`, and `LOOM_MAX_THREADS`; the smoke
+lane uses 2, 300, and 4, while daily/manual runs use 3, 2,000, and 4. Reaching
+a Loom bound is a failed or incomplete result, never evidence of exhaustive
+exploration.
 
 The assertions are safety properties: one closer owns the duplicate writer,
 failed hand-off leaks no owner, the reader remains borrowed, terminal cleanup

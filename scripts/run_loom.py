@@ -13,6 +13,7 @@ import os
 import re
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this driver runs a fixed Cargo command.
 import time
+import typing as typ
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +68,17 @@ class LoomRunResult:
             f"- elapsed: {self.elapsed_seconds:.3f}s",
             "",
         ))
+
+
+@dc.dataclass(frozen=True, slots=True)
+class LoomCliOptions:
+    """Typed command-line options at the argparse boundary."""
+
+    mode: str
+    summary: Path | None
+    max_preemptions: int | None
+    max_branches: int | None
+    max_threads: int | None
 
 
 class LoomError(Exception):
@@ -138,8 +150,8 @@ def _bounds_for_mode(mode: str) -> LoomBounds:
     """Return the repository's explicit exploration budget for ``mode``."""
     _validate_mode(mode)
     if mode == "smoke":
-        return LoomBounds(max_preemptions=2, max_branches=300, max_threads=3)
-    return LoomBounds(max_preemptions=3, max_branches=2_000, max_threads=3)
+        return LoomBounds(max_preemptions=2, max_branches=300, max_threads=4)
+    return LoomBounds(max_preemptions=3, max_branches=2_000, max_threads=4)
 
 
 def _validate_mode(mode: str) -> None:
@@ -254,7 +266,7 @@ def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
     )
 
 
-def _parse_arguments() -> argparse.Namespace:
+def _parse_arguments() -> LoomCliOptions:
     """Parse the intentionally small mode-and-summary command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("smoke", "full"), required=True)
@@ -262,10 +274,17 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument("--max-preemptions", type=int)
     parser.add_argument("--max-branches", type=int)
     parser.add_argument("--max-threads", type=int)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    return LoomCliOptions(
+        mode=typ.cast("str", arguments.mode),
+        summary=typ.cast("Path | None", arguments.summary),
+        max_preemptions=typ.cast("int | None", arguments.max_preemptions),
+        max_branches=typ.cast("int | None", arguments.max_branches),
+        max_threads=typ.cast("int | None", arguments.max_threads),
+    )
 
 
-def _selected_bounds(arguments: argparse.Namespace) -> LoomBounds | None:
+def _selected_bounds(arguments: LoomCliOptions) -> LoomBounds | None:
     """Validate optional complete bound overrides from the command line."""
     values = (
         arguments.max_preemptions,
@@ -274,7 +293,20 @@ def _selected_bounds(arguments: argparse.Namespace) -> LoomBounds | None:
     )
     if all(value is None for value in values):
         return None
-    if any(value is None for value in values) or any(value < 1 for value in values):
+    if arguments.max_preemptions is None:
+        raise LoomRunError.invalid_bound_override()
+    if arguments.max_branches is None:
+        raise LoomRunError.invalid_bound_override()
+    if arguments.max_threads is None:
+        raise LoomRunError.invalid_bound_override()
+    if (
+        min(
+            arguments.max_preemptions,
+            arguments.max_branches,
+            arguments.max_threads,
+        )
+        < 1
+    ):
         raise LoomRunError.invalid_bound_override()
     return _validate_bounds(
         LoomBounds(
