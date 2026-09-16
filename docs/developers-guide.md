@@ -3055,10 +3055,12 @@ docstrings, string fixtures, and prose. Only spellings required by external
 contracts or deliberate spelling-test fixtures are exempt.
 
 Before checking the repository, the generator refreshes the shared/base
-en-GB-oxendict dictionary into an untracked local cache only when the authority
-is newer, then merges `typos.local.toml`. The generated `typos.toml` is
-reviewed and committed so a clean, network-restricted checkout can still
-enforce the last known-good policy.
+en-GB-oxendict dictionary into an untracked local cache, then merges
+`typos.local.toml`. `scripts/generate_typos_config.py` fixes the shared source
+to its recorded commit and SHA-256, so a fresh checkout cannot silently adopt a
+new `main` policy or render a different document as the selected baseline. The
+generated `typos.toml` is reviewed and committed so a clean, network-restricted
+checkout can still enforce the last known-good policy.
 
 Put an unavoidable external-contract spelling or a deliberate spelling-test
 fixture in `typos.local.toml` as a narrowly anchored `[patterns].ignore` entry.

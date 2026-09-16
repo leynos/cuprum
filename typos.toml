@@ -35,6 +35,8 @@ extend-ignore-re = [
     "--artifact-name(?:[=\\s\"`]|$)",
     "--artifact-server-path(?:[=\\s\"`]|$)",
     "/artifacts(?:[/?#\"`]|$)",
+    "Azure\\s+Architecture\\s+Center\\s*\\|\\s*Microsoft\\s+Learn\\b",
+    "GitHub\\s+Flavored\\s+Markdown\\b(?:\\s\\(GFM\\))?",
     "Upload main benchmark baseline artifact",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",

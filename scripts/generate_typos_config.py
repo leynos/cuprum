@@ -18,6 +18,7 @@ the network is unavailable, and ``typos.local.toml`` supplies the narrow
 repository-specific policy that must not weaken the estate-wide base.
 """
 
+import hashlib
 import logging
 import tomllib
 import urllib.error
@@ -28,11 +29,21 @@ import typos_rollout as rollout
 
 DEFAULT_BASE_URL = (
     "https://raw.githubusercontent.com/leynos/agent-helper-scripts/"
-    "refs/heads/main/data/typos-oxendict-base.toml"
+    "64bd9ce54942562cd89252b66fcedf5683324a78/data/typos-oxendict-base.toml"
 )
+PINNED_BASE_REVISION = "64bd9ce54942562cd89252b66fcedf5683324a78"
+PINNED_BASE_SHA256 = "7eb3d405d49d466f918d189a671afc708fab26f982845ea82be3b1d377166b6a"
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 _logger = logging.getLogger(__name__)
+
+
+def _verify_pinned_base(cache: Path) -> None:
+    """Reject a default-source cache whose bytes differ from the pinned base."""
+    content_hash = hashlib.sha256(cache.read_bytes()).hexdigest()
+    if content_hash != PINNED_BASE_SHA256:
+        message = "pinned shared dictionary SHA-256 does not match the baseline"
+        raise ValueError(message)
 
 
 def dictionary_from_cache(repository: Path = REPOSITORY_ROOT) -> rollout.Dictionary:
@@ -176,6 +187,8 @@ def main(
         if fallback is not None:
             return fallback
         raise
+    if source == DEFAULT_BASE_URL:
+        _verify_pinned_base(repository / ".typos-oxendict-base.toml")
     rollout.write_config(destination, dictionary_from_cache(repository))
     return result
 

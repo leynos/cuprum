@@ -7,6 +7,7 @@ import logging
 import tomllib
 import typing as typ
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -55,6 +56,16 @@ class _InvalidDictionaryCase:
     document_builder: cabc.Callable[[cabc.Callable[..., str]], str]
     error_type: type[Exception]
     match: str
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PinnedRefreshSetup:
+    """Capture the observable boundaries of one pinned shared-base refresh."""
+
+    generator: types.ModuleType
+    requests: list[urllib.request.Request]
+    timeouts: list[float]
+    verified_caches: list[Path]
 
 
 def test_rollout_generates_oxford_corrections(
@@ -137,6 +148,110 @@ def test_https_failure_reuses_valid_tracked_config(
     assert getattr(fallback_record, "error_type", None) == "URLError", (
         "the fallback warning must classify the bounded refresh error type"
     )
+
+
+def test_default_source_pins_the_recorded_shared_baseline(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+) -> None:
+    """The default source cannot silently resume following the shared main branch."""
+    _, _, generator = rollout_modules
+
+    expected_revision = "64bd9ce54942562cd89252b66fcedf5683324a78"
+    expected_hash = "7eb3d405d49d466f918d189a671afc708fab26f982845ea82be3b1d377166b6a"
+    expected_url = (
+        "https://raw.githubusercontent.com/leynos/agent-helper-scripts/"
+        f"{expected_revision}/data/typos-oxendict-base.toml"
+    )
+
+    assert expected_revision == generator.PINNED_BASE_REVISION, (
+        "the generator must retain this run's recorded shared revision"
+    )
+    assert expected_hash == generator.PINNED_BASE_SHA256, (
+        "the generator must retain this run's recorded shared content hash"
+    )
+    assert expected_url == generator.DEFAULT_BASE_URL, (
+        "the default shared dictionary URL must select the recorded commit"
+    )
+
+
+@pytest.fixture(name="pinned_refresh_setup")
+def pinned_refresh_setup_fixture(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    monkeypatch: pytest.MonkeyPatch,
+    patch_https_opener: cabc.Callable[[cabc.Callable[..., object]], None],
+    dictionary_text: cabc.Callable[..., str],
+) -> _PinnedRefreshSetup:
+    """Set up a fresh pinned refresh and retain its observable boundaries."""
+    _, _, generator = rollout_modules
+    setup = _PinnedRefreshSetup(generator, [], [], [])
+
+    class Response:
+        """Return a small valid dictionary through the HTTPS test boundary."""
+
+        status = 200
+        headers: typ.ClassVar[dict[str, str]] = {"ETag": '"pinned-base"'}
+
+        def read(self, limit: int | None = None) -> bytes:
+            """Return the valid test dictionary, respecting the read limit."""
+            return dictionary_text().encode()[:limit]
+
+        def __enter__(self) -> Response:
+            """Enter the response context."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Leave the response context without suppressing failures."""
+
+    def open_response(request: urllib.request.Request, *, timeout: float) -> Response:
+        """Capture the immutable authority request and return valid content."""
+        setup.requests.append(request)
+        setup.timeouts.append(timeout)
+        return Response()
+
+    patch_https_opener(open_response)
+    monkeypatch.setattr(
+        generator,
+        "_verify_pinned_base",
+        setup.verified_caches.append,
+    )
+    return setup
+
+
+def test_fresh_default_refresh_requests_the_pinned_revision(
+    pinned_refresh_setup: _PinnedRefreshSetup,
+    tmp_path: Path,
+) -> None:
+    """A fresh cache fetches the immutable default source before rendering."""
+    result = pinned_refresh_setup.generator.main(repository=tmp_path)
+
+    cache = tmp_path / ".typos-oxendict-base.toml"
+    assert result.status == "refreshed", (
+        "a fresh default cache must report that it was populated"
+    )
+    assert pinned_refresh_setup.timeouts == [30.0], (
+        "the immutable shared dictionary request must use the 30-second timeout"
+    )
+    assert [request.full_url for request in pinned_refresh_setup.requests] == [
+        pinned_refresh_setup.generator.DEFAULT_BASE_URL
+    ], "the fresh cache request must use the immutable default URL"
+    assert pinned_refresh_setup.verified_caches == [cache], (
+        "the fresh cache must be verified before generated output is accepted"
+    )
+    assert cache.exists(), "a fresh default refresh must populate its cache"
+
+
+def test_pinned_base_hash_mismatch_fails_closed(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    tmp_path: Path,
+    dictionary_text: cabc.Callable[..., str],
+) -> None:
+    """A valid but different shared document cannot pass for the pinned revision."""
+    _, _, generator = rollout_modules
+    cache = tmp_path / ".typos-oxendict-base.toml"
+    cache.write_text(dictionary_text(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SHA-256 does not match"):
+        generator._verify_pinned_base(cache)
 
 
 @pytest.mark.parametrize(
