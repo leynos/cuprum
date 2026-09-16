@@ -6,6 +6,20 @@ use _rust_backend_native::loom_model::{
     LifecycleSnapshot, NativeOutcome, NativePumpModel, SubmissionOutcome,
 };
 
+fn model(action: impl Fn() + Send + Sync + 'static) {
+    let max_threads = std::env::var("LOOM_MAX_THREADS")
+        .expect("the Loom driver must set LOOM_MAX_THREADS")
+        .parse::<usize>()
+        .expect("LOOM_MAX_THREADS must be an unsigned integer");
+    assert!(
+        (1..loom::MAX_THREADS).contains(&max_threads),
+        "LOOM_MAX_THREADS must be between one and Loom's maximum"
+    );
+    let mut builder = loom::model::Builder::new();
+    builder.max_threads = max_threads;
+    builder.check(action);
+}
+
 fn assert_safe_terminal(snapshot: LifecycleSnapshot) {
     assert_eq!(
         snapshot.writer_closes, 1,
@@ -37,7 +51,7 @@ fn model_submission_and_cleanup(
     cancel_before_submission: bool,
     cancel_after_submission: bool,
 ) {
-    loom::model(move || {
+    model(move || {
         let state = NativePumpModel::new();
         if cancel_before_submission {
             state
@@ -116,7 +130,7 @@ fn cancellation_before_after_and_repeated_submission_are_safe() {
 
 #[test]
 fn cancellation_before_submission_remains_released() {
-    loom::model(|| {
+    model(|| {
         let state = NativePumpModel::new();
         state
             .cancel()
@@ -160,12 +174,49 @@ fn downstream_close_remains_terminal_under_competing_observers() {
 #[test]
 #[should_panic(expected = "the duplicate writer closes once")]
 fn deliberate_double_close_fixture_is_detected() {
-    loom::model(|| {
+    model(|| {
         let state = NativePumpModel::with_double_close_defect();
         let worker =
             NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed)
                 .expect("failed submission must preserve lifecycle state");
         assert!(worker.is_none());
+        assert_safe_terminal(
+            state
+                .snapshot()
+                .expect("snapshot must observe the settled lifecycle"),
+        );
+    });
+}
+
+#[test]
+fn cancellation_and_submission_share_the_handoff_linearization_point() {
+    model(|| {
+        let state = NativePumpModel::new();
+        let submitting_state = state.clone();
+        let submitter = loom::thread::spawn(move || {
+            NativePumpModel::submit(
+                &submitting_state,
+                SubmissionOutcome::Submitted,
+                NativeOutcome::Succeeded,
+            )
+        });
+
+        state
+            .cancel()
+            .expect("event-loop cancellation must be modelled");
+        let worker = submitter
+            .join()
+            .expect("submission actor must finish")
+            .expect("submission actor must preserve lifecycle state");
+        if let Some(worker) = worker {
+            worker
+                .join()
+                .expect("worker actor must finish")
+                .expect("worker actor must preserve lifecycle state");
+        }
+        state
+            .observe_completion()
+            .expect("observer actor must preserve lifecycle state");
         assert_safe_terminal(
             state
                 .snapshot()
