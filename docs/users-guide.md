@@ -2407,7 +2407,11 @@ The continuous integration (CI) workflows run the following checks:
   Python 3.12, 3.13, and 3.14. The Python 3.15a row is experimental and allowed
   to fail.
 - Formatting and lint checks run on Python 3.13.
-- Coverage upload (artefact + optional CodeScene upload) runs on Python 3.13.
+- Coverage runs on Python 3.13. Pull requests compare their reports against a
+  local ratchet baseline written by `main`; they neither upload coverage to
+  CodeScene nor receive its access token. The `coverage-main.yml` workflow
+  writes the fresh ratchet baseline and uploads main-branch coverage to
+  CodeScene.
 - Benchmark ratchet runs on every push to `main`, and on pull requests that
   change performance-relevant paths (`cuprum/`, `rust/`, `benchmarks/`,
   `conftest.py`, `Makefile`, `pyproject.toml`, `uv.lock`, or the CI workflow

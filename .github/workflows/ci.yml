@@ -840,9 +840,9 @@ jobs:
         run: make test-extension
 
   coverage:
-    # Pull requests only. Pushes to main are handled by coverage-main.yml,
-    # which also uploads the report to CodeScene; guarding here stops
-    # coverage being generated twice on main.
+    # Pull requests only. coverage-main.yml publishes main's report and the
+    # ratchet baseline, so this lane only compares its coverage locally
+    # against the trusted baseline without generating coverage twice on main.
     if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
     # Above the 2,700 s cargo watchdog set below plus the work either side
@@ -874,9 +874,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
         with:
-          # Full history so a future CodeScene changed-line gate
-          # (cs-coverage check) can reach the pull request merge base.
-          fetch-depth: 0
           persist-credentials: false
 
       # Started before the first cache restore, so the archive downloads and
@@ -1032,18 +1029,6 @@ jobs:
           all-targets: 'true'
           all-features: 'true'
           doctests: 'true'
-
-      - name: Check coverage against CodeScene gates
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-        if: env.CS_ACCESS_TOKEN != '' && github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
-        with:
-          format: cobertura
-          mode: check
-          project-url: https://api.codescene.io/v2/projects/74471
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
-          installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
 
       - name: Record compiler-cache effectiveness
         if: always()

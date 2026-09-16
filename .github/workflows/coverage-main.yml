@@ -250,6 +250,7 @@ jobs:
         uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           format: cobertura
+          mode: upload
           path: coverage.xml
           access-token: ${{ env.CS_ACCESS_TOKEN }}
           installer-checksum: ${{ vars.CODESCENE_CLI_SHA256 }}
