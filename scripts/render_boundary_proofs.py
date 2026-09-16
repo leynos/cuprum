@@ -10,6 +10,8 @@ verbatim from production. Generated output belongs under ``rust/target`` and
 is regenerated on every proof run, so a stale mirror cannot pass verification.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +33,31 @@ PROGRESS_CONTRACT = """-> (result: Option<(u64, u64)>)
 {"""
 
 
+def _production_half(source: str) -> str:
+    """Return the non-test half of a module, failing closed on the boundary.
+
+    Parameters
+    ----------
+    source : str
+        Complete production module text.
+
+    Returns
+    -------
+    str
+        Text preceding the module's ``#[cfg(test)]`` boundary.
+
+    Raises
+    ------
+    ValueError
+        If the test-module boundary is absent or ambiguous.
+    """
+    marker = "#[cfg(test)]"
+    if source.count(marker) != 1:
+        msg = "production module must have exactly one test-module boundary"
+        raise ValueError(msg)
+    return source.split(marker, 1)[0]
+
+
 def render(source: str) -> str:
     """Render production functions with specifications and unchanged bodies.
 
@@ -49,11 +76,7 @@ def render(source: str) -> str:
     ValueError
         If a signature or the test-module boundary changed unexpectedly.
     """
-    marker = "#[cfg(test)]"
-    if source.count(marker) != 1:
-        msg = "production kernel must have exactly one test-module boundary"
-        raise ValueError(msg)
-    production, _ = source.split(marker, 1)
+    production = _production_half(source)
     for signature in (COUNT_SIGNATURE, PROGRESS_SIGNATURE):
         if production.count(signature) != 1:
             msg = f"production signature changed: {signature}"
@@ -80,7 +103,7 @@ def main() -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(render(source.read_text(encoding="utf-8")), encoding="utf-8")
     memory_source = ROOT / "rust/cuprum-native-io/src/memory.rs"
-    memory = memory_source.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
+    memory = _production_half(memory_source.read_text(encoding="utf-8"))
     memory = memory.replace("#![forbid(unsafe_code)]", "")
     memory = memory.replace("#[cfg(any(windows, test, kani))]", "").replace("//!", "//")
     assessment = destination.with_name("memory-assessment.rs")

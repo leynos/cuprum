@@ -1,5 +1,7 @@
 """Invalid native reader arguments must not strand an owned writer duplicate."""
 
+from __future__ import annotations
+
 import contextlib
 import os
 from types import SimpleNamespace

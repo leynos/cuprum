@@ -16,6 +16,14 @@ pub enum PumpError {
     /// A computed range exceeded the backing buffer's bounds.
     #[error("computed range exceeded the buffer bounds")]
     BufferRangeExceeded,
+    /// The scratch buffer could not be allocated.
+    ///
+    /// The stream loops reserve their buffers fallibly rather than with the
+    /// infallible `vec![0_u8; len]`, whose allocation failure aborts the
+    /// process instead of unwinding. Keeping the failure on this enum lets an
+    /// embedding interpreter raise it rather than die with it.
+    #[error("failed to allocate the stream buffer")]
+    BufferAllocationFailed,
     /// An operating-system I/O failure.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -44,6 +52,7 @@ impl PumpError {
         match self {
             Self::LengthOverflow => Some("integer length conversion overflowed"),
             Self::BufferRangeExceeded => Some("computed range exceeded the buffer bounds"),
+            Self::BufferAllocationFailed => Some("failed to allocate the stream buffer"),
             Self::Io(_) => None,
         }
     }

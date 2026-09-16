@@ -1,6 +1,7 @@
 //! Safe stream orchestration, decoding, and error policy for Cuprum.
 #![forbid(unsafe_code)]
 
+mod buffer;
 #[cfg(test)]
 mod buffer_size_tests;
 #[cfg(all(test, unix))]
@@ -129,7 +130,7 @@ fn pump_stream_files_readwrite(
     let _guard = span.enter();
     io_utils::reset_retry_counters();
 
-    let mut buffer = vec![0_u8; buffer_size.value()];
+    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
     let mut state = PumpState::start();
 
     loop {
@@ -181,7 +182,7 @@ fn consume_stream_files(
     let _guard = span.enter();
     io_utils::reset_retry_counters();
 
-    let mut buffer = vec![0_u8; buffer_size.value()];
+    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
     let mut pending: Vec<u8> = Vec::new();
     let mut output = String::new();
     let mut total_read = 0_u64;

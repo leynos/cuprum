@@ -782,7 +782,13 @@ partial-failure paths in one place rather than inlined in the pump:
   caller falls back to the Python pump rather than racing it. A transport
   exposing no pause hooks answers `True`, since there are no callbacks to
   suspend. A transport with `pause_reading()` but no `resume_reading()` answers
-  `False`: pausing it could not be undone.
+  `False`: pausing it could not be undone. A transport that is already closing
+  is never paused — `_pause_reader_transport` asks `is_closing()` before
+  pausing — because asyncio silently ignores a pause there and its queued
+  `connection_lost` callback can still close the descriptor during hand-off.
+  The outcome is an instance of `_ReaderPause`, the frozen slots dataclass that
+  carries `may_hand_off`, `resume`, `decline_reason`, and the
+  `closing_transport` marker, reporting a `reader_pause_failed` decline.
 
 Before native I/O begins, the reader transport is paused and callbacks queued
 before the pause are allowed to settle. If `StreamReader._buffer` contains
@@ -793,7 +799,17 @@ the remaining raw bytes. Rust borrows the reader duplicate and consumes the
 writer duplicate. After the worker settles, Python closes the remaining reader
 duplicate; it closes the writer duplicate itself only when preparation or
 executor submission fails. If any preparation step cannot be completed safely,
-dispatch falls back to the Python pump.
+dispatch falls back to the Python pump. That fall-back has one exception, and
+it is test-only: `_permit_test_owned_descriptor_handoff` in
+`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
+that one — when the dispatch test seam has installed its own descriptor supply
+(`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
+hand-off derives its worker descriptor from the transport and keeps the
+decline. The permitted verdict carries no resume hook, because nothing was
+paused. That permission depends on the configured test hooks: the stub must be
+cleared with `reset_pump_stream_dispatch_for_testing()`, which the
+`clear_backend_caches` fixture applies around each test in the pump-stream
+dispatch test modules, leaving nothing for a later test to inherit.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` shields
@@ -833,7 +849,7 @@ Table 1: `cuprum_reason` values and the seam each one reports
 | `cuprum_reason`             | Seam that declined                                                 |
 | --------------------------- | ------------------------------------------------------------------ |
 | `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
+| `reader_pause_failed`       | `pause_reading()` raised, or the transport was already closing     |
 | `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
@@ -2264,15 +2280,20 @@ with `thiserror`:
   type ("impossible" on supported platforms, kept observable rather than
   silently truncating).
 - `BufferRangeExceeded` — a computed range exceeded the backing buffer.
+- `BufferAllocationFailed` — the scratch buffer could not be allocated. The
+  stream loops reserve fallibly because `vec![0_u8; len]` aborts the process on
+  allocation failure instead of unwinding, which would take an embedding
+  interpreter down with it.
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
-Conversion to a Python exception happens in exactly one place
-(`From<PumpError> for PyErr`). The overflow variants surface as plain
-`OSError`. The non-fatal write classification (broken pipe / connection reset)
-lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
-function the splice and read/write paths previously shared. New failure
-conditions get a variant here rather than a stringly-typed
-`io::Error::other(...)`.
+Conversion to a Python exception happens in exactly one place,
+`pump_error_to_py_err` in `rust/cuprum-rust/src/errors.rs` (called from
+`stream_pyfunctions.rs`). Every non-`Io` variant surfaces as a plain `OSError`
+carrying the stable message from `PumpError::py_os_error_message`. The
+non-fatal write classification (broken pipe / connection reset) lives on the
+enum as `PumpError::is_nonfatal_write`, replacing the free function the splice
+and read/write paths previously shared. New failure conditions get a variant
+here rather than a stringly-typed `io::Error::other(...)`.
 
 ### Preserving the operating-system error code
 
@@ -2478,7 +2499,13 @@ make boundary-test
 make boundary-verus
 make boundary-kani
 make boundary-miri
+make boundary-contract
+make boundary-faults
 ```
+
+`make boundary-contract` confirms the safe targets reject unsafe Rust, and
+`make boundary-faults` requires the verification harnesses to detect deliberate
+faults.
 
 Install the checksum-verified prebuilt tools first with `make install-verus` and
 `make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
@@ -2514,30 +2541,36 @@ Round 27 Miri passed all 13 isolated native tests with zero ignored; see
 `/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
 `libc::splice`, and unsupported operating-system representations. Round 33's
 prior local checkpoint passed, and Round 35's integrated local run passed the
-native and repository gates. Windows and macOS runtime tests remain pending
-hosted execution.
+native and repository gates. Windows and macOS runtime tests are no longer
+pending hosted execution. On 2026-09-15, `Rust boundary verification` run
+35004943625 succeeded with its `Native contracts (windows-2022)`,
+`Native contracts (macos-latest)`, and `Native contracts (ubuntu-latest)` jobs,
+and `CI` run 35004943782 succeeded with its
+`Extension-gated tests (Windows Python/Rust boundary)` and
+`Extension-gated tests (Python/Rust boundary)` jobs. The boundary workflow's
+`extended` job is skipped on pull requests by design.
 
-The boundary installer and fault harnesses have narrow reuse policies. \`
-scripts/install_boundary_kani.py\` owns \`checked_download\` for the Kani and
-Z3 installers only: HTTPS-only bounded redirects, digest validation, and no
-source builds. \`scripts/check_boundary_faults.py\` scopes its runner to the
-four verification commands and a disposable source copy; it is not a general
-process abstraction. Its progress and ownership checks have separate private
-runners; their scope is the existing four mutations, with the same controls and
-failure diagnostics. The download helpers separate bounded redirect traversal,
-one connection's lifetime, and response classification. They remain private to
-the pinned binary installer. The compiler-contract checker uses a named
-predicate requiring both failure and an unsafe-forbid diagnostic, so unrelated
-compiler failures cannot pass the probe.
+The boundary installer and fault harnesses have narrow reuse policies.
+`scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
+installers only: HTTPS-only bounded redirects, digest validation, and no source
+builds. `scripts/check_boundary_faults.py` scopes its runner to the four
+verification commands and a disposable source copy; it is not a general process
+abstraction. Its progress and ownership checks have separate private runners;
+their scope is the existing four mutations, with the same controls and failure
+diagnostics. The download helpers separate bounded redirect traversal, one
+connection's lifetime, and response classification. They remain private to the
+pinned binary installer. The compiler-contract checker uses a named predicate
+requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
+failures cannot pass the probe.
 
-Windows borrowed I/O lives beside its handle adapter in \`
-rust/cuprum-native-io/src/windows.rs\`. Its private \`with_file\` helper
-retains the borrowed handle and converts the byte count once for both read and
-write; Unix adapters retain their direct syscall and buffer contracts.
+Windows borrowed I/O lives beside its handle adapter in
+`rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
+the borrowed handle and converts the byte count once for both read and write;
+Unix adapters retain their direct syscall and buffer contracts.
 
-\`make boundary-faults\` archives controls and deliberate fault failures for
-the scheduled Kani job. The final run passed its controls and detected all four
-mutations; see \`/tmp/issue379-round27-faults.log\`.
+`make boundary-faults` archives controls and deliberate fault failures for the
+scheduled `extended` job. The final run passed its controls and detected all
+four mutations; see `/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 
@@ -2568,6 +2601,23 @@ rejection emits `executor_submission_rejected` before it is re-raised.
 Blocking-mode failure selects the Python fallback and emits
 `blocking_setup_failed`. The outcome events are counted by
 `cuprum_rust_pump_handoff_total` as described above.
+
+`_prepare_rust_pump_call` completes every Python-side check before the writer
+descriptor reaches native code: it loads the native module, validates the
+buffer size (`_validate_buffer_size_before_writer_transfer`), then prepares the
+reader. Buffer-size validation calls `operator.index` and raises
+`OverflowError` for values outside the `i64` range and `ValueError` for a
+non-positive size or one above the 1 GiB cap (`_MAX_BUFFER_SIZE`). Reader
+preparation (`_prepare_native_reader`) converts the descriptor for the
+platform, then requires an `i64`-representable value (`OverflowError`), a
+32-bit signed range on non-Windows platforms (`ValueError`, "file descriptor
+out of range"), and a non-negative value (`ValueError`, "file descriptor must
+be non-negative", or "file handle must be non-negative" on Windows). Each
+failure closes the writer Python still owns
+(`_close_writer_after_pre_native_failure`) and emits the matching hand-off
+outcome (`native_load_failed`, `buffer_validation_failed`, or
+`reader_preparation_failed`); a reader-preparation failure additionally logs the
+`reader_preparation` phase at `DEBUG` on the `cuprum._streams_rs` logger.
 
 ## Rust splice-loop and drain contract
 
@@ -3646,18 +3696,19 @@ uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
 ## Rust stream buffer-size validation
 
 `rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
-`rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through a pure
-`checked_buffer_size(i64) -> Result<usize, &'static str>` helper, wrapped by
-`validate_buffer_size` (which maps the message to `PyValueError`). The contract
-is: reject non-positive values, values that overflow `usize` on the target
-platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
-guards against absurd allocations while comfortably exceeding any realistic
-transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
-its boundaries are property tested directly in
-`rust/cuprum-streams/src/buffer_size_tests.rs`; the Python-side error mapping
-is exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep
-the `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
-users' guide aligned with this contract when the cap changes.
+`rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through
+`validate_buffer_size(i64) -> PyResult<BufferSize>`, which maps the message to
+`PyValueError`. `BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs`
+owns the validation and returns the validated size used by the stream loops.
+The contract is: reject non-positive values, values that overflow `usize` on
+the target platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) —
+the cap guards against absurd allocations while comfortably exceeding any
+realistic transfer buffer (the default is 64 KiB). The Rust boundary cases are
+property tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the
+Python-side error mapping is exercised in
+`cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
+`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
+guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 

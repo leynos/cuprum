@@ -2,9 +2,13 @@
 
 ## Status
 
-Accepted on 2026-09-08. The implementation is in the `cuprum-streams`,
-`cuprum-native-io`, and `cuprum-rust` workspace crates. Verification remains in
-progress where recorded below.
+Accepted on 2026-09-08. Cuprum confines native descriptor, handle, and syscall
+obligations to the audited `cuprum-native-io` and `cuprum-rust` boundaries and
+keeps `cuprum-streams` free of unsafe Rust.
+
+## Date
+
+2026-09-08.
 
 ## Context and problem statement
 
@@ -118,9 +122,17 @@ crate-level attribute, are covered by the contract gate. The normal callback
 compile regression passed with the expected `&W` versus `&mut W` diagnostic in
 `/tmp/issue379-round25-trybuild-normal.log`; the final fault run passed its
 controls and detected all four mutations in `/tmp/issue379-round27-faults.log`.
-Windows and macOS runtime execution remain pending hosted runs; the broader
-native full-gate rerun is also pending. Packaging coverage found that
-`uv build --sdist` omitted the Rust workspace and that
+Hosted Windows and macOS runtime execution passed on 2026-09-15: the "Rust
+boundary verification" run 35004943625 succeeded with the
+`Native contracts (windows-2022)`, `Native contracts (macos-latest)`, and
+`Native contracts (ubuntu-latest)` jobs alongside `verus`; the "CI" run
+35004943782 succeeded with the
+`Extension-gated tests (Windows Python/Rust boundary)` and
+`Extension-gated tests (Python/Rust boundary)` jobs. The `extended` Kani/Miri
+job is skipped on pull requests by design, so these hosted runs add no verifier
+coverage beyond the bounded local rounds recorded above; the scheduled Loom
+interleaving harness remains a separate pending deliverable. Packaging coverage
+found that `uv build --sdist` omitted the Rust workspace and that
 `uv run maturin sdist --manifest-path rust/cuprum-rust/Cargo.toml` omitted
 `rust/rust-toolchain.toml`; the red evidence is in
 `/tmp/issue379-native-sdist-before2.log`. Explicit archive entries and the

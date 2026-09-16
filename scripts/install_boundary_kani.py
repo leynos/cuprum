@@ -11,6 +11,8 @@ Netsuke. The upstream bundle supplies CBMC and the matching Rust compiler.
 this script never invokes Cargo or compiles a verifier from source.
 """
 
+from __future__ import annotations
+
 import hashlib
 import http.client
 import shutil

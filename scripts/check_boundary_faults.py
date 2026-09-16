@@ -9,6 +9,8 @@ All mutations affect a disposable workspace copy. Logs retain counterexamples
 and real-unwind failures, and a successful control precedes each mutation.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import os
 import shutil
@@ -18,6 +20,8 @@ from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scop
 from scripts.render_boundary_proofs import render
 
 ROOT = Path(__file__).resolve().parent.parent
+KANI_VERSION = (ROOT / "tools/kani/VERSION").read_text(encoding="utf-8").strip()
+VERUS_VERSION = (ROOT / "tools/verus/VERSION").read_text(encoding="utf-8").strip()
 
 
 def mutate(source: str, old: str, new: str) -> str:
@@ -58,7 +62,7 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
         noise_rules=(),
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
-    kani = Path.home() / ".kani/kani-0.67.0"
+    kani = Path.home() / f".kani/kani-{KANI_VERSION}"
     context = sh.ExecutionContext(
         cwd=workspace,
         env={
@@ -115,7 +119,7 @@ def _verify_progress_faults(workspace: Path, logs: Path) -> None:
     install = Path(
         os.environ.get(
             "VERUS_INSTALL_DIR",
-            str(Path.home() / ".local/share/cuprum-verus-0.2026.09.06.8dea4a2"),
+            str(Path.home() / f".local/share/cuprum-verus-{VERUS_VERSION}"),
         )
     )
     verus = str(install / "verus/verus")

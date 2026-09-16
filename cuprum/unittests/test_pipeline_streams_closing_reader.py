@@ -69,6 +69,9 @@ def test_closing_reader_declines_native_borrow(pipe_at_eof: typ.BinaryIO) -> Non
             assert pause.decline_reason is RustPumpDeclineReason.READER_PAUSE_FAILED, (
                 "an ignored pause must use the existing pause-failure decline"
             )
+            assert pause.closing_transport, (
+                "the pause must record the transport close that denied hand-off"
+            )
             assert await reader.read() == b"buffered prefix", (
                 "the Python fallback must preserve bytes already read by asyncio"
             )

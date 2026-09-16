@@ -158,7 +158,7 @@ fn accumulate_splices(
 /// instead of silently ending the drain, end of file terminates it, and
 /// any other error propagates.
 fn drain_reader(fd_in: BorrowedStream<'_>, chunk_size: usize) -> Result<(), PumpError> {
-    let mut buf = vec![0_u8; chunk_size];
+    let mut buf = crate::buffer::allocate_buffer(chunk_size)?;
     loop {
         let n = read_raw_fd(fd_in, &mut buf)?;
         if n == 0 {

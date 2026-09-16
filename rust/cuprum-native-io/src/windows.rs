@@ -3,10 +3,13 @@
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 
-use windows_sys::Win32::Foundation::GetHandleInformation;
 use windows_sys::Win32::System::Pipes::CreatePipe;
 
-use crate::{BorrowedStream, OwnedStream, PlatformFd};
+#[cfg(test)]
+use crate::PlatformFd;
+use crate::{BorrowedStream, OwnedStream};
+#[cfg(test)]
+use windows_sys::Win32::Foundation::GetHandleInformation;
 
 /// Create two uniquely owned, non-inheritable anonymous pipe handles.
 ///
@@ -32,9 +35,12 @@ pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
 
 /// Observe whether a handle is currently open, without granting ownership.
 ///
-/// The result must not be used as a check-then-use validity guarantee.
+/// The result must not be used as a check-then-use validity guarantee. It is
+/// test support, so it is neither exported nor compiled into the shipped
+/// library.
+#[cfg(test)]
 #[must_use]
-pub fn fd_is_open(raw: PlatformFd) -> bool {
+pub(crate) fn fd_is_open(raw: PlatformFd) -> bool {
     let mut flags = 0;
     // SAFETY: GetHandleInformation validates the opaque handle and writes
     // flags only through the live output pointer. No ownership is acquired.

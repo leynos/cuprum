@@ -525,20 +525,20 @@ placing native descriptor, handle, and syscall obligations behind small
 workspace boundaries. See [ADR-011](adr-011-audited-rust-boundaries.md) and
 [Rust boundary verification](rust-boundary-verification.md).
 
-- [ ] 8.4.1. Keep `cuprum-streams` free of unsafe Rust, including test and
+- [x] 8.4.1. Keep `cuprum-streams` free of unsafe Rust, including test and
   helper targets, and keep `cuprum-rust` limited to the PyO3/maturin hand-off.
   - Success: the safe-crate contract rejects deliberate unsafe probes, the
     workspace allowlist names only approved boundary crates, and Python API,
     optional backend, packaging, and supported-platform behaviour retain
     regression coverage.
-- [ ] 8.4.2. Maintain native ownership and I/O contracts for borrowed readers,
+- [x] 8.4.2. Maintain native ownership and I/O contracts for borrowed readers,
   uniquely transferred writers, initialized buffers, short or interrupted
   calls, byte accounting, and real cleanup on normal, error, and unwind paths.
   - Success: native Unix/Linux and Windows tests observe descriptor/handle
     effects, EOF, fallback, broken pipes, and setup or cancellation cleanup;
     fault sensitivity detects leaks, double closes, invalid bounds, and bad
     accounting.
-- [ ] 8.4.3. Run and archive the applicable Verus, Kani, and Miri evidence with
+- [x] 8.4.3. Run and archive the applicable Verus, Kani, and Miri evidence with
   exact pinned toolchains, bounds, coverage witnesses, exclusions, and trusted
   assumptions.
   - Success: Verus verifies exact production kernels where feasible; Kani is
