@@ -10,6 +10,9 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 mod errors;
 #[cfg(test)]
 mod fd_tests;
+#[cfg(loom)]
+#[doc(hidden)]
+pub mod loom_model;
 
 #[derive(Clone, Copy, Debug)]
 struct ReaderFd(PlatformFd);

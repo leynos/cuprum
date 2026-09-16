@@ -13,8 +13,11 @@ pub mod progress;
 pub use memory::with_owned_writer;
 #[cfg(kani)]
 mod fd_ownership_kani_proofs;
-#[cfg(any(test, kani))]
+#[cfg(any(test, kani, loom))]
 mod fd_ownership_model;
+#[cfg(loom)]
+#[doc(hidden)]
+pub mod loom_support;
 
 #[cfg(unix)]
 pub use std::os::fd::{AsFd as AsStream, BorrowedFd as BorrowedStream, OwnedFd as OwnedStream};
