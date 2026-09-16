@@ -1,4 +1,13 @@
-"""Default program data for Cuprum's curated catalogue."""
+"""Provide immutable program data for Cuprum's default catalogue.
+
+``cuprum.catalogue`` turns these records into ``ProjectSettings`` values while
+keeping the public catalogue implementation focused on indexing and lookups.
+
+Examples
+--------
+>>> CORE_OPS_PROJECT
+'core-ops'
+"""
 
 from __future__ import annotations
 
