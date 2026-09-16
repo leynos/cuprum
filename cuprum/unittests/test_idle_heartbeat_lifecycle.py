@@ -77,6 +77,7 @@ def _execution(
         capture=capture,
         echo_stdout=echo,
         echo_stderr=echo,
+        max_echo_line_bytes=None,
         timeout=None,
         observation=_StageObservation(
             cmd=command,
