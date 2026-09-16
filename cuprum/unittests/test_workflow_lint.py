@@ -341,7 +341,11 @@ def test_ci_provisions_the_pinned_workflow_linters() -> None:
     )
     assert actionlint_policy == {
         "self-hosted-runner": {"labels": ["ubicloud-standard-2"]},
-        "config-variables": ["CODESCENE_CLI_SHA256"],
+        "config-variables": [
+            "CODESCENE_CLI_SHA256",
+            "BENCHMARK_TELEMETRY_ENDPOINT",
+            "BENCHMARK_TELEMETRY_INSTANCE_ID",
+        ],
     }
 
     _assert_yamllint_provisioning()

@@ -279,6 +279,14 @@ def test_the_recorded_decision_matches_the_gate(
     assert summary.metric == expected_metric, (
         f"expected bounded metric labels {expected_metric!r}; found {summary.metric!r}"
     )
+    # The publish step transports these outputs rather than recomputing the
+    # decision, so an output that disagreed with the table would put the series
+    # and the summary a maintainer reads into contradiction — with neither one
+    # visibly wrong on its own.
+    assert summary.outputs == expected_metric, (
+        f"the step outputs downstream telemetry transports must equal the bounded "
+        f"values {expected_metric!r}; found {summary.outputs!r}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -337,7 +345,7 @@ def test_the_summary_parser_rejects_a_malformed_metric_label() -> None:
     )
 
     with pytest.raises(AssertionError, match="metric label") as error:
-        _parse_summary(emitted=emitted, stdout=stdout)
+        _parse_summary(emitted=emitted, outputs={}, stdout=stdout)
 
     assert stdout in str(error.value), (
         "the parse diagnostic must retain workflow output"

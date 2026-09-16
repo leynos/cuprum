@@ -144,11 +144,28 @@ Document the conflict in `Decision log` and escalate.
   specification and the Grafana Cloud OTLP gateway contract.
 - [x] (2026-09-16 19:30Z) Rename branch to
   `issue-339-add-durable-benchmark-gate-telemetry-and-an-actions-runner-integration-harness`.
-- [ ] Write ADR-011 (telemetry sink) and ADR-012 (integration harness); link
-  from `docs/developers-guide.md` and `docs/contents.md`.
-- [ ] Red: add contract test asserting the telemetry step exists, is
-  secret-gated and fail-open, and carries exactly three closed-set labels.
-- [ ] Green: add the emission step to the `changes` job.
+- [x] (2026-09-16 20:05Z) Write ADR-011 (telemetry sink) and ADR-012
+  (integration harness); link from `docs/developers-guide.md` and
+  `docs/contents.md`.
+- [x] (2026-09-16 21:40Z) Red then Green: contract tests for the telemetry
+  step, then the emission step in the `changes` job. The step publishes the
+  gate step's three `$GITHUB_OUTPUT` values rather than recomputing them, so
+  the published series and the step summary cannot disagree.
+- [x] (2026-09-16 22:30Z) Fix the shared shlex tokenizer in
+  `tests/helpers/workflow_shell.py`; the new step's ordinary
+  `payload="$(mktemp)"` raised `ValueError: No closing quotation` under the old
+  single-mode tokenizer. See Surprises & discoveries.
+- [x] (2026-09-16 23:15Z) Split the telemetry contract suite in two at the
+  declaration/execution seam, and parametrize the verbatim-publish test on a
+  `Verdict` rather than three positional strings. See Decision log.
+- [ ] Red: add the act integration harness tests; observe them skip without a
+  runtime and fail without the fixture/report plumbing.
+- [ ] Green: implement `tests/helpers/act_harness.py` and fixtures.
+- [ ] Write `docs/ci-benchmark-gate-telemetry.md`; update `docs/contents.md`
+  and `docs/developers-guide.md`. It must document `count_over_time` as the
+  query surface, not `rate()`/`increase()`; see Surprises & discoveries.
+- [ ] Wire new test paths into `PYTEST_TARGETS` (Makefile) and any CI gate job.
+- [ ] Full gate run via `scrutineer`; `coderabbit review --agent`; draft PR.
 - [ ] Red: add the act integration harness tests; observe them skip without a
   runtime and fail without the fixture/report plumbing.
 - [ ] Green: implement `tests/helpers/act_harness.py` and fixtures.
@@ -192,6 +209,45 @@ Document the conflict in `Decision log` and escalate.
   harness must assert the recorded decision on the failing path as well as the
   exit code, rather than treating non-zero exit as "no evidence". This is
   exactly the case the step's `!cancelled()` condition exists for.
+
+- Observation: a cumulative counter whose value is always `1` cannot be read
+  with `rate()` or `increase()`. Evidence: both compute `last - first` over the
+  window, and this series' value is `1` at every sample, so the difference is
+  always zero; the *count* lives in the sample timestamps, not in the value.
+  Impact: the documented query surface must be `count_over_time`. This is a
+  property of the chosen encoding, not a defect in it — one run contributes one
+  sample, and the samples are what accumulate — but a maintainer who reaches for
+  `rate()` will read a flat zero and conclude the telemetry is broken. It must
+  be stated in `docs/ci-benchmark-gate-telemetry.md`.
+
+- Observation: the shared shlex tokenizer could not lex the new step's script.
+  Evidence: `payload="$(mktemp)"` — an ordinary assignment, not a corner case —
+  raised `ValueError: No closing quotation` from
+  `tests/helpers/workflow_shell.py` under the mode that preserved quotes, which
+  broke two `test_extension_ci_contract.py` tests. Probing five shlex mode
+  combinations showed no single configuration both survives a double-quoted
+  command substitution and preserves quote delimiters:
+  `posix=True, preserve_quotes=True` does not preserve quotes on Python 3.13
+  (documented behaviour only from 3.14), and `posix=False` raises on `$(...)`.
+  Impact: the helper now uses two passes — `posix=True, punctuation_chars=True`
+  for the base tokenize, `posix=False, punctuation_chars=False` for the quoted
+  comparison — gated on an equal token count, so a differing split is reported
+  as "cannot be compared" rather than silently misaligned. The trade-off is
+  that quoted-heredoc detection (`cat <<'EOF'`) is now best-effort where the
+  base pass is authoritative. Fixing the shared helper was preferred to
+  contorting the workflow script to avoid `x="$(...)"`, which would have left
+  the trap in place for the next workflow change.
+
+- Observation: `.github/actionlint.yaml`'s `config-variables` list is
+  additionally pinned by `cuprum/unittests/test_workflow_lint.py`, which
+  asserts the parsed file equals a literal two-rule dict. Evidence: `make test`
+  failed with
+  `{'config-variables': […]} != {'config-variables': ['CODESCENE_CLI_SHA256']}`
+  at that file's line 341. Impact: registering a new repository variable is a
+  two-file change, and the pin is intentional — it is what makes a typo in a
+  `vars.*` reference an actionlint error rather than an empty string at run
+  time — so the fix was to extend the expectation, in the same order as the
+  YAML, rather than to loosen the assertion.
 
 - Observation: `docs/developers-guide.md`'s "Accepted architectural decisions"
   list is stale — it omits ADR-001, ADR-008, and ADR-010, which
@@ -255,6 +311,20 @@ Document the conflict in `Decision log` and escalate.
   temporary repository avoids binding the developer's worktree into a container
   that runs `git checkout`. Date/Author: 2026-09-16, planning agent, from the
   feasibility experiment.
+
+- Decision: split the telemetry contract suite into
+  `tests/test_ci_benchmark_gate_telemetry.py` (declaration assertions, read from
+  `ci.yml`) and `tests/test_ci_benchmark_gate_telemetry_execution.py`
+  (assertions on the body the real `run:` block produced). Rationale: the
+  single module was 485 lines against pylint's `max-module-lines = 400`. The
+  seam is the one the repository already uses —
+  `test_benchmark_gate_summary_behaviour` contrasts "the contract tests next
+  door" with the tests that execute the script — and it also states the
+  adequacy argument: the declaration half is necessary but not sufficient,
+  which is why both exist. Splitting on that line was preferred to raising the
+  cap or suppressing C0302, since the cap is a real ceiling and no
+  `# pylint: disable` exists anywhere in the repository. Date/Author:
+  2026-09-16, implementing agent.
 
 - Decision: expose the harness as a pytest suite and a Makefile target, not as
   a new scheduled `ci.yml` job. Rationale: the issue asks for a supported
@@ -713,6 +783,13 @@ No Python or Rust production interface changes. The new surfaces are:
   runtime being available, following the `CUPRUM_RUN_BENCHMARKS` precedent.
 
 ## Revision note
+
+2026-09-16 (telemetry milestone): the emission step, the contract suite that
+covers it, and the shared-tokenizer fix are implemented and staged. `Progress`,
+`Surprises & discoveries`, and `Decision log` carry this stage's evidence,
+including the `count_over_time` query requirement that
+`docs/ci-benchmark-gate-telemetry.md` must state. Two gates were red on the
+first run and are fixed pending re-run.
 
 2026-09-16: initial draft, written after reconnaissance and the feasibility
 experiment. Status set to IN PROGRESS because the task instructions authorize
