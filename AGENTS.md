@@ -361,10 +361,11 @@ working on the Rust portions of the project:
   `typos.local.toml`, document the upstream contract beside each exception, and
   never edit generated entries by hand.
 - Masks that must relax documentation without relaxing source, such as fenced
-  and inline code spans, belong under `[patterns] markdown_only` in
-  `typos.local.toml`. Architecture decision record (ADR) 009 keeps Oxford
-  spelling in source identifiers, so those masks are rendered under a
-  Markdown-scoped table rather than the default one.
+  code blocks, belong under `[patterns] markdown_only` in `typos.local.toml`.
+  Architecture decision record (ADR) 009 keeps Oxford spelling in source
+  identifiers, so that mask is rendered under a Markdown-scoped table rather
+  than the default one. Inline code spans stay checked everywhere; give a
+  backticked identifier its own narrow `ignore` entry instead.
 - Shared `[phrases.corrections]` policy is enforced by the gate's phrase stage
   before Typos. Correct genuine maintained prose rather than masking it.
 - Run `make fmt` after documentation changes to format Markdown and fix table

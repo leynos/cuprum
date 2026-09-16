@@ -58,7 +58,6 @@ extend-glob = [
 ]
 extend-ignore-re = [
     "(?s)```.*?```",
-    "`[^`\\n]+`",
 ]
 
 [default.extend-words]

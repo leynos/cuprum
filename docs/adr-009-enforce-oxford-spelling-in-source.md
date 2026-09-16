@@ -37,10 +37,10 @@ anchored ignore pattern to `typos.local.toml` and document the specific
 contract beside it. `make spelling` regenerates `typos.toml` on every run; do
 not accept globally incorrect forms or edit the generated file by hand.
 
-The Markdown-only scoping this decision relies on — fenced blocks and inline
-code spans masked in documentation but not in source — is now expressed through
-the `[patterns] markdown_only` key of `typos-config-builder`, which renders
-those masks under a `[type.markdown]` table instead of `[default]`.
+The Markdown-only scoping this decision relies on — fenced blocks masked in
+documentation but not in source — is now expressed through the
+`[patterns] markdown_only` key of `typos-config-builder`, which renders that
+mask under a `[type.markdown]` table instead of `[default]`.
 
 ## Consequences
 

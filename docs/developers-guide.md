@@ -3057,10 +3057,11 @@ accept a globally incorrect Oxford form under `[words] accepted`.
 A mask that should relax documentation without relaxing source belongs under
 `[patterns] markdown_only`. The builder withholds each listed expression from
 the merged `[default]` ignore set and renders it under a `[type.markdown]`
-table scoped to `*.md` instead. This repository confines the fenced-block and
-inline code span masks that way, because ADR 009 requires Oxford spelling in
-source identifiers and masking code spans everywhere would let a misspelled
-identifier through.
+table scoped to `*.md` instead. This repository confines the fenced-block mask
+that way, because ADR 009 requires Oxford spelling in source identifiers and
+masking fenced blocks everywhere would let a misspelled identifier through.
+Inline code spans stay checked in every file; a backticked identifier that must
+keep another spelling gets its own narrow `ignore` entry instead.
 
 The builder fetches the shared dictionary over HTTPS only, refuses any redirect
 that would downgrade the connection to plain HTTP, binds its cache to the

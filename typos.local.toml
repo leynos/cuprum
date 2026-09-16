@@ -31,24 +31,24 @@ ignore = [
   '\("ises", "izes"\)',
   # This byte-splitting fixture deliberately divides "second" after "sec".
   'b"ond\\n"',
-  # The shared base does not exempt inline code spans in source, so the
+  # The shared base no longer exempts inline code spans wholesale, so the
   # identifiers below — a helper name, a third-party command-line flag, and
   # the style guide's own US-spelled API example — are exempted one at a time.
-  # Prefer another narrow pattern to a blanket rule here: these entries apply
-  # to Python and Rust source as well as Markdown.
+  # Prefer another narrow pattern to reinstating a blanket rule: prose inside
+  # backticks should still be spell-checked.
   '\bbuild_native_wheel_artifact\b',
   '--artifact-server-path(?:[=\s"`]|$)',
   '`color`',
   '\brust-analyzer\b',
 ]
 
-# ADR 009 requires en-GB-oxendict spelling in source identifiers, so the code
-# span masks below must not reach Python or Rust files. `markdown_only`
-# withholds them from `[default] extend-ignore-re` and renders them under a
-# `[type.markdown]` table scoped to `*.md` instead.
+# ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
+# block mask must not reach Python or Rust files. `markdown_only` withholds it
+# from `[default] extend-ignore-re` and renders it under a `[type.markdown]`
+# table scoped to `*.md` instead. Inline code spans stay checked everywhere,
+# per the narrow-pattern preference recorded above.
 markdown_only = [
   '(?s)```.*?```',
-  '`[^`\n]+`',
 ]
 
 [files]
