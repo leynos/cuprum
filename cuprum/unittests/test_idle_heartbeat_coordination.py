@@ -158,9 +158,19 @@ def test_stage_stderr_defers_the_aggregate(
         "the deferred quiet tail must still be reported repeatedly for "
         f"notifications={recorder.seen!r}"
     )
-    # Without a stage's stderr counting as output the first report would land
-    # one interval in; with it, not before the producer's last tick plus one.
-    assert recorder.first_total() >= (ticks - 1) * gap, (
+    # An idle age below the elapsed total is the signature of a reset: without
+    # a stage's stderr counting as output no activity would ever be recorded,
+    # so every report would name an idle age equal to the total. Only the
+    # producer's stderr can have reset the clock here -- its stdout is
+    # inter-stage and the consumer stays silent.
+    #
+    # Deliberately not a wall-clock threshold against the producer's tick
+    # schedule: the parent's event loop stalls inside `create_subprocess_exec`
+    # while it spawns the next stage, which can delay its reads of the
+    # producer's stderr past the first deadline without changing what the
+    # clock counted.
+    total, idle = recorder.seen[-1]
+    assert idle < total, (
         "a stage's stderr must defer the aggregate clock for "
         f"notifications={recorder.seen!r}"
     )
