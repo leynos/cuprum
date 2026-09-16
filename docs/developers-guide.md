@@ -3037,12 +3037,12 @@ by absolute `ACTIONLINT` path, so checkout contents cannot shadow `make`.
 `make spelling` is the whole gate. It runs the shared
 [typos-config-builder](https://github.com/leynos/typos-config-builder) at the
 version pinned by `TYPOS_CONFIG_BUILDER_VERSION`, which regenerates
-`typos.toml`, runs the shared phrase check, then runs Typos itself with British
-English and Oxford `-ize` conventions. `--scope all` passes every tracked file,
-so the policy governs code identifiers, comments, docstrings, string fixtures,
-and prose. Only spellings required by external contracts or deliberate
-spelling-test fixtures are exempt. `make lint` and `make markdownlint` both
-depend on this recipe.
+`typos.toml`, runs Typos itself with British English and Oxford `-ize`
+conventions, then runs the shared phrase check. `--scope all` passes every
+tracked file, so the policy governs code identifiers, comments, docstrings,
+string fixtures, and prose. Only spellings required by external contracts or
+deliberate spelling-test fixtures are exempt. `make lint` and
+`make markdownlint` both depend on this recipe.
 
 `typos.toml` is regenerated from the live shared dictionary and the
 `typos.local.toml` overlay on every run, so it is never drift checked in CI. A

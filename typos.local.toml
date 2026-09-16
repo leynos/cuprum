@@ -55,7 +55,10 @@ markdown_only = [
 
 [files]
 exclude = [
-  # Syrupy snapshots of byte-fidelity fixtures: random base64 payloads whose
-  # substrings collide with dictionary words. Not maintained prose.
-  "*.ambr",
+  # Syrupy snapshot of the byte-fidelity fixture: a random base64 payload
+  # whose substrings collide with dictionary words. Not maintained prose.
+  # Other `.ambr` snapshots hold maintained user-visible strings (warnings,
+  # benchmark summaries) and stay spell-checked under the all-tracked-files
+  # policy.
+  "tests/behaviour/__snapshots__/test_stream_fidelity.ambr",
 ]
