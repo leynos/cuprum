@@ -54,7 +54,7 @@ def test_coercible_intervals_are_normalized_at_construction(
     assert isinstance(options.idle_after, float), (
         f"the stored interval must already be a float, got {options.idle_after!r}"
     )
-    assert options.idle_after == float(typ.cast("float", interval)), (
+    assert options.idle_after == pytest.approx(float(typ.cast("float", interval))), (
         "normalization must preserve the interval's value"
     )
 

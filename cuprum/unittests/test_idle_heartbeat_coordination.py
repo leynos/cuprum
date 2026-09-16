@@ -19,7 +19,6 @@ import asyncio
 import contextlib
 import io
 import typing as typ
-from pathlib import Path
 
 import pytest
 
@@ -30,6 +29,7 @@ from tests.helpers.idle import IdleRecorder, keepalives, pending_tasks
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.sh import Pipeline, PipelineResult, SafeCmd
     from tests.helpers.catalogue import PythonCatalogue
