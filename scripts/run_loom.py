@@ -159,6 +159,14 @@ def _environment(bounds: LoomBounds) -> dict[str, str]:
     }
 
 
+def _validate_bounds(bounds: LoomBounds) -> LoomBounds:
+    """Reject non-positive programmatic exploration bounds."""
+    values = (bounds.max_preemptions, bounds.max_branches, bounds.max_threads)
+    if any(value < 1 for value in values):
+        raise LoomRunError.invalid_bound_override()
+    return bounds
+
+
 def _cargo_command(*tail: str) -> list[str]:
     """Build the fixed Cargo command line for the dedicated Loom target."""
     return [
@@ -225,7 +233,7 @@ def _count_executed(output: str) -> int:
 def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
     """Discover then execute the non-empty Loom target under explicit bounds."""
     _validate_mode(mode)
-    selected_bounds = bounds or _bounds_for_mode(mode)
+    selected_bounds = _validate_bounds(bounds or _bounds_for_mode(mode))
     environment = _environment(selected_bounds)
     started_at = time.monotonic()
     discovery = _run(_cargo_command("--", "--list"), environment=environment)
@@ -268,10 +276,12 @@ def _selected_bounds(arguments: argparse.Namespace) -> LoomBounds | None:
         return None
     if any(value is None for value in values) or any(value < 1 for value in values):
         raise LoomRunError.invalid_bound_override()
-    return LoomBounds(
-        max_preemptions=arguments.max_preemptions,
-        max_branches=arguments.max_branches,
-        max_threads=arguments.max_threads,
+    return _validate_bounds(
+        LoomBounds(
+            max_preemptions=arguments.max_preemptions,
+            max_branches=arguments.max_branches,
+            max_threads=arguments.max_threads,
+        )
     )
 
 
