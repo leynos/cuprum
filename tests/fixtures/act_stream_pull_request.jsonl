@@ -1,0 +1,25 @@
+# A recorded `act --json` stream, one JSON object per line.
+#
+# Recorded from the real `changes` job running under the harness in
+# docs/local-validation-of-github-actions-with-act-and-pytest.md, then
+# reduced to the events the parser reads. Fields no parser touches and
+# that vary per machine or per run — `time`, `msg`, `jobID`, `executionTime`
+# and the container paths inside `msg` — are dropped, so the file is
+# deterministic and diffs cleanly.
+#
+# Lines starting with `#` are not part of the format; the test strips them.
+#
+# the healthy detector path: a performance-relevant pull request at head.
+#
+{"step": "Set up job", "stepResult": "success"}
+{"executionTime": 160797828, "step": "Check out repository", "stepResult": "success"}
+{"executionTime": 637123685, "step": "Detect performance-relevant changes", "stepResult": "success"}
+{"arg": "true", "command": "set-output", "name": "bench", "step": "Detect performance-relevant changes"}
+{"arg": "1", "command": "set-output", "name": "bench_count", "step": "Detect performance-relevant changes"}
+{"arg": "[\"bench\"]", "command": "set-output", "name": "changes", "step": "Detect performance-relevant changes"}
+{"executionTime": 514452316, "step": "Record the benchmark gate decision", "stepResult": "success"}
+{"arg": "pull_request", "command": "set-output", "name": "event_class", "step": "Record the benchmark gate decision"}
+{"arg": "success", "command": "set-output", "name": "detector_status", "step": "Record the benchmark gate decision"}
+{"arg": "run", "command": "set-output", "name": "decision", "step": "Record the benchmark gate decision"}
+{"command": "summary", "content": "### Benchmark gate\n\n| event | detector | performance-relevant changes | benchmark-ratchet |\n| --- | --- | --- | --- |\n| pull_request | success | true | run |\n", "step": "Record the benchmark gate decision"}
+{"step": "Complete job", "stepResult": "success"}

@@ -1,0 +1,31 @@
+# A recorded `act --json` stream, one JSON object per line.
+#
+# Recorded from a real one-step workflow under `act`, then reduced to the
+# events the parser reads. Fields no parser touches and that vary per machine
+# or per run — `time`, `msg`, `jobID`, `jobPath` and the container paths inside
+# `msg` — are dropped, so the file is deterministic and diffs cleanly.
+#
+# Lines starting with `#` are not part of the format; the test strips them.
+#
+# the one shape where `act` emits the same output name twice.
+#
+# A name reaches this stream more than once only when a step writes it through
+# the *legacy* `::set-output::` command: `act` walks the log lines as they
+# arrive and emits one event per command, so a `$GITHUB_OUTPUT` write followed
+# by a legacy one (and then another file write) yields two events. Ordinary
+# `$GITHUB_OUTPUT` writes are folded by the runner and emit a single event
+# carrying the final value — see
+# `docs/adr-012-actions-runner-integration-harness.md`.
+#
+# The recorded workflow wrote `value=from-file`, then
+# `::set-output name=value::from-legacy-command`, then `value=from-file-again`,
+# and read back `from-file-again`. So the live value is the *last* event's, and
+# a parser that took the first match would report a value the run had already
+# replaced.
+#
+{"step": "Set up job", "stepResult": "success"}
+{"arg": "from-legacy-command", "command": "set-output", "name": "value", "step": "Write one output three ways"}
+{"arg": "from-file-again", "command": "set-output", "name": "value", "step": "Write one output three ways"}
+{"step": "Write one output three ways", "stepResult": "success"}
+{"step": "Read it back", "stepResult": "success"}
+{"step": "Complete job", "stepResult": "success"}

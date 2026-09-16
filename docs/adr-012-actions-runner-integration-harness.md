@@ -60,8 +60,12 @@ matter.
   socket so rootless Podman works without a Docker daemon.
 - Recover the step summary from the `act` JSON log stream, because the
   in-container summary file is truncated after upload.
-- Take the last value of a repeated `set-output`, because the JSON stream is
-  cumulative and carries stale intermediate values.
+- Take the last value of a repeated `set-output`. `act` folds ordinary
+  `$GITHUB_OUTPUT` writes and emits one event carrying the final value, so the
+  real `changes` job produces each name exactly once. A name still reaches the
+  stream more than once when a step also uses the legacy `::set-output::`
+  command, and there the live value is the last event's — so the parser
+  resolves repeats last-wins and a recorded fixture pins that behaviour.
 
 ## Options considered
 
@@ -141,8 +145,9 @@ maintainer-facing and a metered CI job is the expensive part.
   re-running it when Actions semantics change.
 - The harness depends on `act`'s JSON stream format, which is not a stable
   interface. The parsing is therefore repository-owned code with its own unit
-  tests, including a stream carrying a stale repeated value, so a format change
-  fails visibly instead of silently returning the wrong output.
+  tests over recorded streams, including one that carries the same output name
+  twice, so a format change fails visibly instead of silently returning the
+  wrong output.
 - Container images for non-amd64 hosts are not always available, so the pinned
   public image is the committed default and any divergence in the opt-in CI job
   is documented rather than assumed to be equivalent.
@@ -162,3 +167,37 @@ maintainer-facing and a metered CI job is the expensive part.
 - `make test` gains a scenario set that is slower than the rest of the suite and
   that requires a container runtime to contribute.
 - The repository owns a parser for a third-party tool's output format.
+
+## Revision note, 2026-09-16: two findings from building the harness
+
+Two things the harness taught us after this decision was first written. Both
+are recorded here because they change how the harness must be used, not merely
+how it is implemented.
+
+**The detector diffs the checked-out branch, not the event's head.** With an
+empty `github.token`, `dorny/paths-filter` falls back to
+`git diff <base> <current-branch>`, where the current branch is whatever the
+container has checked out. It does not consult `pull_request.base.sha`. A
+pull-request scenario that leaves the repository on its default branch
+therefore diffs that branch against a commit already containing every scenario
+commit, observes no changes, and reports `bench=false` for a scenario that is
+plainly relevant. `tests/helpers/act_harness.py` makes this explicit through
+`branch()`, which every pull-request scenario must call first. The trap is
+worth recording because it fails *quietly and plausibly*: the wrong answer is
+the same `false` that a genuinely irrelevant scenario produces.
+
+**The legacy `::set-output::` command is the only source of a repeated
+output.** `act` folds `$GITHUB_OUTPUT` writes and emits a single event carrying
+the final value, so the real `changes` job produces each name exactly once. The
+technical requirement above originally justified last-wins resolution as a
+property of the whole stream; the measurement says the requirement holds for
+the legacy path specifically. The parser resolves repeats last-wins either way,
+and `tests/fixtures/act_stream_repeated_output.jsonl` is a real recording that
+pins it. A parser written on the original premise would still be correct; it
+would simply have been correct for a reason that was never checked.
+
+The harness also runs through Cuprum's own `SafeCmd` driver rather than
+`subprocess`, so the repository's command runner is the thing exercising the
+repository's workflow. That is a deliberate choice: it dogfoods the driver on
+a real, long-running, container-boundary command, and it means a regression in
+`run_sync`'s argument or environment handling surfaces here as well.
