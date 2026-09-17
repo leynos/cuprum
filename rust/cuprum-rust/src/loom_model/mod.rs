@@ -288,10 +288,13 @@ impl NativePumpModel {
     }
 
     fn complete_locked(&self, lifecycle: &mut Lifecycle) {
-        if lifecycle.cleanup_completed || lifecycle.worker_active {
+        if lifecycle.cleanup_completed {
             return;
         }
-        lifecycle.released_while_worker_active = lifecycle.worker_active;
+        if lifecycle.worker_active {
+            lifecycle.released_while_worker_active = true;
+            return;
+        }
         lifecycle.writer.close_once(self.inject_double_close);
         lifecycle.blocking_restored = true;
         lifecycle.reader_resumed = true;
