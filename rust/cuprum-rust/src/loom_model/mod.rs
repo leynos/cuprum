@@ -8,7 +8,9 @@
 mod sync;
 
 use cuprum_native_io::loom_support::borrowed_reader_close_count as native_borrowed_reader_close_count;
-use cuprum_streams::loom_support::{drive_downstream_close, drive_successful_pump};
+use cuprum_streams::loom_support::{
+    drive_downstream_close, drive_failed_pump, drive_successful_pump,
+};
 use sync::{Arc, AtomicBool, AtomicUsize, Cell, JoinHandle, Mutex, MutexGuard, Ordering, thread};
 
 /// Error returned when the bounded model cannot preserve its own invariants.
@@ -240,7 +242,6 @@ impl NativePumpModel {
     }
 
     /// Return the model's post-join observable state.
-    #[must_use]
     pub fn snapshot(&self) -> Result<LifecycleSnapshot, ModelError> {
         let lifecycle = self.lock_lifecycle()?;
         Ok(LifecycleSnapshot {
@@ -318,6 +319,6 @@ fn drive_production_pump_machine(native: NativeOutcome) {
     match native {
         NativeOutcome::Succeeded => drive_successful_pump(),
         NativeOutcome::DownstreamClosed => drive_downstream_close(),
-        NativeOutcome::Failed => {}
+        NativeOutcome::Failed => drive_failed_pump(),
     }
 }
