@@ -28,6 +28,7 @@ the repository's own (`tests.helpers.act_workflow`).
 
 from __future__ import annotations
 
+import copy
 import dataclasses as dc
 import json
 import os
@@ -48,6 +49,7 @@ from tests.helpers.act_workflow import (
     copy_actions,
     copy_workflow,
 )
+from tests.helpers.workflow import mapping
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -139,10 +141,14 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
     dict[str, object]
         The complete webhook payload.
     """
-    payload = json.loads(json.dumps(event.payload))
+    payload = copy.deepcopy(event.payload)
     payload["ref"] = event.ref
     if event.name == "pull_request":
-        payload["pull_request"]["head"].update({"sha": event.sha, "ref": event.branch})
+        pull_request = mapping(
+            payload.get("pull_request"), "event must define pull_request"
+        )
+        head = mapping(pull_request.get("head"), "pull_request must define head")
+        head.update({"sha": event.sha, "ref": event.branch})
     else:
         payload["after"] = event.sha
     payload["repository"] = {

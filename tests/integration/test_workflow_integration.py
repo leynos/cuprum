@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import pathlib as pth
+import typing as typ
 
 import pytest
 
@@ -109,9 +110,9 @@ def event_fixture(event_name: str, case: str) -> dict[str, object]:
     path = (
         WORKTREE / "tests" / "fixtures" / "events" / f"{event_name}-{case}.event.json"
     )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload: object = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict), "event fixture must be a JSON mapping"
-    return payload
+    return typ.cast("dict[str, object]", payload)
 
 
 def pull_request(repository: pth.Path, paths: list[str], *, case: str) -> ActRun:
