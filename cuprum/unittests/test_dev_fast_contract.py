@@ -104,14 +104,14 @@ def test_fragment_digest_rejects_content_mutation() -> None:
     )
 
 
-def test_make_reads_the_mold_version_from_its_pin() -> None:
+def test_make_reads_the_linker_version_from_its_pin() -> None:
     """Keep prerequisite diagnostics coupled to the checked-in linker pin."""
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
     assert "DEV_FAST_MOLD_VERSION_FILE ?= tools/mold/VERSION" in makefile, (
-        "the prerequisite check must read the tracked mold version file"
+        "the prerequisite check must read the tracked linker version file"
     )
     assert "mold 2.41.0 is required" not in makefile, (
-        "Make diagnostics must not retain a stale hard-coded mold version"
+        "Make diagnostics must not retain a stale hard-coded linker version"
     )
 
 
@@ -174,7 +174,7 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
         "debug routes must select the pinned dev-fast nightly"
     )
     assert "-Clink-arg=-fuse-ld=mold" in routing, (
-        "explicit RUSTFLAGS must retain the Linux mold linker selection"
+        "explicit RUSTFLAGS must retain the Linux linker selection"
     )
 
 
