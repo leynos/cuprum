@@ -120,18 +120,21 @@ def test_smoke_job_uses_the_same_loom_shape_and_driver() -> None:
     assert smoke.get("timeout-minutes") == 10, "smoke needs an explicit budget"
     steps = smoke.get("steps")
     assert isinstance(steps, list), "smoke must declare steps"
-    cache_step = _string_mapping(
-        next(step for step in steps if step.get("name") == "Compute cache keys"),
-        "the smoke job must compute cache keys",
+    typed_steps = [_string_mapping(step, "a smoke workflow step") for step in steps]
+    cache_step = next(
+        (step for step in typed_steps if step.get("name") == "Compute cache keys"),
+        None,
     )
+    assert cache_step is not None, "the smoke job must compute cache keys"
     cache_inputs = _string_mapping(cache_step["with"], "the cache-key inputs")
     assert cache_inputs["compiler-shape"] == "loom", (
         "smoke must use the isolated Loom cache family"
     )
-    run_step = _string_mapping(
-        next(step for step in steps if step.get("name") == "Run Loom smoke models"),
-        "the smoke job must execute Loom models",
+    run_step = next(
+        (step for step in typed_steps if step.get("name") == "Run Loom smoke models"),
+        None,
     )
+    assert run_step is not None, "the smoke job must execute Loom models"
     smoke_command = run_step["run"]
     assert isinstance(smoke_command, str), "the smoke run step must be a script"
     assert script_runs_command(

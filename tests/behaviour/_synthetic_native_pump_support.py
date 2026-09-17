@@ -25,7 +25,14 @@ def force_synthetic_native_pump_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> cabc.Iterator[None]:
     """Route a test-owned pipe pair through the otherwise unsupported native path."""
-    reader_fd, writer_fd = os.pipe()
+    reader_pipe_fd, writer_pipe_fd = os.pipe()
+    extracted_fds: list[int] = []
+
+    def duplicate_for_extraction(pipe_fd: int) -> int:
+        """Return an extraction-only duplicate that outlives no test context."""
+        extracted_fd = os.dup(pipe_fd)
+        extracted_fds.append(extracted_fd)
+        return extracted_fd
 
     def extract_raw_fd(
         stream: asyncio.StreamReader | asyncio.StreamWriter | None,
@@ -33,9 +40,9 @@ def force_synthetic_native_pump_path(
         """Return the pipe descriptor owned by the synthetic stream role."""
         match stream:
             case asyncio.StreamReader():
-                return reader_fd
+                return duplicate_for_extraction(reader_pipe_fd)
             case asyncio.StreamWriter():
-                return writer_fd
+                return duplicate_for_extraction(writer_pipe_fd)
             case _:
                 return None
 
@@ -57,6 +64,6 @@ def force_synthetic_native_pump_path(
             set_rust_availability_for_testing(is_available=None)
             _backend._check_rust_available.cache_clear()
             _backend.get_stream_backend.cache_clear()
-            for fd in (reader_fd, writer_fd):
+            for fd in (*extracted_fds, reader_pipe_fd, writer_pipe_fd):
                 with contextlib.suppress(OSError):
                     os.close(fd)
