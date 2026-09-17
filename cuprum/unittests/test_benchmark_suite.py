@@ -27,6 +27,7 @@ from benchmarks.pipeline_throughput import (
 from benchmarks.pipeline_throughput_scenarios import (
     _SMOKE_LARGE_PAYLOAD_BYTES,
     CI_RATCHET_PAYLOAD_BYTES,
+    CI_RATCHET_WORKER_ITERATIONS,
 )
 from benchmarks.pipeline_worker import PipelineWorkerConfig
 
@@ -674,3 +675,47 @@ def test_cli_either_workload_alone_builds_its_own_plan(
         tuple(sorted({scenario["payload_bytes"] for scenario in plan["scenarios"]}))
         == expected_payloads
     ), f"`{flag}` alone must plan only its own payload tiers"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_iterations"),
+    [
+        pytest.param((), 20, id="sweep-default"),
+        pytest.param(("--smoke",), 20, id="smoke-default"),
+        pytest.param(
+            ("--ci-ratchet",), CI_RATCHET_WORKER_ITERATIONS, id="ratchet-default"
+        ),
+        pytest.param(
+            ("--ci-ratchet", "--worker-iterations", "9"), 9, id="explicit-wins"
+        ),
+    ],
+)
+def test_cli_resolves_the_worker_iterations_for_its_workload(
+    argv: tuple[str, ...],
+    expected_iterations: int,
+    tmp_path: pth.Path,
+) -> None:
+    """Each workload measures at its own iteration count unless overridden.
+
+    The count is recorded in every sample and only samples whose profile
+    metadata agrees are compared, so a ratchet measured at the wrong count is
+    silently incomparable rather than visibly wrong. Defaulting `--ci-ratchet`
+    to the count CI measures at keeps a local reproduction on the same protocol
+    as the job that will judge it; the explicit flag still wins, because a
+    developer tuning the workload has to be able to change it.
+    """
+    output_path = tmp_path / "plan.json"
+
+    exit_code = throughput_main([
+        "--output",
+        str(output_path),
+        "--dry-run",
+        *argv,
+    ])
+
+    assert exit_code == 0, f"`{' '.join(argv)}` should exit cleanly, got {exit_code}"
+    plan = json.loads(output_path.read_text(encoding="utf-8"))
+    assert plan["worker_iterations"] == expected_iterations, (
+        f"`{' '.join(argv) or 'no workload flag'}` must record "
+        f"{expected_iterations} worker iterations, got {plan['worker_iterations']}"
+    )

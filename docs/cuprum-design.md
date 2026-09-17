@@ -3095,16 +3095,21 @@ past every crossover measured between the four backend/callback combinations,
 where streaming draws level with the per-iteration set-up cost — and below the
 128 MiB ceiling that keeps one measured run to a few seconds — and
 `ci_benchmark_ratchet_profile.py` rejects any scenario outside that band rather
-than comparing it. Because a payload size is not recorded in a sample, that
-change also bumped `BENCHMARK_PROFILE_VERSION`: samples measured at the old
-payloads are not comparable with the new ones and the window refills with
-compatible runs. Until the second such run lands the window yields at most one
-sample, which is the pre-window bar — the flat threshold decides alone and
-confirmation re-measurement guards the transition — and until the first such
-run lands there is no compatible history at all and the job skips the
-comparison rather than failing it. This is the fix for the false positives
-reported in [issue #219](https://github.com/leynos/cuprum/issues/219); the
-measurements behind it are recorded in
+than comparing it. `--ci-ratchet` also defaults its `--worker-iterations` to
+the count the job measures at, because the count is part of the profile
+metadata the comparability check reads: a local reproduction at another count
+was previously not an error but a silently incomparable sample, which made the
+reproduction unrepresentative rather than visibly wrong. Because a payload size
+is not recorded in a sample, that change also bumped
+`BENCHMARK_PROFILE_VERSION`: samples measured at the old payloads are not
+comparable with the new ones and the window refills with compatible runs. Until
+the second such run lands the window yields at most one sample, which is the
+pre-window bar — the flat threshold decides alone and confirmation
+re-measurement guards the transition — and until the first such run lands there
+is no compatible history at all and the job skips the comparison rather than
+failing it. This is the fix for the false positives reported in
+[issue #219](https://github.com/leynos/cuprum/issues/219); the measurements
+behind it are recorded in
 `docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md`.
 
 The median, rather than the latest sample, is the bar because a single run is

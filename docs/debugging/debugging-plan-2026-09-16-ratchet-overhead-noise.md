@@ -85,10 +85,10 @@ shape, and the two differ by the load the machine carried.
 ### The ratio's spread falls as the payload rises
 
 One cell per payload, each cell four repeat hyperfine invocations of the
-scenario set the CI profile selects (single-stage, both callback modes, both
-backends), ten runs and one warmup per command, `--iterations 5`. Ratios are
-`rust_mean / python_mean` within one invocation; the band is the ratchet's own
-`3 × 1.4826 × MAD` relative to the median.
+scenario set the CI profile selects (the `single` depth, both callback modes,
+both backends), ten runs and one warmup per command, `--iterations 5`. Ratios
+are `rust_mean / python_mean` within one invocation; the band is the ratchet's
+own `3 × 1.4826 × MAD` relative to the median.
 
 *Table 3. Within-run ratios by payload (2026-09-16, development host, load
 average falling from 23 to about 2.5 across the sweep, other agents' work
@@ -198,18 +198,18 @@ runs and to the full selected workload (2026-09-16, development host).*
 | 64 MiB  | 74.3 s                           | 84.4 s (measured, Table 5)       | ≈ 84 s               |
 | 100 MiB | 100.8 s                          | 202 s (projected)                | 202 s                |
 
-The ratchet job measures four scenarios — one payload, one two-stage depth, two
-callback modes, both backends — and re-measures them a second time when
-anything is flagged. At 64 MiB and twenty runs that is under two minutes of
-measurement in the common case, under four with the confirmation pass, against
-the job's sixty-minute timeout. The old profile measured twelve smoke scenarios
-at ten runs.
+The ratchet job measures four scenarios — one payload, the `single` depth (two
+stages, zero passthrough), two callback modes, both backends — and re-measures
+them a second time when anything is flagged. At 64 MiB and twenty runs that is
+under two minutes of measurement in the common case, under four with the
+confirmation pass, against the job's sixty-minute timeout. The old profile
+measured twelve smoke scenarios at ten runs.
 
 ### The old CI profile was not the workload the fixtures described
 
-The profile selected two-stage scenarios at 1 KiB and 64 KiB. Those are the
-smoke matrix's payloads, chosen for fast validation rather than for
-measurement, so `--smoke` would have been the obvious way to get them: the
+The profile selected `single`-depth (two-stage) scenarios at 1 KiB and 64 KiB.
+Those are the smoke matrix's payloads, chosen for fast validation rather than
+for measurement, so `--smoke` would have been the obvious way to get them: the
 ratchet was measuring a validation fixture. That is the design error behind the
 numbers above — the profile inherited a payload tier that was never meant to
 carry a comparison.
@@ -234,6 +234,18 @@ The ratchet now measures a dedicated payload tier rather than a smoke tier:
   `pipeline-worker-release-ratio-v5`. A payload size is not recorded in a
   sample, so the version gate is the only thing that stops a v4 ratio from
   being compared against a v5 one.
+- `--ci-ratchet` defaults `--worker-iterations` to
+  `CI_RATCHET_WORKER_ITERATIONS` (5), so a developer reproducing the gate
+  locally measures the same protocol the job will judge. The throughput sweep
+  and `--smoke` keep the previous default of 20, and an explicit
+  `--worker-iterations` still overrides either. Without this, `--ci-ratchet`
+  alone planned twenty iterations against a history recorded at five; the
+  iteration count is part of the profile metadata a sample is compared on, so
+  the mismatch did not error — it yielded zero compatible samples and skipped
+  the comparison, making a local reproduction quietly unrepresentative rather
+  than visibly wrong. A contract test in `test_benchmark_gate_ci_contract.py`
+  holds the workflow's flag and the CLI default together so the two cannot
+  drift apart again.
 
 `--max-regression` stays at 0.30. The evidence above says the threshold was not
 the problem: the 1 KiB ratio's own observed spread exceeded it between two

@@ -1384,6 +1384,13 @@ jobs:
             # two per backend — one per callback mode — so four in total.
             # Changing either value invalidates the recorded samples and needs
             # a BENCHMARK_PROFILE_VERSION bump; see docs/cuprum-design.md 13.9.
+            #
+            # The count is also the CLI's own default for `--ci-ratchet`
+            # (`CI_RATCHET_WORKER_ITERATIONS`, the value a local reproduction
+            # gets), and a contract test in `test_benchmark_gate_ci_contract.py`
+            # fails if the two disagree. It is restated here because the
+            # protocol is part of what this job declares, not because the
+            # workflow is where it is decided.
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
               --ci-ratchet \
