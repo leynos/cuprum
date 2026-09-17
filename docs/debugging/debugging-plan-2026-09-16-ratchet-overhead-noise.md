@@ -188,21 +188,31 @@ compares ratios across runs rather than wall clock.
 Per cell, the mean wall clock of one hyperfine invocation of the four commands
 at ten runs and one warmup each:
 
-*Table 6. Wall clock per hyperfine invocation by payload, projected to twenty
-runs and to the full selected workload (2026-09-16, development host).*
+*Table 6. Wall clock per hyperfine invocation by payload. The ten-run column is
+measured: the mtime span of each cell's four exported hyperfine JSON files,
+divided by three, gives one invocation. The twenty-run column scales that same
+cell by `(20 + 1) / (10 + 1)` — twenty measured runs plus one warmup against
+ten plus one — because a run and a warmup execute the same worker command and
+differ only in whether hyperfine records them; the last column is that
+projection for the four commands the profile selects (2026-09-16, development
+host).*
 
 | Payload | invocation (4 commands, 10 runs) | invocation (4 commands, 20 runs) | 4 commands × 20 runs |
 | ------- | -------------------------------- | -------------------------------- | -------------------- |
-| 16 MiB  | 25.0 s                           | 50 s (projected)                 | 50 s                 |
-| 32 MiB  | 41.3 s                           | 83 s (projected)                 | 83 s                 |
-| 64 MiB  | 74.3 s                           | 84.4 s (measured, Table 5)       | ≈ 84 s               |
-| 100 MiB | 100.8 s                          | 202 s (projected)                | 202 s                |
+| 16 MiB  | 23.6 s                           | 45.1 s (projected)               | 45 s                 |
+| 32 MiB  | 42.7 s                           | 81.5 s (projected)               | 82 s                 |
+| 64 MiB  | 71.6 s                           | 136.7 s (projected)              | 137 s                |
+| 100 MiB | 100.6 s                          | 192.1 s (projected)              | 192 s                |
 
 The ratchet job measures four scenarios — one payload, the `single` depth (two
 stages, zero passthrough), two callback modes, both backends — and re-measures
 them a second time when anything is flagged. At 64 MiB and twenty runs that is
-under two minutes of measurement in the common case, under four with the
-confirmation pass, against the job's sixty-minute timeout. The old profile
+about two and a quarter minutes of measurement in the common case, about four
+and a half with the confirmation pass, against the job's sixty-minute timeout.
+Table 5's 84.4 s came from the same session as this table's 64 MiB row, at the
+run count already in place; its three repeats of a nominal 84.4 s figure spread
+by enough to make that a draw rather than a reading, which is why the column is
+projected from the ten-run cell instead of quoted from it. The old profile
 measured twelve smoke scenarios at ten runs.
 
 ### The old CI profile was not the workload the fixtures described
