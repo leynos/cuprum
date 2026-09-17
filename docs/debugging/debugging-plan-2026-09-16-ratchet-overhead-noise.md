@@ -196,7 +196,7 @@ runs and to the full selected workload (2026-09-16, development host).*
 | 64 MiB  | 74.3 s                           | 84.4 s (measured, Table 5)       | ≈ 84 s               |
 | 100 MiB | 100.8 s                          | 202 s (projected)                | 202 s                |
 
-The ratchet job measures four scenarios — one payload, two-stage depths, two
+The ratchet job measures four scenarios — one payload, one two-stage depth, two
 callback modes, both backends — and re-measures them a second time when
 anything is flagged. At 64 MiB and twenty runs that is under two minutes of
 measurement in the common case, under four with the confirmation pass, against
