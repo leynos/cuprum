@@ -3072,28 +3072,30 @@ The ratchet rule is:
 - fail only when a flagged scenario is still flagged by a second measurement
   taken in the same job
 
-Comparing within-run ratios rather than absolute wall-clock means cancels out
-runner-speed differences between the two CI jobs that produced the baseline and
-candidate runs.
+Comparing within-run ratios rather than absolute wall-clock means reduces the
+gate's sensitivity to runner-speed differences between the two CI jobs that
+produced the baseline and candidate runs. It does not remove them: a ratio only
+cancels a cost the two backends pay in the same proportion, and the backends do
+not respond to contention identically, so load that falls unevenly across the
+two measured blocks still moves the ratio.
 
-A ratio only cancels a cost the two backends pay in the same proportion. The
-interpreter start, the `cuprum` import, and the per-iteration pipeline set-up
-do not scale with the payload, and the two backends pay different amounts of
-them, so at a small payload those fixed costs are most of both means and the
-ratio compares start-up times: it is the spread of *those*, not of the
-pipeline, that decides whether a scenario is flagged. The ratchet therefore
-measures one payload large enough for the streaming work to dominate — 64 MiB,
-above the 32 MiB floor — the first tier past every crossover measured between
-the four backend/callback combinations, where streaming draws level with the
-per-iteration set-up cost — and below the 128 MiB ceiling that keeps one
-measured run to a few seconds — and `ci_benchmark_ratchet_profile.py` rejects
-any scenario outside that band rather than comparing it. Because a payload size
-is not recorded in a sample, that change also bumped
-`BENCHMARK_PROFILE_VERSION`: samples measured at the old payloads are not
-comparable with the new ones and the window refills with compatible runs,
-leaving the flat threshold and confirmation re-measurement to guard the
-transition. This is the fix for the false positives reported in issue #219; the
-measurements behind it are recorded in
+The interpreter start, the `cuprum` import, and the per-iteration pipeline
+set-up are the clearest case of that: they do not scale with the payload, and
+the two backends pay different amounts of them, so at a small payload those
+fixed costs are most of both means and the ratio compares start-up times: it is
+the spread of *those*, not of the pipeline, that decides whether a scenario is
+flagged. The ratchet therefore measures one payload large enough for the
+streaming work to dominate — 64 MiB, above the 32 MiB floor — the first tier
+past every crossover measured between the four backend/callback combinations,
+where streaming draws level with the per-iteration set-up cost — and below the
+128 MiB ceiling that keeps one measured run to a few seconds — and
+`ci_benchmark_ratchet_profile.py` rejects any scenario outside that band rather
+than comparing it. Because a payload size is not recorded in a sample, that
+change also bumped `BENCHMARK_PROFILE_VERSION`: samples measured at the old
+payloads are not comparable with the new ones and the window refills with
+compatible runs, leaving the flat threshold and confirmation re-measurement to
+guard the transition. This is the fix for the false positives reported in issue
+# 219; the measurements behind it are recorded in
 `docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md`.
 
 The median, rather than the latest sample, is the bar because a single run is
