@@ -10,7 +10,10 @@ import yaml
 from tests.helpers.act_harness import CI_WORKFLOW
 from tests.helpers.act_workflow import copy_workflow
 from tests.helpers.ci_workflows import workflow_document
-from tests.helpers.workflow import job, mapping, parse_workflow
+from tests.helpers.workflow import job, mapping, parse_workflow, step_named
+from tests.test_ci_workflow_harness_job import (
+    test_the_harness_job_runs_the_target_that_refuses_a_skip as verify_harness_command,
+)
 
 
 def test_projection_preserves_the_detector_and_admission_contract(
@@ -81,3 +84,25 @@ def test_projection_rejects_malformed_workflow_shapes(
     workflow.write_text(yaml.safe_dump(parsed), encoding="utf-8")
     with pytest.raises(AssertionError, match="must declare"):
         copy_workflow(tmp_path / "target", source, CI_WORKFLOW)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "# make test-act\ntrue",
+        "echo 'make test-act'",
+        "make test-act-extra",
+        "cat <<'EOF'\nmake test-act\nEOF",
+    ],
+)
+def test_harness_contract_rejects_unexecuted_target_text(script: str) -> None:
+    """Mentioning the target must not satisfy the workflow execution contract."""
+    worktree = pth.Path(__file__).resolve().parents[1]
+    source = worktree / ".github/workflows/benchmark-gate-harness.yml"
+    workflow = parse_workflow(source.read_text(encoding="utf-8"))
+    step = step_named(
+        workflow, "workflow-harness", "Run the workflow integration harness"
+    )
+    step["run"] = script
+    with pytest.raises(AssertionError, match="must run"):
+        verify_harness_command(workflow)

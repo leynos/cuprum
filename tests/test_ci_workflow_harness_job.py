@@ -99,7 +99,7 @@ def test_the_harness_job_runs_the_target_that_refuses_a_skip(
     """
     script = script_of(_harness_step(workflow_data))
     assert script is not None, f"{JOB} must run a shell command"
-    assert HARNESS_TARGET in script, (
+    assert script_runs_command(script, HARNESS_TARGET), (
         f"{JOB} must run `{HARNESS_TARGET}`, which sets CUPRUM_REQUIRE_ACT=1; "
         f"a direct pytest invocation would let a skipped suite pass. Script: "
         f"{script!r}"
