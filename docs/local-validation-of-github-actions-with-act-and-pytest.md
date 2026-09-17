@@ -6,6 +6,20 @@ testing** of a workflow using `act` and `pytest`, treating the workflow as a
 structured logs. Host-side command interception is intentionally avoided;
 containers execute in isolation.
 
+It is the background for the *supported* harness this repository now ships,
+which executes the real `changes` job from `.github/workflows/ci.yml`. To run
+that, or to read the contract it enforces, start with
+[ADR-012](adr-012-actions-runner-integration-harness.md) and:
+
+```bash
+make test-act   # refuses to skip: fails when act or a runtime is missing
+make test       # runs the scenarios too, and skips where they cannot run
+```
+
+The rest of this document is the general recipe for validating *any* workflow
+in this repository with `act`, and is the reason the supported harness is
+shaped the way it is.
+
 ## TL;DR
 
 - Keep **unit tests** in the action codebase (plain `pytest` or the language's
@@ -18,7 +32,10 @@ containers execute in isolation.
 
 ## Prerequisites
 
-- Docker daemon available.
+- A container runtime. Docker is the default; rootless Podman also works when
+  its socket is running, which is what a developer machine uses. On a
+  GitHub-hosted runner there is no user session to start Podman's socket, so
+  the opt-in CI job binds Docker instead — see ADR-012.
 - `act` installed.
 - Python 3.10+ with `pytest`.
 - Optional but recommended: pin an image to reduce drift:
@@ -26,6 +43,13 @@ containers execute in isolation.
   ```bash
   act pull_request -P ubuntu-latest=catthehacker/ubuntu:act-latest --list
   ```
+
+Verify both before debugging a scenario that will not start:
+
+```bash
+docker info --format '{{.ServerVersion}}'   # or: podman info
+act --version
+```
 
 ## Minimal layout
 
@@ -206,6 +230,39 @@ record, replay, and verify loop:
 3. **Inspect** the journal. After verification, `cmd_mox.journal` exposes the
    captured `Invocation` objects. Serialize the data into JSON lines or YAML,
    so future tests can bootstrap mocks from the same expectations.
+
+## Traps this repository has hit
+
+Each of these produces a *plausible wrong answer* rather than an error, which
+is why they are listed here rather than left to be rediscovered.
+
+- **Scope `act` to one workflow with `-W`.** `--job` matches a job name across
+  every workflow file, so without `-W .github/workflows/<file>.yml` a job name
+  that appears in two files runs both, and the failure names a job you did not
+  mean to run.
+- **Pass `-s GITHUB_TOKEN=` when the workflow uses `actions/checkout` and
+  `dorny/paths-filter`.** With an empty token, `paths-filter` takes its local
+  `git diff` path and works offline. With a token `act` fabricates, it calls
+  the GitHub API and fails with `::error::Not Found` — a failure that looks
+  like a broken detector rather than an offline-mode problem.
+- **A path filter diffs the checked-out branch, not the event's head.** With
+  an empty token the base resolves to `base || baseSha || defaultBranch` and is
+  compared against `git branch --show-current`; `pull_request.base.sha` is not
+  consulted. A scenario left on the default branch diffs that branch against a
+  commit that already contains its own changes and reports "no relevant
+  changes" — the same answer a genuinely irrelevant scenario produces. Put the
+  temporary repository on a branch first.
+- **A workflow file is often itself one of its own filter patterns.** If
+  `.github/workflows/<file>.yml` matches the filter, it must be in the *base*
+  commit, or every scenario is relevant for a reason unrelated to what it is
+  testing.
+- **Read outputs from the stream, and step summaries too.**
+  `$GITHUB_STEP_SUMMARY` is truncated inside the container after upload, so
+  recover it from the `⚙ Summary -` log message. `act` folds `$GITHUB_OUTPUT`
+  writes into a single event carrying the final value; a name reaches the
+  stream more than once only when a step also uses the legacy
+  `::set-output name=X::Y` command, and there the last event's value is the
+  live one.
 
 ## What to assert (beyond exit code)
 

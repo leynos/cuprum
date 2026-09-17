@@ -119,9 +119,20 @@ non-zero exit.
 
 The harness passes `-s GITHUB_TOKEN=` so that `github.token` is empty and the
 pinned `dorny/paths-filter` takes its local `git diff` path rather than calling
-the GitHub API. It is exposed as a pytest module and a Makefile target rather
-than as a scheduled workflow job, because the evidence it produces is
-maintainer-facing and a metered CI job is the expensive part.
+the GitHub API. It is exposed as a pytest module and a Makefile target; the
+maintainer-facing evidence is the point, and a run on every pull request would
+buy little for a boundary that changes rarely.
+
+It is additionally run by an opt-in `workflow-harness` job in `ci.yml`, on a
+dispatch or a weekly schedule and never on a pull request. That job exists
+because the alternative is a harness nothing runs: the suite skips where no
+container runtime is present, so without a job that sets
+`CUPRUM_REQUIRE_ACT=1` a silent regression in the harness, its pinned image, or
+`act`'s own output format would be indistinguishable from a passing suite. It
+runs on `ubuntu-latest` and binds the Docker daemon the hosted image installs
+and starts — deliberately not the rootless Podman a developer machine uses,
+because on that image Podman's socket comes from a systemd *user* unit and a
+runner has no user session to create one.
 
 ## Goals and non-goals
 
@@ -133,6 +144,8 @@ maintainer-facing and a metered CI job is the expensive part.
 - Non-goals:
   - Emulating every Actions feature. The harness covers what the `changes` job
     uses and makes no claim beyond that.
+  - Running on every pull request. The opt-in job runs the scenarios on a
+    dispatch or a schedule, never as a pull-request gate.
   - Running `benchmark-ratchet`, which needs the metered runner's toolchain.
   - Verifying that the telemetry sink accepts the payload, which
     [ADR-011](adr-011-benchmark-gate-telemetry-sink.md) leaves to a documented
