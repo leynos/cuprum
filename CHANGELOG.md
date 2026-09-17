@@ -209,12 +209,13 @@
   128 MiB band. Both the payload change and the iteration change are
   sampling-protocol changes, so `BENCHMARK_PROFILE_VERSION` was bumped to
   `pipeline-worker-release-ratio-v5` and the rolling window refills with
-  compatible `main` samples before the noise band applies again. The workflow's
-  `--max-regression`, `--noise-sigmas`, and `--history-window` values are now
-  pinned to `benchmarks/ratchet_history.py`'s single authoritative defaults by
-  a CI contract test, and the sample-recording and baseline-upload steps are
-  contract-tested to depend only on the measurement, never on the ratchet's
-  verdict. See [§13.9](docs/cuprum-design.md) and the
+  compatible `main` samples; until the second sample lands the comparison falls
+  back to a single-sample bar where the flat threshold decides alone. The
+  workflow's `--max-regression`, `--noise-sigmas`, and `--history-window`
+  values are now pinned to `benchmarks/ratchet_history.py`'s single
+  authoritative defaults by a CI contract test, and the sample-recording and
+  baseline-upload steps are contract-tested to depend only on the measurement,
+  never on the ratchet's verdict. See [§13.9](docs/cuprum-design.md) and the
   [noise measurements](docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md).
 
 - **Maturin 1.15.0:** The development, wheel-workflow, and composite-action
