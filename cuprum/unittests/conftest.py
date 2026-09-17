@@ -15,6 +15,9 @@ import pytest
 from hypothesis import settings
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_WORKER_ITERATIONS as WORKER_ITERATIONS,
+)
 from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
 if typ.TYPE_CHECKING:
@@ -38,14 +41,15 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
     "worker_command",
 })
 
-#: The CI ratchet's sampling protocol, mirroring `.github/workflows/ci.yml`: it
-#: plans the `ratchet` payload tier at five worker iterations. The scenario
-#: label and the iteration count are what fixtures record beside
+#: The CI ratchet's sampling protocol. The iteration count is imported under
+#: this name rather than rebound from the scenario module's constant: it is the
+#: value the CLI records and the workflow passes, and a fixture that named a
+#: different one would describe a run the gate cannot make. The scenario label
+#: and the iteration count are what fixtures record beside
 #: `BENCHMARK_PROFILE_VERSION`, which is the whole comparability key; a fixture
 #: naming a payload tier the gate no longer measures describes a run that
 #: cannot happen (issue #219).
 SCENARIO = "ratchet-single-nocb"
-WORKER_ITERATIONS = 5
 TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 
 
