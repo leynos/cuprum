@@ -13,7 +13,7 @@ the named outputs, and the step verdicts are read back from `act`'s JSON stream
 by `tests.helpers.act_stream`, because the in-container summary file is
 truncated once it has been uploaded.
 
-Everything here is offline and credential-free: `github.token` is emptied so
+Scenarios use local Git history and no credentials: `github.token` is emptied so
 the pinned `dorny/paths-filter` takes its local `git diff` path, and the
 container is bound to the temporary clone rather than to the developer's
 checkout. See `docs/adr-012-actions-runner-integration-harness.md` for why the
@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import os
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - required act process boundary with explicit argv and timeout.
 import typing as typ
 
-from cuprum.sh import ExecutionContext
 from tests.helpers.act_runtime import (
     ACT_AVAILABLE_ENV,
     SKIP_REASON_ENV,
@@ -40,7 +41,6 @@ from tests.helpers.act_runtime import (
     git,
     git_commit,
     harness_skip_reason,
-    run,
 )
 from tests.helpers.act_stream import ActRun
 from tests.helpers.act_workflow import (
@@ -80,8 +80,11 @@ DEFAULT_BRANCH = "main"
 #: The job that owns the benchmark gate decision.
 CHANGES_JOB = "changes"
 #: The pinned runner image. `act` maps a workflow's `runs-on` label onto this
-#: through `-P`; pinning it by tag is what makes a scenario reproducible.
-IMAGE = "catthehacker/ubuntu:act-latest"
+#: through `-P`; the immutable digest makes scenarios reproducible.
+IMAGE = (
+    "catthehacker/ubuntu:act-latest@sha256:"
+    "c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43"
+)
 #: Bound on one scenario. Warm runs measured at 15-27s on the development
 #: machine, and a cold image pull is the only thing that takes longer, so a
 #: hung container is the realistic failure this catches.
@@ -126,7 +129,7 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
     Parameters
     ----------
     event : Event
-        The event to deliver. Its payload is shallow-copied, never mutated.
+        The event to deliver. Its payload is deep-copied, never mutated.
     repository : str
         ``owner/name`` for the temporary repository the scenario runs in. The
         workflow reads `repository.default_branch` to resolve a push's base.
@@ -136,7 +139,12 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
     dict[str, object]
         The complete webhook payload.
     """
-    payload = dict(event.payload)
+    payload = json.loads(json.dumps(event.payload))
+    payload["ref"] = event.ref
+    if event.name == "pull_request":
+        payload["pull_request"]["head"].update({"sha": event.sha, "ref": event.branch})
+    else:
+        payload["after"] = event.sha
     payload["repository"] = {
         "full_name": repository,
         "default_branch": "main",
@@ -146,7 +154,9 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
     return payload
 
 
-def run_act(repository: pth.Path, event: Event) -> ActRun:
+def run_act(
+    repository: pth.Path, event: Event, *, job: str = CHANGES_JOB, image: str = IMAGE
+) -> ActRun:
     """Run the `changes` job under `act` and return what it produced.
 
     Parameters
@@ -157,6 +167,10 @@ def run_act(repository: pth.Path, event: Event) -> ActRun:
         commit.
     event : Event
         Event to replay.
+    job : str
+        Job to execute, including its dependencies.
+    image : str
+        Immutable runner image reference.
 
     Returns
     -------
@@ -165,19 +179,21 @@ def run_act(repository: pth.Path, event: Event) -> ActRun:
     """
     payload = repository / _EVENT_PATH
     payload.write_text(json.dumps(event_payload(event, _REPOSITORY)), encoding="utf-8")
-    # The scenario runs through Cuprum itself, so the repository's own command
-    # runner is the thing exercising its own workflow. The overlay is layered
-    # onto the live environment, so the rest of `os.environ` still reaches
-    # `act`; only the runtime socket is pinned.
-    context = ExecutionContext(cwd=str(repository), env={"DOCKER_HOST": docker_host()})
-    result = run("act", *_act_argv(event)).run_sync(
-        timeout=_TIMEOUT_SECONDS, context=context
+    argv = ("act", *_act_argv(event, job, image))
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - explicit harness argv; no shell interpretation.
+        argv,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_TIMEOUT_SECONDS,
+        cwd=repository,
+        env={**os.environ, "DOCKER_HOST": docker_host()},
     )
     return ActRun(
-        exit_code=result.exit_code,
-        stdout=result.stdout or "",
-        stderr=result.stderr or "",
-        argv=(str(result.program), *result.argv),
+        exit_code=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        argv=argv,
     )
 
 
@@ -323,7 +339,7 @@ def break_detector(repository: pth.Path) -> str:
     return git(repository, "rev-parse", "HEAD").strip()
 
 
-def _act_argv(event: Event) -> list[str]:
+def _act_argv(event: Event, job: str, image: str) -> list[str]:
     """Build the `act` arguments for one scenario."""
     return [
         event.name,
@@ -332,15 +348,16 @@ def _act_argv(event: Event) -> list[str]:
         "-W",
         CI_WORKFLOW,
         "-j",
-        CHANGES_JOB,
-        # One pinned label suffices: `changes` is the only job this runs, and
-        # it declares `runs-on: ubuntu-latest`.
+        job,
+        # Every projected job uses the same immutable runner image.
         "-P",
-        f"ubuntu-latest={IMAGE}",
+        f"ubuntu-latest={image}",
         # An empty token routes `dorny/paths-filter` onto its local `git diff`
-        # path instead of the GitHub API, which is what makes this offline.
+        # path instead of the GitHub API.
         "-s",
         "GITHUB_TOKEN=",
+        "-s",
+        "BENCHMARK_TELEMETRY_TOKEN=",
         "-e",
         _EVENT_PATH,
         "--json",

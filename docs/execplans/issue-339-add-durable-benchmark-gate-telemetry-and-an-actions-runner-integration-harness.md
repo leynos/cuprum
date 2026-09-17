@@ -147,6 +147,17 @@ Document the conflict in `Decision log` and escalate.
 
 ## Progress
 
+- 2026-09-17: Telemetry hardening committed as `8c9f8662` after every
+  deterministic gate and seven existing `act` cases passed. CodeRabbit against
+  `d254d808` completed with zero findings.
+- 2026-09-17: Added an admission assertion to the existing relevant-PR case;
+  it failed because the harness never executed the downstream job (red evidence:
+  `/tmp/issue339-admission-red.log`). Extending the runtime boundary to
+  preserve the real benchmark `needs` and `if`, with inexpensive job bodies,
+  and isolating the scheduled harness from paid CI jobs. Sink provisioning
+  remains blocked by unavailable settings access; durable receipt is not
+  verified.
+
 - [x] (2026-09-16 19:00Z) Reconnaissance: read `ci.yml` `changes` job, the gate
   contract and behaviour tests, `workflow.py` helpers, `docs/contents.md`,
   `docs/developers-guide.md`, and the act design doc.

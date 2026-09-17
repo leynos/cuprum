@@ -8,7 +8,7 @@ Two things here are about the workflow *file* rather than about a scenario:
 - breaking the detector step, so the gate's `detector_status=failure` path can
   be exercised against a real failure instead of a mocked one.
 
-Both are line-oriented edits to YAML source with no `act` process and no git
+Both are structural edits to YAML source with no `act` process and no git
 history involved, which is what separates them from
 `tests/helpers/act_harness.py`: that module says what a scenario *is*, this one
 says how the workflow it runs is derived from the repository's own.
@@ -19,26 +19,21 @@ from __future__ import annotations
 import shutil
 import typing as typ
 
+import yaml
+
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
 __all__ = ("break_detector_step", "copy_actions", "copy_workflow")
 
-#: The action whose failure the gate has to survive.
-_DETECTOR_ACTION = "uses: dorny/paths-filter@"
-#: The key that opens that action's inputs.
-_DETECTOR_WITH = "with:"
-#: The input whose misuse makes the detector fail, and the value that does it.
-#: The action validates `list-files` against an enum, so an unknown value fails
-#: the step before it diffs anything — which is the failure the gate exists for.
-_DETECTOR_BREAKER = "list-files: bogus"
-
 
 def copy_workflow(target: pth.Path, worktree: pth.Path, workflow: str) -> None:
-    """Copy the workflow under test from the repository into a scenario.
+    """Project the real detector and admission boundary into a scenario.
 
     The workflow is taken from the repository rather than from a fixture, so a
-    scenario runs the file that is actually checked in. A fixture would let the
+    scenario preserves the changes job and benchmark needs/condition. Expensive
+    prerequisite and benchmark bodies become success/admission probes. A fixture
+    would let the
     workflow and the harness drift apart while every scenario kept passing.
 
     Parameters
@@ -51,7 +46,34 @@ def copy_workflow(target: pth.Path, worktree: pth.Path, workflow: str) -> None:
         Repository-relative path of the workflow to copy.
     """
     (target / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(worktree / workflow, target / workflow)
+    document = yaml.safe_load((worktree / workflow).read_text(encoding="utf-8"))
+    jobs = document["jobs"]
+    benchmark = jobs["benchmark-ratchet"]
+    projected = {"changes": jobs["changes"]}
+    for dependency in benchmark["needs"]:
+        if dependency != "changes":
+            projected[dependency] = {
+                "runs-on": "ubuntu-latest",
+                "steps": [{"run": "true"}],
+            }
+    projected["benchmark-ratchet"] = {
+        "runs-on": "ubuntu-latest",
+        "needs": benchmark["needs"],
+        "if": benchmark["if"],
+        "steps": [
+            {
+                "name": "Record benchmark admission",
+                "run": 'echo "benchmark_admitted=true" >> "$GITHUB_OUTPUT"',
+            }
+        ],
+    }
+    document["jobs"] = projected
+    # PyYAML's YAML 1.1 reader interprets the Actions trigger key as True.
+    if True in document:
+        document["on"] = document.pop(True)
+    (target / workflow).write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
 
 
 def copy_actions(target: pth.Path, worktree: pth.Path) -> None:
@@ -85,9 +107,7 @@ def break_detector_step(repository: pth.Path, workflow: str) -> None:
     validates the input against a fixed set and exits before it diffs anything,
     which is exactly the shape of a detector that cannot answer.
 
-    The edit is confined to the detector step: the key is appended to that
-    step's own `with:` block, at the block's indentation, so the rest of the
-    workflow — including the gate step under test — is untouched. The caller
+    The structural edit changes only the detector's input mapping. The caller
     commits the result.
 
     Parameters
@@ -105,66 +125,16 @@ def break_detector_step(repository: pth.Path, workflow: str) -> None:
         detector case and still pass.
     """
     source = repository / workflow
-    lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
-    action = next(
-        (index for index, line in enumerate(lines) if _DETECTOR_ACTION in line), None
-    )
-    message = (
-        f"{workflow} has no {_DETECTOR_ACTION} step; the staged workflow changed "
-        "shape and this scenario must be updated"
-    )
-    if action is None:
+    document = yaml.safe_load(source.read_text(encoding="utf-8"))
+    detectors = [
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if str(step.get("uses", "")).startswith("dorny/paths-filter@")
+    ]
+    if len(detectors) != 1:
+        message = "expected exactly one real detector step"
         raise AssertionError(message)
-    # The step's own indentation anchors the edit, so the inserted key lands at
-    # the depth of the keys already under `with:` however the step is indented
-    # today. `with:` sits at the same depth as `uses:`; the search stops at the
-    # next step so a `with:` further down the file cannot be mistaken for this
-    # step's.
-    step = lines[action]
-    indent = step[: len(step) - len(step.lstrip())]
-    marker = next(
-        (
-            index
-            for index in range(action + 1, _step_end(lines, action, indent))
-            if lines[index] == f"{indent}{_DETECTOR_WITH}\n"
-        ),
-        None,
-    )
-    message = (
-        f"{workflow}'s {_DETECTOR_ACTION} step has no {_DETECTOR_WITH} block; the "
-        "staged workflow changed shape and this scenario must be updated"
-    )
-    if marker is None:
-        raise AssertionError(message)
-    lines[marker] += f"{indent}  {_DETECTOR_BREAKER}\n"
-    source.write_text("".join(lines), encoding="utf-8")
-
-
-def _step_end(lines: list[str], start: int, indent: str) -> int:
-    """Return the index just past the step that begins at ``start``.
-
-    A step ends where the next one begins: the next list item indented less
-    than this step's own keys. Anything else a step might contain is either
-    deeper-indented or a blank line, so this bound is what keeps a search for
-    one of the step's keys inside the step.
-
-    Parameters
-    ----------
-    lines : list[str]
-        Workflow source, split but not stripped, so indentation survives.
-    start : int
-        Index of the line the step's `uses:` or `run:` key sits on.
-    indent : str
-        That line's leading whitespace, which its sibling keys share.
-
-    Returns
-    -------
-    int
-        The exclusive end of the step, which is ``len(lines)`` for the last.
-    """
-    for index in range(start + 1, len(lines)):
-        line = lines[index]
-        outer = len(line) - len(line.lstrip())
-        if line.strip().startswith("- ") and outer < len(indent):
-            return index
-    return len(lines)
+    detectors[0]["with"]["list-files"] = "bogus"
+    if True in document:
+        document["on"] = document.pop(True)
+    source.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")

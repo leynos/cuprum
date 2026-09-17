@@ -6,15 +6,22 @@ testing** of a workflow using `act` and `pytest`, treating the workflow as a
 structured logs. Host-side command interception is intentionally avoided;
 containers execute in isolation.
 
-It is the background for the *supported* harness this repository now ships,
-which executes the real `changes` job from `.github/workflows/ci.yml`. To run
-that, or to read the contract it enforces, start with
+It is the background for the *supported* harness this repository ships. The
+harness preserves the real `changes` job and the `benchmark-ratchet` admission
+boundary from `.github/workflows/ci.yml`, while replacing unrelated
+prerequisite jobs and the benchmark body with probes. To run that, or to read
+the contract it enforces, start with
 [ADR-012](adr-012-actions-runner-integration-harness.md) and:
 
 ```bash
-make test-act   # refuses to skip: fails when act or a runtime is missing
+make test-act   # runs the opt-in scenarios; refuses to skip in CI
 make test       # does not run the scenarios; they need a container runtime
 ```
+
+The hosted opt-in entry point is
+`.github/workflows/benchmark-gate-harness.yml`. It runs weekly and on manual
+dispatch, always on GitHub-hosted `ubuntu-latest`; `ci.yml` retains its general
+manual dispatch for ordinary CI runs.
 
 The rest of this document is the general recipe for validating *any* workflow
 in this repository with `act`, and is the reason the supported harness is
@@ -33,16 +40,22 @@ shaped the way it is.
 ## Prerequisites
 
 - A container runtime. Docker is the default; rootless Podman also works when
-  its socket is running, which is what a developer machine uses. On a
-  GitHub-hosted runner there is no user session to start Podman's socket, so
-  the opt-in CI job binds Docker instead — see ADR-012.
-- `act` installed.
+  its socket is running. The hosted harness uses Docker on `ubuntu-latest`.
+- `act` 0.2.89, or the version pinned by the repository's checksum-verified
+  install step.
 - Python 3.10+ with `pytest`.
-- Optional but recommended: pin an image to reduce drift:
+- The harness pins this immutable runner image to reduce drift:
 
   ```bash
-  act pull_request -P ubuntu-latest=catthehacker/ubuntu:act-latest --list
+  image='catthehacker/ubuntu:act-latest@sha256:c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43'
+  act pull_request -P "ubuntu-latest=${image}" --list
   ```
+
+The hosted harness installs `act` 0.2.89 from the Linux x86_64 release archive
+and verifies SHA-256
+`0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0` before
+running it. Maintainers update the CLI version, checksum, and image digest
+together, then rerun the repository gates.
 
 Verify both before debugging a scenario that will not start:
 
@@ -58,8 +71,8 @@ act --version
 scripts/
   # optional helper scripts used by the workflow
 tests/
-  fixtures/pull_request.event.json
-  test_workflow_integration.py
+  fixtures/events/pull_request-relevant.event.json
+  integration/test_workflow_integration.py
 ```
 
 ### Example workflow (self-checking)
@@ -104,132 +117,62 @@ jobs:
           path: out/result.json
 ```
 
-### Event payload fixture
+### Event payload fixtures
 
-```json
-{
-  "pull_request": {"number": 1, "head": {"ref": "test-branch"}},
-  "repository": {"full_name": "example/repo"},
-  "sender": {"login": "tester"}
-}
-```
-
-File: `tests/fixtures/pull_request.event.json`.
+The supported fixtures under `tests/fixtures/` cover both `pull_request` and
+`push` events, with relevant, irrelevant, mixed, and empty changed-path sets. A
+detector-failure fixture exercises the `skip-detector-failed` path. Templates
+contain only fields consumed by the workflow; the harness fills the repository,
+local branch refs, and commit SHAs from the temporary Git history before
+invoking `act`. This keeps the event payload and the checked-out history
+consistent.
 
 ## Driving `act` from `pytest` (black-box harness)
 
-The harness runs `act`, captures artefacts under a pytest-managed temporary
-directory, and reads the JSON log stream. It makes **no attempt** to intercept
-commands inside the containers.
+`tests/helpers/act_harness.py` builds a temporary Git repository whose commits
+represent the changed-path set. It copies the real workflow, projects the
+`changes` job and the `benchmark-ratchet` dependency boundary, and replaces
+unrelated prerequisite bodies with success probes and the benchmark body with
+an admission marker. Running `benchmark-ratchet` therefore executes the real
+`changes` job and its admission expression without running the paid benchmark.
+
+The helper's `run_act` function defaults to `job="changes"`; integration tests
+pass `job="benchmark-ratchet"` when they need to exercise the dependency graph.
+It accepts a temporary repository, an event template, and an image, invokes
+`act --job` with `--eventpath` and `--json`, and uses
+`subprocess.run(..., check=False, capture_output=True, timeout=...)`. The
+result exposes the exit code, parsed JSON lines, summary, and path-filter
+output for assertions.
 
 ```python
-# tests/test_workflow_integration.py
-from __future__ import annotations
-import json
-import subprocess
-from pathlib import Path
+from tests.helpers.act_harness import Event, IMAGE, run_act
 
-EVENT = Path("tests/fixtures/pull_request.event.json")
-
-
-def run_act(
-    job: str = "selftest",
-    event_path: Path = EVENT,
-    *,
-    artifact_dir: Path,
-) -> tuple[int, Path, str]:
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "act",
-        "pull_request",
-        "-j",
-        job,
-        "-e",
-        str(event_path),
-        "-P",
-        "ubuntu-latest=catthehacker/ubuntu:act-latest",
-        "--artifact-server-path",
-        str(artifact_dir),
-        "--json",  # machine-parseable log stream
-        "-b",  # bind-mount repo as workspace (preserves side effects)
-    ]
-    completed = subprocess.run(cmd, text=True, capture_output=True)
-    logs = completed.stdout + "\n" + completed.stderr
-    return completed.returncode, artifact_dir, logs
-
-
-def test_workflow_produces_expected_artefact_and_logs(tmp_path: Path) -> None:
-    artifact_dir = tmp_path / "act-artifacts"
-    code, artdir, logs = run_act(artifact_dir=artifact_dir)
-    assert code == 0, f"act failed:\n{logs}"
-
-    # Assert artefact presence and contents
-    files = list(artdir.rglob("result*/result.json"))
-    assert files, f"artefact missing. Logs:\n{logs}"
-    data = json.loads(files[0].read_text())
-    assert data["status"] == "ok"
-    assert data["python"].startswith("3."), data["python"]
-
-    # Assert on log stream: act --json prints one JSON document per line
-    saw_greeting = False
-    for line in logs.splitlines():
-        if not line.lstrip().startswith("{"):
-            continue
-        try:
-            evt = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        out = evt.get("Output") or evt.get("message") or ""
-        if "Hello from workflow" in out:
-            saw_greeting = True
-            break
-    assert saw_greeting, "expected greeting in structured logs"
+event = Event(
+    name="pull_request",
+    payload={
+        "action": "opened",
+        "number": 1,
+        "pull_request": {"base": {"ref": "main"}, "head": {"ref": "feature"}},
+    },
+    ref="refs/pull/1/merge",
+    sha=head_sha,
+    branch="feature",
+)
+run = run_act(repository, event, job="benchmark-ratchet", image=IMAGE)
+assert run.output("bench") == "true"
+assert run.output("decision") == "run"
+assert run.output("benchmark_admitted") == "true"
 ```
 
-## Record -> replay -> verify (closing the loop)
+Assertions use the summary, artefacts, and parsed JSON events. Raw terminal
+output is diagnostic only. The helper empties `GITHUB_TOKEN`, which routes the
+real `dorny/paths-filter` action to its local Git fallback rather than the
+hosted REST API; action and image downloads can still require network access.
 
-`cmd-mox` complements this harness when a workflow drives helper scripts that
-shell out to external command-line interfaces (CLIs). The tooling follows a
-record, replay, and verify loop:
-
-1. **Record** a golden trace with passthrough spies.
-
-   ```python
-   from cmd_mox import CmdMox
-
-
-   def test_record(tmp_path: Path) -> None:
-       artifact_dir = tmp_path / "act-artifacts"
-       with CmdMox() as mox:
-           gh = mox.spy("gh").passthrough()
-           mox.replay()
-           code, _, logs = run_act(artifact_dir=artifact_dir)
-           assert code == 0, logs
-           mox.verify()
-           assert gh.call_count == 1
-   ```
-
-2. **Replay** deterministically with mocks. Configure expectations using the
-   fluent API and keep verification mandatory, so regressions surface quickly.
-
-   ```python
-   def test_replay(tmp_path: Path, cmd_mox) -> None:
-       artifact_dir = tmp_path / "act-artifacts"
-       cmd_mox.mock("gh").with_args(
-           "release",
-           "view",
-           "--json",
-           "tagName",
-       ).returns(stdout='{"tagName":"v9.9.9"}\n')
-       cmd_mox.replay()
-       code, _, logs = run_act(artifact_dir=artifact_dir)
-       assert code == 0, logs
-       cmd_mox.verify()
-   ```
-
-3. **Inspect** the journal. After verification, `cmd_mox.journal` exposes the
-   captured `Invocation` objects. Serialize the data into JSON lines or YAML,
-   so future tests can bootstrap mocks from the same expectations.
+The harness does not intercept commands inside the container. If a workflow
+needs deterministic command substitution, test that helper separately with the
+repository's command-mocking tools; keep this suite focused on the workflow
+boundary and its observable outputs.
 
 ## Traps this repository has hit
 
@@ -241,10 +184,12 @@ is why they are listed here rather than left to be rediscovered.
   that appears in two files runs both, and the failure names a job you did not
   mean to run.
 - **Pass `-s GITHUB_TOKEN=` when the workflow uses `actions/checkout` and
-  `dorny/paths-filter`.** With an empty token, `paths-filter` takes its local
-  `git diff` path and works offline. With a token `act` fabricates, it calls
-  the GitHub API and fails with `::error::Not Found` — a failure that looks
-  like a broken detector rather than an offline-mode problem.
+  `dorny/paths-filter`. With an empty token, `paths-filter` takes its local
+  `git diff` path and avoids the GitHub API. `act` may still need network
+  access to download actions and the pinned image. With a token `act`
+  fabricates, it calls the GitHub API and fails with `::error::Not Found` — a
+  failure that looks like a broken detector rather than a credential-routing
+  problem.
 - **A path filter diffs the checked-out branch, not the event's head.** With
   an empty token the base resolves to `base || baseSha || defaultBranch` and is
   compared against `git branch --show-current`; `pull_request.base.sha` is not
@@ -263,6 +208,15 @@ is why they are listed here rather than left to be rediscovered.
   stream more than once only when a step also uses the legacy
   `::set-output name=X::Y` command, and there the last event's value is the
   live one.
+- **Preserve the admission boundary when projecting the workflow.** The
+  harness keeps all of `changes`, the `benchmark-ratchet` `needs` edge, and its
+  `if` expression. Only unrelated prerequisite bodies and the benchmark body
+  are replaced, so a passing marker proves admission without spending paid
+  benchmark time.
+- **Fill event templates from the temporary Git history.** Static refs and
+  SHAs can disagree with the checked-out branch and make a scenario pass for
+  the wrong reason. The harness writes the local refs and commit SHAs into each
+  JSON event before invoking `act`.
 
 ## What to assert (beyond exit code)
 
@@ -276,13 +230,14 @@ is why they are listed here rather than left to be rediscovered.
 
 ## Useful `act` flags in this setup
 
-- `-P ubuntu-latest=catthehacker/ubuntu:act-latest`: pin a close runner image.
-- `-b/--bind`: bind mount the repository; enables checking file side effects.
-- `--artifact-server-path <dir>`: export uploaded artefacts to a host
-  directory.
+- `--job changes` (the helper default), or `--job benchmark-ratchet` to run
+  the projected dependency graph.
+- `--eventpath <event.json>`: provide the generated event payload.
+- `-P ubuntu-latest=<immutable-image>`: select the pinned image shown in
+  [Prerequisites](#prerequisites).
 - `--json`: emit a line-delimited JSON log stream suitable for parsing.
-- `-e <event.json>` / `--env` / `--env-file`: control the event and
-  environment under test.
+- `-s GITHUB_TOKEN=`: force the filter's local Git fallback and avoid hosted
+  REST API calls.
 
 ## Known limitations (by design)
 

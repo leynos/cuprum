@@ -14,6 +14,7 @@ nothing. See `docs/adr-012-actions-runner-integration-harness.md`.
 
 from __future__ import annotations
 
+import json
 import pathlib as pth
 
 import pytest
@@ -97,7 +98,23 @@ def scenario(tmp_path: pth.Path, act_available: str) -> pth.Path:
     return prepare_repository(tmp_path / "repo", WORKTREE)
 
 
-def pull_request(repository: pth.Path, paths: list[str]) -> ActRun:
+def event_fixture(event_name: str, case: str) -> dict[str, object]:
+    """Load the minimal webhook template for a scenario.
+
+    Returns
+    -------
+    dict[str, object]
+        Payload fields consumed by the workflow and its pinned actions.
+    """
+    path = (
+        WORKTREE / "tests" / "fixtures" / "events" / f"{event_name}-{case}.event.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict), "event fixture must be a JSON mapping"
+    return payload
+
+
+def pull_request(repository: pth.Path, paths: list[str], *, case: str) -> ActRun:
     """Commit ``paths`` on a feature branch and replay a pull request.
 
     Parameters
@@ -106,6 +123,8 @@ def pull_request(repository: pth.Path, paths: list[str]) -> ActRun:
         The prepared scenario repository.
     paths : list[str]
         The changed-path set the scenario is about.
+    case : str
+        Event fixture basename.
 
     Returns
     -------
@@ -118,15 +137,16 @@ def pull_request(repository: pth.Path, paths: list[str]) -> ActRun:
         repository,
         Event(
             name="pull_request",
-            payload={"action": "opened", "number": 1},
+            payload=event_fixture("pull_request", case),
             ref="refs/pull/1/merge",
             sha=head,
             branch=FEATURE_BRANCH,
         ),
+        job="benchmark-ratchet",
     )
 
 
-def push(repository: pth.Path, paths: list[str]) -> ActRun:
+def push(repository: pth.Path, paths: list[str], *, case: str) -> ActRun:
     """Commit ``paths`` onto the default branch and replay a push to it.
 
     A push is the event class where the gate admits the ratchet regardless of
@@ -138,6 +158,8 @@ def push(repository: pth.Path, paths: list[str]) -> ActRun:
         The prepared scenario repository.
     paths : list[str]
         The changed-path set the scenario is about.
+    case : str
+        Event fixture basename.
 
     Returns
     -------
@@ -151,6 +173,7 @@ def push(repository: pth.Path, paths: list[str]) -> ActRun:
         Event(
             name="push",
             payload={
+                **event_fixture("push", case),
                 "before": base,
                 "after": head,
                 "ref": f"refs/heads/{DEFAULT_BRANCH}",
@@ -159,6 +182,7 @@ def push(repository: pth.Path, paths: list[str]) -> ActRun:
             sha=head,
             branch=DEFAULT_BRANCH,
         ),
+        job="benchmark-ratchet",
     )
 
 
@@ -217,6 +241,9 @@ def assert_decision(
     assert run.output("decision") == decision, (
         f"the gate must publish decision={decision!r}, got {run.output('decision')!r}"
     )
+    assert run.output("benchmark_admitted") == (
+        "true" if decision == "run" else None
+    ), "downstream admission must agree with the recorded gate decision"
     row = gate_row(run)
     assert row[2] == relevant, (
         f"the table's relevance cell must be {relevant!r}, got {row[2]!r}"
@@ -227,100 +254,68 @@ def assert_decision(
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
-def test_a_relevant_pull_request_admits_the_benchmark_ratchet(
-    scenario: pth.Path,
+@pytest.mark.parametrize("event_name", ["pull_request", "push"])
+@pytest.mark.parametrize(
+    ("case", "change"),
+    [
+        ("relevant", ([RELEVANT_PATH], DETECTOR_TRUE)),
+        ("irrelevant", ([IRRELEVANT_PATH], DETECTOR_FALSE)),
+        ("mixed", ([RELEVANT_PATH, IRRELEVANT_PATH], DETECTOR_TRUE)),
+        ("empty", ([], DETECTOR_FALSE)),
+    ],
+)
+def test_changed_paths_control_benchmark_admission(
+    scenario: pth.Path, event_name: str, case: str, change: tuple[list[str], str]
 ) -> None:
-    """Relevant paths must set `bench` and admit the ratchet."""
-    run = pull_request(scenario, [RELEVANT_PATH])
+    """Execute detector output propagation and the downstream job condition."""
+    paths, bench = change
+    replay = pull_request if event_name == "pull_request" else push
+    run = replay(scenario, paths, case=case)
     assert run.exit_code == 0, run.failure_context()
-    assert_decision(run, DETECTOR_TRUE, "true", "run")
-
-
-@pytest.mark.timeout(SCENARIO_TIMEOUT)
-def test_an_irrelevant_pull_request_skips_the_benchmark_ratchet(
-    scenario: pth.Path,
-) -> None:
-    """A pull request touching nothing metered must not admit the ratchet."""
-    run = pull_request(scenario, [IRRELEVANT_PATH])
-    assert run.exit_code == 0, run.failure_context()
-    assert_decision(run, DETECTOR_FALSE, "false", "skip")
-
-
-@pytest.mark.timeout(SCENARIO_TIMEOUT)
-def test_a_mixed_pull_request_is_relevant_if_any_path_is(
-    scenario: pth.Path,
-) -> None:
-    """One relevant path among irrelevant ones must still admit the ratchet."""
-    run = pull_request(scenario, [RELEVANT_PATH, IRRELEVANT_PATH])
-    assert run.exit_code == 0, run.failure_context()
-    assert_decision(run, DETECTOR_TRUE, "true", "run")
-
-
-@pytest.mark.timeout(SCENARIO_TIMEOUT)
-def test_an_empty_pull_request_skips_the_benchmark_ratchet(
-    scenario: pth.Path,
-) -> None:
-    """An empty changed-path set is not a relevant one.
-
-    The scenario commits nothing, so the detector must observe no changes at
-    all — which is distinct from observing a change it does not match.
-    """
-    run = pull_request(scenario, [])
-    assert run.exit_code == 0, run.failure_context()
-    assert_decision(run, DETECTOR_FALSE, "false", "skip")
-
-
-@pytest.mark.timeout(SCENARIO_TIMEOUT)
-def test_a_push_runs_the_ratchet_even_without_relevant_paths(
-    scenario: pth.Path,
-) -> None:
-    """A non-pull-request event admits the ratchet by event class alone.
-
-    This is the case the `event_class` label exists for: the detector answered
-    `false`, and the gate still decided `run`.
-    """
-    run = push(scenario, [IRRELEVANT_PATH])
-    assert run.exit_code == 0, run.failure_context()
-    assert_decision(run, DETECTOR_FALSE, "false", "run")
-    assert run.output("event_class") == "other", (
-        f"a push must be classified as other, got {run.output('event_class')!r}"
+    decision = "run" if event_name == "push" or bench == DETECTOR_TRUE else "skip"
+    assert_decision(run, bench, bench, decision)
+    assert run.output("event_class") == (
+        "pull_request" if event_name == "pull_request" else "other"
+    ), "event class must survive runtime event delivery"
+    assert run.output("detector_status") == "success", (
+        "healthy detector must report success"
     )
-    assert gate_row(run)[0] == "push", (
-        f"the table must name the push event, got {gate_row(run)[0]!r}"
-    )
+    assert gate_row(run)[0] == event_name, "summary must retain the actual event name"
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
+@pytest.mark.parametrize("event_name", ["pull_request", "push"])
 def test_a_failed_detector_still_records_a_decision(
-    scenario: pth.Path,
+    scenario: pth.Path, event_name: str
 ) -> None:
-    """Record `skip-detector-failed` rather than mistaking failure for `false`.
-
-    The detector really fails here: the workflow is edited to pass the action
-    an invalid value for one of its own inputs. `bench` is therefore never set,
-    and the assertion is that the gate distinguishes "no answer" from "no
-    relevant changes" — and that `benchmark-ratchet` is not admitted on a
-    decision the detector could not make.
-    """
-    branch(scenario, FEATURE_BRANCH)
-    commit_paths(scenario, [RELEVANT_PATH], message="scenario change")
+    """A real failed action must record failure and prevent benchmark admission."""
+    if event_name == "pull_request":
+        branch(scenario, FEATURE_BRANCH)
+    base = commit_paths(scenario, [RELEVANT_PATH], message="scenario change")
     head = break_detector(scenario)
+    payload = event_fixture(event_name, "detector-failure")
+    payload.update({"before": base, "after": head})
     run = run_act(
         scenario,
         Event(
-            name="pull_request",
-            payload={"action": "opened", "number": 1},
-            ref="refs/pull/1/merge",
+            name=event_name,
+            payload=payload,
+            ref="refs/pull/1/merge"
+            if event_name == "pull_request"
+            else "refs/heads/main",
             sha=head,
-            branch=FEATURE_BRANCH,
+            branch=FEATURE_BRANCH if event_name == "pull_request" else DEFAULT_BRANCH,
         ),
+        job="benchmark-ratchet",
     )
     assert run.exit_code != 0, "the detector was expected to fail the job"
     assert "Detect performance-relevant changes" in run.failed_steps, (
-        f"the detector's step must be reported as failed, got {run.failed_steps!r}"
+        "failure must originate in the real detector action"
     )
-    assert run.output(BENCH) is None, "a failed detector must not answer"
     assert_decision(run, None, "unknown", "skip-detector-failed")
+    assert run.output("detector_status") == "failure", (
+        "failed detector must publish the failure status"
+    )
 
 
 def test_the_harness_verifies_the_job_the_gate_lives_in() -> None:

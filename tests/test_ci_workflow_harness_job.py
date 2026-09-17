@@ -1,7 +1,7 @@
 """Contract tests for the opt-in job that runs the `act` harness in CI.
 
 The harness itself lives in `tests/integration/` and is exercised by
-`make test-act`. Whether CI runs it is a declaration in `ci.yml`, and every
+`make test-act`. CI declares it in `benchmark-gate-harness.yml`. Every
 way that declaration can go wrong fails *quietly*, which is why it is asserted
 here rather than left to the harness's own tests:
 
@@ -29,6 +29,7 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.act_harness import IMAGE
 from tests.helpers.ci_runners import GITHUB_HOSTED_JOBS
 from tests.helpers.ci_workflows import workflow_document
 from tests.helpers.workflow import job, script_of, step_named, steps
@@ -52,7 +53,19 @@ HARNESS_TARGET = "make test-act"
 RUNTIME = "docker"
 #: The pinned image. The harness pins the same tag; this asserts the job warms
 #: the image the harness will ask for, rather than one that merely looks close.
-IMAGE = "catthehacker/ubuntu:act-latest"
+HARNESS_WORKFLOW = "benchmark-gate-harness.yml"
+
+
+@pytest.fixture
+def workflow_data() -> Workflow:
+    """Read the dedicated harness workflow.
+
+    Returns
+    -------
+    Workflow
+        Parsed workflow under contract test.
+    """
+    return typ.cast("Workflow", workflow_document(HARNESS_WORKFLOW))
 
 
 def _harness_step(workflow_data: Workflow) -> dict[str, object]:
@@ -67,7 +80,7 @@ def test_the_harness_job_stays_on_a_github_hosted_runner() -> None:
     the manifest asks for, so a job that moved to Ubicloud fails here and in
     `tests/test_ci_runner_placement.py` rather than only in the latter.
     """
-    declared = GITHUB_HOSTED_JOBS["ci.yml"]
+    declared = GITHUB_HOSTED_JOBS[HARNESS_WORKFLOW]
     assert JOB in declared, (
         f"{JOB} must be classified in the GitHub-hosted manifest in "
         f"tests/helpers/ci_runners.py; found {declared!r}"
@@ -146,6 +159,9 @@ def test_the_harness_job_warms_the_image_the_harness_binds(
     scripts = [
         script for step in steps(workflow_data, JOB) if (script := script_of(step))
     ]
+    assert re.fullmatch(r"[^@]+@sha256:[a-f0-9]{64}", IMAGE), (
+        "runner image must have an immutable SHA-256 digest"
+    )
     assert any(IMAGE in script for script in scripts), (
         f"{JOB} must pull {IMAGE}, the image the harness binds; scripts were "
         f"{scripts!r}"
@@ -188,7 +204,7 @@ def test_the_harness_job_is_admitted_only_where_it_was_asked_for(
 
 def test_the_dispatch_input_defaults_to_off() -> None:
     """Make the opt-in real: a dispatch that says nothing runs nothing."""
-    document = workflow_document("ci.yml")
+    document = workflow_document(HARNESS_WORKFLOW)
     # YAML 1.1 reads the `on:` key as the boolean `True`, which is why this
     # reads both.
     triggers = document.get("on", document.get(True))
