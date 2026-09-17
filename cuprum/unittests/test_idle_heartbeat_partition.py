@@ -7,7 +7,7 @@ disabling echo, a sink that rejects a chunk, a chunk that decodes to no text
 at all, or a chunk that completes no line. These are properties over arbitrary
 chunk partitions rather than examples, because the interesting cases are the
 splits -- a multibyte character cut in half, a line ending landing alone in its
-own chunk -- that a hand-written fixture would have to enumerate to find.
+own chunk -- that a handwritten fixture would have to enumerate to find.
 
 The pinned behaviour of the hook's run-owned lifecycle lives in
 ``test_idle_heartbeat.py`` and ``test_idle_heartbeat_execution.py``.

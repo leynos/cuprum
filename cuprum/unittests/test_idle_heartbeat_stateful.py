@@ -10,7 +10,7 @@ renderer's lines are counted at the sink, which makes the channel's failure
 mode observable as model state rather than as a log line.
 
 The pinned boundary cases live in ``test_idle_heartbeat.py``; this module
-explores the orderings no hand-written case would think to cover. The driver
+explores the orderings no handwritten case would think to cover. The driver
 task that turns the schedule into real time is deliberately left out -- it
 needs a live event loop -- and is covered by the example and integration tests.
 """
