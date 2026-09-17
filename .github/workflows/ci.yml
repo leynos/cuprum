@@ -11,6 +11,25 @@ on:
   # instead of churning it. `coverage` stays pull-request-only; the trunk
   # coverage run has its own dispatchable workflow.
   workflow_dispatch:
+    inputs:
+      # The `act` harness is opt-in on every event, not just on a dispatch.
+      # A dispatch is how a maintainer runs it deliberately, and how the
+      # scheduled job below would be re-run by hand after an image or a
+      # runner-image change.
+      workflow-harness:
+        description: >-
+          Run the `act` workflow integration harness, which executes the real
+          `changes` job in a container.
+        type: boolean
+        required: false
+        default: false
+  # The harness is the only thing that reads `act`'s JSON stream and a pinned
+  # container image, both of which change without this repository changing. A
+  # weekly run means the harness fails here — where its own tests are — rather
+  # than on the day someone relies on it. Off the hour and off the half hour so
+  # it does not queue behind the estate's scheduled jobs.
+  schedule:
+    - cron: '43 6 * * 1'
 
 permissions:
   actions: read
@@ -1269,6 +1288,106 @@ jobs:
               "${status}"
             printf '\n'
           fi
+
+  # The only job that executes the boundary `benchmark-ratchet` is gated on.
+  # The contract tests read `ci.yml` and the behavioural tests run the gate's
+  # `run:` block in isolation; neither can observe whether the pinned
+  # `dorny/paths-filter` actually produces the `bench` output the gate assumes,
+  # or whether an event payload reaches the gate the way a real event does.
+  #
+  # A GitHub-hosted runner, deliberately: this job sleeps on a container start
+  # and a few scenario runs, so it gains nothing from a metered build slot, and
+  # keeping it off one is the whole reason it exercises the cheap `changes` job
+  # and never `benchmark-ratchet` itself. The runtime is the Docker daemon the
+  # hosted image installs and starts, which is the socket the harness binds
+  # here. Rootless Podman is what the harness uses on a developer machine and
+  # is deliberately *not* used here: it is on the runner image, but its socket
+  # is created by a systemd user unit, a runner has no user session to start
+  # one, and so a Podman install step reports success and leaves every scenario
+  # failing the skip refusal below. `act` is pinned by version and checksum
+  # rather than by tag, matching the actionlint install.
+  #
+  # The job is opt-in because each scenario costs 15-27 s warm plus image
+  # warm-up, which is real time on every pull request for a boundary that
+  # changes rarely. It runs on a dispatch, and on a schedule so the pinned
+  # image and `act`'s JSON format cannot drift unnoticed for months.
+  workflow-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'schedule' || inputs.workflow-harness
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+
+      # Cached under the worktree-local directories the Makefile pins, which is
+      # what makes the dependency sync here a few seconds rather than a minute.
+      - name: Cache uv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            .uv-cache
+            .uv-tools
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-${{ runner.arch }}-
+
+      # `act` is not in the runner image, and the scenario suite is skipped
+      # rather than failed when it is absent — so an install that silently
+      # stopped working would turn this job into a green run that tested
+      # nothing. `CUPRUM_REQUIRE_ACT=1` below is the other half of that
+      # guarantee: it refuses the skip and fails the job instead.
+      - name: Install act
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly ACT_VERSION='0.2.89'
+          readonly ACT_SHA256='0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0'
+          readonly ACT_ARCHIVE='act_Linux_x86_64.tar.gz'
+          readonly ACT_URL="https://github.com/nektos/act/releases/download/v${ACT_VERSION}/${ACT_ARCHIVE}"
+          readonly ACT_DIR="${RUNNER_TEMP}/act"
+          ACT_ARCHIVE_PATH="$(mktemp)"
+          trap 'rm -f "${ACT_ARCHIVE_PATH}"' EXIT
+          command curl --fail --location --show-error \
+            --output "${ACT_ARCHIVE_PATH}" "${ACT_URL}"
+          printf '%s  %s\n' "${ACT_SHA256}" "${ACT_ARCHIVE_PATH}" \
+            | sha256sum --check --status
+          mkdir -p "${ACT_DIR}"
+          tar --extract --gzip --file "${ACT_ARCHIVE_PATH}" --directory "${ACT_DIR}" act
+          printf '%s\n' "${ACT_DIR}" >> "${GITHUB_PATH}"
+
+      # The runtime the scenarios bind to. The hosted image already installs
+      # and starts Docker, so this step asserts rather than installs: it is
+      # here to make a runner image that stopped starting its daemon fail at a
+      # step named for the runtime, instead of at the skip refusal inside the
+      # harness with no indication of which dependency moved. `docker info`
+      # reaches the daemon, which a `command -v docker` would not.
+      - name: Provide the container runtime
+        run: |
+          set -euo pipefail
+          docker info --format '{{.ServerVersion}}'
+
+      - name: Pull the act runner image
+        run: |
+          docker pull catthehacker/ubuntu:act-latest
+
+      # `make test-act` sets `CUPRUM_REQUIRE_ACT=1`, so a missing act binary,
+      # a missing runtime, or a missing socket fails here rather than turning
+      # every scenario into a skip. A green run of this job therefore means
+      # the scenarios ran.
+      - name: Run the workflow integration harness
+        run: make test-act
 
   benchmark-ratchet:
     # The ratchet compares each scenario's within-run `rust_mean / python_mean`
