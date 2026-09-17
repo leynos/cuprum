@@ -3042,22 +3042,27 @@ checkout (with a release build of the Rust extension) and compares each
 scenario's within-run Rust-to-Python mean ratio against compatible rolling
 history from completed `main` runs, falling back to the latest completed `main`
 baseline artefact when no compatible history is available. The CI profile
-measures twenty runs per command; hyperfine 1.20.0 runs the commands
-consecutively rather than interleaving them, so each backend's block is timed
-as a unit and slow drift biases each ratio — which is one reason the gate
-compares ratios across runs rather than absolute wall clock, and one reason the
-payload is large enough that the drift is a small part of what is timed. On
-pushes to `main`, the new benchmark output is uploaded as the next baseline
-artefact for future runs. When no prior `main` baseline is available yet, or
-when the existing baseline uses an incompatible (older) benchmark profile whose
-sampling protocol is not comparable, the job writes a skip report instead of
-failing the workflow. The baseline fetch helper follows GitHub’s signed archive
-redirects without forwarding GitHub-only authentication headers to the storage
-host, avoiding cross-origin 401 responses during artefact download. The same
-job also generates a Python-versus-Rust comparison report from the candidate
-benchmark artefacts and appends a Markdown summary table to
-`$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend speedups even when the
-Rust ratchet later fails the job.
+measures twenty runs per command and orders the selected scenarios by payload,
+then callback mode, then backend, so hyperfine runs the matched Python and Rust
+commands of one callback mode adjacently — `python-nocb`, `rust-nocb`,
+`python-cb`, then `rust-cb`. Hyperfine 1.20.0 does not interleave a command's
+runs with the next command's (upstream issue 21), so a pair is adjacent rather
+than simultaneous and slow drift still biases each ratio; the adjacency keeps
+the two backends of a pair close enough in time that the drift they see is
+largely common, which is one reason the gate compares ratios across runs rather
+than absolute wall clock, and one reason the payload is large enough that the
+drift is a small part of what is timed. On pushes to `main`, the new benchmark
+output is uploaded as the next baseline artefact for future runs. When no prior
+`main` baseline is available yet, or when the existing baseline uses an
+incompatible (older) benchmark profile whose sampling protocol is not
+comparable, the job writes a skip report instead of failing the workflow. The
+baseline fetch helper follows GitHub’s signed archive redirects without
+forwarding GitHub-only authentication headers to the storage host, avoiding
+cross-origin 401 responses during artefact download. The same job also
+generates a Python-versus-Rust comparison report from the candidate benchmark
+artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
+reviewers can inspect backend speedups even when the Rust ratchet later fails
+the job.
 
 The ratchet rule is:
 
