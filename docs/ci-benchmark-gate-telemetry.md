@@ -212,10 +212,24 @@ surface. Maintainers should periodically run the analysis recipe and inspect the
 `skip-detector-failed` ratio. A missing artefact is a delivery or retention
 question, not evidence of a zero-valued gate decision.
 
-After pushing the workflow, perform a hosted receipt check: run `changes` on a
-trusted event, download `benchmark-gate-decision-*`, and validate one record's
-schema, exact labels, run metadata, and requested retention. Local `act` tests
-cannot prove that GitHub accepted or retained the artefact.
+## Verified hosted receipt
+
+Receipt was verified for commit [bbe408f][verified-commit] in
+[run 35248836322][verified-run]. [Artefact 10508771038][verified-artefact],
+named `benchmark-gate-decision-1`, was created at 2026-09-17 16:48:27 UTC and
+expires at 2026-12-16 16:48:18 UTC according to GitHub's artefact API. The
+downloaded `decisions.jsonl` contained a schema version 1 record with metric
+`benchmark_gate_decisions_total`, value `1`, labels exactly `pull_request`/
+`success`/`run`, run ID `35248836322`, attempt `1`, and `recorded_at`
+`2026-09-17T16:48:26Z`. The dates validate the requested approximately 90-day
+retention from run start.
+
+This verifies receipt and retention metadata for that run only. It does not
+claim hosted harness execution or full CI completion. For subsequent changes,
+run `changes` on a trusted event, download `benchmark-gate-decision-*`, and
+validate one record's schema, exact labels, run metadata, and requested
+retention. Local `act` tests cannot prove that GitHub accepted or retained the
+artefact.
 
 ## Related records
 
@@ -228,3 +242,6 @@ cannot prove that GitHub accepted or retained the artefact.
   and fail-open behaviour.
 
 [github-artefacts]: https://docs.github.com/en/actions/tutorials/store-and-share-data
+[verified-commit]: https://github.com/leynos/cuprum/commit/bbe408f011d4a4c08d7c0e9f4ff3bf83c2b817a8
+[verified-run]: https://github.com/leynos/cuprum/actions/runs/35248836322
+[verified-artefact]: https://github.com/leynos/cuprum/actions/runs/35248836322/artifacts/10508771038

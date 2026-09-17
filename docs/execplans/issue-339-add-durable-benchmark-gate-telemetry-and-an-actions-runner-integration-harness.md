@@ -1,6 +1,6 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IN PROGRESS
+Status: IMPLEMENTED; hosted receipt verified, external CI failures recorded
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -118,12 +118,24 @@ artefact.
 - [x] 2026-09-17: Relevant and irrelevant PR scenarios passed with the new
   runtime record assertions. The documented CSV/SVG recipe passed valid,
   duplicate, empty-input, and invalid-label smoke checks.
-- [ ] Validate the full runtime matrix and every applicable gate.
-- [ ] Complete the final CodeRabbit review and resolve verified findings.
-- [ ] Push the requested branch and update existing draft PR #418, including
-  `Closes #339`, the issue suffix in its title, and the final session reference.
-- [ ] Download a decision artefact from the published candidate and verify its
-  schema, labels, and run association. Record terminal hosted CI outcomes.
+- [x] 2026-09-17: Validated the full runtime matrix and every applicable gate.
+  Eleven harness checks passed with no skips, including ten container runs.
+- [x] 2026-09-17: Completed the full-branch CodeRabbit review. Replaced a
+  substring contract assertion with the shared shell parser in `2c1c4e57`; four
+  negative controls failed before the fix and passed afterwards. Added the
+  requested NumPy parameter documentation in `bbe408f0`. All code gates passed
+  for both repairs; the final review returned zero findings.
+- [x] 2026-09-17: Pushed the requested branch and updated existing draft PR
+      #418,
+  including `Closes #339`, the issue suffix in its title, and the final session
+  reference.
+- [x] 2026-09-17: Downloaded a decision artefact from the published candidate
+  and verified its schema, labels, run association, and approximately 90-day
+  retention using GitHub's artefact metadata.
+- [x] 2026-09-17: Recorded terminal hosted CI outcomes: `changes` and
+  `benchmark-ratchet` passed. CodeScene coverage parsing and a rustup TLS
+  connection failed independently of the implemented boundary. Final-head
+  results are tracked in draft PR #418.
 
 ## Surprises & discoveries
 
@@ -187,9 +199,14 @@ run the weekly compatibility workflow after merge, and retain a separate hosted
 receipt check. Action and image downloads can still need network access even
 though the detector uses local Git history.
 
-The previous published candidate had an unrelated CodeScene coverage-parser
-failure. Re-check the new candidate's hosted results and report any remaining
-external failure separately from local gate and artefact receipt evidence.
+The published candidate passed `changes` and `benchmark-ratchet`, but broader
+CI is not wholly green. CodeScene again rejected coverage XML with
+`No matching field found: close for class java.io.InputStreamReader`, matching
+the previous candidate's external parser failure. The Linux x86 wheel installer
+failed with `curl(35)` and `SSL_ERROR_SYSCALL` while connecting to
+`sh.rustup.rs:443`. No workflow check was weakened to hide either failure. The
+final documentation push triggers a fresh run; its outcome belongs in the draft
+PR rather than being inferred from this earlier run.
 
 ## Verification plan
 
@@ -286,13 +303,45 @@ PR records provide the durable review history. Useful logs from this session:
   checks passed.
 - `/tmp/issue339-log-red.log` and `/tmp/issue339-log-green.log`: missing
   persistence control and 31 passing log tests.
+- `/tmp/issue339-log-*.log`: passing full repository, documentation, and runtime
+  gates for the persistent-log milestone.
+- `/tmp/issue339-command-red.log`: four false-positive command controls failed
+  before the contract repair; `/tmp/issue339-command-focused.log`: 27 passed
+  afterwards.
+- `/tmp/issue339-command-*.log` and `/tmp/issue339-docstring-*.log`: passing
+  code gates for the final review repairs.
+- `/tmp/issue339-review-command-final.log`: zero-finding review after repair.
+- [Hosted CI run 35248836322](https://github.com/leynos/cuprum/actions/runs/35248836322)
+  ran published commit `bbe408f011d4a4c08d7c0e9f4ff3bf83c2b817a8`.
+  [Decision artefact 10508771038](https://github.com/leynos/cuprum/actions/runs/35248836322/artifacts/10508771038)
+  contains exactly one schema-version-1 record with labels
+  `event_class=pull_request`, `detector_status=success`, and `decision=run`.
+  Its run ID is `35248836322` and attempt is `1`. The downloaded bytes and
+  separately retrieved API metadata are in
+  `/tmp/issue339-hosted-receipt.ATRFG9/`. GitHub reports expiry at
+  `2026-12-16T16:48:18Z`, approximately 90 days after creation.
+- The same run's successful benchmark job uploaded
+  [measurement artefact 10509590666](https://github.com/leynos/cuprum/actions/runs/35248836322/artifacts/10509590666)
+  with the same expiry. Its fifteen downloaded JSON files parsed successfully,
+  and its Markdown comparison summary was present.
+- `/tmp/issue339-hosted-final.json` records the terminal run result;
+  `/tmp/issue339-hosted-coverage-job.log` and
+  `/tmp/issue339-hosted-wheel-job.log` contain the two external failures above.
 
 ## Outcomes & retrospective
 
-The implementation remains salvageable. The runtime harness is implemented,
-validated, and committed. The revised persistence design removes the external
-service requirement instead of leaving an undeployed dependency. Final branch
-validation, review, publication, and hosted receipt remain outstanding.
+The existing implementation was salvaged. The runtime harness and persistent
+logging are implemented, validated, reviewed, and published in draft PR #418.
+GitHub accepted the new decision log, and its downloaded contents and retention
+metadata satisfy the revised persistence contract. No external service or
+telemetry credential was introduced. The documented standard-library analysis
+recipe produces CSV and SVG without another application.
+
+The local harness proves compatibility for the specified event and changed-path
+matrix; the hosted receipt proves the configured upload boundary. The hosted
+benchmark also ran successfully and retained its measurements. This does not
+establish exact runtime parity or success for unrelated hosted CI jobs: the
+CodeScene parser and installer TLS failures remain separately documented.
 
 ## Revision note
 
@@ -300,3 +349,7 @@ validation, review, publication, and hosted receipt remain outstanding.
 maintainer-authorized storage-only design. Preserved the implementation and
 review history in concise form, updated all acceptance evidence and remaining
 work, and separated local runtime proof from hosted artefact receipt.
+
+2026-09-17: Added successful full-gate and final-review evidence, verified
+hosted decision and measurement downloads, and recorded terminal external CI
+failures without weakening their checks.
