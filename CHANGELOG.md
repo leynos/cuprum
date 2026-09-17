@@ -335,7 +335,11 @@
   values are now pinned to `benchmarks/ratchet_history.py`'s single
   authoritative defaults by a CI contract test, and the sample-recording and
   baseline-upload steps are contract-tested to depend only on the measurement,
-  never on the ratchet's verdict. See [§13.9](docs/cuprum-design.md) and the
+  never on the ratchet's verdict. `--ci-ratchet` also defaults its
+  `--worker-iterations` to the count the job measures at, so a local
+  reproduction records the same protocol the gate will judge rather than
+  silently planning a sample the history cannot be compared against. See
+  [§13.9](docs/cuprum-design.md) and the
   [noise measurements](docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md).
 
 - **Maturin 1.15.0:** The development, wheel-workflow, and composite-action

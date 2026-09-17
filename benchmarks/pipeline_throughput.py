@@ -18,7 +18,10 @@ for both.
 Example
 -------
 uv run python benchmarks/pipeline_throughput.py \\
-  --ci-ratchet --dry-run --worker-iterations 5 --output plan.json
+  --ci-ratchet --dry-run --output plan.json
+
+``--ci-ratchet`` measures at its own worker-iteration count by default, so the
+plan above is already the shape the CI job runs.
 """
 
 from __future__ import annotations
@@ -39,7 +42,10 @@ from benchmarks.pipeline_throughput_runner import (
     render_prefixed_command,
     run_pipeline_benchmarks,
 )
-from benchmarks.pipeline_throughput_scenarios import default_pipeline_scenarios
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_WORKER_ITERATIONS,
+    default_pipeline_scenarios,
+)
 from cuprum import is_rust_available
 
 if typ.TYPE_CHECKING:
@@ -51,6 +57,11 @@ if typ.TYPE_CHECKING:
 # `__doc__`: the module docstring explains the workloads, and this names the
 # command.
 _CLI_DESCRIPTION = "Benchmark end-to-end pipeline throughput with hyperfine."
+
+#: Worker iterations for the throughput sweep and the smoke matrix, matching
+#: `PipelineBenchmarkConfig`'s own default. The ratchet workload overrides
+#: this; see `_resolve_worker_iterations`.
+_DEFAULT_WORKER_ITERATIONS = 20
 
 __all__ = [
     "HyperfineConfig",
@@ -79,7 +90,7 @@ def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
     workloads.add_argument(
         "--smoke",
         action="store_true",
-        help="Use a 1 KB payload and fewer iterations for fast validation.",
+        help="Use the reduced payload tiers for fast validation.",
     )
     workloads.add_argument(
         "--ci-ratchet",
@@ -109,10 +120,36 @@ def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--worker-iterations",
         type=int,
-        default=20,
-        help="Number of pipeline executions inside each measured worker process.",
+        default=None,
+        help=(
+            "Number of pipeline executions inside each measured worker "
+            "process. Defaults to the workload's own count: "
+            f"{CI_RATCHET_WORKER_ITERATIONS} for --ci-ratchet, whose samples "
+            "are only comparable at that count, and "
+            f"{_DEFAULT_WORKER_ITERATIONS} otherwise."
+        ),
     )
     return parser.parse_args(argv)
+
+
+def _resolve_worker_iterations(args: argparse.Namespace) -> int:
+    """Return the worker iteration count for the selected workload.
+
+    ``--worker-iterations`` defaults to ``None`` rather than to a number so an
+    explicit flag can be told apart from an omitted one: the ratchet workload
+    has to default to the count its samples are recorded at, while every other
+    workload keeps the throughput sweep's count.
+
+    Returns
+    -------
+    int
+        The iteration count to record in the plan's profile metadata.
+    """
+    if args.worker_iterations is not None:
+        return typ.cast("int", args.worker_iterations)
+    if args.ci_ratchet:
+        return CI_RATCHET_WORKER_ITERATIONS
+    return _DEFAULT_WORKER_ITERATIONS
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
@@ -146,7 +183,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         runs=args.runs,
         dry_run=args.dry_run,
         rust_available=rust_available,
-        worker_iterations=args.worker_iterations,
+        worker_iterations=_resolve_worker_iterations(args),
     )
     run_pipeline_benchmarks(config=config)
     return 0

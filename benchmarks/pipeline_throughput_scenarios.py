@@ -29,6 +29,16 @@ _SMOKE_LARGE_PAYLOAD_BYTES = 1024 * 1024  # 1 MB
 # record cited from docs/cuprum-design.md 13.9).
 CI_RATCHET_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB
 
+#: Worker iterations the CI ratchet measures at, matching the
+#: ``--worker-iterations`` the workflow passes. The count is measurement
+#: protocol rather than a tuning dial: it is recorded in every sample, and
+#: the ratchet only compares samples whose profile metadata agrees, so a run
+#: at another count is silently incomparable rather than wrong. Defaulting
+#: ``--ci-ratchet`` to this value keeps a developer's local reproduction on
+#: the same protocol as the job that will judge it; an explicit
+#: ``--worker-iterations`` still overrides it.
+CI_RATCHET_WORKER_ITERATIONS = 5
+
 # Backward-compatible aliases.
 _SMOKE_PAYLOAD_BYTES = _SMOKE_SMALL_PAYLOAD_BYTES
 _DEFAULT_PAYLOAD_BYTES = _MEDIUM_PAYLOAD_BYTES

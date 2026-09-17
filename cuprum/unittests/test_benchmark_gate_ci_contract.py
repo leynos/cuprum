@@ -39,6 +39,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from benchmarks.pipeline_throughput_scenarios import CI_RATCHET_WORKER_ITERATIONS
 from benchmarks.ratchet_history import (
     DEFAULT_MAX_REGRESSION,
     DEFAULT_NOISE_SIGMAS,
@@ -72,6 +73,9 @@ SAMPLE_STEP = "Record this run's benchmark sample"
 BASELINE_UPLOAD_STEP = "Upload main benchmark baseline artifact"
 #: The shell function in `THROUGHPUT_STEP` that runs the ratchet comparison.
 RATCHET_FUNCTION = "run_ratchet"
+#: The shell function in `THROUGHPUT_STEP` that measures, as distinct from the
+#: one that judges. The measurement flags live here.
+RATCHET_BENCHMARKS_FUNCTION = "run_ratchet_benchmarks"
 #: The only step state the publication steps may read: whether this run produced
 #: candidate artefacts at all. Reading anything else — the ratchet's outcome in
 #: particular — is what would let a failing run withhold its own sample.
@@ -293,6 +297,31 @@ def test_the_ratchet_policy_matches_the_module_defaults(
     assert window_size == DEFAULT_WINDOW_SIZE, (
         f"--history-window must be the {DEFAULT_WINDOW_SIZE!r} that "
         f"benchmarks/ratchet_history.py owns; found {window_size!r}"
+    )
+
+
+def test_the_ratchet_worker_iterations_match_the_scenario_default(
+    workflow_data: Workflow,
+) -> None:
+    """Require the workflow's iteration count to be the scenario module's own.
+
+    The count is measurement protocol, not a tuning dial: it is recorded in
+    every sample and the ratchet only compares samples whose profile metadata
+    agrees, so a workflow that measured at one count while the module's
+    default named another would silently make every local reproduction
+    incomparable rather than visibly wrong. `--worker-iterations` therefore
+    appears in two places that must agree — the workflow's flag, and the
+    default the CLI resolves for `--ci-ratchet` — and this asserts they do.
+    """
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+
+    iterations = int(_flag_value(body, "--worker-iterations"))
+    assert iterations == CI_RATCHET_WORKER_ITERATIONS, (
+        f"--worker-iterations must be the {CI_RATCHET_WORKER_ITERATIONS!r} "
+        f"that benchmarks/pipeline_throughput_scenarios.py owns; "
+        f"found {iterations!r}"
     )
 
 
