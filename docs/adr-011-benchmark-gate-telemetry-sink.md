@@ -6,8 +6,13 @@ ______________________________________________________________________
 
 Accepted, superseding the Grafana Cloud sink proposal on 2026-09-17. The
 repository does not provision an external service, credential, or new
-application. Hosted receipt remains to be verified after the workflow change is
-pushed.
+application. A hosted receipt was verified for commit
+[bbe408f](https://github.com/leynos/cuprum/commit/bbe408f011d4a4c08d7c0e9f4ff3bf83c2b817a8)
+in
+[run 35248836322](https://github.com/leynos/cuprum/actions/runs/35248836322):
+artefact 10508771038 was created and contained the schema version 1 record
+described here. This verifies receipt for that run only. The separate harness
+was tested locally; broader CI results are recorded on PR #418.
 
 ## Date
 
