@@ -362,8 +362,6 @@ def _act_argv(event: Event, job: str, image: str) -> list[str]:
         # path instead of the GitHub API.
         "-s",
         "GITHUB_TOKEN=",
-        "-s",
-        "BENCHMARK_TELEMETRY_TOKEN=",
         "-e",
         _EVENT_PATH,
         "--json",

@@ -33,6 +33,7 @@ from tests.helpers.act_harness import (
     prepare_repository,
     run_act,
 )
+from tests.helpers.workflow import mapping
 
 #: The repository under test, whose workflow and local actions are staged into
 #: each scenario.
@@ -245,6 +246,16 @@ def assert_decision(
     assert run.output("benchmark_admitted") == (
         "true" if decision == "run" else None
     ), "downstream admission must agree with the recorded gate decision"
+    record_json = run.output("record")
+    assert record_json is not None, "the runtime must produce a persistent log record"
+    decoded: object = json.loads(record_json)
+    record = mapping(decoded, "runtime decision record must be a mapping")
+    assert record["labels"] == {name: run.output(name) for name in GATE_OUTPUTS}, (
+        "runtime log labels must match the canonical gate outputs"
+    )
+    assert run.output("written") == "true", (
+        "the runtime must confirm a successful write"
+    )
     row = gate_row(run)
     assert row[2] == relevant, (
         f"the table's relevance cell must be {relevant!r}, got {row[2]!r}"

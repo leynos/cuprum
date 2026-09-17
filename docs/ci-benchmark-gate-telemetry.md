@@ -1,188 +1,230 @@
 # Benchmark-gate telemetry
 
-This contract is for maintainers of Cuprum's Continuous Integration (CI)
-workflow. It describes the proposed external telemetry sink, its bounded
-payload, and how to operate the resulting Grafana Cloud queries and alerts.
+This contract is for Cuprum maintainers. It describes the durable benchmark
+gate record stored with GitHub Actions artefacts, how to retrieve it, and how
+to analyse trends without an external telemetry service.
 
 ## Problem and source of truth
 
 The `changes` job decides whether `benchmark-ratchet` is admitted. Its
 `$GITHUB_STEP_SUMMARY` table and `::notice::` annotation explain an individual
 run, but they cannot answer cross-run questions about benchmark runs, skips, or
-detector failures. An external series supplies that history.
+detector failures.
 
 The decision step in `.github/workflows/ci.yml` is the single source of truth
-for `event_class`, `detector_status`, and `decision`. The publish step carries
-those outputs unchanged. It must never recompute labels from event data or
-changed paths, because a summary and its metric must describe the same decision.
+for `event_class`, `detector_status`, and `decision`. The telemetry step copies
+those outputs into one JSONL record. It must not recompute them from event data
+or changed paths.
 
-## Metric and closed labels
+## Record contract
 
-The workflow emits `benchmark_gate_decisions_total`. Each emitted observation
-uses the value `1`, and carries exactly the following labels:
+Each non-cancelled `changes` execution writes one line to `decisions.jsonl`.
+The line is uploaded as the artefact `benchmark-gate-decision-${run_attempt}`
+with a requested retention of 90 days. The existing `benchmark-ratchet` JSON
+and Markdown reports also declare 90-day retention explicitly.
 
-| Label             | Allowed values                        | Meaning                        |
-| ----------------- | ------------------------------------- | ------------------------------ |
-| `event_class`     | `pull_request`, `other`               | Broad event type               |
-| `detector_status` | `success`, `failure`, `unknown`       | Result of `dorny/paths-filter` |
-| `decision`        | `run`, `skip`, `skip-detector-failed` | Benchmark admission decision   |
+The schema is version 1:
 
-_Table 1: The metric's labels and their closed vocabularies._
+```json
+{
+  "schema_version": 1,
+  "metric": "benchmark_gate_decisions_total",
+  "value": 1,
+  "labels": {
+    "event_class": "pull_request",
+    "detector_status": "success",
+    "decision": "run"
+  },
+  "run_id": "123456789",
+  "run_attempt": "1",
+  "recorded_at": "2026-09-17T12:34:56Z"
+}
+```
 
-The step validates all three values, including missing values, before it invokes
-`curl`. An invalid or missing value produces a bounded warning and no sample.
-No changed file path, command text, commit SHA, run ID, or timestamp may appear
-in a label position. The OTLP `resource` object is empty as well. Grafana Cloud
-documents that resource attributes can be promoted into labels and that service
-attributes are mapped to `job` and `instance` or exposed via `target_info`; an
-empty resource avoids adding labels beyond Table 1. See
-[Grafana Cloud's OTLP format considerations][grafana-otlp].
+The `labels` object contains exactly these bounded values:
 
-## Sink and provisioning status
+| Label             | Allowed values                        | Meaning                      |
+| ----------------- | ------------------------------------- | ---------------------------- |
+| `event_class`     | `pull_request`, `other`               | Broad event type             |
+| `detector_status` | `success`, `failure`, `unknown`       | `paths-filter` result        |
+| `decision`        | `run`, `skip`, `skip-detector-failed` | Benchmark admission decision |
 
-The proposed sink is Grafana Cloud's OTLP/JSON endpoint:
-`https://otlp-gateway-<region>.grafana.net/otlp/v1/metrics`. The workflow uses
-`curl` and reads two repository variables and one repository secret:
+_Table 1: The metric's exact label set and closed vocabularies._
 
-| Name                              | Kind     | Contents                              |
-| --------------------------------- | -------- | ------------------------------------- |
-| `BENCHMARK_TELEMETRY_ENDPOINT`    | variable | OTLP gateway URL                      |
-| `BENCHMARK_TELEMETRY_INSTANCE_ID` | variable | Grafana Cloud instance ID             |
-| `BENCHMARK_TELEMETRY_TOKEN`       | secret   | Access policy token (`metrics:write`) |
+`run` means that the gate permits benchmark admission if the quality
+prerequisites succeed; it does not prove that `benchmark-ratchet` actually
+executed. `run_id`, `run_attempt`, and UTC `recorded_at` are metadata outside
+`labels`. The two identifiers are decimal strings. `value` is always `1`; it is
+an observation to count, not an exactly-once increment of a shared counter. No
+changed path, command text, commit SHA, timestamp, secret, or other unbounded
+value may become a label.
 
-_Table 2: The sink configuration and its least-privilege credential._
+## Retention and delivery
 
-Provisioning and receipt are not verified by this repository. Attempts to list
-the GitHub repository's secrets and variables returned HTTP 403, and no known
-Grafana Cloud stack credentials are available. A maintainer must request and
-complete this configuration securely:
+The workflow requests 90 days for each decision artefact. The effective period
+is limited by repository or organization policy and by artefact deletion, as
+described in GitHub's
+[artefact storage and retention guidance][github-artefacts]. Download archives
+before expiry when longer retention is required.
 
-1. In Grafana Cloud, select the metrics stack and record its regional OTLP
-   gateway URL and instance ID.
-2. Create an access policy token with `metrics:write` only. Do not put the
-   token in source, a workflow variable, a command argument, or a log.
-3. Add the endpoint and instance ID as Actions repository variables, and add
-   the token as the `BENCHMARK_TELEMETRY_TOKEN` Actions repository secret.
-4. From a trusted repository run, check the workflow log for a successful
-   publish without exposing the token. In Grafana Explore, query the metric
-   over the last 7 days and verify a sample has exactly the three labels in
-   Table 1. This is the receipt check; local tests cannot perform it.
+Record writes and artefact uploads are fail-open. A failure emits a bounded
+workflow warning and does not fail `changes` or change benchmark admission.
+Because the record step uses `!cancelled()`, a detector failure is still
+recorded. A cancelled run, missing context, or expired or deleted artefact is
+unknown; it must not be represented as a zero decision.
 
-Until the secret is present, the publish step is skipped. Forks and other runs
-without access to repository secrets therefore produce no external sample. That
-is the intended optional-integration degradation, and absence alone must not be
-interpreted as a broken benchmark gate.
+When `env.ACT == 'true'`, artefact upload is skipped. The local harness
+therefore needs no artefact service. Local tests verify the record and gate
+outputs; hosted receipt is a separate check to perform after the workflow is
+pushed.
 
-## Query surface
+## Retrieve records
 
-Use Grafana Explore with the Prometheus data source for one-off checks. Create
-the suggested dashboard **Cuprum CI / Benchmark Gate** with panels for the
-following queries:
+Download one run's decision artefact with the GitHub CLI:
 
-```promql
-# Observations by decision over the last 7 days.
-sum by (decision) (
-  count_over_time(benchmark_gate_decisions_total[7d])
+```bash
+gh run download RUNID \
+  --pattern 'benchmark-gate-decision-*' \
+  --dir logs/RUNID
+```
+
+To retrieve recent CI runs, list their database IDs and download each archive
+into a run-specific directory. A run without an artefact is expected for a
+cancelled, failed-before-upload, or expired run. The message keeps omissions
+visible without making one missing artefact fail the whole collection:
+
+```bash
+for run_id in $(gh run list --workflow ci.yml --limit 20 \
+  --json databaseId --jq '.[].databaseId'); do
+  if ! gh run download "$run_id" \
+    --pattern 'benchmark-gate-decision-*' \
+    --dir "logs/$run_id"; then
+    printf 'decision artefact unavailable for run %s\n' "$run_id" >&2
+  fi
+done
+```
+
+Analysis must deduplicate by `(run_id, run_attempt)`. Re-downloading an
+artefact or finding the same record in two local archives must not double the
+count.
+
+## Standard-library analysis
+
+This runnable heredoc reads `logs/**/*.jsonl`, validates the schema and closed
+labels, deduplicates run attempts, and writes `decisions.csv` and
+`decisions.svg`. It uses only the Python standard library. Set
+`INCLUDE_SHARES = False` to omit CSV share ratios. SVG labels are escaped even
+though the label vocabulary is closed.
+
+```bash
+python - <<'PY'
+from collections import Counter
+from pathlib import Path
+import csv
+import html
+import json
+
+LABELS = ("event_class", "detector_status", "decision")
+ALLOWED = {
+    "event_class": {"pull_request", "other"},
+    "detector_status": {"success", "failure", "unknown"},
+    "decision": {"run", "skip", "skip-detector-failed"},
+}
+INCLUDE_SHARES = True
+counts = Counter()
+seen = set()
+for path in sorted(Path("logs").rglob("*.jsonl")):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for line_number, line in enumerate(lines, 1):
+        record = json.loads(line)
+        expected_keys = {
+            "schema_version", "metric", "value", "labels", "run_id",
+            "run_attempt", "recorded_at",
+        }
+        if set(record) != expected_keys or record["schema_version"] != 1:
+            raise ValueError(f"{path}:{line_number}: unsupported record")
+        if record["metric"] != "benchmark_gate_decisions_total":
+            raise ValueError(f"{path}:{line_number}: unexpected metric")
+        if record["value"] != 1:
+            raise ValueError(f"{path}:{line_number}: value must be 1")
+        labels = record.get("labels")
+        if not isinstance(labels, dict) or set(labels) != set(LABELS):
+            raise ValueError(f"{path}:{line_number}: invalid label set")
+        values = tuple(labels[name] for name in LABELS)
+        if any(
+            not isinstance(value, str) or value not in ALLOWED[name]
+            for name, value in zip(LABELS, values)
+        ):
+            raise ValueError(f"{path}:{line_number}: invalid label value")
+        recorded_at = record.get("recorded_at")
+        if not isinstance(recorded_at, str) or not recorded_at.endswith("Z"):
+            raise ValueError(f"{path}:{line_number}: recorded_at must be UTC")
+        identity = (record.get("run_id"), record.get("run_attempt"))
+        if not all(
+            isinstance(value, str) and value.isascii() and value.isdecimal()
+            for value in identity
+        ):
+            raise ValueError(f"{path}:{line_number}: invalid run identity")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        counts[values] += 1
+
+if not counts:
+    raise SystemExit("no accepted benchmark-gate records found")
+
+total = sum(counts.values())
+with Path("decisions.csv").open("w", newline="", encoding="utf-8") as output:
+    writer = csv.writer(output)
+    writer.writerow([*LABELS, "count", "share"])
+    for values, count in sorted(counts.items()):
+        share = f"{count / total:.6f}" if INCLUDE_SHARES and total else ""
+        writer.writerow([*values, count, share])
+
+width, bar_start, bar_max, row_height = 1100, 400, 600, 24
+height = 40 + max(1, len(counts)) * row_height
+maximum = max(counts.values(), default=1)
+bars = []
+for index, (values, count) in enumerate(sorted(counts.items())):
+    label = html.escape(" / ".join(values), quote=True)
+    y = 20 + index * row_height
+    bar_width = int(bar_max * count / maximum)
+    bars.append(
+        f'<text x="0" y="{y + 17}">{label}</text>'
+        f'<rect x="{bar_start}" y="{y + 3}" width="{bar_width}" height="18" />'
+        f'<text x="{bar_start + bar_width + 8}" y="{y + 17}">{count}</text>'
+    )
+Path("decisions.svg").write_text(
+    '<svg xmlns="http://www.w3.org/2000/svg" '
+    f'viewBox="0 0 {width} {height}"><title>Benchmark gate observations</title>'
+    '<style>text{font:13px sans-serif}rect{fill:#3465a4}</style>'
+    + "".join(bars) + "</svg>\n",
+    encoding="utf-8",
 )
-
-# Pull-request detector failures over the last 7 days.
-sum(count_over_time(
-  benchmark_gate_decisions_total{
-    event_class="pull_request",detector_status="failure"
-  }[7d]
-))
-
-# Pull-request skips over the last 14 days.
-sum(count_over_time(
-  benchmark_gate_decisions_total{
-    event_class="pull_request",decision="skip"
-  }[14d]
-))
+PY
 ```
 
-`count_over_time` counts samples received in the selected range. It does not
-count increments of a shared cumulative counter and does not establish
-exactly-once workflow execution. Retries and lost requests affect the count,
-and a backend may coalesce repeated samples with the same labels and timestamp.
-Because every observation carries `1`, `rate()` and `increase()` are
-inappropriate: they calculate changes in the sample value, not the number of
-received observations.
+## Alerting and operational checks
 
-The Grafana Cloud Free plan retains metrics for 14 days. Keep queries within 7
-or 14 days unless the stack's paid retention plan is separately confirmed; the
-current plan is documented on [Grafana Cloud pricing][grafana-pricing].
+There is no automatic Grafana dashboard or alert. Existing failed-job
+notifications and GitHub Actions notifications remain the immediate alerting
+surface. Maintainers should periodically run the analysis recipe and inspect the
+`skip-detector-failed` ratio. A missing artefact is a delivery or retention
+question, not evidence of a zero-valued gate decision.
 
-## Alerting
+After pushing the workflow, perform a hosted receipt check: run `changes` on a
+trusted event, download `benchmark-gate-decision-*`, and validate one record's
+schema, exact labels, run metadata, and requested retention. Local `act` tests
+cannot prove that GitHub accepted or retained the artefact.
 
-Create a Grafana alert rule named **Benchmark gate detector failures rising**.
-Evaluate it every 1 hour and require the condition for 2 hours. The following
-expression compares the pull-request detector-failure share in the latest 7-day
-window with the preceding 7-day window, and requires at least 20 current
-observations and one observation in the previous window:
+## Related records
 
-```promql
-(
-  (sum(count_over_time(benchmark_gate_decisions_total{
-    event_class="pull_request",decision="skip-detector-failed"
-  }[7d])) or vector(0))
-  /
-  clamp_min(sum(count_over_time(
-    benchmark_gate_decisions_total{event_class="pull_request"}[7d]
-  )) or vector(0), 1)
-) > (
-  (sum(count_over_time(benchmark_gate_decisions_total{
-    event_class="pull_request",decision="skip-detector-failed"
-  }[7d] offset 7d)) or vector(0))
-  /
-  clamp_min(sum(count_over_time(
-    benchmark_gate_decisions_total{event_class="pull_request"}[7d] offset 7d
-  )) or vector(0), 1)
-) + 0.10
-and
-sum(count_over_time(
-  benchmark_gate_decisions_total{event_class="pull_request"}[7d]
-)) >= 20
-and
-sum(count_over_time(
-  benchmark_gate_decisions_total{event_class="pull_request"}[7d] offset 7d
-)) > 0
-```
-
-The ten-percentage-point margin is a suggested starting point; maintainers own
-the threshold and must select their Grafana notification contact point during
-provisioning. The zero fallback handles a healthy window with no
-detector-failure series. Configure this rule's No Data state as Normal; missing
-data must be investigated alongside workflow warnings and provisioning state. A
-missing secret, fork event, sink outage, or request loss can produce no sample
-while the benchmark gate remains healthy, so an absence alert must not be
-treated as proof of a gate failure.
-
-## Failure and security contract
-
-The publish step runs only when `BENCHMARK_TELEMETRY_TOKEN` is non-empty and
-under the `!cancelled()` guard, so detector-failure decisions can be emitted.
-It writes the credential to a temporary, mode-0600 `curl` configuration file;
-the token does not appear in process arguments or output.
-
-Invalid labels are rejected before transport with a bounded warning. A `curl`
-failure also produces a warning and remains fail-open through
-`continue-on-error: true`; it must never fail `changes` or suppress
-`benchmark-ratchet`. The step summary remains the per-run human-readable
-record, regardless of sink availability.
-
-The payload is hand-built OTLP/JSON with a monotonic cumulative Sum and one
-data point whose `asInt` is the string `"1"`. `startTimeUnixNano` is set to the
-sample timestamp for the individual observation. It does not claim that the
-backend has an exactly-once, process-wide counter; use the sample-count queries
-above.
-
-## Related records and tests
-
-- [ADR-011: Durable benchmark-gate telemetry sink](adr-011-benchmark-gate-telemetry-sink.md)
-  records the sink decision and its consequences.
+- [ADR-011: Durable benchmark-gate telemetry](adr-011-benchmark-gate-telemetry-sink.md)
+  records the superseding storage decision and consequences.
+- [GitHub's artefact storage guidance][github-artefacts] defines the hosted
+  retention policy.
 - `tests/test_ci_benchmark_gate_telemetry.py` checks the workflow declaration.
-- `tests/test_ci_benchmark_gate_telemetry_execution.py` parses the bytes sent
-  to the stub transport and checks label safety and payload shape.
+- `tests/test_ci_benchmark_gate_telemetry_execution.py` checks record creation
+  and fail-open behaviour.
 
-[grafana-otlp]: https://grafana.com/docs/grafana-cloud/observe-and-act/send-data/otlp/otlp-format-considerations/
-[grafana-pricing]: https://grafana.com/pricing/
+[github-artefacts]: https://docs.github.com/en/actions/tutorials/store-and-share-data

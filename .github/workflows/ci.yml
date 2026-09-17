@@ -1199,78 +1199,80 @@ jobs:
             printf 'decision=%s\n' "${decision}"
           } >> "${GITHUB_OUTPUT}"
 
-      # The step summary is durable only for as long as the run record is, so
-      # nothing aggregates the gate across runs: "is `skip-detector-failed`
-      # becoming more frequent?" — the case where performance was silently
-      # not measured — is answerable only by paging through the Actions UI,
-      # and no alert can be attached to it.
-      #
-      # The three values were already computed above and every one is a closed
-      # set, so the metric is bounded by construction: no changed file path,
-      # command line, commit SHA, run identifier, or timestamp reaches a
-      # label. The push is best-effort in both directions — a fork without the
-      # secret sends nothing and a revoked token or a sink outage costs one
-      # warning — because telemetry must never gate the product's own CI. In
-      # particular a failed publish must not fail `changes`, which would skip
-      # `benchmark-ratchet` and stop the baseline being refreshed.
-      #
-      # `aggregationTemporality: 2` is cumulative and is not a preference:
-      # Grafana Cloud's Prometheus translation drops non-cumulative monotonic
-      # sums, so a delta payload is accepted, acknowledged, and discarded.
-      # Each run emits a fresh value of one: queries count received samples,
-      # not increments of a shared counter. Resource attributes are empty
-      # because Grafana promotes them into additional metric labels.
-      - name: Publish the benchmark gate decision
-        if: ${{ env.SINK_TOKEN != '' && !cancelled() }}
+      # Keep analysable records in the existing Actions artefact service.
+      # Labels reuse the gate outputs; per-run metadata never becomes a label.
+      # The runner's preinstalled Python standard library avoids an installer
+      # or dependency sync in this cheap job (Python 3.11+ is sufficient).
+      - name: Persist the benchmark gate decision
+        id: gate-log
+        if: ${{ !cancelled() }}
         continue-on-error: true
         env:
-          SINK_ENDPOINT: ${{ vars.BENCHMARK_TELEMETRY_ENDPOINT }}
-          SINK_INSTANCE_ID: ${{ vars.BENCHMARK_TELEMETRY_INSTANCE_ID }}
-          SINK_TOKEN: ${{ secrets.BENCHMARK_TELEMETRY_TOKEN }}
           EVENT_CLASS: ${{ steps.gate.outputs.event_class }}
           DETECTOR_STATUS: ${{ steps.gate.outputs.detector_status }}
           DECISION: ${{ steps.gate.outputs.decision }}
         run: |
-          set -euo pipefail
-          if [[ ! "${EVENT_CLASS}" =~ ^(pull_request|other)$ ]] ||
-             [[ ! "${DETECTOR_STATUS}" =~ ^(success|failure|unknown)$ ]] ||
-             [[ ! "${DECISION}" =~ ^(run|skip|skip-detector-failed)$ ]]; then
-            printf '::warning title=benchmark-gate-telemetry::Invalid gate labels; sample omitted.\n'
-            exit 0
-          fi
-          now="$(date +%s%N)"
-          payload="$(mktemp)"
-          curlrc="$(mktemp)"
-          trap 'rm -f "${payload}" "${curlrc}"' EXIT
-          printf '%s\n' \
-            '{"resourceMetrics":[{"resource":{},"scopeMetrics":[{"metrics":[' \
-            '{"name":"benchmark_gate_decisions_total","sum":{"isMonotonic":true,' \
-            '"aggregationTemporality":2,"dataPoints":[{"startTimeUnixNano":' \
-            "\"${now}\",\"timeUnixNano\":\"${now}\",\"asInt\":\"1\"," \
-            '"attributes":[{"key":"event_class","value":{"stringValue":' \
-            "\"${EVENT_CLASS}\"}},{\"key\":\"detector_status\"," \
-            '"value":{"stringValue":' \
-            "\"${DETECTOR_STATUS}\"}},{\"key\":\"decision\",\"value\":" \
-            "{\"stringValue\":\"${DECISION}\"}}]}]}}]}]}]}" \
-            > "${payload}"
-          # The credential goes in a config file, not on the command line:
-          # `--user` would publish it in the process arguments, where any other
-          # process on the runner can read it. `mktemp` creates the file 0600.
-          printf 'user = "%s:%s"\n' "${SINK_INSTANCE_ID}" "${SINK_TOKEN}" \
-            > "${curlrc}"
-          status=0
-          curl --config "${curlrc}" \
-            --fail-with-body --silent --show-error --max-time 20 \
-            --request POST \
-            --header 'Content-Type: application/json' \
-            --data-binary "@${payload}" \
-            "${SINK_ENDPOINT}" || status=$?
-          if [ "${status}" -ne 0 ]; then
-            printf '::warning title=benchmark-gate-telemetry::'
-            printf 'benchmark_gate_decisions_total push failed (curl exit %s)' \
-              "${status}"
-            printf '\n'
-          fi
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import datetime as dt
+          from pathlib import Path
+
+          def persist_decision():
+              """Write one bounded record without making logging gate CI."""
+              vocabularies = {
+                  "event_class": {"pull_request", "other"},
+                  "detector_status": {"success", "failure", "unknown"},
+                  "decision": {"run", "skip", "skip-detector-failed"},
+              }
+              labels = {name: os.environ.get(name.upper(), "") for name in vocabularies}
+              identity = {
+                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              }
+              if any(labels[name] not in allowed for name, allowed in vocabularies.items()) or not all(
+                  value.isascii() and value.isdecimal() for value in identity.values()
+              ):
+                  print("::warning title=benchmark-gate-log::Invalid record fields; log omitted.")
+                  return
+              record = {
+                  "schema_version": 1,
+                  "metric": "benchmark_gate_decisions_total",
+                  "value": 1,
+                  "labels": labels,
+                  **identity,
+                  "recorded_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+              }
+              encoded = json.dumps(record, separators=(",", ":"))
+              try:
+                  directory = Path(os.environ["RUNNER_TEMP"]) / "benchmark-gate"
+                  directory.mkdir(parents=True, exist_ok=True)
+                  (directory / "decisions.jsonl").write_text(encoded + "\n", encoding="utf-8")
+                  with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                      output.write("written=true\nrecord=" + encoded + "\n")
+              except OSError:
+                  print("::warning title=benchmark-gate-log::Could not persist the decision log.")
+
+          persist_decision()
+          PYTHON
+
+      # act verifies the record and admission without starting another local
+      # service. Hosted Actions verifies the storage boundary after upload.
+      - name: Upload the benchmark gate log
+        id: gate-log-upload
+        if: ${{ !cancelled() && env.ACT != 'true' && steps.gate-log.outputs.written == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: benchmark-gate-decision-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/benchmark-gate/decisions.jsonl
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Warn when the benchmark gate log is unavailable
+        if: ${{ !cancelled() && steps.gate-log-upload.outcome == 'failure' }}
+        run: |
+          echo '::warning title=benchmark-gate-log::Decision log upload failed; benchmark admission is unchanged.'
 
   benchmark-ratchet:
     # The ratchet compares each scenario's within-run `rust_mean / python_mean`
@@ -1648,6 +1650,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: benchmark-ratchet
+          retention-days: 90
           path: |
             ${{ runner.temp }}/benchmark-ratchet/**/*.json
             ${{ runner.temp }}/benchmark-ratchet/**/*.md
