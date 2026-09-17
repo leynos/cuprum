@@ -13,7 +13,7 @@ that, or to read the contract it enforces, start with
 
 ```bash
 make test-act   # refuses to skip: fails when act or a runtime is missing
-make test       # runs the scenarios too, and skips where they cannot run
+make test       # does not run the scenarios; they need a container runtime
 ```
 
 The rest of this document is the general recipe for validating *any* workflow
