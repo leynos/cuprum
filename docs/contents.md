@@ -29,8 +29,8 @@ open each document.
   production correspondence, assumptions, and safety claims for native-pump
   concurrency checks.
 - [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) - the
-  benchmark-gate counter's label vocabulary, query surface, retention window,
-  alerting rule, and fail-open degradation.
+  benchmark-gate JSONL artefact schema, retention, retrieval, analysis recipe,
+  and fail-open delivery contract.
 
 ## Design and decisions
 
@@ -65,9 +65,9 @@ open each document.
 - [ADR-013: Opt-in GitHub Actions presentation sink][adr-013] - accepted
   decision to frame runs in Actions log groups and annotate failures through an
   opt-in presentation sink.
-- [ADR-012: Durable benchmark-gate telemetry sink][adr-012] - accepted decision
-  to publish a bounded benchmark-gate counter to Grafana Cloud over OTLP,
-  secret-gated and fail-open.
+- [ADR-012: Durable benchmark-gate telemetry][adr-012] - accepted decision to
+  retain bounded benchmark-gate observations in GitHub Actions artefacts with
+  fail-open delivery and no external sink or secret.
 - [ADR-013: Actions-runner integration harness][adr-013] - accepted decision to
   verify the `changes` job boundary with a pytest-driven `act` harness rather
   than by reading the workflow source.

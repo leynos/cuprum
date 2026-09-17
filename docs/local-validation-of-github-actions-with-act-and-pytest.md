@@ -169,6 +169,11 @@ output is diagnostic only. The helper empties `GITHUB_TOKEN`, which routes the
 real `dorny/paths-filter` action to its local Git fallback rather than the
 hosted REST API; action and image downloads can still require network access.
 
+The persistent decision writer runs in every scenario. Its `record` output must
+contain the same bounded labels as the gate outputs. The GitHub artefact upload
+is skipped under `act`, so these tests do not claim to verify hosted storage;
+validate that separately by downloading a CI run's decision log.
+
 The harness does not intercept commands inside the container. If a workflow
 needs deterministic command substitution, test that helper separately with the
 repository's command-mocking tools; keep this suite focused on the workflow

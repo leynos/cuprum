@@ -16,7 +16,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
 - [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
-- [ADR-012: Durable benchmark-gate telemetry sink](adr-011-benchmark-gate-telemetry-sink.md)
+- [ADR-012: Durable benchmark-gate telemetry](adr-011-benchmark-gate-telemetry-sink.md)
 - [ADR-013: Actions-runner integration harness](adr-012-actions-runner-integration-harness.md)
 
 The
@@ -4314,17 +4314,20 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
-The same step also publishes the decision outside GitHub as
-`benchmark_gate_decisions_total`, carrying the three values it already
-computed. The step summary is durable only for as long as the run record is, so
-the counter is what makes the trend — in particular the share of runs recorded
-as `skip-detector-failed` — queryable and alertable.
-[ADR-011](adr-011-benchmark-gate-telemetry-sink.md) records the decision and
+A following step writes one JSONL observation named
+`benchmark_gate_decisions_total` to a GitHub Actions artefact, carrying the
+three values the decision step already computed. The record keeps `run_id`,
+`run_attempt`, and UTC `recorded_at` as metadata outside the exact three-label
+set. The artefact is requested for 90 days, subject to repository and
+organization retention policy, so maintainers can analyse trends after
+downloading recent runs. [ADR-011](adr-011-benchmark-gate-telemetry-sink.md)
+records the superseding decision and
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
-operational contract: label vocabulary, query surface, retention, alerting, and
-what happens when the sink is unreachable. The push is gated on a repository
-secret and fails open, so a fork, a revoked token, or a sink outage costs one
-`::notice` line and never blocks the gate.
+operational contract: schema, retrieval, analysis, retention, and fail-open
+behaviour. Failed writes and uploads warn without blocking the gate; the
+`!cancelled()` condition keeps detector-failure observations recordable. Local
+`act` runs set `ACT=true` and skip artefact upload, while hosted receipt
+remains a post-push check.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run

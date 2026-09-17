@@ -61,6 +61,13 @@ placeholders. With an empty `GITHUB_TOKEN`, the pinned filter uses its local
 Git fallback instead of the hosted REST API; action and image downloads can
 still require network access.
 
+The decision writer also runs under `act`, and tests read its structured record
+from the step outputs. Uploading that record to GitHub is skipped when
+`env.ACT` is `true`; the harness does not start an additional local artefact
+service. Hosted receipt is verified separately by downloading a CI run's
+artefact. This keeps the runtime test focused on detector output, record
+creation, and benchmark admission.
+
 ## Consequences
 
 - The detector, event delivery, output propagation, and benchmark admission are
