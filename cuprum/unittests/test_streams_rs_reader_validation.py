@@ -12,6 +12,12 @@ import pytest
 from cuprum import _streams_rs
 
 
+def _close_duplicate(fd: int) -> None:
+    """Close a duplicate the native pump may already have consumed."""
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
 @pytest.mark.parametrize(
     ("reader", "error"),
     [
@@ -32,25 +38,22 @@ def test_invalid_reader_closes_duplicate_before_native_call(
     error: type[Exception],
 ) -> None:
     """ABI validation fails before transferring the only writer owner."""
-    source, sink = os.pipe()
-    duplicate = os.dup(sink)
-    duplicate_closed = False
-    native = mock.Mock(return_value=0)
-    monkeypatch.setattr(
-        _streams_rs, "_load_native", lambda: SimpleNamespace(rust_pump_stream=native)
-    )
-    monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", lambda fd: fd)
-    try:
+    with contextlib.ExitStack() as stack:
+        source, sink = os.pipe()
+        stack.callback(os.close, source)
+        stack.callback(os.close, sink)
+        duplicate = os.dup(sink)
+        stack.callback(_close_duplicate, duplicate)
+        native = mock.Mock(return_value=0)
+        monkeypatch.setattr(
+            _streams_rs,
+            "_load_native",
+            lambda: SimpleNamespace(rust_pump_stream=native),
+        )
+        monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", lambda fd: fd)
         with pytest.raises(error):
             _streams_rs.rust_pump_stream(reader, duplicate)
         native.assert_not_called()
         with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(duplicate)
-        duplicate_closed = True
         os.fstat(sink)
-    finally:
-        os.close(source)
-        os.close(sink)
-        if not duplicate_closed:
-            with contextlib.suppress(OSError):
-                os.close(duplicate)
