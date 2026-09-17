@@ -1,4 +1,8 @@
-"""Contract tests for Cuprum's non-vacuous scheduled Loom lane."""
+"""Validate the scheduled and smoke Loom workflow contracts.
+
+Run ``pytest tests/test_loom_workflow_contract.py`` to ensure both lanes
+invoke the bounded Loom driver with the required execution settings.
+"""
 
 from __future__ import annotations
 

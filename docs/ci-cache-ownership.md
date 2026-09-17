@@ -104,6 +104,7 @@ to measure warm caches without churning the generation they are measuring.
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`          |
 | Compiler, 3.13 instrumented           | `coverage-main.yml` `coverage-upload` |
 | Compiler, Cranelift lint              | `ci.yml` `lint-test`                  |
+| Compiler, Loom model                  | `loom.yml` `loom`                     |
 
 _Table 2: The single job that publishes each family on a push to `main`._
 

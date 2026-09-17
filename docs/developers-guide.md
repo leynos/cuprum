@@ -41,6 +41,8 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
 | `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
 | `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
+| `loom-smoke`              | `ci.yml`                 | `ubuntu-latest`       |
+| `loom`                    | `loom.yml`               | `ubuntu-latest`       |
 | `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
 | `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
 | `publish`                 | `release.yml`            | `ubuntu-latest`       |
@@ -138,13 +140,14 @@ No job in this repository archives `target`, `rust/target`, or
 oversight, and a contract test enforces it.
 
 sccache is the single owner of compiler output for every build shape. The
-repository produces three: the objects the lint gate builds through its
+repository produces four: the objects the lint gate builds through its
 alternative code generator and linker, the ordinary debug objects the test
-gates build, and the `-C instrument-coverage` objects the coverage gate builds.
-sccache hashes the compiler flags into its cache key, so all three coexist in
-one store without colliding; run 33677926269 recorded zero non-cacheable
-compilations with the cranelift-built Whitaker lints, and Whitaker's
-instrumented coverage build reports the same.
+gates build, the `-C instrument-coverage` objects the coverage gate builds, and
+the `--cfg loom` objects the model checks build. sccache hashes the compiler
+flags into its cache key, so all four coexist in one store without colliding;
+run 33677926269 recorded zero non-cacheable compilations with the
+cranelift-built Whitaker lints, and Whitaker's instrumented coverage build
+reports the same.
 
 A `target` tree, by contrast, is invalidated by any source change, so its
 archive is rewritten far more often than the registry it would sit beside and
@@ -205,7 +208,8 @@ measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
 own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
 `coverage-upload` writes the instrumented one, and `lint-test` writes the
-GitHub-hosted lint family.
+GitHub-hosted lint family. The daily `loom` job writes its separate model
+family, while `loom-smoke` restores it on pull requests.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged
