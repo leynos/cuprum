@@ -1705,15 +1705,15 @@ jobs:
             # `--worker-iterations 5` states the per-process iteration count
             # that goes into the plan's profile metadata. Both are measurement
             # protocol: five iterations is what makes a single measured run a
-            # few hundred milliseconds at that payload — around 63% of it
-            # streaming for the pure-Python pump, 56% for the native one, with
-            # the rest worker start-up and per-iteration set-up — long enough
-            # for hyperfine's per-command mean to be stable without pushing
-            # the job's wall clock. `ci_benchmark_ratchet_profile.py` then keeps
-            # only the two-stage scenarios inside its payload band, so the
-            # acceptance criteria for a plan live in one place. Changing
-            # either value invalidates the recorded samples and needs a
-            # BENCHMARK_PROFILE_VERSION bump; see docs/cuprum-design.md 13.9.
+            # few hundred milliseconds at that payload — the streaming part of
+            # it well past the worker start-up and per-iteration set-up the
+            # ratio used to be dominated by — long enough for hyperfine's
+            # per-command mean to be stable without pushing the job's wall
+            # clock. `ci_benchmark_ratchet_profile.py` then keeps only the
+            # two-stage scenarios inside its payload band, which is the same
+            # two per backend — one per callback mode — so four in total.
+            # Changing either value invalidates the recorded samples and needs
+            # a BENCHMARK_PROFILE_VERSION bump; see docs/cuprum-design.md 13.9.
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
               --ci-ratchet \
