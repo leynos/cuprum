@@ -1,4 +1,25 @@
-"""Build and execute the CI benchmark profile for the Rust ratchet."""
+r"""Build and execute the CI benchmark profile for the Rust ratchet.
+
+Rewrites a dry-run benchmark plan down to the scenarios the CI ratchet is
+allowed to compare, then runs hyperfine over them and writes the filtered
+plan beside the throughput JSON. The filter is the profile: it keeps the
+two-stage scenarios inside a payload band and discards the rest, so the
+payload the ratchet compares from run to run is a property of this module
+rather than of whatever matrix the plan happens to carry. See
+``docs/cuprum-design.md`` 13.9 for why the band exists and the tuning
+record it cites for where its bounds came from.
+
+The command is normally invoked by the `benchmark-ratchet` job, after
+``pipeline_throughput.py --ci-ratchet --dry-run`` has written the full
+plan.
+
+Example
+-------
+uv run python benchmarks/ci_benchmark_ratchet_profile.py \\
+  --full-plan full-plan.json \\
+  --filtered-plan plan.json \\
+  --throughput throughput.json
+"""
 
 from __future__ import annotations
 
@@ -20,6 +41,10 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
+# Kept separate from the module docstring for the same reason as in
+# `pipeline_throughput.py`: argparse reflows a multi-paragraph description into
+# one block, and `--help` reads better as a single line.
+_CLI_DESCRIPTION = "Build and execute the CI benchmark profile for the Rust ratchet."
 _CI_RATCHET_STAGE_COUNT = 2
 # The ratchet only accepts payloads the streaming work dominates, so that the
 # ratio it compares is a measurement of the pipeline rather than of the fixed
@@ -271,7 +296,7 @@ def _require_rust_available(payload: cabc.Mapping[str, object]) -> bool:
 
 def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_CLI_DESCRIPTION)
     parser.add_argument("--full-plan", type=pth.Path, required=True)
     parser.add_argument("--filtered-plan", type=pth.Path, required=True)
     parser.add_argument("--throughput", type=pth.Path, required=True)

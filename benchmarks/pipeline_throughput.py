@@ -1,9 +1,31 @@
-"""Benchmark end-to-end pipeline throughput with hyperfine."""
+r"""Benchmark end-to-end pipeline throughput with hyperfine.
+
+Renders a scenario matrix into prefixed worker commands and hands them to
+hyperfine, which times each one; the dry-run mode writes the same plan as
+JSON instead of executing it. Three workloads are available, and the
+matrix they select is the only thing that varies between them:
+
+- the throughput sweep (the default), which covers three payload tiers;
+- ``--smoke``, the same shape at reduced payloads, for fast validation;
+- ``--ci-ratchet``, the single large payload the CI ratchet compares
+  between runs, where streaming dominates the fixed per-run cost.
+
+``--smoke`` and ``--ci-ratchet`` select contradictory payloads and are
+mutually exclusive on the command line; ``default_pipeline_scenarios``
+rejects the pair too, so a caller that bypasses argparse still cannot ask
+for both.
+
+Example
+-------
+uv run python benchmarks/pipeline_throughput.py \\
+  --ci-ratchet --dry-run --worker-iterations 5 --output plan.json
+"""
 
 from __future__ import annotations
 
 import argparse
 import pathlib as pth
+import typing as typ
 
 from benchmarks._benchmark_types import (
     HyperfineConfig,
@@ -20,6 +42,16 @@ from benchmarks.pipeline_throughput_runner import (
 from benchmarks.pipeline_throughput_scenarios import default_pipeline_scenarios
 from cuprum import is_rust_available
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+# The help text is asserted semantically rather than by snapshot, and argparse
+# reflows a multi-paragraph `description` into one unreadable block, so the
+# parser's own description is a separate one-line literal rather than
+# `__doc__`: the module docstring explains the workloads, and this names the
+# command.
+_CLI_DESCRIPTION = "Benchmark end-to-end pipeline throughput with hyperfine."
+
 __all__ = [
     "HyperfineConfig",
     "PipelineBenchmarkConfig",
@@ -34,21 +66,34 @@ __all__ = [
 ]
 
 
-def _parse_args() -> argparse.Namespace:
-    """Parse command-line arguments for the throughput runner."""
-    parser = argparse.ArgumentParser(description=__doc__)
+def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments for the throughput runner.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None
+        Optional CLI argument sequence; when ``None`` the process
+        arguments are parsed.
+
+    Returns
+    -------
+    argparse.Namespace
+        The parsed arguments.
+    """
+    parser = argparse.ArgumentParser(description=_CLI_DESCRIPTION)
     parser.add_argument(
         "--output",
         type=pth.Path,
         required=True,
         help="Path for hyperfine JSON output (or dry-run plan output).",
     )
-    parser.add_argument(
+    workloads = parser.add_mutually_exclusive_group()
+    workloads.add_argument(
         "--smoke",
         action="store_true",
         help="Use a 1 KB payload and fewer iterations for fast validation.",
     )
-    parser.add_argument(
+    workloads.add_argument(
         "--ci-ratchet",
         action="store_true",
         help=(
@@ -79,18 +124,24 @@ def _parse_args() -> argparse.Namespace:
         default=20,
         help="Number of pipeline executions inside each measured worker process.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
+def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Run the benchmark CLI entry point.
+
+    Parameters
+    ----------
+    argv : collections.abc.Sequence[str] | None
+        Optional CLI argument sequence; when ``None`` the process
+        arguments are parsed.
 
     Returns
     -------
     int
         The process exit code.
     """
-    args = _parse_args()
+    args = _parse_args(argv)
     rust_available = is_rust_available()
     scenarios = default_pipeline_scenarios(
         smoke=args.smoke,

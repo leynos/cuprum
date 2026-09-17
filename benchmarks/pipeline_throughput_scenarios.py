@@ -27,7 +27,7 @@ _SMOKE_LARGE_PAYLOAD_BYTES = 1024 * 1024  # 1 MB
 # component moves the ratio far less than it did at the smoke payloads, while
 # the measurement still fits the job's wall-clock budget (see the tuning
 # record cited from docs/cuprum-design.md 13.9).
-CI_RATCHET_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MB
+CI_RATCHET_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB
 
 # Backward-compatible aliases.
 _SMOKE_PAYLOAD_BYTES = _SMOKE_SMALL_PAYLOAD_BYTES
