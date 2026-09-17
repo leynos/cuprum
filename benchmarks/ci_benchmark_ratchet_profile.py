@@ -105,34 +105,18 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
 
 
 def _require_numeric_payload_bytes(value: object) -> int | float:
-    """Return *value* as a finite numeric payload size, or raise.
-
-    ``json.loads`` accepts the JSON ``NaN`` and ``Infinity`` literals, and
-    every comparison against a NaN is false, so a NaN payload would fall
-    through all three band checks and be measured. Non-finite sizes are
-    rejected rather than compared.
-
-    Parameters
-    ----------
-    value : object
-        The raw ``payload_bytes`` field from a plan scenario.
-
-    Returns
-    -------
-    int | float
-        The payload size as a finite number.
-
-    Raises
-    ------
-    TypeError
-        If ``value`` is a bool or is not numeric.
-    ValueError
-        If ``value`` is not finite.
-    """
+    """Return *value* as a finite numeric payload size, or raise."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         msg = "scenario payload_bytes must be numeric"
         raise TypeError(msg)
-    if not math.isfinite(value):
+    # `json.loads` accepts the bare `NaN` and `Infinity` literals, and every
+    # comparison against a NaN is false, so a NaN payload would pass the
+    # non-negative check and both band bounds and be measured. An `int` is
+    # always finite, and testing one against `math.isfinite` would raise
+    # `OverflowError` on an absurd JSON integer rather than the `ValueError`
+    # the caller expects — so only floats reach the check, and an out-of-range
+    # integer is dropped by the ceiling like any other oversized payload.
+    if isinstance(value, float) and not math.isfinite(value):
         msg = f"scenario payload_bytes must be finite, got {value!r}"
         raise ValueError(msg)
     return value

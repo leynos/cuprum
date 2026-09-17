@@ -67,19 +67,7 @@ __all__ = [
 
 
 def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments for the throughput runner.
-
-    Parameters
-    ----------
-    argv : collections.abc.Sequence[str] | None
-        Optional CLI argument sequence; when ``None`` the process
-        arguments are parsed.
-
-    Returns
-    -------
-    argparse.Namespace
-        The parsed arguments.
-    """
+    """Parse command-line arguments for the throughput runner."""
     parser = argparse.ArgumentParser(description=_CLI_DESCRIPTION)
     parser.add_argument(
         "--output",
