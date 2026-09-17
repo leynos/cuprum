@@ -2,11 +2,15 @@
 
 The helper turns a dry-run benchmark plan into the hyperfine command the
 `benchmark-ratchet` job measures: it keeps the scenarios that fit the CI
-profile and rejects the rest. Nothing downstream notices if that filter is
-wrong — a payload outside the band is simply not measured, so the job reports
-an empty selection rather than a failure — which is why the band, the
-selection, the plan rewriting, and the command construction are all pinned
-here. The contract with the scenario matrix that supplies the workload is
+profile and rejects the rest. Nothing downstream notices when that filter
+stops matching the plan it is given: the workload arrives from a separate
+module, and a payload outside the band is dropped silently. If the workload
+moved out of the band entirely, every scenario would be dropped and
+`select_ci_ratchet_scenarios` would raise `ValueError` before `main` built or
+ran any hyperfine command — a loud failure, but one paid for on the runner.
+That is why the band, the selection, the plan rewriting, and the command
+construction are all pinned here, and why the contract with the scenario
+matrix that supplies the workload is
 `test_ci_ratchet_profile_contract_matches_the_payload_matrix`.
 
 Example
@@ -68,8 +72,9 @@ _CI_PROFILE_WORKER_ITERATIONS = 5
 
 _CI_PROFILE_SCENARIO_SPECS: tuple[_ScenarioSpec, ...] = (
     # Four scenarios at the measured payload, mirroring the matrix the CI job
-    # plans, plus probes either side of the band and one that is too deep. Only
-    # the four are expected to survive selection.
+    # plans, plus probes either side of the band and one that is too deep. Six
+    # survive selection: the four tuned ones and the two probes that sit exactly
+    # on the inclusive floor and ceiling.
     _ScenarioSpec(
         name="python-ratchet-single-nocb",
         backend="python",
@@ -534,9 +539,10 @@ def test_ci_ratchet_profile_contract_matches_the_payload_matrix() -> None:
     The band and the payload are separate declarations in separate modules:
     the matrix decides what a plan offers, the profile decides what it will
     measure. Nothing but a test notices when one moves out from under the
-    other, and the failure mode is quiet — a payload below the floor is simply
-    not selected, so the job would report an empty selection rather than
-    measure anything.
+    other. A payload below the floor or above the ceiling is dropped without
+    comment, so the failure is only loud in the limit: once nothing is left,
+    ``select_ci_ratchet_scenarios`` raises and the job fails on the runner
+    instead of measuring. This test moves that failure to the suite.
     """
     assert _CI_RATCHET_MIN_PAYLOAD_BYTES == 32 * 1024 * 1024, (
         "the floor is the first payload above every measured crossover — the "
