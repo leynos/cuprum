@@ -126,13 +126,13 @@ buy little for a boundary that changes rarely.
 It is additionally run by an opt-in `workflow-harness` job in `ci.yml`, on a
 dispatch or a weekly schedule and never on a pull request. That job exists
 because the alternative is a harness nothing runs: the suite skips where no
-container runtime is present, so without a job that sets
-`CUPRUM_REQUIRE_ACT=1` a silent regression in the harness, its pinned image, or
-`act`'s own output format would be indistinguishable from a passing suite. It
-runs on `ubuntu-latest` and binds the Docker daemon the hosted image installs
-and starts — deliberately not the rootless Podman a developer machine uses,
-because on that image Podman's socket comes from a systemd *user* unit and a
-runner has no user session to create one.
+container runtime is present, so without a job that sets `CUPRUM_REQUIRE_ACT=1`
+a silent regression in the harness, its pinned image, or `act`'s own output
+format would be indistinguishable from a passing suite. It runs on
+`ubuntu-latest` and binds the Docker daemon the hosted image installs and
+starts — deliberately not the rootless Podman a developer machine uses, because
+on that image Podman's socket comes from a systemd _user_ unit and a runner has
+no user session to create one.
 
 ## Goals and non-goals
 
@@ -196,12 +196,12 @@ therefore diffs that branch against a commit already containing every scenario
 commit, observes no changes, and reports `bench=false` for a scenario that is
 plainly relevant. `tests/helpers/act_harness.py` makes this explicit through
 `branch()`, which every pull-request scenario must call first. The trap is
-worth recording because it fails *quietly and plausibly*: the wrong answer is
+worth recording because it fails _quietly and plausibly_: the wrong answer is
 the same `false` that a genuinely irrelevant scenario produces.
 
-**The legacy `::set-output::` command is the only source of a repeated
-output.** `act` folds `$GITHUB_OUTPUT` writes and emits a single event carrying
-the final value, so the real `changes` job produces each name exactly once. The
+**The legacy `::set-output::` command is the only source of a repeated output.**
+`act` folds `$GITHUB_OUTPUT` writes and emits a single event carrying the
+final value, so the real `changes` job produces each name exactly once. The
 technical requirement above originally justified last-wins resolution as a
 property of the whole stream; the measurement says the requirement holds for
 the legacy path specifically. The parser resolves repeats last-wins either way,
@@ -211,6 +211,6 @@ would simply have been correct for a reason that was never checked.
 
 The harness also runs through Cuprum's own `SafeCmd` driver rather than
 `subprocess`, so the repository's command runner is the thing exercising the
-repository's workflow. That is a deliberate choice: it dogfoods the driver on
-a real, long-running, container-boundary command, and it means a regression in
+repository's workflow. That is a deliberate choice: it dogfoods the driver on a
+real, long-running, container-boundary command, and it means a regression in
 `run_sync`'s argument or environment handling surfaces here as well.

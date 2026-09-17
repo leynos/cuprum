@@ -134,7 +134,7 @@ Document the conflict in `Decision log` and escalate.
 - Risk: the `workflow-harness` job declares a container runtime and cannot
   actually provide one, so it fails every scenario's skip refusal on a job
   whose runtime step reported success. Severity: high. Likelihood: high.
-  Status: **realised, then fixed.** The first draft installed Podman. On the
+  Status: **realized, then fixed.** The first draft installed Podman. On the
   GitHub-hosted image Podman's socket is created by a systemd *user* unit
   (`/usr/lib/systemd/user/podman.socket`), and a runner has no user session to
   start one, so `apt-get install podman` leaves no socket at any of the three
@@ -142,8 +142,8 @@ Document the conflict in `Decision log` and escalate.
   `CUPRUM_REQUIRE_ACT=1` turns that into a hard failure. The job now binds the
   Docker daemon the image installs and starts, and asserts it with
   `docker info`; see Surprises & discoveries and Decision log. Residual risk:
-  the hosted image could stop starting its daemon, which the `docker info`
-  step fails loudly on rather than deferring to the harness.
+  the hosted image could stop starting its daemon, which the `docker info` step
+  fails loudly on rather than deferring to the harness.
 
 ## Progress
 
@@ -194,11 +194,11 @@ Document the conflict in `Decision log` and escalate.
   but inspection showed the recorded fixtures contained **no repeats at all**,
   so the test asserted nothing about repetition. Probing `act` empirically
   established that it folds `$GITHUB_OUTPUT` writes and emits one event with
-  the final value; a name repeats only via the legacy `::set-output::`
-  command. Captured that as
-  `tests/fixtures/act_stream_repeated_output.jsonl` and re-ran the mutation:
-  now caught with `assert 'from-legacy-command' == 'from-file-again'`. ADR-012
-  corrected and a revision note appended; see Surprises & discoveries.
+  the final value; a name repeats only via the legacy `::set-output::` command.
+  Captured that as `tests/fixtures/act_stream_repeated_output.jsonl` and re-ran
+  the mutation: now caught with
+  `assert 'from-legacy-command' == 'from-file-again'`. ADR-012 corrected and a
+  revision note appended; see Surprises & discoveries.
 - [x] (2026-09-17 03:40Z) Add the opt-in `workflow-harness` job to `ci.yml`
   with a `workflow_dispatch` boolean input and a weekly schedule, plus
   `tests/test_ci_workflow_harness_job.py` (11 tests) and the
@@ -207,10 +207,16 @@ Document the conflict in `Decision log` and escalate.
   Podman runtime step could not leave a socket on a hosted runner. Now binds
   Docker and asserts it with `docker info`. Negative control run against the
   defective shape: the test failed for the intended reason, with the mutated
-  job still carrying `docker pull` — so a substring check would have passed
-  it. See Surprises & discoveries.
-- [ ] Wire the act scenario target into `PYTEST_TARGETS` (Makefile) if not
-  already present, and confirm the refuse-the-skip path.
+  job still carrying `docker pull` — so a substring check would have passed it.
+  See Surprises & discoveries.
+- [x] (2026-09-17 05:30Z) Rebased onto `origin/main` after PR #403 moved the
+  base and adopted the estate Markdown formatting baseline. Confirmed the act
+  scenario target needs no Makefile change: `PYTEST_TARGETS` already carries
+  `tests/test_ci_*.py`, so `make test` covers the new job contract test.
+- [x] (2026-09-17 06:10Z) Audited the formatter's own output, as V9 now
+  requires. Found and repaired a silent semantic corruption (`'10.'` -> `'1.'`)
+  and a malformed nested code span, and reworded the two other wrapped ordinals
+  that could trip `--renumber` on a future rewrap. See Surprises & discoveries.
 - [ ] Full gate run via `scrutineer`; `coderabbit review --agent`; draft PR.
 
 ## Surprises & discoveries
@@ -219,10 +225,10 @@ Document the conflict in `Decision log` and escalate.
   repository, not the host worktree, and the real `changes` job completes
   offline against rootless podman. Evidence: the probe run
   `/tmp/act-changes-339/run.out` shows `stepResult=success` for "Check out
-  repository" and prints `| pull_request | success | true | run |`. Exit code
-  0. Impact: the harness can exercise the real job rather than a fixture that
-  imitates it, which is what the issue asks for. No network, no token, and no
-  worktree mutation are required.
+  repository" and prints `| pull_request | success | true | run |`, exiting
+  zero. Impact: the harness can exercise the real job rather than a fixture
+  that imitates it, which is what the issue asks for. No network, no token, and
+  no worktree mutation are required.
 
 - Observation: the pinned `dorny/paths-filter` takes the GitHub API branch
   whenever `github.token` is non-empty, and only falls back to local `git diff`
@@ -236,23 +242,23 @@ Document the conflict in `Decision log` and escalate.
 - Observation: **partly corrected on 2026-09-17.** The step-summary half holds:
   summary content is recoverable from the `⚙ Summary -` log message, and must
   be, because the in-container `$GITHUB_STEP_SUMMARY` file is truncated after
-  upload. The cumulative-stream half does **not**. `act` folds
-  `$GITHUB_OUTPUT` writes and emits a single event carrying the final value, so
-  a given output name normally appears exactly once, and the real `changes` job
-  emits each of `bench`, `bench_count`, `changes`, `event_class`,
-  `detector_status`, and `decision` exactly once. Evidence: a mutation of the
-  parser's last-wins assignment to `setdefault` was *not* caught by the
-  recorded fixtures, because none of them contained a repeat; grepping the raw
-  `/tmp/act-stream-*.jsonl` recordings confirmed no repeats either. Probing
-  `act` directly found the only shape that repeats a name — a step that also
-  writes the legacy `::set-output name=X::Y` command, where the live value is
-  the *last* event's. Impact: last-wins resolution is still the correct parser
-  behaviour, but it was originally justified by a premise that had never been
-  measured. `tests/fixtures/act_stream_repeated_output.jsonl` is a real
-  recording of the legacy shape, and ADR-012's technical requirement now states
-  the narrower, verified reason. A parser written on the original premise would
-  have been correct for a reason that was never checked — which is the failure
-  mode the fixture now prevents.
+  upload. The cumulative-stream half does **not**. `act` folds `$GITHUB_OUTPUT`
+  writes and emits a single event carrying the final value, so a given output
+  name normally appears exactly once, and the real `changes` job emits each of
+  `bench`, `bench_count`, `changes`, `event_class`, `detector_status`, and
+  `decision` exactly once. Evidence: a mutation of the parser's last-wins
+  assignment to `setdefault` was *not* caught by the recorded fixtures, because
+  none of them contained a repeat; grepping the raw `/tmp/act-stream-*.jsonl`
+  recordings confirmed no repeats either. Probing `act` directly found the only
+  shape that repeats a name — a step that also writes the legacy
+  `::set-output name=X::Y` command, where the live value is the *last* event's.
+  Impact: last-wins resolution is still the correct parser behaviour, but it
+  was originally justified by a premise that had never been measured.
+  `tests/fixtures/act_stream_repeated_output.jsonl` is a real recording of the
+  legacy shape, and ADR-012's technical requirement now states the narrower,
+  verified reason. A parser written on the original premise would have been
+  correct for a reason that was never checked — which is the failure mode the
+  fixture now prevents.
 
 - Observation: the detector-failure scenario exits non-zero, yet the summary is
   still recorded. Evidence: the `broken` probe run exits 1 with
@@ -340,22 +346,41 @@ Document the conflict in `Decision log` and escalate.
   `github.event_name == 'schedule' || inputs.workflow-harness` is safely falsy
   on a push or a pull request. Evidence: GitHub's contexts documentation states
   that dereferencing a nonexistent property "will evaluate to an empty string".
-  Impact: the first draft of `test_the_harness_job_is_admitted_only_where_it_was_asked_for`
-  parametrized `dispatch_input=True` for the `pull_request` and `push` cases
-  and failed 2 of 10. The test was asserting an unreachable state, not the job
+  Impact: the first draft of
+  `test_the_harness_job_is_admitted_only_where_it_was_asked_for` parametrized
+  `dispatch_input=True` for the `pull_request` and `push` cases and failed two
+  of its ten cases. The test was asserting an unreachable state, not the job
   being wrong; `ADMISSION_CASES` now represents "no such key" as `None` and
   asserts `dispatch_input is True`, which is the documented falsy resolution
   rather than a coincidence of Python truthiness.
 
 - Observation: a container-runtime contract test that only greps the job's
-  script text for the runtime's name cannot detect the defect above.
-  Evidence: the negative control mutated the runtime step back to the Podman
-  install while leaving `docker pull` in the next step, so a substring check
-  for `"docker"` would have passed the job that could not run a single
-  scenario. Impact: `test_the_harness_job_reaches_the_runtime_it_declares`
-  runs the step's scripts through the repository's shell-token matcher and
-  requires a `docker info` command segment. That command reaches the daemon, so
-  no script containing it can pass while the runtime is unusable.
+  script text for the runtime's name cannot detect the defect above. Evidence:
+  the negative control mutated the runtime step back to the Podman install
+  while leaving `docker pull` in the next step, so a substring check for
+  `"docker"` would have passed the job that could not run a single scenario.
+  Impact: `test_the_harness_job_reaches_the_runtime_it_declares` runs the
+  step's scripts through the repository's shell-token matcher and requires a
+  `docker info` command segment. That command reaches the daemon, so no script
+  containing it can pass while the runtime is unusable.
+
+- Observation: `mdtablefix`'s `--renumber` rule can silently rewrite *prose*
+  into a wrong number, because it judges a line by its first characters rather
+  than by Markdown context. It is not a syntax-aware Markdown parser: this plan
+  contained the sentence "the … cases and failed 2 of 10.", the rewrap pass
+  moved `10.` to the start of a continuation line, and the renumber pass then
+  read `10.` as the tenth item of an ordered list and reset it to `1.`, so the
+  committed text said "failed 2 of 1". Nothing failed: the file is valid
+  Markdown, markdownlint accepts it, and `--check` reports it as clean.
+  Evidence: an ordered token diff of the plan against `HEAD` reported exactly
+  two non-equal opcodes, one of them `'10.'` -> `'1.'`; a
+  whitespace-insensitive diff could not see it at all. Impact: prose numbers
+  that can land at a line start after rewrapping are a live hazard, so the
+  passage was reworded to "failed two of its ten cases" and the two other
+  wrapped ordinals in this plan ("Exit code 0.", "a delta of 1") were reworded
+  too. The general lesson is that `--check` proves convergence, not fidelity: a
+  formatter that rewrites content needs a token-level diff against the
+  pre-format revision, not just a clean exit status.
 
 ## Decision log
 
@@ -433,28 +458,26 @@ Document the conflict in `Decision log` and escalate.
   require classification in `tests/helpers/ci_runners.py` and a
   runner-placement test update. The suite auto-skips without a container
   runtime, so it is safe in any environment. Date/Author: 2026-09-16, planning
-  agent.
-  **Superseded on 2026-09-17.** The task specification's third work item
-  requires "an opt-in job on `ubuntu-latest` (never paid runners)"
-  explicitly, and that instruction is a requirement rather than a suggestion.
-  The decision above is retained for provenance; the operative decision is the
-  next entry.
+  agent. **Superseded on 2026-09-17.** The task specification's third work item
+  requires "an opt-in job on `ubuntu-latest` (never paid runners)" explicitly,
+  and that instruction is a requirement rather than a suggestion. The decision
+  above is retained for provenance; the operative decision is the next entry.
 
 - Decision: **deviation from the entry above** — add an opt-in
-  `workflow-harness` job to `ci.yml` anyway. Affected identifiers:
-  `EP-M3` (harness milestone) and the "Non-goals" line in ADR-012 that says
-  the harness is exposed as "a pytest module and a Makefile target rather than
-  as a scheduled workflow job". Rationale: the task specification requires the
-  job on `ubuntu-latest` and forbids paid runners, so the cost argument in the
+  `workflow-harness` job to `ci.yml` anyway. Affected identifiers: `EP-M3`
+  (harness milestone) and the "Non-goals" line in ADR-012 that says the harness
+  is exposed as "a pytest module and a Makefile target rather than as a
+  scheduled workflow job". Rationale: the task specification requires the job on
+  `ubuntu-latest` and forbids paid runners, so the cost argument in the
   superseded entry does not apply — `ubuntu-latest` is free for a public
   repository, and the job is opt-in on a dispatch plus weekly on a schedule, so
   no pull request pays for it. The classification and runner-placement work the
   entry correctly anticipated was done in the same commit (`GITHUB_HOSTED_JOBS`
   in `tests/helpers/ci_runners.py`; `tests/test_ci_runner_placement.py`, 34
   passed). Impacts: `ci.yml` gains a job, a `workflow_dispatch` input, and a
-  schedule block; ADR-012's Non-goals needs the same correction, and its
-  "Known risks" already anticipates image/tooling divergence in an opt-in CI
-  job. Options considered: (a) revert the job and ship the target only, which
+  schedule block; ADR-012's Non-goals needs the same correction, and its "Known
+  risks" already anticipates image/tooling divergence in an opt-in CI job.
+  Options considered: (a) revert the job and ship the target only, which
   contradicts an explicit requirement; (b) add the job as required, which is
   what was done; (c) add it on `pull_request` as well, rejected because the
   scenarios cost 15-27 s each for a boundary that changes rarely. Status:
@@ -466,30 +489,29 @@ Document the conflict in `Decision log` and escalate.
   installed Podman and would have failed on its first run — on the hosted image
   Podman's socket comes from a systemd *user* unit and a runner has no user
   session to start one. Docker is installed and started by the image, so the
-  job neither installs nor starts a daemon; the step exists to make its
-  failure land where the dependency is declared. Rootless Podman remains what
-  the harness uses on a developer machine, and `tests/helpers/act_runtime.py`
-  is unchanged: it accepts either runtime and probes all three socket paths.
+  job neither installs nor starts a daemon; the step exists to make its failure
+  land where the dependency is declared. Rootless Podman remains what the
+  harness uses on a developer machine, and `tests/helpers/act_runtime.py` is
+  unchanged: it accepts either runtime and probes all three socket paths.
   `docker info` was chosen over `command -v docker` because the former reaches
   the daemon and therefore cannot pass while the runtime is unusable. Options
   considered: (a) keep Podman and start `podman system service` in the
   background, which adds a daemon-management step and a `DOCKER_HOST` export
   for no benefit when a working daemon is already present; (b) install Docker
   explicitly, which is redundant on this image. Date/Author: 2026-09-17,
-  implementing agent, from the runner image manifest and GitHub's
-  hosted-runner documentation.
+  implementing agent, from the runner image manifest and GitHub's hosted-runner
+  documentation.
 
 - Decision: make the `workflow-harness` job's contract test assert the runtime
   is *reachable* rather than merely named. Rationale: the substring form of the
   test passed the very job that could not run a scenario, because `docker pull`
-  in the following step satisfied it. The test now runs the step scripts
-  through `tests/helpers/workflow_shell.py::script_runs_command`, which is the
+  in the following step satisfied it. The test now runs the step scripts through
+  `tests/helpers/workflow_shell.py::script_runs_command`, which is the
   repository's existing token-aware matcher, and requires a `docker info`
-  command segment. Verified by negative control: restoring the defective
-  Podman step fails the test with
-  `workflow-harness must run `docker info`, which fails unless the daemon the
-  harness binds is actually reachable`. Date/Author: 2026-09-17, implementing
-  agent.
+  command segment. Verified by negative control: restoring the defective Podman
+  step fails the test with a message naming the command it could not find — the
+  job "must run `docker info`, which fails unless the daemon the harness binds
+  is actually reachable". Date/Author: 2026-09-17, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -612,8 +634,8 @@ Axioms (external facts treated as given, not verified here):
   `pull_request`, `push`, `workflow_dispatch`, and `schedule`; the detector
   outcome over `success`, `failure`, `cancelled`, and empty; and `bench` over
   `true`, `false`, and empty. Artefact:
-  `tests/test_ci_benchmark_gate_telemetry.py`. Evidence: `make test` passes; the
-  test fails if a fourth label or a non-member value is introduced.
+  `tests/test_ci_benchmark_gate_telemetry.py`. Evidence: `make test` passes;
+  the test fails if a fourth label or a non-member value is introduced.
   Non-vacuity: witnesses exist for every member of all three vocabularies (the
   three `decision` values are produced by the three named scenarios). The
   negative control is a seeded mutation — adding `,run_id="$RANDOM"` to the
@@ -662,8 +684,8 @@ Axioms (external facts treated as given, not verified here):
   dependency, which is observable only by running the process. Domain:
   credential absent; credential present but host unresolvable. Artefact:
   `tests/integration/test_workflow_integration.py`,
-  `tests/test_ci_benchmark_gate_telemetry.py`. Evidence: the harness run for the
-  relevant scenario exits 0 and prints its table with no telemetry step
+  `tests/test_ci_benchmark_gate_telemetry.py`. Evidence: the harness run for
+  the relevant scenario exits 0 and prints its table with no telemetry step
   executed; the contract test asserts `|| true`-equivalent semantics.
   Non-vacuity: the positive control is that the step *is* present and would run
   given a credential, asserted by the contract test, so "fail-open" is not
@@ -723,9 +745,10 @@ Axioms (external facts treated as given, not verified here):
   legacy `::set-output::` command, which is the only shape that repeats a name.
   Re-running the `setdefault` mutation against it fails with
   `assert 'from-legacy-command' == 'from-file-again'`, so the control is a
-  recorded artefact rather than a hand-written one. `test_the_repeated_name_is_genuinely_repeated_in_the_recording`
-  guards the fixture itself, so a later reduction to a single event cannot make
-  the test pass for the wrong reason again.
+  recorded artefact rather than a hand-written one.
+  `test_the_repeated_name_is_genuinely_repeated_in_the_recording` guards the
+  fixture itself, so a later reduction to a single event cannot make the test
+  pass for the wrong reason again.
 
 - Obligation: V8 — **The opt-in job can actually run the scenarios**. The
   `workflow-harness` job provides a container runtime whose socket the harness
@@ -737,17 +760,37 @@ Axioms (external facts treated as given, not verified here):
   executed nothing — which is not observable from the harness's own suite.
   Domain: the job's declared steps and condition; the admission condition is
   evaluated structurally for `pull_request`, `push`, `schedule`, and both
-  dispatch values. Artefact: `tests/test_ci_workflow_harness_job.py` (11 tests).
-  Evidence: `make test` passes; `tests/test_ci_runner_placement.py` passes (34
-  tests) with the job classified in `GITHUB_HOSTED_JOBS`. Non-vacuity: the
-  negative control was applied by hand — the runtime step was reverted to the
-  defective Podman install, leaving `docker pull` in the following step, and
-  the test failed for the intended reason. That control is what showed a
-  substring check for the runtime's name would have passed the job that could
-  not run a single scenario. The admission test's earlier form asserted
-  `dispatch_input=True` for push and pull request, which is an unreachable
-  state: GitHub resolves a nonexistent `inputs` property to an empty string, so
-  the falsy resolution is documented behaviour, not a truthiness accident.
+  dispatch values. Artefact: `tests/test_ci_workflow_harness_job.py` (11
+  tests). Evidence: `make test` passes; `tests/test_ci_runner_placement.py`
+  passes (34 tests) with the job classified in `GITHUB_HOSTED_JOBS`.
+  Non-vacuity: the negative control was applied by hand — the runtime step was
+  reverted to the defective Podman install, leaving `docker pull` in the
+  following step, and the test failed for the intended reason. That control is
+  what showed a substring check for the runtime's name would have passed the
+  job that could not run a single scenario. The admission test's earlier form
+  asserted `dispatch_input=True` for push and pull request, which is an
+  unreachable state: GitHub resolves a nonexistent `inputs` property to an
+  empty string, so the falsy resolution is documented behaviour, not a
+  truthiness accident.
+
+- Obligation: V9 — **The Markdown formatter is content-preserving on this
+  branch's prose**. The markdownlint and `mdtablefix` baseline adopted from
+  `origin/main` reformats these documents without changing any word of them,
+  apart from the intended edits. Method: an ordered token diff of each changed
+  Markdown file against its `HEAD` revision, with fenced code blocks excluded,
+  after the formatter's last in-place pass. Rationale: `mdtablefix --check`
+  proves the file has converged, not that it still says the same thing — a
+  formatter that rewrites content can pass `--check` while having changed a
+  number, which is exactly what happened. Domain: every `*.md` file this branch
+  modifies. Artefact: the token-diff script recorded in
+  `Surprises & discoveries`, run by hand against `HEAD`. Evidence: the diff
+  reports only the intended edits and no other non-equal opcode; before the fix
+  it reported `'10.'` -> `'1.'` in the plan, a silent semantic change under a
+  clean `--check`. Non-vacuity: the method was demonstrably able to fail — it
+  did fail, on the very first run, and identified both a real corruption and a
+  genuinely malformed nested code span. A whitespace-insensitive line diff was
+  run alongside it and could not see either, which is why the method is
+  token-level rather than line-level.
 
 Residual gaps, stated explicitly: the harness does not verify that Grafana
 Cloud *accepts* the payload, because that requires a live credential and would
@@ -794,8 +837,8 @@ operator-facing read-back check for this residual gap is a documented step in
   decision: none; the step is new.
 
 - EP-M3: **Opt-in job plateau.** The `workflow-harness` job runs the scenarios
-  in CI: opt-in on a dispatch, weekly on a schedule, never on a pull request,
-  on `ubuntu-latest`, with `act` checksum-verified and the pinned image warmed.
+  in CI: opt-in on a dispatch, weekly on a schedule, never on a pull request, on
+  `ubuntu-latest`, with `act` checksum-verified and the pinned image warmed.
   Requirements and gaps: #339-AC3 (the "supported harness" half — a harness
   nothing runs is not supported). Acceptance evidence:
   `tests/test_ci_workflow_harness_job.py` passes (11 tests);
@@ -826,9 +869,9 @@ operator-facing read-back check for this residual gap is a documented step in
 
 Stage A is complete (reconnaissance and design validation, above).
 
-Stage B: red tests. Add `tests/test_ci_benchmark_gate_telemetry.py` asserting the
-properties of a step that does not yet exist; run it and observe it fail for
-the intended reason ("no step named …"). Add
+Stage B: red tests. Add `tests/test_ci_benchmark_gate_telemetry.py` asserting
+the properties of a step that does not yet exist; run it and observe it fail
+for the intended reason ("no step named …"). Add
 `tests/integration/test_workflow_integration.py` and
 `tests/helpers/act_harness.py` with the parsing unit tests first, so the
 harness's own correctness is red before the harness is used. Add the event
@@ -891,9 +934,9 @@ All commands run from the repository root, which is the worktree directory.
 Acceptance is behavioural. After the change:
 
 - `make test` passes, and the new module
-  `tests/test_ci_benchmark_gate_telemetry.py` fails before the `ci.yml` edit and
-  passes after it. Its failure mode before the edit is a missing step, not an
-  import error.
+  `tests/test_ci_benchmark_gate_telemetry.py` fails before the `ci.yml` edit
+  and passes after it. Its failure mode before the edit is a missing step, not
+  an import error.
 - `uv run pytest -v tests/integration/test_workflow_integration.py` runs the
   real `changes` job for five scenarios and asserts, for each, the detector's
   `bench` output and the gate's recorded decision. On this machine it is

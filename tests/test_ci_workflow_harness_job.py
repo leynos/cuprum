@@ -165,9 +165,7 @@ ADMISSION_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("event_name", "dispatch_input", "expected"), ADMISSION_CASES
-)
+@pytest.mark.parametrize(("event_name", "dispatch_input", "expected"), ADMISSION_CASES)
 def test_the_harness_job_is_admitted_only_where_it_was_asked_for(
     event_name: str, dispatch_input: object, expected: bool, workflow_data: Workflow
 ) -> None:
@@ -210,7 +208,7 @@ def _admits(condition: str, *, event_name: str, dispatch_input: object) -> bool:
     The expression is deliberately small — a disjunction of an event-name
     comparison and a boolean input — so it is evaluated structurally rather
     than by handing the text to a general expression engine. Anything the
-    parser does not recognise is a failure, not a silent `False`, so a job
+    parser does not recognize is a failure, not a silent `False`, so a job
     whose condition was rewritten into an unhandled shape fails here instead of
     being reported as never admitted.
     """
