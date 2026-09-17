@@ -826,14 +826,14 @@ Axioms (external facts treated as given, not verified here):
   `act` emits cumulative state. Measurement showed that premise false: `act`
   folds `$GITHUB_OUTPUT` writes and emits one event with the final value, and
   none of the recorded fixtures contained a repeat at all — so a mutation of
-  the parser to first-match was caught by a hand-written stream that no real
-  run had ever produced. The obligation is now discharged against a real
-  recording: `tests/fixtures/act_stream_repeated_output.jsonl`, captured from a
-  workflow that writes the same name through both `$GITHUB_OUTPUT` and the
-  legacy `::set-output::` command, which is the only shape that repeats a name.
+  the parser to first-match was caught by a synthetic stream that no real run
+  had ever produced. The obligation is now discharged against a real recording:
+  `tests/fixtures/act_stream_repeated_output.jsonl`, captured from a workflow
+  that writes the same name through both `$GITHUB_OUTPUT` and the legacy
+  `::set-output::` command, which is the only shape that repeats a name.
   Re-running the `setdefault` mutation against it fails with
   `assert 'from-legacy-command' == 'from-file-again'`, so the control is a
-  recorded artefact rather than a hand-written one.
+  recorded artefact rather than a synthetic one.
   `test_the_repeated_name_is_genuinely_repeated_in_the_recording` guards the
   fixture itself, so a later reduction to a single event cannot make the test
   pass for the wrong reason again.
