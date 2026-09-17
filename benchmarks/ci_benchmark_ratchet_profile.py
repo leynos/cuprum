@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib as pth
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - helper intentionally invokes hyperfine
 import typing as typ
@@ -104,10 +105,36 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
 
 
 def _require_numeric_payload_bytes(value: object) -> int | float:
-    """Return *value* as a numeric payload size, or raise ``TypeError``."""
+    """Return *value* as a finite numeric payload size, or raise.
+
+    ``json.loads`` accepts the JSON ``NaN`` and ``Infinity`` literals, and
+    every comparison against a NaN is false, so a NaN payload would fall
+    through all three band checks and be measured. Non-finite sizes are
+    rejected rather than compared.
+
+    Parameters
+    ----------
+    value : object
+        The raw ``payload_bytes`` field from a plan scenario.
+
+    Returns
+    -------
+    int | float
+        The payload size as a finite number.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is a bool or is not numeric.
+    ValueError
+        If ``value`` is not finite.
+    """
     if isinstance(value, bool) or not isinstance(value, int | float):
         msg = "scenario payload_bytes must be numeric"
         raise TypeError(msg)
+    if not math.isfinite(value):
+        msg = f"scenario payload_bytes must be finite, got {value!r}"
+        raise ValueError(msg)
     return value
 
 
