@@ -22,6 +22,9 @@ MSRV_TOOLCHAIN ?= 1.85.0
 DEV_FAST_TOOLCHAIN ?= nightly-2026-08-23
 DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
 DEV_FAST_CONFIG ?= tools/dev-fast/config.toml
+DEV_FAST_MOLD_VERSION_FILE ?= tools/mold/VERSION
+DEV_FAST_MOLD_VERSION := $(strip $(shell tr -d '\r\n' < $(DEV_FAST_MOLD_VERSION_FILE)))
+DEV_FAST_MOLD_VERSION_PATTERN = $(subst .,\.,$(DEV_FAST_MOLD_VERSION))
 DEV_FAST_RUST_CONFIG ?= ../$(DEV_FAST_CONFIG)
 DEV_FAST_CARGO_BRIDGE ?= tools/dev-fast/cargo
 DEV_FAST_ABSOLUTE_CONFIG := $(abspath $(DEV_FAST_CONFIG))
@@ -38,8 +41,9 @@ MATURIN_DEVELOP_IS_RELEASE := $(strip $(filter --release -r --profile=release,$(
 DEVELOP_DEV_FAST_ENABLED := $(if $(DEV_FAST_HOST_IS_LINUX),$(if $(MATURIN_DEVELOP_IS_RELEASE),,yes))
 DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
 DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) DEV_FAST_CONFIG=$(DEV_FAST_ABSOLUTE_CONFIG) CARGO=$(DEV_FAST_CARGO_BRIDGE))
-DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf '%s\n' 'mold 2.41.0 is required for Linux dev-fast builds' >&2; exit 1; }; mold --version | grep -q '^mold 2\.41\.0' || { printf '%s\n' 'mold 2.41.0 is required for Linux dev-fast builds' >&2; exit 1; }; rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)" | grep -q '^$(DEV_FAST_CRANELIFT_COMPONENT)' || { printf 'install %s for %s before using dev-fast\n' "$(DEV_FAST_CRANELIFT_COMPONENT)" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }
-DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
+DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)" | grep -q '^$(DEV_FAST_CRANELIFT_COMPONENT)' || { printf 'install %s for %s before using dev-fast\n' "$(DEV_FAST_CRANELIFT_COMPONENT)" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }
+DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
+DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
 WHITAKER ?= whitaker
 BUILD_JOBS ?=
 RUST_FLAGS ?= -D warnings
@@ -338,10 +342,10 @@ test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV
@@ -362,7 +366,7 @@ test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiri
 	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
 
 test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
-	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py
+	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_dev_fast_action.py
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks

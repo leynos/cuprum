@@ -5,29 +5,43 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests fixed local build wiring.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - controlled test argv.
 import tomllib
 import typing as typ
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     from collections import abc as cabc
-    from pathlib import Path
 
 
-FRAGMENT_SHA256 = "d8fcc29ce680ecf43e96f024bd8d0e1a378d5998efdafc8221902735f9ff4ec4"
+if typ.TYPE_CHECKING:
+    from collections import abc as cabc
+
+
+FRAGMENT_SHA256 = "8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
+MOLD_VERSION = (repo_root() / "tools/mold/VERSION").read_text(encoding="utf-8").strip()
+SAFE_MATURIN_FLAGS = st.sampled_from((
+    "--release",
+    "-r",
+    "--profile",
+    "release",
+    "--profile=release",
+    "--skip-install",
+))
 
 
 def _dry_run(*goals: str, variables: dict[str, str] | None = None) -> str:
     """Return evaluated Make recipes for a controlled caller environment."""
     make = shutil.which("make")
-    assert make is not None
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+    assert make is not None, "the routing contract requires GNU Make on PATH"
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
         [
             make,
             "--dry-run",
@@ -55,10 +69,14 @@ def _routing_lines(output: str) -> list[str]:
 
 def _assert_fragment_free(route: str) -> None:
     """Reject any selected Linux development acceleration from a protected route."""
-    assert "--config" not in route
-    assert "tools/dev-fast/cargo" not in route
-    assert "nightly-2026-08-23" not in route
-    assert "DEV_FAST_" not in route
+    assert "--config" not in route, f"protected route selected Cargo config: {route}"
+    assert "tools/dev-fast/cargo" not in route, (
+        f"protected route selected bridge: {route}"
+    )
+    assert "nightly-2026-08-23" not in route, (
+        f"protected route selected nightly: {route}"
+    )
+    assert "DEV_FAST_" not in route, f"protected route leaked dev-fast state: {route}"
 
 
 def _assert_fragment_mutation_is_rejected(route: str) -> None:
@@ -68,39 +86,96 @@ def _assert_fragment_mutation_is_rejected(route: str) -> None:
         _assert_fragment_free(mutation)
 
 
+def _is_release_maturin_flags(flags: list[str]) -> bool:
+    """Model the documented Makefile spellings that must select a release build."""
+    return any(
+        flag in {"--release", "-r", "--profile=release"}
+        or (flag == "--profile" and flags[index + 1 : index + 2] == ["release"])
+        for index, flag in enumerate(flags)
+    )
+
+
+def test_fragment_digest_rejects_content_mutation() -> None:
+    """A changed fragment cannot satisfy the reviewed immutable digest."""
+    fragment = (repo_root() / FRAGMENT).read_bytes()
+    mutated_digest = hashlib.sha256(fragment + b"\n# mutation\n").hexdigest()
+    assert mutated_digest != FRAGMENT_SHA256, (
+        "the digest contract must reject a changed dev-fast fragment"
+    )
+
+
+def test_make_reads_the_mold_version_from_its_pin() -> None:
+    """Keep prerequisite diagnostics coupled to the checked-in linker pin."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "DEV_FAST_MOLD_VERSION_FILE ?= tools/mold/VERSION" in makefile, (
+        "the prerequisite check must read the tracked mold version file"
+    )
+    assert "mold 2.41.0 is required" not in makefile, (
+        "Make diagnostics must not retain a stale hard-coded mold version"
+    )
+
+
 def test_fragment_is_the_approved_immutable_extension() -> None:
     """Keep the checked-in Cargo fragment byte-identical to its approved pin."""
     fragment = (repo_root() / FRAGMENT).read_bytes()
-    assert hashlib.sha256(fragment).hexdigest() == FRAGMENT_SHA256
+    assert hashlib.sha256(fragment).hexdigest() == FRAGMENT_SHA256, (
+        "the reviewed fragment digest must change with its contents"
+    )
+    developers_guide = (repo_root() / "docs/developers-guide.md").read_text(
+        encoding="utf-8"
+    )
+    assert FRAGMENT_SHA256 in developers_guide, (
+        "the developer guide must publish the same reviewed fragment digest"
+    )
 
 
 def test_every_workspace_member_inherits_the_published_msrv() -> None:
     """Keep Clippy's MSRV-aware diagnostics aligned with Cargo metadata."""
     rust_root = repo_root() / "rust"
     workspace = tomllib.loads((rust_root / "Cargo.toml").read_text(encoding="utf-8"))
-    assert workspace["workspace"]["package"]["rust-version"] == "1.85.0"
-    assert tuple(workspace["workspace"]["members"]) == RUST_MEMBERS
+    assert workspace["workspace"]["package"]["rust-version"] == "1.85.0", (
+        "the workspace must publish the agreed Rust compatibility version"
+    )
+    assert tuple(workspace["workspace"]["members"]) == RUST_MEMBERS, (
+        "the MSRV contract must enumerate every workspace package"
+    )
     for member in RUST_MEMBERS:
         manifest = tomllib.loads(
             (rust_root / member / "Cargo.toml").read_text(encoding="utf-8")
         )
-        assert manifest["package"]["rust-version"] == {"workspace": True}
+        assert manifest["package"]["rust-version"] == {"workspace": True}, (
+            f"{member} must inherit the root MSRV contract"
+        )
 
 
 def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     """Every supported debug Cargo invocation explicitly selects the fragment."""
-    output = _dry_run("develop", "test-rust", "rust-lint", "dev-build", "dev-test")
+    output = _dry_run(
+        "develop",
+        "test-rust",
+        "rust-lint",
+        "dev-build",
+        "dev-test",
+        variables={"DEV_FAST_HOST_IS_LINUX": "yes"},
+    )
     routing = "\n".join(_routing_lines(output))
-    assert "DEV_FAST_CARGO=probe-cargo" in routing
-    assert "CARGO=tools/dev-fast/cargo" in routing
+    assert "DEV_FAST_CARGO=probe-cargo" in routing, "develop must inject Cargo"
+    assert "CARGO=tools/dev-fast/cargo" in routing, "develop must use the adapter"
     direct_cargo = [
         line for line in routing.splitlines() if "probe-cargo --config" in line
     ]
-    assert sum(line.count("probe-cargo --config") for line in direct_cargo) == 7
+    assert sum(line.count("probe-cargo --config") for line in direct_cargo) == 7, (
+        "each standard and explicit debug Cargo invocation must select one fragment"
+    )
     assert all(
         "--config ../tools/dev-fast/config.toml" in line for line in direct_cargo
+    ), "every debug Cargo command must select the approved relative fragment"
+    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" in routing, (
+        "debug routes must select the pinned dev-fast nightly"
     )
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" in routing
+    assert "-Clink-arg=-fuse-ld=mold" in routing, (
+        "explicit RUSTFLAGS must retain the Linux mold linker selection"
+    )
 
 
 @pytest.mark.parametrize(
@@ -114,9 +189,22 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
 def test_release_maturin_routes_do_not_select_dev_fast(flags: str) -> None:
     """Release spellings cannot accidentally route Maturin through Cranelift."""
     output = _dry_run("develop", variables={"MATURIN_DEVELOP_FLAGS": flags})
-    assert "tools/dev-fast/cargo" not in output
-    assert "DEV_FAST_CARGO=" not in output
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in output
+    assert "tools/dev-fast/cargo" not in output, "release Maturin must skip bridge"
+    assert "DEV_FAST_CARGO=" not in output, "release Maturin must skip adapter env"
+    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in output, (
+        "release Maturin must not select the dev-fast nightly"
+    )
+
+
+@settings(max_examples=24, deadline=None)
+@given(st.lists(SAFE_MATURIN_FLAGS, max_size=7))
+def test_maturin_release_classification_is_order_independent(flags: list[str]) -> None:
+    """Generated safe flag sequences preserve the documented release boundary."""
+    output = _dry_run("develop", variables={"MATURIN_DEVELOP_FLAGS": " ".join(flags)})
+    is_release = _is_release_maturin_flags(flags)
+    assert ("tools/dev-fast/cargo" not in output) is is_release, (
+        f"flags {flags!r} must {'skip' if is_release else 'select'} the dev-fast bridge"
+    )
 
 
 def test_non_linux_alternative_stays_on_the_stable_cargo_route() -> None:
@@ -124,9 +212,11 @@ def test_non_linux_alternative_stays_on_the_stable_cargo_route() -> None:
     output = _dry_run(
         "develop", "test-rust", "rust-lint", variables={"DEV_FAST_HOST_IS_LINUX": ""}
     )
-    assert "tools/dev-fast/cargo" not in output
-    assert "--config ../tools/dev-fast/config.toml" not in output
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in output
+    assert "tools/dev-fast/cargo" not in output, "non-Linux must skip bridge"
+    assert "--config ../tools/dev-fast/config.toml" not in output, (
+        "non-Linux must not select the fragment"
+    )
+    assert "nightly-2026-08-23" not in output, "non-Linux must use its stable route"
 
 
 def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
@@ -138,19 +228,23 @@ def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
         for line in output.splitlines()
         if "--target x86_64-pc-windows-msvc" in line
     )
-    assert "--config" not in whitaker
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in whitaker
-    assert "--config" not in windows
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in windows
+    assert "--config" not in whitaker, "Whitaker must not select a Cargo fragment"
+    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in whitaker, (
+        "Whitaker must keep its verifier toolchain"
+    )
+    assert "--config" not in windows, "Windows lint must not select Linux fragment"
+    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in windows, (
+        "Windows lint must retain its platform route"
+    )
 
 
 def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:
     """The accelerated lint compiler cannot replace published-MSRV verification."""
     output = _dry_run("msrv-check")
     route = next(line for line in output.splitlines() if "probe-cargo check" in line)
-    assert "RUSTUP_TOOLCHAIN=1.85.0" in route
-    assert "--config" not in route
-    assert "nightly-2026-08-23" not in route
+    assert "RUSTUP_TOOLCHAIN=1.85.0" in route, "MSRV check must pin Rust 1.85.0"
+    assert "--config" not in route, "MSRV check must not select the fragment"
+    assert "nightly-2026-08-23" not in route, "MSRV check must not use nightly"
 
 
 @pytest.mark.parametrize(
@@ -186,104 +280,25 @@ def test_protected_routes_reject_dev_fast_contamination(
     _assert_fragment_mutation_is_rejected(protected_route)
 
 
-def _bridge_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """Create a recording Cargo child for the adapter's process contract."""
-    argv_path = tmp_path / "argv"
-    child = tmp_path / "cargo-child"
-    child.write_text(
-        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$DEV_FAST_ARGV"\nexit 47\n',
-        encoding="utf-8",
-    )
-    child.chmod(0o755)
-    return {
-        "DEV_FAST_ARGV": str(argv_path),
-        "DEV_FAST_CARGO": str(child),
-        "DEV_FAST_CONFIG": str(repo_root() / FRAGMENT),
-    }, argv_path
-
-
-def test_bridge_injects_one_fragment_and_preserves_child_exit(
-    tmp_path: Path,
-) -> None:
-    """The Maturin adapter preserves Cargo's argv and status through exec."""
-    environment, argv_path = _bridge_environment(tmp_path)
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-        [repo_root() / "tools/dev-fast/cargo", "rustc", "--lib"],
-        check=False,
-        cwd=repo_root(),
-        env={**os.environ, **environment},
-    )
-    assert result.returncode == 47
-    assert argv_path.read_text(encoding="utf-8").splitlines() == [
-        "--config",
-        environment["DEV_FAST_CONFIG"],
-        "rustc",
-        "--lib",
-    ]
-
-
-@pytest.mark.parametrize("config_flag", ["--config", "--config=other.toml"])
-def test_bridge_rejects_duplicate_configuration(
-    tmp_path: Path, config_flag: str
-) -> None:
-    """A caller cannot override or duplicate the approved configuration."""
-    environment, argv_path = _bridge_environment(tmp_path)
-    command = [repo_root() / "tools/dev-fast/cargo", "rustc", config_flag]
-    if config_flag == "--config":
-        command.append("other.toml")
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-        command, check=False, cwd=repo_root(), env={**os.environ, **environment}
-    )
-    assert result.returncode == 2
-    assert not argv_path.exists()
-
-
-def _write_program(directory: Path, name: str, body: str) -> None:
-    """Create one controlled executable used to mutate a prerequisite."""
-    program = directory / name
-    program.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
-    program.chmod(0o755)
-
-
-@pytest.mark.parametrize(
-    "programs",
-    [
-        pytest.param({}, id="missing_mold"),
-        pytest.param(
-            {"mold": "printf '%s\\n' 'mold 2.41.0'", "rustup": "exit 0"},
-            id="missing_component",
-        ),
-    ],
-)
-def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
-    tmp_path: Path, programs: dict[str, str]
-) -> None:
-    """Missing linker or component is a hard failure, not an optimistic skip."""
-    for name, body in programs.items():
-        _write_program(tmp_path, name, body)
-    make = shutil.which("make")
-    assert make is not None
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-        [make, "dev-fast-check", "DEV_FAST_HOST_IS_LINUX=yes"],
-        check=False,
-        cwd=repo_root(),
-        env={**os.environ, "PATH": f"{tmp_path}:/usr/bin:/bin"},
-        text=True,
-    )
-    assert result.returncode != 0
-
-
 def test_ci_provisions_only_the_pinned_linux_prerequisites() -> None:
     """CI installs only the approved binary prerequisites for Linux debug work."""
     action = (repo_root() / ".github/actions/setup-dev-fast/action.yml").read_text(
         encoding="utf-8"
     )
     workflow = (repo_root() / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "nightly-2026-08-23" in action
-    assert "rustc-codegen-cranelift" in action
-    assert 'rustup component add "${component}" clippy' in action
-    assert 'archive="mold-${version}-${architecture}-linux.tar.gz"' in action
-    assert "sha256sum --check --status" in action
-    assert "cargo install" not in action
-    assert workflow.count("uses: ./.github/actions/setup-dev-fast") == 2
-    assert "- name: Verify Rust MSRV\n        run: make msrv-check" in workflow
+    assert "nightly-2026-08-23" in action, "CI must install the pinned nightly"
+    assert "rustc-codegen-cranelift" in action, "CI must install Cranelift"
+    assert 'rustup component add "${component}" clippy' in action, (
+        "CI must provision the lint component with the backend"
+    )
+    assert 'archive="mold-${version}-${architecture}-linux.tar.gz"' in action, (
+        "CI must derive the architecture-specific archive"
+    )
+    assert "sha256sum --check --status" in action, "CI must verify downloaded mold"
+    assert "cargo install" not in action, "CI must not add a source-build fallback"
+    assert workflow.count("uses: ./.github/actions/setup-dev-fast") == 2, (
+        "only Linux debug jobs may provision dev-fast"
+    )
+    assert "- name: Verify Rust MSRV\n        run: make msrv-check" in workflow, (
+        "CI must retain independent MSRV verification"
+    )
