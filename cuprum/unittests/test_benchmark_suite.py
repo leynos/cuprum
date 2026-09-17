@@ -21,6 +21,10 @@ from benchmarks.pipeline_throughput import (
     render_prefixed_command,
     run_pipeline_benchmarks,
 )
+from benchmarks.pipeline_throughput_scenarios import (
+    _SMOKE_LARGE_PAYLOAD_BYTES,
+    CI_RATCHET_PAYLOAD_BYTES,
+)
 from benchmarks.pipeline_worker import PipelineWorkerConfig
 
 
@@ -547,3 +551,71 @@ def test_default_pipeline_scenarios_python_and_rust_backends() -> None:
     rust_count = sum(1 for s in scenarios if s.backend == "rust")
     assert python_count == 12, f"expected 12 python scenarios, got {python_count}"
     assert rust_count == 12, f"expected 12 rust scenarios, got {rust_count}"
+
+
+# -- CI ratchet matrix tests (issue #219) ------------------------------------
+
+
+def test_default_pipeline_scenarios_ci_ratchet_matrix_count() -> None:
+    """The ratchet matrix is one payload across both depths and callback modes."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=True,
+        ci_ratchet=True,
+    )
+
+    assert len(scenarios) == 8, (
+        f"expected 8 ratchet scenarios (1 size x 2 depths x 2 callbacks x 2 "
+        f"backends), got {len(scenarios)}"
+    )
+
+
+def test_default_pipeline_scenarios_ci_ratchet_uses_the_ratchet_payload() -> None:
+    """Every ratchet scenario measures the one payload streaming dominates."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=True,
+        ci_ratchet=True,
+    )
+
+    payload_sizes = {s.payload_bytes for s in scenarios}
+    assert payload_sizes == {CI_RATCHET_PAYLOAD_BYTES}, (
+        f"expected the ratchet matrix to measure only "
+        f"{CI_RATCHET_PAYLOAD_BYTES} bytes, got {payload_sizes}"
+    )
+
+
+def test_ci_ratchet_payload_exceeds_the_smoke_matrix() -> None:
+    """The ratchet needs a payload the smoke matrix cannot offer.
+
+    Choosing `--smoke` for the ratchet would be the obvious alternative to a
+    dedicated tier, so the tier only earns its place while its payload is
+    larger than anything the smoke matrix measures. If this ever stops being
+    true, the ratchet should use the smoke payload instead (issue #219).
+    """
+    assert CI_RATCHET_PAYLOAD_BYTES > _SMOKE_LARGE_PAYLOAD_BYTES, (
+        f"ratchet payload {CI_RATCHET_PAYLOAD_BYTES} must exceed the largest "
+        f"smoke payload {_SMOKE_LARGE_PAYLOAD_BYTES}"
+    )
+
+
+def test_default_pipeline_scenarios_ci_ratchet_gates_rust_backend() -> None:
+    """The ratchet matrix omits Rust scenarios when Rust is unavailable."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=False,
+        ci_ratchet=True,
+    )
+
+    assert len(scenarios) == 4, (
+        f"expected 4 python-only ratchet scenarios, got {len(scenarios)}"
+    )
+    assert all(s.backend == "python" for s in scenarios), (
+        "expected rust backend to be omitted when include_rust=False"
+    )
+
+
+def test_default_pipeline_scenarios_rejects_smoke_with_ci_ratchet() -> None:
+    """The smoke and ratchet workloads are distinct, so asking for both fails."""
+    with pytest.raises(ValueError, match="smoke and ci_ratchet"):
+        default_pipeline_scenarios(smoke=True, include_rust=True, ci_ratchet=True)

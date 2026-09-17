@@ -49,6 +49,14 @@ def _parse_args() -> argparse.Namespace:
         help="Use a 1 KB payload and fewer iterations for fast validation.",
     )
     parser.add_argument(
+        "--ci-ratchet",
+        action="store_true",
+        help=(
+            "Build the single-payload CI ratchet matrix instead of the "
+            "throughput sweep, so streaming dominates the fixed per-run cost."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Write scenario/command plan JSON without invoking hyperfine.",
@@ -87,6 +95,7 @@ def main() -> int:
     scenarios = default_pipeline_scenarios(
         smoke=args.smoke,
         include_rust=rust_available,
+        ci_ratchet=args.ci_ratchet,
     )
     worker_path = pth.Path(__file__).with_name("pipeline_worker.py")
 

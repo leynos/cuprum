@@ -27,8 +27,10 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 FEATURE = "../features/benchmark_ratchet_noise.feature"
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
+# Mirrors the CI ratchet's sampling protocol, as `cuprum/unittests/conftest.py`
+# states it: the `ratchet` payload tier at five worker iterations.
+SCENARIO = "ratchet-single-nocb"
+WORKER_ITERATIONS = 5
 
 
 @scenario(FEATURE, "One anomalous main run does not fail the pull requests after it")

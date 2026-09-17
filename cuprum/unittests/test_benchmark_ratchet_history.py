@@ -9,8 +9,10 @@ import pytest
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
+# Mirrors the CI ratchet's sampling protocol, as `cuprum/unittests/conftest.py`
+# states it: the `ratchet` payload tier at five worker iterations.
+SCENARIO = "ratchet-single-nocb"
+WORKER_ITERATIONS = 5
 
 
 def _sample(

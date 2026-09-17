@@ -1216,12 +1216,12 @@ jobs:
           persist-credentials: false
 
       # No resource sampler here, deliberately. This job times commands that
-      # run for about half a second and compares the ratio of two of them, so
-      # a background loop waking every 15 s to shell out to `free` and `df` is
-      # interference in the measurement rather than an observation of it. Its
-      # disk figure was taken once, in run 33857764655: 62.1 GB used with
-      # 11.0 GB free on the 72 GB volume, the same envelope as the other
-      # Ubicloud jobs.
+      # each run for about half a second and compares the ratio of two of
+      # them, so a background loop waking every 15 s to shell out to `free`
+      # and `df` is interference in the measurement rather than an observation
+      # of it. Its disk figure was taken once, in run 33857764655: 62.1 GB
+      # used with 11.0 GB free on the 72 GB volume, the same envelope as the
+      # other Ubicloud jobs.
 
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
@@ -1355,7 +1355,7 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/benchmark-ratchet"
           mkdir -p "${artifact_dir}"
 
-          run_smoke_benchmarks() {
+          run_ratchet_benchmarks() {
             local workspace="$1"
             local prefix="$2"
             pushd "${workspace}" >/dev/null
@@ -1371,10 +1371,24 @@ jobs:
             CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
               make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
 
+            # `--ci-ratchet` selects the one payload this gate measures and
+            # `--worker-iterations 5` states the per-process iteration count
+            # that goes into the plan's profile metadata. Both are measurement
+            # protocol: five iterations is what makes a single measured run a
+            # few hundred milliseconds at that payload — around 63% of it
+            # streaming for the pure-Python pump, 56% for the native one, with
+            # the rest worker start-up and per-iteration set-up — long enough
+            # for hyperfine's per-command mean to be stable without pushing
+            # the job's wall clock. `ci_benchmark_ratchet_profile.py` then keeps
+            # only the two-stage scenarios inside its payload band, so the
+            # acceptance criteria for a plan live in one place. Changing
+            # either value invalidates the recorded samples and needs a
+            # BENCHMARK_PROFILE_VERSION bump; see docs/cuprum-design.md 13.9.
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/pipeline_throughput.py \
-              --smoke \
+              --ci-ratchet \
               --dry-run \
+              --worker-iterations 5 \
               --output "${artifact_dir}/${prefix}-full-plan.json"
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
@@ -1386,7 +1400,7 @@ jobs:
             popd >/dev/null
           }
 
-          run_smoke_benchmarks "${GITHUB_WORKSPACE}" "candidate"
+          run_ratchet_benchmarks "${GITHUB_WORKSPACE}" "candidate"
 
           # Stage the files the baseline artefact publishes before the
           # comparison can fail the step. A main run that measures a
@@ -1403,6 +1417,18 @@ jobs:
             # The window is the bar; the single-sample baseline is the
             # fallback for a first run, an expired artefact, or a window
             # emptied by a benchmark-profile change.
+            #
+            # All three thresholds are stated here rather than left to the
+            # script's defaults, so the workflow reads as the policy it
+            # applies. `benchmarks/ratchet_history.py` owns them and
+            # `test_the_ratchet_policy_matches_the_module_defaults` fails if
+            # these literals drift from it. `--max-regression` is the flat
+            # floor a candidate must clear whatever the spread, the noise band
+            # that widened the bar is `--noise-sigmas` times the window's own
+            # MAD-derived sigma, and `--history-window` is how many recent
+            # compatible main runs form that window. Raising the flat floor is
+            # the wrong lever for a flaky gate — it hides real regressions —
+            # so it must stay at the value the module owns.
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/ratchet_rust_performance.py \
               --baseline-plan "${artifact_dir}/main-baseline/main-plan.json" \
@@ -1411,6 +1437,8 @@ jobs:
               --candidate-plan "${artifact_dir}/${prefix}-plan.json" \
               --candidate-throughput "${artifact_dir}/${prefix}-throughput.json" \
               --max-regression 0.30 \
+              --noise-sigmas 3.0 \
+              --history-window 7 \
               --output "${report}" || status=$?
             popd >/dev/null
             return "${status}"
@@ -1467,7 +1495,7 @@ jobs:
               # merge.
               echo "::notice::regression reported; re-measuring to confirm"
               confirmation_ratchet_status=0
-              run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation" || \
+              run_ratchet_benchmarks "${GITHUB_WORKSPACE}" "confirmation" || \
                 confirmation_ratchet_status=$?
               if [[ "${confirmation_ratchet_status}" -eq 0 ]]; then
                 run_ratchet "confirmation" \
@@ -1614,6 +1642,12 @@ jobs:
       # than the bar is always accepted, while the slower measurements that
       # would correct it are the ones rejected. `!cancelled()` rather than
       # `always()` so an interrupted, half-measured run records nothing.
+      #
+      # Nothing here depends on the ratchet's verdict, and nothing may: the
+      # condition reads the candidate artefacts, not the comparison's exit
+      # code, so a run that failed its own gate still republishes the sample
+      # and the baseline. Gating either on the ratchet passing would restore
+      # exactly the low-biased window this step exists to prevent.
       - name: Record this run's benchmark sample
         if: >-
           ${{ !cancelled() && github.event_name == 'push' &&
@@ -1632,6 +1666,9 @@ jobs:
             --run-id "${GITHUB_RUN_ID}" \
             --output "${artifact_dir}/main-baseline-history.json"
 
+      # Same independence as the step above: a main run that measured a
+      # slowdown publishes the baseline it measured, so the next run compares
+      # against a window that contains it.
       - name: Upload main benchmark baseline artifact
         if: >-
           ${{ !cancelled() && github.event_name == 'push' &&

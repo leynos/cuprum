@@ -3018,7 +3018,11 @@ Both pathways are tested as first-class implementations:
   the same matrix shape with reduced payload sizes for fast validation.
   Scenarios follow a systematic naming convention:
   `{backend}-{size}-{depth}-{callbacks}` (for example
-  `python-small-single-nocb` or `rust-large-multi-cb`).
+  `python-small-single-nocb` or `rust-large-multi-cb`). The CI ratchet does not
+  sweep that matrix: `--ci-ratchet` replaces the three payload tiers with the
+  single `CI_RATCHET_PAYLOAD_BYTES` tier, labelled `ratchet`, so that the ratio
+  it compares is the same measurement from run to run — and one where the
+  pipeline, not the fixed per-run cost, is most of what is timed.
 
 CI includes a benchmark ratchet job on pushes to `main` and on pull requests
 that change performance-relevant paths. The job runs on a paid runner, so a
@@ -3029,24 +3033,28 @@ closed for every event, including pushes to `main`, so an unknown path verdict
 cannot spend paid-runner time. The gate summary records both the detector
 status and the resulting benchmark decision. The gate and its rationale are
 described under "Gating the paid benchmark job" in the developers' guide. The
-job executes smoke-mode throughput benchmarks for the current checkout (with a
-release build of the Rust extension) and compares each scenario's within-run
-Rust-to-Python mean ratio against compatible rolling history from completed
-`main` runs, falling back to the latest completed `main` baseline artefact when
-no compatible history is available. The CI profile measures ten runs per
-command and orders matched Python/Rust commands adjacently so time-dependent
-runner load is less likely to bias one backend block. On pushes to `main`, the
-new smoke benchmark output is uploaded as the next baseline artefact for future
-runs. When no prior `main` baseline is available yet, or when the existing
-baseline uses an incompatible (older) benchmark profile whose sampling protocol
-is not comparable, the job writes a skip report instead of failing the
-workflow. The baseline fetch helper follows GitHub’s signed archive redirects
-without forwarding GitHub-only authentication headers to the storage host,
-avoiding cross-origin 401 responses during artefact download. The same job also
-generates a Python-versus-Rust comparison report from the candidate smoke
-artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
-reviewers can inspect backend speedups even when the Rust ratchet later fails
-the job.
+job executes the ratchet payload — the single 64 MiB tier `--ci-ratchet`
+selects, not the throughput sweep and not the smoke matrix — for the current
+checkout (with a release build of the Rust extension) and compares each
+scenario's within-run Rust-to-Python mean ratio against compatible rolling
+history from completed `main` runs, falling back to the latest completed `main`
+baseline artefact when no compatible history is available. The CI profile
+measures twenty runs per command; hyperfine 1.20.0 runs the commands
+consecutively rather than interleaving them, so each backend's block is timed
+as a unit and slow drift biases each ratio — which is one reason the gate
+compares ratios across runs rather than absolute wall clock, and one reason the
+payload is large enough that the drift is a small part of what is timed. On
+pushes to `main`, the new benchmark output is uploaded as the next baseline
+artefact for future runs. When no prior `main` baseline is available yet, or
+when the existing baseline uses an incompatible (older) benchmark profile whose
+sampling protocol is not comparable, the job writes a skip report instead of
+failing the workflow. The baseline fetch helper follows GitHub’s signed archive
+redirects without forwarding GitHub-only authentication headers to the storage
+host, avoiding cross-origin 401 responses during artefact download. The same
+job also generates a Python-versus-Rust comparison report from the candidate
+benchmark artefacts and appends a Markdown summary table to
+`$GITHUB_STEP_SUMMARY`, so reviewers can inspect backend speedups even when the
+Rust ratchet later fails the job.
 
 The ratchet rule is:
 
@@ -3062,8 +3070,28 @@ The ratchet rule is:
   taken in the same job
 
 Comparing within-run ratios rather than absolute wall-clock means cancels out
-runner-speed differences and interpreter startup overhead between the two CI
-jobs that produced the baseline and candidate runs.
+runner-speed differences between the two CI jobs that produced the baseline and
+candidate runs.
+
+A ratio only cancels a cost the two backends pay in the same proportion. The
+interpreter start, the `cuprum` import, and the per-iteration pipeline set-up
+do not scale with the payload, and the two backends pay different amounts of
+them, so at a small payload those fixed costs are most of both means and the
+ratio compares start-up times: it is the spread of *those*, not of the
+pipeline, that decides whether a scenario is flagged. The ratchet therefore
+measures one payload large enough for the streaming work to dominate — 64 MiB,
+above the 32 MiB floor — the first tier past every crossover measured between
+the four backend/callback combinations, where streaming draws level with the
+per-iteration set-up cost — and below the 128 MiB ceiling that keeps one
+measured run to a few seconds — and `ci_benchmark_ratchet_profile.py` rejects
+any scenario outside that band rather than comparing it. Because a payload size
+is not recorded in a sample, that change also bumped
+`BENCHMARK_PROFILE_VERSION`: samples measured at the old payloads are not
+comparable with the new ones and the window refills with compatible runs,
+leaving the flat threshold and confirmation re-measurement to guard the
+transition. This is the fix for the false positives reported in issue #219; the
+measurements behind it are recorded in
+`docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md`.
 
 The median, rather than the latest sample, is the bar because a single run is
 not an estimate of anything: one anomalous measurement on `main` used to become

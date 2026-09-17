@@ -1,4 +1,4 @@
-"""Unit tests for the CI smoke benchmark ratchet helper."""
+"""Unit tests for the CI benchmark ratchet helper."""
 
 from __future__ import annotations
 
@@ -10,12 +10,16 @@ import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.ci_benchmark_ratchet_profile import (
+    _CI_RATCHET_MAX_PAYLOAD_BYTES,
+    _CI_RATCHET_MIN_PAYLOAD_BYTES,
+    _CI_RATCHET_RUNS,
     build_hyperfine_command,
     load_plan_payload,
     main,
     select_ci_ratchet_scenarios,
     write_filtered_plan,
 )
+from benchmarks.pipeline_throughput_scenarios import CI_RATCHET_PAYLOAD_BYTES
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -43,50 +47,76 @@ def _scenario(spec: _ScenarioSpec) -> dict[str, object]:
     }
 
 
+#: Worker iterations the ratchet job plans with. Nothing in the profile module
+#: pins this — the workflow passes it and the filtered plan echoes it — but
+#: fixtures should describe the same protocol the job runs.
+_CI_PROFILE_WORKER_ITERATIONS = 5
+
 _CI_PROFILE_SCENARIO_SPECS: tuple[_ScenarioSpec, ...] = (
+    # Four scenarios at the measured payload, mirroring the matrix the CI job
+    # plans, plus probes either side of the band and one that is too deep. Only
+    # the four are expected to survive selection.
     _ScenarioSpec(
-        name="python-small-single-nocb",
+        name="python-ratchet-single-nocb",
         backend="python",
-        payload_bytes=1024,
+        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
         stages=2,
     ),
     _ScenarioSpec(
-        name="python-small-single-cb",
+        name="python-ratchet-single-cb",
         backend="python",
-        payload_bytes=1024,
+        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
         stages=2,
         with_line_callbacks=True,
     ),
     _ScenarioSpec(
-        name="rust-small-single-nocb",
+        name="rust-ratchet-single-nocb",
         backend="rust",
-        payload_bytes=1024,
+        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
         stages=2,
     ),
     _ScenarioSpec(
-        name="rust-small-single-cb",
+        name="rust-ratchet-single-cb",
         backend="rust",
-        payload_bytes=1024,
+        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
         stages=2,
         with_line_callbacks=True,
     ),
     _ScenarioSpec(
-        name="rust-large-single-nocb",
+        name="rust-at-the-floor",
         backend="rust",
-        payload_bytes=131072,
+        payload_bytes=_CI_RATCHET_MIN_PAYLOAD_BYTES,
         stages=2,
     ),
     _ScenarioSpec(
-        name="python-small-multi-nocb",
+        name="rust-overhead-bound",
+        backend="rust",
+        payload_bytes=_CI_RATCHET_MIN_PAYLOAD_BYTES - 1,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="rust-at-the-ceiling",
+        backend="rust",
+        payload_bytes=_CI_RATCHET_MAX_PAYLOAD_BYTES,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="rust-over-ceiling",
+        backend="rust",
+        payload_bytes=_CI_RATCHET_MAX_PAYLOAD_BYTES + 1,
+        stages=2,
+    ),
+    _ScenarioSpec(
+        name="python-ratchet-multi-nocb",
         backend="python",
-        payload_bytes=1024,
+        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
         stages=3,
     ),
 )
 
 
 def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
-    """Only two-stage scenarios up to 64 KiB should remain in the CI profile."""
+    """Only two-stage scenarios inside the payload band should remain."""
     full_payload = {
         "dry_run": True,
         "rust_available": True,
@@ -98,12 +128,15 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
             "1",
             "--runs",
             "3",
-            "python small nocb",
-            "python small cb",
-            "rust small nocb",
-            "rust small cb",
-            "rust too-big",
-            "python too-deep",
+            "python ratchet nocb",
+            "python ratchet cb",
+            "rust ratchet nocb",
+            "rust ratchet cb",
+            "rust at the floor",
+            "rust overhead bound",
+            "rust at the ceiling",
+            "rust over the ceiling",
+            "python too deep",
         ],
         "scenarios": [_scenario(spec) for spec in _CI_PROFILE_SCENARIO_SPECS],
     }
@@ -111,12 +144,19 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
     selected = select_ci_ratchet_scenarios(full_payload)
 
     # Validate name/command pairs (not names alone) so the test fails if the
-    # scenario metadata and its hyperfine command were mismatched.
+    # scenario metadata and its hyperfine command were mismatched. The
+    # overhead-bound and over-ceiling payloads must be dropped rather than
+    # measured: below the floor the fixed per-run cost, not the pipeline,
+    # decides most of the ratio (issue #219); above the ceiling one run is too
+    # long to repeat twenty times inside the job's timeout. Both bounds are
+    # inclusive, which is why the at-the-floor and at-the-ceiling probes stay.
     assert [(scenario["name"], command) for scenario, command in selected] == [
-        ("python-small-single-nocb", "python small nocb"),
-        ("rust-small-single-nocb", "rust small nocb"),
-        ("python-small-single-cb", "python small cb"),
-        ("rust-small-single-cb", "rust small cb"),
+        ("rust-at-the-floor", "rust at the floor"),
+        ("python-ratchet-single-nocb", "python ratchet nocb"),
+        ("rust-ratchet-single-nocb", "rust ratchet nocb"),
+        ("python-ratchet-single-cb", "python ratchet cb"),
+        ("rust-ratchet-single-cb", "rust ratchet cb"),
+        ("rust-at-the-ceiling", "rust at the ceiling"),
     ]
 
 
@@ -125,9 +165,9 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
     [
         pytest.param(
             {
-                "name": "python-small-single-nocb",
+                "name": "python-ratchet-single-nocb",
                 "backend": "python",
-                "payload_bytes": 1024,
+                "payload_bytes": CI_RATCHET_PAYLOAD_BYTES,
             },
             "python only",
             "must include Rust scenarios",
@@ -135,7 +175,7 @@ def test_select_ci_ratchet_scenarios_filters_for_ci_profile() -> None:
         ),
         pytest.param(
             {
-                "name": "rust-small-single-nocb",
+                "name": "rust-ratchet-single-nocb",
                 "backend": "rust",
                 "payload_bytes": -1,
             },
@@ -184,9 +224,9 @@ def test_select_ci_ratchet_scenarios_rejects_non_boolean_line_callbacks(
     """Non-boolean with_line_callbacks metadata should raise TypeError."""
     scenario = _scenario(
         _ScenarioSpec(
-            name="rust-small-single-nocb",
+            name="rust-ratchet-single-nocb",
             backend="rust",
-            payload_bytes=1024,
+            payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
             stages=2,
         )
     )
@@ -211,17 +251,17 @@ def test_select_ci_ratchet_scenarios_rejects_unknown_backend(bad_backend: str) -
     """Scenarios with an unsupported backend should raise ValueError."""
     bad_scenario = _scenario(
         _ScenarioSpec(
-            name="bad-small-single-nocb",
+            name="bad-ratchet-single-nocb",
             backend=bad_backend,
-            payload_bytes=1024,
+            payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
             stages=2,
         )
     )
     rust_scenario = _scenario(
         _ScenarioSpec(
-            name="rust-small-single-nocb",
+            name="rust-ratchet-single-nocb",
             backend="rust",
-            payload_bytes=1024,
+            payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
             stages=2,
         )
     )
@@ -245,17 +285,17 @@ def test_load_plan_payload_rejects_mismatched_command_count(tmp_path: pth.Path) 
             "scenarios": [
                 _scenario(
                     _ScenarioSpec(
-                        name="python-small-single-nocb",
+                        name="python-ratchet-single-nocb",
                         backend="python",
-                        payload_bytes=1024,
+                        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                         stages=2,
                     )
                 ),
                 _scenario(
                     _ScenarioSpec(
-                        name="rust-small-single-nocb",
+                        name="rust-ratchet-single-nocb",
                         backend="rust",
-                        payload_bytes=1024,
+                        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                         stages=2,
                     )
                 ),
@@ -282,9 +322,9 @@ def test_build_hyperfine_command_includes_selected_scenarios(
         (
             _scenario(
                 _ScenarioSpec(
-                    name="python-small-single-nocb",
+                    name="python-ratchet-single-nocb",
                     backend="python",
-                    payload_bytes=1024,
+                    payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                     stages=2,
                 )
             ),
@@ -293,9 +333,9 @@ def test_build_hyperfine_command_includes_selected_scenarios(
         (
             _scenario(
                 _ScenarioSpec(
-                    name="rust-small-single-nocb",
+                    name="rust-ratchet-single-nocb",
                     backend="rust",
-                    payload_bytes=1024,
+                    payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                     stages=2,
                 )
             ),
@@ -315,11 +355,11 @@ def test_build_hyperfine_command_includes_selected_scenarios(
         "--warmup",
         "1",
         "--runs",
-        "10",
+        str(_CI_RATCHET_RUNS),
         "--command-name",
-        "python-small-single-nocb",
+        "python-ratchet-single-nocb",
         "--command-name",
-        "rust-small-single-nocb",
+        "rust-ratchet-single-nocb",
         "python cmd",
         "rust cmd",
     ]
@@ -358,9 +398,9 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         (
             _scenario(
                 _ScenarioSpec(
-                    name="python-small-single-nocb",
+                    name="python-ratchet-single-nocb",
                     backend="python",
-                    payload_bytes=1024,
+                    payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                     stages=2,
                 )
             ),
@@ -369,9 +409,9 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         (
             _scenario(
                 _ScenarioSpec(
-                    name="rust-small-single-nocb",
+                    name="rust-ratchet-single-nocb",
                     backend="rust",
-                    payload_bytes=1024,
+                    payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                     stages=2,
                 )
             ),
@@ -384,7 +424,7 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         full_payload={
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
             "rust_available": True,
-            "worker_iterations": 20,
+            "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
         },
         command=command,
         selected=selected,
@@ -397,7 +437,7 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         "dry_run": True,
         "rust_available": True,
         "scenarios": [scenario for scenario, _ in selected],
-        "worker_iterations": 20,
+        "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
     }
 
 
@@ -414,14 +454,14 @@ def test_main_rejects_non_bool_rust_availability(
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
             "dry_run": True,
             "rust_available": "false",
-            "worker_iterations": 20,
+            "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
             "command": ["a", "b", "c", "d", "e", "f", "g", "rust cmd"],
             "scenarios": [
                 _scenario(
                     _ScenarioSpec(
-                        name="rust-small-single-nocb",
+                        name="rust-ratchet-single-nocb",
                         backend="rust",
-                        payload_bytes=1024,
+                        payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                         stages=2,
                     )
                 )
@@ -455,16 +495,16 @@ def test_write_filtered_plan_rejects_non_boolean_rust_available(
             full_payload={
                 "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
                 "rust_available": "false",
-                "worker_iterations": 20,
+                "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
             },
             command=["hyperfine", "rust cmd"],
             selected=[
                 (
                     _scenario(
                         _ScenarioSpec(
-                            name="rust-small-single-nocb",
+                            name="rust-ratchet-single-nocb",
                             backend="rust",
-                            payload_bytes=1024,
+                            payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
                             stages=2,
                         )
                     ),
@@ -472,3 +512,45 @@ def test_write_filtered_plan_rejects_non_boolean_rust_available(
                 ),
             ],
         )
+
+
+def test_ci_ratchet_profile_contract_matches_the_payload_matrix() -> None:
+    """The profile's band must accept the workload the scenario matrix builds.
+
+    The band and the payload are separate declarations in separate modules:
+    the matrix decides what a plan offers, the profile decides what it will
+    measure. Nothing but a test notices when one moves out from under the
+    other, and the failure mode is quiet — a payload below the floor is simply
+    not selected, so the job would report an empty selection rather than
+    measure anything.
+    """
+    assert _CI_RATCHET_MIN_PAYLOAD_BYTES == 32 * 1024 * 1024, (
+        "the floor is the first payload above every measured crossover — the "
+        "four backend/mode combinations reach it between about 4 MiB and "
+        "22 MiB per iteration — so a scenario the band accepts has paid for "
+        "its ratio with streaming work rather than with set-up"
+    )
+    assert _CI_RATCHET_MAX_PAYLOAD_BYTES == 128 * 1024 * 1024, (
+        "the ceiling keeps one measured run to a few seconds, so the job still "
+        "fits its timeout with confirmation re-measurement included"
+    )
+    assert CI_RATCHET_PAYLOAD_BYTES == 64 * 1024 * 1024, (
+        "64 MiB is the tuned workload: streaming is 63% of the pure-Python "
+        "no-callback run and 86% of a callback run on the reference host, so "
+        "the pipeline rather than the worker's start-up is most of what is "
+        "timed (issue #219)"
+    )
+    assert (
+        _CI_RATCHET_MIN_PAYLOAD_BYTES
+        <= CI_RATCHET_PAYLOAD_BYTES
+        <= (_CI_RATCHET_MAX_PAYLOAD_BYTES)
+    ), (
+        "the measured workload must fall inside the band the profile accepts; "
+        f"band={_CI_RATCHET_MIN_PAYLOAD_BYTES}..{_CI_RATCHET_MAX_PAYLOAD_BYTES}, "
+        f"workload={CI_RATCHET_PAYLOAD_BYTES}"
+    )
+    assert _CI_RATCHET_RUNS == 20, (
+        "twenty runs is the tuned count: at this payload it keeps the mean of "
+        "each command stable while the whole measurement still costs about "
+        "two minutes"
+    )
