@@ -37,7 +37,6 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
         ".github/actions/install-nixie",
         ".github/actions/install-whitaker",
         ".github/actions/setup-rust",
-        ".github/actions/upload-codescene-coverage",
     },
     "coverage-main.yml": {
         ".github/actions/generate-coverage",

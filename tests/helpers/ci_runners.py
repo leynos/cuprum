@@ -24,6 +24,7 @@ from tests.helpers.ci_workflows import (
     cache_steps,
     expand,
     job,
+    job_env,
     jobs,
     restore_steps,
     save_steps,
@@ -44,7 +45,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",
     "ROOT", "WORKFLOW_DIR", "cache_paths", "cache_steps", "expand", "job",
-    "jobs", "restore_steps", "save_steps", "step_inputs", "steps",
+    "job_env", "jobs", "restore_steps", "save_steps", "step_inputs", "steps",
     "workflow_document", "workflow_env", "workflow_sources",
 )
 # fmt: on
