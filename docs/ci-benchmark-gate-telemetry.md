@@ -1,173 +1,188 @@
 # Benchmark-gate telemetry
 
-Cuprum's `changes` job decides whether the benchmark job runs, and records that
-decision in the step summary. A step summary is a run artefact: it is readable
-for as long as the run record is retained, and it is readable one run at a
-time. Nothing about it answers "has this gate been skipping more pull requests
-than it used to?", which is the question that tells a maintainer whether the
-path filter has drifted away from the code it was meant to select.
+This contract is for maintainers of Cuprum's Continuous Integration (CI)
+workflow. It describes the proposed external telemetry sink, its bounded
+payload, and how to operate the resulting Grafana Cloud queries and alerts.
 
-The `changes` job therefore publishes the same decision to an external sink,
-where it accumulates into a series that can be queried and alerted on. This
-document records what is published, where it lands, how to query it, and what
-it deliberately does not contain.
+## Problem and source of truth
 
-## The metric
+The `changes` job decides whether `benchmark-ratchet` is admitted. Its
+`$GITHUB_STEP_SUMMARY` table and `::notice::` annotation explain an individual
+run, but they cannot answer cross-run questions about benchmark runs, skips, or
+detector failures. An external series supplies that history.
 
-One sample per run, named `benchmark_gate_decisions_total`, carrying exactly
-three labels:
+The decision step in `.github/workflows/ci.yml` is the single source of truth
+for `event_class`, `detector_status`, and `decision`. The publish step carries
+those outputs unchanged. It must never recompute labels from event data or
+changed paths, because a summary and its metric must describe the same decision.
 
-| Label             | Values                                |
-| ----------------- | ------------------------------------- |
-| `event_class`     | `pull_request`, `other`               |
-| `detector_status` | `success`, `failure`, `unknown`       |
-| `decision`        | `run`, `skip`, `skip-detector-failed` |
+## Metric and closed labels
+
+The workflow emits `benchmark_gate_decisions_total`. Each emitted observation
+uses the value `1`, and carries exactly the following labels:
+
+| Label             | Allowed values                        | Meaning                        |
+| ----------------- | ------------------------------------- | ------------------------------ |
+| `event_class`     | `pull_request`, `other`               | Broad event type               |
+| `detector_status` | `success`, `failure`, `unknown`       | Result of `dorny/paths-filter` |
+| `decision`        | `run`, `skip`, `skip-detector-failed` | Benchmark admission decision   |
 
 _Table 1: The metric's labels and their closed vocabularies._
 
-All three vocabularies are finite and are asserted closed by
-`tests/test_ci_benchmark_gate_telemetry_execution.py`, which reads them out of
-the request body the step actually sent rather than out of the script text.
-That distinction matters: a label whose value came from the event payload would
-still be _named_ `event_class`, and would still grow the series count with the
-repository's history.
+The step validates all three values, including missing values, before it invokes
+`curl`. An invalid or missing value produces a bounded warning and no sample.
+No changed file path, command text, commit SHA, run ID, or timestamp may appear
+in a label position. The OTLP `resource` object is empty as well. Grafana Cloud
+documents that resource attributes can be promoted into labels and that service
+attributes are mapped to `job` and `instance` or exposed via `target_info`; an
+empty resource avoids adding labels beyond Table 1. See
+[Grafana Cloud's OTLP format considerations][grafana-otlp].
 
-`decision` is the operative value. It is computed once, by the step that
-records the summary, and the publish step transports that value rather than
-recomputing it — so the table a maintainer reads in the run and the series a
-query returns cannot disagree.
+## Sink and provisioning status
 
-## Where it lands
+The proposed sink is Grafana Cloud's OTLP/JSON endpoint:
+`https://otlp-gateway-<region>.grafana.net/otlp/v1/metrics`. The workflow uses
+`curl` and reads two repository variables and one repository secret:
 
-The sink is **Grafana Cloud**, reached over its OTLP gateway at
-`https://otlp-gateway-<region>.grafana.net/otlp/v1/metrics`. Three repository
-variables and one secret configure it:
+| Name                              | Kind     | Contents                              |
+| --------------------------------- | -------- | ------------------------------------- |
+| `BENCHMARK_TELEMETRY_ENDPOINT`    | variable | OTLP gateway URL                      |
+| `BENCHMARK_TELEMETRY_INSTANCE_ID` | variable | Grafana Cloud instance ID             |
+| `BENCHMARK_TELEMETRY_TOKEN`       | secret   | Access policy token (`metrics:write`) |
 
-| Name                                 | Kind     | Holds                         |
-| ------------------------------------ | -------- | ----------------------------- |
-| `BENCHMARK_TELEMETRY_ENDPOINT`       | variable | the gateway URL               |
-| `BENCHMARK_TELEMETRY_INSTANCE_ID`    | variable | the Grafana Cloud instance ID |
-| `BENCHMARK_TELEMETRY_TOKEN`          | secret   | an access policy token        |
-| `BENCHMARK_TELEMETRY_TOKEN` (absent) | —        | the step does not run at all  |
+_Table 2: The sink configuration and its least-privilege credential._
 
-_Table 2: The configuration the sink reads, and what each part holds._
+Provisioning and receipt are not verified by this repository. Attempts to list
+the GitHub repository's secrets and variables returned HTTP 403, and no known
+Grafana Cloud stack credentials are available. A maintainer must request and
+complete this configuration securely:
 
-The token needs the `metrics:write` scope and nothing else. It is pushed by
-`curl`, with the credential written to a `mktemp`-created file (mode 0600) and
-passed with `--config`, never with `--user`. That is deliberate: `-u` would put
-the token in the process arguments, where any other process on the runner can
-read it, and it would appear in a failing step's logs. The repository's own
-tests assert the credential reaches `curl` and nothing else.
+1. In Grafana Cloud, select the metrics stack and record its regional OTLP
+   gateway URL and instance ID.
+2. Create an access policy token with `metrics:write` only. Do not put the
+   token in source, a workflow variable, a command argument, or a log.
+3. Add the endpoint and instance ID as Actions repository variables, and add
+   the token as the `BENCHMARK_TELEMETRY_TOKEN` Actions repository secret.
+4. From a trusted repository run, check the workflow log for a successful
+   publish without exposing the token. In Grafana Explore, query the metric
+   over the last 7 days and verify a sample has exactly the three labels in
+   Table 1. This is the receipt check; local tests cannot perform it.
 
-The push is **best-effort**. The step is gated on the secret being non-empty
-and set `continue-on-error: true`, because the failure mode of a telemetry
-outage must not be a failed `changes` job: `changes` failing skips the
-benchmark job, so a telemetry problem would silently stop the baseline being
-refreshed and turn into a benchmarking problem. A failed push is reported as a
-workflow notice in the run, which is where a maintainer will see it.
+Until the secret is present, the publish step is skipped. Forks and other runs
+without access to repository secrets therefore produce no external sample. That
+is the intended optional-integration degradation, and absence alone must not be
+interpreted as a broken benchmark gate.
 
-Until the secret exists, the step is skipped and the metric is empty. That is
-the intended pre-deployment state, not a misconfiguration.
+## Query surface
 
-## Querying it
-
-The series accumulates one sample per run. Because the published value is always
-`1` and the counter is cumulative, **the count is in the sample timestamps,
-not in the sample values**, so `rate()` and `increase()` do not work: both
-compute `last - first` over the window, and a series whose value is `1` at
-every sample has a difference of zero at every window size. They return 0, not
-because the telemetry is broken, but because the arithmetic has no information
-to work with.
-
-Use `count_over_time` instead:
+Use Grafana Explore with the Prometheus data source for one-off checks. Create
+the suggested dashboard **Cuprum CI / Benchmark Gate** with panels for the
+following queries:
 
 ```promql
-# Decided skips over the last 30 days, by decision.
-sum by (decision) (count_over_time(benchmark_gate_decisions_total[30d]))
+# Observations by decision over the last 7 days.
+sum by (decision) (
+  count_over_time(benchmark_gate_decisions_total[7d])
+)
 
-# Pull requests where the detector itself failed, over the last 7 days.
+# Pull-request detector failures over the last 7 days.
 sum(count_over_time(
-  benchmark_gate_decisions_total{event_class="pull_request",detector_status="failure"}[7d]
+  benchmark_gate_decisions_total{
+    event_class="pull_request",detector_status="failure"
+  }[7d]
 ))
 
-# Share of pull requests the gate skipped, over the last 30 days.
-sum(count_over_time(benchmark_gate_decisions_total{decision="skip"}[30d]))
-  /
-sum(count_over_time(benchmark_gate_decisions_total{event_class="pull_request"}[30d]))
+# Pull-request skips over the last 14 days.
+sum(count_over_time(
+  benchmark_gate_decisions_total{
+    event_class="pull_request",decision="skip"
+  }[14d]
+))
 ```
 
-The `30d` range is not a display window; `count_over_time` counts the samples
-in the range you give it, so the range is the reporting period. Grafana's range
-is not the same thing and does not substitute for it.
+`count_over_time` counts samples received in the selected range. It does not
+count increments of a shared cumulative counter and does not establish
+exactly-once workflow execution. Retries and lost requests affect the count,
+and a backend may coalesce repeated samples with the same labels and timestamp.
+Because every observation carries `1`, `rate()` and `increase()` are
+inappropriate: they calculate changes in the sample value, not the number of
+received observations.
 
-A useful invariant to put on a dashboard: `count_over_time` over a period,
-grouped by `decision`, should sum to the number of runs in that period. A short
-total means pushes are being dropped — either the sink rejected them, or the
-secret was rotated away — and each drop is reported as a workflow notice in the
-run that suffered it.
+The Grafana Cloud Free plan retains metrics for 14 days. Keep queries within 7
+or 14 days unless the stack's paid retention plan is separately confirmed; the
+current plan is documented on [Grafana Cloud pricing][grafana-pricing].
 
-## Retention and alerting
+## Alerting
 
-The series is retained under whatever retention the Grafana Cloud metrics
-instance is configured with; the repository does not pin it. Two alert rules
-are worth having, and both are stated in `count_over_time` terms:
+Create a Grafana alert rule named **Benchmark gate detector failures rising**.
+Evaluate it every 1 hour and require the condition for 2 hours. The following
+expression compares the pull-request detector-failure share in the latest 7-day
+window with the preceding 7-day window, and requires at least 20 current
+observations and one observation in the previous window:
 
-- **Telemetry has stopped.** No samples for longer than the longest expected
-  gap between default-branch runs. This catches a rotated secret or a rejected
-  endpoint, neither of which fails a run and so neither of which is visible
-  without looking for it.
-- **The gate has stopped skipping.** `decision="skip"` absent over a long
-  window while `decision="run"` continues. A path filter that matches
-  everything is indistinguishable from a healthy gate on any single run.
+```promql
+(
+  (sum(count_over_time(benchmark_gate_decisions_total{
+    event_class="pull_request",decision="skip-detector-failed"
+  }[7d])) or vector(0))
+  /
+  clamp_min(sum(count_over_time(
+    benchmark_gate_decisions_total{event_class="pull_request"}[7d]
+  )) or vector(0), 1)
+) > (
+  (sum(count_over_time(benchmark_gate_decisions_total{
+    event_class="pull_request",decision="skip-detector-failed"
+  }[7d] offset 7d)) or vector(0))
+  /
+  clamp_min(sum(count_over_time(
+    benchmark_gate_decisions_total{event_class="pull_request"}[7d] offset 7d
+  )) or vector(0), 1)
+) + 0.10
+and
+sum(count_over_time(
+  benchmark_gate_decisions_total{event_class="pull_request"}[7d]
+)) >= 20
+and
+sum(count_over_time(
+  benchmark_gate_decisions_total{event_class="pull_request"}[7d] offset 7d
+)) > 0
+```
 
-Alert on absence, not on a threshold crossing. A best-effort push can fail for
-one run without the telemetry being broken, but a metric that has been quiet
-for a week is a statement about the pipeline.
+The ten-percentage-point margin is a suggested starting point; maintainers own
+the threshold and must select their Grafana notification contact point during
+provisioning. The zero fallback handles a healthy window with no
+detector-failure series. Configure this rule's No Data state as Normal; missing
+data must be investigated alongside workflow warnings and provisioning state. A
+missing secret, fork event, sink outage, or request loss can produce no sample
+while the benchmark gate remains healthy, so an absence alert must not be
+treated as proof of a gate failure.
 
-## What is never published
+## Failure and security contract
 
-No changed file path, no command text, no commit SHA, no run identifier, and no
-timestamp appears as a label value. Each of those would either publish
-repository content to a third party or give the series one identity per run,
-and a series with one identity per run counts nothing. The check is not
-textual: the tests parse the emitted payload and assert every label value is a
-member of the vocabularies in Table 1, and that the resource attributes are
-limited to `service.name` and `service.namespace`.
+The publish step runs only when `BENCHMARK_TELEMETRY_TOKEN` is non-empty and
+under the `!cancelled()` guard, so detector-failure decisions can be emitted.
+It writes the credential to a temporary, mode-0600 `curl` configuration file;
+the token does not appear in process arguments or output.
 
-`service.instance.id` is deliberately absent. The OTLP-to-Prometheus
-translation turns it into an `instance` label, which would split the series per
-run; `service.name` and `service.namespace` become the `job` label and identify
-the sender without splitting it.
+Invalid labels are rejected before transport with a bounded warning. A `curl`
+failure also produces a warning and remains fail-open through
+`continue-on-error: true`; it must never fail `changes` or suppress
+`benchmark-ratchet`. The step summary remains the per-run human-readable
+record, regardless of sink availability.
 
-## Wire format
+The payload is hand-built OTLP/JSON with a monotonic cumulative Sum and one
+data point whose `asInt` is the string `"1"`. `startTimeUnixNano` is set to the
+sample timestamp for the individual observation. It does not claim that the
+backend has an exactly-once, process-wide counter; use the sample-count queries
+above.
 
-The payload is hand-built OTLP/JSON, sent as `application/json`, carrying a
-monotonic Sum with `aggregationTemporality: 2` (cumulative). Two encoding
-choices are load-bearing rather than cosmetic:
+## Related records and tests
 
-- **Cumulative, not delta.** Grafana Cloud's remote-write translation drops
-  non-cumulative monotonic sums, so a delta-encoded payload is accepted,
-  acknowledged, and then discarded. Nothing in the workflow's output would show
-  that. The tests assert the temporality on the emitted bytes.
-- **`startTimeUnixNano` equal to `timeUnixNano`.** This declares "a new
-  unbroken sequence of observations begins with a reset at an unknown start
-  time", which is what lets one long-lived series accumulate across runs.
-  Leaving it unset or at zero would instead describe a series that began at the
-  epoch — a different and false claim.
+- [ADR-011: Durable benchmark-gate telemetry sink](adr-011-benchmark-gate-telemetry-sink.md)
+  records the sink decision and its consequences.
+- `tests/test_ci_benchmark_gate_telemetry.py` checks the workflow declaration.
+- `tests/test_ci_benchmark_gate_telemetry_execution.py` parses the bytes sent
+  to the stub transport and checks label safety and payload shape.
 
-The metric is named `benchmark_gate_decisions_total` with the `_total` suffix
-already applied, because the translation appends `_total` to a monotonic Sum
-whose name lacks it and leaves a name that already carries it unchanged.
-Publishing the final name means the documented query does not depend on the
-translator's suffixing rule.
-
-## Related
-
-- `docs/adr-011-benchmark-gate-telemetry-sink.md` records why the sink, the
-  wire format, and the secret-gated push were chosen.
-- `docs/adr-012-actions-runner-integration-harness.md` records the harness that
-  exercises the workflow boundary offline.
-- `.github/workflows/ci.yml` declares the step; the contract tests in
-  `tests/test_ci_benchmark_gate_telemetry.py` and
-  `tests/test_ci_benchmark_gate_telemetry_execution.py` hold it to this
-  document.
+[grafana-otlp]: https://grafana.com/docs/grafana-cloud/observe-and-act/send-data/otlp/otlp-format-considerations/
+[grafana-pricing]: https://grafana.com/pricing/

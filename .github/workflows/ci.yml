@@ -1229,18 +1229,16 @@ jobs:
       # command line, commit SHA, run identifier, or timestamp reaches a
       # label. The push is best-effort in both directions — a fork without the
       # secret sends nothing and a revoked token or a sink outage costs one
-      # notice — because telemetry must never gate the product's own CI. In
+      # warning — because telemetry must never gate the product's own CI. In
       # particular a failed publish must not fail `changes`, which would skip
       # `benchmark-ratchet` and stop the baseline being refreshed.
       #
       # `aggregationTemporality: 2` is cumulative and is not a preference:
       # Grafana Cloud's Prometheus translation drops non-cumulative monotonic
       # sums, so a delta payload is accepted, acknowledged, and discarded.
-      # `startTimeUnixNano` equal to `timeUnixNano` declares a reset at an
-      # unknown start time, which is what lets one series accumulate across
-      # runs. Deliberately no `service.instance.id`: the translation turns it
-      # into an `instance` label, giving the counter one series per run rather
-      # than one series per verdict.
+      # Each run emits a fresh value of one: queries count received samples,
+      # not increments of a shared counter. Resource attributes are empty
+      # because Grafana promotes them into additional metric labels.
       - name: Publish the benchmark gate decision
         if: ${{ env.SINK_TOKEN != '' && !cancelled() }}
         continue-on-error: true
@@ -1253,14 +1251,18 @@ jobs:
           DECISION: ${{ steps.gate.outputs.decision }}
         run: |
           set -euo pipefail
-          now="$(date +%s)000000000"
+          if [[ ! "${EVENT_CLASS}" =~ ^(pull_request|other)$ ]] ||
+             [[ ! "${DETECTOR_STATUS}" =~ ^(success|failure|unknown)$ ]] ||
+             [[ ! "${DECISION}" =~ ^(run|skip|skip-detector-failed)$ ]]; then
+            printf '::warning title=benchmark-gate-telemetry::Invalid gate labels; sample omitted.\n'
+            exit 0
+          fi
+          now="$(date +%s%N)"
           payload="$(mktemp)"
           curlrc="$(mktemp)"
           trap 'rm -f "${payload}" "${curlrc}"' EXIT
           printf '%s\n' \
-            '{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name",' \
-            '"value":{"stringValue":"cuprum-ci"}},{"key":"service.namespace",' \
-            '"value":{"stringValue":"cuprum"}}]},"scopeMetrics":[{"metrics":[' \
+            '{"resourceMetrics":[{"resource":{},"scopeMetrics":[{"metrics":[' \
             '{"name":"benchmark_gate_decisions_total","sum":{"isMonotonic":true,' \
             '"aggregationTemporality":2,"dataPoints":[{"startTimeUnixNano":' \
             "\"${now}\",\"timeUnixNano\":\"${now}\",\"asInt\":\"1\"," \
@@ -1283,7 +1285,7 @@ jobs:
             --data-binary "@${payload}" \
             "${SINK_ENDPOINT}" || status=$?
           if [ "${status}" -ne 0 ]; then
-            printf '::notice title=benchmark-gate-telemetry::'
+            printf '::warning title=benchmark-gate-telemetry::'
             printf 'benchmark_gate_decisions_total push failed (curl exit %s)' \
               "${status}"
             printf '\n'
