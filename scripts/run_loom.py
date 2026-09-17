@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses as dc
+import enum
 import os
 import re
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this driver runs a fixed Cargo command.
@@ -19,7 +20,6 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOOM_MANIFEST = Path("rust/cuprum-rust/Cargo.toml")
 LOOM_TARGET = "loom"
-VALID_MODES = frozenset(("smoke", "full"))
 _DISCOVERY_RE = re.compile(r"^(?P<count>\d+) tests?, \d+ benchmarks$", re.MULTILINE)
 _EXECUTION_RE = re.compile(
     r"test result: (?:ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed;"
@@ -35,11 +35,18 @@ class LoomBounds:
     max_threads: int
 
 
+class LoomMode(enum.StrEnum):
+    """Named execution modes with fixed bounded exploration budgets."""
+
+    SMOKE = "smoke"
+    FULL = "full"
+
+
 @dc.dataclass(frozen=True, slots=True)
 class LoomRunResult:
     """Observable result of one discovery-and-execution Loom run."""
 
-    mode: str
+    mode: LoomMode
     bounds: LoomBounds
     commit: str
     cargo_version: str
@@ -74,7 +81,7 @@ class LoomRunResult:
 class LoomCliOptions:
     """Typed command-line options at the argparse boundary."""
 
-    mode: str
+    mode: LoomMode
     summary: Path | None
     max_preemptions: int | None
     max_branches: int | None
@@ -146,18 +153,19 @@ class LoomModeError(LoomError, ValueError):
         return cls(message)
 
 
-def _bounds_for_mode(mode: str) -> LoomBounds:
+def _bounds_for_mode(mode: LoomMode) -> LoomBounds:
     """Return the repository's explicit exploration budget for ``mode``."""
-    _validate_mode(mode)
-    if mode == "smoke":
+    if mode is LoomMode.SMOKE:
         return LoomBounds(max_preemptions=2, max_branches=300, max_threads=4)
     return LoomBounds(max_preemptions=3, max_branches=2_000, max_threads=4)
 
 
-def _validate_mode(mode: str) -> None:
-    """Reject programmatic execution modes outside the fixed lane set."""
-    if mode not in VALID_MODES:
-        raise LoomModeError.unsupported(mode)
+def _selected_mode(mode: str | LoomMode) -> LoomMode:
+    """Return the typed mode while preserving programmatic diagnostics."""
+    try:
+        return LoomMode(mode)
+    except ValueError as error:
+        raise LoomModeError.unsupported(str(mode)) from error
 
 
 def _environment(bounds: LoomBounds) -> dict[str, str]:
@@ -242,10 +250,12 @@ def _count_executed(output: str) -> int:
     return count
 
 
-def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
+def run_loom(
+    *, mode: str | LoomMode, bounds: LoomBounds | None = None
+) -> LoomRunResult:
     """Discover then execute the non-empty Loom target under explicit bounds."""
-    _validate_mode(mode)
-    selected_bounds = _validate_bounds(bounds or _bounds_for_mode(mode))
+    selected_mode = _selected_mode(mode)
+    selected_bounds = _validate_bounds(bounds or _bounds_for_mode(selected_mode))
     environment = _environment(selected_bounds)
     started_at = time.monotonic()
     discovery = _run(_cargo_command("--", "--list"), environment=environment)
@@ -255,7 +265,7 @@ def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
     if executed != discovered:
         raise LoomRunError.test_count_mismatch(discovered, executed)
     return LoomRunResult(
-        mode=mode,
+        mode=selected_mode,
         bounds=selected_bounds,
         commit=_tool_output(["git", "rev-parse", "HEAD"]),
         cargo_version=_tool_output(["cargo", "--version"]),
@@ -269,14 +279,14 @@ def run_loom(*, mode: str, bounds: LoomBounds | None = None) -> LoomRunResult:
 def _parse_arguments() -> LoomCliOptions:
     """Parse the intentionally small mode-and-summary command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("smoke", "full"), required=True)
+    parser.add_argument("--mode", choices=tuple(LoomMode), required=True)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--max-preemptions", type=int)
     parser.add_argument("--max-branches", type=int)
     parser.add_argument("--max-threads", type=int)
     arguments = parser.parse_args()
     return LoomCliOptions(
-        mode=typ.cast("str", arguments.mode),
+        mode=LoomMode(typ.cast("str", arguments.mode)),
         summary=typ.cast("Path | None", arguments.summary),
         max_preemptions=typ.cast("int | None", arguments.max_preemptions),
         max_branches=typ.cast("int | None", arguments.max_branches),

@@ -135,6 +135,34 @@ def test_run_loom_rejects_a_green_zero_test_execution(
         loom_driver.run_loom(mode="full")
 
 
+def test_run_loom_rejects_a_discovery_execution_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    loom_driver: LoomDriver,
+) -> None:
+    """A target whose selected tests drift after discovery is a driver failure."""
+
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """Report two discovered tests but execute only one."""
+        if "--list" in command:
+            return _completed(command, "one: test\ntwo: test\n2 tests, 0 benchmarks\n")
+        if command[:2] == ["cargo", "test"]:
+            return _completed(
+                command,
+                (
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                    "1 filtered out;\n"
+                ),
+            )
+        return _completed(command, "version\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(loom_driver.LoomRunError, match="discovery found 2"):
+        loom_driver.run_loom(mode="full")
+
+
 def test_run_loom_reports_cargo_failure_details(
     monkeypatch: pytest.MonkeyPatch,
     loom_driver: LoomDriver,

@@ -56,6 +56,18 @@ SAVE_GUARD_CLAUSES = (
 MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
 
 
+def _save_guard_clauses(workflow_name: str) -> list[str]:
+    """Return the event and branch guards required to save one cache family."""
+    return [
+        (
+            "github.event_name == 'schedule'"
+            if workflow_name == "loom.yml" and clause == "github.event_name == 'push'"
+            else clause
+        )
+        for clause in SAVE_GUARD_CLAUSES
+    ]
+
+
 def _key_of(step: Step, message: str) -> str:
     """Return a cache step's ``key`` input, asserting it is a string."""
     key = step_inputs(step, message).get("key")
@@ -206,15 +218,7 @@ def test_saves_happen_only_on_trunk_and_only_after_a_miss() -> None:
             )
             collapsed = " ".join(condition.split())
             message = f"{workflow_name}:{job_name} save must declare inputs"
-            required = [
-                (
-                    "github.event_name == 'schedule'"
-                    if workflow_name == "loom.yml"
-                    and clause == "github.event_name == 'push'"
-                    else clause
-                )
-                for clause in SAVE_GUARD_CLAUSES
-            ]
+            required = _save_guard_clauses(workflow_name)
             if _key_name(_key_of(step, message)) not in ROLLING_KEYS:
                 required.append(MISS_GUARD_CLAUSE)
             missing = [clause for clause in required if clause not in collapsed]
