@@ -3092,10 +3092,10 @@ verified false positive, record a named exception with:
 make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
 ```
 
-The target requires both values and rejects empty or whitespace-only
-`SYMBOL` and `REASON` values. Use `SYMBOL` rather than `NAME` because WSL may
-inject `NAME` with the hostname. It stores the reason in Skylos's documented
-allow list. Updates are serialized with `flock` using the ignored
+The target requires both values and rejects empty or whitespace-only `SYMBOL`
+and `REASON` values. Use `SYMBOL` rather than `NAME` because WSL may inject
+`NAME` with the hostname. It stores the reason in Skylos's documented allow
+list. Updates are serialized with `flock` using the ignored
 `.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
 an alternate lock path. Never use a broad or unreasoned exception.
 
@@ -3104,8 +3104,8 @@ The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 available before running the test suite. CI installs its pinned Makeutil
 revision before running that target.
 
-For local test runs, install the same pinned parser and toolchain before
-running `make test`:
+For local test runs, install the same pinned parser and toolchain before running
+`make test`:
 
 ```bash
 rustup toolchain install nightly-2026-05-28 --profile minimal
@@ -3185,36 +3185,36 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                | Default                                                                      | Purpose                                                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
-| `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
-| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
-| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
-| `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
-| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
-| `INTERROGATE_TARGETS`   | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files interrogated for docstring coverage.                                                                  |
-| `INTERROGATE`           | Derived command                                                              | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
-| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
-| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files passed to `pylint-pypy`.                                                                              |
-| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
-| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
-| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
-| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
-| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
-| `DF12_PYTHON_LINTS_REF` | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
-| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
-| `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
-| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
-| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
-| `SKYLOS_VERSION`        | `4.33.2`                                                                     | Pinned standalone Skylos release.                                                                                            |
-| `SKYLOS`                | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
-| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                 | Production paths passed to Skylos.                                                                                           |
-| `SKYLOS_EXCLUDE_FOLDERS` | `cuprum/unittests`                                                         | Test-only paths excluded from the production scan.                                                                           |
-| `SKYLOS_WHITELIST_LOCK` | `.skylos-whitelist.lock`                                                   | Lock file serializing `skylos-allow` updates.                                                                                |
-| `LOCAL_TOOL_ENV`        | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
-| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
-| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
+| Variable                    | Default                                                                      | Purpose                                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `VENV_TOOLS`                | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
+| `RUFF_VERSION`              | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
+| `RUFF_ENV`                  | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
+| `RUFF`                      | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
+| `TY_VERSION`                | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
+| `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
+| `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files interrogated for docstring coverage.                                                                  |
+| `INTERROGATE`               | Derived command                                                              | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
+| `PYLINT_PYTHON`             | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
+| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files passed to `pylint-pypy`.                                                                              |
+| `PYLINT_PYPY_SHIM_REF`      | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
+| `PYLINT_PYPY_SHIM`          | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
+| `PYLINT_VERSION`            | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
+| `PYLINT_CACHE`              | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `PYLINT`                    | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
+| `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
+| `DF12_PYTHON`               | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
+| `DF12_PYLINT_MESSAGES`      | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
+| `DF12_PYLINT`               | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
+| `AMBRLEAKS`                 | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
+| `SKYLOS_VERSION`            | `4.33.2`                                                                     | Pinned standalone Skylos release.                                                                                           |
+| `SKYLOS`                    | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
+| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                     | Production paths passed to Skylos.                                                                                          |
+| `SKYLOS_EXCLUDE_FOLDERS`    | `cuprum/unittests`                                                           | Test-only paths excluded from the production scan.                                                                          |
+| `SKYLOS_WHITELIST_LOCK`     | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                                                                               |
+| `LOCAL_TOOL_ENV`            | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
+| `UV_ENV`                    | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
+| `UV_RUN_ENV`                | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
 <!-- markdownlint-enable MD013 -->
 

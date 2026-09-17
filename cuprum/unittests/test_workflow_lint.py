@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
 
 _CI_WORKFLOW = ".github/workflows/ci.yml"
 _WORKFLOW_DIRECTORY = ".github/workflows"
+_RUN_LINT_STEP = "Run lint, including Skylos dead-code detection"
 _ACTIONLINT_INSTALLER_LINES = (
     "readonly ACTIONLINT_VERSION='1.7.12'",
     (
@@ -224,7 +225,7 @@ def _assert_linter_step_order() -> None:
         "Install yamllint",
         "Cache actionlint",
         "Download actionlint",
-        "Run lint",
+        _RUN_LINT_STEP,
     ]
     steps = _lint_job().get("steps")
     assert isinstance(steps, list), "lint-test must declare a steps list"
@@ -347,7 +348,7 @@ def test_ci_provisions_the_pinned_workflow_linters() -> None:
     _assert_actionlint_provisioning()
     _assert_linter_step_order()
 
-    lint_command = _step_named("Run lint").get("run")
+    lint_command = _step_named(_RUN_LINT_STEP).get("run")
     assert (
         lint_command == '/usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint'
     )

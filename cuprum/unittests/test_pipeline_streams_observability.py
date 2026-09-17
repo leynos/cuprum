@@ -28,8 +28,9 @@ import pytest
 from cuprum import _pipeline_streams
 from cuprum._pipeline_stream_fds import (
     RUST_PUMP_TEARDOWN_FAILED_ACTION,
-    _paused_reader,
+    _pause_reader_transport,
     _restore_stream_fd_blocking,
+    _resume_reader_transport,
 )
 from cuprum.adapters.pump_metrics import PumpMetricsHook
 from cuprum.pump_observation import observe_pump
@@ -188,15 +189,16 @@ def test_a_reader_that_cannot_be_resumed_is_recorded(
     transport = _UnresumableTransport()
     reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
 
-    with (
-        caplog.at_level(logging.DEBUG, logger=_FDS_LOGGER_NAME),
-        _paused_reader(reader) as pause,
-    ):
-        assert pause.may_hand_off is True, (
-            "a transport that pauses must permit the hand-off, or the resume "
-            "under test never runs"
-        )
-        assert transport.paused, "the pause must actually have been applied"
+    with caplog.at_level(logging.DEBUG, logger=_FDS_LOGGER_NAME):
+        pause = _pause_reader_transport(reader)
+        try:
+            assert pause.may_hand_off is True, (
+                "a transport that pauses must permit the hand-off, or the resume "
+                "under test never runs"
+            )
+            assert transport.paused, "the pause must actually have been applied"
+        finally:
+            _resume_reader_transport(pause.resume)
 
     records = _teardown_records(caplog)
     assert len(records) == 1, (

@@ -406,6 +406,9 @@ package = true
 [tool.skylos.gate]
 strict = true
 
+[tool.skylos.whitelist.documented]
+_check_rust_available = "Re-exported as the public is_rust_available backend probe."
+
 [[tool.skylos.dead_code.entrypoints]]
 type = "parameter"
 full_name = [
@@ -420,6 +423,55 @@ full_name = [
     "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
 ]
 reason = "Called structurally through _PipelineWaitReporter by _StageObservation.report_pipeline_wait."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
+]
+reason = "Passed as the threading.Thread target by _PersistentNativePumpExecutor.submit."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._pipeline_native_pump_runtime._PersistentNativePumpExecutor.submit",
+]
+reason = "Called through _DEFAULT_NATIVE_PUMP_RUNTIME.executor by _submit_rust_pump."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._pipeline_native_pump_types._RustPumpState.defer_cleanup",
+]
+reason = "Called through _DeferredNativePumpCleanupState during cancellation cleanup."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._pipeline_native_pump_types._RustPumpState.complete_cleanup",
+]
+reason = "Called through the native-pump completion callback's cleanup state."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._pipeline_stream_fds._BlockingModeGuard.restore",
+]
+reason = "Invoked through the native cleanup callback when restoring descriptor modes."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum._pipeline_stream_fds._restore_stream_fd_blocking",
+]
+reason = "Called by the callback-owned _BlockingModeGuard.restore method."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum._streams_pump._override_read_size",
+]
+reason = "Called by benchmarks.tee_profile_worker while profiling the pump read loop."
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]

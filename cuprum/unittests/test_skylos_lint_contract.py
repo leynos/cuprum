@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import shlex
-import subprocess  # noqa: S404 - contract test invokes the pinned parser.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - contract test invokes the pinned parser.
 import tomllib
 import typing as typ
 
@@ -90,19 +90,33 @@ _SKYLOS_WHITELIST_TOKENS: typ.Final = (
     "$${SKYLOS_REASON}",
 )
 _SKYLOS_WHITELIST_LOCK_TOKENS: typ.Final = (".skylos-whitelist.lock",)
-_DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset()
+_LINT_PREREQUISITES: typ.Final = (
+    "python-lint",
+    "rust-lint",
+    "github-actions-lint",
+)
+_DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({"_check_rust_available"})
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
 })
 _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.logging_adapter._StructuredLoggingHook.report_pipeline_wait",
+    "cuprum._pipeline_native_pump_runtime._PersistentNativePumpExecutor.submit",
+    "cuprum._pipeline_native_pump_types._RustPumpState.complete_cleanup",
+    "cuprum._pipeline_native_pump_types._RustPumpState.defer_cleanup",
+    "cuprum._pipeline_stream_fds._BlockingModeGuard.restore",
+})
+_RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
+    "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
+    "cuprum._pipeline_stream_fds._restore_stream_fd_blocking",
+    "cuprum._streams_pump._override_read_size",
 })
 
 
 def _makefile_report() -> dict[str, object]:
     """Return Makeutil's complete, successfully parsed Makefile report."""
-    completed = subprocess.run(  # noqa: S603 - fixed parser command.
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed parser command.
         _MAKEUTIL_COMMAND,
         capture_output=True,
         check=True,
@@ -243,7 +257,7 @@ def _assert_makeutil_installation(command: object, *, contract: str) -> None:
 def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     """`make lint` must scan production code with Skylos's strict gate."""
     test_prerequisites = _text_sequence(
-        _sole_recipe_rule("test").get("prerequisites"),
+        _sole_recipe_rule("test", require_recipes=False).get("prerequisites"),
         subject="test target prerequisites",
     )
     assert "makeutil" in test_prerequisites, (
@@ -263,7 +277,7 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
         _sole_recipe_rule("lint", require_recipes=False).get("prerequisites"),
         subject="lint target prerequisites",
     )
-    assert lint_prerequisites == ("python-lint", "rust-lint"), (
+    assert lint_prerequisites == _LINT_PREREQUISITES, (
         "Skylos lint delegation contract must retain the Python lint target"
     )
     skylos_commands = [
@@ -341,15 +355,19 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
         )
     )
     assert entry_point_names == (
-        _RUNTIME_PARAMETER_ENTRY_POINTS | _RUNTIME_METHOD_ENTRY_POINTS
+        _RUNTIME_PARAMETER_ENTRY_POINTS
+        | _RUNTIME_METHOD_ENTRY_POINTS
+        | _RUNTIME_FUNCTION_ENTRY_POINTS
     ), "Skylos entry-point contract must preserve every runtime caller exclusion"
     for entry_point in entry_points:
         names = frozenset(
             _text_sequence(entry_point.get("full_name"), subject="entry-point name")
         )
-        entry_point_type = (
-            "method" if names & _RUNTIME_METHOD_ENTRY_POINTS else "parameter"
-        )
+        entry_point_type = "parameter"
+        if names & _RUNTIME_METHOD_ENTRY_POINTS:
+            entry_point_type = "method"
+        elif names & _RUNTIME_FUNCTION_ENTRY_POINTS:
+            entry_point_type = "function"
         assert entry_point.get("type") == entry_point_type, (
             "Skylos entry-point contract must classify each implicit runtime caller"
         )
@@ -365,9 +383,9 @@ def test_ci_runs_the_lint_target_and_installs_makeutil() -> None:
     lint_step = _sole_workflow_step(
         "lint-test", "Run lint, including Skylos dead-code detection"
     )
-    assert lint_step.get("run") == "make lint", (
-        "CI lint-step contract must invoke the shared make lint target"
-    )
+    assert lint_step.get("run") == (
+        '/usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint'
+    ), "CI lint-step contract must invoke the shared make lint target"
 
     parser_step = _sole_workflow_step("typecheck-test", "Install Makefile parser")
     _assert_makeutil_installation(

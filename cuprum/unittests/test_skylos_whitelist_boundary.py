@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import string
-import subprocess  # noqa: S404 - boundary tests invoke a fixed Make command.
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - boundary tests invoke a fixed Make command.
 import sys
 import tomllib
 import typing as typ
@@ -79,7 +79,7 @@ def _run_whitelist(
     cli: str,
 ) -> subprocess.CompletedProcess[str]:
     """Run the whitelist target against an isolated project directory."""
-    return subprocess.run(  # noqa: S603 - fixed Makefile and test arguments.
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
         _whitelist_command(directory, cli=cli),
         capture_output=True,
         check=False,
@@ -92,13 +92,13 @@ def _run_whitelist(
 def _run_required_argument_check(*arguments: str) -> subprocess.CompletedProcess[str]:
     """Run the whitelist target with `NAME` set but no valid Skylos CLI."""
     environment = {**os.environ, "NAME": "wsl-hostname"}
-    environment.pop("REASON", None)
-    environment.pop("SYMBOL", None)
+    environment.pop("REASON", "")
+    environment.pop("SYMBOL", "")
     for argument in arguments:
         name, value = argument.split("=", maxsplit=1)
         environment[name] = value
-    return subprocess.run(  # noqa: S603 - resolved Make target and arguments.
-        (_make_executable(), "skylos-allow"),
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - resolved Make target and arguments.
+        [_make_executable(), "skylos-allow"],
         capture_output=True,
         check=False,
         cwd=repo_root(),
@@ -189,7 +189,7 @@ def test_whitelist_lock_preserves_concurrent_documented_entries(tmp_path: Path) 
     writer.chmod(0o755)
     cli = str(writer)
 
-    first = subprocess.Popen(  # noqa: S603 - fixed Makefile and test arguments.
+    first = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
         _whitelist_command(tmp_path, cli=cli),
         cwd=tmp_path,
         env={**os.environ, "SYMBOL": "first", "REASON": "first reason"},
@@ -197,7 +197,7 @@ def test_whitelist_lock_preserves_concurrent_documented_entries(tmp_path: Path) 
         stderr=subprocess.PIPE,
         text=True,
     )
-    second = subprocess.Popen(  # noqa: S603 - fixed Makefile and test arguments.
+    second = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
         _whitelist_command(tmp_path, cli=cli),
         cwd=tmp_path,
         env={**os.environ, "SYMBOL": "second", "REASON": "second reason"},
