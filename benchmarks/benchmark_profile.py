@@ -15,8 +15,11 @@ _logger = logging.getLogger(__name__)
 # their spread was the runner's rather than the pipeline's (issue #219). A
 # payload size is not recorded in a sample, so only this version gate keeps a
 # v4 ratio from being compared with a v5 one. Expect the window to be empty
-# until seven compatible main-branch runs have accumulated; until then the
-# flat threshold decides alone and confirmation re-measurement is the guard.
+# until compatible main-branch runs have accumulated: with no sample at all
+# the comparison is skipped, with one it falls back to a single-sample bar
+# where the flat threshold decides alone, and the noise band only exists from
+# the second sample onwards. Confirmation re-measurement is the guard the
+# transition relies on.
 #
 # v4: the CI ratchet passes Hyperfine --command-name options so throughput
 # JSON results carry stable logical scenario names instead of raw worker
