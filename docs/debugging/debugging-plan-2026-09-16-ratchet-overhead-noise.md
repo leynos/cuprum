@@ -4,8 +4,10 @@
 [#219](https://github.com/leynos/cuprum/issues/219), surfaced on
 [PR #158](https://github.com/leynos/cuprum/pull/158) **Severity**: medium
 **Planning agent boundary**: This is a completed investigation, not a plan for
-a falsification sub-agent. The measurements below were taken directly; each is
-reproducible from the commands and artefacts it cites.
+a falsification sub-agent. The measurements below were taken directly. Every
+workload they rest on is rebuildable from the repository, as Reproducing shows;
+the harnesses that looped the repeats were scratch and are not retained, so the
+figures here are a record rather than a runnable experiment.
 
 ## Problem statement
 
@@ -84,11 +86,13 @@ shape, and the two differ by the load the machine carried.
 
 ### The ratio's spread falls as the payload rises
 
-One cell per payload, each cell four repeat hyperfine invocations of the
-scenario set the CI profile selects (the `single` depth, both callback modes,
-both backends), ten runs and one warmup per command, `--iterations 5`. Ratios
-are `rust_mean / python_mean` within one invocation; the band is the ratchet's
-own `3 × 1.4826 × MAD` relative to the median.
+One cell per payload, each cell repeated hyperfine invocations of the scenario
+set the CI profile selects (the `single` depth, both callback modes, both
+backends). The 1 KiB cell predates the profile change: it is two retained
+invocations of five runs and one warmup per command at `--iterations 20`. The
+16 MiB and larger cells are four invocations of ten runs and one warmup at
+`--iterations 5`. Ratios are `rust_mean / python_mean` within one invocation;
+the band is the ratchet's own `3 × 1.4826 × MAD` relative to the median.
 
 *Table 3. Within-run ratios by payload (2026-09-16, development host, load
 average falling from 23 to about 2.5 across the sweep, other agents' work
@@ -209,11 +213,13 @@ stages, zero passthrough), two callback modes, both backends — and re-measures
 them a second time when anything is flagged. At 64 MiB and twenty runs that is
 about two and a quarter minutes of measurement in the common case, about four
 and a half with the confirmation pass, against the job's sixty-minute timeout.
-Table 5's 84.4 s came from the same session as this table's 64 MiB row, at the
-run count already in place; its three repeats of a nominal 84.4 s figure spread
-by enough to make that a draw rather than a reading, which is why the column is
-projected from the ten-run cell instead of quoted from it. The old profile
-measured twelve smoke scenarios at ten runs.
+Table 5's 84.4 s is the same cell at the full twenty runs, so the ten-run
+column is not that figure halved: Table 5 measured a quieter machine, and its
+per-execution cost came out 1.63× lower than this session's, which is the
+spread the Limitations section records. Projecting this session's own ten-run
+cells keeps a row's four entries comparable with each other, which a mix of the
+two sessions' figures would not be. The old profile measured twelve smoke
+scenarios at ten runs.
 
 ### The old CI profile was not the workload the fixtures described
 
@@ -294,19 +300,57 @@ something.
 
 ## Reproducing
 
+The workload behind every table here is the one the job measures, and it is
+rebuildable from the repository alone:
+
 ```bash
 # the extension must be built the way CI builds it
 make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
 
-# one cell: four commands, one warmup and N runs each
-/tmp/tune_ratchet.py --payload 67108864 --iterations 5 --repeats 4 --runs 10
+# the workload, as the plan the job plans: `--ci-ratchet` already defaults
+# its iteration count to the one the job measures at
+uv run python benchmarks/pipeline_throughput.py \
+  --ci-ratchet --dry-run --output /tmp/ratchet-full-plan.json
 
-# the fixed-versus-streaming split: one command pair per backend, 1 MiB
-# against 64 MiB, at the CI iteration count
-/tmp/decompose_cost.py
+# profile it down to the measured four, then measure them: this keeps the
+# two-stage scenarios, runs hyperfine over them, and writes the per-command
+# means the ratios are built from
+uv run python benchmarks/ci_benchmark_ratchet_profile.py \
+  --full-plan /tmp/ratchet-full-plan.json \
+  --filtered-plan /tmp/ratchet-plan.json \
+  --throughput /tmp/ratchet-throughput.json
 ```
 
-The harnesses that produced these tables are scratch, outside the repository.
-Their commands match `pipeline_throughput_runner._build_worker_command`,
-including the `CUPRUM_STREAM_BACKEND` environment prefix that is the only
-difference between a Python and a Rust scenario.
+The plan writes the payload, stage count, callback mode, iteration count and
+command line for each scenario, including the `CUPRUM_STREAM_BACKEND`
+environment prefix that is the only difference between a Python and a Rust
+scenario. The profile step keeps the four the job measures — one per callback
+mode per backend, two stages each — and its hyperfine export holds one mean per
+scenario, which is what every ratio in these tables divides. The warmup and run
+counts are `ci_benchmark_ratchet_profile._CI_RATCHET_RUNS`, so the step is the
+job's measurement rather than a copy of it. Expect its two ratios to differ
+from the table's quiet-machine ones rather than to land on them: a re-run on
+this host while it carried other work returned 0.8077 and 0.9469 against that
+table's 0.83–0.84 and 0.92–1.03, which is the drift the band exists to cover.
+
+Repeating that profile step and reading the ratio spread across repeats
+reproduces the bands in "The ratio's spread falls as the payload rises" at 64
+MiB, the size the shipped constant selects. Reproducing another of that table's
+rows means changing `CI_RATCHET_PAYLOAD_BYTES` to the row's size first:
+`--ci-ratchet` measures one payload, and the sweep that chose it is what varied
+the size. The 1 KiB rows also predate the iteration count the job now uses, so
+they are the old profile's numbers rather than a reproduction of the current
+one.
+
+What is not reproducible is the repetition itself. The scratch harnesses that
+looped the measured cell lived outside the repository and are not retained, so
+a reader can rebuild the workload and the figures' shape but not rerun the
+tuning session that chose the constants. Their two shapes were:
+
+- the cell harness ran one four-command hyperfine invocation per repeat and
+  printed each mode's mean ratio, its standard deviation and the wall clock, at
+  the payload and iteration counts of its own command line — the ratios, spread
+  bands and invocation times in these tables;
+- the decomposition harness measured one command pair per backend at 1 MiB and
+  64 MiB, splitting a measured run into fixed cost and streaming, which is
+  where the crossover table's set-up and slope columns come from.
