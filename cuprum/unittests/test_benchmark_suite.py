@@ -22,7 +22,7 @@ from benchmarks.pipeline_throughput import (
     run_pipeline_benchmarks,
 )
 from benchmarks.pipeline_throughput import (
-    _parse_args as parse_throughput_args,
+    main as throughput_main,
 )
 from benchmarks.pipeline_throughput_scenarios import (
     _SMOKE_LARGE_PAYLOAD_BYTES,
@@ -624,7 +624,7 @@ def test_default_pipeline_scenarios_rejects_smoke_with_ci_ratchet() -> None:
         default_pipeline_scenarios(smoke=True, include_rust=True, ci_ratchet=True)
 
 
-def test_parse_args_rejects_smoke_with_ci_ratchet() -> None:
+def test_cli_rejects_smoke_with_ci_ratchet(tmp_path: pth.Path) -> None:
     """The CLI rejects the contradictory workload pair before any matrix is built.
 
     `default_pipeline_scenarios` raises on the pair as well, so the argument
@@ -633,9 +633,10 @@ def test_parse_args_rejects_smoke_with_ci_ratchet() -> None:
     scenario builder.
     """
     with pytest.raises(SystemExit) as exc_info:
-        parse_throughput_args([
+        throughput_main([
             "--output",
-            "plan.json",
+            str(tmp_path / "plan.json"),
+            "--dry-run",
             "--smoke",
             "--ci-ratchet",
         ])
@@ -645,14 +646,31 @@ def test_parse_args_rejects_smoke_with_ci_ratchet() -> None:
     )
 
 
-def test_parse_args_accepts_either_workload_alone() -> None:
-    """Each workload flag stays usable on its own."""
-    smoke = parse_throughput_args(["--output", "plan.json", "--smoke"])
-    ratchet = parse_throughput_args(["--output", "plan.json", "--ci-ratchet"])
+@pytest.mark.parametrize(
+    ("flag", "expected_payloads"),
+    [
+        pytest.param("--smoke", (1024, 65536, 1048576), id="smoke"),
+        pytest.param("--ci-ratchet", (67108864,), id="ci-ratchet"),
+    ],
+)
+def test_cli_either_workload_alone_builds_its_own_plan(
+    flag: str,
+    expected_payloads: tuple[int, ...],
+    tmp_path: pth.Path,
+) -> None:
+    """Each workload flag stays usable on its own, and selects its own payloads.
 
-    assert smoke.smoke is True, "`--smoke` alone must set the smoke workload"
-    assert smoke.ci_ratchet is False, "`--smoke` alone must leave the ratchet off"
-    assert ratchet.ci_ratchet is True, (
-        "`--ci-ratchet` alone must set the ratchet workload"
-    )
-    assert ratchet.smoke is False, "`--ci-ratchet` alone must leave smoke off"
+    Asserting on the written dry-run plan rather than on parsed attributes
+    keeps this a test of what the CLI does: the two workloads are told apart by
+    the payload tiers they plan, which is the user-visible difference.
+    """
+    output_path = tmp_path / "plan.json"
+
+    exit_code = throughput_main(["--output", str(output_path), "--dry-run", flag])
+
+    assert exit_code == 0, f"`{flag}` alone should exit cleanly, got {exit_code}"
+    plan = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        tuple(sorted({scenario["payload_bytes"] for scenario in plan["scenarios"]}))
+        == expected_payloads
+    ), f"`{flag}` alone must plan only its own payload tiers"
