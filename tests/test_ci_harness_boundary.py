@@ -96,7 +96,14 @@ def test_projection_rejects_malformed_workflow_shapes(
     ],
 )
 def test_harness_contract_rejects_unexecuted_target_text(script: str) -> None:
-    """Mentioning the target must not satisfy the workflow execution contract."""
+    """Mentioning the target must not satisfy the workflow execution contract.
+
+    Parameters
+    ----------
+    script : str
+        Shell text assigned to the harness step, mentioning the target without
+        invoking it.
+    """
     worktree = pth.Path(__file__).resolve().parents[1]
     source = worktree / ".github/workflows/benchmark-gate-harness.yml"
     workflow = parse_workflow(source.read_text(encoding="utf-8"))
