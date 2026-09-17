@@ -236,6 +236,22 @@ Document the conflict in `Decision log` and escalate.
   rather than silently no-op. See Decision log.
 - [ ] Full gate run via `scrutineer`; `coderabbit review --agent`; draft PR.
 
+- [x] (2026-09-17) Resumed the existing work and repaired formatting and
+  docstring diagnostics in the uncommitted contract-test fixes. Renamed the
+  shell-token regression module to `tests/test_ci_workflow_shell_tokens.py` so
+  the default Makefile selection includes it. Formatting, lint, typecheck, and
+  the default suite passed before that filename change (1,744 passed, 60
+  skipped); the renamed module and remaining gates still need validation.
+- [ ] Resolve deployment access: listing repository secrets and variables both
+  returned HTTP 403, "Resource not accessible by integration". No sink
+  deployment or metric receipt has been verified. Requested the Grafana stack
+  and secure credential provisioning from the maintainer.
+- [ ] Repair the acceptance gaps found during the resumed audit: resource
+  attributes add labels beyond the three permitted labels; repeated cumulative
+  values of one do not accumulate a counter; the harness observes the summary
+  but does not execute the downstream admission condition; the runner image
+  uses a mutable tag. Earlier completion claims do not discharge these gaps.
+
 ## Surprises & discoveries
 
 - Observation: the harness probe ignores `DOCKER_HOST`, so a test that tries to

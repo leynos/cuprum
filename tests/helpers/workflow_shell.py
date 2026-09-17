@@ -30,28 +30,40 @@ def _shell_tokens(line: str) -> list[str]:
     return list(lexer)
 
 
-def _quoted_shell_tokens(line: str) -> list[str]:
+def _quoted_shell_tokens(line: str) -> list[str] | None:
     """Tokenize one shell line retaining quote delimiters, for comparison.
 
     Only ever compared with :func:`_shell_tokens`, never executed, so the
     tokens need only line up positionally with that pass. This one is
-    deliberately non-``posix`` and does not split punctuation, because `shlex`
-    cannot lex a double-quoted command substitution that way: the ordinary
-    assignment ``payload="$(mktemp)"`` raises ``ValueError: No closing
-    quotation``, which would make a whole workflow line unreadable by every
-    caller that scans a script. Callers require equal token counts before
-    comparing, so a differing split is reported as "cannot be compared"
-    instead of being silently misaligned.
+    deliberately non-``posix`` because that is the mode that preserves the
+    quote delimiters the comparison keys on. It must still split punctuation,
+    though: the two passes are compared index by index, which is only
+    meaningful if a shell operator lands at the same position in both.
+    Without ``punctuation_chars`` the line ``echo "<<"&&true`` tokenizes as
+    three words here and four in the other pass, the counts disagree, and a
+    caller gives up on a line it could have read — misreading the quoted
+    ``<<`` as a here-document operator, which then swallows every following
+    line.
+
+    That combination cannot lex a double-quoted command substitution:
+    ``payload="$(mktemp)"`` raises ``ValueError: No closing quotation``. Such
+    an assignment is unremarkable — ``ci.yml`` writes three of them — so
+    rather than let one take out every caller that scans a job, an unlexable
+    line returns ``None``, which callers report as "cannot be compared".
 
     Returns
     -------
-    list[str]
-        One entry per shell word, with any quote delimiters retained.
+    list[str] | None
+        One entry per shell word, with any quote delimiters retained, or
+        ``None`` if the line cannot be lexed in this mode.
     """
-    lexer = shlex.shlex(line, posix=False, punctuation_chars=False)
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    return list(lexer)
+    try:
+        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        return list(lexer)
+    except ValueError:
+        return None
 
 
 def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
@@ -60,9 +72,22 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
 
 
 def _quoted_heredoc_operator_indices(line: str, tokens: list[str]) -> frozenset[int]:
-    """Return token positions whose ``<<`` spelling came from quoted text."""
+    """Return token positions whose ``<<`` spelling came from quoted text.
+
+    A line that cannot be lexed in the comparison mode, or that the two passes
+    split differently, yields no indices: the line is reported as "cannot be
+    compared" rather than guessed at. No line in this repository's workflows
+    currently reaches either branch with a quoted ``<<`` on it, so the
+    fallback costs nothing today; it exists so that the failure is a
+    conservative miss rather than an invented here-document.
+
+    Returns
+    -------
+    frozenset[int]
+        Positions confirmed to contain quoted operators.
+    """
     quoted_tokens = _quoted_shell_tokens(line)
-    if len(tokens) != len(quoted_tokens):
+    if quoted_tokens is None or len(tokens) != len(quoted_tokens):
         return frozenset()
     return frozenset(
         index

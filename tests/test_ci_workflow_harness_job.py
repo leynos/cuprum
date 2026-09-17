@@ -24,6 +24,7 @@ job runs is that target.
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 import pytest
@@ -265,7 +266,7 @@ def _term_holds(term: str, *, event_name: str, dispatch_input: object) -> bool:
         If the term is not one this reader understands.
     """
     if term.startswith("github.event_name =="):
-        return event_name in term
+        return _comparison_holds(term, event_name)
     if term == "inputs.workflow-harness":
         return dispatch_input is True
     message = (
@@ -273,3 +274,99 @@ def _term_holds(term: str, *, event_name: str, dispatch_input: object) -> bool:
         "reader rather than leaving the job's admission untested"
     )
     raise AssertionError(message)
+
+
+#: An event-name comparison whose right-hand side is a quoted literal. The
+#: literal is captured rather than searched for, because `event_name in term`
+#: would also be satisfied by a *substring* of a longer event name.
+_EVENT_NAME_COMPARISON = re.compile(
+    r"github\.event_name == (?:'([^']*)'|\"([^\"]*)\")\s*"
+)
+
+
+def _comparison_holds(term: str, event_name: str) -> bool:
+    """Return whether an event-name comparison term holds for ``event_name``.
+
+    The comparison must be the whole term, and its right-hand side must be a
+    quoted literal. A term carrying a conjunct — ``github.event_name == 'x' &&
+    something`` — is rejected rather than answered, because this reader
+    evaluates the event-name half only and would otherwise report that half's
+    verdict as the whole term's.
+
+    Returns
+    -------
+    bool
+        Whether the event name equals the complete quoted literal.
+
+    Raises
+    ------
+    AssertionError
+        If the term is not a supported equality comparison.
+    """
+    match = _EVENT_NAME_COMPARISON.fullmatch(term)
+    if match is None:
+        message = (
+            f"unhandled event-name term {term!r} in the {JOB} job's condition; "
+            "only a bare `github.event_name == '...'` comparison is understood, "
+            "because a term carrying `&&` would have its conjunct ignored"
+        )
+        raise AssertionError(message)
+    return event_name == (match.group(1) or match.group(2))
+
+
+@pytest.mark.parametrize(
+    ("term", "event_name", "expected"),
+    [
+        pytest.param(
+            "github.event_name == 'schedule'", "schedule", True, id="exact-match"
+        ),
+        pytest.param("github.event_name == 'schedule'", "push", False, id="exact-miss"),
+        pytest.param(
+            'github.event_name == "schedule"', "schedule", True, id="double-quoted"
+        ),
+        pytest.param(
+            "github.event_name == 'schedule'",
+            "dispatch",
+            False,
+            id="no-substring-admit",
+        ),
+    ],
+)
+def test_an_event_name_comparison_matches_the_whole_literal(
+    term: str, event_name: str, expected: bool
+) -> None:
+    """Compare the quoted literal, not a substring that happens to appear in it.
+
+    A substring test admits an event whose name is contained in the literal.
+    No such event exists today, so the mistake would sit undetected until the
+    condition grew a second comparison that made it matter.
+    """
+    assert _comparison_holds(term, event_name) is expected, (
+        f"{term!r} against event {event_name!r} must be {expected}"
+    )
+
+
+@pytest.mark.parametrize(
+    "term",
+    [
+        pytest.param(
+            "github.event_name == 'workflow_dispatch' && inputs.workflow-harness",
+            id="conjunction",
+        ),
+        pytest.param(
+            "github.event_name == 'schedule' || true", id="disjunction-in-term"
+        ),
+        pytest.param("github.event_name != 'push'", id="not-equal"),
+        pytest.param("github.event_name", id="bare-context"),
+    ],
+)
+def test_an_unhandled_event_name_term_is_refused(term: str) -> None:
+    """Refuse a shape the reader would otherwise answer wrongly.
+
+    The conjunction is the case that matters: answered by its event-name half
+    alone, it would report `admitted` for an event that also had to satisfy the
+    conjunct. Refusing is the only safe response, and it keeps the reader
+    honest if the condition is ever rewritten.
+    """
+    with pytest.raises(AssertionError, match="unhandled event-name term"):
+        _comparison_holds(term, "workflow_dispatch")
