@@ -89,6 +89,14 @@ def job(workflow_name: str, job_name: str) -> Job:
     return typ.cast("Job", payload)
 
 
+def job_env(workflow_name: str, job_name: str) -> dict[str, object]:
+    """Return the ``env`` mapping one job declares for all of its steps."""
+    return _mapping(
+        job(workflow_name, job_name).get("env"),
+        f"{workflow_name}:{job_name} must declare job-level env",
+    )
+
+
 def steps(workflow_name: str, job_name: str) -> list[Step]:
     """Return the validated steps for one workflow job."""
     declared = job(workflow_name, job_name).get("steps")

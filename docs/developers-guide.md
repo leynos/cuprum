@@ -289,6 +289,40 @@ Two jobs survive that look like duplicates and are not:
 The nextest installer is gone from this repository. Nothing here runs nextest
 directly any more; the coverage action installs its own.
 
+### Coverage ownership
+
+The two coverage jobs split the work by event. `ci.yml`'s `coverage` job is the
+continuous integration (CI) comparison lane: it runs on pull requests only
+(`github.event_name == 'pull_request'`), compares its report against the
+trusted baseline with `with-ratchet: 'true'`, and publishes nothing. It
+declares no `publish-baseline` input, invokes no CodeScene action, receives no
+`CS_ACCESS_TOKEN` at step, job, or workflow scope, and names no CodeScene
+project URL. Its checkout sets only `persist-credentials: false`, with no
+`fetch-depth`: nothing in this lane reads Git history, and the merge-base walk
+that once justified full history belonged to the CodeScene changed-line gate,
+which no longer runs in this lane.
+
+`coverage-main.yml`'s `coverage-upload` job owns both things the CI lane leaves
+out — the ratchet baseline publication and the only CodeScene upload — and it
+runs on `push` to `main` and on `workflow_dispatch`. Three properties of that
+arrangement are worth pinning:
+
+- **Publication has two guards.** The `publish-baseline` dispatch input is a
+  boolean defaulting to publishing, so a dispatch carrying an automerged change
+  advances the baseline, and the expression additionally requires
+  `github.ref == 'refs/heads/main'`. That ref check exists because the `push`
+  trigger is restricted to `main` but `workflow_dispatch` is not:
+  `gh workflow run coverage-main.yml --ref some-branch` would otherwise publish
+  that branch's coverage as the authoritative baseline.
+- **The upload mode is explicit.** The CodeScene step declares `mode: upload`.
+  The shared action already defaults to `upload`, so that input is not
+  load-bearing today, but the sibling `check` mode is the pull-request
+  comparison, and switching to it would silently retire main-branch publication.
+- **Both contracts are pinned.** `tests/test_ci_ratchet_publication.py`
+  evaluates the publication expression per event rather than matching its text,
+  and `tests/test_ci_codescene_boundary.py` searches both environment scopes
+  for the token and asserts the upload mode by value.
+
 ### Concurrency
 
 `ci.yml` declares one constant, `LINUX_RUNNER_VCPUS`, equal to the vCPU count of

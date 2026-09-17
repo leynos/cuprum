@@ -41,6 +41,8 @@ class Job(_JobRunner, total=False):
 
     Attributes
     ----------
+    env : object
+        Environment variables and expressions declared for the whole job.
     needs : object
         Job or jobs that must complete before this job starts.
     outputs : object
@@ -51,6 +53,7 @@ class Job(_JobRunner, total=False):
         Steps executed by the job, when it does not call a reusable workflow.
     """
 
+    env: object
     needs: object
     outputs: object
     steps: list[Step]

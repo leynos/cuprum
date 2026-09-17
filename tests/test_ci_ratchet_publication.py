@@ -349,23 +349,6 @@ def test_the_pull_request_lane_does_not_opt_in() -> None:
     )
 
 
-def test_the_pull_request_lane_does_not_contact_codescene() -> None:
-    """A pull request must keep its report and CodeScene token local to main."""
-    workflow_name, job_name = PULL_REQUEST_LANE
-    pull_request_steps = steps(workflow_name, job_name)
-
-    assert not any(
-        "upload-codescene-coverage" in str(step.get("uses", ""))
-        for step in pull_request_steps
-    ), f"{workflow_name}:{job_name} must not invoke the CodeScene action"
-    assert "CS_ACCESS_TOKEN" not in str(pull_request_steps), (
-        f"{workflow_name}:{job_name} must not receive the CodeScene token"
-    )
-    assert "api.codescene.io" not in str(pull_request_steps), (
-        f"{workflow_name}:{job_name} must not declare a CodeScene project"
-    )
-
-
 @pytest.mark.parametrize(
     ("workflow_name", "job_name"), [TRUNK_PUBLISHER, PULL_REQUEST_LANE]
 )
