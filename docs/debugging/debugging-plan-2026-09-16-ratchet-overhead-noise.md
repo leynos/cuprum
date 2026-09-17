@@ -84,7 +84,7 @@ machine, fitted a larger per-MiB slope (4.2 ms/MiB for Python); the figures
 above are the quiet-machine pair of measurements at the exact `--iterations 5`
 shape, and the two differ by the load the machine carried.
 
-### The ratio's spread falls as the payload rises
+### The ratio's spread is load-sensitive and falls no further past the crossover
 
 One cell per payload, each cell repeated hyperfine invocations of the scenario
 set the CI profile selects (the `single` depth, both callback modes, both
@@ -115,6 +115,18 @@ The 1 KiB rows reproduce the reported failure mode: the two repeats differ by
 6% and 6.4% respectively, which at three runs per command — what the ratchet
 measured before this work — is inside the spread the gate was making decisions
 with.
+
+Above the crossover the bands are not monotone in the payload: 16 MiB reads
+6.7% and 32 MiB reads 31.5% and 68.8%, then 100 MiB reads 11.2% and 2.4%. The
+sweep ran across a load average falling from 23 to about 2.5, so the cells were
+not measured under one condition, and the 1 KiB row is a sanity check at a
+different iteration count rather than a like-for-like entry (Limitations has
+the accounting). What the larger cells show is therefore not a trend in payload
+but the absence of one: past the crossover the band reflects what else the
+machine was doing, which is why 64 MiB was chosen on the cost decomposition and
+the confirmation re-measurement rather than on being the tightest row here.
+Table 5 is the same cell re-measured on a quiet machine, which is where the
+chosen payload's spread is small enough for the threshold to mean something.
 
 ### Streaming overtakes the per-iteration set-up between 4 and 22 MiB
 
@@ -288,15 +300,22 @@ something.
   rows carry a familiar-payload sanity check rather than a measurement — the
   13.1% and 14.2% bands are a MAD over two values, and their spread is what the
   old profile was making decisions with. The 16 MiB and larger rows are a MAD
-  over four.
+  over four. The 1 KiB cell also predates the profile change and was measured at
+  `--iterations 20` with five runs per command, where the rest are at
+  `--iterations 5` with ten, so it is not a like-for-like row either.
 - Hyperfine does not interleave commands, so a pair's Python and Rust commands
   are measured one after the other and slow drift biases each ratio. The
   selected scenarios are ordered payload, then callback mode, then backend, so
   the pair is at least adjacent in time; a payload large enough to dominate the
   fixed cost reduces that bias's relative size but does not remove it.
-- The 100 MiB cell was measured but rejected: it buys a tighter band than 64
-  MiB at roughly twice the wall clock, and the confirmation re-measurement has
-  to fit in the same job.
+- The 100 MiB cell was measured but rejected: it costs about 1.4× the wall
+  clock of 64 MiB within one session (192 s against 137 s for the four commands
+  at twenty runs), and the confirmation re-measurement has to fit in the same
+  job. Its Table 3 band is the tightest of the sweep, but that is a
+  cross-session comparison — the cell was measured later in the sweep than the
+  64 MiB one, under a different load — so it is not evidence that a larger
+  payload buys stability, and the 64 MiB choice rests on the crossover and the
+  quiet-machine re-measurement instead.
 
 ## Reproducing
 
@@ -334,13 +353,13 @@ this host while it carried other work returned 0.8077 and 0.9469 against that
 table's 0.83–0.84 and 0.92–1.03, which is the drift the band exists to cover.
 
 Repeating that profile step and reading the ratio spread across repeats
-reproduces the bands in "The ratio's spread falls as the payload rises" at 64
-MiB, the size the shipped constant selects. Reproducing another of that table's
-rows means changing `CI_RATCHET_PAYLOAD_BYTES` to the row's size first:
-`--ci-ratchet` measures one payload, and the sweep that chose it is what varied
-the size. The 1 KiB rows also predate the iteration count the job now uses, so
-they are the old profile's numbers rather than a reproduction of the current
-one.
+reproduces the bands in "The ratio's spread is load-sensitive and falls no
+further past the crossover" at 64 MiB, the size the shipped constant selects.
+Reproducing another of that table's rows means changing
+`CI_RATCHET_PAYLOAD_BYTES` to the row's size first: `--ci-ratchet` measures one
+payload, and the sweep that chose it is what varied the size. The 1 KiB rows
+also predate the iteration count the job now uses, so they are the old
+profile's numbers rather than a reproduction of the current one.
 
 What is not reproducible is the repetition itself. The scratch harnesses that
 looped the measured cell lived outside the repository and are not retained, so
