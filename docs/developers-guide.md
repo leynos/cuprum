@@ -361,6 +361,50 @@ When updating Rust dependencies, keep the requested version aligned to the
 patch baseline already present in `Cargo.lock`. This keeps lockfile updates
 focused, small, and easy to review.
 
+## Linux debug-build acceleration
+
+[ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and
+its compatibility rationale.
+
+Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
+verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
+uses the separately pinned `nightly-2026-08-23` and the
+`rustc-codegen-cranelift` component through `tools/dev-fast/config.toml`. The
+fragment is an approved byte-for-byte local extension from
+`leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
+Concordat issue 157; its SHA-256 is
+`8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5`.
+
+Run `make dev-fast-check` before the first Linux accelerated build. It requires
+the nightly component and the pinned `mold` 2.41.0 linker. The approved binary
+route is the checksum-verified upstream release archive; it never permits a
+source-build fallback. `make develop`, `make test-rust`, and the Cargo doc and
+Clippy portion of `make rust-lint` select the fragment on a compatible Linux
+host. `make dev-build` and `make dev-test` expose the same route explicitly.
+Direct Cargo invocations retain the repository-selected Rust toolchain unless
+the caller explicitly supplies the fragment.
+
+Every workspace package inherits `rust-version = "1.85.0"` from the root
+manifest. Cargo treats that as the publication and compatibility contract, and
+MSRV-aware Clippy lints use it while the Linux debug lint route runs on the
+dev-fast nightly. `make msrv-check` separately compiles every workspace target
+on Rust `1.85.0` without the fragment, so the accelerated lint compiler cannot
+replace compatibility verification.
+
+Maturin accepts a Cargo executable but cannot pass Cargo's configuration-file
+flag itself. The Linux-only `tools/dev-fast/cargo` adapter receives the injected
+`CARGO` executable, adds exactly one approved `--config` path, and then
+replaces itself with Cargo. It rejects a second configuration argument. This
+small POSIX adapter is intentionally outside the normal Python scripting
+standard because it must preserve Cargo's exact argv and exit status.
+
+macOS and Windows use the stable backend as the approved alternative. The
+Windows cross-target lint, wheel builds, benchmark release builds, coverage,
+verification, and Whitaker never select the fragment. The fragment documents
+Cuprum's ownership boundary: Makefile pins the dev-fast nightly, while
+`tools/mold/VERSION` pins the linker release. The stable support promise
+remains independently verified.
+
 ## Tar and rsync builder helpers
 
 `TarCreateOptions.compression` in `cuprum/builders/tar.py` selects one member

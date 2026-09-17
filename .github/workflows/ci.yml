@@ -254,6 +254,11 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
 
+      # Only the Linux debug route selects Cranelift and mold. The stable
+      # toolchain remains selected for Whitaker and every other lane.
+      - name: Install Linux dev-fast prerequisites
+        uses: ./.github/actions/setup-dev-fast
+
       - name: Install Whitaker
         uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
@@ -289,6 +294,11 @@ jobs:
 
       - name: Run lint
         run: /usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint
+
+      # The accelerated lint pass uses a maintenance nightly, so retain a
+      # separate fragment-free compilation check on the published Rust MSRV.
+      - name: Verify Rust MSRV
+        run: make msrv-check
 
       # The Windows wheel build compiles this arm but without `-D warnings`,
       # so it catches a Windows arm that fails to build and nothing else. This
@@ -703,6 +713,9 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
           install-binstall: 'false'
+
+      - name: Install Linux dev-fast prerequisites
+        uses: ./.github/actions/setup-dev-fast
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml
