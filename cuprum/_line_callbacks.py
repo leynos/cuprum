@@ -19,6 +19,7 @@ answers with an awaitable holds the read loop: that is what lets the
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import inspect
 import typing as typ
 
@@ -147,28 +148,28 @@ def _chain_line_hooks(
 
 def _fan_out_hooks(chain: cabc.Sequence[_LineHookFn]) -> _LineHookFn:
     """Return one hook that delivers every event to each hook in *chain*."""
+    return typ.cast("_LineHookFn", functools.partial(_fan_out_event, tuple(chain)))
 
-    async def await_all(pending: cabc.Sequence[cabc.Awaitable[None]]) -> None:
-        """Await every deferred hook, in registration order."""
-        for index, outcome in enumerate(pending):
-            try:
-                await outcome
-            except BaseException:
-                _close_skipped_hook_outcomes(pending[index + 1 :])
-                raise
 
-    def fan_out(event: LineEvent) -> _LineHookOutcome:
-        """Deliver one event to every hook, in registration order."""
-        pending: list[cabc.Awaitable[None]] = []
-        for hook in chain:
-            outcome = hook(event)
-            if outcome is not None:
-                pending.append(outcome)
-        if not pending:
-            return None
-        return await_all(pending)
+def _fan_out_event(
+    chain: cabc.Sequence[_LineHookFn],
+    event: LineEvent,
+) -> _LineHookOutcome:
+    """Deliver one event to every hook before awaiting their outcomes."""
+    pending = [outcome for hook in chain if (outcome := hook(event)) is not None]
+    if not pending:
+        return None
+    return _await_hook_outcomes(pending)
 
-    return fan_out
+
+async def _await_hook_outcomes(pending: cabc.Sequence[cabc.Awaitable[None]]) -> None:
+    """Await every deferred hook, in registration order."""
+    for index, outcome in enumerate(pending):
+        try:
+            await outcome
+        except BaseException:
+            _close_skipped_hook_outcomes(pending[index + 1 :])
+            raise
 
 
 def _close_skipped_hook_outcomes(pending: cabc.Iterable[cabc.Awaitable[None]]) -> None:

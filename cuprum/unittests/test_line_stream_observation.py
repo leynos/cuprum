@@ -29,7 +29,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecEvent
+    from cuprum.events import ExecEvent, ExecId
     from cuprum.line_stream_events import LineStreamHook
     from cuprum.lines import LineStreamName
     from cuprum.sh import SafeCmd
@@ -85,6 +85,74 @@ def _collect_lines(
     return asyncio.run(collect())
 
 
+def _assert_line_stream_output(lines: cabc.Sequence[LineEvent]) -> None:
+    """Assert that a line-only stream yields exactly the expected output."""
+    assert Counter((event.stream, event.text) for event in lines) == Counter({
+        ("stdout", "out"): 1,
+        ("stderr", "err"): 1,
+    }), f"line-only iteration must retain both streams, got {lines!r}"
+
+
+def _assert_lifecycle_correlation(
+    lifecycle: cabc.Sequence[LineStreamEvent],
+    execution: cabc.Sequence[ExecEvent],
+) -> ExecId:
+    """Assert that lifecycle events retain one execution correlation."""
+    assert [event.phase for event in lifecycle] == ["spawned", "completed"], (
+        f"successful line streams must report start and completion, got {lifecycle!r}"
+    )
+    exec_ids = {event.exec_id for event in execution}
+    assert len(exec_ids) == 1, (
+        f"line lifecycle must correlate to one execution, got {execution!r}"
+    )
+    exec_id = next(iter(exec_ids))
+    assert exec_id is not None, (
+        f"line lifecycle must retain a concrete execution ID, got {execution!r}"
+    )
+    assert lifecycle[0].exec_id == exec_id, (
+        f"line lifecycle must retain the execution correlation, got {lifecycle!r}"
+    )
+    assert all(event.pid is not None for event in lifecycle), (
+        f"spawned processes must carry their PID, got {lifecycle!r}"
+    )
+    return exec_id
+
+
+def _assert_structured_lifecycle_logs(
+    records: cabc.Iterable[logging.LogRecord],
+    exec_id: ExecId,
+) -> None:
+    """Assert structured logs preserve lifecycle order and correlation."""
+    structured_records = [
+        record
+        for record in records
+        if record.__dict__.get("cuprum_action") == "line_stream_event"
+    ]
+    assert [record.__dict__["cuprum_phase"] for record in structured_records] == [
+        "spawned",
+        "completed",
+    ], f"structured logs must preserve lifecycle phases, got {structured_records!r}"
+    assert all(
+        record.__dict__["cuprum_exec_id"] == exec_id for record in structured_records
+    ), (
+        "structured logs must retain the execution correlation, got "
+        f"{structured_records!r}"
+    )
+
+
+def _assert_traced_lifecycle_events(tracer: InMemoryTracer) -> None:
+    """Assert tracing records exactly the line-stream lifecycle boundaries."""
+    assert len(tracer.spans) == 1, (
+        f"one command must create one span, got {tracer.spans!r}"
+    )
+    assert [
+        name for name, _attrs in tracer.spans[0].events if name == "cuprum.line_stream"
+    ] == [
+        "cuprum.line_stream",
+        "cuprum.line_stream",
+    ], f"tracing must receive both lifecycle boundaries, got {tracer.spans[0].events!r}"
+
+
 def test_line_stream_lifecycle_is_correlated_logged_and_traced(
     caplog: pytest.LogCaptureFixture,
     python_builder: cabc.Callable[..., SafeCmd],
@@ -109,45 +177,10 @@ def test_line_stream_lifecycle_is_correlated_logged_and_traced(
             command, output=RunOutputOptions(capture=False, echo=False)
         )
 
-    assert Counter((event.stream, event.text) for event in lines) == Counter({
-        ("stdout", "out"): 1,
-        ("stderr", "err"): 1,
-    }), f"line-only iteration must retain both streams, got {lines!r}"
-    assert [event.phase for event in lifecycle] == ["spawned", "completed"], (
-        f"successful line streams must report start and completion, got {lifecycle!r}"
-    )
-    exec_ids = {event.exec_id for event in execution}
-    assert len(exec_ids) == 1, (
-        f"line lifecycle must correlate to the execution records, got {lifecycle!r}"
-    )
-    assert lifecycle[0].exec_id in exec_ids, (
-        f"line lifecycle must retain the execution correlation, got {lifecycle!r}"
-    )
-    assert all(event.pid is not None for event in lifecycle), (
-        f"spawned processes must carry their PID, got {lifecycle!r}"
-    )
-    structured_records = [
-        record
-        for record in caplog.records
-        if record.__dict__.get("cuprum_action") == "line_stream_event"
-    ]
-    assert [record.__dict__["cuprum_phase"] for record in structured_records] == [
-        "spawned",
-        "completed",
-    ], f"structured logs must preserve lifecycle phases, got {structured_records!r}"
-    assert all(
-        record.__dict__["cuprum_exec_id"] == lifecycle[0].exec_id
-        for record in structured_records
-    ), "structured logs must retain the execution correlation"
-    assert len(tracer.spans) == 1, (
-        f"one command must create one span, got {tracer.spans!r}"
-    )
-    assert [
-        name for name, _attrs in tracer.spans[0].events if name == "cuprum.line_stream"
-    ] == [
-        "cuprum.line_stream",
-        "cuprum.line_stream",
-    ], f"tracing must receive both lifecycle boundaries, got {tracer.spans[0].events!r}"
+    _assert_line_stream_output(lines)
+    exec_id = _assert_lifecycle_correlation(lifecycle, execution)
+    _assert_structured_lifecycle_logs(caplog.records, exec_id)
+    _assert_traced_lifecycle_events(tracer)
 
 
 def test_queue_saturation_reports_bounded_queue_details() -> None:

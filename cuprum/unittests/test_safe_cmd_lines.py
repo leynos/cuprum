@@ -31,7 +31,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.events import ExecEvent
-    from cuprum.lines import LineEvent
+    from cuprum.lines import LineEvent, LineStreamName
     from cuprum.sh import CommandResult, SafeCmd
 
 
@@ -52,6 +52,28 @@ def _two_stream_script() -> str:
         "print('o1', flush=True)\n"
         "print('e1', file=sys.stderr, flush=True)\n"
     )
+
+
+def _assert_line_event_order(
+    events: cabc.Sequence[LineEvent],
+    stream: LineStreamName,
+    expected: cabc.Sequence[str],
+) -> None:
+    """Assert the decoded line order for one output stream."""
+    assert [event.text for event in events if event.stream == stream] == list(
+        expected
+    ), f"line events must preserve {stream} order, got {events!r}"
+
+
+def _assert_exec_event_order(
+    events: cabc.Sequence[ExecEvent],
+    stream: LineStreamName,
+    expected: cabc.Sequence[str],
+) -> None:
+    """Assert the observed output-line order for one stream."""
+    assert [event.line for event in events if event.phase == stream] == list(
+        expected
+    ), f"execution events must preserve {stream} order, got {events!r}"
 
 
 # The child records its own pid, announces readiness with a flushed line, then
@@ -266,26 +288,10 @@ def test_lines_started_stream_emits_lifecycle_and_output_events(
     assert len({event.exec_id for event in observed}) == 1, (
         f"one line-stream run must share one exec_id, got {observed!r}"
     )
-    assert [event.line for event in output_events if event.phase == "stdout"] == [
-        "o1",
-        "o2",
-        "o1",
-    ], f"stdout output records lost ordering: {output_events!r}"
-    assert [event.line for event in output_events if event.phase == "stderr"] == [
-        "e1",
-        "e2",
-        "e1",
-    ], f"stderr output records lost ordering: {output_events!r}"
-    assert [event.text for event in lines if event.stream == "stdout"] == [
-        "o1",
-        "o2",
-        "o1",
-    ], f"line iterator stdout payloads differ: {lines!r}"
-    assert [event.text for event in lines if event.stream == "stderr"] == [
-        "e1",
-        "e2",
-        "e1",
-    ], f"line iterator stderr payloads differ: {lines!r}"
+    _assert_exec_event_order(output_events, "stdout", ["o1", "o2", "o1"])
+    _assert_exec_event_order(output_events, "stderr", ["e1", "e2", "e1"])
+    _assert_line_event_order(lines, "stdout", ["o1", "o2", "o1"])
+    _assert_line_event_order(lines, "stderr", ["e1", "e2", "e1"])
 
 
 def test_lines_on_line_callback_receives_events(
@@ -321,20 +327,10 @@ def test_lines_on_line_callback_receives_events(
     assert Counter((event.phase, event.line) for event in output_events) == expected, (
         f"observe must receive every output event, got {output_events!r}"
     )
-    for stream, expected_texts in (
-        ("stdout", ["o1", "o2", "o1"]),
-        ("stderr", ["e1", "e2", "e1"]),
-    ):
-        assert [
-            event.text for event in line_events if event.stream == stream
-        ] == expected_texts, (
-            f"on_line must preserve {stream} order, got {line_events!r}"
-        )
-        assert [
-            event.line for event in output_events if event.phase == stream
-        ] == expected_texts, (
-            f"observe must preserve {stream} order, got {output_events!r}"
-        )
+    _assert_line_event_order(line_events, "stdout", ["o1", "o2", "o1"])
+    _assert_line_event_order(line_events, "stderr", ["e1", "e2", "e1"])
+    _assert_exec_event_order(output_events, "stdout", ["o1", "o2", "o1"])
+    _assert_exec_event_order(output_events, "stderr", ["e1", "e2", "e1"])
     assert all(event.at >= 0.0 for event in line_events), (
         f"line callback timestamps must be non-negative, got {line_events!r}"
     )
