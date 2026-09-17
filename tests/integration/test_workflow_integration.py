@@ -204,13 +204,21 @@ def assert_decision(
     decision : str
         Expected `decision` output, and the last table cell.
     """
-    assert run.output(BENCH) == bench
+    assert run.output(BENCH) == bench, (
+        f"the detector's {BENCH!r} output must be {bench!r}, got {run.output(BENCH)!r}"
+    )
     for name in GATE_OUTPUTS:
         assert run.output(name) is not None, f"{name} was never recorded"
-    assert run.output("decision") == decision
+    assert run.output("decision") == decision, (
+        f"the gate must publish decision={decision!r}, got {run.output('decision')!r}"
+    )
     row = gate_row(run)
-    assert row[2] == relevant
-    assert row[-1] == decision
+    assert row[2] == relevant, (
+        f"the table's relevance cell must be {relevant!r}, got {row[2]!r}"
+    )
+    assert row[-1] == decision, (
+        f"the table's last cell must be {decision!r}, got {row[-1]!r}"
+    )
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
@@ -269,8 +277,12 @@ def test_a_push_runs_the_ratchet_even_without_relevant_paths(
     run = push(scenario, [IRRELEVANT_PATH])
     assert run.exit_code == 0, run.failure_context()
     assert_decision(run, DETECTOR_FALSE, "false", "run")
-    assert run.output("event_class") == "other"
-    assert gate_row(run)[0] == "push"
+    assert run.output("event_class") == "other", (
+        f"a push must be classified as other, got {run.output('event_class')!r}"
+    )
+    assert gate_row(run)[0] == "push", (
+        f"the table must name the push event, got {gate_row(run)[0]!r}"
+    )
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
@@ -299,7 +311,9 @@ def test_a_failed_detector_still_records_a_decision(
         ),
     )
     assert run.exit_code != 0, "the detector was expected to fail the job"
-    assert "Detect performance-relevant changes" in run.failed_steps
+    assert "Detect performance-relevant changes" in run.failed_steps, (
+        f"the detector's step must be reported as failed, got {run.failed_steps!r}"
+    )
     assert run.output(BENCH) is None, "a failed detector must not answer"
     assert_decision(run, None, "unknown", "skip-detector-failed")
 
@@ -312,4 +326,6 @@ def test_the_harness_verifies_the_job_the_gate_lives_in() -> None:
     says nothing about the rename; this says it once, and cheaply.
     """
     source = (WORKTREE / CI_WORKFLOW).read_text(encoding="utf-8")
-    assert f"\n  {CHANGES_JOB}:\n" in source
+    assert f"\n  {CHANGES_JOB}:\n" in source, (
+        f"{CI_WORKFLOW} must still declare a {CHANGES_JOB!r} job"
+    )
