@@ -3412,8 +3412,9 @@ than comparing it. Because a payload size is not recorded in a sample, that
 change also bumped `BENCHMARK_PROFILE_VERSION`: samples measured at the old
 payloads are not comparable with the new ones and the window refills with
 compatible runs, leaving the flat threshold and confirmation re-measurement to
-guard the transition. This is the fix for the false positives reported in issue
-# 219; the measurements behind it are recorded in
+guard the transition. This is the fix for the false positives reported in
+[issue #219](https://github.com/leynos/cuprum/issues/219); the measurements
+behind it are recorded in
 `docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md`.
 
 The median, rather than the latest sample, is the bar because a single run is
