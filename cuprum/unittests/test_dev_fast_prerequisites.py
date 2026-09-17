@@ -30,13 +30,19 @@ def _write_program(directory: Path, name: str, body: str) -> None:
     [
         pytest.param({}, {}, f"mold {MOLD_VERSION} is required", id="missing_mold"),
         pytest.param(
-            {"mold": "printf '%s\\n' 'mold 2.41.00'", "rustup": "exit 0"},
+            {
+                "mold": "printf '%s\\n' 'mold 2.41.00'",
+                "rustup": "exit 0",
+            },
             {},
             f"mold {MOLD_VERSION} is required",
             id="wrong_mold_version",
         ),
         pytest.param(
-            {"mold": f"printf '%s\\n' 'mold {MOLD_VERSION}'", "rustup": "exit 0"},
+            {
+                "mold": f"printf '%s\\n' 'mold {MOLD_VERSION}'",
+                "rustup": "exit 0",
+            },
             {},
             "install rustc-codegen-cranelift",
             id="missing_component",

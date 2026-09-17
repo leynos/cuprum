@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import typing as typ
 from pathlib import Path
 
 import pytest
 
 from tests.helpers.composite_actions import StepResult, run_step, step_script
+
+if typ.TYPE_CHECKING:
+    from syrupy.assertion import SnapshotAssertion
 
 ACTION = ".github/actions/setup-dev-fast"
 INSTALL_STEP = "Install the pinned backend and linker"
@@ -24,10 +28,10 @@ def _write_program(directory: Path, name: str, body: str) -> None:
 
 def _write_mold_metadata(directory: Path, checksum_lines: str) -> None:
     """Create the action's repository-relative linker metadata."""
-    mold = directory / "tools/mold"
-    mold.mkdir(parents=True)
-    (mold / "VERSION").write_text(f"{MOLD_VERSION}\n", encoding="utf-8")
-    (mold / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
+    metadata_directory = directory / "tools/mold"
+    metadata_directory.mkdir(parents=True)
+    (metadata_directory / "VERSION").write_text(f"{MOLD_VERSION}\n", encoding="utf-8")
+    (metadata_directory / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
 
 
 def _action_environment(
@@ -85,7 +89,7 @@ def _run_install(tmp_path: Path, environment: dict[str, str]) -> StepResult:
     ],
 )
 def test_install_selects_the_pinned_archive_and_exports_its_path(
-    tmp_path: Path, architecture: str, archive: str
+    tmp_path: Path, architecture: str, archive: str, snapshot: SnapshotAssertion
 ) -> None:
     """Supported architectures download, check, extract, and expose one archive."""
     _write_mold_metadata(tmp_path, f"{CHECKSUM}  {archive}\n")
@@ -93,19 +97,15 @@ def test_install_selects_the_pinned_archive_and_exports_its_path(
     result = _run_install(tmp_path, environment)
     records = Path(environment["DEV_FAST_RECORDS"])
     assert result.returncode == 0, result.stderr
-    assert records.joinpath("rustup").read_text(encoding="utf-8").splitlines() == [
-        "toolchain",
-        "install",
-        "nightly-2026-08-23",
-        "--profile",
-        "minimal",
-        "component",
-        "add",
-        "rustc-codegen-cranelift",
-        "clippy",
-        "--toolchain",
-        "nightly-2026-08-23",
-    ], "the action must provision only the pinned nightly components"
+    rustup_arguments = (
+        records.joinpath("rustup").read_text(encoding="utf-8").splitlines()
+    )
+    assert rustup_arguments[:2] == ["toolchain", "install"], (
+        "the action must install its dev-fast toolchain"
+    )
+    assert "rustc-codegen-cranelift" in rustup_arguments, (
+        "the action must install the Cranelift component"
+    )
     assert (
         records
         .joinpath("curl")
@@ -117,15 +117,15 @@ def test_install_selects_the_pinned_archive_and_exports_its_path(
         f"{CHECKSUM}  {environment['RUNNER_TEMP']}/{archive}\n"
     ), "the action must verify the pinned checksum against its downloaded archive"
     tar_arguments = records.joinpath("tar").read_text(encoding="utf-8").splitlines()
-    assert tar_arguments == [
-        "--extract",
-        "--gzip",
-        "--strip-components=1",
-        "--directory",
-        f"{tmp_path}/.local",
-        "--file",
-        f"{environment['RUNNER_TEMP']}/{archive}",
-    ], "the action must extract the verified archive into the local tool path"
+    installation_commands = {
+        "rustup": rustup_arguments,
+        "tar": [
+            argument.replace(str(tmp_path), "<workspace>") for argument in tar_arguments
+        ],
+    }
+    assert installation_commands == snapshot, (
+        "the backend installation and extraction command contracts changed"
+    )
     assert Path(environment["GITHUB_PATH"]).read_text(encoding="utf-8") == (
         f"{tmp_path}/.local/bin\n"
     ), "the action must expose the installed linker to later workflow steps"
@@ -135,7 +135,7 @@ def test_install_selects_the_pinned_archive_and_exports_its_path(
 def test_install_accepts_github_runner_architecture_aliases(
     tmp_path: Path, architecture: str
 ) -> None:
-    """GitHub runner architecture aliases map to their canonical mold archive."""
+    """GitHub runner architecture aliases map to their canonical linker archive."""
     canonical = "x86_64" if architecture == "amd64" else "aarch64"
     archive = f"mold-{MOLD_VERSION}-{canonical}-linux.tar.gz"
     _write_mold_metadata(tmp_path, f"{CHECKSUM}  {archive}\n")
@@ -153,12 +153,14 @@ def test_install_rejects_an_unsupported_architecture_before_provisioning(
     result = _run_install(tmp_path, environment)
     records = Path(environment["DEV_FAST_RECORDS"])
     assert result.returncode != 0, "unsupported architecture must fail closed"
-    assert "unsupported mold architecture: riscv64" in result.stderr
+    assert "unsupported mold architecture: riscv64" in result.stderr, (
+        "the unsupported architecture diagnostic must name the rejected architecture"
+    )
     assert not records.joinpath("rustup").exists(), (
         "unsupported hosts must not install nightly"
     )
     assert not records.joinpath("curl").exists(), (
-        "unsupported hosts must not download mold"
+        "unsupported hosts must not download the linker"
     )
 
 
@@ -200,7 +202,9 @@ def test_install_propagates_a_download_failure(tmp_path: Path) -> None:
     result = _run_install(tmp_path, environment)
     records = Path(environment["DEV_FAST_RECORDS"])
     assert result.returncode == 22, "curl's failure status must fail the action"
-    assert "download failed" in result.stderr
+    assert "download failed" in result.stderr, (
+        "the action must preserve curl's download diagnostic"
+    )
     assert not records.joinpath("checksum").exists(), (
         "failed downloads must not be checked"
     )
