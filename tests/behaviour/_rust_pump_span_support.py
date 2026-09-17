@@ -22,15 +22,13 @@ from cuprum import (
 from cuprum._backend import (
     _check_rust_available,
     get_stream_backend,
-    set_rust_availability_for_testing,
-)
-from cuprum._testing import (
-    configure_pump_stream_dispatch_for_testing,
-    reset_pump_stream_dispatch_for_testing,
 )
 from cuprum.pump_observation import observe_pump
 from cuprum.pump_span_observation import observe_pump_span
 from cuprum.unittests._rust_pump_test_helpers import install_fake_pump
+from tests.behaviour._synthetic_native_pump_support import (
+    force_synthetic_native_pump_path,
+)
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -166,7 +164,7 @@ def run_cancelled_hop(
     scenario = _make_cancelled_hop_scenario()
     _install_blocked_native_worker(monkeypatch, scenario)
     with (
-        _force_rust_pump_path(monkeypatch),
+        force_synthetic_native_pump_path(monkeypatch),
         observe_pump_span(_SpanEndRecordingTracer(tracer, scenario.events)),
         observe_pump(_record_cleanup_start(scenario)),
         scoped(ScopeConfig(allowlist=scenario.allowlist)),
@@ -264,39 +262,3 @@ def _install_blocked_native_worker(
         record_restore,
     )
     install_fake_pump(monkeypatch, blocked_native_worker)
-
-
-@contextlib.contextmanager
-def _force_rust_pump_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> cabc.Iterator[None]:
-    """Force public stream dispatch through controlled Rust-worker descriptors."""
-    reader_fd, writer_fd = os.pipe()
-
-    def extract_raw_fd(
-        stream: asyncio.StreamReader | asyncio.StreamWriter | None,
-    ) -> int | None:
-        """Return the owned descriptor for the stream role under test."""
-        match stream:
-            case asyncio.StreamReader():
-                return reader_fd
-            case asyncio.StreamWriter():
-                return writer_fd
-            case _:
-                return None
-
-    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-    configure_pump_stream_dispatch_for_testing(raw_fd_extractor=extract_raw_fd)
-    set_rust_availability_for_testing(is_available=True)
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
-    try:
-        yield
-    finally:
-        reset_pump_stream_dispatch_for_testing()
-        set_rust_availability_for_testing(is_available=None)
-        _check_rust_available.cache_clear()
-        get_stream_backend.cache_clear()
-        for fd in (reader_fd, writer_fd):
-            with contextlib.suppress(OSError):
-                os.close(fd)
