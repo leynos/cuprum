@@ -133,20 +133,12 @@ def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _resolve_worker_iterations(args: argparse.Namespace) -> int:
-    """Return the worker iteration count for the selected workload.
-
-    ``--worker-iterations`` defaults to ``None`` rather than to a number so an
-    explicit flag can be told apart from an omitted one: the ratchet workload
-    has to default to the count its samples are recorded at, while every other
-    workload keeps the throughput sweep's count.
-
-    Returns
-    -------
-    int
-        The iteration count to record in the plan's profile metadata.
-    """
+    """Return the worker iteration count for the selected workload."""
     if args.worker_iterations is not None:
         return typ.cast("int", args.worker_iterations)
+    # An omitted `--worker-iterations` is `None` rather than a number, so the
+    # ratchet workload can default to the count its samples are recorded at
+    # while every other workload keeps the throughput sweep's count.
     if args.ci_ratchet:
         return CI_RATCHET_WORKER_ITERATIONS
     return _DEFAULT_WORKER_ITERATIONS
