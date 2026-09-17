@@ -102,7 +102,7 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 #: only, and a job that sleeps, calls an API, or publishes an artefact someone
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("lint-test", "changes", "loom-smoke"),
+    "ci.yml": ("lint-test", "changes", "loom-smoke", "workflow-harness"),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "loom.yml": ("loom",),
