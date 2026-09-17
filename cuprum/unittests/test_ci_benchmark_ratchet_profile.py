@@ -296,6 +296,34 @@ def test_select_ci_ratchet_scenarios_rejects_non_finite_payload(
         })
 
 
+def test_select_ci_ratchet_scenarios_drops_oversized_integer_payload() -> None:
+    """An integer too large for a float is dropped, not raised on.
+
+    `json.loads` keeps arbitrary-precision integers, so a plan can carry a
+    payload `math.isfinite` refuses to convert. Treating that as an error
+    would report a malformed plan for a payload that is merely too large; the
+    ceiling already rejects it, and the finiteness check stays on floats where
+    it belongs.
+    """
+    oversized = 10**400
+    with pytest.raises(ValueError, match="no scenarios selected"):
+        select_ci_ratchet_scenarios({
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
+            "scenarios": [
+                _scenario(
+                    _ScenarioSpec(
+                        name="rust-ratchet-single-nocb",
+                        backend="rust",
+                        payload_bytes=oversized,
+                        stages=2,
+                    )
+                )
+            ],
+        })
+
+
 @pytest.mark.parametrize(
     "bad_backend",
     [

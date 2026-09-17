@@ -250,9 +250,13 @@ something.
   the fixed per-iteration cost — is a property of the cost model and does
   transfer; the exact ratio spreads do not, and hyperfine reported statistical
   outliers in several cells.
-- Four repeats per payload, with only two retained at 1 KiB (one probe
-  aborted), is enough to see the trend and not enough to estimate a
-  distribution. The band column is a MAD over four values.
+- Four repeats per payload is enough to see the trend and not enough to
+  estimate a distribution. Only two of them are retained at 1 KiB: the runner
+  aborted one probe and the other was discarded during triage, so those two
+  rows carry a familiar-payload sanity check rather than a measurement — the
+  13.1% and 14.2% bands are a MAD over two values, and their spread is what the
+  old profile was making decisions with. The 16 MiB and larger rows are a MAD
+  over four.
 - Hyperfine does not interleave commands, so the Python and Rust blocks are
   measured consecutively and slow drift biases each ratio. A payload large
   enough to dominate the fixed cost reduces that bias's relative size but does
