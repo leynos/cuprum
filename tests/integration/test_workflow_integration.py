@@ -21,6 +21,7 @@ import pytest
 from tests.helpers.act_harness import (
     CHANGES_JOB,
     CI_WORKFLOW,
+    DEFAULT_BRANCH,
     ActRun,
     Event,
     branch,
@@ -149,10 +150,14 @@ def push(repository: pth.Path, paths: list[str]) -> ActRun:
         repository,
         Event(
             name="push",
-            payload={"before": base, "after": head, "ref": "refs/heads/main"},
-            ref="refs/heads/main",
+            payload={
+                "before": base,
+                "after": head,
+                "ref": f"refs/heads/{DEFAULT_BRANCH}",
+            },
+            ref=f"refs/heads/{DEFAULT_BRANCH}",
             sha=head,
-            branch="main",
+            branch=DEFAULT_BRANCH,
         ),
     )
 

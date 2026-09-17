@@ -166,7 +166,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling nixie test test-python test-rust typecheck \
+        markdownlint spelling nixie test test-python test-rust test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
