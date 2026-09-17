@@ -37,7 +37,10 @@ from benchmarks.ci_benchmark_ratchet_profile import (
     select_ci_ratchet_scenarios,
     write_filtered_plan,
 )
-from benchmarks.pipeline_throughput_scenarios import CI_RATCHET_PAYLOAD_BYTES
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_PAYLOAD_BYTES,
+    CI_RATCHET_WORKER_ITERATIONS,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -66,10 +69,9 @@ def _scenario(spec: _ScenarioSpec) -> dict[str, object]:
 
 
 #: Worker iterations the ratchet job plans with. Nothing in the profile module
-#: pins this — the workflow passes it and the filtered plan echoes it — but
-#: fixtures should describe the same protocol the job runs.
-_CI_PROFILE_WORKER_ITERATIONS = 5
-
+#: pins this — the workflow passes it and the filtered plan echoes it — and the
+#: value used below is `CI_RATCHET_WORKER_ITERATIONS`, the scenario module's own
+#: constant, so these fixtures always describe the protocol the job runs.
 _CI_PROFILE_SCENARIO_SPECS: tuple[_ScenarioSpec, ...] = (
     # Four scenarios at the measured payload, mirroring the matrix the CI job
     # plans, plus probes either side of the band and one that is too deep. Six
@@ -508,7 +510,7 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         full_payload={
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
             "rust_available": True,
-            "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
+            "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
         },
         command=command,
         selected=selected,
@@ -521,7 +523,7 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         "dry_run": True,
         "rust_available": True,
         "scenarios": [scenario for scenario, _ in selected],
-        "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
+        "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
     }
 
 
@@ -538,7 +540,7 @@ def test_main_rejects_non_bool_rust_availability(
             "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
             "dry_run": True,
             "rust_available": "false",
-            "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
+            "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
             "command": ["a", "b", "c", "d", "e", "f", "g", "rust cmd"],
             "scenarios": [
                 _scenario(
@@ -579,7 +581,7 @@ def test_write_filtered_plan_rejects_non_boolean_rust_available(
             full_payload={
                 "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
                 "rust_available": "false",
-                "worker_iterations": _CI_PROFILE_WORKER_ITERATIONS,
+                "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
             },
             command=["hyperfine", "rust cmd"],
             selected=[
