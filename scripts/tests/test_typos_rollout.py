@@ -265,7 +265,9 @@ def test_pinned_base_hash_accepts_exact_pinned_bytes(
     fixture = Path(__file__).parent / "data" / "typos-oxendict-base-64bd9ce.toml"
     pinned_bytes = fixture.read_bytes()
 
-    assert hashlib.sha256(pinned_bytes).hexdigest() == generator.PINNED_BASE_SHA256
+    assert hashlib.sha256(pinned_bytes).hexdigest() == generator.PINNED_BASE_SHA256, (
+        "the immutable dictionary fixture must match the recorded SHA-256"
+    )
 
     cache.write_bytes(pinned_bytes)
     generator._verify_pinned_base(cache)
