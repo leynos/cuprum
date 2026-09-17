@@ -13,7 +13,13 @@ a regression:
   stop refreshing the baseline artefact that pull-request runs compare
   against, so the ratchet quietly degrades to comparing against nothing;
 - move `changes` onto the paid runner and the saving is spent detecting
-  whether to spend it.
+  whether to spend it;
+- state the ratchet's thresholds differently from the module that owns them,
+  and the job applies numbers nobody chose — a wider floor hides real
+  regressions, a narrower one restores the false positives of issue #219;
+- gate the sample-recording or baseline-upload step on the ratchet's verdict,
+  and a main run that measured a slowdown stops publishing the sample that
+  would have corrected the window (issue #219).
 
 No ordinary test notices any of that, so these tests parse `ci.yml` and read
 the contract back. They pin the *declarations*; the decision those
@@ -26,12 +32,18 @@ workflow's contract — which job builds the extension, and how — lives in
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from benchmarks.ratchet_history import (
+    DEFAULT_MAX_REGRESSION,
+    DEFAULT_NOISE_SIGMAS,
+    DEFAULT_WINDOW_SIZE,
+)
 from tests.helpers.workflow import (
     BENCHMARK_JOB,
     CHANGES_JOB,
@@ -56,6 +68,15 @@ PATHS_FILTER_ACTION = "dorny/paths-filter@"
 SUMMARY_STEP = "Record the benchmark gate decision"
 CHECKOUT_STEP = "Check out repository"
 THROUGHPUT_STEP = "Run throughput benchmarks and ratchet comparison"
+SAMPLE_STEP = "Record this run's benchmark sample"
+BASELINE_UPLOAD_STEP = "Upload main benchmark baseline artifact"
+#: The shell function in `THROUGHPUT_STEP` that runs the ratchet comparison.
+RATCHET_FUNCTION = "run_ratchet"
+#: The only step state the publication steps may read: whether this run produced
+#: candidate artefacts at all. Reading anything else — the ratchet's outcome in
+#: particular — is what would let a failing run withhold its own sample.
+ARTEFACT_STEP = "candidate-artefacts"
+ARTEFACT_AVAILABLE = f"steps.{ARTEFACT_STEP}.outputs.available == 'true'"
 #: The gate, verbatim. Pinning the whole expression rather than probing it for
 #: substrings is what makes an inverted or half-deleted condition a failure:
 #: `needs.changes.outputs.bench != 'true'` contains every operand the loose
@@ -208,6 +229,115 @@ def test_the_paid_benchmark_uses_the_shared_optimized_setup(
     )
     assert "UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python" in script, (
         "the benchmark scripts must reuse checkout-local uv caches and tools"
+    )
+
+
+def _shell_function(script: str, name: str) -> str:
+    """Return the body of the shell function *name* declared in *script*."""
+    match = re.search(
+        rf"^[ \t]*{re.escape(name)}\(\)\s*\{{(?P<body>.*?)^[ \t]*\}}",
+        script,
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        msg = f"{name!r} must be declared as a shell function in {THROUGHPUT_STEP!r}"
+        raise AssertionError(msg)
+    return match.group("body")
+
+
+def _flag_value(body: str, flag: str) -> str:
+    """Return the value the ratchet invocation in *body* passes to *flag*."""
+    match = re.search(
+        rf"^[ \t]*{re.escape(flag)}[ \t]+(?P<value>[^\s\\]+)",
+        body,
+        re.MULTILINE,
+    )
+    if match is None:
+        msg = f"the ratchet comparison must pass {flag} explicitly"
+        raise AssertionError(msg)
+    return match.group("value")
+
+
+def test_the_ratchet_policy_matches_the_module_defaults(
+    workflow_data: Workflow,
+) -> None:
+    """Require the workflow's ratchet thresholds to be the module's own.
+
+    `benchmarks/ratchet_history.py` owns the policy — the flat floor, the noise
+    multiplier, and the window size — and the ratchet CLI defaults to those same
+    values. The workflow restates all three anyway, so that the job reads as the
+    policy it applies instead of inheriting whatever the module currently says.
+    That restatement is only safe while something notices when the two drift:
+    otherwise a change to the module leaves the job silently applying the old
+    numbers, and the failure is expensive in both directions. A wider floor
+    hides real regressions; a narrower one reinstates the false positives of
+    issue #219.
+    """
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+    body = _shell_function(script, RATCHET_FUNCTION)
+
+    max_regression = float(_flag_value(body, "--max-regression"))
+    assert max_regression == DEFAULT_MAX_REGRESSION, (
+        f"--max-regression must be the {DEFAULT_MAX_REGRESSION!r} that "
+        f"benchmarks/ratchet_history.py owns; found {max_regression!r}"
+    )
+
+    noise_sigmas = float(_flag_value(body, "--noise-sigmas"))
+    assert noise_sigmas == DEFAULT_NOISE_SIGMAS, (
+        f"--noise-sigmas must be the {DEFAULT_NOISE_SIGMAS!r} that "
+        f"benchmarks/ratchet_history.py owns; found {noise_sigmas!r}"
+    )
+
+    window_size = int(_flag_value(body, "--history-window"))
+    assert window_size == DEFAULT_WINDOW_SIZE, (
+        f"--history-window must be the {DEFAULT_WINDOW_SIZE!r} that "
+        f"benchmarks/ratchet_history.py owns; found {window_size!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    [
+        pytest.param(SAMPLE_STEP, id="record-sample"),
+        pytest.param(BASELINE_UPLOAD_STEP, id="upload-baseline"),
+    ],
+)
+def test_the_main_sample_is_published_whatever_the_ratchet_decides(
+    workflow_data: Workflow,
+    step_name: str,
+) -> None:
+    """Require publication to depend on the measurement, never on the verdict.
+
+    Both steps publish what a `main` run measured. A window fed only by passing
+    runs is a window of low-biased samples: a measurement faster than the bar is
+    always accepted, while the slower measurements that would correct it are the
+    ones a failing run would withhold. So the conditions must run on every
+    completed run — `!cancelled()` rather than GitHub's implicit `success()` —
+    and must read only whether candidate artefacts exist, never the ratchet's
+    outcome.
+    """
+    condition = step_named(workflow_data, BENCHMARK_JOB, step_name).get("if")
+    assert isinstance(condition, str), (
+        f"the {step_name!r} step must declare an `if:` condition; found {condition!r}"
+    )
+
+    assert "!cancelled()" in condition, (
+        f"the {step_name!r} step must run after a failed ratchet as well as a "
+        "passed one, so its condition needs `!cancelled()`; an interrupted run "
+        f"that measured half a sample still publishes nothing. Found: {condition!r}"
+    )
+    assert ARTEFACT_AVAILABLE in condition, (
+        f"the {step_name!r} step must still require this run to have produced "
+        f"candidate artefacts. Found: {condition!r}"
+    )
+
+    referenced = set(re.findall(r"steps\.([A-Za-z0-9_-]+)\.", condition))
+    assert referenced == {ARTEFACT_STEP}, (
+        f"the {step_name!r} step may read only {ARTEFACT_STEP!r} step state; found "
+        f"{sorted(referenced)}. Reading the ratchet's outcome here would withhold "
+        "the sample of exactly the runs the window most needs, which is how the "
+        f"baseline became low-biased (issue #219). Found: {condition!r}"
     )
 
 

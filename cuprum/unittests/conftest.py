@@ -38,8 +38,14 @@ _VOLATILE_KEYS: frozenset[str] = frozenset({
     "worker_command",
 })
 
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
+#: The CI ratchet's sampling protocol, mirroring `.github/workflows/ci.yml`: it
+#: plans the `ratchet` payload tier at five worker iterations. The scenario
+#: label and the iteration count are what fixtures record beside
+#: `BENCHMARK_PROFILE_VERSION`, which is the whole comparability key; a fixture
+#: naming a payload tier the gate no longer measures describes a run that
+#: cannot happen (issue #219).
+SCENARIO = "ratchet-single-nocb"
+WORKER_ITERATIONS = 5
 TYPICAL_RATIOS = (1.013, 1.001, 1.069, 0.916, 1.105)
 
 
@@ -72,7 +78,7 @@ class ThroughputPayload(typ.TypedDict):
 
 
 def benchmark_run_payloads(
-    ratios: cabc.Mapping[str, float], *, worker_iterations: int = 20
+    ratios: cabc.Mapping[str, float], *, worker_iterations: int = WORKER_ITERATIONS
 ) -> tuple[PlanPayload, ThroughputPayload]:
     """Build matching dry-run and Hyperfine payloads for scenario ratios.
 
@@ -81,7 +87,10 @@ def benchmark_run_payloads(
     ratios : collections.abc.Mapping[str, float]
         Comparison identifiers and their desired Rust-to-Python mean ratios.
     worker_iterations : int
-        Positive worker count recorded in the generated plan; defaults to 20.
+        Positive worker count recorded in the generated plan; defaults to the
+        CI ratchet's `WORKER_ITERATIONS`, so a plan fixture and a history
+        fixture built side by side stay comparable and actually exercise the
+        window rather than the fallback baseline.
 
     Returns
     -------

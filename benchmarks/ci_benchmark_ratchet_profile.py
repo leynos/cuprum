@@ -1,4 +1,4 @@
-"""Build and execute the CI smoke benchmark profile for the Rust ratchet."""
+"""Build and execute the CI benchmark profile for the Rust ratchet."""
 
 from __future__ import annotations
 
@@ -21,8 +21,23 @@ if typ.TYPE_CHECKING:
 
 _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
 _CI_RATCHET_STAGE_COUNT = 2
-_CI_RATCHET_MAX_PAYLOAD_BYTES = 65536
-_CI_RATCHET_RUNS = 10
+# The ratchet only accepts payloads the streaming work dominates, so that the
+# ratio it compares is a measurement of the pipeline rather than of the fixed
+# per-run cost every scenario pays. The floor is the first payload above every
+# crossover measured on the reference host — the point where the streaming work
+# drawn across the five iterations outweighs the five iterations' set-up, which
+# the four backend/mode combinations reach between about 4 MiB and 22 MiB — so
+# a scenario the band accepts has paid for its ratio with streaming work; the
+# ceiling keeps one measured run to a few seconds in callback mode, so a job
+# still fits its timeout. The workload comes from
+# `benchmarks.pipeline_throughput_scenarios.CI_RATCHET_PAYLOAD_BYTES`, which
+# `test_ci_ratchet_profile_contract_matches_the_payload_matrix` holds inside
+# this band.
+_CI_RATCHET_MIN_PAYLOAD_BYTES = 32 * 1024 * 1024
+_CI_RATCHET_MAX_PAYLOAD_BYTES = 128 * 1024 * 1024
+#: Enough runs that the mean of each command is stable without, at the ratchet
+#: payload, spending more than a couple of minutes on the whole measurement.
+_CI_RATCHET_RUNS = 20
 _SUPPORTED_BACKENDS = ("python", "rust")
 
 
@@ -95,6 +110,8 @@ def _select_scenario(
     if payload_bytes < 0:
         msg = "scenario payload_bytes must be >= 0"
         raise ValueError(msg)
+    if payload_bytes < _CI_RATCHET_MIN_PAYLOAD_BYTES:
+        return None
     if payload_bytes > _CI_RATCHET_MAX_PAYLOAD_BYTES:
         return None
     return scenario, scenario_command

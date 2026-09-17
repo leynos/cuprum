@@ -315,6 +315,28 @@
 
 ### Changed
 
+- **Benchmark ratchet measures the pipeline, not worker start-up:** The
+  `benchmark-ratchet` job compared a within-run Rust-to-Python ratio over
+  payloads where the interpreter start, the `cuprum` import, and the
+  per-iteration set-up were most of both means, so a runner-to-runner swing in
+  that fixed cost could move the ratio past the 30% threshold on its own — the
+  false positive reported against
+  [PR #158](https://github.com/leynos/cuprum/pull/158) and analysed in
+  [#219](https://github.com/leynos/cuprum/issues/219). The job now measures a
+  single 64 MiB payload (`--ci-ratchet`, labelled `ratchet`) at five worker
+  iterations and twenty hyperfine runs, where streaming dominates what is timed;
+  `ci_benchmark_ratchet_profile.py` rejects any scenario outside its 32 MiB to
+  128 MiB band. Both the payload change and the iteration change are
+  sampling-protocol changes, so `BENCHMARK_PROFILE_VERSION` was bumped to
+  `pipeline-worker-release-ratio-v5` and the rolling window refills with
+  compatible `main` samples before the noise band applies again. The workflow's
+  `--max-regression`, `--noise-sigmas`, and `--history-window` values are now
+  pinned to `benchmarks/ratchet_history.py`'s single authoritative defaults by
+  a CI contract test, and the sample-recording and baseline-upload steps are
+  contract-tested to depend only on the measurement, never on the ratchet's
+  verdict. See [§13.9](docs/cuprum-design.md) and the
+  [noise measurements](docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md).
+
 - **Maturin 1.15.0:** The development, wheel-workflow, and composite-action
   maturin pins now agree on 1.15.0, and the PyO3 0.29 line is confirmed
   compatible with the new backend
