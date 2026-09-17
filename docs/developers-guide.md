@@ -320,9 +320,18 @@ The lint job installs Nixie and Whitaker through the pinned
 `leynos/shared-actions` installers. Nixie's installer also provisions Merman;
 the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
 compiler. The job then restores Rust `1.85.0`, the project's supported
-toolchain, before installing Whitaker and running the project gates. The
-Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the job environment
-(`0.2.7`, the workflow's configured installer version).
+toolchain, before installing Whitaker and running the project gates. On Linux,
+standard debug Rust build, test, Rustdoc, and Clippy commands select
+`nightly-2026-08-23` with the explicit `tools/dev-fast/config.toml` fragment.
+The current `typecheck` target is Python-only and selects no Cargo fragment.
+`fmt` and `check-fmt` alone select `nightly-2026-05-28` through `RUSTFMT_CARGO`
+in the Makefile. `rust/.rustfmt.toml` configures formatter behaviour only;
+change the Makefile when changing the formatter toolchain. Coverage, release,
+verification, MSRV, and Whitaker commands, together with macOS and Windows,
+retain their prescribed fragment-free or separately pinned toolchains. The
+stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
+maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
+job environment (`0.2.7`, the workflow's configured installer version).
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official

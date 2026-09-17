@@ -2,10 +2,10 @@
 //!
 //! The invariant under proof, over every modelled exit path:
 //!
-//! - a reader passed through the production retention kernel is **never** closed by
-//!   Rust — it stays caller-owned on normal completion and error return;
-//! - the `pump_stream` writer is **consumed** and closes exactly once on
-//!   every exit path, which is what signals EOF downstream.
+//! - a reader passed through the production retention kernel is **never** closed by Rust — it stays
+//!   caller-owned on normal completion and error return;
+//! - the `pump_stream` writer is **consumed** and closes exactly once on every exit path, which is
+//!   what signals EOF downstream.
 //!
 //! Scope. These are bounded-model proofs over the ownership *model* in
 //! [`super::fd_ownership_model`], not over real descriptors: Kani does not
@@ -19,7 +19,11 @@
 //! is bounded explicitly.
 
 use super::fd_ownership_model::{
-    CloseLog, ExitMode, ModelFd, model_consume_stream, model_pump_stream,
+    CloseLog,
+    ExitMode,
+    ModelFd,
+    model_consume_stream,
+    model_pump_stream,
     model_with_borrowed_reader,
 };
 

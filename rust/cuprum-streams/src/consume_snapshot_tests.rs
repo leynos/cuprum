@@ -20,9 +20,12 @@
 //! Each case feeds a fixed payload through a real pipe, so the decode is driven
 //! by actual descriptor reads rather than a synthetic byte buffer.
 
-use crate::errors::PumpError;
-use crate::test_support::{make_pipe, write_all_to};
-use crate::{BufferSize, consume_stream_files};
+use crate::{
+    BufferSize,
+    consume_stream_files,
+    errors::PumpError,
+    test_support::{make_pipe, write_all_to},
+};
 
 /// Decode `payload` through the real `consume_stream_files` read loop using a
 /// pipe, reading `buffer_size` bytes at a time.
@@ -130,8 +133,9 @@ mod properties {
     //! Payloads stay small so the unbuffered write in `consume` cannot fill the
     //! pipe and block, which is the precondition the helper documents.
 
-    use super::consume;
     use proptest::prelude::*;
+
+    use super::consume;
 
     /// The largest payload a single unbuffered pipe write must accept.
     const MAX_PAYLOAD: usize = 512;

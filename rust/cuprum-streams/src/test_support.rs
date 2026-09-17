@@ -1,24 +1,23 @@
 //! Shared Unix file-descriptor fixtures and assertions for Rust unit tests.
 
+use std::{
+    fmt::Debug,
+    io::{self, Read, Write},
+    os::fd::OwnedFd,
+};
+
 use cap_std::fs::File;
-use std::fmt::Debug;
-use std::io::{self, Read, Write};
-use std::os::fd::OwnedFd;
 
 /// Create an anonymous pipe as `(read_end, write_end)`.
 ///
 /// Returns the operating-system error from `pipe(2)` so fixtures can pass it
 /// to the test body, where the failure receives assertion context.
-pub(crate) fn make_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
-    cuprum_native_io::pipe()
-}
+pub(crate) fn make_pipe() -> io::Result<(OwnedFd, OwnedFd)> { cuprum_native_io::pipe() }
 
 /// Duplicate a typed descriptor into an independently owned [`File`].
 ///
 /// The caller retains its descriptor; cloning failures propagate to the test.
-pub(crate) fn dup_as_file(fd: &OwnedFd) -> io::Result<File> {
-    fd.try_clone().map(File::from)
-}
+pub(crate) fn dup_as_file(fd: &OwnedFd) -> io::Result<File> { fd.try_clone().map(File::from) }
 
 /// Write every byte of `payload` through a duplicated descriptor.
 ///

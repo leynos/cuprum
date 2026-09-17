@@ -5,11 +5,9 @@
 //! errors like broken pipes. Failures are reported through the crate's
 //! canonical [`PumpError`] taxonomy.
 
-use std::cell::Cell;
-use std::io;
+use std::{cell::Cell, io};
 
-use crate::errors::PumpError;
-use crate::pump_machine::WriteEvent;
+use crate::{errors::PumpError, pump_machine::WriteEvent};
 
 thread_local! {
     /// EINTR retries observed on the read path of the current operation.
@@ -31,14 +29,10 @@ pub(crate) fn reset_retry_counters() {
 }
 
 /// EINTR retries accumulated on the read path since the last reset.
-pub(crate) fn read_retry_count() -> u64 {
-    READ_RETRIES.with(Cell::get)
-}
+pub(crate) fn read_retry_count() -> u64 { READ_RETRIES.with(Cell::get) }
 
 /// EINTR retries accumulated on the write path since the last reset.
-pub(crate) fn write_retry_count() -> u64 {
-    WRITE_RETRIES.with(Cell::get)
-}
+pub(crate) fn write_retry_count() -> u64 { WRITE_RETRIES.with(Cell::get) }
 
 /// Increment the current operation's read-path `EINTR` retry counter.
 ///

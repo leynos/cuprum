@@ -7,8 +7,7 @@
 
 use proptest::prelude::*;
 use rstest::rstest;
-use tracing::Level;
-use tracing::callsite::Callsite;
+use tracing::{Level, callsite::Callsite};
 
 use super::{Captured, capture};
 

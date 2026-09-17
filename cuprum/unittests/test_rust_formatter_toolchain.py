@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - expands fixed local Makefile recipes.
 import tomllib
 
 from tests.helpers.docs import repo_root
@@ -94,3 +96,53 @@ def test_formatter_skips_are_limited_to_known_rstest_fixtures() -> None:
     assert observed == _FORMATTER_FIXTURE_SKIPS, (
         "add a mutation proof before extending the formatter exception set"
     )
+
+
+def test_make_formatter_targets_select_the_pinned_nightly() -> None:
+    """Only formatter recipes select the pinned nightly cargo route."""
+    make_executable = shutil.which("make")
+    assert make_executable is not None, "make must be available to expand recipes"
+    root = repo_root()
+
+    def expanded_recipes(*targets: str) -> str:
+        """Return dry-run output for the fixed formatter contract targets."""
+        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+            [make_executable, "--dry-run", "CARGO=probe-cargo", *targets],
+            check=True,
+            shell=False,
+            cwd=root,
+            capture_output=True,
+            encoding="utf-8",
+        )
+        return completed.stdout
+
+    formatter_recipes = expanded_recipes("fmt", "check-fmt")
+    formatter_lines = [
+        line
+        for line in formatter_recipes.splitlines()
+        if line.startswith("cd rust && probe-cargo")
+    ]
+    expected_lines = [
+        "cd rust && probe-cargo +nightly-2026-05-28 fmt --all",
+        "cd rust && probe-cargo +nightly-2026-05-28 fmt --all -- --check",
+    ]
+    assert formatter_lines == expected_lines, (
+        "formatter targets must use only the injected pinned nightly cargo route"
+    )
+
+    expected_debug_route = (
+        "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
+        "--config ../tools/dev-fast/config.toml"
+    )
+    for target in ("lint", "test"):
+        target_recipes = expanded_recipes(target)
+        cargo_lines = [
+            line for line in target_recipes.splitlines() if "probe-cargo" in line
+        ]
+        assert cargo_lines, f"{target} must expand at least one Cargo command"
+        assert all(
+            "probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines
+        ), f"{target} must not select the formatter's nightly Cargo route"
+        assert any(expected_debug_route in line for line in cargo_lines), (
+            f"{target} must retain the Linux dev-fast Cargo route"
+        )

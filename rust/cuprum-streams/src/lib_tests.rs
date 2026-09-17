@@ -1,13 +1,18 @@
 //! Tests for the borrowed file-descriptor ownership contract.
 
-use crate::errors::PumpError;
-use crate::io_utils::{classify_write, read_stream};
-use crate::pump_machine::WriteEvent;
-use crate::test_support::{make_pipe, read_all_from, write_all_to};
-use crate::tracing_capture::capture;
-use crate::{BufferSize, consume_stream_files, pump_stream_files_readwrite};
 use rstest::rstest;
 use tracing::Level;
+
+use crate::{
+    BufferSize,
+    consume_stream_files,
+    errors::PumpError,
+    io_utils::{classify_write, read_stream},
+    pump_machine::WriteEvent,
+    pump_stream_files_readwrite,
+    test_support::{make_pipe, read_all_from, write_all_to},
+    tracing_capture::capture,
+};
 
 /// Consuming a pipe records its byte total and zero read retries in the span.
 #[rstest]
@@ -169,8 +174,8 @@ fn pump_drains_the_reader_after_the_writer_breaks() {
             "broken pipe; draining reader",
             &[("bytes_transferred", "0")],
         ),
-        "the writer-close latch must report the hang-up by name, with the zero \
-         byte total that reached the hung-up downstream",
+        "the writer-close latch must report the hang-up by name, with the zero byte total that \
+         reached the hung-up downstream",
     );
 
     // The reader must have been drained to EOF: a further read returns zero

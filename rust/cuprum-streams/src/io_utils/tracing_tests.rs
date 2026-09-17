@@ -17,7 +17,11 @@ use proptest::prelude::*;
 use tracing::Level;
 
 use super::{
-    operation_span, read_raw_fd_with, read_retry_count, reset_retry_counters, write_all_unix_with,
+    operation_span,
+    read_raw_fd_with,
+    read_retry_count,
+    reset_retry_counters,
+    write_all_unix_with,
     write_retry_count,
 };
 use crate::tracing_capture::capture;
@@ -45,8 +49,7 @@ fn warn_filter_keeps_eintr_warning_context() {
 
     assert!(
         captured.event_has_fields(Level::WARN, &["operation", "buffer_size"]),
-        "EINTR warn event must retain operation + buffer_size context under a \
-         warn filter",
+        "EINTR warn event must retain operation + buffer_size context under a warn filter",
     );
 }
 
@@ -63,8 +66,7 @@ fn error_filter_keeps_fatal_write_context() {
 
     assert!(
         captured.event_has_fields(Level::ERROR, &["operation", "buffer_size"]),
-        "fatal write error event must retain operation + buffer_size context \
-         under an error filter",
+        "fatal write error event must retain operation + buffer_size context under an error filter",
     );
 }
 
@@ -84,8 +86,8 @@ fn error_filter_keeps_ordinary_fatal_write_context() {
 
     assert!(
         captured.event_has_fields(Level::ERROR, &["operation", "buffer_size"]),
-        "map_short_write_error's fatal event must retain operation + \
-         buffer_size context under an error filter",
+        "map_short_write_error's fatal event must retain operation + buffer_size context under an \
+         error filter",
     );
 }
 
@@ -105,8 +107,8 @@ fn error_filter_keeps_read_overflow_context() {
 
     assert!(
         captured.event_has_fields(Level::ERROR, &["operation", "buffer_size"]),
-        "read length-overflow error event must retain operation + buffer_size \
-         context under an error filter",
+        "read length-overflow error event must retain operation + buffer_size context under an \
+         error filter",
     );
 }
 
