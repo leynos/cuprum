@@ -7,7 +7,7 @@ import contextlib
 import os
 import typing as typ
 
-from cuprum import _backend, _pipeline_streams
+from cuprum import _pipeline_streams
 from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
@@ -55,15 +55,11 @@ def force_synthetic_native_pump_path(
         )
         configure_pump_stream_dispatch_for_testing(raw_fd_extractor=extract_raw_fd)
         set_rust_availability_for_testing(is_available=True)
-        _backend._check_rust_available.cache_clear()
-        _backend.get_stream_backend.cache_clear()
         try:
             yield
         finally:
             reset_pump_stream_dispatch_for_testing()
             set_rust_availability_for_testing(is_available=None)
-            _backend._check_rust_available.cache_clear()
-            _backend.get_stream_backend.cache_clear()
             for fd in (*extracted_fds, reader_pipe_fd, writer_pipe_fd):
                 with contextlib.suppress(OSError):
                     os.close(fd)

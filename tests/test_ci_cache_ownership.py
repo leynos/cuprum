@@ -51,6 +51,9 @@ SAVE_GUARD_CLAUSES = (
     "github.event_name == 'push'",
     "github.ref == 'refs/heads/main'",
 )
+SAVE_EVENT_GUARDS = {"loom.yml": "github.event_name == 'schedule'"}
+DEFAULT_SAVE_EVENT_GUARD = "github.event_name == 'push'"
+BRANCH_GUARD_CLAUSE = "github.ref == 'refs/heads/main'"
 #: The additional clause a content-addressed key carries, so a run that already
 #: hit does not re-upload what it just downloaded.
 MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
@@ -58,14 +61,8 @@ MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
 
 def _save_guard_clauses(workflow_name: str) -> list[str]:
     """Return the event and branch guards required to save one cache family."""
-    return [
-        (
-            "github.event_name == 'schedule'"
-            if workflow_name == "loom.yml" and clause == "github.event_name == 'push'"
-            else clause
-        )
-        for clause in SAVE_GUARD_CLAUSES
-    ]
+    event_guard = SAVE_EVENT_GUARDS.get(workflow_name, DEFAULT_SAVE_EVENT_GUARD)
+    return [event_guard, BRANCH_GUARD_CLAUSE]
 
 
 def _key_of(step: Step, message: str) -> str:
