@@ -7,8 +7,8 @@
 # passed explicitly with `cargo --config tools/dev-fast/config.toml ...` from
 # the `make dev-*` targets.
 #
-# The toolchain is the repository's own, from `rust-toolchain.toml`; only the
-# mold release is pinned here, in `tools/mold/VERSION`. See
+# Makefile pins the dev-fast nightly through `DEV_FAST_TOOLCHAIN`; only the
+# mold release is pinned in `tools/mold/VERSION`. See
 # `docs/developers-guide.md` for the ownership boundary and composition rules.
 
 [unstable]

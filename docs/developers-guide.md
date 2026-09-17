@@ -363,6 +363,9 @@ focused, small, and easy to review.
 
 ## Linux debug-build acceleration
 
+[ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and
+its compatibility rationale.
+
 Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
 verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
 uses the separately pinned `nightly-2026-08-23` and the
@@ -370,7 +373,7 @@ uses the separately pinned `nightly-2026-08-23` and the
 fragment is an approved byte-for-byte local extension from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
 Concordat issue 157; its SHA-256 is
-`d8fcc29ce680ecf43e96f024bd8d0e1a378d5998efdafc8221902735f9ff4ec4`.
+`8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5`.
 
 Run `make dev-fast-check` before the first Linux accelerated build. It requires
 the nightly component and the pinned `mold` 2.41.0 linker. The approved binary
@@ -384,9 +387,9 @@ the caller explicitly supplies the fragment.
 Every workspace package inherits `rust-version = "1.85.0"` from the root
 manifest. Cargo treats that as the publication and compatibility contract, and
 MSRV-aware Clippy lints use it while the Linux debug lint route runs on the
-maintenance nightly. `make msrv-check` separately compiles every workspace
-target on Rust `1.85.0` without the fragment, so the accelerated lint compiler
-cannot replace compatibility verification.
+dev-fast nightly. `make msrv-check` separately compiles every workspace target
+on Rust `1.85.0` without the fragment, so the accelerated lint compiler cannot
+replace compatibility verification.
 
 Maturin accepts a Cargo executable but cannot pass Cargo's configuration-file
 flag itself. The Linux-only `tools/dev-fast/cargo` adapter receives the injected
@@ -397,10 +400,10 @@ standard because it must preserve Cargo's exact argv and exit status.
 
 macOS and Windows use the stable backend as the approved alternative. The
 Windows cross-target lint, wheel builds, benchmark release builds, coverage,
-verification, and Whitaker never select the fragment. The canonical fragment's
-provenance comment refers to a repository-owned toolchain; Cuprum deliberately
-uses the separately pinned maintenance nightly above to preserve its stable
-support promise.
+verification, and Whitaker never select the fragment. The fragment documents
+Cuprum's ownership boundary: Makefile pins the dev-fast nightly, while
+`tools/mold/VERSION` pins the linker release. The stable support promise
+remains independently verified.
 
 ## Tar and rsync builder helpers
 
