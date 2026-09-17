@@ -38,7 +38,8 @@ matter.
 - It must not run on a metered runner, and it must not be able to corrupt the
   developer's checkout.
 - It must skip cleanly, rather than fail, where no container runtime is
-  available, so that `make test` stays portable.
+  available, so that `make test-act` reports "cannot run here" distinctly from
+  "ran and disagreed", and stays usable on every machine.
 - The cases it covers must be the cases that change the outcome: relevant,
   irrelevant, mixed, and empty changed-path sets, pull-request and
   non-pull-request events, and a detector failure.
@@ -97,12 +98,12 @@ This is the most faithful environment and the least portable. It requires
 infrastructure, cannot run in a pull-request gate for a fork, and is
 disproportionate to a job that installs two actions and runs two shell scripts.
 
-| Topic                   | Option A          | Option B | Option C      |
-| ----------------------- | ----------------- | -------- | ------------- |
-| Executes the real job   | yes               | no       | yes           |
-| Runs offline            | yes               | yes      | no            |
-| Needs infrastructure    | container runtime | none     | a runner host |
-| Runnable in `make test` | yes, or skips     | yes      | no            |
+| Topic                    | Option A          | Option B | Option C      |
+| ------------------------ | ----------------- | -------- | ------------- |
+| Executes the real job    | yes               | no       | yes           |
+| Runs offline             | yes               | yes      | no            |
+| Needs infrastructure     | container runtime | none     | a runner host |
+| Runnable without a CI PR | yes, or skips     | yes      | no            |
 
 _Table 1: Comparison of workflow verification options._
 
@@ -172,13 +173,15 @@ no user session to create one.
 - The workflow boundary the gate depends on is exercised, not inferred, and the
   traps that motivated the harness are encoded as tests.
 - A maintainer can reproduce a gate decision locally with one command.
-- The harness skips rather than fails where no runtime exists, so the suite
-  stays green on machines that cannot run it.
+- The harness skips rather than fails where no runtime exists, so
+  `make test-act` stays usable on machines that cannot run it.
 
 ### Negative
 
-- `make test` gains a scenario set that is slower than the rest of the suite and
-  that requires a container runtime to contribute.
+- The repository carries a scenario set that is slower than the rest of the
+  suite and that only contributes on a machine with a container runtime. It is
+  deliberately absent from `PYTEST_TARGETS`, so `make test` and CI's
+  `make test-python` do not collect it; a maintainer runs `make test-act`.
 - The repository owns a parser for a third-party tool's output format.
 
 ## Revision note, 2026-09-16: two findings from building the harness

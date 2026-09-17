@@ -217,9 +217,39 @@ Document the conflict in `Decision log` and escalate.
   requires. Found and repaired a silent semantic corruption (`'10.'` -> `'1.'`)
   and a malformed nested code span, and reworded the two other wrapped ordinals
   that could trip `--renumber` on a future rewrap. See Surprises & discoveries.
+- [x] (2026-09-17 06:40Z) Closed the branch's longest-standing verification
+  gap: `actionlint` (1.7.12) and `yamllint --strict` were run directly against
+  `.github/workflows` and both exit zero, so the `ci.yml` change *is*
+  validated. It had never been observed before, because `ruff check`
+  short-circuits `python-lint`'s `&&` chain and the GitHub Actions gate sits
+  after it. Running the two tools directly is equivalent to the
+  `github-actions-lint` target, and is recorded here rather than claimed from
+  an unrun gate.
+- [x] (2026-09-17 14:30Z) Cleared the last `make lint` blocker: 37 `C9102`
+  (`assert-missing-message`) and 1 `R9109` (`prefer-snapshot-substring`), all
+  confined to the two new integration test files. Messages were added rather
+  than the rules suppressed — an AST census showed the message convention held
+  everywhere else in the repository and `tests/integration` was the sole
+  violator. `R9109` was resolved by parametrizing the one test it fired on, so
+  the rule has nothing to count. The df12 plugin now rates `tests/integration/`
+  at 10.00/10, and a positive control confirmed the plugin was genuinely loaded
+  rather than silently no-op. See Decision log.
 - [ ] Full gate run via `scrutineer`; `coderabbit review --agent`; draft PR.
 
 ## Surprises & discoveries
+
+- Observation: the harness probe ignores `DOCKER_HOST`, so a test that tries to
+  *simulate* a missing runtime by pointing the environment at a nonexistent
+  socket does not simulate anything — the probe looks for socket files on disk.
+  Evidence: `DOCKER_HOST=unix:///nonexistent/socket.sock` produced
+  `7 passed in 113.19s`, i.e. the real daemon ran every scenario. Impact: the
+  skip path has to be exercised by removing `act` from `PATH`, which reaches
+  the probe's first branch; doing that gave `6 skipped, 1 passed` with
+  `CUPRUM_REQUIRE_ACT=1` off and `1 passed, 6 errors` with it on. The general
+  lesson is the one this whole plan keeps meeting: a probe that answers from
+  the filesystem rather than from the environment will not be fooled by an
+  environment-only override, so a "simulated absence" is only a simulation if
+  it removes the thing the probe actually inspects.
 
 - Observation: `actions/checkout` under `act` checks out the *scratch*
   repository, not the host worktree, and the real `changes` job completes
@@ -382,6 +412,27 @@ Document the conflict in `Decision log` and escalate.
   formatter that rewrites content needs a token-level diff against the
   pre-format revision, not just a clean exit status.
 
+- Observation: a green `make test` is not, by itself, evidence that a new test
+  module ran. `PYTEST_TARGETS` is an explicit list of globs, and
+  `tests/integration/test_workflow_integration.py` matches none of them, so the
+  full-gate run reported 1744 passed while collecting that file zero times.
+  Evidence: `grep -c test_workflow_integration` over the 2392-line gate log
+  returned 0, while `grep -c test_act_stream_parsing` returned 20 — the parser
+  half is named in `PYTEST_TARGETS` and the scenario half deliberately is not.
+  Impact: three passages (this plan's V3 obligation, ADR-012's option table and
+  its "Negative" consequence, and the opening of
+  `docs/local-validation-of-github-actions-with-act-and-pytest.md`) asserted
+  that `make test` runs the scenarios, and were corrected to name
+  `make test-act`. The split is right — CI's `typecheck-test` job runs
+  `make test-python` on a runner with no container runtime — but the split's
+  own justification was wrong too: `test-act`'s Makefile comment attributed the
+  exclusion to the suite-wide `timeout = 30`, which every scenario overrides
+  with `@pytest.mark.timeout(300)`. The exclusion is real and comes from
+  `PYTEST_TARGETS`; the timeout never had anything to do with it. The general
+  lesson: an evidence line must name the command that actually exercises the
+  artefact, and a count of passing tests is not a count of the tests you meant
+  to add.
+
 ## Decision log
 
 - Decision: push the metric to **Grafana Cloud's OTLP gateway** with `curl`
@@ -512,6 +563,42 @@ Document the conflict in `Decision log` and escalate.
   step fails the test with a message naming the command it could not find — the
   job "must run `docker info`, which fails unless the daemon the harness binds
   is actually reachable". Date/Author: 2026-09-17, implementing agent.
+
+- Decision: satisfy `R9109` (`prefer-snapshot-substring`) at
+  `test_the_failure_context_names_the_command_and_the_failing_step` by
+  **parametrizing** the test — one probe per case, drawn from a
+  `CONTEXT_FACETS` table — rather than either converting it to a syrupy
+  snapshot or suppressing the rule. Rationale: the rule's subject is "one test
+  repeatedly asserting that string fragments occur in the same subject", and it
+  counts probes per function body; with one probe per case there is nothing
+  left to count, so the finding is *moot* rather than suppressed. The reading
+  that led here was the rule's own source, read from the pinned plugin rather
+  than inferred: `_MIN_SUBSTRING_PROBES = 3`, and the message is raised once per
+  `(target, count)` pair in a `test_`-named function. A snapshot was rejected
+  on the merits: the subject is derived from a recorded `act --json` fixture,
+  so the snapshot would embed that fixture verbatim. Snapshot roots are scanned
+  by `ambrleaks` precisely because they sit outside Python's lintable source
+  tree (ADR-003), so moving a verbatim third-party recording there would trade
+  a clear assertion for a new secret-shaped-value surface. The five facets —
+  exit status, failing step, pasted command, and the two stream sections — are
+  also independent, not re-samples of one property, so a snapshot would blur
+  five failure modes into one diff. Verified: the plugin rates the new shape
+  10.00/10 where the old shape scored 6.00/10, and the suite went from 16 to 20
+  tests with coverage unchanged. Non-vacuity: deleting the `command:` line from
+  `failure_context()` failed exactly one case, `[pasted-command]`, while the
+  other 19 passed — so the cases are independently load-bearing. Date/Author:
+  2026-09-17, implementing agent.
+
+- Decision: conform to `C9102` (`assert-missing-message`) across the two
+  integration test files by adding real failure messages, rather than
+  suppressing the rule. Rationale: an AST census over the repository found the
+  convention real and consistently held — `tests/` 0 bare of 237, `tests/`
+  `behaviour/` 0 of 278, `benchmarks/` 0 of 6 — with `tests/integration` (36
+  bare of 47) the sole violator, entirely because both files carrying the
+  violation are new on this branch. `cuprum/unittests/` escapes only because
+  `source-exclude` omits that directory from the Pylint target, which is a
+  property of the configuration rather than a precedent. Date/Author:
+  2026-09-17, implementing agent.
 
 ## Outcomes & retrospective
 
@@ -668,10 +755,11 @@ Axioms (external facts treated as given, not verified here):
   agreement with a pure model (`tests/helpers/workflow_gate.py`), so extending
   it keeps one source of truth rather than adding a parallel one. Domain: as
   V1. Artefact: `tests/behaviour/test_benchmark_gate_summary_behaviour.py` and
-  `tests/integration/test_workflow_integration.py`. Evidence: `make test`
+  `tests/integration/test_workflow_integration.py`. Evidence: `make test-act`
   passes; the harness asserts the gate table rendered by the real job for five
-  scenarios. Non-vacuity: the pre-existing pure model `benchmark_runs` is the
-  oracle and is already exercised; the harness supplies an independent,
+  scenarios. (`make test` does not collect this module — see Surprises &
+  discoveries.) Non-vacuity: the pre-existing pure model `benchmark_runs` is
+  the oracle and is already exercised; the harness supplies an independent,
   out-of-process witness (the job's own output) that would disagree if the
   script drifted.
 
@@ -762,16 +850,27 @@ Axioms (external facts treated as given, not verified here):
   evaluated structurally for `pull_request`, `push`, `schedule`, and both
   dispatch values. Artefact: `tests/test_ci_workflow_harness_job.py` (11
   tests). Evidence: `make test` passes; `tests/test_ci_runner_placement.py`
-  passes (34 tests) with the job classified in `GITHUB_HOSTED_JOBS`.
-  Non-vacuity: the negative control was applied by hand — the runtime step was
-  reverted to the defective Podman install, leaving `docker pull` in the
-  following step, and the test failed for the intended reason. That control is
-  what showed a substring check for the runtime's name would have passed the
-  job that could not run a single scenario. The admission test's earlier form
-  asserted `dispatch_input=True` for push and pull request, which is an
-  unreachable state: GitHub resolves a nonexistent `inputs` property to an
-  empty string, so the falsy resolution is documented behaviour, not a
-  truthiness accident.
+  passes (34 tests) with the job classified in `GITHUB_HOSTED_JOBS`. The
+  skip-versus-refuse pair was then observed directly rather than inferred, by
+  running the scenario module under a PATH with `act` removed: with the
+  variable unset, `6 skipped, 1 passed in 0.03s`, each skip carrying "act is
+  not installed; see docs/local-validation-of-github-actions-with-act-and-
+  pytest.md"; with `CUPRUM_REQUIRE_ACT=1`, `1 passed, 6 errors in 0.15s`, each
+  error carrying "CUPRUM_REQUIRE_ACT=1 requires the workflow integration
+  harness to run, but it cannot". That is the whole portability claim and the
+  whole reason a green CI job is meaningful, in one pair of runs. A first
+  attempt at this check set `DOCKER_HOST` to a nonexistent socket and the suite
+  still passed in 113s: the probe looks for socket *files on disk* rather than
+  trusting the environment, so the override was ignored and the real daemon was
+  used. The check that worked was to remove `act` from PATH. Non-vacuity: the
+  negative control was applied by hand — the runtime step was reverted to the
+  defective Podman install, leaving `docker pull` in the following step, and
+  the test failed for the intended reason. That control is what showed a
+  substring check for the runtime's name would have passed the job that could
+  not run a single scenario. The admission test's earlier form asserted
+  `dispatch_input=True` for push and pull request, which is an unreachable
+  state: GitHub resolves a nonexistent `inputs` property to an empty string, so
+  the falsy resolution is documented behaviour, not a truthiness accident.
 
 - Obligation: V9 — **The Markdown formatter is content-preserving on this
   branch's prose**. The markdownlint and `mdtablefix` baseline adopted from
@@ -791,6 +890,30 @@ Axioms (external facts treated as given, not verified here):
   genuinely malformed nested code span. A whitespace-insensitive line diff was
   run alongside it and could not see either, which is why the method is
   token-level rather than line-level.
+
+- Obligation: V10 — **Telemetry cannot gate the benchmark ratchet**. A sink
+  outage, an expired credential, or a malformed payload must leave every
+  admission decision exactly as it would have been without telemetry: the
+  metered `benchmark-ratchet` job runs when, and only when, it would otherwise
+  have run. Method: structural reading of the two declarations, checked against
+  each other — the publish step's position and outcome handling in `changes`,
+  and the ratchet job's admission condition. Rationale: this is a *fail-open*
+  claim, and it is the one property whose violation is both silent and
+  expensive: a telemetry step that failed the job would skip a gate that exists
+  to catch performance regressions, and the skip would read as "no relevant
+  changes". Domain: the `changes` job's step order, and the `benchmark-ratchet`
+  job's `if:`. Evidence: the publish step is declared `continue-on-error: true`
+  and is the **last** step of `changes`, so no downstream step can be perturbed
+  by it; `benchmark-ratchet` is gated on
+  `needs.changes.result == 'success' && (github.event_name != 'pull_request'
+  || needs.changes.outputs.bench == 'true')`, which a step-level
+  `continue-on-error` cannot falsify. Non-vacuity: the claim is non-trivial
+  because the step *does* exit non-zero internally on a transport error — it
+  catches `curl`'s status, reports a `::notice`, and exits zero — so the
+  behaviour rests on two independent mechanisms rather than on the script being
+  incapable of failing. The companion execution test
+  `test_the_publish_step_does_not_fail_the_job_when_the_sink_rejects_it`
+  exercises that path with a stub `curl` that exits 22.
 
 Residual gaps, stated explicitly: the harness does not verify that Grafana
 Cloud *accepts* the payload, because that requires a live credential and would
@@ -815,10 +938,11 @@ operator-facing read-back check for this residual gap is a documented step in
   `tests/fixtures/` event fixtures, and
   `tests/integration/test_workflow_integration.py` exist and pass on a machine
   with `act` and podman, and skip cleanly without them. Requirements and gaps:
-  #339-AC3, #339-AC4. Acceptance evidence: `make test` passes and the
-  integration module reports five passing or skipping cases. Conformance check:
-  the harness runs the real `changes` job; no fake workflow is introduced; the
-  worktree is never bound into a container. Recovery: delete
+  #339-AC3, #339-AC4. Acceptance evidence: `make test` passes (the module is not
+  collected by it), `make test-act` reports seven cases, and the
+  container-bound scenarios pass or skip with a stated reason. Conformance
+  check: the harness runs the real `changes` job; no fake workflow is
+  introduced; the worktree is never bound into a container. Recovery: delete
   `tests/helpers/act_harness.py`, `tests/fixtures/`, and `tests/integration/`.
   Remaining gaps: the telemetry step does not yet exist, so the harness's
   assertion of the metric is a no-op at this plateau. Compatibility decision:

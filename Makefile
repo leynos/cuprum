@@ -321,11 +321,15 @@ test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 
 # The scenario half of the harness: it runs the real `changes` job under `act`
 # against a throwaway repository, one scenario at a time. It is opt-in because
-# each scenario costs 15-27s warm plus image warm-up, which the suite-wide
-# `timeout = 30` in pyproject.toml would cut short anyway, and because it needs
-# a container runtime that `make test` must not require. `CUPRUM_REQUIRE_ACT=1`
-# turns a missing runtime into a failure, so a job that provides one cannot
-# report success for having skipped every scenario.
+# each scenario costs 15-27s warm plus image warm-up, and because it needs a
+# container runtime that `make test` must not require. The scenarios carry
+# their own `@pytest.mark.timeout`, so the suite-wide `timeout = 30` in
+# pyproject.toml is not what keeps them out of `make test`: what does is that
+# `ACT_SCENARIO_TARGETS` is absent from `PYTEST_TARGETS`. CI runs
+# `make test-python`, so collecting them there would put a container-bound
+# scenario on a job that has no runtime. `CUPRUM_REQUIRE_ACT=1` turns a missing
+# runtime into a failure, so a job that provides one cannot report success for
+# having skipped every scenario.
 test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, requiring a container runtime
 	CUPRUM_REQUIRE_ACT=1 $(PYTEST) -v $(ACT_SCENARIO_TARGETS)
 
