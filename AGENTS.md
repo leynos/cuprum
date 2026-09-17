@@ -228,8 +228,7 @@ working on the Rust portions of the project:
   release, coverage, Whitaker, the explicit `make msrv-check` verification
   target, and the macOS and Windows platform alternatives. All Rust packages
   inherit Cargo's `rust-version = "1.85.0"` contract, which also keeps
-  MSRV-aware Clippy findings valid when debug linting uses the dev-fast
-  nightly.
+  MSRV-aware Clippy findings valid when debug linting uses the dev-fast nightly.
 - Clippy warnings MUST be disallowed.
 - Fix any warnings emitted during tests in code instead of silencing them.
 - Where a function is too long, extract meaningfully named helper functions
