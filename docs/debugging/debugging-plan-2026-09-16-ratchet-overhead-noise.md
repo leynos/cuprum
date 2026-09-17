@@ -46,9 +46,10 @@ rust-1024     398.6 ms ± 2.7      python-1024    404.6 ms ± 3.7
 
 The failing run's individual hyperfine samples were not retained; only the
 aggregate regression ratio is on record. Hyperfine 1.20.0 does not interleave
-commands (upstream issue #21, milestone 2.0), so the Python and Rust commands
-are consecutive groups within one invocation and slow load drift remains a bias
-in the comparison — this record measures that bias but does not remove it.
+commands (upstream issue #21, milestone 2.0): it runs out one command's runs
+before starting the next, so the Python and Rust commands of a pair are
+consecutive rather than interleaved, and slow load drift remains a bias in the
+comparison — this record measures that bias but does not remove it.
 
 ______________________________________________________________________
 
@@ -174,12 +175,12 @@ Table 3 and Table 5 (0.43 versus 0.83 for the same cell) because the machine
 load differed, and the two backends are not affected by load in the same
 proportion: the pure-Python pump loses more wall clock to contention than the
 native one. The *within-run* ratio is therefore still load-sensitive in a way
-the payload change does not fix — hyperfine still measures the Python block and
-the Rust block consecutively rather than interleaved. What the payload change
-buys is that the ratio is no longer mostly fixed cost, so its *spread* is small
-enough for a threshold to be meaningful; the residual load bias is the same
-kind of bias the baseline and candidate share, which is why the gate compares
-ratios across runs rather than wall clock.
+the payload change does not fix — a pair's Python and Rust commands are still
+measured one after the other rather than at the same time. What the payload
+change buys is that the ratio is no longer mostly fixed cost, so its *spread*
+is small enough for a threshold to be meaningful; the residual load bias is the
+same kind of bias the baseline and candidate share, which is why the gate
+compares ratios across runs rather than wall clock.
 
 ### Wall clock fits the job's budget
 
@@ -257,10 +258,11 @@ something.
   13.1% and 14.2% bands are a MAD over two values, and their spread is what the
   old profile was making decisions with. The 16 MiB and larger rows are a MAD
   over four.
-- Hyperfine does not interleave commands, so the Python and Rust blocks are
-  measured consecutively and slow drift biases each ratio. A payload large
-  enough to dominate the fixed cost reduces that bias's relative size but does
-  not remove it.
+- Hyperfine does not interleave commands, so a pair's Python and Rust commands
+  are measured one after the other and slow drift biases each ratio. The
+  selected scenarios are ordered payload, then callback mode, then backend, so
+  the pair is at least adjacent in time; a payload large enough to dominate the
+  fixed cost reduces that bias's relative size but does not remove it.
 - The 100 MiB cell was measured but rejected: it buys a tighter band than 64
   MiB at roughly twice the wall clock, and the confirmation re-measurement has
   to fit in the same job.
