@@ -223,10 +223,11 @@ The ratchet now measures a dedicated payload tier rather than a smoke tier:
   32–128 MiB band — past every measured crossover, where the five iterations'
   streaming has paid for the five iterations' set-up — and rejects the rest
   instead of measuring them.
-- Five worker iterations (down from twenty) keep one measured run a few hundred
-  milliseconds at this payload — around 63% of it streaming in the no-callback
-  mode, 86% in callback mode — and twenty hyperfine runs (up from ten) tighten
-  the mean of each command.
+- Five worker iterations (down from twenty) keep one measured run between 0.45
+  and 0.54 s in the no-callback mode and between 1.42 and 1.57 s in callback
+  mode at this payload — 62% and 57% of the no-callback run streaming, for the
+  python and native pumps respectively, rising to 87% for both in callback mode
+  — and twenty hyperfine runs (up from ten) tighten the mean of each command.
 - `BENCHMARK_PROFILE_VERSION` was bumped to
   `pipeline-worker-release-ratio-v5`. A payload size is not recorded in a
   sample, so the version gate is the only thing that stops a v4 ratio from
