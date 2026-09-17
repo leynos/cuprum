@@ -43,6 +43,28 @@ _MAKEUTIL_INSTALL_TOKENS: typ.Final = (
     "--force",
     "makeutil",
 )
+_TYPOS_CONFIG_BUILDER_VERSION_TOKENS: typ.Final = ("v0.1.2",)
+_TYPOS_CONFIG_BUILDER_TOKENS: typ.Final = (
+    "$(UV_RUN_ENV)",
+    "uv",
+    "tool",
+    "run",
+    "--python",
+    "3.14",
+    "--from",
+    "\n",
+    "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)",
+    "\n",
+    "typos-config-builder",
+)
+_SPELLING_GATE_TOKENS: typ.Final = (
+    "$(TYPOS_CONFIG_BUILDER)",
+    "gate",
+    "--repository",
+    ".",
+    "--scope",
+    "all",
+)
 _SKYLOS_VERSION_TOKENS: typ.Final = ("4.33.2",)
 _SKYLOS_PRODUCTION_TARGET_TOKENS: typ.Final = ("cuprum",)
 _SKYLOS_EXCLUSION_TOKENS: typ.Final = ("cuprum/unittests",)
@@ -291,22 +313,16 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     )
 
 
-def test_spelling_helper_runs_each_rollout_regression_module() -> None:
-    """The spelling gate must run each committed local-policy regression."""
-    pytest_commands = [
-        command
-        for command in _recipe_tokens("spelling-helper-test")
-        if "pytest" in command
-    ]
-    assert len(pytest_commands) == 1, (
-        "Spelling-helper test contract must invoke pytest exactly once"
+def test_spelling_gate_uses_the_pinned_config_builder() -> None:
+    """The spelling gate must use the pinned policy builder introduced by main."""
+    assert _variable_tokens("TYPOS_CONFIG_BUILDER_VERSION") == (
+        _TYPOS_CONFIG_BUILDER_VERSION_TOKENS
+    ), "Spelling-builder version contract must retain the pinned release"
+    assert _variable_tokens("TYPOS_CONFIG_BUILDER") == _TYPOS_CONFIG_BUILDER_TOKENS, (
+        "Spelling-builder command contract must retain the pinned Python 3.14 CLI"
     )
-    assert {
-        "scripts/tests/test_typos_rollout.py",
-        "scripts/tests/test_typos_rollout_properties.py",
-        "scripts/tests/test_typos_rollout_refresh.py",
-    }.issubset(pytest_commands[0]), (
-        "Spelling-helper test contract must run every spelling-policy regression"
+    assert _recipe_tokens("spelling") == (_SPELLING_GATE_TOKENS,), (
+        "Spelling gate contract must invoke the builder for the full repository"
     )
 
 
