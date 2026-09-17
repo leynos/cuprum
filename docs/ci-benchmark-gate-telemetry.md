@@ -222,7 +222,7 @@ downloaded `decisions.jsonl` contained a schema version 1 record with metric
 `benchmark_gate_decisions_total`, value `1`, labels exactly `pull_request`/
 `success`/`run`, run ID `35248836322`, attempt `1`, and `recorded_at`
 `2026-09-17T16:48:26Z`. The dates validate the requested approximately 90-day
-retention from run start.
+retention after artefact creation.
 
 This verifies receipt and retention metadata for that run only. It does not
 claim hosted harness execution or full CI completion. For subsequent changes,
