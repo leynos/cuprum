@@ -18,6 +18,7 @@ The operational contract — query surface, retention, alerting — is
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -55,11 +56,6 @@ LABEL_VOCABULARIES = {
     "decision": frozenset({"run", "skip", "skip-detector-failed"}),
 }
 
-#: Resource attribute keys that become labels after translation. Every other
-#: resource attribute is dropped, so this is the whole resource surface; an
-#: `instance` label in particular would give the series one identity per run.
-RESOURCE_LABELS = frozenset({"service.name", "service.namespace"})
-
 #: The gate's own rows, which the publish step must not re-derive. The verdict
 #: is computed once, in the summary step, and transported; two computations of
 #: one decision can disagree, and each is keyed by the gate row that produces
@@ -94,7 +90,7 @@ def test_the_publish_step_does_not_fail_the_job_when_the_sink_rejects_it(
         f"telemetry outage is not reported as a gate failure; stderr was:\n"
         f"{run.stderr}"
     )
-    assert "::notice" in run.stdout or "::warning" in run.stdout, (
+    assert "::warning" in run.stdout, (
         f"a rejected publish must still be reported; output was:\n{run.stdout}"
     )
 
@@ -244,10 +240,9 @@ def test_the_payload_exposes_no_unbounded_label_values(
     checked, because the translation folds resource attributes into labels too.
     """
     payload = _payload(tmp_path, workflow_data)
-    assert set(payload.resource_attributes) <= RESOURCE_LABELS, (
-        "only service.name and service.namespace become resource-derived labels; "
-        "every other resource attribute is dropped, and an instance identifier "
-        f"would create one series per run; found {sorted(payload.resource_attributes)}"
+    assert not payload.resource_attributes, (
+        "resource attributes must not add labels beyond the three gate labels; "
+        f"found {sorted(payload.resource_attributes)}"
     )
     unbounded = {
         name: value for name, value in payload.labels.items() if not _is_bounded(value)
@@ -256,10 +251,23 @@ def test_the_payload_exposes_no_unbounded_label_values(
         f"every data point attribute must be a short, structure-free token; "
         f"found {unbounded!r}"
     )
-    for name, value in payload.resource_attributes.items():
-        assert _is_bounded(value), (
-            f"resource label {name!r} must stay bounded; found {value!r}"
-        )
+
+
+@pytest.mark.parametrize("label", tuple(LABEL_VOCABULARIES))
+@pytest.mark.parametrize("value", ["", "docs/private.txt", '"}\nprivate-command'])
+def test_invalid_labels_are_refused_before_transport(
+    label: str, value: str, tmp_path: pth.Path, workflow_data: Workflow
+) -> None:
+    """Missing outputs and injected strings must never reach the sink."""
+    run = run_publish_script(
+        verdict=dc.replace(RECORDED_RUN, **{label: value}),
+        workflow_data=workflow_data,
+        tmp_path=tmp_path,
+    )
+    assert run.exit_code == 0, "invalid telemetry must not fail the benchmark gate"
+    assert not run.argv, "invalid labels must be refused before invoking curl"
+    assert not run.body, "invalid values must never enter a telemetry payload"
+    assert "::warning" in run.stdout, "a refused sample must produce a warning"
 
 
 def test_the_payload_is_well_formed_otlp_json(

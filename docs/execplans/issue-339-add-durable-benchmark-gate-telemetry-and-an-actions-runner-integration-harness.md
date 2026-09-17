@@ -243,21 +243,29 @@ Document the conflict in `Decision log` and escalate.
   the default suite passed before that filename change (1,744 passed, 60
   skipped). The renamed module then passed nine cases; Markdown, spelling, and
   diagram gates passed, followed by seven real `act` harness cases.
-- [ ] CodeRabbit identified an unknown-quoting case in the shell scanner.
+- [x] CodeRabbit identified an unknown-quoting case in the shell scanner.
   Added regressions: two failed and ten passed before the repair, recorded in
   `/tmp/issue339-parser-red.log`. The repair retries tokenization without
   parenthesis punctuation and refuses redirects whose quoting is still
-  ambiguous. Validation of this repair is pending.
+  ambiguous. All 12 focused tests and all required deterministic gates passed;
+  commit `081150ab` addresses both duplicate review comments.
+- [x] Tightened telemetry transport to exactly the three gate labels, with no
+  resource-derived labels. Reject invalid or missing outputs before `curl`,
+  warn on rejection or transport failure, and retain fail-open behaviour.
+  Before repair, 11 execution cases failed and 15 passed; afterwards the
+  execution and declaration suites passed all 31 cases. Logs are
+  `/tmp/issue339-telemetry-red.log` and `/tmp/issue339-telemetry-targeted.log`.
+  Full milestone gates remain pending.
 - [ ] Resolve deployment access: listing repository secrets and variables both
   returned HTTP 403, "Resource not accessible by integration". No sink
   deployment or metric receipt has been verified. Requested the Grafana stack
   and secure credential provisioning from the maintainer.
-- [ ] Repair the acceptance gaps found during the resumed audit: resource
-  attributes add labels beyond the three permitted labels; the requested
-  per-run values of one need explicit sample-counting limits, rather than
-  claims of an accumulated counter; the harness observes the summary but does
-  not execute the downstream admission condition; the runner image uses a
-  mutable tag. Earlier completion claims do not discharge these gaps.
+- [ ] Repair the remaining acceptance gaps found during the resumed audit:
+  the requested per-run values of one need explicit sample-counting limits,
+  rather than claims of an accumulated counter; the harness observes the
+  summary but does not execute the downstream admission condition; the runner
+  image uses a mutable tag. Earlier completion claims do not discharge these
+  gaps.
 
 ## Surprises & discoveries
 
