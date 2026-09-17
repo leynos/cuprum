@@ -155,18 +155,55 @@ def test_run_loom_reports_cargo_failure_details(
         loom_driver.run_loom(mode="smoke")
 
 
-def test_selected_bounds_rejects_partial_or_zero_overrides(
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(_LoomCliOptions(None, 2, 3), id="missing-preemptions"),
+        pytest.param(_LoomCliOptions(1, None, 3), id="missing-branches"),
+        pytest.param(_LoomCliOptions(1, 2, None), id="missing-threads"),
+    ],
+)
+def test_selected_bounds_rejects_each_partial_override(
     loom_driver: LoomDriver,
+    arguments: _LoomCliOptions,
 ) -> None:
-    """Overrides cannot accidentally turn a bounded model into an invalid run."""
-    arguments = _LoomCliOptions(
-        max_preemptions=1,
-        max_branches=None,
-        max_threads=3,
-    )
-
+    """An incomplete command-line override cannot select a model budget."""
     with pytest.raises(loom_driver.LoomRunError, match="Specify all positive"):
         loom_driver._selected_bounds(arguments)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param(_LoomCliOptions(0, 2, 3), id="zero-preemptions"),
+        pytest.param(_LoomCliOptions(1, 0, 3), id="zero-branches"),
+        pytest.param(_LoomCliOptions(1, 2, 0), id="zero-threads"),
+        pytest.param(_LoomCliOptions(-1, 2, 3), id="negative-preemptions"),
+        pytest.param(_LoomCliOptions(1, -1, 3), id="negative-branches"),
+        pytest.param(_LoomCliOptions(1, 2, -1), id="negative-threads"),
+    ],
+)
+def test_selected_bounds_rejects_each_non_positive_complete_override(
+    loom_driver: LoomDriver,
+    arguments: _LoomCliOptions,
+) -> None:
+    """A complete override delegates non-positive values to shared validation."""
+    with pytest.raises(loom_driver.LoomRunError, match="Specify all positive"):
+        loom_driver._selected_bounds(arguments)
+
+
+def test_selected_bounds_returns_a_complete_positive_override(
+    loom_driver: LoomDriver,
+) -> None:
+    """A complete positive override reaches the shared bound validator."""
+    bounds = loom_driver._selected_bounds(_LoomCliOptions(1, 2, 3))
+
+    assert bounds is not None, "a complete positive override must yield bounds"
+    assert (
+        bounds.max_preemptions,
+        bounds.max_branches,
+        bounds.max_threads,
+    ) == (1, 2, 3), "the shared validator must preserve every override value"
 
 
 def test_run_loom_rejects_an_unknown_mode(loom_driver: LoomDriver) -> None:

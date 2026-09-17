@@ -293,26 +293,13 @@ def _selected_bounds(arguments: LoomCliOptions) -> LoomBounds | None:
     )
     if all(value is None for value in values):
         return None
-    if arguments.max_preemptions is None:
-        raise LoomRunError.invalid_bound_override()
-    if arguments.max_branches is None:
-        raise LoomRunError.invalid_bound_override()
-    if arguments.max_threads is None:
-        raise LoomRunError.invalid_bound_override()
-    if (
-        min(
-            arguments.max_preemptions,
-            arguments.max_branches,
-            arguments.max_threads,
-        )
-        < 1
-    ):
+    if any(value is None for value in values):
         raise LoomRunError.invalid_bound_override()
     return _validate_bounds(
         LoomBounds(
-            max_preemptions=arguments.max_preemptions,
-            max_branches=arguments.max_branches,
-            max_threads=arguments.max_threads,
+            max_preemptions=typ.cast("int", arguments.max_preemptions),
+            max_branches=typ.cast("int", arguments.max_branches),
+            max_threads=typ.cast("int", arguments.max_threads),
         )
     )
 
