@@ -20,6 +20,10 @@ from tests.helpers.workflow_shell import script_runs_command
 #: swallowing every following line, including the command under assertion.
 _QUOTED_OPERATOR_SCRIPTS = [
     pytest.param(
+        'payload="$(mktemp)"; echo "<<"&&true\ndocker info',
+        id="command-substitution-beside-quoted-operator",
+    ),
+    pytest.param(
         'echo "<<"&&true\ndocker info',
         id="quoted-operator-adjacent-to-andand",
     ),
@@ -120,3 +124,17 @@ def test_a_heredoc_operator_after_a_quoted_one_is_still_recognized() -> None:
         "the here-document body must still be skipped when the same line "
         "also carries a quoted `<<`"
     )
+
+
+def test_a_real_heredoc_beside_a_command_substitution_hides_its_body() -> None:
+    """Keep real here-document data hidden when quote analysis needs a fallback."""
+    script = 'payload="$(mktemp)"; cat <<EOF\ndocker info\nEOF\ntrue'
+    assert not script_runs_command(script, "docker info"), (
+        "a command substitution must not disable real here-document detection"
+    )
+
+
+def test_ambiguous_redirect_quoting_is_refused() -> None:
+    """Report unsupported quote concatenation instead of inventing a redirect."""
+    with pytest.raises(ValueError, match="cannot classify here-document quoting"):
+        script_runs_command('echo "a"b "<<"\ndocker info', "docker info")

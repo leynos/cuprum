@@ -241,16 +241,23 @@ Document the conflict in `Decision log` and escalate.
   shell-token regression module to `tests/test_ci_workflow_shell_tokens.py` so
   the default Makefile selection includes it. Formatting, lint, typecheck, and
   the default suite passed before that filename change (1,744 passed, 60
-  skipped); the renamed module and remaining gates still need validation.
+  skipped). The renamed module then passed nine cases; Markdown, spelling, and
+  diagram gates passed, followed by seven real `act` harness cases.
+- [ ] CodeRabbit identified an unknown-quoting case in the shell scanner.
+  Added regressions: two failed and ten passed before the repair, recorded in
+  `/tmp/issue339-parser-red.log`. The repair retries tokenization without
+  parenthesis punctuation and refuses redirects whose quoting is still
+  ambiguous. Validation of this repair is pending.
 - [ ] Resolve deployment access: listing repository secrets and variables both
   returned HTTP 403, "Resource not accessible by integration". No sink
   deployment or metric receipt has been verified. Requested the Grafana stack
   and secure credential provisioning from the maintainer.
 - [ ] Repair the acceptance gaps found during the resumed audit: resource
-  attributes add labels beyond the three permitted labels; repeated cumulative
-  values of one do not accumulate a counter; the harness observes the summary
-  but does not execute the downstream admission condition; the runner image
-  uses a mutable tag. Earlier completion claims do not discharge these gaps.
+  attributes add labels beyond the three permitted labels; the requested
+  per-run values of one need explicit sample-counting limits, rather than
+  claims of an accumulated counter; the harness observes the summary but does
+  not execute the downstream admission condition; the runner image uses a
+  mutable tag. Earlier completion claims do not discharge these gaps.
 
 ## Surprises & discoveries
 

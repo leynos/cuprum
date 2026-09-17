@@ -45,11 +45,9 @@ def _quoted_shell_tokens(line: str) -> list[str] | None:
     ``<<`` as a here-document operator, which then swallows every following
     line.
 
-    That combination cannot lex a double-quoted command substitution:
-    ``payload="$(mktemp)"`` raises ``ValueError: No closing quotation``. Such
-    an assignment is unremarkable — ``ci.yml`` writes three of them — so
-    rather than let one take out every caller that scans a job, an unlexable
-    line returns ``None``, which callers report as "cannot be compared".
+    Parentheses inside a quoted command substitution confuse this mode.
+    Retry without parenthesis punctuation in that case; callers still require
+    positional agreement with the POSIX pass before trusting the result.
 
     Returns
     -------
@@ -57,13 +55,15 @@ def _quoted_shell_tokens(line: str) -> list[str] | None:
         One entry per shell word, with any quote delimiters retained, or
         ``None`` if the line cannot be lexed in this mode.
     """
-    try:
-        lexer = shlex.shlex(line, posix=False, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        return list(lexer)
-    except ValueError:
-        return None
+    for punctuation in (True, ";&|<>"):
+        try:
+            lexer = shlex.shlex(line, posix=False, punctuation_chars=punctuation)
+            lexer.whitespace_split = True
+            lexer.commenters = "#"
+            return list(lexer)
+        except ValueError:
+            continue
+    return None
 
 
 def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
@@ -71,24 +71,23 @@ def _is_command_boundary(shell_word: str, *, is_command_position: bool) -> bool:
     return shell_word in _OPERATORS or (is_command_position and shell_word in _KEYWORDS)
 
 
-def _quoted_heredoc_operator_indices(line: str, tokens: list[str]) -> frozenset[int]:
+def _quoted_heredoc_operator_indices(
+    line: str, tokens: list[str]
+) -> frozenset[int] | None:
     """Return token positions whose ``<<`` spelling came from quoted text.
 
-    A line that cannot be lexed in the comparison mode, or that the two passes
-    split differently, yields no indices: the line is reported as "cannot be
-    compared" rather than guessed at. No line in this repository's workflows
-    currently reaches either branch with a quoted ``<<`` on it, so the
-    fallback costs nothing today; it exists so that the failure is a
-    conservative miss rather than an invented here-document.
+    Keep failed analysis distinct from a confirmed absence of quoted operators.
+    The caller must refuse an ambiguous redirect rather than treat it as a
+    real here-document and silently hide subsequent commands.
 
     Returns
     -------
-    frozenset[int]
-        Positions confirmed to contain quoted operators.
+    frozenset[int] | None
+        Confirmed quoted positions, or ``None`` when token alignment is unknown.
     """
     quoted_tokens = _quoted_shell_tokens(line)
     if quoted_tokens is None or len(tokens) != len(quoted_tokens):
-        return frozenset()
+        return None
     return frozenset(
         index
         for index, (shell_word, quoted_shell_word) in enumerate(
@@ -99,9 +98,25 @@ def _quoted_heredoc_operator_indices(line: str, tokens: list[str]) -> frozenset[
 
 
 def _here_document_delimiters(
-    tokens: list[str], quoted_operator_indices: frozenset[int]
+    tokens: list[str], quoted_operator_indices: frozenset[int] | None
 ) -> cabc.Iterator[str]:
-    """Yield declared here-document delimiters in declaration order."""
+    """Yield confirmed here-document delimiters in declaration order.
+
+    Yields
+    ------
+    str
+        Delimiters whose redirect operators are confirmed unquoted.
+
+    Raises
+    ------
+    ValueError
+        If redirect quoting cannot be classified reliably.
+    """
+    if "<<" not in tokens:
+        return
+    if quoted_operator_indices is None:
+        message = "cannot classify here-document quoting"
+        raise ValueError(message)
     for index, shell_word in enumerate(tokens[:-1]):
         if shell_word == "<<" and index not in quoted_operator_indices:
             yield tokens[index + 1]
@@ -171,7 +186,7 @@ def script_runs_command(script: str, command: str) -> bool:
     Raises
     ------
     ValueError
-        If ``script`` or ``command`` contains unclosed shell quoting.
+        If quoting is unclosed or a redirect's quoting cannot be classified.
     """  # ruff: ignore[docstring-extraneous-exception] - shlex propagates malformed quoting.
     expected = tuple(shlex.split(command))
     return any(
