@@ -280,8 +280,19 @@ def test_make_formatter_targets_select_the_pinned_nightly() -> None:
         "formatter targets must use only the injected pinned nightly cargo route"
     )
 
-    non_formatter_recipes = expanded_recipes("lint", "test")
-    for formatter_line in expected_lines:
-        assert formatter_line not in non_formatter_recipes, (
-            "lint and test must not select the formatter's nightly cargo route"
+    expected_debug_route = (
+        "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
+        "--config ../tools/dev-fast/config.toml"
+    )
+    for target in ("lint", "test"):
+        target_recipes = expanded_recipes(target)
+        cargo_lines = [
+            line for line in target_recipes.splitlines() if "probe-cargo" in line
+        ]
+        assert cargo_lines, f"{target} must expand at least one Cargo command"
+        assert all(
+            "probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines
+        ), f"{target} must not select the formatter's nightly Cargo route"
+        assert any(expected_debug_route in line for line in cargo_lines), (
+            f"{target} must retain the Linux dev-fast Cargo route"
         )
