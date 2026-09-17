@@ -2,8 +2,8 @@
 //!
 //! The invariant under proof, over every modelled exit path:
 //!
-//! - a reader passed through `with_borrowed_reader` is **never** closed by
-//!   Rust — it stays caller-owned on normal completion and on unwind;
+//! - a reader passed through the production retention kernel is **never** closed by
+//!   Rust — it stays caller-owned on normal completion and error return;
 //! - the `pump_stream` writer is **consumed** and closes exactly once on
 //!   every exit path, which is what signals EOF downstream.
 //!
@@ -11,7 +11,7 @@
 //! [`super::fd_ownership_model`], not over real descriptors: Kani does not
 //! interpret I/O, so no real `close(2)` effect is exercised here. Actual
 //! descriptor behaviour stays covered by the real-FD regression tests in
-//! `lib_tests.rs`. Tracking issue: <https://github.com/leynos/cuprum/issues/89>.
+//! `ownership_tests.rs`. Tracking issue: <https://github.com/leynos/cuprum/issues/89>.
 //!
 //! Bounds. The exit space is finite and fully enumerated (two modes, both
 //! reached — see the `kani::cover!` statements). Only
@@ -28,7 +28,7 @@ fn any_exit_mode() -> ExitMode {
     if kani::any::<bool>() {
         ExitMode::Normal
     } else {
-        ExitMode::Unwind
+        ExitMode::Error
     }
 }
 
@@ -45,7 +45,10 @@ fn pump_borrows_reader_and_consumes_writer() {
     // Prove both boundary cases are reachable, so neither assertion below is
     // vacuously satisfied by an unreachable branch.
     kani::cover!(exit == ExitMode::Normal, "reaches normal completion");
-    kani::cover!(exit == ExitMode::Unwind, "reaches the modelled unwind exit");
+    kani::cover!(
+        exit == ExitMode::Error,
+        "reaches the operation error return"
+    );
 
     let outcome = model_pump_stream(ModelFd::new(&reader_log), ModelFd::new(&writer_log), exit);
 
@@ -58,8 +61,8 @@ fn pump_borrows_reader_and_consumes_writer() {
         "the pump writer is consumed and closes exactly once, signalling EOF",
     );
     kani::assert(
-        outcome.is_err() == (exit == ExitMode::Unwind),
-        "the modelled unwind exit propagates out of the helper",
+        outcome.is_err() == (exit == ExitMode::Error),
+        "the operation error return propagates out of the helper",
     );
 }
 
@@ -73,7 +76,10 @@ fn consume_borrows_its_only_reader() {
     let exit = any_exit_mode();
 
     kani::cover!(exit == ExitMode::Normal, "reaches normal completion");
-    kani::cover!(exit == ExitMode::Unwind, "reaches the modelled unwind exit");
+    kani::cover!(
+        exit == ExitMode::Error,
+        "reaches the operation error return"
+    );
 
     let outcome = model_consume_stream(ModelFd::new(&reader_log), exit);
 
@@ -82,8 +88,8 @@ fn consume_borrows_its_only_reader() {
         "a borrowed reader FD is never closed by Rust, on any exit path",
     );
     kani::assert(
-        outcome.is_err() == (exit == ExitMode::Unwind),
-        "the modelled unwind exit propagates out of the helper",
+        outcome.is_err() == (exit == ExitMode::Error),
+        "the operation error return propagates out of the helper",
     );
 }
 
@@ -112,7 +118,7 @@ fn repeated_borrows_never_close_the_reader() {
         let outcome =
             model_with_borrowed_reader(ModelFd::new(&reader_log), |_reader| exit.outcome());
         kani::assert(
-            outcome.is_err() == (exit == ExitMode::Unwind),
+            outcome.is_err() == (exit == ExitMode::Error),
             "each borrow reports its own exit mode",
         );
     }
