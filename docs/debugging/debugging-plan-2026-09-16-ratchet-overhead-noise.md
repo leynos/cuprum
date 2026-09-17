@@ -91,7 +91,8 @@ backends), ten runs and one warmup per command, `--iterations 5`. Ratios are
 `3 × 1.4826 × MAD` relative to the median.
 
 *Table 3. Within-run ratios by payload (2026-09-16, development host, load
-average 5–23 from other agents).*
+average falling from 23 to about 2.5 across the sweep, other agents' work
+running).*
 
 | Payload | mode | ratios, oldest first           | median | MAD band |
 | ------- | ---- | ------------------------------ | ------ | -------- |
@@ -124,7 +125,7 @@ per-iteration cost falls out of the difference — separates the two terms:
 
 *Table 4. Per-iteration set-up and streaming cost by backend and callback mode,
 with the crossover payload where one iteration's streaming equals its set-up
-(2026-09-16, quiet machine).*
+(2026-09-16, quiet machine, load average 0.6–1.8).*
 
 | Backend, mode | set-up per iteration | streaming per iteration | crossover |
 | ------------- | -------------------- | ----------------------- | --------- |
@@ -152,8 +153,8 @@ The same 64 MiB cell, re-measured at exactly the shape the job now runs
 (`--iterations 5 --runs 20 --warmup 1`, three repeat invocations) once the
 machine quietened (load average 1.6–3.2):
 
-*Table 5. The chosen cell at CI shape, quiet machine (2026-09-16, later
-session).*
+*Table 5. The chosen cell at CI shape, quiet machine, load average 1.6–3.2
+(2026-09-16, later session).*
 
 | repeat | mode | python    | rust      | ratio  |
 | ------ | ---- | --------- | --------- | ------ |
@@ -206,12 +207,12 @@ at ten runs.
 
 ### The old CI profile was not the workload the fixtures described
 
-The profile selected two-stage scenarios at 1 KB and 64 KB. Those are the smoke
-matrix's payloads, chosen for fast validation rather than for measurement, so
-`--smoke` would have been the obvious way to get them: the ratchet was
-measuring a validation fixture. That is the design error behind the numbers
-above — the profile inherited a payload tier that was never meant to carry a
-comparison.
+The profile selected two-stage scenarios at 1 KiB and 64 KiB. Those are the
+smoke matrix's payloads, chosen for fast validation rather than for
+measurement, so `--smoke` would have been the obvious way to get them: the
+ratchet was measuring a validation fixture. That is the design error behind the
+numbers above — the profile inherited a payload tier that was never meant to
+carry a comparison.
 
 ## Decision
 
@@ -244,13 +245,15 @@ something.
 ## Limitations
 
 - Every number here was taken on the development host with other agents' work
-  running, not on the CI runner: Table 3 under a load average of 5–23, the
-  later cells and Table 5 under 0.6–3.8. The load changes the *absolute*
-  figures by more than a factor of two between sessions, so neither table's
-  wall clock transfers to CI. The *design* conclusion — streaming must dominate
-  the fixed per-iteration cost — is a property of the cost model and does
-  transfer; the exact ratio spreads do not, and hyperfine reported statistical
-  outliers in several cells.
+  running, not on the CI runner. Each table records its own session: Table 3
+  under a load average that started at 23 and fell to about 2.5 across the
+  sweep, the cost decomposition behind Table 4 under the 0.6–1.8 of its probes,
+  and Table 5 under 1.6–3.2. The load changes the *absolute* figures by more
+  than a factor of two between sessions, so neither table's wall clock
+  transfers to CI. The *design* conclusion — streaming must dominate the fixed
+  per-iteration cost — is a property of the cost model and does transfer; the
+  exact ratio spreads do not, and hyperfine reported statistical outliers in
+  several cells.
 - Four repeats per payload is enough to see the trend and not enough to
   estimate a distribution. Only two of them are retained at 1 KiB: the runner
   aborted one probe and the other was discarded during triage, so those two
