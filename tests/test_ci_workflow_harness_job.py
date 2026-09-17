@@ -29,6 +29,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.ci_runners import GITHUB_HOSTED_JOBS
+from tests.helpers.ci_workflows import workflow_document
 from tests.helpers.workflow import job, script_of, step_named, steps
 from tests.helpers.workflow_shell import script_runs_command
 
@@ -184,9 +185,11 @@ def test_the_harness_job_is_admitted_only_where_it_was_asked_for(
     )
 
 
-def test_the_dispatch_input_defaults_to_off(workflow_data: Workflow) -> None:
+def test_the_dispatch_input_defaults_to_off() -> None:
     """Make the opt-in real: a dispatch that says nothing runs nothing."""
-    document = workflow_data
+    document = workflow_document("ci.yml")
+    # YAML 1.1 reads the `on:` key as the boolean `True`, which is why this
+    # reads both.
     triggers = document.get("on", document.get(True))
     assert isinstance(triggers, dict), "ci.yml must declare an on: mapping"
     dispatch = triggers.get("workflow_dispatch")
@@ -211,6 +214,21 @@ def _admits(condition: str, *, event_name: str, dispatch_input: object) -> bool:
     parser does not recognize is a failure, not a silent `False`, so a job
     whose condition was rewritten into an unhandled shape fails here instead of
     being reported as never admitted.
+
+    Parameters
+    ----------
+    condition : str
+        The job's declared `if:` expression.
+    event_name : str
+        The `github.event_name` the condition is evaluated against.
+    dispatch_input : object
+        The value of the `workflow-harness` dispatch input, or ``None`` where
+        the `inputs` context has no such key.
+
+    Returns
+    -------
+    bool
+        Whether any disjunct of ``condition`` holds for that event.
     """
     assert condition, f"{JOB} must declare an if: condition"
     terms = [term.strip() for term in condition.split("||")]
@@ -224,9 +242,27 @@ def _admits(condition: str, *, event_name: str, dispatch_input: object) -> bool:
 def _term_holds(term: str, *, event_name: str, dispatch_input: object) -> bool:
     """Evaluate one disjunct of the job's condition.
 
-    ``dispatch_input`` is ``None`` when the `inputs` context has no such key,
-    and that is falsy for the documented reason rather than by accident: GitHub
-    resolves a nonexistent property to an empty string.
+    Parameters
+    ----------
+    term : str
+        One disjunct, split on `||`.
+    event_name : str
+        The `github.event_name` the term is evaluated against.
+    dispatch_input : object
+        The value of the `workflow-harness` dispatch input. ``None`` is the
+        state where the `inputs` context has no such key, and that is falsy for
+        the documented reason rather than by accident: GitHub resolves a
+        nonexistent property to an empty string.
+
+    Returns
+    -------
+    bool
+        Whether the term holds.
+
+    Raises
+    ------
+    AssertionError
+        If the term is not one this reader understands.
     """
     if term.startswith("github.event_name =="):
         return event_name in term

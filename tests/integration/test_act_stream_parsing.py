@@ -64,7 +64,9 @@ def test_the_recorded_streams_parse_as_act_output() -> None:
     for path in (PULL_REQUEST, DETECTOR_FAILURE, REPEATED_OUTPUT):
         events = recorded(path).events
         assert events, f"{path.name} yielded no events"
-        assert all(isinstance(event, dict) for event in events)
+        assert all(isinstance(event, dict) for event in events), (
+            f"{path.name} yielded a non-mapping event: {events!r}"
+        )
 
 
 def test_non_json_lines_are_skipped_rather_than_fatal() -> None:
@@ -75,7 +77,9 @@ def test_non_json_lines_are_skipped_rather_than_fatal() -> None:
         stderr="",
         argv=("act",),
     )
-    assert run.events == [{"command": "set-output", "name": "a", "arg": "1"}]
+    assert run.events == [{"command": "set-output", "name": "a", "arg": "1"}], (
+        f"non-JSON lines must be skipped, got {run.events!r}"
+    )
 
 
 def test_the_fixtures_carry_comment_lines_that_are_not_events() -> None:
@@ -84,7 +88,9 @@ def test_the_fixtures_carry_comment_lines_that_are_not_events() -> None:
         text = path.read_text(encoding="utf-8")
         comments = [line for line in text.splitlines() if line.startswith("#")]
         assert comments, f"{path.name} has no comment lines"
-        assert all(not event.get("comment") for event in recorded(path).events)
+        assert all(not event.get("comment") for event in recorded(path).events), (
+            f"{path.name} turned a comment line into an event"
+        )
 
 
 def test_outputs_take_the_last_value_when_a_name_repeats() -> None:
@@ -95,8 +101,12 @@ def test_outputs_take_the_last_value_when_a_name_repeats() -> None:
     would report an output the run had already replaced.
     """
     run = recorded(REPEATED_OUTPUT)
-    assert run.output("value") == "from-file-again"
-    assert run.outputs() == {"value": "from-file-again"}
+    assert run.output("value") == "from-file-again", (
+        f"the later set-output must win, got {run.output('value')!r}"
+    )
+    assert run.outputs() == {"value": "from-file-again"}, (
+        f"the outputs mapping must report the later value, got {run.outputs()!r}"
+    )
 
 
 def test_the_repeated_name_is_genuinely_repeated_in_the_recording() -> None:
@@ -111,7 +121,9 @@ def test_the_repeated_name_is_genuinely_repeated_in_the_recording() -> None:
         for event in recorded(REPEATED_OUTPUT).events
         if event.get("command") == "set-output"
     ]
-    assert names == ["value", "value"]
+    assert names == ["value", "value"], (
+        f"the recording must report the same name twice, got {names!r}"
+    )
 
 
 def test_an_output_that_was_never_set_reads_as_none() -> None:
@@ -122,17 +134,30 @@ def test_an_output_that_was_never_set_reads_as_none() -> None:
     answered `false`.
     """
     failure = recorded(DETECTOR_FAILURE, exit_code=1)
-    assert failure.output("bench") is None
-    assert "bench" not in failure.outputs()
+    assert failure.output("bench") is None, (
+        f"a detector that failed must not answer, got {failure.output('bench')!r}"
+    )
+    assert "bench" not in failure.outputs(), (
+        f"bench must be absent from the outputs, got {sorted(failure.outputs())!r}"
+    )
 
 
 def test_the_healthy_recording_reports_the_detectors_answer() -> None:
     """Read the detector's output, which is what the gate's `run` rests on."""
     run = recorded(PULL_REQUEST)
-    assert run.output("bench") == "true"
-    assert run.output("event_class") == "pull_request"
-    assert run.output("detector_status") == "success"
-    assert run.output("decision") == "run"
+    assert run.output("bench") == "true", (
+        f"the detector must answer true for this recording, got {run.output('bench')!r}"
+    )
+    assert run.output("event_class") == "pull_request", (
+        f"the recording is a pull request, got {run.output('event_class')!r}"
+    )
+    assert run.output("detector_status") == "success", (
+        f"the detector succeeded in this recording, got "
+        f"{run.output('detector_status')!r}"
+    )
+    assert run.output("decision") == "run", (
+        f"a healthy pull request must admit the ratchet, got {run.output('decision')!r}"
+    )
 
 
 def test_the_detector_failure_recording_still_records_a_decision() -> None:
@@ -142,16 +167,28 @@ def test_the_detector_failure_recording_still_records_a_decision() -> None:
     leave a recorded decision, not an empty output and not a silent skip.
     """
     run = recorded(DETECTOR_FAILURE, exit_code=1)
-    assert run.output("detector_status") == "failure"
-    assert run.output("decision") == "skip-detector-failed"
+    assert run.output("detector_status") == "failure", (
+        f"the detector must have failed, got {run.output('detector_status')!r}"
+    )
+    assert run.output("decision") == "skip-detector-failed", (
+        f"a failed detector must skip rather than run, got {run.output('decision')!r}"
+    )
 
 
 def test_step_verdicts_name_the_step_that_failed() -> None:
     """Report the failing step by name, which is what a triage needs first."""
     failure = recorded(DETECTOR_FAILURE, exit_code=1)
-    assert failure.failed_steps == ["Detect performance-relevant changes"]
-    assert failure.step_results["Record the benchmark gate decision"] == "success"
-    assert recorded(PULL_REQUEST).failed_steps == []
+    assert failure.failed_steps == ["Detect performance-relevant changes"], (
+        f"the failing step must be named, got {failure.failed_steps!r}"
+    )
+    assert failure.step_results["Record the benchmark gate decision"] == "success", (
+        f"the gate must have recorded its decision, got "
+        f"{failure.step_results['Record the benchmark gate decision']!r}"
+    )
+    assert recorded(PULL_REQUEST).failed_steps == [], (
+        f"the healthy recording must have no failed steps, got "
+        f"{recorded(PULL_REQUEST).failed_steps!r}"
+    )
 
 
 def test_the_summary_comes_from_the_stream_not_the_container_file() -> None:
@@ -161,28 +198,51 @@ def test_the_summary_comes_from_the_stream_not_the_container_file() -> None:
     has been uploaded, so the file is not a source the parser can read.
     """
     summary = recorded(PULL_REQUEST).summary
-    assert summary.startswith("### Benchmark gate")
-    assert "| pull_request | success | true | run |" in summary
+    assert summary.startswith("### Benchmark gate"), (
+        f"the summary must open with its heading, got {summary!r}"
+    )
+    assert "| pull_request | success | true | run |" in summary, (
+        f"the summary must record the healthy decision, got {summary!r}"
+    )
     assert "| pull_request | failure | unknown | skip-detector-failed |" in (
         recorded(DETECTOR_FAILURE, exit_code=1).summary
-    )
+    ), "the summary must record the detector-failure decision"
 
 
 def test_a_run_with_no_summary_reports_an_empty_one() -> None:
     """Return an empty summary rather than raising when none was written."""
     empty = ActRun(exit_code=0, stdout="", stderr="", argv=("act",))
-    assert not empty.summary
-    assert empty.events == []
+    assert not empty.summary, (
+        f"a run with no summary must report '', got {empty.summary!r}"
+    )
+    assert not empty.events, (
+        f"a run with no stdout must report no events, got {empty.events!r}"
+    )
 
 
-def test_the_failure_context_names_the_command_and_the_failing_step() -> None:
+#: The facets of a failure message that make a failed scenario reproducible:
+#: the exit status, the step that failed, the command to paste back, and the
+#: two streams to read. Each is asserted on its own so a failure names the one
+#: that went missing rather than printing the whole rendered message.
+CONTEXT_FACETS = [
+    pytest.param("act exited 1", id="exit-status"),
+    pytest.param("Detect performance-relevant changes", id="failing-step"),
+    pytest.param("command: act pull_request --json", id="pasted-command"),
+    pytest.param("stdout:", id="stdout-section"),
+    pytest.param("stderr:", id="stderr-section"),
+]
+
+
+@pytest.mark.parametrize("fragment", CONTEXT_FACETS)
+def test_the_failure_context_names_the_command_and_the_failing_step(
+    fragment: str,
+) -> None:
     """Make a failed scenario reproducible from its message alone."""
     context = recorded(DETECTOR_FAILURE, exit_code=1).failure_context()
-    assert "act exited 1" in context
-    assert "Detect performance-relevant changes" in context
-    assert "command: act pull_request --json" in context
-    assert "stdout:" in context
-    assert "stderr:" in context
+    assert fragment in context, (
+        f"failure_context() must name {fragment!r} so a failed scenario can be "
+        f"read back from its message; it rendered:\n{context}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -198,4 +258,6 @@ def test_commands_are_rendered_so_they_can_be_pasted_back(
     argv: list[str], expected: str
 ) -> None:
     """Quote an argument before it goes into a pasted command line."""
-    assert shell_join(argv) == expected
+    assert shell_join(argv) == expected, (
+        f"{argv!r} must render as {expected!r}, got {shell_join(argv)!r}"
+    )
