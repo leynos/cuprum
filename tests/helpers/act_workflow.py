@@ -21,6 +21,8 @@ import typing as typ
 
 import yaml
 
+from tests.helpers.workflow import job, mapping, parse_workflow, steps
+
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
@@ -44,13 +46,25 @@ def copy_workflow(target: pth.Path, worktree: pth.Path, workflow: str) -> None:
         Repository to copy from.
     workflow : str
         Repository-relative path of the workflow to copy.
+
+    Raises
+    ------
+    AssertionError
+        If the benchmark dependency list is malformed.
     """
     (target / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
-    document = yaml.safe_load((worktree / workflow).read_text(encoding="utf-8"))
-    jobs = document["jobs"]
-    benchmark = jobs["benchmark-ratchet"]
-    projected = {"changes": jobs["changes"]}
-    for dependency in benchmark["needs"]:
+    parsed = parse_workflow((worktree / workflow).read_text(encoding="utf-8"))
+    steps(parsed, "changes")
+    benchmark = job(parsed, "benchmark-ratchet")
+    dependencies = benchmark.get("needs")
+    if not isinstance(dependencies, list) or not all(
+        isinstance(dependency, str) for dependency in dependencies
+    ):
+        message = "benchmark-ratchet must declare a list of dependency names"
+        raise AssertionError(message)
+    projected: dict[str, object] = {"changes": job(parsed, "changes")}
+    for dependency in typ.cast("list[str]", dependencies):
+        job(parsed, dependency)
         if dependency != "changes":
             projected[dependency] = {
                 "runs-on": "ubuntu-latest",
@@ -67,10 +81,8 @@ def copy_workflow(target: pth.Path, worktree: pth.Path, workflow: str) -> None:
             }
         ],
     }
+    document: dict[str, object] = dict(parsed)
     document["jobs"] = projected
-    # PyYAML's YAML 1.1 reader interprets the Actions trigger key as True.
-    if True in document:
-        document["on"] = document.pop(True)
     (target / workflow).write_text(
         yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
     )
@@ -125,16 +137,15 @@ def break_detector_step(repository: pth.Path, workflow: str) -> None:
         detector case and still pass.
     """
     source = repository / workflow
-    document = yaml.safe_load(source.read_text(encoding="utf-8"))
+    document = parse_workflow(source.read_text(encoding="utf-8"))
     detectors = [
         step
-        for step in document["jobs"]["changes"]["steps"]
+        for step in steps(document, "changes")
         if str(step.get("uses", "")).startswith("dorny/paths-filter@")
     ]
     if len(detectors) != 1:
         message = "expected exactly one real detector step"
         raise AssertionError(message)
-    detectors[0]["with"]["list-files"] = "bogus"
-    if True in document:
-        document["on"] = document.pop(True)
+    inputs = mapping(detectors[0].get("with"), "detector must declare its inputs")
+    inputs["list-files"] = "bogus"
     source.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")

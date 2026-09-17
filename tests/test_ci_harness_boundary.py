@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pathlib as pth
 
+import pytest
 import yaml
 
 from tests.helpers.act_harness import CI_WORKFLOW
 from tests.helpers.act_workflow import copy_workflow
 from tests.helpers.ci_workflows import workflow_document
+from tests.helpers.workflow import job, mapping, parse_workflow
 
 
 def test_projection_preserves_the_detector_and_admission_contract(
@@ -17,22 +19,26 @@ def test_projection_preserves_the_detector_and_admission_contract(
     """Only expensive job bodies may be replaced by lightweight probes."""
     worktree = pth.Path(__file__).resolve().parents[1]
     copy_workflow(tmp_path, worktree, CI_WORKFLOW)
-    projected = yaml.safe_load((tmp_path / CI_WORKFLOW).read_text(encoding="utf-8"))
-    source = workflow_document("ci.yml")
-    original_jobs = source["jobs"]
-    assert isinstance(original_jobs, dict), "source jobs must be a mapping"
-    jobs = projected["jobs"]
-    assert jobs["changes"] == original_jobs["changes"], (
+    projected = parse_workflow((tmp_path / CI_WORKFLOW).read_text(encoding="utf-8"))
+    source = parse_workflow((worktree / CI_WORKFLOW).read_text(encoding="utf-8"))
+    jobs = mapping(projected.get("jobs"), "projection must declare jobs")
+    assert job(projected, "changes") == job(source, "changes"), (
         "projection must preserve the entire changes job"
     )
+    benchmark = job(projected, "benchmark-ratchet")
     for key in ("needs", "if"):
-        assert (
-            jobs["benchmark-ratchet"][key] == original_jobs["benchmark-ratchet"][key]
-        ), "admission dependencies and condition must match production"
-    assert set(jobs) == {*jobs["benchmark-ratchet"]["needs"], "benchmark-ratchet"}, (
+        assert benchmark[key] == job(source, "benchmark-ratchet")[key], (
+            "admission dependencies and condition must match production"
+        )
+    needs = benchmark["needs"]
+    assert isinstance(needs, list), "benchmark dependencies must be a list"
+    assert all(isinstance(name, str) for name in needs), (
+        "benchmark dependency names must be strings"
+    )
+    assert set(jobs) == {*needs, "benchmark-ratchet"}, (
         "projection must contain exactly the benchmark dependency graph"
     )
-    assert all(job["runs-on"] == "ubuntu-latest" for job in jobs.values()), (
+    assert all(job(projected, name)["runs-on"] == "ubuntu-latest" for name in jobs), (
         "all probes must use GitHub-hosted runner mappings"
     )
 
@@ -57,3 +63,21 @@ def test_scheduled_harness_cannot_start_paid_ci_jobs() -> None:
     assert "workflow_dispatch" in ci_triggers, (
         "CI must retain manual warm-cache dispatch"
     )
+
+
+@pytest.mark.parametrize(
+    ("job_name", "field"), [("changes", "steps"), ("benchmark-ratchet", "needs")]
+)
+def test_projection_rejects_malformed_workflow_shapes(
+    tmp_path: pth.Path, job_name: str, field: str
+) -> None:
+    """Malformed runtime inputs must fail with a deliberate contract diagnostic."""
+    worktree = pth.Path(__file__).resolve().parents[1]
+    parsed = parse_workflow((worktree / CI_WORKFLOW).read_text(encoding="utf-8"))
+    job(parsed, job_name)[field] = None
+    source = tmp_path / "source"
+    workflow = source / CI_WORKFLOW
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(yaml.safe_dump(parsed), encoding="utf-8")
+    with pytest.raises(AssertionError, match="must declare"):
+        copy_workflow(tmp_path / "target", source, CI_WORKFLOW)
