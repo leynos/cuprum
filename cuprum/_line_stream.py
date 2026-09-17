@@ -313,7 +313,6 @@ async def _wait_for_line_stream_exit(
     asyncio.CancelledError
         If the caller cancels line iteration while the subprocess is running.
     """
-    pid = run.process.pid
     try:
         exit_code, exited_at = await _wait_for_exit_code_within_timeout(
             run.process,
@@ -321,19 +320,11 @@ async def _wait_for_line_stream_exit(
         )
     except TimeoutError as exc:
         run.telemetry.emit(LineStreamPhase.TIMEOUT, _LineStreamEventDetails(error=exc))
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-        stdout_text, stderr_text = await _shielded_cleanup(
-            _reconcile_run_tasks(
-                run.tasks,
-                _DrainContext(
-                    capture=execution.capture,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=run.tasks.discard_on_cancel,
-                ),
-            )
+        stdout_text, stderr_text = await _cleanup_failed_line_stream_run(
+            run,
+            execution,
+            capture=execution.capture,
         )
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_text,
@@ -342,37 +333,49 @@ async def _wait_for_line_stream_exit(
         )
     except asyncio.CancelledError:
         run.telemetry.emit(LineStreamPhase.CANCELLED)
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-        await _shielded_cleanup(
-            _reconcile_run_tasks(
-                run.tasks,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=run.tasks.discard_on_cancel,
-                ),
-            )
+        await _cleanup_failed_line_stream_run(
+            run,
+            execution,
+            capture=False,
         )
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         raise
     except BaseException:
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-        await _shielded_cleanup(
-            _reconcile_run_tasks(
-                run.tasks,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=run.tasks.discard_on_cancel,
-                ),
-            )
+        await _cleanup_failed_line_stream_run(
+            run,
+            execution,
+            capture=False,
         )
-        run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
         raise
-    stdout_text, stderr_text = await _drain_after_exit(run, pid, execution)
+    stdout_text, stderr_text = await _drain_after_exit(
+        run,
+        run.process.pid,
+        execution,
+    )
     return exit_code, exited_at, stdout_text, stderr_text
+
+
+async def _cleanup_failed_line_stream_run(
+    run: _LineStreamRun,
+    execution: _SubprocessExecution,
+    *,
+    capture: bool,
+) -> tuple[str | None, str | None]:
+    """Reconcile a failed run after emitting its teardown boundaries."""
+    pid = run.process.pid
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
+    result = await _shielded_cleanup(
+        _reconcile_run_tasks(
+            run.tasks,
+            _DrainContext(
+                capture=capture,
+                pid=pid,
+                observation=execution.observation,
+                discard_on_cancel=run.tasks.discard_on_cancel,
+            ),
+        )
+    )
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+    return result
 
 
 async def _drain_after_exit(
