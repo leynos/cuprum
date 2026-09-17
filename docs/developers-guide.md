@@ -2537,7 +2537,7 @@ historical model is gated `#[cfg(any(test, kani))]`, so `make test` exercises
 it as ordinary unit tests too — where `ModelFd` records a close on drop instead
 of issuing one. The `ManuallyDrop` wrapper, the closure call, and the
 early-exit edge are all real Rust, so Rust's own drop elaboration decides the
-outcome rather than any hand-written accounting. The model covers only its
+outcome rather than any handwritten accounting. The model covers only its
 explicit `Normal` and `Error` outcomes; it does not simulate panic unwind. Real
 `catch_unwind` native tests remain authoritative for that path and for OS close
 effects. Being a bounded model checker, Kani establishes its claims over an
@@ -4111,7 +4111,7 @@ test still represents a genuine compile-time error.
 
 A fail case that pins an encapsulation boundary must include the real module
 under test with `#[path]` rather than restating its shape, because a
-hand-written copy would only prove the copy private.
+handwritten copy would only prove the copy private.
 
 Such a fixture may legitimately need to silence a lint the throwaway crate
 trybuild builds cannot configure — that crate inherits no `[lints]` table, so
