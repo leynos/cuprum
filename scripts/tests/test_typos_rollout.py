@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import hashlib
 import logging
 import tomllib
 import typing as typ
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import types
-    from pathlib import Path
 
 
 def _invalid_schema(dictionary_text: cabc.Callable[..., str]) -> str:
@@ -252,6 +253,22 @@ def test_pinned_base_hash_mismatch_fails_closed(
 
     with pytest.raises(ValueError, match="SHA-256 does not match"):
         generator._verify_pinned_base(cache)
+
+
+def test_pinned_base_hash_accepts_exact_pinned_bytes(
+    rollout_modules: tuple[types.ModuleType, types.ModuleType, types.ModuleType],
+    tmp_path: Path,
+) -> None:
+    """The recorded dictionary bytes satisfy the immutable digest contract."""
+    _, _, generator = rollout_modules
+    cache = tmp_path / ".typos-oxendict-base.toml"
+    fixture = Path(__file__).parent / "data" / "typos-oxendict-base-64bd9ce.toml"
+    pinned_bytes = fixture.read_bytes()
+
+    assert hashlib.sha256(pinned_bytes).hexdigest() == generator.PINNED_BASE_SHA256
+
+    cache.write_bytes(pinned_bytes)
+    generator._verify_pinned_base(cache)
 
 
 @pytest.mark.parametrize(
