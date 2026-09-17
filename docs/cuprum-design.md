@@ -3022,7 +3022,10 @@ Both pathways are tested as first-class implementations:
   sweep that matrix: `--ci-ratchet` replaces the three payload tiers with the
   single `CI_RATCHET_PAYLOAD_BYTES` tier, labelled `ratchet`, so that the ratio
   it compares is the same measurement from run to run — and one where the
-  pipeline, not the fixed per-run cost, is most of what is timed.
+  pipeline, not the fixed per-run cost, is most of what is timed. That leaves
+  eight planned scenarios (one payload × two depths × two callback modes × two
+  backends), of which `ci_benchmark_ratchet_profile.py` keeps the four that are
+  two stages deep — one per backend and callback mode.
 
 CI includes a benchmark ratchet job on pushes to `main` and on pull requests
 that change performance-relevant paths. The job runs on a paid runner, so a

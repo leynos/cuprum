@@ -19,6 +19,8 @@ move the ratio past the threshold.
 
 ## Context summary
 
+*Table 1. Context summary for the overhead-bound ratio observation.*
+
 | Aspect              | Details                                                                             |
 | ------------------- | ----------------------------------------------------------------------------------- |
 | First observed      | PR #158 CI, run 30047241417                                                         |
@@ -58,6 +60,9 @@ Micro-probes on the development host, with the release extension built as CI
 builds it (`make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'`),
 separated the per-run costs:
 
+*Table 2. Per-run cost components at the payloads the ratchet measured before
+this work (2026-09-16, development host).*
+
 | Component                      | Cost                                              | Method                                                        |
 | ------------------------------ | ------------------------------------------------- | ------------------------------------------------------------- |
 | Process start                  | ≈ 140 ms                                          | `python -c 'import cuprum'` against `python -c pass`          |
@@ -84,7 +89,7 @@ backends), ten runs and one warmup per command, `--iterations 5`. Ratios are
 `rust_mean / python_mean` within one invocation; the band is the ratchet's own
 `3 × 1.4826 × MAD` relative to the median.
 
-*Table 1. Within-run ratios by payload (2026-09-16, development host, load
+*Table 3. Within-run ratios by payload (2026-09-16, development host, load
 average 5–23 from other agents).*
 
 | Payload | mode | ratios, oldest first           | median | MAD band |
@@ -116,6 +121,10 @@ t(iterations) = 103 ms + iterations * (17 ms + slope * payload)
 shape directly — at 1 MiB and 64 MiB, one iteration against five, so the
 per-iteration cost falls out of the difference — separates the two terms:
 
+*Table 4. Per-iteration set-up and streaming cost by backend and callback mode,
+with the crossover payload where one iteration's streaming equals its set-up
+(2026-09-16, quiet machine).*
+
 | Backend, mode | set-up per iteration | streaming per iteration | crossover |
 | ------------- | -------------------- | ----------------------- | --------- |
 | python, nocb  | 17.3 ms              | 0.95 ms/MiB             | 18.2 MiB  |
@@ -142,7 +151,7 @@ The same 64 MiB cell, re-measured at exactly the shape the job now runs
 (`--iterations 5 --runs 20 --warmup 1`, three repeat invocations) once the
 machine quietened (load average 1.6–3.2):
 
-*Table 2. The chosen cell at CI shape, quiet machine (2026-09-16, later
+*Table 5. The chosen cell at CI shape, quiet machine (2026-09-16, later
 session).*
 
 | repeat | mode | python    | rust      | ratio  |
@@ -161,7 +170,7 @@ is looser (5.6%, and hyperfine flagged one statistical outlier), which is what
 the confirmation re-measurement and the MAD band are for.
 
 Two things this does *not* say. The absolute ratios differ sharply between
-Table 1 and Table 2 (0.43 versus 0.83 for the same cell) because the machine
+Table 3 and Table 5 (0.43 versus 0.83 for the same cell) because the machine
 load differed, and the two backends are not affected by load in the same
 proportion: the pure-Python pump loses more wall clock to contention than the
 native one. The *within-run* ratio is therefore still load-sensitive in a way
@@ -177,18 +186,22 @@ ratios across runs rather than wall clock.
 Per cell, the mean wall clock of one hyperfine invocation of the four commands
 at ten runs and one warmup each:
 
-| Payload | invocation (4 commands, 10 runs) | invocation (4 commands, 20 runs) | 8 commands × 20 runs |
-| ------- | -------------------------------- | -------------------------------- | -------------------- |
-| 16 MiB  | 25.0 s                           | 50 s (projected)                 | 100 s                |
-| 32 MiB  | 41.3 s                           | 83 s (projected)                 | 165 s                |
-| 64 MiB  | 74.3 s                           | 84.4 s (measured, Table 2)       | ≈ 170 s              |
-| 100 MiB | 100.8 s                          | 202 s (projected)                | 403 s                |
+*Table 6. Wall clock per hyperfine invocation by payload, projected to twenty
+runs and to the full selected workload (2026-09-16, development host).*
 
-The ratchet job measures eight scenarios (four per backend: two depths × two
-callback modes) and re-measures them a second time when anything is flagged. At
-64 MiB and twenty runs that is under three minutes of measurement in the common
-case, under six with the confirmation pass, against the job's sixty-minute
-timeout. The old profile measured twelve smoke scenarios at ten runs.
+| Payload | invocation (4 commands, 10 runs) | invocation (4 commands, 20 runs) | 4 commands × 20 runs |
+| ------- | -------------------------------- | -------------------------------- | -------------------- |
+| 16 MiB  | 25.0 s                           | 50 s (projected)                 | 50 s                 |
+| 32 MiB  | 41.3 s                           | 83 s (projected)                 | 83 s                 |
+| 64 MiB  | 74.3 s                           | 84.4 s (measured, Table 5)       | ≈ 84 s               |
+| 100 MiB | 100.8 s                          | 202 s (projected)                | 202 s                |
+
+The ratchet job measures four scenarios — one payload, two-stage depths, two
+callback modes, both backends — and re-measures them a second time when
+anything is flagged. At 64 MiB and twenty runs that is under two minutes of
+measurement in the common case, under four with the confirmation pass, against
+the job's sixty-minute timeout. The old profile measured twelve smoke scenarios
+at ten runs.
 
 ### The old CI profile was not the workload the fixtures described
 
@@ -229,8 +242,8 @@ something.
 ## Limitations
 
 - Every number here was taken on the development host with other agents' work
-  running, not on the CI runner: Table 1 under a load average of 5–23, the
-  later cells and Table 2 under 0.6–3.8. The load changes the *absolute*
+  running, not on the CI runner: Table 3 under a load average of 5–23, the
+  later cells and Table 5 under 0.6–3.8. The load changes the *absolute*
   figures by more than a factor of two between sessions, so neither table's
   wall clock transfers to CI. The *design* conclusion — streaming must dominate
   the fixed per-iteration cost — is a property of the cost model and does

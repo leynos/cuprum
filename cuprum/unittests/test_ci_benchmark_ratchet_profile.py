@@ -1,4 +1,18 @@
-"""Unit tests for the CI benchmark ratchet helper."""
+"""Unit tests for the CI benchmark ratchet helper.
+
+The helper turns a dry-run benchmark plan into the hyperfine command the
+`benchmark-ratchet` job measures: it keeps the scenarios that fit the CI
+profile and rejects the rest. Nothing downstream notices if that filter is
+wrong — a payload outside the band is simply not measured, so the job reports
+an empty selection rather than a failure — which is why the band, the
+selection, the plan rewriting, and the command construction are all pinned
+here. The contract with the scenario matrix that supplies the workload is
+`test_ci_ratchet_profile_contract_matches_the_payload_matrix`.
+
+Example
+-------
+pytest cuprum/unittests/test_ci_benchmark_ratchet_profile.py
+"""
 
 from __future__ import annotations
 
@@ -535,10 +549,10 @@ def test_ci_ratchet_profile_contract_matches_the_payload_matrix() -> None:
         "fits its timeout with confirmation re-measurement included"
     )
     assert CI_RATCHET_PAYLOAD_BYTES == 64 * 1024 * 1024, (
-        "64 MiB is the tuned workload: streaming is 63% of the pure-Python "
-        "no-callback run and 86% of a callback run on the reference host, so "
-        "the pipeline rather than the worker's start-up is most of what is "
-        "timed (issue #219)"
+        "64 MiB is the tuned workload: streaming is 62% of the pure-Python "
+        "no-callback run, 57% of the native one, and 87% of both callback "
+        "runs on the reference host, so the pipeline rather than the worker's "
+        "start-up is most of what is timed (issue #219)"
     )
     assert (
         _CI_RATCHET_MIN_PAYLOAD_BYTES
