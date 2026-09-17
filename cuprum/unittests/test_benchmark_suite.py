@@ -21,6 +21,9 @@ from benchmarks.pipeline_throughput import (
     render_prefixed_command,
     run_pipeline_benchmarks,
 )
+from benchmarks.pipeline_throughput import (
+    _parse_args as parse_throughput_args,
+)
 from benchmarks.pipeline_throughput_scenarios import (
     _SMOKE_LARGE_PAYLOAD_BYTES,
     CI_RATCHET_PAYLOAD_BYTES,
@@ -619,3 +622,37 @@ def test_default_pipeline_scenarios_rejects_smoke_with_ci_ratchet() -> None:
     """The smoke and ratchet workloads are distinct, so asking for both fails."""
     with pytest.raises(ValueError, match="smoke and ci_ratchet"):
         default_pipeline_scenarios(smoke=True, include_rust=True, ci_ratchet=True)
+
+
+def test_parse_args_rejects_smoke_with_ci_ratchet() -> None:
+    """The CLI rejects the contradictory workload pair before any matrix is built.
+
+    `default_pipeline_scenarios` raises on the pair as well, so the argument
+    parser's refusal is not the only guard — but it is the one a user meets,
+    and it reports a usage error rather than a traceback from inside the
+    scenario builder.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        parse_throughput_args([
+            "--output",
+            "plan.json",
+            "--smoke",
+            "--ci-ratchet",
+        ])
+
+    assert exc_info.value.code == 2, (
+        f"argparse reports usage errors with exit code 2, got {exc_info.value.code}"
+    )
+
+
+def test_parse_args_accepts_either_workload_alone() -> None:
+    """Each workload flag stays usable on its own."""
+    smoke = parse_throughput_args(["--output", "plan.json", "--smoke"])
+    ratchet = parse_throughput_args(["--output", "plan.json", "--ci-ratchet"])
+
+    assert smoke.smoke is True, "`--smoke` alone must set the smoke workload"
+    assert smoke.ci_ratchet is False, "`--smoke` alone must leave the ratchet off"
+    assert ratchet.ci_ratchet is True, (
+        "`--ci-ratchet` alone must set the ratchet workload"
+    )
+    assert ratchet.smoke is False, "`--ci-ratchet` alone must leave smoke off"
