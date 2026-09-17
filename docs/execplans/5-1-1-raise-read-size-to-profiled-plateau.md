@@ -467,7 +467,7 @@ This task is complete only when:
   payload to the reader. Before the fix it failed with `[first_line, "", "b"]`;
   after the fix it passes with `[first_line, "b"]`. The BDD scenario observes
   the same two stdout lines from a subprocess. Impact: V0 has direct red-green
-  evidence without relying on scheduler timing or a hand-written stream-reader
+  evidence without relying on scheduler timing or a handwritten stream-reader
   double.
 
 - Observation: the remote stack parent had been rewritten after this branch

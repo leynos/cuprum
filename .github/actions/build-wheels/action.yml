@@ -8,7 +8,7 @@ inputs:
     description: Rust target triple for cross builds (optional)
     required: false
   artifact-name:
-    description: Name of the uploaded artifact
+    description: Name of the uploaded artefact
     required: true
   wheelhouse:
     description: Output directory for built wheels
@@ -63,7 +63,7 @@ runs:
           args+=(--target "${{ inputs.target }}")
         fi
         maturin build "${args[@]}"
-    - name: Upload wheel artifact
+    - name: Upload wheel artefact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}

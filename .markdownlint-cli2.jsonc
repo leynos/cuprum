@@ -18,7 +18,8 @@
     "**/node_modules/**",
     "**/target/**",
     ".terraform/**",
-    ".uv-cache/**",
+    "**/.uv-cache/**",
+    "**/.uv-tools/**",
     "CRUSH.md",
     "memories/**"
   ]

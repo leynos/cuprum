@@ -80,8 +80,6 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
-TYPOS_VERSION ?= 1.48.0
-TYPOS := uv tool run typos@$(TYPOS_VERSION)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 ifeq ($(OS),Windows_NT)
 LOCAL_TOOL_ENV =
@@ -125,8 +123,10 @@ PYLINT_CACHE ?= .cache/pylint
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
-SPELLING_CONFIG_COMMAND ?= $(UV_RUN_ENV) uv run scripts/generate_typos_config.py
-SPELLING_HELPER_TARGET ?= spelling-helper-test
+TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.2
+TYPOS_CONFIG_BUILDER = $(UV_RUN_ENV) uv tool run --python 3.14 --from \
+  "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
+  typos-config-builder
 # Use the controlled v0.3.0 release tag. Keep in step with the
 # df12-python-lints dev dependency in pyproject.toml.
 DF12_PYTHON_LINTS_REF ?= v0.3.0
@@ -148,8 +148,8 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling spelling-config spelling-helper-test \
-        _run_spelling_gate nixie test test-python test-rust typecheck \
+        markdownlint spelling \
+        nixie test test-python test-rust typecheck \
         test-extension test-markdown-format develop \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
@@ -174,7 +174,7 @@ develop: build ## Build the native extension into the dev virtual-env
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
 
-clean: ## Remove build artifacts
+clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
 	  .mypy_cache .pytest_cache .coverage coverage.* \
 	  lcov.info htmlcov .venv
@@ -272,30 +272,8 @@ markdownlint: $(MDLINT) ## Lint Markdown files
 	$(call run_markdownlint_files,$(MDLINT_CHECK_COMMAND))
 	+$(MAKE) spelling
 
-spelling: $(SPELLING_HELPER_TARGET) _run_spelling_gate ## Enforce en-GB-oxendict spelling in prose and source
-
-spelling-config:
-	@$(SPELLING_CONFIG_COMMAND)
-
-_run_spelling_gate: spelling-config
-	@git ls-files -z '*.md' '*.py' '*.rs' | \
-		xargs -0 -r $(TYPOS) --config typos.toml --force-exclude
-
-spelling-helper-test: build spelling-config ## Validate the shared spelling-policy integration
-	@TYPOS_TEST_COMMAND=$(call shell_quote,$(TYPOS)) PYTHONPATH=scripts \
-		$(UV_RUN_ENV) uv run --python 3.13 \
-		--with pytest-cov==7.0.0 \
-		python -m pytest scripts/tests/test_typos_rollout.py \
-		scripts/tests/test_typos_rollout_properties.py \
-		scripts/tests/test_typos_rollout_spelling_gate.py \
-		scripts/tests/test_typos_rollout_render_properties.py \
-		scripts/tests/test_typos_rollout_freshness_properties.py \
-		scripts/tests/test_typos_rollout_refresh.py \
-		scripts/tests/test_typos_rollout_degradation.py \
-		--cov=generate_typos_config --cov=typos_rollout \
-		--cov=typos_rollout_cache --cov=typos_rollout_dictionary \
-		--cov=typos_rollout_refresh --cov=typos_rollout_degradation \
-		--cov-fail-under=90
+spelling: ## Enforce en-GB-oxendict spelling in prose and source
+	$(TYPOS_CONFIG_BUILDER) gate --repository . --scope all
 
 nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)

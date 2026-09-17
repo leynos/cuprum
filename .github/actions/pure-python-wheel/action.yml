@@ -1,5 +1,5 @@
 name: Build Pure Python Wheel
-description: Builds a pure Python wheel using UV and uploads it as an artifact.
+description: Builds a pure Python wheel using UV and uploads it as an artefact.
 inputs:
   python-version:
     description: Python version to set up
@@ -9,7 +9,7 @@ inputs:
     required: false
     default: dist
   artifact-name:
-    description: Name of the uploaded artifact
+    description: Name of the uploaded artefact
     required: true
 runs:
   using: composite
@@ -29,7 +29,7 @@ runs:
     - name: Build wheel
       shell: bash
       run: uv build --wheel --out-dir ${{ inputs.out-dir }}
-    - name: Upload wheel artifact
+    - name: Upload wheel artefact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-name }}

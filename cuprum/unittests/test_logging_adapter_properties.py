@@ -11,7 +11,7 @@ What can go wrong is per-event and shape-dependent, which is what these
 properties cover: an extra key colliding with a reserved `LogRecord` attribute
 (a `KeyError` raised inside the user's logging stack, not in cuprum), a phase
 falling through the level map, and a value that `JsonLoggingFormatter` cannot
-serialize. Each fails only for particular event shapes that hand-written cases
+serialize. Each fails only for particular event shapes that handwritten cases
 are unlikely to enumerate.
 """
 

@@ -22,6 +22,11 @@ ignore = [
   '\bartifact_dir\b',
   '/artifacts(?:[/?#"`]|$)',
   '--artifact-name(?:[=\s"`]|$)',
+  # Composite-action input key and its `${{ inputs.* }}` reference; renaming it
+  # would break every caller in .github/workflows.
+  '\bartifact-name\b',
+  # GitHub's pull_request activity types are literal event names.
+  'types: \[opened, reopened, synchronize, labeled, ready_for_review\]',
   # Spelling-policy tests must contain the deliberately invalid input tokens.
   'mappings\["organise"\]',
   '\("teh", "(?:the|ten)"\)',
@@ -39,5 +44,21 @@ ignore = [
   '\brust-analyzer\b',
 ]
 
+# ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
+# block mask must not reach Python or Rust files. `markdown_only` withholds it
+# from `[default] extend-ignore-re` and renders it under a `[type.markdown]`
+# table scoped to `*.md` instead. Inline code spans stay checked everywhere,
+# per the narrow-pattern preference recorded above.
+markdown_only = [
+  '(?s)```.*?```',
+]
+
 [files]
-exclude = []
+exclude = [
+  # Syrupy snapshot of the byte-fidelity fixture: a random base64 payload
+  # whose substrings collide with dictionary words. Not maintained prose.
+  # Other `.ambr` snapshots hold maintained user-visible strings (warnings,
+  # benchmark summaries) and stay spell-checked under the all-tracked-files
+  # policy.
+  "tests/behaviour/__snapshots__/test_stream_fidelity.ambr",
+]
