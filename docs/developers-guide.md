@@ -620,10 +620,15 @@ test, and no whole-run budget at all.
 
 The 300 s per-test allowance is `period = "60s"` multiplied by
 `terminate-after = 5`, so nextest kills a hung test after it has reported the
-test as slow. The 1200 s global budget contains that allowance while remaining
-well inside the cargo watchdog. The 2700 s watchdog was sized from roughly
-fifty successful runs: the worst coverage step was 418 s in run 34071469378,
-the worst trunk coverage step was 322 s in run 34062626757, and run 34067223641
+test as slow. That period also sets when a test is reported slow, and the worst
+healthy test here is long enough to trip it: the `trybuild` UI test
+`compile_time_ui` ran 62 s on run 35400748402, so the coverage log carries a
+`SLOW` line for it. That is the warning working, not a fault. It is reported at
+60 s and killed at 300 s, five times later, and no healthy test approaches
+that. The 1200 s global budget contains that allowance while remaining well
+inside the cargo watchdog. The 2700 s watchdog was sized from roughly fifty
+successful runs: the worst coverage step was 418 s in run 34071469378, the
+worst trunk coverage step was 322 s in run 34062626757, and run 34067223641
 measured the worst work outside the watchdog. None was a genuinely cold build.
 
 The watchdog must satisfy
