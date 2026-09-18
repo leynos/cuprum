@@ -1,6 +1,6 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IMPLEMENTED; hosted receipt verified, external CI failures recorded
+Status: IMPLEMENTED; hosted receipt verified, rebased candidate green
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -46,14 +46,15 @@ path detector.
 ## Tolerances (exception triggers)
 
 The user has authorized continuation, the logging replacement, commits, push,
-and a draft PR. Routine fixes within this scope do not require renewed
-approval. Stop if the implementation cannot be salvaged, the disk fills, or
-completing this design would require a new service or application. Report a
-denied external operation precisely; do not retry it without authorization.
+and a pull request; its readiness for review was set at the user's direction.
+Routine fixes within this scope do not require renewed approval. Stop if the
+implementation cannot be salvaged, the disk fills, or completing this design
+would require a new service or application. Report a denied external operation
+precisely; do not retry it without authorization.
 
 Do not claim hosted receipt from a local test or a successful upload
 declaration. If hosted verification cannot run, document that gap explicitly in
-this plan and the draft PR rather than marking delivery complete.
+this plan and the pull request rather than marking delivery complete.
 
 ## Context and orientation
 
@@ -92,8 +93,7 @@ style, and scripting standards govern implementation and verification.
 The original external-sink requirement is superseded, not silently deferred.
 The requirement for bounded decisions maps to milestone M2 and its schema
 tests; the runtime-boundary requirement maps to M1 and the `act` scenarios;
-persistent receipt and draft delivery map to M3 and a downloaded hosted
-artefact.
+persistent receipt and publication map to M3 and a downloaded hosted artefact.
 
 ## Progress
 
@@ -143,6 +143,10 @@ artefact.
 - [x] 2026-09-18: Repaired the two CodeScene argument-count diagnostics in the
   summary-support and telemetry-execution tests, then re-ran the repository
   gates for the rebased candidate.
+- [x] 2026-09-18: Confirmed the rebased candidate's hosted run `35337586749`
+  passed all 17 jobs, re-validated its downloaded decision and measurement
+  artefacts, corrected PR #418's stale "unresolved failure" claim, and marked
+  it ready for review at the user's direction.
 
 ## Surprises & discoveries
 
@@ -206,14 +210,18 @@ run the weekly compatibility workflow after merge, and retain a separate hosted
 receipt check. Action and image downloads can still need network access even
 though the detector uses local Git history.
 
-The published candidate passed `changes` and `benchmark-ratchet`, but broader
-CI is not wholly green. CodeScene again rejected coverage XML with
-`No matching field found: close for class java.io.InputStreamReader`, matching
-the previous candidate's external parser failure. The Linux x86 wheel installer
-failed with `curl(35)` and `SSL_ERROR_SYSCALL` while connecting to
-`sh.rustup.rs:443`. No workflow check was weakened to hide either failure. The
-final documentation push triggers a fresh run; its outcome belongs in the draft
-PR rather than being inferred from this earlier run.
+The pre-rebase candidate passed `changes` and `benchmark-ratchet`, but the
+broader run was not wholly green: CodeScene rejected coverage XML with
+`No matching field found: close for class java.io.InputStreamReader`, and the
+Linux x86 wheel installer failed with `curl(35)` and `SSL_ERROR_SYSCALL` while
+connecting to `sh.rustup.rs:443`. Neither check was weakened. Both failures are
+now accounted for rather than merely re-observed: main's PR #411 (`2070a41b`)
+retired the pull-request CodeScene check and moved that upload to
+`coverage-main.yml`, so the rebased head no longer runs the failing step, and
+its hosted run `35337586749` passed all 17 jobs. The residual risk is external
+service behaviour, not a suppressed check: a default-branch CodeScene change or
+a rustup/registry outage can still fail unrelated jobs without touching this
+boundary.
 
 ## Verification plan
 
@@ -282,8 +290,8 @@ the review service rate-limits, use the user-requested foreground `vsleep`
 interval of a random 45–90 minutes before retrying.
 
 M3 publishes the already named branch, retaining its matching origin upstream,
-and updates the existing draft rather than opening a duplicate. The PR title
-must include `(#339)` and its summary must contain `Closes #339`. Its final
+and updates the existing PR rather than opening a duplicate. The PR title must
+include `(#339)` and its summary must contain `Closes #339`. Its final
 `## References` section must link session
 `https://lody.ai/leynos/sessions/103f642f-34a2-46a6-b03c-f280276fdbc9`.
 
@@ -338,17 +346,19 @@ PR records provide the durable review history. Useful logs from this session:
 ## Outcomes & retrospective
 
 The existing implementation was salvaged. The runtime harness and persistent
-logging are implemented, validated, reviewed, and published in draft PR #418.
-GitHub accepted the new decision log, and its downloaded contents and retention
-metadata satisfy the revised persistence contract. No external service or
-telemetry credential was introduced. The documented standard-library analysis
-recipe produces CSV and SVG without another application.
+logging are implemented, validated, reviewed, and published in PR #418, which
+is open for review rather than a draft. GitHub accepted the new decision log,
+and its downloaded contents and retention metadata satisfy the revised
+persistence contract. No external service or telemetry credential was
+introduced. The documented standard-library analysis recipe produces CSV and
+SVG without another application.
 
 The local harness proves compatibility for the specified event and changed-path
 matrix; the hosted receipt proves the configured upload boundary. The hosted
 benchmark also ran successfully and retained its measurements. This does not
-establish exact runtime parity or success for unrelated hosted CI jobs: the
-CodeScene parser and installer TLS failures remain separately documented.
+establish exact runtime parity or success for unrelated hosted CI jobs; the
+pre-rebase CodeScene parser and installer TLS failures are recorded above, and
+the rebased head's run `35337586749` passed all 17 jobs.
 
 ## Revision note
 
@@ -380,3 +390,14 @@ parametrizations. `SummaryCase` was deliberately left unchanged: it models
 expected results rather than execution inputs. The subprocess command,
 environment, output files, return-code assertion, the 18-case matrix, and its
 deterministic ordering are all unchanged.
+
+2026-09-18: Corrected current-state claims that the rebase had invalidated. The
+published pull-request description still reported the pre-rebase CI failures as
+unresolved; it now records run `35337586749` succeeding for `67539822` with all
+17 jobs passing, explains that main's PR #411 retired the pull-request
+CodeScene check into `coverage-main.yml`, and reports the rebased head's
+re-validated decision and measurement artefacts (requesting 90-day retention).
+The plan's Risks, Outcomes, and M3 sections were updated to match: the PR is
+open for review rather than a draft, and the earlier failures are retained as
+history rather than as an open blocker. Historical entries that describe what
+was true on 2026-09-17 are deliberately left unchanged.
