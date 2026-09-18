@@ -378,8 +378,8 @@ The coverage jobs currently declare a 65-minute job ceiling in `ci.yml` and
 sized independently, by `required_ceiling()`, as the sum of each step's own
 watchdog plus the work outside them and a margin. Here it lands on the
 boundary: 2700 s + 300 s + 900 s is exactly 3900 s, or 65 minutes, so the
-cold-build allowance is sized to fit a ceiling that already existed rather
-than the ceiling being raised to fit it.
+cold-build allowance is sized to fit a ceiling that already existed rather than
+the ceiling being raised to fit it.
 
 The coverage action uses `language: mixed`, so nextest does not bound the
 Python half of the suite. `pytest-timeout` sets that per-test budget separately
