@@ -263,13 +263,15 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             self._mark_future_retrieved()
         self._drive(self._build(capacity, mode))
 
-    @precondition(
-        lambda self: (
+    def _run_accepts_lines(self) -> bool:
+        """Return whether a delivery can land without parking the producer."""
+        return (
             self._queue.qsize() < self._capacity
             and self._mode != "failing"
             and not self._end_of_stream()
         )
-    )
+
+    @precondition(lambda self: self._run_accepts_lines())
     @rule(
         stream=st.sampled_from(_STREAMS),
         text=st.text(alphabet="abcdef", min_size=1, max_size=6),
@@ -293,7 +295,11 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             "the sink must never grow the queue past its bound"
         )
 
-    @precondition(lambda self: self._mode == "failing" and not self._end_of_stream())
+    def _failing_delivery_can_run(self) -> bool:
+        """Return whether a raising caller callback can still deliver."""
+        return self._mode == "failing" and not self._end_of_stream()
+
+    @precondition(lambda self: self._failing_delivery_can_run())
     @rule(
         stream=st.sampled_from(_STREAMS),
         text=st.text(alphabet="abcdef", min_size=1, max_size=6),
@@ -329,13 +335,15 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         ), "callback failure must name its sink, stream, and error class"
         self._failures_seen += 1
 
-    @precondition(
-        lambda self: (
+    def _saturation_can_be_entered(self) -> bool:
+        """Return whether the sink can still meet a full queue."""
+        return (
             self._queue.qsize() == self._capacity
             and self._mode != "failing"
             and not self._end_of_stream()
         )
-    )
+
+    @precondition(lambda self: self._saturation_can_be_entered())
     @rule(
         stream=st.sampled_from(_STREAMS),
         text=st.text(alphabet="abcdef", min_size=1, max_size=6),
@@ -382,13 +390,7 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             "the released post must refill the one slot the drain freed"
         )
 
-    @precondition(
-        lambda self: (
-            self._queue.qsize() < self._capacity
-            and self._mode != "failing"
-            and not self._end_of_stream()
-        )
-    )
+    @precondition(lambda self: self._run_accepts_lines())
     @rule(
         stream=st.sampled_from(_STREAMS),
         text=st.text(alphabet="abcdef", min_size=1, max_size=6),
@@ -408,8 +410,9 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             self._posted[stream].append(text)
             self._pending.append(event)
 
-    @precondition(
-        lambda self: (
+    def _completion_can_run(self) -> bool:
+        """Return whether a successful result can be published."""
+        return (
             (self._coordinator is None or self._coordinator.done())
             and not self._future.done()
             # The coordinator's terminal post is awaited, so a full queue would
@@ -417,7 +420,8 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             # its bound here and let the consume rules model that drain.
             and self._queue.qsize() < self._capacity
         )
-    )
+
+    @precondition(lambda self: self._completion_can_run())
     @rule(exit_code=st.integers(min_value=0, max_value=3))
     def complete(self, exit_code: int) -> None:
         """Publish a successful result behind any lines still queued."""
@@ -432,12 +436,13 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             "the terminal result must be queued before it is published"
         )
 
-    @precondition(
-        lambda self: (
-            (self._coordinator is None or self._coordinator.done())
-            and not self._future.done()
-        )
-    )
+    def _failure_can_run(self) -> bool:
+        """Return whether a failing result can be published."""
+        return (
+            self._coordinator is None or self._coordinator.done()
+        ) and not self._future.done()
+
+    @precondition(lambda self: self._failure_can_run())
     @rule()
     def fail(self) -> None:
         """Publish a failure that never lands a terminal item on the queue."""
