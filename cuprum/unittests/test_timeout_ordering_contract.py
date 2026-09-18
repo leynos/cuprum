@@ -154,7 +154,7 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
 
 
 def test_the_nextest_config_sits_where_nextest_looks_for_it() -> None:
-    """nextest reads its config from the workspace root, not the repository root.
+    """Nextest reads its config from the workspace root, not the repository root.
 
     Nextest resolves repository configuration from
     `<workspace>/.config/nextest.toml` and searches no parent directory, so a
@@ -222,7 +222,7 @@ def test_the_watchdog_contains_the_global_timeout_and_its_termination() -> None:
     """
     global_timeout = global_timeout_seconds()
     termination = termination_allowance_seconds()
-    assert EXPECTED_WATCHDOG_SECONDS >= global_timeout + termination, (
+    assert global_timeout + termination <= EXPECTED_WATCHDOG_SECONDS, (
         f"the {EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog must "
         f"cover {NEXTEST_CONFIG}'s {global_timeout} s global-timeout plus the "
         f"{termination} s termination allowance, so a run nextest is ending is "
