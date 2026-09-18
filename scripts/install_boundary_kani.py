@@ -64,17 +64,27 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
     if not url.startswith("https://"):
         msg = "binary downloads require HTTPS"
         raise ValueError(msg)
-    if destination.exists() and _digest(destination) == digest:
+    if _cache_is_current(destination, digest):
         return
     pending = destination.with_suffix(".download")
     try:
         _download(url, pending)
-        if _digest(pending) != digest:
-            msg = f"binary checksum mismatch: {destination.name}"
-            raise ValueError(msg)
+        _require_digest(pending, destination, digest)
         pending.replace(destination)
     finally:
         pending.unlink(missing_ok=True)
+
+
+def _cache_is_current(destination: Path, digest: str) -> bool:
+    """Report whether an existing cache entry already matches the pin."""
+    return destination.exists() and _digest(destination) == digest
+
+
+def _require_digest(pending: Path, destination: Path, digest: str) -> None:
+    """Refuse downloaded bytes that do not match the approved digest."""
+    if _digest(pending) != digest:
+        msg = f"binary checksum mismatch: {destination.name}"
+        raise ValueError(msg)
 
 
 def _download(url: str, destination: Path) -> None:
@@ -86,6 +96,17 @@ def _download(url: str, destination: Path) -> None:
         url = redirect
     msg = "release redirect limit exceeded"
     raise ValueError(msg)
+
+
+def _connect(url: str) -> tuple[http.client.HTTPSConnection, str]:
+    """Validate one hop's URL and open its HTTPS connection."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        msg = "binary downloads and redirects require HTTPS"
+        raise ValueError(msg)
+    target = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, "")) or "/"
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
+    return connection, target
 
 
 def _redirect_url(url: str, response: http.client.HTTPResponse) -> str | None:
@@ -102,25 +123,31 @@ def _redirect_url(url: str, response: http.client.HTTPResponse) -> str | None:
     return None
 
 
+def _fetch_body(
+    connection: http.client.HTTPSConnection,
+    url: str,
+    destination: Path,
+) -> str | None:
+    """Save the response body, or resolve one redirect hop instead."""
+    with connection.getresponse() as response:
+        redirect = _redirect_url(url, response)
+        if redirect is not None:
+            return redirect
+        with destination.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        return None
+
+
 def _download_once(url: str, destination: Path) -> str | None:
     """Close one HTTPS connection after saving its body or resolving a redirect."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        msg = "binary downloads and redirects require HTTPS"
-        raise ValueError(msg)
-    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
+    connection, target = _connect(url)
     try:
-        path = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, ""))
         connection.request(
-            "GET", path or "/", headers={"User-Agent": "cuprum-boundary-verification"}
+            "GET",
+            target,
+            headers={"User-Agent": "cuprum-boundary-verification"},
         )
-        with connection.getresponse() as response:
-            redirect = _redirect_url(url, response)
-            if redirect is not None:
-                return redirect
-            with destination.open("wb") as output:
-                shutil.copyfileobj(response, output)
-            return None
+        return _fetch_body(connection, url, destination)
     finally:
         connection.close()
 
@@ -147,25 +174,34 @@ def boundary_root() -> Path:
     return Path(override) if override else ROOT
 
 
+def _require_current_pin(pin: str) -> None:
+    """Refuse a VERSION file that no longer matches the packaged digests."""
+    if pin != VERSION:
+        msg = "update Kani archive names and digests with its version pin"
+        raise ValueError(msg)
+
+
+def _extract_frontend(archive: Path, destination: Path) -> None:
+    """Extract exactly the approved frontend executables into the cache."""
+    destination.mkdir(exist_ok=True)
+    with tarfile.open(archive, "r:gz") as bundle:
+        bundle.extractall(
+            destination,
+            members=[bundle.getmember(name) for name in FRONTEND_MEMBERS],
+            filter="data",
+        )
+
+
 def main() -> None:
     """Install the pinned frontend into a private verification tool directory."""
     root = boundary_root()
     pin = (root / "tools/kani/VERSION").read_text(encoding="utf-8").strip()
-    if pin != VERSION:
-        msg = "update Kani archive names and digests with its version pin"
-        raise ValueError(msg)
+    _require_current_pin(pin)
     cache = root / ".cache/boundary-kani"
     cache.mkdir(parents=True, exist_ok=True)
     checked_download(FRONTEND_URL, cache / FRONTEND_NAME, FRONTEND_DIGEST)
     checked_download(BUNDLE_URL, cache / BUNDLE_NAME, BUNDLE_DIGEST)
-    frontend = cache / "bin"
-    frontend.mkdir(exist_ok=True)
-    with tarfile.open(cache / FRONTEND_NAME, "r:gz") as archive:
-        archive.extractall(
-            frontend,
-            members=[archive.getmember(name) for name in FRONTEND_MEMBERS],
-            filter="data",
-        )
+    _extract_frontend(cache / FRONTEND_NAME, cache / "bin")
 
 
 if __name__ == "__main__":
