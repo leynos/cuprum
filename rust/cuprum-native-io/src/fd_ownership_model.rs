@@ -26,8 +26,8 @@ impl CloseLog {
     }
 
     /// Number of closes recorded so far.
-    pub(crate) fn closes(&self) -> u32 {
-        self.closes.get()
+    pub(crate) const fn closes(self) -> u32 {
+        self.closes.into_inner()
     }
 
     fn record_close(&self) {

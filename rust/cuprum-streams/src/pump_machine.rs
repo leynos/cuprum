@@ -164,7 +164,7 @@ pub(crate) fn advance<E>(
 /// child module and shows the compiler refusing an attempt to build a
 /// transition and apply it from the parent. Widening either item, even to
 /// `pub(crate)`, makes that case fail.
-fn step(state: &mut PumpState, transition: Transition) -> Flow {
+const fn step(state: &mut PumpState, transition: Transition) -> Flow {
     match transition {
         Transition::Eof => Flow::Stop,
         Transition::Drained => Flow::Continue,
@@ -175,7 +175,7 @@ fn step(state: &mut PumpState, transition: Transition) -> Flow {
     }
 }
 /// Apply a write outcome to the running total and the `writer_open` latch.
-fn apply_write(state: &mut PumpState, write: WriteEvent) {
+const fn apply_write(state: &mut PumpState, write: WriteEvent) {
     match write {
         WriteEvent::Complete { bytes } => {
             state.total_written = state.total_written.saturating_add(bytes);
