@@ -1754,6 +1754,21 @@ place — a non-integer, or a Python integer outside the signed 64-bit range —
 may instead fail earlier, during PyO3 argument conversion, with a different
 exception.
 
+The internal pump validates the buffer size and reader ABI representation
+before transferring ownership of its duplicated writer. If either check fails,
+the duplicate is closed before native work begins. These checks establish only
+representability and error ordering; they do not prove that a descriptor or
+handle is valid, remains live, or is exclusively owned. The pipeline keeps the
+reader paused and waits for native cleanup after cancellation so those lifetime
+obligations remain in force.
+
+Before borrowing the reader's raw descriptor, the pipeline rejects an asyncio
+transport that is already closing. Asyncio may silently accept
+`pause_reading()` while a queued close callback can still close the descriptor;
+the hop therefore reports `READER_PAUSE_FAILED` and uses the Python fall-back,
+which retains the reader's buffered prefix. This protects the hand-off contract
+without identifying the cause of any historical native payload mismatch.
+
 ### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
@@ -1824,18 +1839,29 @@ Failures that never reached the operating system — an internal overflow or
 bounds condition — surface as a plain `OSError` with a descriptive message and
 no `errno`, because there is no system code to report.
 
+The scratch buffer each helper reads or writes through is allocated fallibly,
+so requesting a `buffer_size` the allocator cannot satisfy is one of those
+systemless failures rather than a crash: it raises an `OSError` with the stable
+message `failed to allocate the stream buffer` and no `errno`. It is an error,
+not a signal, so it unwinds normally and never aborts the process embedding the
+extension. The production cap of 1 GiB (see `MAX_BUFFER_SIZE`) means a request
+large enough to be refused is far outside the range the helpers are designed to
+serve, so the message is the stable interface here — unlike a system failure,
+there is no number to branch on.
+
 ### Rust stream observability (internal)
 
 Both internal helpers emit `tracing` diagnostics; the crate installs no
 subscriber, so the embedding application owns subscriber configuration. Each
 successful read or write logs a `debug` event (with the byte count and
 platform), every `EINTR` retry logs a `warn`, and fatal I/O failures,
-zero-progress writes, and length-conversion overflows log an `error`. The pump
-and consume loops run inside an operation span that carries the `operation` and
-`buffer_size` fields and, on completion, records `total_bytes` and the
-cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
-`error` level so the `warn`/`error` events retain their operation context even
-when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
+zero-progress writes, length-conversion overflows, and refused scratch-buffer
+allocations log an `error`. The pump and consume loops run inside an operation
+span that carries the `operation` and `buffer_size` fields and, on completion,
+records `total_bytes` and the cumulative `EINTR` `read_retries`/`write_retries`
+counts. The span sits at `error` level so the `warn`/`error` events retain
+their operation context even when the subscriber is filtered to `warn`/`error`;
+it emits no log line itself.
 
 One further `debug` event reports the pump's own state rather than an
 individual read or write. When a downstream stage hangs up early — the
@@ -1869,6 +1895,29 @@ itself succeeded.
 
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
+
+One `error` event reports a refusal rather than a kernel failure, so it carries
+a stable category instead of a system message:
+
+```text
+scratch buffer allocation refused
+    error_category=buffer_allocation_failed
+    buffer_size=<bucket>            platform=<unix|windows>
+```
+
+`error_category` is always `buffer_allocation_failed` for this event.
+`buffer_size` is the requested size rounded up to a power-of-two bucket — a
+bounded magnitude, not the exact caller-supplied number and not any allocator
+internal. `platform` matches the field on the read/write events. The event is
+emitted from inside the operation span, so the span's own `operation` and
+`buffer_size` fields are in scope alongside it, exactly as for the fatal I/O
+failures above.
+
+This event accompanies the `OSError` described under
+[Rust stream error handling (internal)](#rust-stream-error-handling-internal):
+the same refused allocation produces both. A caught exception then still leaves
+a trace for the subscriber, rather than disappearing with the caller's `except`
+clause.
 
 ### Why a hop fell back to Python
 
