@@ -314,7 +314,7 @@ def test_a_failed_detector_still_records_a_decision(
             payload=payload,
             ref="refs/pull/1/merge"
             if event_name == "pull_request"
-            else "refs/heads/main",
+            else f"refs/heads/{DEFAULT_BRANCH}",
             sha=head,
             branch=FEATURE_BRANCH if event_name == "pull_request" else DEFAULT_BRANCH,
         ),

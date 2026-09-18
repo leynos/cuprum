@@ -36,7 +36,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - required act p
 import typing as typ
 
 from tests.helpers.act_runtime import (
-    ACT_AVAILABLE_ENV,
+    REQUIRE_ACT_ENV,
     SKIP_REASON_ENV,
     docker_host,
     git,
@@ -55,11 +55,11 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 __all__ = (
-    "ACT_AVAILABLE_ENV",
     "CHANGES_JOB",
     "CI_WORKFLOW",
     "DEFAULT_BRANCH",
     "IMAGE",
+    "REQUIRE_ACT_ENV",
     "SKIP_REASON_ENV",
     "ActRun",
     "Event",
@@ -96,6 +96,10 @@ _EVENT_PATH = ".act-event.json"
 #: `owner/name` the scenario reports as its repository, matching the
 #: `full_name` the payload builder fills in.
 _REPOSITORY = "cuprum/act-harness"
+#: The event names the harness knows how to deliver. `event_payload` builds a
+#: different body for each, so a name outside this set is a harness bug, not a
+#: payload the workflow could parse.
+_EVENT_NAMES = ("pull_request", "push")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -105,7 +109,8 @@ class Event:
     Attributes
     ----------
     name : str
-        Event name, as `github.event_name` would carry it.
+        Event name, as `github.event_name` would carry it. Only the names in
+        `_EVENT_NAMES` are deliverable; `event_payload` rejects the rest.
     payload : dict[str, object]
         Webhook payload written to the event-path file. `act` injects
         `github.event_name`, so the payload carries only the body.
@@ -140,7 +145,19 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
     -------
     dict[str, object]
         The complete webhook payload.
+
+    Raises
+    ------
+    AssertionError
+        If `event.name` is not one the harness knows how to deliver. Without
+        this, any unrecognized name would silently receive push semantics.
     """
+    if event.name not in _EVENT_NAMES:
+        message = (
+            f"unsupported event name {event.name!r}; the harness delivers "
+            f"{' and '.join(_EVENT_NAMES)}"
+        )
+        raise AssertionError(message)
     payload = copy.deepcopy(event.payload)
     payload["ref"] = event.ref
     if event.name == "pull_request":

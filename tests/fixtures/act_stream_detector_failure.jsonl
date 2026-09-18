@@ -12,10 +12,10 @@
 # the detector-failure path: the detector step fails, so `bench` is never set.
 #
 {"step": "Set up job", "stepResult": "success"}
-{"executionTime": 74164449, "step": "Check out repository", "stepResult": "success"}
+{"step": "Check out repository", "stepResult": "success"}
 {"arg": "Input parameter 'list-files' is set to invalid value 'bogus'", "command": "error", "step": "Detect performance-relevant changes"}
-{"executionTime": 246835638, "step": "Detect performance-relevant changes", "stepResult": "failure"}
-{"executionTime": 211161454, "step": "Record the benchmark gate decision", "stepResult": "success"}
+{"step": "Detect performance-relevant changes", "stepResult": "failure"}
+{"step": "Record the benchmark gate decision", "stepResult": "success"}
 {"arg": "skip-detector-failed", "command": "set-output", "name": "decision", "step": "Record the benchmark gate decision"}
 {"arg": "pull_request", "command": "set-output", "name": "event_class", "step": "Record the benchmark gate decision"}
 {"arg": "failure", "command": "set-output", "name": "detector_status", "step": "Record the benchmark gate decision"}
