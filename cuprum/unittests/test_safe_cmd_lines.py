@@ -621,7 +621,7 @@ def test_lines_empty_output_completes_and_publishes_result(
 
     async def collect() -> tuple[list[LineEvent], CommandResult]:
         """Iterate a silent command and retain its published result."""
-        stream = command.lines()
+        stream = command.lines(timeout=2.0)
         events = [event async for event in stream]
         assert stream.result is not None, (
             "a silent line stream must still publish its CommandResult"
@@ -631,7 +631,16 @@ def test_lines_empty_output_completes_and_publishes_result(
     events, result = asyncio.run(collect())
 
     assert events == [], f"a silent child must yield no line events, got {events!r}"
-    assert result.ok, f"a silent child must still succeed, got {result!r}"
+    assert result.exit_code == 0, (
+        f"a silent child must exit cleanly, got exit_code={result.exit_code!r}"
+    )
+    assert result.ok is True, f"a silent child must succeed, got {result!r}"
+    assert result.stdout == "", (
+        f"a silent child must capture no stdout, got {result.stdout!r}"
+    )
+    assert result.stderr == "", (
+        f"a silent child must capture no stderr, got {result.stderr!r}"
+    )
 
 
 def test_lines_behaviour_streams_tags_and_text(
