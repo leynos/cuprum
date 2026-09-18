@@ -35,6 +35,7 @@ _Figure 1: Simplified repository tree for contributor orientation._
 | `docs/`             | User, maintainer, design, decision, roadmap, and reference documentation.                                                     |
 | `docs/execplans/`   | Durable execution plans for non-trivial implementation work.                                                                  |
 | `rust/`             | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                 |
+| `rust/.config/`     | nextest repository configuration, resolved from the Cargo workspace root.                                                     |
 | `rust/cuprum-rust/` | PyO3-backed Rust crate that provides accelerated Cuprum components.                                                           |
 | `test-wheelhouse/`  | Local wheel artefacts used by validation workflows and compatibility tests.                                                   |
 | `tests/`            | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                             |

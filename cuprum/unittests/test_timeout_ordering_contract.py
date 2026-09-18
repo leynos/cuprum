@@ -6,6 +6,11 @@ nextest's per-test allowance and whole-run budget, the shared coverage
 action's wall-clock watchdog on the ``cargo`` invocation, and the job's
 own ``timeout-minutes``.
 
+The two nextest tiers live in the Cargo workspace's ``.config/nextest.toml``
+rather than the repository root's, because nextest resolves that path from
+the workspace root and searches no parent directory. Cuprum keeps no root
+``Cargo.toml``, so the workspace is ``rust/``.
+
 Both coverage lanes ran on the action's 1,800 s default until this
 contract was written, and nothing in this repository mentioned it. A
 budget nobody chose is one nobody can defend, and the failure it
@@ -46,9 +51,12 @@ from cuprum.unittests._timeout_lane_support import (
     WATCHDOG_VARIABLE,
     _default_nextest_profile,
     _slow_timeout_of,
+    cargo_workspace_dir,
     global_timeout_seconds,
     largest_per_test_allowance_seconds,
+    termination_allowance_seconds,
 )
+from tests.helpers.docs import repo_root
 
 REQUIRED_CONDITIONS: typ.Final[dict[tuple[str, str], tuple[object, object]]] = {
     (".github/workflows/ci.yml", "coverage"): (
@@ -145,6 +153,33 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
     )
 
 
+def test_the_nextest_config_sits_where_nextest_looks_for_it() -> None:
+    """nextest reads its config from the workspace root, not the repository root.
+
+    Nextest resolves repository configuration from
+    `<workspace>/.config/nextest.toml` and searches no parent directory, so a
+    copy at the repository root is never read. Cuprum keeps no root
+    `Cargo.toml`, making `rust/` the workspace; a config written one level up
+    would leave both inner tiers inert while every value assertion below still
+    passed, because those read the file rather than the run.
+
+    Proved by mutation: moving the file to the repository root and running
+    `cargo nextest list --manifest-path rust/Cargo.toml` exits 0 and reports
+    no parse error, while an invalid value at the workspace root exits 96.
+    """
+    misplaced = repo_root() / ".config" / "nextest.toml"
+    assert not misplaced.is_file(), (
+        "a nextest configuration at the repository root is never read; nextest "
+        f"resolves {NEXTEST_CONFIG} from the Cargo workspace root and searches "
+        "no parent directory, so the tiers it declares would be inert beneath "
+        "a watchdog sized for neither"
+    )
+    assert (cargo_workspace_dir() / ".config" / "nextest.toml").is_file(), (
+        f"expected the nextest configuration at {NEXTEST_CONFIG}, the path "
+        "nextest resolves from the Cargo workspace root"
+    )
+
+
 def test_the_nextest_tiers_are_explicitly_set() -> None:
     """The default profile declares both inner timeout tiers in full."""
     profile = _default_nextest_profile()
@@ -171,6 +206,27 @@ def test_the_nextest_global_timeout_stays_inside_the_cargo_watchdog() -> None:
     assert global_timeout_seconds() < EXPECTED_WATCHDOG_SECONDS, (
         f"{NEXTEST_CONFIG}'s global-timeout must stay below the "
         f"{EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog"
+    )
+
+
+def test_the_watchdog_contains_the_global_timeout_and_its_termination() -> None:
+    """Tier three must cover everything tier two can spend.
+
+    The two clocks do not start together and the terms are not the same
+    work. The watchdog starts with `cargo` and covers the build; nextest's
+    global timeout starts only when tests begin, and hitting it starts a
+    termination procedure rather than stopping the run. A watchdog merely
+    above the global timeout therefore still cuts off the run while nextest
+    is terminating it, and the failure it reports names `cargo` rather than
+    the test.
+    """
+    global_timeout = global_timeout_seconds()
+    termination = termination_allowance_seconds()
+    assert EXPECTED_WATCHDOG_SECONDS >= global_timeout + termination, (
+        f"the {EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog must "
+        f"cover {NEXTEST_CONFIG}'s {global_timeout} s global-timeout plus the "
+        f"{termination} s termination allowance, so a run nextest is ending is "
+        f"not cut off mid-termination by a timer that names cargo"
     )
 
 

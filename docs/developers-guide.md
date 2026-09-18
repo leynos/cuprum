@@ -327,7 +327,7 @@ arrangement are worth pinning:
 
 The coverage lanes contain four timeout tiers in this order: per-test allowance
 < global-timeout < cargo watchdog < job ceiling. The first two live in
-`.config/nextest.toml`; the third is the shared coverage action's cargo
+`rust/.config/nextest.toml`; the third is the shared coverage action's cargo
 watchdog; and the fourth is GitHub Actions' job timer. The contract in
 `cuprum/unittests/test_timeout_ordering_contract.py` pins the first three
 relationships.
@@ -341,6 +341,16 @@ Table 3: Coverage timeout tiers
 | Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`             | 2700 s | One coverage action cargo call               |
 | Job ceiling        | `timeout-minutes`                         | 65 m   | The `coverage` job and its trunk counterpart |
 
+The file sits in `rust/` rather than the repository root because nextest
+resolves `.config/nextest.toml` from the Cargo workspace root and searches no
+parent directory. Cuprum keeps no root `Cargo.toml`, so its workspace is
+`rust/`. A copy at the repository root is never read: the tiers it declares are
+inert while every value assertion still passes, because those read the file
+rather than the run. Worse, `generate-coverage` treats a repository-root config
+as one already supplied and skips writing its own fallback, so the run proceeds
+on nextest's built-in defaults — a 60 s slow warning that never terminates the
+test, and no whole-run budget at all.
+
 The 300 s per-test allowance is `period = "60s"` multiplied by
 `terminate-after = 5`, so nextest kills a hung test after it has reported the
 test as slow. The 1200 s global budget contains that allowance while remaining
@@ -351,8 +361,9 @@ measured the worst work outside the watchdog. None was a genuinely cold build.
 
 The watchdog must satisfy
 `watchdog >= global-timeout + termination + cold build`. Termination is the
-largest configured `slow-timeout.grace-period`, with a 60 s floor. The coverage
-jobs currently declare a 65-minute job ceiling in `ci.yml` and
+largest configured `slow-timeout.grace-period`, with a 60 s floor; the contract
+reads it through `termination_allowance_seconds()` and asserts the sum. The
+coverage jobs currently declare a 65-minute job ceiling in `ci.yml` and
 `coverage-main.yml`; the earlier 60-minute figure is stale.
 
 The coverage action uses `language: mixed`, so nextest does not bound the
