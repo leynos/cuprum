@@ -179,18 +179,26 @@ pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
 /// This observation grants no ownership or lifetime guarantee and must never
 /// be used to justify subsequent raw-resource reconstruction. It is test
 /// support, so it is neither exported nor compiled into the shipped library.
+///
+/// # Errors
+/// Returns the kernel's error for any failure that is neither an interruption
+/// nor the closed-descriptor condition. Folding those into "closed" would
+/// report an ownership verdict the observation never established.
 #[cfg(all(test, unix))]
-#[must_use]
-pub(crate) fn fd_is_open(fd: i32) -> bool {
+pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
     loop {
         // SAFETY: F_GETFD accepts arbitrary descriptor integers, has no pointer
         // argument, and reports EBADF without touching memory for closed FDs.
         let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         if result != -1 {
-            return true;
+            return Ok(true);
         }
-        if io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            return false;
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            // A delivered signal interrupted the call; observe again.
+            Some(libc::EINTR) => continue,
+            Some(libc::EBADF) => return Ok(false),
+            _ => return Err(error),
         }
     }
 }

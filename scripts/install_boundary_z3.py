@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import zipfile
 
-from install_boundary_kani import ROOT, checked_download
+from install_boundary_kani import boundary_root, checked_download
 
 NAME = "z3-4.16.0-x64-glibc-2.39"
 DIGEST = "7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e"
@@ -24,7 +24,7 @@ URL = f"https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/{NAME}.zip"
 
 def main() -> None:
     """Install only the verified solver executable in the repository cache."""
-    cache = ROOT / ".cache/boundary-z3"
+    cache = boundary_root() / ".cache/boundary-z3"
     cache.mkdir(parents=True, exist_ok=True)
     archive_path = cache / f"{NAME}.zip"
     checked_download(URL, archive_path, DIGEST)

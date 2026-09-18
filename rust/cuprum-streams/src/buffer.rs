@@ -8,19 +8,66 @@
 //! [`PumpError`], where the Python boundary can raise it.
 use crate::PumpError;
 
+/// Host platform name, matching the `platform` field of the I/O seam events.
+#[cfg(unix)]
+const PLATFORM: &str = "unix";
+/// Host platform name, matching the `platform` field of the I/O seam events.
+#[cfg(windows)]
+const PLATFORM: &str = "windows";
+
 /// Allocate a zeroed scratch buffer of `len` bytes.
 ///
 /// # Errors
 /// Returns [`PumpError::BufferAllocationFailed`] when the allocation fails.
+/// The failure is also reported as an `error` event carrying the stable
+/// `buffer_allocation_failed` category and a power-of-two bucket of the
+/// requested size, so a refused allocation is diagnosable without an unwind or
+/// a core dump.
 pub(crate) fn allocate_buffer(len: usize) -> Result<Vec<u8>, PumpError> {
     let mut buffer = Vec::new();
-    buffer
-        .try_reserve_exact(len)
-        .map_err(|_| PumpError::BufferAllocationFailed)?;
+    if buffer.try_reserve_exact(len).is_err() {
+        // Only the requested size is reported, and only as a power-of-two
+        // bucket: no allocator internals, no identifiers, and no payload.
+        tracing::error!(
+            error_category = ALLOCATION_FAILED_CATEGORY,
+            buffer_size = BufferBucket::of(len).bytes(),
+            platform = PLATFORM,
+            "scratch buffer allocation refused",
+        );
+        return Err(PumpError::BufferAllocationFailed);
+    }
     // The reservation above already guarantees the capacity, so growing to
     // `len` here cannot reallocate and cannot reach the aborting path.
     buffer.resize(len, 0_u8);
     Ok(buffer)
+}
+
+/// Stable category reported by the allocation-failure error event.
+pub(crate) const ALLOCATION_FAILED_CATEGORY: &str = "buffer_allocation_failed";
+
+/// A requested buffer size rounded up to a power of two, for telemetry.
+///
+/// Rounding bounds the number of distinct values the event can carry and keeps
+/// the logged number from leaking an exact caller-chosen size. The bucket is
+/// always at least the request, so it still shows how large an allocation was
+/// refused; a request too large to round is reported as itself, because no
+/// larger power of two is representable.
+#[derive(Clone, Copy, Debug)]
+struct BufferBucket(usize);
+
+impl BufferBucket {
+    /// Round `requested` up to the next power of two, saturating at the top.
+    const fn of(requested: usize) -> Self {
+        match requested.checked_next_power_of_two() {
+            Some(rounded) => Self(rounded),
+            None => Self(requested),
+        }
+    }
+
+    /// The rounded size in bytes.
+    const fn bytes(self) -> usize {
+        self.0
+    }
 }
 
 #[cfg(test)]

@@ -15,16 +15,23 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import os
 import shutil
 import tarfile
 import urllib.parse
 from pathlib import Path
+
+# The repository root the installer reads its version pin from and writes its
+# cache beneath. `CUPRUM_BOUNDARY_ROOT` redirects both, so a test or a staging
+# wrapper can install into an isolated tree without touching the checkout.
+_ROOT_ENV = "CUPRUM_BOUNDARY_ROOT"
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = "0.67.0"
 TARGET = "x86_64-unknown-linux-gnu"
 FRONTEND_NAME = f"kani-verifier-{VERSION}-{TARGET}.tar.gz"
 BUNDLE_NAME = f"kani-{VERSION}-{TARGET}.tar.gz"
+FRONTEND_MEMBERS = ("cargo-kani", "kani")
 FRONTEND_DIGEST = "ed2bafc239b834e14c6b66fc4838e342e3bc0b814e548e72ea30e84f83dc0974"
 BUNDLE_DIGEST = "3b5f7afd3b51603ee720db7bc1bc4fe46b5a4f5d36daad9939c4b4c658b51ac0"
 FRONTEND_URL = (
@@ -124,13 +131,30 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def boundary_root() -> Path:
+    """Return the repository root whose pins and cache this installer uses.
+
+    Honours ``CUPRUM_BOUNDARY_ROOT`` so an isolated tree — a test fixture, or a
+    staging wrapper — can be installed into without modifying the checkout the
+    script lives in.
+
+    Returns
+    -------
+    Path
+        The configured root, or the repository containing this script.
+    """
+    override = os.environ.get(_ROOT_ENV)
+    return Path(override) if override else ROOT
+
+
 def main() -> None:
     """Install the pinned frontend into a private verification tool directory."""
-    pin = (ROOT / "tools/kani/VERSION").read_text(encoding="utf-8").strip()
+    root = boundary_root()
+    pin = (root / "tools/kani/VERSION").read_text(encoding="utf-8").strip()
     if pin != VERSION:
         msg = "update Kani archive names and digests with its version pin"
         raise ValueError(msg)
-    cache = ROOT / ".cache/boundary-kani"
+    cache = root / ".cache/boundary-kani"
     cache.mkdir(parents=True, exist_ok=True)
     checked_download(FRONTEND_URL, cache / FRONTEND_NAME, FRONTEND_DIGEST)
     checked_download(BUNDLE_URL, cache / BUNDLE_NAME, BUNDLE_DIGEST)
@@ -139,7 +163,7 @@ def main() -> None:
     with tarfile.open(cache / FRONTEND_NAME, "r:gz") as archive:
         archive.extractall(
             frontend,
-            members=[archive.getmember("cargo-kani"), archive.getmember("kani")],
+            members=[archive.getmember(name) for name in FRONTEND_MEMBERS],
             filter="data",
         )
 
