@@ -59,7 +59,8 @@ def test_source_distribution_retains_native_workspace(
         members = {Path(name).parts[1:] for name in archive.getnames()}
     workspace = repo_root() / "rust"
     expected: set[tuple[str, ...]] = {
-        ("rust", name) for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml")
+        ("rust", name)
+        for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "dylint.toml")
     }
     for crate in ("cuprum-rust", "cuprum-streams", "cuprum-native-io"):
         expected.add(("rust", crate, "Cargo.toml"))

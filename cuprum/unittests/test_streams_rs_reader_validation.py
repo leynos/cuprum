@@ -57,3 +57,25 @@ def test_invalid_reader_closes_duplicate_before_native_call(
         with pytest.raises(OSError, match="Bad file descriptor"):
             os.fstat(duplicate)
         os.fstat(sink)
+
+
+def test_windows_negative_reader_is_rejected_before_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A negative CRT descriptor must not reach the platform conversion."""
+    converted: list[int] = []
+
+    def convert_reader(fd: int) -> int:
+        """Record the descriptor and model the real conversion's refusal."""
+        converted.append(fd)
+        if fd < 0:
+            msg = "get_osfhandle refuses a negative descriptor"
+            raise OSError(msg)
+        return fd
+
+    monkeypatch.setattr(_streams_rs.os, "name", "nt")
+    monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert_reader)
+    with pytest.raises(ValueError, match="file handle must be non-negative"):
+        _streams_rs._prepare_native_reader(-1)
+
+    assert not converted, "conversion must not run for a negative descriptor"

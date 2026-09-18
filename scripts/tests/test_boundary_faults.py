@@ -15,10 +15,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_the_harness_launches_the_pinned_installer_versions() -> None:
     """A drifted pin must fail here rather than at verifier launch."""
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert f"KANI_VERSION = {faults.KANI_VERSION}" in makefile, (
+    pins = faults.read_tool_pins()
+    assert f"KANI_VERSION = {pins.kani}" in makefile, (
         "the harness Kani pin drifted from the Makefile's installer"
     )
-    assert f"cuprum-verus-{faults.VERUS_VERSION}" in makefile, (
+    assert f"cuprum-verus-{pins.verus}" in makefile, (
         "the harness Verus root drifted from the Makefile's installer"
     )
 

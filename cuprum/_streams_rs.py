@@ -129,16 +129,20 @@ def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
 
 def _prepare_native_reader(reader_fd: int) -> int:
     """Validate ABI representation while Python still owns the writer."""
-    reader = operator.index(_convert_fd_for_platform(reader_fd))
+    # A negative value is rejected before the platform conversion: on Windows
+    # the conversion calls ``msvcrt.get_osfhandle``, which raises ``OSError``
+    # for a negative CRT descriptor rather than the documented ``ValueError``.
+    raw_reader = operator.index(reader_fd)
+    if raw_reader < 0:
+        resource = "file handle" if os.name == "nt" else "file descriptor"
+        msg = f"{resource} must be non-negative"
+        raise ValueError(msg)
+    reader = operator.index(_convert_fd_for_platform(raw_reader))
     if not _I64_MIN <= reader <= _I64_MAX:
         msg = "Python int too large to convert to C long"
         raise OverflowError(msg)
     if os.name != "nt" and not -(1 << 31) <= reader < (1 << 31):
         msg = "file descriptor out of range"
-        raise ValueError(msg)
-    if reader < 0:
-        resource = "file handle" if os.name == "nt" else "file descriptor"
-        msg = f"{resource} must be non-negative"
         raise ValueError(msg)
     return reader
 
