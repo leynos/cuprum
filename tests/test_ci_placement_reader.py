@@ -198,6 +198,38 @@ def test_unmodelled_declarations_are_refused(
         reader.placement("w.yml", "j")
 
 
+def test_an_interpolated_label_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse a value that interpolates without being wholly an expression.
+
+    `ubuntu-${{ matrix.release }}` is not a literal label, and recording it as
+    one is the same defect as recording an opaque expression as one: the label
+    it resolves to at run time is invisible to every placement and registry
+    assertion, while the job still asks for a runner.
+    """
+    _declare(monkeypatch, {"runs-on": "ubuntu-${{ matrix.release }}", "steps": []})
+    with pytest.raises(AssertionError, match="interpolates its runner label"):
+        reader.placement("w.yml", "j")
+
+
+def test_incidental_whitespace_around_an_expression_is_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a correctly written lane readable when a scalar leaves a space.
+
+    A folded scalar can leave a trailing space. Without tolerating it the whole
+    declaration falls through to the literal branch, and a correct fork lane
+    quietly stops being read as one, which is a false negative rather than a
+    false positive and so is the harder kind to notice.
+    """
+    _declare(monkeypatch, {"runs-on": f"  {FORK_EXPRESSION} ", "steps": []})
+    placed = reader.placement("w.yml", "j")
+    assert placed.kind == "fork", (
+        f"incidental whitespace must not change the shape, got {placed.kind}"
+    )
+    assert placed.owned == OWNED, f"owned arm was {placed.owned!r}"
+    assert placed.fork == HOSTED, f"fork arm was {placed.fork!r}"
+
+
 def test_the_refusal_of_an_opaque_expression_is_still_needed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
