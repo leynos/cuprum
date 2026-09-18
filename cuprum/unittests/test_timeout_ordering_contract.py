@@ -52,9 +52,9 @@ from cuprum.unittests._timeout_lane_support import (
     WATCHDOG_VARIABLE,
     _default_nextest_profile,
     _slow_timeout_of,
-    cargo_workspace_dir,
     global_timeout_seconds,
     largest_per_test_allowance_seconds,
+    nextest_config_path,
     termination_allowance_seconds,
 )
 from tests.helpers.docs import repo_root
@@ -175,7 +175,7 @@ def test_the_nextest_config_sits_where_nextest_looks_for_it() -> None:
         "no parent directory, so the tiers it declares would be inert beneath "
         "a watchdog sized for neither"
     )
-    assert (cargo_workspace_dir() / ".config" / "nextest.toml").is_file(), (
+    assert nextest_config_path().is_file(), (
         f"expected the nextest configuration at {NEXTEST_CONFIG}, the path "
         "nextest resolves from the Cargo workspace root"
     )
