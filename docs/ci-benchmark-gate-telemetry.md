@@ -141,11 +141,23 @@ for path in sorted(Path("logs").rglob("*.jsonl")):
             "schema_version", "metric", "value", "labels", "run_id",
             "run_attempt", "recorded_at",
         }
-        if set(record) != expected_keys or record["schema_version"] != 1:
+        # `True == 1` in Python, so a bare `!= 1` would accept `true` for a
+        # field the writer emits as an integer. The type checks below keep a
+        # boolean from satisfying a numeric contract.
+        if (
+            set(record) != expected_keys
+            or not isinstance(record["schema_version"], int)
+            or isinstance(record["schema_version"], bool)
+            or record["schema_version"] != 1
+        ):
             raise ValueError(f"{path}:{line_number}: unsupported record")
         if record["metric"] != "benchmark_gate_decisions_total":
             raise ValueError(f"{path}:{line_number}: unexpected metric")
-        if record["value"] != 1:
+        if (
+            not isinstance(record["value"], int)
+            or isinstance(record["value"], bool)
+            or record["value"] != 1
+        ):
             raise ValueError(f"{path}:{line_number}: value must be 1")
         labels = record.get("labels")
         if not isinstance(labels, dict) or set(labels) != set(LABELS):

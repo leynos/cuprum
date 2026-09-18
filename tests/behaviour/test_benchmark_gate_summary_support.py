@@ -45,6 +45,30 @@ class Detector:
     bench: str
 
 
+class SummaryOutputs(typ.TypedDict):
+    """Step outputs the summary script publishes for downstream steps.
+
+    The script's output contract is fixed: it transports the same three
+    bounded values it writes into the summary table, and the telemetry step
+    reads them back by these names. Declaring them lets a consumer that reads
+    a key the script never writes fail type checking rather than resolve to
+    `None` at run time.
+
+    Attributes
+    ----------
+    event_class : str
+        Bounded event class, `pull_request` or `other`.
+    detector_status : str
+        Bounded detector verdict, `success`, `failure`, or `unknown`.
+    decision : str
+        Bounded benchmark-gate decision.
+    """
+
+    event_class: str
+    detector_status: str
+    decision: str
+
+
 @dc.dataclass(frozen=True, slots=True)
 class Summary:
     """Represent the parsed row emitted by the summary script.
@@ -57,14 +81,14 @@ class Summary:
         Canonical Markdown table emitted by the workflow summary script.
     metric : dict[str, str]
         Bounded labels emitted in the workflow annotation.
-    outputs : dict[str, str]
+    outputs : SummaryOutputs
         Step outputs the script published for downstream steps to transport.
     """
 
     fields: dict[str, str]
     table: str
     metric: dict[str, str]
-    outputs: dict[str, str]
+    outputs: SummaryOutputs
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -143,7 +167,7 @@ def _execute_summary_script(
     return completed
 
 
-def _parse_summary(*, emitted: str, outputs: dict[str, str], stdout: str) -> Summary:
+def _parse_summary(*, emitted: str, outputs: SummaryOutputs, stdout: str) -> Summary:
     """Parse the summary table and workflow annotation."""
     rows = [
         line
@@ -228,11 +252,17 @@ def run_summary_script(
     )
 
 
-def _read_outputs(path: pth.Path) -> dict[str, str]:
-    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``."""
+def _read_outputs(path: pth.Path) -> SummaryOutputs:
+    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``.
+
+    The keys are the script's, not this function's: it parses whatever the step
+    appended. The behavioural test asserts the parsed mapping equals the
+    expected bounded values, so a missing or misspelled output fails there
+    rather than surfacing as a `KeyError` in whichever consumer reads first.
+    """
     pairs = (
         line.split("=", maxsplit=1)
         for line in path.read_text(encoding="utf-8").splitlines()
         if "=" in line
     )
-    return dict(pairs)
+    return typ.cast("SummaryOutputs", dict(pairs))

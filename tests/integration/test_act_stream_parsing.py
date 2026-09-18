@@ -82,15 +82,32 @@ def test_non_json_lines_are_skipped_rather_than_fatal() -> None:
     )
 
 
-def test_the_fixtures_carry_comment_lines_that_are_not_events() -> None:
-    """Prove the fixtures exercise the non-JSON path they are documented for."""
-    for path in (PULL_REQUEST, DETECTOR_FAILURE, REPEATED_OUTPUT):
-        text = path.read_text(encoding="utf-8")
-        comments = [line for line in text.splitlines() if line.startswith("#")]
-        assert comments, f"{path.name} has no comment lines"
-        assert all(not event.get("comment") for event in recorded(path).events), (
-            f"{path.name} turned a comment line into an event"
-        )
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param(PULL_REQUEST, id="pull-request"),
+        pytest.param(DETECTOR_FAILURE, id="detector-failure"),
+        pytest.param(REPEATED_OUTPUT, id="repeated-output"),
+    ],
+)
+def test_the_fixtures_carry_comment_lines_that_are_not_events(path: pth.Path) -> None:
+    """Prove the fixtures exercise the non-JSON path they are documented for.
+
+    The property is a count, not the absence of a key: `act` emits no
+    `comment` field, so asserting that no event carries one would hold however
+    the parser treated the comment lines. Counting events against the fixture's
+    JSON lines fails when a comment line is read as an event — and when a real
+    event is dropped alongside it.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    comments = [line for line in lines if line.startswith("#")]
+    assert comments, f"{path.name} has no comment lines"
+    json_lines = [line for line in lines if line.startswith("{")]
+    events = recorded(path).events
+    assert len(events) == len(json_lines), (
+        f"{path.name} must yield one event per JSON line and skip the comment "
+        f"lines, got {len(events)} events for {len(json_lines)} JSON lines"
+    )
 
 
 def test_outputs_take_the_last_value_when_a_name_repeats() -> None:

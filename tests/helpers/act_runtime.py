@@ -22,7 +22,7 @@ from cuprum import ProgramCatalogue
 from cuprum.sh import ExecutionContext, SafeCmd
 
 __all__ = (
-    "ACT_AVAILABLE_ENV",
+    "REQUIRE_ACT_ENV",
     "SKIP_REASON_ENV",
     "docker_host",
     "git",
@@ -34,12 +34,14 @@ __all__ = (
 #: Set to `1` to turn "no container runtime" from a skip into a failure. The
 #: opt-in CI job sets it, because a job that exists to run these scenarios must
 #: not report success for having skipped every one of them.
-SKIP_REASON_ENV = "CUPRUM_REQUIRE_ACT"
-#: Set by the probe that decides whether the suite will run at all. The
-#: session-scoped fixture passes its verdict down through this, so the probe is
-#: paid for once rather than once per scenario, and so the skip reasons a
-#: report shows are decided by one piece of code.
-ACT_AVAILABLE_ENV = "CUPRUM_ACT_AVAILABLE"
+REQUIRE_ACT_ENV = "CUPRUM_REQUIRE_ACT"
+#: A caller-supplied skip reason. An outer harness that has already probed the
+#: host can pass that verdict down through this rather than paying for the
+#: probe again, and the reasons a report shows stay decided by one piece of
+#: code. It carries a reason *string*, not a flag: any non-empty value is
+#: reported as the skip reason, so `CUPRUM_ACT_SKIP_REASON=1` would skip with
+#: the reason `1`.
+SKIP_REASON_ENV = "CUPRUM_ACT_SKIP_REASON"
 
 # `act` accepts several spellings for the same runtime, and `DOCKER_HOST` can
 # point at any of them. The probe checks the sockets rather than the
@@ -53,6 +55,22 @@ _RUNTIME_COMMANDS = ("podman", "docker")
 #: The catalogue name for the commands the harness runs. It is the project
 #: those commands are attributed to, not a repository name.
 _CATALOGUE = "cuprum-act-harness"
+
+
+def _socket_paths() -> tuple[str, ...]:
+    """Return the candidate runtime sockets for this host, if any.
+
+    Returns
+    -------
+    tuple of str
+        The socket paths with the user id substituted, or an empty tuple on a
+        host with no POSIX user id, where none of the candidates can be named
+        and so none can be tested.
+    """
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return ()
+    return tuple(path.format(uid=getuid()) for path in _RUNTIME_PROBES)
 
 
 def _probe_reason() -> str:
@@ -71,12 +89,13 @@ def _probe_reason() -> str:
         )
     if not any(shutil.which(command) for command in _RUNTIME_COMMANDS):
         return "neither podman nor docker is installed, so act has no container runtime"
-    if not any(
-        pth.Path(path.format(uid=os.getuid())).exists() for path in _RUNTIME_PROBES
-    ):
+    paths = _socket_paths()
+    if not paths:
+        return "this host has no POSIX user id, so act has no container socket"
+    if not any(pth.Path(path).exists() for path in paths):
         return (
             "no container runtime socket was found at "
-            f"{', '.join(_RUNTIME_PROBES)}, so act cannot start a container"
+            f"{', '.join(paths)}, so act cannot start a container"
         )
     return ""
 
@@ -99,12 +118,12 @@ def harness_skip_reason() -> str:
     AssertionError
         If the harness cannot run and skipping has been refused.
     """
-    reason = os.environ.get(ACT_AVAILABLE_ENV) or _probe_reason()
+    reason = os.environ.get(SKIP_REASON_ENV) or _probe_reason()
     if not reason:
         return ""
-    if os.environ.get(SKIP_REASON_ENV) == "1":
+    if os.environ.get(REQUIRE_ACT_ENV) == "1":
         message = (
-            f"{SKIP_REASON_ENV}=1 requires the workflow integration harness to "
+            f"{REQUIRE_ACT_ENV}=1 requires the workflow integration harness to "
             f"run, but it cannot: {reason}"
         )
         raise AssertionError(message)
@@ -124,8 +143,7 @@ def docker_host() -> str:
     AssertionError
         If no known socket exists, so the probe and the run cannot disagree.
     """
-    for candidate in _RUNTIME_PROBES:
-        path = candidate.format(uid=os.getuid())
+    for path in _socket_paths():
         if pth.Path(path).exists():
             return f"unix://{path}"
     message = f"no container runtime socket found in {_RUNTIME_PROBES}"

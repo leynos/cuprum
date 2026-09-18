@@ -162,11 +162,7 @@ def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
     # Compared as a set: the config registers names for lint to resolve, and
     # actionlint does not care what order they appear in. Sorting still fails
     # on a duplicate, so the membership check loses nothing.
-    assert sorted(config["config-variables"]) == sorted([
-        "CODESCENE_CLI_SHA256",
-        "BENCHMARK_TELEMETRY_ENDPOINT",
-        "BENCHMARK_TELEMETRY_INSTANCE_ID",
-    ]), (
+    assert sorted(config["config-variables"]) == ["CODESCENE_CLI_SHA256"], (
         "list only the configuration variables the workflows read, so a typo "
         f"in a vars.* reference fails lint; got {config['config-variables']}"
     )

@@ -186,8 +186,7 @@ is why they are listed here rather than left to be rediscovered.
 
 - **Scope `act` to one workflow with `-W`.** `--job` matches a job name across
   every workflow file, so without `-W .github/workflows/<file>.yml` a job name
-  that appears in two files runs both, and the failure names a job you did not
-  mean to run.
+  that appears in two files runs both, and the failure names an unintended job.
 - **Pass `-s GITHUB_TOKEN=` when the workflow uses `actions/checkout` and
   `dorny/paths-filter`. With an empty token, `paths-filter` takes its local
   `git diff` path and avoids the GitHub API. `act` may still need network

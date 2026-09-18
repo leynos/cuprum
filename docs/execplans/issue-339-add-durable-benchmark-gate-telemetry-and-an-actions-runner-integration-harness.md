@@ -1,7 +1,7 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IMPLEMENTED; hosted receipt verified, rebased candidate green, rebased
-again onto `b63a0f21`
+Status: IMPLEMENTED; hosted receipts verified for the commits their runs name,
+rebased candidate green, rebased again onto `b63a0f21`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -314,8 +314,8 @@ interval of a random 45–90 minutes before retrying.
 M3 publishes the already named branch, retaining its matching origin upstream,
 and updates the existing PR rather than opening a duplicate. The PR title must
 include `(#339)` and its summary must contain `Closes #339`. Its final
-`## References` section must link session
-`https://lody.ai/leynos/sessions/103f642f-34a2-46a6-b03c-f280276fdbc9`.
+`## References` section must link the session at
+<https://lody.ai/leynos/sessions/103f642f-34a2-46a6-b03c-f280276fdbc9>.
 
 Inspect the hosted `changes` result for that exact pushed SHA. Download its
 `benchmark-gate-decision-*` artefact using the operational guide and compare
@@ -381,11 +381,12 @@ benchmark also ran successfully and retained its measurements. This does not
 establish exact runtime parity or success for unrelated hosted CI jobs; the
 pre-rebase CodeScene parser and installer TLS failures are recorded above, and
 the head reached by the first rebase, `67539822`, passed all 17 jobs in run
-`35337586749`. That receipt predates the second rebase onto `b63a0f21`, so the
-head reached by that rebase, `3051257e`, needed its own hosted run. It has one:
+`35337586749`. That receipt predates the second rebase onto `b63a0f21`. No
+hosted run names the replay's own head, `3051257e`, so no receipt is claimed
+for that commit; the receipt covering the rebased series belongs to a commit
+its run does name:
 [run 35394569533](https://github.com/leynos/cuprum/actions/runs/35394569533)
-completed **successfully** for `2a671157`, the plan-commit head of the rebased
-series, with every job passing. Its
+completed **successfully** for `2a671157`, with every job passing. Its
 [decision artefact](https://github.com/leynos/cuprum/actions/runs/35394569533/artifacts/10566788571)
 was downloaded and validated against the schema, the three bounded labels
 (`event_class=pull_request`, `detector_status=success`, `decision=run`),

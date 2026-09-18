@@ -22,6 +22,7 @@ from tests.behaviour.test_benchmark_gate_summary_support import (
     Detector,
     Summary,
     SummaryCase,
+    SummaryOutputs,
     _parse_summary,
     run_summary_script,
 )
@@ -345,7 +346,13 @@ def test_the_summary_parser_rejects_a_malformed_metric_label() -> None:
     )
 
     with pytest.raises(AssertionError, match="metric label") as error:
-        _parse_summary(emitted=emitted, outputs={}, stdout=stdout)
+        # The parse fails on the annotation before it looks at the outputs, so
+        # this case supplies none.
+        _parse_summary(
+            emitted=emitted,
+            outputs=typ.cast("SummaryOutputs", {}),
+            stdout=stdout,
+        )
 
     assert stdout in str(error.value), (
         "the parse diagnostic must retain workflow output"
