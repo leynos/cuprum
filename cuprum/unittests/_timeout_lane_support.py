@@ -63,6 +63,24 @@ COVERAGE_ACTION: typ.Final[str] = (
 #: finishes inside it.
 EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
 
+#: What a cold instrumented compile may add to the invocation the watchdog
+#: bounds, before the run reaches a single test.
+#:
+#: An allowance rather than a measurement: this repository has no coverage
+#: run it can prove was cold, and a bound is what the watchdog needs. This
+#: lane no longer archives `target`, so sccache carries the compiler output
+#: and a branch's first run compiles everything the cache cannot serve.
+#:
+#: Adopted from the estate's own observed cold run rather than derived from
+#: cuprum's warm one. `generate-coverage`'s README records Netsuke's first
+#: trunk run after the same change serving 333 of 2,336 compiler requests,
+#: finishing 2,790 tests at about 512 s and being killed at 600 during
+#: report generation. Netsuke's suite is some twenty-five times the 112
+#: tests measured here, so 600 s is conservative for this repository, and
+#: seven times the 83 s its whole warm Rust invocation took on run
+#: 35391248951 (a 29.54 s compile and a 50.969 s nextest run).
+COLD_BUILD_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
+
 #: Everything in a coverage job that is not the `cargo` invocation the
 #: watchdog bounds. The job timer covers it; the watchdog does not.
 #:
