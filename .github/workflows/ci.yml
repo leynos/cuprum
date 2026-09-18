@@ -55,7 +55,23 @@ env:
 
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
+    # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
+    # arm falls back to a GitHub-hosted label and only forks take it. Keep the
+    # continuation at this indent: a more-indented continuation in a folded
+    # scalar keeps its line break and puts a newline inside the expression.
+    # GitHub evaluates the broken value regardless, so a green run is not
+    # evidence; `test_placement_expressions_parse_to_one_line` is.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+    # Compile-bound on two toolchains plus a Windows cross-target check,
+    # measured at 198 to 292 s over six runs on four GitHub-hosted vCPU.
+    # Ubicloud vCPU are not GitHub vCPU, so the Ubicloud figure is expected to
+    # be higher and the arm is judged on the third run. The ceiling matches the
+    # interpreter-suite lanes: a regression fails visibly instead of quietly
+    # costing, and `ubicloud-standard-4` needs measured evidence this
+    # repository does not have yet.
+    timeout-minutes: 45
     env:
       MBAKE_VERSION: '1.4.6'
       MDTABLEFIX_VERSION: '0.6.0'
@@ -72,6 +88,12 @@ jobs:
           # token must not stay in .git/config where that code could reach it.
           persist-credentials: false
 
+      - name: Start resource sampler
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: start
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
         with:
@@ -80,10 +102,11 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: lint
 
-      # This job is GitHub-hosted, so these archives live in GitHub's cache
-      # service rather than Ubicloud's. Every key carries `runner.environment`,
-      # so the two lanes cannot restore each other's entries even though they
-      # share a family name, and each lane has its own single writer.
+      # Every key carries `runner.environment`, so the owned arm and the fork
+      # arm cannot restore each other's entries even though they share a family
+      # name. Nothing writes the fork arm's scope: every save below requires a
+      # push to `refs/heads/main`, which a fork can never produce, so a fork's
+      # pull request restores nothing and compiles cold.
       - name: Restore the Cargo registry
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -328,26 +351,19 @@ jobs:
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # Single writer for the GitHub-hosted lane, mirroring `typecheck-test`
-      # on the Ubicloud lane. It is the only Linux gate here and the only one
-      # that compiles, so there is nothing to race with.
-      - name: Save the Cargo registry
-        if: >-
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ env.CARGO_CACHE_KEY }}
-
+      # This job restores the Cargo registry and no longer saves it. On the
+      # owned arm it now runs on the Ubicloud lane, where `runner.environment`
+      # renders `self-hosted` and the key it would publish is the very family
+      # `extension-tests` writes. Two writers of one family is the collision
+      # `test_each_cache_family_has_exactly_one_writer` exists to refuse, and
+      # the registry holds the resolved dependency graph, which is the same
+      # content either job would archive.
       - name: Save the compiler cache
-        # The only GitHub-hosted job that compiles, so it owns the whole
-        # `github-hosted` compiler-cache scope; its Cranelift lint build is
-        # also a shape no other job produces. Its archive lands in GitHub's
-        # cache rather than Ubicloud's, which is the other reason the lane is
-        # named in the key.
+        # The `lint` build shape is produced by no other job, so this remains
+        # the sole writer of its compiler-cache family. Only the lane in the
+        # rendered key changed: the fork arm cannot reach this step, because
+        # the guard below requires a push to `refs/heads/main` and a fork's
+        # pull request is neither.
         #
         # The entry is a rolling generation named after the run, so there is
         # no cache-hit guard to skip: the key is new every time, and a run
@@ -362,10 +378,25 @@ jobs:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
 
+      - name: Report peak resource use
+        if: always()
+        uses: ./.github/actions/resource-sampler
+        with:
+          mode: report
+          vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
+
   typecheck-test:
     name: Typecheck and test (Python ${{ matrix.python-label }})
     continue-on-error: ${{ matrix.experimental }}
-    runs-on: ubicloud-standard-2
+    # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
+    # arm falls back to a GitHub-hosted label and only forks take it. Keep the
+    # continuation at this indent: a more-indented continuation in a folded
+    # scalar keeps its line break and puts a newline inside the expression.
+    # GitHub evaluates the broken value regardless, so a green run is not
+    # evidence; `test_placement_expressions_parse_to_one_line` is.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     env:
       MDTABLEFIX_VERSION: '0.6.0'
@@ -617,7 +648,15 @@ jobs:
 
   extension-tests:
     name: Extension-gated tests (Python/Rust boundary)
-    runs-on: ubicloud-standard-2
+    # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
+    # arm falls back to a GitHub-hosted label and only forks take it. Keep the
+    # continuation at this indent: a more-indented continuation in a folded
+    # scalar keeps its line break and puts a newline inside the expression.
+    # GitHub evaluates the broken value regardless, so a green run is not
+    # evidence; `test_placement_expressions_parse_to_one_line` is.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     steps:
       - name: Check out repository
@@ -822,6 +861,11 @@ jobs:
   extension-tests-windows:
     name: Extension-gated tests (Windows Python/Rust boundary)
     runs-on: windows-2022
+    # Measured at 67 to 72 s. A ceiling belongs on every job that declares
+    # steps, not only on the paid ones: once a label is event-dependent,
+    # "an Ubicloud lane" is a property of the event, so a rule keyed on the
+    # label would stop applying on exactly the arm that hangs.
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -873,7 +917,15 @@ jobs:
     # ratchet baseline, so this lane only compares its coverage locally
     # against the trusted baseline without generating coverage twice on main.
     if: github.event_name == 'pull_request'
-    runs-on: ubicloud-standard-2
+    # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
+    # arm falls back to a GitHub-hosted label and only forks take it. Keep the
+    # continuation at this indent: a more-indented continuation in a folded
+    # scalar keeps its line break and puts a newline inside the expression.
+    # GitHub evaluates the broken value regardless, so a green run is not
+    # evidence; `test_placement_expressions_parse_to_one_line` is.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Above the 2,700 s cargo watchdog set below plus the work either side
     # of the coverage step, which reached 43 s on run 34071469378. Fifty
     # minutes is the requirement, and the estate's rule is fifteen above
@@ -1128,7 +1180,10 @@ jobs:
   # `needs` edge never leaves benchmark-ratchet skipped on pushes to
   # main, where the baseline artefact must stay fresh.
   changes:
+    # Stays GitHub-hosted: a five-second paths-filter call is administrative,
+    # API-bound work that gains nothing from a metered build slot.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       # paths-filter reads pull-request changed files through GitHub's API.
@@ -1426,7 +1481,15 @@ jobs:
     # ratio between the baseline and the candidate, so runner speed cancels out
     # of the comparison and the job does not need a fixed or larger shape. It
     # therefore starts at the estate default like every other Linux gate.
-    runs-on: ubicloud-standard-2
+    # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
+    # arm falls back to a GitHub-hosted label and only forks take it. Keep the
+    # continuation at this indent: a more-indented continuation in a folded
+    # scalar keeps its line break and puts a newline inside the expression.
+    # GitHub evaluates the broken value regardless, so a green run is not
+    # evidence; `test_placement_expressions_parse_to_one_line` is.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 60
     needs:
       - lint-test

@@ -13,6 +13,16 @@ from __future__ import annotations
 
 import typing as typ
 
+from tests.helpers.ci_placement import (
+    FORK_FIELD,
+    FROZEN_HOSTED_LABELS,
+    Placement,
+    all_jobs,
+    declares_steps,
+    never_runs,
+    placement,
+    references,
+)
 from tests.helpers.ci_workflows import (
     CACHE_ACTION_PIN,
     CACHE_PLAIN,
@@ -46,8 +56,11 @@ if typ.TYPE_CHECKING:
 # fmt: off
 __all__ = (
     "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",
-    "ROOT", "WORKFLOW_DIR", "cache_paths", "cache_steps", "expand", "job",
-    "job_env", "jobs", "restore_steps", "save_steps",
+    "FORK_FIELD", "FROZEN_HOSTED_LABELS", "ROOT", "WORKFLOW_DIR",
+    "Placement", "RUNNER_NAMED_JOBS", "all_jobs", "cache_paths",
+    "cache_steps", "ceiling",
+    "declares_steps", "expand", "job", "job_env", "jobs", "never_runs",
+    "placement", "references", "restore_steps", "save_steps",
     "single_step_position_using", "single_step_using", "step_inputs",
     "steps", "workflow_document", "workflow_env", "workflow_sources",
 )
@@ -98,14 +111,49 @@ OBSERVATION_STEP = "Record cache observations"
 #: and does real work, which is what buys it a paid runner.
 UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
-    "ci.yml": ("typecheck-test", "extension-tests", "coverage", "benchmark-ratchet"),
+    "ci.yml": (
+        "lint-test",
+        "typecheck-test",
+        "extension-tests",
+        "coverage",
+        "benchmark-ratchet",
+    ),
     "coverage-main.yml": ("coverage-upload",),
 }
+#: Ubicloud lanes a pull request from a fork can reach, which must therefore
+#: declare the fallback arm. Derived intent, not derived fact: the workflows
+#: are read back against it, and `test_fork_reachability_matches_the_manifest`
+#: holds it against the triggers so a lane cannot quietly leave the set.
+#:
+#: `coverage-upload` is absent because `coverage-main.yml` triggers only on a
+#: push to `main` and a dispatch, neither of which a fork can cause. The two
+#: `build-wheels.yml` jobs are present because `ci.yml` calls that workflow on
+#: every pull request, so its own `workflow_call` trigger understates its
+#: exposure (weaver: a called workflow's triggers are its callers').
+FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
+    "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
+    "ci.yml": (
+        "lint-test",
+        "typecheck-test",
+        "extension-tests",
+        "coverage",
+        "benchmark-ratchet",
+    ),
+}
+#: The one job permitted to fail without failing the workflow, and the matrix
+#: key that says so. The 3.15a leg tracks a pre-release interpreter and is not
+#: a required context; every other leg gates a merge.
+EXPERIMENTAL_LEG_KEY = "experimental"
+CONTINUE_ON_ERROR_JOBS: typ.Final = (("ci.yml", "typecheck-test"),)
 #: Jobs that stay on GitHub-hosted runners, and why. Ubicloud offers Linux
 #: only, and a job that sleeps, calls an API, or publishes an artefact someone
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("lint-test", "changes", "loom-smoke"),
+    # `lint-test` moved to the Ubicloud manifest: it is a developer-blocking
+    # Linux gate that compiles, which is what buys a paid runner. `loom-smoke`
+    # and `workflow-harness` stay here, and `rust-boundaries.yml`'s verifier
+    # lanes stay by this repository's own decision recorded below.
+    "ci.yml": ("changes", "loom-smoke"),
     "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "loom.yml": ("loom",),
@@ -113,6 +161,15 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     # Issue379 requires verifier schedules on GitHub-hosted Linux.
     "rust-boundaries.yml": ("verus", "extended"),
 }
+#: Matrix jobs whose check context spells the runner label, reviewed and
+#: accepted. A name reading a matrix key is stable per event, which is the
+#: property the stability rule protects, but the context still carries a label
+#: and a placement change would rename it. Two of `build-native-wheels`'
+#: contexts are named verbatim in the `main-required-checks` ruleset, which is
+#: why moving its Linux legs is the repository owner's decision rather than a
+#: label change; `native` is not a required context today.
+RUNNER_NAMED_JOBS: typ.Final = (("rust-boundaries.yml", "native"),)
+
 #: Windows-native validation needs GitHub's hosted Windows image; Ubicloud
 #: offers Linux capacity only.
 WINDOWS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
@@ -178,7 +235,11 @@ FORBIDDEN_CACHE_PATHS: typ.Final = ("target", "rust/target", "target/debug")
 #: the GitHub-hosted lane and the Ubicloud lane render different values and
 #: read different cache services; a key with two writers has one on each side.
 CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
-    "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "lint-test")),
+    # `lint-test` restores this key and no longer saves it. On its owned arm
+    # it renders the `self-hosted` lane, which is the family `extension-tests`
+    # writes, and the registry holds the resolved dependency graph either job
+    # would have archived.
+    "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"),),
     # The compiler cache is written by whichever job actually compiles, and
     # each compile shape is its own family. See CACHE_FAMILY_WRITERS: this
     # mapping only says which jobs hold a save step, not which archive each
@@ -214,12 +275,11 @@ CACHE_FAMILY_WRITERS: typ.Final[
     cabc.Mapping[tuple[str, str, tuple[str, ...]], tuple[str, str]]
 ] = {
     ("CARGO_CACHE_KEY", "self-hosted", ()): ("ci.yml", "extension-tests"),
-    ("CARGO_CACHE_KEY", "github-hosted", ()): ("ci.yml", "lint-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.12",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.14",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.15",)): ("ci.yml", "typecheck-test"),
-    ("SCCACHE_CACHE_KEY", "github-hosted", ("3.13", "lint")): (
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "lint")): (
         "ci.yml",
         "lint-test",
     ),

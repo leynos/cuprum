@@ -43,24 +43,34 @@ gains nothing from a metered build slot.
 
 Table 1: GitHub Actions jobs, workflows, and runners
 
-| Job                       | Workflow                     | Runner                |
-| ------------------------- | ---------------------------- | --------------------- |
-| `typecheck-test`          | `ci.yml`                     | `ubicloud-standard-2` |
-| `extension-tests`         | `ci.yml`                     | `ubicloud-standard-2` |
-| `coverage`                | `ci.yml`                     | `ubicloud-standard-2` |
-| `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` |
-| `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` |
-| `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` |
-| `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` |
-| `lint-test`               | `ci.yml`                     | `ubuntu-latest`       |
-| `changes`                 | `ci.yml`                     | `ubuntu-latest`       |
-| `workflow-harness`        | `benchmark-gate-harness.yml` | `ubuntu-latest`       |
-| `loom-smoke`              | `ci.yml`                     | `ubuntu-latest`       |
-| `loom`                    | `loom.yml`                   | `ubuntu-latest`       |
-| `extension-tests-windows` | `ci.yml`                     | `windows-2022`        |
-| `publish`                 | `release.yml`                | `ubuntu-latest`       |
-| `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       |
-| `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    |
+| Job                       | Workflow                     | Owned arm             | Fork arm        | Ceiling |
+| ------------------------- | ---------------------------- | --------------------- | --------------- | ------- |
+| `lint-test`               | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 45      |
+| `typecheck-test`          | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 45      |
+| `extension-tests`         | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 45      |
+| `coverage`                | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 65      |
+| `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 60      |
+| `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
+| `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
+| `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` | none            | 65      |
+| `changes`                 | `ci.yml`                     | `ubuntu-latest`       | none            | 10      |
+| `loom-smoke`              | `ci.yml`                     | `ubuntu-latest`       | none            | 10      |
+| `workflow-harness`        | `benchmark-gate-harness.yml` | `ubuntu-latest`       | none            | 30      |
+| `loom`                    | `loom.yml`                   | `ubuntu-latest`       | none            | 30      |
+| `verus`                   | `rust-boundaries.yml`        | `ubuntu-latest`       | none            | 20      |
+| `extended`                | `rust-boundaries.yml`        | `ubuntu-latest`       | none            | 45      |
+| `extension-tests-windows` | `ci.yml`                     | `windows-2022`        | none            | 20      |
+| `publish`                 | `release.yml`                | `ubuntu-latest`       | none            | 20      |
+| `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       | none            | 180     |
+| `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    | none            | 45      |
+| `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
+
+The hosted rows are hosted for a reason, not by omission. `changes` and
+`loom-smoke` are cheap gate jobs; `workflow-harness`, `loom` and `extended` run
+only on a schedule or a dispatch; and `rust-boundaries.yml`'s verifier lanes
+stay on GitHub-hosted Linux by this repository's own decision. Placing `verus`
+or `loom-smoke` on the paid lane is a separate question needing its own
+measurements.
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -76,17 +86,110 @@ scenario's within-run `rust_mean / python_mean` ratio between the baseline and
 the candidate, so runner speed cancels out of the comparison and the job needs
 neither a fixed nor a larger shape.
 
-`lint-test` stays on `ubuntu-latest`. It installs Whitaker and keeps its own
-npm and Whitaker archives on GitHub's cache service, which is a different store
-from Ubicloud's. It owns its Cargo registry and compiler caches on that side
-exactly as the Ubicloud jobs own theirs.
+`lint-test` moved onto the paid lane. It is a developer-blocking gate that
+compiles real work: Whitaker, clippy under two toolchains, a Windows
+cross-target check and Nixie. Six runs measured it at 198 to 292 seconds on
+four GitHub-hosted vCPU, with a queue that was two to three seconds five times
+and 154 seconds once; the same run queued every hosted lane 77 to 164 seconds
+while its Ubicloud neighbours queued 18 to 37. The case is that tail. Ubicloud
+vCPU are not GitHub vCPU, so the Ubicloud figure is expected to be higher than
+the hosted range, and the arm is judged on its third warm run rather than its
+first. Its required check context is the bare job id, which no runner label
+spells, so the move renames nothing.
 
 The native-wheel matrix keeps its platform runners. Ubicloud has no Windows or
 macOS capacity, and its Linux legs build inside manylinux containers and under
-QEMU emulation.
+QEMU emulation. The two Linux legs are also the one place a placement change
+would cost more than it looks: GitHub spells matrix values into the check name,
+so `build-wheels / build-native-wheels (ubuntu-latest, …)` appears verbatim
+twice in the `main-required-checks` ruleset, and nine steps in that job are
+guarded on `startsWith(matrix.os, 'ubuntu')`, which an expression would switch
+off. Moving either leg is a ruleset edit and a guard rewrite, not a label
+change.
 
-Every Ubicloud job declares `timeout-minutes` so a wedged runner cannot bill
-for GitHub's six-hour default.
+### The fork arm
+
+A pull request from a fork cannot obtain an Ubicloud runner, so every
+fork-reachable lane selects its runner by event:
+
+```yaml
+runs-on: >-
+  ${{ github.event.pull_request.head.repo.fork
+  && 'ubuntu-latest' || 'ubicloud-standard-2' }}
+```
+
+Keep the continuation at the same indent. A continuation indented one level
+deeper keeps its line break inside the folded scalar and puts a newline in the
+middle of the expression; GitHub evaluates the broken value anyway, so a green
+run proves nothing and `test_placement_expressions_parse_to_one_line` is what
+catches it.
+
+Reachability is a property of the triggers, not of the file. `build-wheels.yml`
+declares only `workflow_call`, and its two Ubicloud jobs are as exposed as the
+rest because `ci.yml` calls it on every pull request. A called workflow
+inherits its caller's `github` context, so the expression above works unchanged
+there: on the tag-push caller `github.event.pull_request` is null and the
+Ubicloud arm is selected. `coverage-upload` carries no fallback because
+`coverage-main.yml` triggers only on a push to `main` and a dispatch, neither
+of which a fork can cause.
+
+The fork arm runs cold, and that is the accepted price. Every cache key carries
+`runner.environment`, which renders `github-hosted` on the fork arm and
+`self-hosted` on the owned one, so the two arms read different scopes. No
+writer changes: every save step is guarded on a push to `refs/heads/main`,
+which is never a fork, so the fork arm restores and never publishes. Since
+`lint-test` moved, no job writes a `github-hosted` family at all.
+
+`lint-test` therefore no longer saves the Cargo registry. On its owned arm it
+renders the same `self-hosted` family `extension-tests` writes, and one writer
+per family is the invariant `test_each_cache_family_has_exactly_one_writer`
+holds. It still restores that archive; the registry holds the resolved
+dependency graph, which is the same content either job would have published.
+
+### Ceilings
+
+Every job that declares `steps` declares `timeout-minutes`, so a wedged runner
+cannot bill for GitHub's six-hour default. The rule is keyed on declaring steps
+rather than on carrying an Ubicloud label, because once a label is an
+expression "an Ubicloud lane" is a property of the event, and a rule keyed on
+the label would stop applying on exactly the arm that hangs.
+
+Jobs that declare `uses:` are exempt and must declare no ceiling: GitHub rejects
+`timeout-minutes` on a reusable-workflow caller, so placing a job and bounding
+it are separate ideas and the bound lives in the callee. Cuprum's four callers
+all call workflows whose own jobs are bounded by the rule above.
+
+### The actionlint registry
+
+`.github/actionlint.yaml` registers exactly the labels in use that are neither
+GitHub-hosted nor already registered, asserted as an equality in both
+directions. "In use" is derived from every job in the estate, reading both arms
+of a conditional and every matrix runner entry, minus the named frozen set of
+GitHub-hosted labels in `tests/helpers/ci_placement.py`.
+
+The frozen set is named rather than derived from a vendor prefix on purpose. A
+`ubicloud-` prefix filter agrees with the named set over today's workflows and
+differs on the case that matters: it would silently exempt a second paid
+provider's labels from the registry question altogether. A subset assertion
+would miss a stale registration, which is the other half of the equality.
+
+### The placement reader
+
+`tests/helpers/ci_placement.py` is the one reader of `runs-on` in the test
+suite. Its scope is deliberately narrow: it models the three shapes this
+repository declares, a literal label, the fork fallback and a matrix key
+resolved through its `include` entries, and refuses everything else by name.
+Every contract that asks where a job runs, whether it runs, or what label it
+resolves to goes through it, including the cache-family resolver in
+`tests/helpers/ci_cache_families.py`, so there is one definition of a lane
+rather than two that drift.
+
+Refusal is the design, not a gap. An expression recorded as one opaque label
+carries no vendor prefix, so an Ubicloud classifier drops the lane and it sits
+exempt from every placement, ceiling and registry rule while still asking for a
+paid runner. `tests/test_ci_placement_reader.py` drives the reader with
+synthetic declarations, because a rule parametrized over this repository's own
+correct workflows passes whether or not it discriminates.
 
 ### Cache ownership
 
@@ -103,11 +206,11 @@ key and its restore-key prefix as environment values. A restore and its save
 cannot disagree, and the rendered key is printed into the run summary so any
 miss can be explained from the run alone.
 
-| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                       |
-| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`, and `lint-test` on the GitHub-hosted lane |
-| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test`                                             |
-| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, and `lint-test` on the GitHub-hosted lane  |
+| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                      |
+| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                           |
+| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test`                                            |
+| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs |
 
 Four rules hold that table together, each with a contract test:
 
@@ -221,9 +324,12 @@ measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
 own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
 `coverage-upload` writes the instrumented one, and `lint-test` writes the
-GitHub-hosted lint family. The scheduled `loom.yml` job writes its separate
-model family only on `refs/heads/main`, while manual dispatches and
-`loom-smoke` restore it without saving.
+Cranelift lint family, which moves to the Ubicloud lane with it. The scheduled
+`loom.yml` job writes its separate model family only on `refs/heads/main`, and
+stays on the GitHub-hosted lane because its writer does, while manual
+dispatches and `loom-smoke` restore it without saving. Apart from that Loom
+family, a fork's pull request reads a `github-hosted` scope that nothing
+writes, so it compiles cold.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged

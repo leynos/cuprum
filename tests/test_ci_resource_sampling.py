@@ -22,6 +22,10 @@ RESOURCE_SAMPLER = "./.github/actions/resource-sampler"
 #: every 15 s is interference rather than observation; its disk figure was
 #: taken once, in run 33857764655.
 SAMPLED_JOBS: typ.Final = (
+    # `lint-test` joined this list when it moved onto the paid lane: it builds
+    # Whitaker, clippy under two toolchains and a Windows cross-target check on
+    # two vCPU, which is exactly the shape whose failure mode is a silent death.
+    ("ci.yml", "lint-test"),
     ("ci.yml", "typecheck-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),
