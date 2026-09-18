@@ -61,7 +61,14 @@ FROZEN_HOSTED_LABELS: typ.Final = (
     "windows-latest",
 )
 
-_EXPRESSION = re.compile(r"^\$\{\{(?P<body>.*)\}\}$", re.DOTALL)
+# Surrounding whitespace is incidental: a folded scalar can leave a trailing
+# space, and a lane written that way is correct. Without the `\s*` the whole
+# declaration falls through to the literal branch, which is how a correctly
+# written fork lane would quietly stop being read as one.
+_EXPRESSION = re.compile(r"^\s*\$\{\{(?P<body>.*)\}\}\s*$", re.DOTALL)
+#: An expression *fragment*, used to refuse a value that interpolates without
+#: being wholly an expression.
+_INTERPOLATION = re.compile(r"\$\{\{")
 #: The canonical fork fallback, anchored end to end so the arms are read by
 #: position rather than by membership. `\A`/`\Z` rather than a bare `fullmatch`
 #: on a pattern that could otherwise be satisfied by a prefix.
@@ -262,6 +269,19 @@ def placement(workflow_name: str, job_name: str) -> Placement:
     )
     match = _EXPRESSION.match(text)
     if match is None:
+        # A value that interpolates without being wholly an expression, such as
+        # `ubuntu-${{ matrix.release }}`, is not a literal label. Recording it
+        # as one is the same defect this reader exists to prevent, wearing a
+        # different shape: the label it resolves to at run time is invisible to
+        # every placement and registry assertion.
+        _require(
+            condition=_INTERPOLATION.search(text) is None,
+            message=(
+                f"{where} interpolates its runner label: {text!r}. The labels "
+                "this can resolve to are unreadable, so it is refused rather "
+                "than recorded as one literal."
+            ),
+        )
         return Placement("literal", text, None, frozenset({text}), frozenset())
     body = match.group("body")
     fork = _FORK_EXPRESSION.match(body)
