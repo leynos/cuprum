@@ -63,22 +63,17 @@ COVERAGE_ACTION: typ.Final[str] = (
 #: finishes inside it.
 EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
 
-#: What a cold instrumented compile may add to the invocation the watchdog
-#: bounds, before the run reaches a single test.
+#: What a cold instrumented compile may add before the run reaches a test.
 #:
-#: An allowance rather than a measurement: this repository has no coverage
-#: run it can prove was cold, and a bound is what the watchdog needs. This
-#: lane no longer archives `target`, so sccache carries the compiler output
-#: and a branch's first run compiles everything the cache cannot serve.
-#:
-#: Adopted from the estate's own observed cold run rather than derived from
-#: cuprum's warm one. `generate-coverage`'s README records Netsuke's first
-#: trunk run after the same change serving 333 of 2,336 compiler requests,
-#: finishing 2,790 tests at about 512 s and being killed at 600 during
-#: report generation. Netsuke's suite is some twenty-five times the 112
-#: tests measured here, so 600 s is conservative for this repository, and
-#: seven times the 83 s its whole warm Rust invocation took on run
-#: 35391248951 (a 29.54 s compile and a 50.969 s nextest run).
+#: An allowance, not a measurement: no coverage run here can be proved
+#: cold. These lanes archive no `target`, so sccache carries compiler
+#: output and a branch's first run compiles everything it cannot serve.
+#: Adopted from the estate's own cold run rather than cuprum's warm one.
+#: `generate-coverage`'s README records Netsuke's first trunk run after
+#: the same change finishing 2,790 tests at about 512 s and being killed
+#: at 600 during report generation. That suite is some twenty-five times
+#: the 112 tests measured here, so 600 s is conservative; cuprum's whole
+#: warm Rust invocation was 83 s on run 35391248951.
 COLD_BUILD_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
 
 #: Everything in a coverage job that is not the `cargo` invocation the
@@ -347,12 +342,21 @@ def global_timeout_seconds() -> int:
 
 
 def termination_allowance_seconds() -> int:
-    """Return the default profile's grace period with nextest's 60-second floor.
+    """Return the termination allowance the outer watchdog must cover.
 
     Returns
     -------
     int
-        The configured ``slow-timeout.grace-period`` or 60 seconds.
+        The larger of the default profile's ``slow-timeout.grace-period``
+        and 60 seconds.
+
+    An allowance rather than a reading of nextest. Nextest's own default is
+    10 seconds, so the floor here is this repository's, not the tool's, and
+    a grace period configured below it is modelled as 60. That can only
+    raise the sum the watchdog must contain, never lower it, which is the
+    safe direction for a budget whose purpose is to avoid reporting a slow
+    build as a hang. Cuprum configures no grace period, so the floor is
+    what this returns today.
     """
     grace_period = _slow_timeout_of(_default_nextest_profile()).get("grace-period")
     return max(60, _duration_seconds(grace_period) if grace_period else 0)
