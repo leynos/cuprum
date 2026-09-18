@@ -115,6 +115,21 @@ def test_make_reads_the_linker_version_from_its_pin() -> None:
     )
 
 
+def test_the_prerequisite_gate_requires_both_nightly_components() -> None:
+    """Clippy runs through the dev-fast nightly, so the gate must require it."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "DEV_FAST_LINT_COMPONENT ?= clippy" in makefile, (
+        "the dev-fast lint route depends on a separately installed Clippy"
+    )
+    assert (
+        "DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_CRANELIFT_COMPONENT) "
+        "$(DEV_FAST_LINT_COMPONENT)" in makefile
+    ), "the prerequisite gate must enumerate every component it requires"
+    assert "$(DEV_FAST_REQUIRED_COMPONENTS)" in makefile, (
+        "the prerequisite gate must check every required component"
+    )
+
+
 def test_fragment_is_the_approved_immutable_extension() -> None:
     """Keep the checked-in Cargo fragment byte-identical to its approved pin."""
     fragment = (repo_root() / FRAGMENT).read_bytes()

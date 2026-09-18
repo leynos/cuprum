@@ -15,7 +15,16 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
-MOLD_VERSION = (repo_root() / "tools/mold/VERSION").read_text(encoding="utf-8").strip()
+@pytest.fixture
+def mold_version() -> str:
+    """Return the linker version recorded by the checked-in pin."""
+    return (repo_root() / "tools/mold/VERSION").read_text(encoding="utf-8").strip()
+
+
+def _installed_components(*components: str) -> str:
+    """Emit the component listing a provisioned toolchain reports."""
+    listed = " ".join(f"'{component}'" for component in components)
+    return f"printf '%s\\n' {listed}"
 
 
 def _write_program(directory: Path, name: str, body: str) -> None:
@@ -28,24 +37,33 @@ def _write_program(directory: Path, name: str, body: str) -> None:
 @pytest.mark.parametrize(
     ("programs", "variables", "expected_diagnostic"),
     [
-        pytest.param({}, {}, f"mold {MOLD_VERSION} is required", id="missing_mold"),
+        pytest.param({}, {}, "mold {version} is required", id="missing_mold"),
         pytest.param(
             {
                 "mold": "printf '%s\\n' 'mold 2.41.00'",
                 "rustup": "exit 0",
             },
             {},
-            f"mold {MOLD_VERSION} is required",
+            "mold {version} is required",
             id="wrong_mold_version",
         ),
         pytest.param(
             {
-                "mold": f"printf '%s\\n' 'mold {MOLD_VERSION}'",
+                "mold": "printf '%s\\n' 'mold {version}'",
                 "rustup": "exit 0",
             },
             {},
             "install rustc-codegen-cranelift",
             id="missing_component",
+        ),
+        pytest.param(
+            {
+                "mold": "printf '%s\\n' 'mold {version}'",
+                "rustup": _installed_components("rustc-codegen-cranelift"),
+            },
+            {},
+            "install clippy",
+            id="missing_clippy",
         ),
         pytest.param(
             {},
@@ -60,10 +78,11 @@ def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
     programs: dict[str, str],
     variables: dict[str, str],
     expected_diagnostic: str,
+    mold_version: str,
 ) -> None:
     """Missing or mismatched prerequisites are hard failures with useful output."""
     for name, body in programs.items():
-        _write_program(tmp_path, name, body)
+        _write_program(tmp_path, name, body.format(version=mold_version))
     make = shutil.which("make")
     assert make is not None, "the prerequisite contract requires GNU Make on PATH"
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
@@ -80,18 +99,20 @@ def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
         text=True,
     )
     assert result.returncode != 0, "missing prerequisites must fail closed"
-    assert expected_diagnostic in result.stderr, (
+    assert expected_diagnostic.format(version=mold_version) in result.stderr, (
         f"the prerequisite failure must explain how to repair it: {result.stderr}"
     )
 
 
-def test_prerequisite_recipe_accepts_the_pinned_dependencies(tmp_path: Path) -> None:
-    """The closed prerequisite gate accepts exactly the pinned linker and component."""
-    _write_program(tmp_path, "mold", f"printf '%s\\n' 'mold {MOLD_VERSION}'")
+def test_prerequisite_recipe_accepts_the_pinned_dependencies(
+    tmp_path: Path, mold_version: str
+) -> None:
+    """The closed prerequisite gate accepts exactly the pinned linker and components."""
+    _write_program(tmp_path, "mold", f"printf '%s\\n' 'mold {mold_version}'")
     _write_program(
         tmp_path,
         "rustup",
-        "printf '%s\\n' 'rustc-codegen-cranelift (installed)'",
+        _installed_components("rustc-codegen-cranelift", "clippy"),
     )
     make = shutil.which("make")
     assert make is not None, "the prerequisite contract requires GNU Make on PATH"
@@ -106,13 +127,15 @@ def test_prerequisite_recipe_accepts_the_pinned_dependencies(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
 
 
-def test_dev_build_executes_the_approved_fragment(tmp_path: Path) -> None:
+def test_dev_build_executes_the_approved_fragment(
+    tmp_path: Path, mold_version: str
+) -> None:
     """A Linux debug build invokes Cargo once with the explicit approved fragment."""
-    _write_program(tmp_path, "mold", f"printf '%s\n' 'mold {MOLD_VERSION}'")
+    _write_program(tmp_path, "mold", f"printf '%s\\n' 'mold {mold_version}'")
     _write_program(
         tmp_path,
         "rustup",
-        "printf '%s\n' 'rustc-codegen-cranelift (installed)'",
+        _installed_components("rustc-codegen-cranelift", "clippy"),
     )
     invocation = tmp_path / "cargo-invocation"
     cargo = tmp_path / "cargo"

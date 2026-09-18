@@ -271,7 +271,10 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
         tools=("uv", "yamllint", "actionlint", "mold", "rustup"),
         outputs={
             "mold": "mold 2.41.0\n",
-            "rustup": "rustc-codegen-cranelift-x86_64-unknown-linux-gnu (installed)\n",
+            "rustup": (
+                "rustc-codegen-cranelift-x86_64-unknown-linux-gnu (installed)\n"
+                "clippy-x86_64-unknown-linux-gnu (installed)\n"
+            ),
         },
     )
     overrides = tmp_path / "lint-target-overrides.mk"
