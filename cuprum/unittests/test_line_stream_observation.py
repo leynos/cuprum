@@ -394,3 +394,25 @@ def test_telemetry_observer_failure_is_logged_without_masking_delivery(
     assert failures[0].exc_info is not None, (
         f"observer failure must retain its traceback, got {failures!r}"
     )
+
+
+def test_out_of_order_detach_removes_each_registered_hook() -> None:
+    """Non-LIFO detachment must not restore either stale hook registration."""
+    seen_outer: list[LineStreamEvent] = []
+    seen_inner: list[LineStreamEvent] = []
+    outer = observe_line_stream(seen_outer.append)
+    inner = observe_line_stream(seen_inner.append)
+
+    outer.detach()
+    inner.detach()
+
+    _emit_line_stream_event(
+        LineStreamEvent(
+            phase=LineStreamPhase.SPAWNED,
+            exec_id=new_exec_id(),
+            pid=1,
+        )
+    )
+
+    assert seen_outer == [], "events after both detaches must not invoke hook A"
+    assert seen_inner == [], "events after both detaches must not invoke hook B"

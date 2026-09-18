@@ -58,6 +58,8 @@ from cuprum.line_stream_observation import _emit_line_stream_event
 from cuprum.lines import LineEvent, LineStreamName
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecId
     from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult
@@ -354,6 +356,34 @@ async def _wait_for_line_stream_exit(
     return exit_code, exited_at, stdout_text, stderr_text
 
 
+async def _run_line_stream_teardown[T](
+    run: _LineStreamRun,
+    operation: cabc.Awaitable[T],
+) -> T:
+    """Run one teardown operation between its lifecycle boundaries.
+
+    The wrapper is generic over the operation's result so each caller keeps its
+    own drain policy: :func:`_cleanup_failed_line_stream_run` selects capture
+    from the outcome, while :func:`_discard_drain` always discards.
+
+    Returns
+    -------
+    T
+        The operation's result, unchanged.
+
+    Raises
+    ------
+    BaseException
+        Whatever the operation raised, re-raised unchanged. A failed teardown
+        never reports completion, so the started boundary is not paired with a
+        success it did not reach.
+    """  # ruff: ignore[docstring-extraneous-exception] - the operation's failure propagates through this helper
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
+    result = await _shielded_cleanup(operation)
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+    return result
+
+
 async def _cleanup_failed_line_stream_run(
     run: _LineStreamRun,
     execution: _SubprocessExecution,
@@ -362,8 +392,8 @@ async def _cleanup_failed_line_stream_run(
 ) -> tuple[str | None, str | None]:
     """Reconcile a failed run after emitting its teardown boundaries."""
     pid = run.process.pid
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    result = await _shielded_cleanup(
+    return await _run_line_stream_teardown(
+        run,
         _reconcile_run_tasks(
             run.tasks,
             _DrainContext(
@@ -372,10 +402,8 @@ async def _cleanup_failed_line_stream_run(
                 observation=execution.observation,
                 discard_on_cancel=run.tasks.discard_on_cancel,
             ),
-        )
+        ),
     )
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
-    return result
 
 
 async def _drain_after_exit(
@@ -403,8 +431,8 @@ async def _discard_drain(
     execution: _SubprocessExecution,
 ) -> tuple[str | None, str | None]:
     """Discard and reconcile the line stream's consumers after a failure."""
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    result = await _shielded_cleanup(
+    return await _run_line_stream_teardown(
+        run,
         _drain_stream_consumers(
             run.tasks.consumers,
             _DrainContext(
@@ -413,10 +441,8 @@ async def _discard_drain(
                 observation=execution.observation,
                 discard_on_cancel=run.tasks.discard_on_cancel,
             ),
-        )
+        ),
     )
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
-    return result
 
 
 async def _coordinate_line_stream(
