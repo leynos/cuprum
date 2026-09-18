@@ -17,14 +17,13 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._streams import _consume_stream
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum._pipeline_config import _PipelineRunConfig
-from cuprum._pipeline_types import _EventDetails, _StageObservation
+    from cuprum._pipeline_types import _StageObservation
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -40,14 +39,16 @@ def _get_stage_stream_fds(
     idx: int,
     last_idx: int,
     *,
-    stdout_capture_or_echo: bool,
-    stderr_capture_or_echo: bool,
+    stdout_consumed: bool,
+    stderr_consumed: bool,
 ) -> _StageStreamConfig:
     """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode.
 
     A non-final stage always pipes stdout so its output can relay into the
     next stage's stdin, regardless of capture or echo. The final stage's
-    stdout and every stage's stderr follow their own capture-or-echo gate.
+    stdout and every stage's stderr follow their own "consumed" gate, which
+    covers capture, echo, and line observation alike: a stage whose stream
+    nothing reads gets ``DEVNULL``, so no pipe is left open without a reader.
 
     Returns
     -------
@@ -57,71 +58,99 @@ def _get_stage_stream_fds(
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
-        if idx != last_idx or stdout_capture_or_echo
+        if idx != last_idx or stdout_consumed
         else asyncio.subprocess.DEVNULL
     )
-    stderr = (
-        asyncio.subprocess.PIPE
-        if stderr_capture_or_echo
-        else asyncio.subprocess.DEVNULL
-    )
+    stderr = asyncio.subprocess.PIPE if stderr_consumed else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StageCaptureRequest:
+    """Everything the capture-task builder needs for one stage.
+
+    Attributes
+    ----------
+    process:
+        The stage's subprocess, whose streams are consumed.
+    config:
+        The pipeline run config owning the stream and echo settings.
+    observation:
+        The stage's observation, carrying the observe-hook set.
+    is_last_stage:
+        Whether this stage's stdout is the pipeline's final output.
+    started_at:
+        Monotonic spawn reference for the stage's line stamps.
+
+    """
+
+    process: asyncio.subprocess.Process
+    config: _PipelineRunConfig
+    observation: _StageObservation
+    is_last_stage: bool
+    started_at: float
+
+
 def _create_stage_capture_tasks(
-    process: asyncio.subprocess.Process,
-    config: _PipelineRunConfig,
-    *,
-    is_last_stage: bool,
-    observation: _StageObservation,
+    request: _StageCaptureRequest,
 ) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
     """Create stderr and stdout capture tasks for a pipeline stage."""
+    process = request.process
+    config = request.config
+    observation = request.observation
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
-    stderr_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
+    # Every stage's stderr is observed for lines, so the caller's ``on_line``
+    # runs here too; the consumer itself is created whenever the stream is
+    # consumed at all, which includes line observation with capture and echo off.
+    stderr_on_line = _compose_line_callbacks(
+        observation,
+        _LineEmissionContext(
+            stream="stderr",
+            pid=process.pid,
+            on_line=config.on_line,
+            started_at=request.started_at,
+        ),
+    )
 
-        def stderr_on_line(line: str) -> None:
-            """Emit a stderr observe event for each captured line."""
-            observation.emit(
-                "stderr",
-                _EventDetails(pid=process.pid, line=line),
-            )
-
-    if config.stderr_capture_or_echo:
+    if config.stderr_consumed:
+        stderr_config = dc.replace(
+            config.stream_config("stderr"),
+            stream=EchoStream.STDERR,
+        )
         stderr_task = asyncio.create_task(
             _consume_stream(
                 process.stderr,
-                dc.replace(
-                    config.stderr_stream_config,
-                    stream=EchoStream.STDERR,
-                ),
+                stderr_config,
                 on_line=stderr_on_line,
-                read_size=config.stderr_stream_config.read_size,
+                read_size=stderr_config.read_size,
             ),
         )
 
-    if not is_last_stage:
+    # Interior stages' stdout is not observed for lines: it is consumed by the
+    # next stage, so no stage other than the last ever owns a stdout consumer.
+    if not request.is_last_stage:
         return stderr_task, stdout_task
 
-    stdout_on_line: cabc.Callable[[str], None] | None = None
-    if observation.hooks.observe_hooks:
+    stdout_on_line = _compose_line_callbacks(
+        observation,
+        _LineEmissionContext(
+            stream="stdout",
+            pid=process.pid,
+            on_line=config.on_line,
+            started_at=request.started_at,
+        ),
+    )
 
-        def stdout_on_line(line: str) -> None:
-            """Emit a stdout observe event for each captured line."""
-            observation.emit(
-                "stdout",
-                _EventDetails(pid=process.pid, line=line),
-            )
-
-    if config.stdout_capture_or_echo:
+    if config.stdout_consumed:
+        stdout_config = config.stream_config("stdout")
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
-                config.stream_config,
+                stdout_config,
                 on_line=stdout_on_line,
-                read_size=config.stream_config.read_size,
+                read_size=stdout_config.read_size,
             ),
         )
 

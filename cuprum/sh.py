@@ -16,6 +16,8 @@ import warnings
 from pathlib import Path
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
+from cuprum._execution_tracking import _ExecutionTracking
+from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -29,7 +31,6 @@ from cuprum._pipeline_internals import (
     _collect_hooks,
     _enforce_allowlist,
     _EventDetails,
-    _ExecutionHooks,
     _run_pipeline,
     _StageObservation,
 )
@@ -60,6 +61,9 @@ type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
+
+if typ.TYPE_CHECKING:
+    from cuprum.lines import LineHook
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
@@ -312,14 +316,6 @@ class TimeoutExpired(TimeoutError):  # ruff: ignore[error-suffix-on-exception-na
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _ExecutionTracking:
-    """Hook and task tracking for command execution."""
-
-    execution_hooks: _ExecutionHooks
-    pending_tasks: list[asyncio.Task[None]]
-
-
-@dc.dataclass(frozen=True, slots=True)
 class StdinInput:
     """Caller-provided data to write to a subprocess's stdin pipe.
 
@@ -384,6 +380,21 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+    on_line : LineHook | None, default=None
+        Optional synchronous callback invoked once per decoded output line
+        with a ``LineEvent`` carrying the stream name, the monotonic seconds
+        since the command started, and the line text. Independent of
+        ``capture`` and ``echo``; lines are delivered in arrival order per
+        stream. Lines are observed on the Python pathway, so the Rust
+        fast-path dispatcher stays out of the way whenever this is set.
+
+    Examples
+    --------
+    >>> options = RunOutputOptions(capture=True, echo=True)
+    >>> options.resolved_echo
+    (True, True)
+    >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False).resolved_echo
+    (False, True)
     """
 
     capture: bool = True
@@ -391,6 +402,7 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+    on_line: LineHook | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -658,8 +670,80 @@ class SafeCmd:
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
+                on_line=out.on_line,
             ),
             tracking,
+        )
+
+    def lines(
+        self,
+        *,
+        output: RunOutputOptions | None = None,
+        timeout: float | None = None,
+        context: ExecutionContext | None = None,
+        stdin: StdinInput | None = None,
+    ) -> LineStream:
+        """Iterate the command's output lines as they arrive.
+
+        Line events are delivered in arrival order per stream, stamped with
+        monotonic seconds since the command started. Capture and echo stay
+        governed by *output* independently: iterating lines does not disable
+        either unless the caller asks.
+
+        Parameters
+        ----------
+        output:
+            Optional ``RunOutputOptions`` controlling stdout/stderr handling.
+        timeout:
+            Optional wall-clock timeout in seconds; ``None`` disables timeouts.
+            Expiry terminates the subprocess exactly as ``run()`` does.
+        context:
+            Optional execution settings such as env, cwd, and cancel grace.
+        stdin:
+            Optional ``StdinInput`` data to feed to the subprocess.
+
+        Returns
+        -------
+        LineStream
+            An async iterator of ``LineEvent`` whose ``result`` attribute
+            holds the final ``CommandResult`` once iteration completes.
+
+        Raises
+        ------
+        ForbiddenProgramError
+            If the program is not permitted by the active context allowlist.
+        TimeoutExpired
+            If *timeout* elapses before the command completes.
+        UnicodeEncodeError
+            If ``stdin`` text cannot be encoded with the context's encoding.
+        """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
+        out = output or RunOutputOptions()
+        ctx = context or ExecutionContext()
+        _enforce_allowlist(self)
+        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        tracking = _ExecutionTracking(
+            execution_hooks=_collect_hooks(current_context()),
+            pending_tasks=[],
+        )
+        observation = _prepare_execution_observation(self, ctx, tracking, out)
+
+        return LineStream(
+            _iter_line_events(
+                _SubprocessExecution(
+                    cmd=self,
+                    ctx=ctx,
+                    capture=out.capture,
+                    echo_stdout=out.resolved_echo[0],
+                    echo_stderr=out.resolved_echo[1],
+                    max_echo_line_bytes=out.max_echo_line_bytes,
+                    timeout=effective_timeout,
+                    observation=observation,
+                    stdin_data=stdin_data,
+                    on_line=out.on_line,
+                ),
+                tracking,
+            ),
         )
 
     def run_sync(
@@ -874,6 +958,7 @@ __all__ = [
     "CommandResult",
     "ExecutionContext",
     "IOOptions",
+    "LineStream",
     "Pipeline",
     "PipelineResult",
     "RunOutputOptions",
