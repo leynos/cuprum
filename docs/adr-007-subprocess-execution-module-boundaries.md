@@ -319,7 +319,7 @@ target `cuprum._pipeline_spawn`, the module that now resolves it.
 ## Addendum (2026-09-14): stream-wiring split for the module-size ceiling
 
 Routing mirrored output through an opt-in presentation-sink session (see
-[ADR-011](adr-011-opt-in-github-actions-presentation-sink.md)) added sink
+[ADR-012](adr-012-opt-in-github-actions-presentation-sink.md)) added sink
 resolution to `_subprocess_execution`, which pushed that module back over the
 400-line `max-module-lines` ceiling whose suppression Option B removed. The
 wiring half moves to a new cohesive module rather than reintroducing an

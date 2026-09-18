@@ -1412,20 +1412,19 @@ preserving the `SafeCmd.run()` execution contract:
   *construction* and *routing*: `_resolve_stream_sink` chooses the destination
   for each mirrored stream — a live presentation-sink session's log, the
   execution context's configured sink, or the process's own stream — and
-  `_build_stream_config` assembles the stdout `_StreamConfig`,
-  and `_spawn_stream_consumers` derives the stderr config from it and creates
-  the pair of consumer tasks. Fixing the stderr config's echo, sink, and
+  `_build_stream_config` assembles the stdout `_StreamConfig`, and
+  `_spawn_stream_consumers` derives the stderr config from it and creates the
+  pair of consumer tasks. Fixing the stderr config's echo, sink, and
   `EchoStream.STDERR` on the derived config is what keeps the two streams
   distinguishable when both sinks resolve to one object, and it is where the
   idle monitor's mirror cursor reaches the configs whose resolved sink is the
   keepalive's destination. It is the single-command counterpart of
   `cuprum/_pipeline_stage_streams.py`; `_subprocess_execution` re-exports the
-  wiring helpers, so callers and monkeypatch targets resolve the same names
-  as before. This boundary exists to keep
-  `_subprocess_execution` within the Pylint module ceiling once the
-  idle-heartbeat wiring joined the stream configs; see the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-16.
+  wiring helpers, so callers and monkeypatch targets resolve the same names as
+  before. This boundary exists to keep `_subprocess_execution` within the
+  Pylint module ceiling once the idle-heartbeat wiring joined the stream
+  configs; see the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+  addendum of 2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
   validation and normalization, the `_IdleSchedule` state machine that decides
   when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
@@ -2877,10 +2876,15 @@ shared between asyncio and the worker.
 Blocking mode is applied only to worker-owned duplicates. After the native
 worker settles, Python closes the remaining reader duplicate, restores the
 worker descriptor modes, and resumes the reader transport in that order. Rust
-has already closed the consumed writer duplicate. Cancellation therefore cannot
-close or reuse a descriptor while native I/O is still running. If any safe
-hand-off preparation step fails, the dispatcher keeps the original asyncio
-descriptors with the Python fallback.
+has already closed the consumed writer duplicate. When a hop's cleanup grace
+expires before that settlement, the caller instead releases the paused reader
+transport at expiry — the asyncio-owned original, not a worker duplicate —
+because the loop that would otherwise resume it cannot outlive the deferral;
+the post-settlement resume is then a no-op. Cancellation therefore cannot close
+or reuse the descriptors native I/O is still using: the release never touches
+the worker's duplicates, and the descriptor it closes is the transport's own.
+If any safe hand-off preparation step fails, the dispatcher keeps the original
+asyncio descriptors with the Python fallback.
 
 #### Raw descriptor lifecycle
 
@@ -2908,7 +2912,10 @@ path is testable without a live pump:
   exit, because the transport may have set its paused flag before whatever
   raised — leaving a reader nobody resumes while the Python fallback reads a
   descriptor nothing is watching. Having already been corrected, it is not
-  resumed again on exit. It yields the pause outcome, whose `decline_reason` is
+  resumed again on exit. A completed pause yields an outcome carrying both the
+  way back (`resume`) and the way out (`release`): the caller closes the paused
+  transport through `release` when a deferred hand-off outlives the loop, so
+  the descriptor cannot survive past `loop.close()`. Its `decline_reason` is
   `None` when the descriptor may be handed to the Rust pump — a failed pause
   sets `reader_pause_failed`, because asyncio may still be consuming the
   reader, and the caller falls back to the Python pump rather than racing it. A
@@ -2924,9 +2931,15 @@ cannot interrupt the worker thread running the Rust pump, and that thread still
 operates with the borrowed reader duplicate and consumed writer duplicate, so
 cancelling the awaiting task waits for the worker to return before its
 duplicates are closed, blocking mode is restored, and the transport resumed.
-The original reader and writer descriptors remain asyncio-owned throughout.
-Restoring or resuming earlier would hand reader or writer state back to asyncio
-while native code was still mid-transfer.
+That wait is bounded by `ExecutionContext.native_pump_cleanup_grace` (default
+0.5 s): on expiry the caller receives its original `CancelledError` while the
+worker keeps its quarantined duplicates and its one completion callback
+finishes cleanup later. On that deferred path the paused reader transport is
+closed at expiry, while the loop can still run the close, so the descriptor is
+released rather than left to outlive its loop. The writer descriptor stays
+asyncio-owned throughout, as does the reader on the ordinary path. Restoring or
+resuming earlier would hand reader or writer state back to asyncio while native
+code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code

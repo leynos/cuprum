@@ -160,10 +160,33 @@ class _UnresumableTransport:
         raise OSError(errno.EIO, "the transport can no longer be resumed")
 
 
+class _UnclosableTransport:
+    """A reader transport that pauses and resumes but cannot be released."""
+
+    def __init__(self) -> None:
+        """Start with no pause recorded."""
+        self.paused = False
+
+    def pause_reading(self) -> None:
+        """Pause read callbacks, as a healthy transport would."""
+        self.paused = True
+
+    def resume_reading(self) -> None:
+        """Resume read callbacks, as a healthy transport would."""
+        self.paused = False
+
+    def close(self) -> None:
+        """Fail the way a transport whose descriptor is gone would."""
+        raise OSError(errno.EIO, "the descriptor is already gone")
+
+
 class _FakeReader:
     """A stream reader exposing only the transport the pause seam reads."""
 
-    def __init__(self, transport: _UnresumableTransport) -> None:
+    def __init__(
+        self,
+        transport: _UnresumableTransport | _UnclosableTransport,
+    ) -> None:
         """Hold the transport ``_pause_reader_transport`` will find."""
         self.transport = transport
 
@@ -205,6 +228,46 @@ def test_a_reader_that_cannot_be_resumed_is_recorded(
         f"a failed resume must be recorded exactly once, found {len(records)}"
     )
     _assert_teardown_record(records[0], site="resume", error_type="OSError")
+    assert records[0]["cuprum_errno"] == errno.EIO, (
+        f"the record must carry the errno, found {records[0]['cuprum_errno']!r}"
+    )
+
+
+def test_a_reader_that_cannot_be_released_is_recorded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A release that fails on grace expiry is suppressed but not silent.
+
+    A deferred hop outlives the loop that paused its reader, so the pause
+    outcome carries a release that closes the transport while the loop can
+    still run the callbacks releasing the descriptor. A release that fails
+    leaves that descriptor to the transport's own collection, which is exactly
+    the outcome the release exists to prevent, so the failure must be
+    distinguishable from a release that never had to run.
+    """
+    transport = _UnclosableTransport()
+    reader = typ.cast("asyncio.StreamReader", _FakeReader(transport))
+
+    with caplog.at_level(logging.DEBUG, logger=_FDS_LOGGER_NAME):
+        pause = _pause_reader_transport(reader)
+        try:
+            assert pause.may_hand_off is True, (
+                "a transport that pauses must permit the hand-off, or no release "
+                "is ever built"
+            )
+            assert transport.paused, "the pause must actually have been applied"
+            assert pause.release is not None, (
+                "a completed pause must carry the release that closes its reader"
+            )
+            pause.release()
+        finally:
+            _resume_reader_transport(pause.resume)
+
+    records = _teardown_records(caplog)
+    assert len(records) == 1, (
+        f"a failed release must be recorded exactly once, found {len(records)}"
+    )
+    _assert_teardown_record(records[0], site="reader_close", error_type="OSError")
     assert records[0]["cuprum_errno"] == errno.EIO, (
         f"the record must carry the errno, found {records[0]['cuprum_errno']!r}"
     )

@@ -231,10 +231,14 @@ native I/O can still use.
 
 `cleanup_grace_expired` reports the bounded caller wait and carries
 `PumpEvent.elapsed_s`. Once the worker later settles, its one completion
-callback closes its borrowed reader, restores callback-owned state, resumes the
-reader, and emits `cleanup_deferred`. Rust owns the submitted writer duplicate,
-so the callback never double-closes it or resumes the reader early. The
-unlabelled counters `cuprum_rust_pump_cleanup_grace_expired_total` and
+callback closes its borrowed worker reader duplicate, restores callback-owned
+state, and emits `cleanup_deferred`. On a deferred hop the caller has already
+released the paused reader transport, closing it at grace expiry while the
+caller's event loop could still run the close; the callback's later
+`resume_reading()` is therefore a no-op rather than what restores the loop's
+reader. Rust owns the submitted writer duplicate, so the callback never
+double-closes it or resumes the reader early. The unlabelled counters
+`cuprum_rust_pump_cleanup_grace_expired_total` and
 `cuprum_rust_pump_cleanup_deferred_total` make both outcomes observable without
 widening metric cardinality. Tracing projects the phases as
 `cuprum.cleanup_grace_expired` and `cuprum.cleanup_deferred`; only grace expiry

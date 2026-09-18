@@ -75,7 +75,6 @@ class _CleanupOrder:
         del reader
         self.order.append("pause")
         return _pipeline_stream_fds._ReaderPause(
-            may_hand_off=True,
             resume=self.resume,
         )
 

@@ -858,8 +858,10 @@ partial-failure paths in one place rather than inlined in the pump:
   pausing — because asyncio silently ignores a pause there and its queued
   `connection_lost` callback can still close the descriptor during hand-off.
   The outcome is an instance of `_ReaderPause`, the frozen slots dataclass that
-  carries `may_hand_off`, `resume`, `decline_reason`, and the
-  `closing_transport` marker, reporting a `reader_pause_failed` decline.
+  carries `may_hand_off`, `resume`, `decline_reason`, the `closing_transport`
+  marker, and the `release` hook, reporting a `reader_pause_failed` decline.
+  `may_hand_off` is derived rather than supplied: only a named `decline_reason`
+  refuses the hand-off, so a permit and a decline reason cannot disagree.
 
 Before native I/O begins, the reader transport is paused and callbacks queued
 before the pause are allowed to settle. If `StreamReader._buffer` contains
@@ -884,12 +886,17 @@ dispatch test modules, leaving nothing for a later test to inherit.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` shields
-the executor future and re-raises `CancelledError` after cleanup; its
-completion callback closes the remaining reader duplicate, restores its
+the executor future and re-raises `CancelledError` after a bounded wait for
+cleanup (`ExecutionContext.native_pump_cleanup_grace`, 0.5 seconds by default);
+its completion callback closes the remaining reader duplicate, restores its
 descriptor state, and resumes the reader transport only once the worker
-settles. Pipeline teardown remains coupled to that cleanup, so restoring
-blocking mode or resuming the transport earlier cannot hand descriptors back to
-asyncio while native code is still mid-transfer.
+settles. If that grace expires first, the caller has already released (closed)
+the paused reader transport at expiry — while its loop could still run the
+close — so the callback's later resume is a no-op. Pipeline teardown remains
+coupled to that cleanup, so restoring blocking mode or resuming the transport
+earlier cannot hand descriptors back to asyncio while native code is still
+mid-transfer; the grace-expiry release closes only the asyncio-owned reader,
+since the worker reads its own duplicate.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry
@@ -2732,9 +2739,11 @@ fails. On Windows, the shim transfers independently owned Win32 handles and
 closes the temporary CRT descriptors before invoking Rust. No descriptor number
 may be closed by both asyncio and the worker. Blocking mode is restricted to
 the duplicates, and the reader transport remains paused until the worker has
-settled, its remaining duplicate is closed, and its mode is restored. This
-prevents cancellation cleanup from racing with native I/O on a descriptor that
-is still in use.
+settled, its remaining duplicate is closed, and its mode is restored — unless
+the hop's grace expired first, in which case the caller releases (closes) the
+paused reader transport at expiry so it cannot outlive the loop that can no
+longer resume it. This prevents cancellation cleanup from racing with native
+I/O on a descriptor that is still in use.
 
 Executor-side failures are handled in two ways, and the split is deliberate.
 Creating the worker duplicates and submitting the executor work happen *before*

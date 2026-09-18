@@ -304,7 +304,7 @@ def bypass_reader_drain(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _pipeline_streams,
         "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=True),
+        lambda _reader: _pipeline_stream_fds._ReaderPause(),
     )
 
     async def _no_drain(

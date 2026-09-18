@@ -51,7 +51,6 @@ def _install_recording_native_failure(
         del reader
         call_order.append("pause")
         return _pipeline_stream_fds._ReaderPause(
-            may_hand_off=True,
             resume=lambda: call_order.append("resume"),
         )
 
@@ -150,7 +149,6 @@ class TestRustPumpFailures:
             del reader
             call_order.append("pause")
             return _pipeline_stream_fds._ReaderPause(
-                may_hand_off=True,
                 resume=lambda: call_order.append("resume"),
             )
 

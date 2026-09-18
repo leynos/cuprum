@@ -181,6 +181,7 @@ def _engage_rust_pump_blocking_mode(
 def _create_rust_pump_state(
     handoff: _RustPumpHandoff,
     resume_reader: cabc.Callable[[], None] | None,
+    release_reader: cabc.Callable[[], None] | None = None,
 ) -> _RustPumpState:
     """Duplicate a hand-off's descriptor state for completion-owned cleanup."""
     reader_fd, writer_fd = _duplicate_rust_pump_state_fds(handoff)
@@ -190,6 +191,7 @@ def _create_rust_pump_state(
         writer_fd=writer_fd,
         blocking_mode_guard=blocking_mode_guard,
         resume_reader=resume_reader,
+        release_reader=release_reader,
         cleanup_grace_s=handoff.cleanup_grace_s,
     )
 

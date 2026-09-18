@@ -184,7 +184,7 @@ def _permit_test_owned_descriptor_handoff(reader_pause: _ReaderPause) -> _Reader
         and _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor is not None
     ):
         # Nothing was paused, so the permitted verdict carries no resume.
-        return _ReaderPause(may_hand_off=True)
+        return _ReaderPause()
     return reader_pause
 
 
@@ -211,7 +211,11 @@ async def _pump_over_raw_fds(
         # These duplicates outlive the caller-facing task. They carry the
         # blocking-mode state that only the completion callback may restore
         # after native I/O has stopped.
-        state = _create_rust_pump_state(handoff, reader_pause.resume)
+        state = _create_rust_pump_state(
+            handoff,
+            reader_pause.resume,
+            reader_pause.release,
+        )
     except _RustPumpStateDuplicationError as failure:
         # Duplication is best-effort, and declining is the only safe response.
         # The descriptor set was extracted a moment earlier, but asyncio closes

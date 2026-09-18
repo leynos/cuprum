@@ -27,11 +27,10 @@ from cuprum import (
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
+from cuprum.pump_events import RustPumpDeclineReason
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from cuprum.pump_events import RustPumpDeclineReason
 
 
 class RecordingCollector:
@@ -167,7 +166,6 @@ def force_pause_outcome(
         _pipeline_streams,
         "_pause_reader_transport",
         lambda _reader: _pipeline_stream_fds._ReaderPause(
-            may_hand_off=decline_reason is None,
             decline_reason=decline_reason,
         ),
     )
@@ -195,10 +193,16 @@ class TransportOnlyReader:
 
 def allow_pause(monkeypatch: pytest.MonkeyPatch, *, may_hand_off: bool) -> None:
     """Force the reader-pause seam to the given hand-off verdict."""
+    # A permitted hand-off names no decline; a refused one must name a reason,
+    # because the verdict is derived from it and a refusal without a reason
+    # would be unrepresentable rather than merely unhelpful.
+    decline_reason = None if may_hand_off else RustPumpDeclineReason.READER_PAUSE_FAILED
     monkeypatch.setattr(
         _pipeline_streams,
         "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(may_hand_off=may_hand_off),
+        lambda _reader: _pipeline_stream_fds._ReaderPause(
+            decline_reason=decline_reason
+        ),
     )
 
 
