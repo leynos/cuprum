@@ -621,4 +621,3 @@ subprocess-capture half is already closed.
     canonical Python fallback, with the boundary recorded in the developers'
     guide. The current implementation needs no new Rust telemetry and no
     per-read cross-language call.
-
