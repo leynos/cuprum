@@ -473,6 +473,13 @@ full_name = [
 ]
 reason = "Called by benchmarks.tee_profile_worker while profiling the pump read loop."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum.adapters._tracing_line_stream._line_stream_attributes",
+]
+reason = "Called by TracingHook.record_line_stream_event, which callers register through observe_line_stream."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

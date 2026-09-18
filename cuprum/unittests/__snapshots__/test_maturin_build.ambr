@@ -40,7 +40,6 @@
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.cpython-<platform>.so',
       'cuprum/_stream_line_boundaries.py',
-      'cuprum/_stream_line_consumer.py',
       'cuprum/_streams.py',
       'cuprum/_streams_pump.py',
       'cuprum/_streams_rs.py',
