@@ -141,14 +141,26 @@ class CommandResult:
     duration:
         Monotonic process duration in seconds.
     max_rss_bytes:
-        Unavailable because child-resource RSS is a cumulative high-water mark
-        that cannot be attributed safely to one command.
+        Peak resident set size of the executed child in bytes. Direct commands
+        on Linux and macOS report this from the platform ``wait4`` call, which
+        attributes the figure to that one child; Linux reports KiB and macOS
+        bytes, both normalized to bytes here. It is never derived from the
+        process-global ``RUSAGE_CHILDREN`` high-water mark, which cannot be
+        attributed safely to one command. ``None`` on Windows, on platforms
+        without the child-specific interface, and for every pipeline stage,
+        whose concurrently reaped children cannot be separated.
     user_cpu_seconds:
-        User CPU-time delta in seconds. ``None`` on Windows and platforms that
-        cannot provide child resource accounting.
+        User CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
     system_cpu_seconds:
-        System CPU-time delta in seconds. ``None`` on Windows and platforms
-        that cannot provide child resource accounting.
+        System CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
 
     """
 

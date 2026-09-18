@@ -1,4 +1,8 @@
-"""Internal subprocess execution machinery for ``SafeCmd.run()``."""
+"""Internal subprocess execution machinery for ``SafeCmd.run()``.
+
+Orchestration for spawning, stream handling, and ``CommandResult`` assembly;
+the timeout, termination, and drain rules live in ``cuprum._subprocess_wait``.
+"""
 
 from __future__ import annotations
 
@@ -83,9 +87,7 @@ async def _spawn_subprocess(
                 if execution.capture or execution.echo_stderr
                 else asyncio.subprocess.DEVNULL
             ),
-            stdin=(
-                asyncio.subprocess.PIPE if execution.stdin_data is not None else None
-            ),
+            stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
             env=_merge_env(execution.ctx.env),
             cwd=_cwd_arg(execution.ctx.cwd),
         )
