@@ -362,16 +362,19 @@ measured the worst work outside the watchdog. None was a genuinely cold build.
 The watchdog must satisfy
 `watchdog >= global-timeout + termination + cold build`. Termination is the
 largest configured `slow-timeout.grace-period`, with a 60 s floor; the contract
-reads it through `termination_allowance_seconds()`. The cold-build term is the
-allowance that keeps the watchdog a hang detector rather than a schedule: these
-lanes archive no `target` tree, so a branch's first run compiles everything
-sccache cannot serve, and a budget shared with the test run can be spent before
-a test starts. `COLD_BUILD_ALLOWANCE_SECONDS` is 600 s there, taken from the
-estate's own cold run rather than derived from Cuprum's warm one — Netsuke,
-whose suite is roughly twenty-five times the 112 tests measured here, spent
-about 512 s and was killed at 600 during report generation. Cuprum's whole warm
-Rust invocation was 83 s on run 35391248951. The contract asserts the
-three-term sum.
+reads it through `termination_allowance_seconds()`. That floor is this
+repository's, not nextest's: nextest waits 10 s by default. It is a floor on an
+allowance rather than a reading of the tool, so it can only raise the sum the
+watchdog must contain, never lower it. Cuprum configures no grace period. The
+cold-build term is the allowance that keeps the watchdog a hang detector rather
+than a schedule: these lanes archive no `target` tree, so a branch's first run
+compiles everything sccache cannot serve, and a budget shared with the test run
+can be spent before a test starts. `COLD_BUILD_ALLOWANCE_SECONDS` is 600 s
+there, taken from the estate's own cold run rather than derived from Cuprum's
+warm one — Netsuke, whose suite is roughly twenty-five times the 112 tests
+measured here, spent about 512 s and was killed at 600 during report
+generation. Cuprum's whole warm Rust invocation was 83 s on run 35391248951.
+The contract asserts the three-term sum.
 
 The coverage jobs currently declare a 65-minute job ceiling in `ci.yml` and
 `coverage-main.yml`; the earlier 60-minute figure is stale. That ceiling is
