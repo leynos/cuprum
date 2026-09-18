@@ -86,6 +86,31 @@ class SummaryCase:
     decision: str
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SummaryScriptExecution:
+    """Bundle the inputs one summary-script execution needs.
+
+    Attributes
+    ----------
+    event : str
+        Event supplied to the workflow summary script.
+    detector : Detector
+        Detector result supplied to the workflow summary script.
+    summary_path : pathlib.Path
+        File the script writes its step summary into.
+    output_path : pathlib.Path
+        File the script appends its step outputs to.
+    workflow_data : tests.helpers.workflow.Workflow
+        Parsed workflow fixture the script is read from.
+    """
+
+    event: str
+    detector: Detector
+    summary_path: pth.Path
+    output_path: pth.Path
+    workflow_data: Workflow
+
+
 def _summary_script(workflow_data: Workflow) -> str:
     """Return the summary step's script, as `ci.yml` declares it."""
     script = script_of(step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP))
@@ -95,22 +120,18 @@ def _summary_script(workflow_data: Workflow) -> str:
 
 def _execute_summary_script(
     *,
-    event: str,
-    detector: Detector,
-    summary_path: pth.Path,
-    output_path: pth.Path,
-    workflow_data: Workflow,
+    execution: _SummaryScriptExecution,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - literal vector plus workflow run block; no test input reaches the command line.
-        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
+        ["/usr/bin/env", "bash", "-c", _summary_script(execution.workflow_data)],
         env={
             "PATH": "/usr/bin:/bin",
-            "EVENT": event,
-            "BENCH": detector.bench,
-            "DETECTOR": detector.outcome,
-            "GITHUB_STEP_SUMMARY": str(summary_path),
-            "GITHUB_OUTPUT": str(output_path),
+            "EVENT": execution.event,
+            "BENCH": execution.detector.bench,
+            "DETECTOR": execution.detector.outcome,
+            "GITHUB_STEP_SUMMARY": str(execution.summary_path),
+            "GITHUB_OUTPUT": str(execution.output_path),
         },
         capture_output=True,
         text=True,
@@ -192,11 +213,13 @@ def run_summary_script(
     output_path = tmp_path / "step-output.txt"
     output_path.touch()
     completed = _execute_summary_script(
-        event=event,
-        detector=detector,
-        summary_path=summary_path,
-        output_path=output_path,
-        workflow_data=workflow_data,
+        execution=_SummaryScriptExecution(
+            event=event,
+            detector=detector,
+            summary_path=summary_path,
+            output_path=output_path,
+            workflow_data=workflow_data,
+        ),
     )
     return _parse_summary(
         emitted=summary_path.read_text(encoding="utf-8"),
