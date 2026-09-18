@@ -12,10 +12,15 @@ its shared package cache. Only build output uses a separate target directory.
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import sys
 import tomllib
+import typing as typ
 from pathlib import Path
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
 
@@ -133,20 +138,27 @@ def _unsafe_was_forbidden(code: int, output: str) -> bool:
     return code != 0 and any(marker in output for marker in markers)
 
 
+@contextlib.contextmanager
+def _probe_appended(path: Path, probe: str) -> cabc.Iterator[None]:
+    """Temporarily append a probe to a source file, then restore it."""
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original + "\n" + probe + "\n", encoding="utf-8")
+    try:
+        yield
+    finally:
+        path.write_text(original, encoding="utf-8")
+
+
 def _check_target(workspace: Path, path: Path, logs: Path) -> None:
     """Probe one actual target and restore it even if compiler checking fails."""
-    original = path.read_text(encoding="utf-8")
     for index, probe in enumerate(PROBES):
-        try:
-            path.write_text(original + "\n" + probe + "\n", encoding="utf-8")
+        with _probe_appended(path, probe):
             code, output = _compile(workspace)
             name = f"{path.stem}-unsafe-{index}.log"
             (logs / name).write_text(output, encoding="utf-8")
             if not _unsafe_was_forbidden(code, output):
                 msg = f"safe target did not reject unsafe probe: {name}"
                 raise RuntimeError(msg)
-        finally:
-            path.write_text(original, encoding="utf-8")
 
 
 if __name__ == "__main__":

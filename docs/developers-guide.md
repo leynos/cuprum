@@ -2668,12 +2668,12 @@ buffer size (`_validate_buffer_size_before_writer_transfer`), then prepares the
 reader. Buffer-size validation calls `operator.index` and raises
 `OverflowError` for values outside the `i64` range and `ValueError` for a
 non-positive size or one above the 1 GiB cap (`_MAX_BUFFER_SIZE`). Reader
-preparation (`_prepare_native_reader`) converts the descriptor for the
-platform, then requires an `i64`-representable value (`OverflowError`), a
-32-bit signed range on non-Windows platforms (`ValueError`, "file descriptor
-out of range"), and a non-negative value (`ValueError`, "file descriptor must
-be non-negative", or "file handle must be non-negative" on Windows). Each
-failure closes the writer Python still owns
+preparation (`_prepare_native_reader`) requires a non-negative descriptor
+(`ValueError`, "file descriptor must be non-negative", or "file handle must be
+non-negative" on Windows) before conversion, converts it for the platform, then
+requires an `i64`-representable value (`OverflowError`) and a 32-bit signed
+range on non-Windows platforms (`ValueError`, "file descriptor out of range").
+Each failure closes the writer Python still owns
 (`_close_writer_after_pre_native_failure`) and emits the matching hand-off
 outcome (`native_load_failed`, `buffer_validation_failed`, or
 `reader_preparation_failed`); a reader-preparation failure additionally logs the
@@ -3122,17 +3122,18 @@ make lint
 ```
 
 Run Kani separately because it is a bounded model checker rather than a normal
-unit-test runner. The Kani installer places the verifier under `~/.kani`; the
-dynamic library path is required when invoking the crate harnesses. Resolve the
-toolchain library directory from the installed version rather than hard-coding
-it:
+unit-test runner. Install the checksum-verified prebuilt pinned Kani binaries
+without a source build, then run the boundary harnesses from the repository
+root:
 
 ```bash
-KANI_VERSION=$(cargo kani --version | awk '{print $2}')
-cd rust && \
-  LD_LIBRARY_PATH="$HOME/.kani/kani-${KANI_VERSION}/toolchain/lib" \
-  cargo kani --package cuprum-rust
+make install-boundary-kani
+make boundary-kani
 ```
+
+`make boundary-kani` confirms the pinned Kani `0.67.0` installation and
+verifies both `cuprum-native-io` and `cuprum-streams`. The target supplies the
+dynamic library path itself, so no manual `KANI_VERSION` resolution is needed.
 
 When adding new Kani proofs, keep the bounds explicit with attributes such as
 `#[kani::unwind(N)]`, include `kani::cover!` statements for the intended

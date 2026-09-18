@@ -372,7 +372,7 @@ boundary-test: ## Run isolated native integration and verification-tool contract
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
 	$(UV_RUN_ENV) uv run python scripts/install_boundary_kani.py
-	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" cargo kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
+	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" $(CARGO) kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
 
 .PHONY: boundary-contract
 boundary-contract: ## Confirm actual safe targets reject all forms of unsafe Rust

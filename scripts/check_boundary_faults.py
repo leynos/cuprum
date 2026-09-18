@@ -20,8 +20,55 @@ from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scop
 from scripts.render_boundary_proofs import render
 
 ROOT = Path(__file__).resolve().parent.parent
-KANI_VERSION = (ROOT / "tools/kani/VERSION").read_text(encoding="utf-8").strip()
-VERUS_VERSION = (ROOT / "tools/verus/VERSION").read_text(encoding="utf-8").strip()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ToolPins:
+    """Pinned verifier versions, read from the repository's tool manifests."""
+
+    kani: str
+    verus: str
+
+
+class BoundaryFaultError(RuntimeError):
+    """A verifier result the fault harness cannot classify.
+
+    Attributes
+    ----------
+    check_name : str
+        Name of the check whose verifier result was unexpected.
+    exit_code : int
+        Exit code returned by the verifier.
+    log_path : Path
+        Archived verifier output for the unexpected result.
+    """
+
+    def __init__(self, check_name: str, exit_code: int, log_path: Path) -> None:
+        """Record the check identity, exit code, and archived log path."""
+        super().__init__(
+            f"unexpected fault-sensitivity result: {check_name}; inspect {log_path}"
+        )
+        self.check_name = check_name
+        self.exit_code = exit_code
+        self.log_path = log_path
+
+
+def read_tool_pins() -> ToolPins:
+    """Read the pinned Kani and Verus versions from the repository.
+
+    The manifests are read when a verification path runs, not at import time,
+    so importing :func:`mutate` does not require either pin file to exist.
+
+    Returns
+    -------
+    ToolPins
+        The versions pinned by ``tools/kani/VERSION`` and
+        ``tools/verus/VERSION``.
+    """
+    return ToolPins(
+        kani=(ROOT / "tools/kani/VERSION").read_text(encoding="utf-8").strip(),
+        verus=(ROOT / "tools/verus/VERSION").read_text(encoding="utf-8").strip(),
+    )
 
 
 def mutate(source: str, old: str, new: str) -> str:
@@ -54,6 +101,7 @@ def mutate(source: str, old: str, new: str) -> str:
 
 def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str]:
     """Run one allowlisted verification tool with bounded execution time."""
+    pins = read_tool_pins()
     executable = Program(program)
     project = ProjectSettings(
         name="boundary-faults",
@@ -62,7 +110,7 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
         noise_rules=(),
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
-    kani = Path.home() / f".kani/kani-{KANI_VERSION}"
+    kani = Path.home() / f".kani/kani-{pins.kani}"
     context = sh.ExecutionContext(
         cwd=workspace,
         env={
@@ -98,8 +146,7 @@ def _check(check: _Check, workspace: Path, logs: Path) -> None:
         else code != 0 and check.expected_failure in output
     )
     if not passed:
-        msg = f"unexpected fault-sensitivity result: {check.name}; inspect its log"
-        raise RuntimeError(msg)
+        raise BoundaryFaultError(check.name, code, logs / f"{check.name}.log")
 
 
 def main() -> None:
@@ -116,10 +163,11 @@ def main() -> None:
 
 def _verify_progress_faults(workspace: Path, logs: Path) -> None:
     """Check the production progress kernels against bound and accounting faults."""
+    pins = read_tool_pins()
     install = Path(
         os.environ.get(
             "VERUS_INSTALL_DIR",
-            str(Path.home() / f".local/share/cuprum-verus-{VERUS_VERSION}"),
+            str(Path.home() / f".local/share/cuprum-verus-{pins.verus}"),
         )
     )
     verus = str(install / "verus/verus")
