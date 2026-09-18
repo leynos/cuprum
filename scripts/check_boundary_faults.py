@@ -45,9 +45,8 @@ class BoundaryFaultError(RuntimeError):
 
     def __init__(self, check_name: str, exit_code: int, log_path: Path) -> None:
         """Record the check identity, exit code, and archived log path."""
-        super().__init__(
-            f"unexpected fault-sensitivity result: {check_name}; inspect {log_path}"
-        )
+        msg = f"unexpected fault-sensitivity result: {check_name}; inspect {log_path}"
+        super().__init__(msg)
         self.check_name = check_name
         self.exit_code = exit_code
         self.log_path = log_path
@@ -59,16 +58,36 @@ def read_tool_pins() -> ToolPins:
     The manifests are read when a verification path runs, not at import time,
     so importing :func:`mutate` does not require either pin file to exist.
 
+    A missing, unreadable, or empty pin is a hard failure rather than a default:
+    a blank version would otherwise build a verifier path that does not exist
+    and report the resulting launch failure as a failed proof.
+
     Returns
     -------
     ToolPins
         The versions pinned by ``tools/kani/VERSION`` and
         ``tools/verus/VERSION``.
-    """
+
+    Raises
+    ------
+    OSError
+        If a pin file cannot be read.
+    ValueError
+        If a pin file exists but records no version.
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError/ValueError propagate from _read_pin.
     return ToolPins(
-        kani=(ROOT / "tools/kani/VERSION").read_text(encoding="utf-8").strip(),
-        verus=(ROOT / "tools/verus/VERSION").read_text(encoding="utf-8").strip(),
+        kani=_read_pin("kani"),
+        verus=_read_pin("verus"),
     )
+
+
+def _read_pin(tool: str) -> str:
+    """Return one tool's pinned version, refusing a file that records none."""
+    pin = (ROOT / f"tools/{tool}/VERSION").read_text(encoding="utf-8").strip()
+    if not pin:
+        msg = f"tools/{tool}/VERSION records no version"
+        raise ValueError(msg)
+    return pin
 
 
 def mutate(source: str, old: str, new: str) -> str:

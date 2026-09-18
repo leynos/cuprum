@@ -299,15 +299,19 @@ def rust_pump_stream(
     ------
     OSError
         If the Rust pump encounters an I/O error.
+    ValueError
+        If the wrapper rejects an argument before any native hand-off:
+        ``buffer_size`` that is not positive or exceeds 1 GiB, or a negative
+        ``reader_fd``.
 
     Notes
     -----
-    The wrapper validates ``buffer_size`` before transferring a Windows writer
-    resource, preserving the native entry point's errors without leaking a
-    duplicated handle. Other failures propagate unchanged from the Rust
-    extension: ``ImportError`` if the native module cannot be imported and
-    ``OSError`` if an I/O error occurs while pumping bytes.
-    """
+    The wrapper validates ``buffer_size`` and ``reader_fd`` before transferring
+    a Windows writer resource, preserving the native entry point's errors
+    without leaking a duplicated handle. Other failures propagate unchanged
+    from the Rust extension: ``ImportError`` if the native module cannot be
+    imported and ``OSError`` if an I/O error occurs while pumping bytes.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _prepare_rust_pump_call.
     prepared = _prepare_rust_pump_call(
         reader_fd=reader_fd,
         writer_fd=writer_fd,

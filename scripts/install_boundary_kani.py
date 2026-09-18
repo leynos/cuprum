@@ -60,7 +60,10 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
     ------
     ValueError
         If the URL is not HTTPS or downloaded bytes do not match the pin.
-    """
+    OSError
+        If an existing cache entry cannot be inspected, or the download cannot
+        be transferred into the cache.
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _cache_is_current and _digest.
     if not url.startswith("https://"):
         msg = "binary downloads require HTTPS"
         raise ValueError(msg)
@@ -76,8 +79,34 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
 
 
 def _cache_is_current(destination: Path, digest: str) -> bool:
-    """Report whether an existing cache entry already matches the pin."""
-    return destination.exists() and _digest(destination) == digest
+    """Report whether an existing cache entry already matches the pin.
+
+    A cache entry that cannot be read is not a cache miss. The failure is
+    raised, not reported as ``False``, so ``checked_download`` never answers an
+    unreadable cache with a fresh download that would overwrite it.
+
+    Parameters
+    ----------
+    destination : Path
+        Local cache path to inspect.
+    digest : str
+        Expected SHA-256 digest from the approved release manifest.
+
+    Returns
+    -------
+    bool
+        ``True`` only for a readable entry whose digest already matches.
+
+    Raises
+    ------
+    OSError
+        If the cache entry exists but cannot be opened or read.
+    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _digest.
+    try:
+        current = _digest(destination)
+    except FileNotFoundError:
+        return False
+    return current == digest
 
 
 def _require_digest(pending: Path, destination: Path, digest: str) -> None:

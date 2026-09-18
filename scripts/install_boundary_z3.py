@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import zipfile
 
-from install_boundary_kani import boundary_root, checked_download
+# Imported as a package by the tests and as a sibling script by the Makefile.
+# `__package__` is empty for direct-script execution, where only the bare name
+# resolves; leaving a bare import unconditional would break `scripts.tests`.
+if __package__:
+    from scripts.install_boundary_kani import boundary_root, checked_download
+else:
+    from install_boundary_kani import boundary_root, checked_download
 
 NAME = "z3-4.16.0-x64-glibc-2.39"
 DIGEST = "7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e"

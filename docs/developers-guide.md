@@ -3788,6 +3788,47 @@ probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
 extend `maturin_script_locatable()` in place if maturin changes how it locates
 its binary.
 
+## Native Rust source-distribution contract
+
+A source distribution must be able to build the optional native extension, so
+the Rust workspace travels inside the sdist. `tests/test_native_sdist.py` holds
+that contract: it builds a real archive with both packaging frontends and
+checks the members that result.
+
+`[tool.uv].source-include` in `pyproject.toml` lists the workspace files the
+`uv build --sdist` archive must retain:
+
+- the workspace manifests and pins — `rust/Cargo.toml`, `rust/Cargo.lock`,
+  `rust/rust-toolchain.toml`, and `rust/dylint.toml`;
+- each crate manifest — `rust/cuprum-rust/Cargo.toml`,
+  `rust/cuprum-streams/Cargo.toml`, and `rust/cuprum-native-io/Cargo.toml`;
+- all three crate source trees, including each crate's `src/` and the
+  integration `tests/` of `cuprum-rust` and `cuprum-streams`.
+
+Cargo build output is excluded: `target` never appears in an archive, so an
+sdist carries sources rather than a multi-gigabyte build cache.
+
+Maturin builds its archive from the same workspace, and the
+`[tool.maturin].include` entries carry the two files it would not otherwise
+copy — `rust/rust-toolchain.toml` and `rust/dylint.toml`, both restricted with
+`format = "sdist"` so they never enter a wheel.
+
+`tests/test_native_sdist.py` verifies both frontends, and it is deliberately
+not a unit test: each case builds a genuine archive with `uv build --sdist` or
+`uv run maturin sdist`, so the check fails if either frontend stops honouring
+the configuration. Its parametrization covers `uv` and `maturin` separately
+because the two read different manifest keys and can drift independently.
+
+**When the workspace changes.** Adding, renaming, or removing a crate — or
+adding a file a build needs at the workspace root — requires a matching update
+in three places: `[tool.uv].source-include` in `pyproject.toml`, the
+`[tool.maturin].include` list when the file is a root-level pin, and the
+expected-member set in `tests/test_native_sdist.py`. Run the contract with:
+
+```bash
+uv run pytest tests/test_native_sdist.py -q
+```
+
 ## Mutation-testing harness
 
 The mutmut mutation-testing workflow runs the selected test suite from its

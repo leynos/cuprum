@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts import render_boundary_proofs as renderer
+from scripts.tests.boundary_harness_support import copy_boundary_repository
 
 SOURCE = Path(__file__).resolve().parents[2] / "rust/cuprum-native-io/src/progress.rs"
 MEMORY = Path(__file__).resolve().parents[2] / "rust/cuprum-native-io/src/memory.rs"
@@ -59,6 +60,40 @@ def test_memory_assessment_carries_no_test_module() -> None:
         "the memory proof lost the retention kernel it exists to verify"
     )
     assert "#[cfg(test)]" not in production, "the test module leaked into the proof"
+
+
+def test_main_writes_every_assessment_without_test_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """main() emits all three Verus inputs from production source alone."""
+    root = copy_boundary_repository(tmp_path)
+    monkeypatch.setattr(renderer, "ROOT", root)
+    renderer.main()
+
+    destination = root / "rust/target/boundary-verification"
+    generated = {
+        path.name: path.read_text(encoding="utf-8") for path in destination.iterdir()
+    }
+    assert sorted(generated) == [
+        "memory-assessment.rs",
+        "progress.rs",
+        "resource-assessment.rs",
+    ], "every assessment must be regenerated beneath the build directory"
+    for name, text in generated.items():
+        assert "#[cfg(test)]" not in text, f"{name} carries a test module"
+        assert "use vstd::prelude::*;" in text, f"{name} is not a Verus input"
+    assert "total + written" in generated["progress.rs"], (
+        "the progress proof must carry the production accounting"
+    )
+    assert "with_retained_owner" in generated["memory-assessment.rs"], (
+        "the memory proof must carry the production retention kernel"
+    )
+    assert "adopt_writer" in generated["resource-assessment.rs"], (
+        "the resource proof must carry the production adoption helper"
+    )
+    assert "Borrow a raw reader" not in generated["resource-assessment.rs"], (
+        "the resource proof must stop at the reader helper's documentation"
+    )
 
 
 def test_executable_bodies_are_preserved() -> None:

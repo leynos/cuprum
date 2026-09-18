@@ -2013,13 +2013,13 @@ scratch buffer allocation refused
     buffer_size=<bucket>            platform=<unix|windows>
 ```
 
-`error_category` is always `buffer_allocation_failed` for this event.
-`buffer_size` is the requested size rounded up to a power-of-two bucket — a
-bounded magnitude, not the exact caller-supplied number and not any allocator
-internal. `platform` matches the field on the read/write events. The event is
-emitted from inside the operation span, so the span's own `operation` and
-`buffer_size` fields are in scope alongside it, exactly as for the fatal I/O
-failures above.
+`error_category` is always `buffer_allocation_failed` for this event. The
+event's `buffer_size` is the requested size rounded up to a power-of-two bucket
+— a bounded magnitude, not the exact caller-supplied number and not any
+allocator internal. `platform` matches the field on the read/write events. The
+event is emitted from inside the operation span, so the span's `operation` and
+exact requested `buffer_size` fields are in scope alongside it, exactly as for
+the fatal I/O failures above.
 
 This event accompanies the `OSError` described under
 [Rust stream error handling (internal)](#rust-stream-error-handling-internal):
