@@ -155,6 +155,11 @@ persistent receipt and publication map to M3 and a downloaded hosted artefact.
   one of 24 replays conflicted: `.PHONY` in the `Makefile`, where main's
   `makeutil`/`skylos-allow` reflow met the branch's `test-act`. Resolved as a
   union, preserving both sides' targets; the other 23 replays applied cleanly.
+- [x] 2026-09-18: Force-pushed the rebased series with lease, re-flowed the
+  plan prose that `make check-fmt` rejected, re-ran all four gates green at
+  `2a671157`, updated PR #418's body for the new base and head, and validated
+  the resulting hosted run `35394569533`, whose decision and measurement
+  artefacts were downloaded and checked.
 
 ## Surprises & discoveries
 
@@ -376,8 +381,20 @@ establish exact runtime parity or success for unrelated hosted CI jobs; the
 pre-rebase CodeScene parser and installer TLS failures are recorded above, and
 the head reached by the first rebase, `67539822`, passed all 17 jobs in run
 `35337586749`. That receipt predates the second rebase onto `b63a0f21`, so the
-head reached by that rebase, `3051257e`, still needs its own hosted run before
-the same claim is made about it.
+head reached by that rebase, `3051257e`, needed its own hosted run. It has one:
+[run 35394569533](https://github.com/leynos/cuprum/actions/runs/35394569533)
+completed **successfully** for `2a671157`, the plan-commit head of the rebased
+series, with every job passing. Its
+[decision artefact](https://github.com/leynos/cuprum/actions/runs/35394569533/artifacts/10566788571)
+was downloaded and validated against the schema, the three bounded labels
+(`event_class=pull_request`, `detector_status=success`, `decision=run`),
+`value=1`, and a `run_id` matching the producing run, and its
+[measurement artefact](https://github.com/leynos/cuprum/actions/runs/35394569533/artifacts/10567253937)
+holds eleven valid JSON files plus the comparison summary, whose ratchet
+decision is `passed` with no regressions against a five-sample compatible
+history. Both request 90-day retention. The `changes` job's
+`Persist the benchmark gate decision` and `Upload the benchmark gate log` steps
+both succeeded, and the warn step was correctly skipped.
 
 ## Revision note
 
@@ -440,3 +457,17 @@ semantic audit after the replay found no unexplained deletions and no new
 repeated blocks: the only repeated-line count changes in `ci.yml` are the
 branch's own persistence steps matching counts already present at the
 pre-rebase head.
+
+2026-09-18: Published the second rebase and closed its evidence loop. Two
+doc-only commits followed the replay: an mdtablefix re-flow of this plan, whose
+token stream is identical before and after, and a two-line correction that
+stops calling the post-rebase head "current" once later commits landed on top.
+All four gates then passed at `2a671157`. The force push used
+`--force-with-lease` bound to the recorded remote head `1de3e659`, so the
+update could not silently overwrite a concurrent push. Hosted run `35394569533`
+followed and passed every job, which is the first receipt covering the rebased
+series; its decision artefact carries the expected three labels and its
+measurement artefact shows a ratchet pass with no regressions. The PR body was
+updated in the same pass: the previous text still cited the rebase onto
+`83cd8df2`, and its two branch-relative anchors had drifted (`ci.yml` `#L1089`
+to `#L1113`, and the harness-boundary negative control from `#L88` to `#L98`).
