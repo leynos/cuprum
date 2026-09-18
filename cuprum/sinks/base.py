@@ -104,6 +104,11 @@ class OutputSession(typ.Protocol):
     sequential single-writer use the execution layer guarantees: child-output
     writes and control writes are issued from the run's own task context, not
     from unrelated tasks.
+
+    An adapter emits its opening framing as the session is constructed, so it
+    is already written when :meth:`OutputSink.open_session` returns; the
+    execution layer offers no framing hook and never reaches into an adapter's
+    internals. :attr:`log` is therefore a pure accessor.
     """
 
     @property

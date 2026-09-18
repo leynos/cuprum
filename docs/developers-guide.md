@@ -617,27 +617,33 @@ close on every terminal path. The shared mechanics live in
 `cuprum/_sink_lifecycle.py`; the contract (see
 [ADR-012](adr-012-opt-in-github-actions-presentation-sink.md)):
 
-- `_open_sink_session` opens the session *before* any subprocess starts — from
+- `_SinkBracket.open` opens the session *before* any subprocess starts — from
   `_command_session_start` for a single command and from
-  `_prepare_pipeline_config` for a pipeline — and immediately calls its eager
-  `open_group` when the adapter exposes one, so child output can never appear
-  above the group opening. A declined activation (`None`) leaves the run
-  unchanged with nothing to unwind.
-- Stream configuration routes echoed stdout and stderr through
-  `sink_session.log` when a session is active, replacing the default
-  destinations for that run only.
-- Every terminal path closes the session through `_close_sink_session` with a
-  bounded `SessionOutcome`: `_outcome_for_result` maps a completed run's exit
-  code and `_outcome_for_error` maps timeout, cancellation, and earlier
-  failures. A pipeline reports its first failing stage's exit code through
+  `_prepare_pipeline_config` for a pipeline. The bracket is the take-once owner
+  of the session, and framing is the adapter's own business: `open_session`
+  writes it before returning, with no hook and no duck typing, so child output
+  can never appear above the group opening. A declined activation (`None`)
+  leaves the bracket empty and the run unchanged with nothing to unwind.
+- Stream configuration routes echoed stdout and stderr through the bracket's
+  `session.log` when a session is active, replacing the default destinations
+  for that run only.
+- Every terminal path finalizes through `_SinkBracket.close`, which releases the
+  session and delegates to `_close_sink_session` with a bounded
+  `SessionOutcome`. The close is exactly-once — only the first reaches the
+  adapter — so a later guard cannot overwrite an early, precise outcome.
+  `_outcome_for_result` maps a completed run's exit code and
+  `_outcome_for_error` maps timeout, cancellation, and earlier failures. A
+  pipeline reports its first failing stage's exit code through
   `_pipeline_result_outcome` (`cuprum/_pipeline_sink.py`). Only categorical
   detail reaches the adapter; exception text and argv never do.
-- The close runs before the shielded task drain but is itself a non-blocking
-  buffered write; the adapter's `close` is idempotent, so overlapping terminal
-  paths cannot double-annotate.
+- The close runs before the shielded task drain, deliberately: the drain can
+  aggregate a failing after-hook or observe task into a `BaseExceptionGroup`,
+  so closing afterwards would record the aggregate in place of the precise
+  timeout or cancellation, and a drain that raised would skip the close
+  entirely.
 
-When adding an exit path to `_execute_with_hooks` or the pipeline runner, add
-its sink close in the same change. A path that skips the close leaks the
+When adding an exit path to `_execute_with_hooks` or the pipeline runner, close
+the run's bracket in the same change. A path that skips the close leaks the
 stop-commands lease and leaves the group open for the rest of the job log.
 
 Private helpers emit diagnostic logs rather than installing a global metrics or
@@ -4559,14 +4565,15 @@ pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 on both the success and the timeout paths.
 
 `cuprum/_sink_lifecycle.py` holds the presentation-sink session lifecycle the
-two runners share: opening the adapter's session before the work starts
-(`_open_sink_session`, with `_command_session_start` framing a single command),
-closing it on every terminal path (`_close_sink_session`), and mapping a result
-or an error onto the bounded `SessionOutcome` set (`_outcome_for_result`,
-`_outcome_for_error`). `cuprum/_pipeline_sink.py` keeps only the pipeline's own
-result mapping, `_pipeline_result_outcome`, which reports the first failing
-stage's exit code; the command-versus-pipeline split there is the shape of the
-run, not of the session.
+two runners share: the `_SinkBracket` that is the take-once owner of one run's
+session, opening it before the work starts (`_open_sink_session`, with
+`_command_session_start` framing a single command), closing it on every
+terminal path (`_close_sink_session`), and mapping a result or an error onto
+the bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
+`cuprum/_pipeline_sink.py` keeps only the pipeline's own result mapping,
+`_pipeline_result_outcome`, which reports the first failing stage's exit code;
+the command-versus-pipeline split there is the shape of the run, not of the
+session.
 
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the

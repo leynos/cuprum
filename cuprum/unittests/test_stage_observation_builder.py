@@ -31,6 +31,7 @@ from cuprum._pipeline_internals import (
     _collect_hooks,
     _enforce_allowlist,
 )
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._testing import _prepare_pipeline_config
 from cuprum.context import current_context, env, merge_env_overlays
 from cuprum.sh import (
@@ -117,7 +118,7 @@ def _single_command_tags(
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
-        sink_session=None,
+        sink_bracket=_SinkBracket(None),
     )
     observation = _prepare_execution_observation(
         cmd,

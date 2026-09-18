@@ -565,9 +565,10 @@ GitHub Actions; callers who need the framing there must pass `force=True`.
 Inside GitHub Actions the default is sufficient:
 
 ```python
-from cuprum import RunOutputOptions
+from cuprum import ECHO, RunOutputOptions, sh
 from cuprum.sinks import GitHubActionsSink
 
+cmd = sh.make(ECHO)("-n", "hello sink")
 result = cmd.run_sync(
     output=RunOutputOptions(echo=True, sink=GitHubActionsSink()),
 )

@@ -80,7 +80,7 @@ Focus: Provide pipeline execution, richer events, and concurrency helpers.
   adapter (issue `#360`): a `RunOutputOptions.sink` protocol in
   `cuprum.sinks.base`, Actions group framing with a stop-commands lease, one
   `::error::` annotation per failed run, session lifecycle integration on every
-  command and pipeline terminal path, and users'-guide plus ADR-012
+  command and pipeline terminal path, and users' guide plus ADR-012
   documentation.
   - [x] Document the sink in the users' guide and record the decision in
     `docs/adr-012-opt-in-github-actions-presentation-sink.md`.

@@ -331,8 +331,16 @@ exception:
   (`_build_stream_config`), and consumer-task creation
   (`_spawn_stream_consumers`).
 - `_subprocess_execution` remains the composition root: it invokes that wiring
-  for each run and re-exports the helpers, so existing imports and the tests
-  that monkeypatch them by module path keep resolving unchanged.
+  for each run and re-exports `_build_stream_config`,
+  `_create_stream_callback`, and `_spawn_stream_consumers`, so existing imports
+  and the tests that monkeypatch them by module path keep resolving unchanged.
+  `_resolve_stream_sink` is not re-exported; it lives only in
+  `cuprum/_subprocess_streams.py`. Because `_spawn_stream_consumers` resolves
+  `_consume_stream` from that module's own globals, tests must patch
+  `cuprum._subprocess_streams._consume_stream`, as
+  `cuprum/unittests/test_capture_eof_grace_observability.py` and
+  `cuprum/unittests/test_timeout_capture_contract.py` do, rather than an
+  `_subprocess_execution` binding.
 
 No public API changes, and the module-size suppression is still unnecessary.
 `_subprocess_wait` continues to own teardown through the unchanged drain
