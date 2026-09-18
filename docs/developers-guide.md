@@ -2549,6 +2549,34 @@ document. Active verification tracking and the distinction between model
 evidence and real OS effects lives in
 [Rust boundary verification](rust-boundary-verification.md) and issue `#89`.
 
+### Const accessors in the test and Kani ownership model
+
+`CloseLog` in `rust/cuprum-native-io/src/fd_ownership_model.rs` counts modelled
+closes for the bounded model, and its accessor is
+`const fn closes(self) -> u32`. Both details of that signature follow from the
+workspace's Rust 1.85.0 toolchain rather than from an ownership decision.
+
+The workspace denies `missing_const_for_fn`, so an accessor with no reason to
+run at runtime must be `const`. `Cell::get` is not const-stable on 1.85; the
+compiler reports that `Cell::<T>::get` is not yet stable as a const fn.
+`Cell::into_inner` is const-stable, and it consumes the cell, so reaching it
+requires taking `self` by value. The consuming receiver is therefore what keeps
+the accessor `const` on that toolchain. It is not a new ownership rule:
+`CloseLog` stays `pub(crate)` inside a `#[cfg(any(test, kani))]` module, and
+each caller reads the log once as its final use, so the model's unit tests and
+`fd_ownership_kani_proofs.rs` keep their existing call sites. This remains an
+internal test-and-proof helper rather than a supported API.
+
+The pump helpers `step` and `apply_write` in
+`rust/cuprum-streams/src/pump_machine.rs` take `const fn` for the same lint
+reason. `const` qualifies how a function may be called, not who may call it, so
+neither helper widens its visibility and the pump contract is unchanged. The
+compile-fail case `tests/ui/fail/pump_transition_unreachable.rs` still pins the
+encapsulation boundary: it fails if either item is widened, even to
+`pub(crate)`. Because the committed `.stderr` fixture quotes the definition
+line, the added keyword changed that expectation; the private-function
+diagnostic it asserts is the same.
+
 ### Native boundary verification
 
 The boundary checks have dedicated Makefile targets so the normal Rust

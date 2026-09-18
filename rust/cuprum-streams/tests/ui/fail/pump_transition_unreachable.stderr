@@ -21,5 +21,5 @@ error[E0603]: function `step` is private
 note: the function `step` is defined here
   --> tests/ui/fail/../../../src/pump_machine.rs
    |
-   | fn step(state: &mut PumpState, transition: Transition) -> Flow {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | const fn step(state: &mut PumpState, transition: Transition) -> Flow {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
