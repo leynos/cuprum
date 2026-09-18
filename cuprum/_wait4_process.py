@@ -10,13 +10,16 @@ concurrent resource figures cannot be attributed to individual stages.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import functools
 import os
+import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated path owns wait4 reaping.
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
+from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._rusage import (
     ChildResourceUsage,
     _ChildRusageSnapshot,
@@ -28,6 +31,23 @@ from cuprum._rusage import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+class _Wait4InvariantError(_ExecutionInvariantError):
+    """Raised when ``wait4`` reports a child this owner did not spawn.
+
+    A mismatch means some other code reaped this child, so the resource usage
+    the direct path is about to publish belongs to a different process. Both
+    identifiers are exposed as attributes so a caller can tell this failure
+    apart from the other invariant failures without parsing the message.
+    """
+
+    def __init__(self, expected_pid: int, reaped_pid: int) -> None:
+        """Record the two identifiers and build the preserved diagnostic."""
+        msg = f"wait4 reaped unexpected child {reaped_pid}, expected {expected_pid}"
+        super().__init__(msg)
+        self.expected_pid = expected_pid
+        self.reaped_pid = reaped_pid
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -59,6 +79,7 @@ class _WritePipeProtocol(FlowControlMixin):
         self._closed = loop.create_future()
         self._get_close_waiter = functools.partial(_close_waiter, self._closed)
 
+    @typ.override
     def connection_lost(self, exc: Exception | None) -> None:
         """Settle the close waiter after the pipe transport disconnects."""
         super().connection_lost(exc)
@@ -94,6 +115,7 @@ class _Wait4Process(asyncio.subprocess.Process):
         self.stderr: asyncio.StreamReader | None = None
 
     @property
+    @typ.override
     def returncode(self) -> int | None:
         """Exit code after this instance's reaper has received it."""
         return self._returncode
@@ -127,18 +149,60 @@ class _Wait4Process(asyncio.subprocess.Process):
         self._pipe_transports.append(transport)
         return asyncio.StreamWriter(transport, protocol, None, self._loop)
 
+    @typ.override
     async def wait(self) -> int:
         """Await the owned reap without allowing caller cancellation to cancel it."""
         if self._reap_task is None:
             self._reap_task = asyncio.create_task(self._reap())
         return await asyncio.shield(self._reap_task)
 
+    @typ.override
+    def send_signal(self, signal: int) -> None:
+        """Signal the child directly, leaving reaping to this owner alone.
+
+        ``Popen.send_signal`` polls before signalling, and that poll is a
+        ``waitpid``: when the child is dead but not yet reaped it claims the
+        zombie, after which this class's own ``os.wait4`` fails with
+        ``ChildProcessError`` and the child's resource usage is lost — along
+        with whichever exception the caller was unwinding. Sending directly
+        keeps :meth:`_reap` the only reaper, as the module docstring promises.
+
+        The guard on ``_returncode`` covers the case ``Popen`` polls for, that
+        the child is already gone and its PID reusable. It cannot be a poll
+        here without reintroducing the reap above, and it reads one loop-thread
+        hop behind the kernel: between ``os.wait4`` returning in its worker
+        thread and :meth:`_reap` recording the code, the child is reaped while
+        ``_returncode`` is still ``None``, so a signal landing in that window
+        is sent by number. A child that exits *after* the guard still owns its
+        PID as a zombie and discards the signal harmlessly; only a caller
+        signalling inside that single hop could reach a recycled PID, and
+        ``Popen`` documents the same race between its own check and its
+        ``os.kill`` (bpo-38630).
+
+        ``ProcessLookupError`` means the child exited between the caller's
+        liveness check and this call, the same race ``Popen`` absorbs, so it
+        stays suppressed.
+        """
+        if self._returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(self.pid, signal)
+
+    @typ.override
+    def terminate(self) -> None:
+        """Ask the child to exit without reaping it."""
+        self.send_signal(signal.SIGTERM)
+
+    @typ.override
+    def kill(self) -> None:
+        """Compel the child to exit without reaping it."""
+        self.send_signal(signal.SIGKILL)
+
     async def _reap(self) -> int:
         """Perform the one blocking child reap in an executor thread."""
         pid, status, usage = await asyncio.to_thread(os.wait4, self.pid, 0)
         if pid != self.pid:
-            msg = f"wait4 reaped unexpected child {pid}, expected {self.pid}"
-            raise RuntimeError(msg)
+            raise _Wait4InvariantError(self.pid, pid)
         self._returncode = os.waitstatus_to_exitcode(status)
         self._popen.returncode = self._returncode
         self._resource_usage = resource_usage_from_wait4(usage)
