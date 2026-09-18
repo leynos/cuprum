@@ -1,6 +1,7 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IMPLEMENTED; hosted receipt verified, rebased candidate green, rebased again onto `b63a0f21`
+Status: IMPLEMENTED; hosted receipt verified, rebased candidate green, rebased
+again onto `b63a0f21`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -233,10 +234,10 @@ boundary.
 The second rebase onto `b63a0f21` inherited main's new `makeutil` prerequisite
 on `make test` and `make test-python`. That is an added external binary
 requirement for local and CI runs of those targets, and it is now installed in
-both `ci.yml` jobs that need it. The harness workflow's `make test-act` does not
-depend on `makeutil`, so the opt-in scenario lane is unaffected. Installation of
-`makeutil` remains a failure mode for `make test` that the branch neither
-introduces nor can remove.
+both `ci.yml` jobs that need it. The harness workflow's `make test-act` does
+not depend on `makeutil`, so the opt-in scenario lane is unaffected.
+Installation of `makeutil` remains a failure mode for `make test` that the
+branch neither introduces nor can remove.
 
 ## Verification plan
 
@@ -424,12 +425,12 @@ was true on 2026-09-17 are deliberately left unchanged.
 onto `b63a0f21`, the advanced `origin/main` head. Main had gained five commits,
 including Skylos dead-code detection (`6a9b2de4`) and the idle heartbeat for
 quiet children (`b63a0f21`). A `git merge-tree` preview taken before any
-mutation showed exactly one conflicted file: the branch's `test-act` addition
-to `.PHONY` and main's `makeutil`/`skylos-allow` reflow collided in the same
+mutation showed exactly one conflicted file: the branch's `test-act` addition to
+`.PHONY` and main's `makeutil`/`skylos-allow` reflow collided in the same
 target list, while the branch's other `Makefile` hunks and all four other
 overlapping paths (`ci.yml`, `contents.md`, `developers-guide.md`, and
-`test_workflow_lint.py`) merged without conflict. The resolution keeps the union
-of both sides' targets, so main's `makeutil` and `skylos-allow` and the
+`test_workflow_lint.py`) merged without conflict. The resolution keeps the
+union of both sides' targets, so main's `makeutil` and `skylos-allow` and the
 branch's `test-act` are all present; `makeutil parse Makefile` reports
 `status: complete` with no diagnostics, and the contract assertions in
 `test_ci_test_coverage_overlap.py` and `test_skylos_lint_contract.py` hold. The
