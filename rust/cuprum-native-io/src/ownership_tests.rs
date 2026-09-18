@@ -20,6 +20,19 @@ fn descriptor_guard() -> LockResult<MutexGuard<'static, ()>> {
     DESCRIPTOR_TESTS.lock()
 }
 
+/// Observe a descriptor, failing loudly when observation itself fails.
+///
+/// An observation error is neither an open nor a closed verdict: the kernel, or
+/// the Win32 call, refused to answer. Folding that into either branch would
+/// report an ownership assertion the observation never established, so the
+/// test fails here first, naming the underlying error.
+fn descriptor_is_open(raw: super::PlatformFd) -> bool {
+    match fd_is_open(raw) {
+        Ok(is_open) => is_open,
+        Err(error) => panic!("descriptor observation failed: {error:?}"),
+    }
+}
+
 #[rstest]
 #[case::normal(false)]
 #[case::real_unwind(true)]
@@ -53,10 +66,13 @@ fn borrowed_reader_survives(
         assert_eq!(buffer.get(..4), Some(b"ping".as_slice()));
     }));
     assert_eq!(outcome.is_err(), should_panic);
-    assert!(fd_is_open(raw), "borrow must not close the caller's reader");
+    assert!(
+        descriptor_is_open(raw),
+        "borrow must not close the caller's reader"
+    );
     drop(reader);
     assert!(
-        !fd_is_open(raw),
+        !descriptor_is_open(raw),
         "the actual owner still closes the descriptor"
     );
     drop(guard);
@@ -82,7 +98,7 @@ fn transferred_writer_closes_and_delivers_eof(
                     .unwrap_or_else(|error| panic!("write: {error:?}")),
                 4
             );
-            assert!(fd_is_open(raw_of(source)));
+            assert!(descriptor_is_open(raw_of(source)));
             match exit {
                 2 => panic!("injected real unwind"),
                 1 => Err("injected operation error"),
@@ -98,7 +114,7 @@ fn transferred_writer_closes_and_delivers_eof(
         );
     }
     assert!(
-        !fd_is_open(raw),
+        !descriptor_is_open(raw),
         "transferred writer must close on every exit"
     );
     let mut bytes = [0; 8];
@@ -116,7 +132,7 @@ fn transferred_writer_closes_and_delivers_eof(
     // A subsequent resource must not be closed by delayed ownership cleanup.
     let (replacement, _replacement_writer) =
         pipe().unwrap_or_else(|error| panic!("replacement pipe: {error:?}"));
-    assert!(fd_is_open(raw_of(&replacement)));
+    assert!(descriptor_is_open(raw_of(&replacement)));
     drop(guard);
 }
 
@@ -142,7 +158,7 @@ fn owned_descriptor_reads_and_closes(
     );
     assert_eq!(bytes.get(..4), Some(b"pong".as_slice()));
     drop(owned);
-    assert!(!fd_is_open(raw));
+    assert!(!descriptor_is_open(raw));
     drop(guard);
 }
 

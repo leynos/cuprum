@@ -1,9 +1,10 @@
 //! Tests for the borrowed file-descriptor ownership contract.
 
+use crate::buffer::ALLOCATION_FAILED_CATEGORY;
 use crate::errors::PumpError;
 use crate::io_utils::{classify_write, read_stream};
 use crate::pump_machine::WriteEvent;
-use crate::test_support::{make_pipe, read_all_from, write_all_to};
+use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
 use crate::tracing_capture::capture;
 use crate::{BufferSize, consume_stream_files, pump_stream_files_readwrite};
 use rstest::rstest;
@@ -96,6 +97,81 @@ fn pump_records_span_fields_under_error_filter() {
             .as_deref(),
         Some("0"),
         "no interruptions occurred, so write_retries must record as 0",
+    );
+}
+
+/// A refused scratch allocation emits a bounded, categorized `error` event.
+///
+/// Captured at `ERROR` level, exactly the filter a production subscriber is
+/// most likely to run: an event that needed a finer level to be seen would
+/// have diagnostic value that depends on configuration.
+#[rstest]
+fn allocation_failure_reports_a_bounded_category_event() {
+    let captured = capture(Level::ERROR, || {
+        match crate::buffer::allocate_buffer(usize::MAX) {
+            Ok(buffer) => panic!(
+                "an unallocatable buffer must fail, got {} bytes",
+                buffer.len()
+            ),
+            Err(error) => assert!(
+                matches!(error, PumpError::BufferAllocationFailed),
+                "the refusal must surface as the typed error, got {error:?}",
+            ),
+        }
+    });
+
+    assert!(
+        captured.event_matches(
+            Level::ERROR,
+            "scratch buffer allocation refused",
+            &[
+                ("error_category", ALLOCATION_FAILED_CATEGORY),
+                // The request cannot be rounded up past the top of the range,
+                // so the bucket reports the request itself: an exact, bounded
+                // value, never an allocator internal.
+                ("buffer_size", &usize::MAX.to_string()),
+                // The platform field matches the I/O seam events, so an
+                // embedding application filters every stream event alike.
+                ("platform", "unix"),
+            ],
+        ),
+        "a refused allocation must emit its stable category and bounded buffer \
+         size at error level",
+    );
+}
+
+/// The pump's allocation failure keeps the operation span's context.
+#[rstest]
+fn allocation_failure_inside_the_pump_span_keeps_its_context() {
+    // The realistic wiring: `pump_stream_files_readwrite` enters its operation
+    // span before allocating, so the event is emitted inside that span and
+    // inherits the operation context even under an ERROR-only filter.
+    let (reader, _reader_writer) = unwrap_ok(make_pipe());
+    let (_sink_reader, writer) = unwrap_ok(make_pipe());
+    let captured = capture(Level::ERROR, || {
+        match pump_stream_files_readwrite(&reader, &writer, BufferSize(usize::MAX)) {
+            Ok(total) => panic!("an unallocatable buffer must fail the pump, moved {total}"),
+            Err(error) => assert!(
+                matches!(error, PumpError::BufferAllocationFailed),
+                "the pump must propagate the allocation failure, got {error:?}",
+            ),
+        }
+    });
+
+    assert!(
+        captured.event_matches(
+            Level::ERROR,
+            "scratch buffer allocation refused",
+            &[("error_category", ALLOCATION_FAILED_CATEGORY)],
+        ),
+        "the allocation event must fire from the pump with its stable category",
+    );
+    assert_eq!(
+        captured
+            .span_field("pump_stream_readwrite", "operation")
+            .as_deref(),
+        Some("pump_stream_readwrite"),
+        "the event must sit inside the pump's operation span",
     );
 }
 

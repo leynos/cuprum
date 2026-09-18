@@ -9,7 +9,7 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use crate::PlatformFd;
 use crate::{BorrowedStream, OwnedStream};
 #[cfg(test)]
-use windows_sys::Win32::Foundation::GetHandleInformation;
+use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, GetHandleInformation};
 
 /// Create two uniquely owned, non-inheritable anonymous pipe handles.
 ///
@@ -38,13 +38,29 @@ pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
 /// The result must not be used as a check-then-use validity guarantee. It is
 /// test support, so it is neither exported nor compiled into the shipped
 /// library.
+///
+/// # Errors
+/// Returns the Win32 error for any failure other than the documented
+/// invalid-handle condition. Recording those as "closed" would report an
+/// ownership verdict the observation never established.
 #[cfg(test)]
-#[must_use]
-pub(crate) fn fd_is_open(raw: PlatformFd) -> bool {
+pub(crate) fn fd_is_open(raw: PlatformFd) -> io::Result<bool> {
     let mut flags = 0;
     // SAFETY: GetHandleInformation validates the opaque handle and writes
     // flags only through the live output pointer. No ownership is acquired.
-    unsafe { GetHandleInformation(raw as _, &mut flags) != 0 }
+    if unsafe { GetHandleInformation(raw as _, &mut flags) } != 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    // Win32 codes are unsigned; a negative `raw_os_error` cannot be one, so
+    // the conversion to the constant's own type is the honest comparison.
+    match error
+        .raw_os_error()
+        .and_then(|code| u32::try_from(code).ok())
+    {
+        Some(ERROR_INVALID_HANDLE) => Ok(false),
+        _ => Err(error),
+    }
 }
 
 /// Read once into initialized storage, retaining the handle borrow.
