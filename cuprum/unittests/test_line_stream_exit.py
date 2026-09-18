@@ -41,13 +41,16 @@ class _FailedExitTestDouble:
     timeout_calls
         The translated timeout output recorded per call.
     order
-        Lifecycle phases and the reconciliation marker, in occurrence order.
+        Lifecycle phases and the drain markers, in occurrence order.
+    task_sets
+        The task set each patched drain seam received, in order.
     """
 
     error: BaseException
     contexts: list[_DrainContext] = dc.field(default_factory=list)
     timeout_calls: list[tuple[str | None, str | None]] = dc.field(default_factory=list)
     order: list[object] = dc.field(default_factory=list)
+    task_sets: list[object] = dc.field(default_factory=list)
 
     def emit(self, phase: LineStreamPhase, _details: object = None) -> None:
         """Record one lifecycle phase in its emission order."""
@@ -64,12 +67,30 @@ class _FailedExitTestDouble:
 
     async def reconcile(
         self,
-        _tasks: object,
+        tasks: object,
         context: _DrainContext,
     ) -> tuple[str, str]:
-        """Record the cleanup context and produce captured output."""
+        """Record the reconciled ownership and its cleanup context."""
+        return await self._record("reconcile", tasks, context)
+
+    async def drain(
+        self,
+        tasks: object,
+        context: _DrainContext,
+    ) -> tuple[str, str]:
+        """Record the drained consumers and their cleanup context."""
+        return await self._record("drain", tasks, context)
+
+    async def _record(
+        self,
+        marker: str,
+        tasks: object,
+        context: _DrainContext,
+    ) -> tuple[str, str]:
+        """Record one drain seam invocation and produce captured output."""
+        self.task_sets.append(tasks)
         self.contexts.append(context)
-        self.order.append("reconcile")
+        self.order.append(marker)
         await asyncio.sleep(0)
         return "stdout", "stderr"
 
@@ -99,6 +120,7 @@ class _FailedExitTestDouble:
             _line_stream, "_wait_for_exit_code_within_timeout", self.wait_for_exit
         )
         monkeypatch.setattr(_line_stream, "_reconcile_run_tasks", self.reconcile)
+        monkeypatch.setattr(_line_stream, "_drain_stream_consumers", self.drain)
         monkeypatch.setattr(_line_stream, "_shielded_cleanup", self.shield)
         monkeypatch.setattr(_line_stream, "_handle_stream_timeout", self.handle_timeout)
 
@@ -220,6 +242,57 @@ def test_failed_line_stream_exit_reconciles_with_the_outcome_capture_policy(
         )
 
     double.assert_cleanup_contract(capture=capture, expected_phases=expected_phases)
+
+
+def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The discard drain drains the consumers without capturing output."""
+    double = _FailedExitTestDouble(error=ValueError("unused"))
+    consumers = object()
+    run = typ.cast(
+        "_LineStreamRun",
+        types.SimpleNamespace(
+            tasks=types.SimpleNamespace(
+                consumers=consumers,
+                discard_on_cancel=asyncio.Event(),
+            ),
+            telemetry=types.SimpleNamespace(emit=double.emit),
+        ),
+    )
+    observation = object()
+    execution = typ.cast(
+        "_SubprocessExecution",
+        types.SimpleNamespace(observation=observation),
+    )
+    double.install(monkeypatch)
+
+    result = asyncio.run(_line_stream._discard_drain(run, 456, execution))
+
+    assert result == ("stdout", "stderr"), (
+        f"the discard drain must return its drain result, got {result!r}"
+    )
+    assert double.task_sets == [consumers], (
+        f"the discard drain must drain the consumer tasks, got {double.task_sets!r}"
+    )
+    context = double.contexts[0]
+    assert context.capture is False, (
+        f"the discard drain must never capture output, got {context.capture!r}"
+    )
+    assert context.pid == 456, (
+        f"the discard drain must keep its supplied PID, got {context.pid!r}"
+    )
+    assert context.observation is observation, (
+        f"the discard drain must retain the stage observation, got {context!r}"
+    )
+    assert context.discard_on_cancel is run.tasks.discard_on_cancel, (
+        f"the discard drain must retain the discard signal, got {context!r}"
+    )
+    assert double.order == [
+        LineStreamPhase.TEARDOWN_STARTED,
+        "drain",
+        LineStreamPhase.TEARDOWN_COMPLETED,
+    ], f"the discard drain must bracket the drain in teardown, got {double.order!r}"
 
 
 def _teardown_run(order: list[object]) -> _LineStreamRun:
