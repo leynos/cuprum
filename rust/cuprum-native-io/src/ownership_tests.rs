@@ -15,6 +15,10 @@ use super::{adopt_writer, borrow, borrow_reader, fd_is_open, pipe, read_once, wi
 // The guard is outside catch_unwind, so intentional panics do not poison it.
 static DESCRIPTOR_TESTS: Mutex<()> = Mutex::new(());
 
+// `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
+// form that triggers `unused_braces` under Rust 1.85. Remove this skip when
+// that formatter/rstest combination compiles the configured profile cleanly.
+#[rustfmt::skip]
 #[fixture]
 fn descriptor_guard() -> LockResult<MutexGuard<'static, ()>> {
     DESCRIPTOR_TESTS.lock()
