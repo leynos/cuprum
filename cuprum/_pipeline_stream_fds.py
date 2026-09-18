@@ -209,26 +209,6 @@ class _BlockingModeGuard:
         )
 
 
-@contextlib.contextmanager
-def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[_ReaderPause]:
-    """Pause ``reader`` for the block and report whether hand-off is safe.
-
-    An unsupported or unresumable transport is never paused, and a failed pause
-    is corrected at the failure site, so this scope resumes only a completed
-    pause.
-
-    Yields
-    ------
-    _ReaderPause
-        The outcome describing whether the raw-descriptor hand-off is safe.
-    """
-    pause = _pause_reader_transport(reader)
-    try:
-        yield pause
-    finally:
-        _resume_reader_transport(pause.resume)
-
-
 def _resume_reader_transport(
     resume_reader: cabc.Callable[[], None] | None,
 ) -> None:
@@ -247,12 +227,6 @@ def _close_native_pump_worker_fd(worker_fd: int) -> None:
     """Close a worker-owned reader descriptor after native pumping settles."""
     with contextlib.suppress(OSError):
         os.close(worker_fd)
-
-
-def _close_native_pump_worker_fds(worker_fds: _NativePumpWorkerFds) -> None:
-    """Close both worker descriptors before abandoning native preparation."""
-    _close_native_pump_worker_fd(worker_fds.reader_fd)
-    _close_rust_writer_fd(worker_fds.writer_fd)
 
 
 def _close_rust_reader_fd(reader_fd: int) -> None:

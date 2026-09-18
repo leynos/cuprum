@@ -47,6 +47,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
+.skylos-whitelist.lock
 .hypothesis/
 .pytest_cache/
 cover/
@@ -184,6 +185,7 @@ cython_debug/
 
 # Ruff stuff:
 .ruff_cache/
+.skylos/
 
 # PyPI configuration file
 .pypirc
