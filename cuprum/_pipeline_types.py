@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
@@ -242,6 +243,7 @@ class _PipelineSpawnResult:
     stderr_tasks: list[asyncio.Task[str | None] | None]
     stdout_task: asyncio.Task[str | None] | None
     stages: _StageWaitContext
+    idle: _IdleMonitor | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

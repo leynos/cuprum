@@ -63,11 +63,6 @@ def _split_complete_lines(text: str) -> tuple[list[str], str]:
     return lines, text[start:]
 
 
-def _ends_with_line_ending(line: str) -> bool:
-    """Return whether ``line`` ends with a newline or carriage return."""
-    return line.endswith(("\n", "\r"))
-
-
 def _strip_line_ending(line: str) -> str:
     r"""Strip a single trailing ``\r\n``, ``\n``, or ``\r`` from ``line``."""
     if line.endswith("\r\n"):

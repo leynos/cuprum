@@ -1160,6 +1160,21 @@ text-only sinks, it owns an incremental decoder configured with
 `config.encoding` and `config.errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
 
+`_drain_chunks` invokes `config.activity` immediately after a non-empty raw
+read, before decoding, echoing, truncation, and line callbacks. This is the
+only activity signal the idle heartbeat sees, so a partial line, a multibyte
+sequence split across reads, discarded output, and a chunk that is never echoed
+all count as activity, while EOF and parent-generated diagnostics do not. The
+callback receives no child bytes: it exists to reset a timer, not to observe
+output.
+
+The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
+write and the incremental decoder and records where a mirrored sink ended up;
+the mirror cursor it records into is created and retained by the idle heartbeat
+(`cuprum/_idle_heartbeat.py`) and reaches the renderer through `_StreamConfig`.
+The drain loop in `cuprum/_streams.py` only reads the bytes and owns the state
+it renders.
+
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through
@@ -1219,6 +1234,17 @@ propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
+
+The idle heartbeat is run-owned rather than stream-owned: exactly one watchdog
+exists per run, never one per stream and never a task per chunk.
+`_build_idle_monitor` returns `None` when idle reporting is off, so a disabled
+run creates no task and no timer. When enabled it is armed once after the first
+successful spawn and settled exactly once through `_stop_idle_monitor`, the
+idempotent stop/cancel/await that every exit path shares, with the shielded
+cleanup path as the backstop; a timeout, a cancellation, a callback failure,
+and a partial pipeline spawn all leave no task behind. The watchdog is a second
+owner of the run's lifetime, not of the child's: it observes silence and never
+terminates a process or extends a timeout.
 
 ### Canonical adapter event projection and locked-store base
 
@@ -2983,6 +3009,11 @@ The short version is:
   `py-version = "3.12"` semantic baseline.
 - `$(AMBRLEAKS)` scans `cuprum/unittests`, `scripts/tests`, and `tests`; exact
   deterministic fixture values that resemble secrets belong in `ambrleaks.toml`.
+- `$(SKYLOS_CLI)` provisions the pinned Skylos release in its own `uv tool`
+  environment with Python 3.14. Skylos parses source with that interpreter's
+  AST, so the pin prevents phantom dead-code findings from newer syntax.
+- `$(SKYLOS)` adds the scan configuration to `$(SKYLOS_CLI)`, keeping detector
+  dependencies out of Cuprum's application dependency closure.
 
 ### Markdown formatting
 
@@ -3045,6 +3076,8 @@ make lint
    the same targets.
 5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
    test roots.
+6. `$(SKYLOS)` scanning `$(SKYLOS_PRODUCTION_TARGETS)` for dead code, excluding
+   `$(SKYLOS_EXCLUDE_FOLDERS)`, with gate mode enabled.
 
 Each stage must pass before the next runs. When investigating a lint failure,
 fix findings in execution order, then rerun `make lint` to reach the next
@@ -3083,6 +3116,49 @@ it downloads the archive through actionlint's installer pinned to commit
 `8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` before
 extraction. The lint job invokes trusted `/usr/bin/make` and passes actionlint
 by absolute `ACTIONLINT` path, so checkout contents cannot shadow `make`.
+
+### Skylos dead-code policy
+
+Skylos analyses production code only: `cuprum/unittests` is excluded so
+test-only references cannot keep a production symbol live. It runs with
+`--no-grep-verify`, which prevents repository-wide text matches from masking a
+dead production symbol, and its strict gate configuration is in
+`pyproject.toml`.
+
+Remove confirmed dead code. Do not suppress a finding until its runtime caller
+has been verified. For framework callbacks, protocol implementations, or other
+implicit callers, add a narrowly typed entry-point record in
+`[tool.skylos.dead_code]`, using the symbol's full name and a reason naming the
+caller; declare methods as `type = "method"`. If that model cannot describe a
+verified false positive, record a named exception with:
+
+```bash
+make skylos-allow SYMBOL=handler REASON="Loaded by plugin registry"
+```
+
+The target requires both values and rejects empty or whitespace-only `SYMBOL`
+and `REASON` values. Use `SYMBOL` rather than `NAME` because WSL may inject
+`NAME` with the hostname. It stores the reason in Skylos's documented allow
+list. Updates are serialized with `flock` using the ignored
+`.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
+an alternate lock path. Never use a broad or unreasoned exception.
+
+The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
+`test_skylos_lint_contract.py`; `make test` verifies that the parser is
+available before running the test suite. CI installs its pinned Makeutil
+revision before running that target.
+
+For local test runs, install the same pinned parser and toolchain before running
+`make test`:
+
+```bash
+rustup toolchain install nightly-2026-05-28 --profile minimal
+RUSTFLAGS="-Zpolonius=next" cargo +nightly-2026-05-28 install \
+  --git https://github.com/leynos/makeutil \
+  --rev 29fc5a1634ffbaa18a773eed9dff1b2838a45d9c \
+  --locked --force makeutil
+make test
+```
 
 ### Spelling policy
 
@@ -3153,31 +3229,36 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                | Default                                                                      | Purpose                                                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `VENV_TOOLS`            | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
-| `RUFF_VERSION`          | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
-| `RUFF_ENV`              | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
-| `RUFF`                  | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
-| `TY_VERSION`            | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
-| `TY`                    | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
-| `INTERROGATE_TARGETS`   | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files interrogated for docstring coverage.                                                                  |
-| `INTERROGATE`           | Derived command                                                              | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
-| `PYLINT_PYTHON`         | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
-| `PYLINT_TARGETS`        | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files passed to `pylint-pypy`.                                                                              |
-| `PYLINT_PYPY_SHIM_REF`  | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
-| `PYLINT_PYPY_SHIM`      | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
-| `PYLINT_VERSION`        | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
-| `PYLINT_CACHE`          | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
-| `PYLINT`                | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
-| `DF12_PYTHON_LINTS_REF` | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
-| `DF12_PYTHON`           | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
-| `DF12_PYLINT_MESSAGES`  | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
-| `DF12_PYLINT`           | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
-| `AMBRLEAKS`             | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
-| `LOCAL_TOOL_ENV`        | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
-| `UV_ENV`                | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
-| `UV_RUN_ENV`            | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
+| Variable                    | Default                                                                      | Purpose                                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `VENV_TOOLS`                | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
+| `RUFF_VERSION`              | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
+| `RUFF_ENV`                  | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
+| `RUFF`                      | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
+| `TY_VERSION`                | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
+| `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
+| `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files interrogated for docstring coverage.                                                                  |
+| `INTERROGATE`               | Derived command                                                              | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
+| `PYLINT_PYTHON`             | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
+| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files passed to `pylint-pypy`.                                                                              |
+| `PYLINT_PYPY_SHIM_REF`      | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
+| `PYLINT_PYPY_SHIM`          | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
+| `PYLINT_VERSION`            | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
+| `PYLINT_CACHE`              | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `PYLINT`                    | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
+| `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
+| `DF12_PYTHON`               | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
+| `DF12_PYLINT_MESSAGES`      | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
+| `DF12_PYLINT`               | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
+| `AMBRLEAKS`                 | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
+| `SKYLOS_VERSION`            | `4.33.2`                                                                     | Pinned standalone Skylos release.                                                                                           |
+| `SKYLOS`                    | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
+| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                     | Production paths passed to Skylos.                                                                                          |
+| `SKYLOS_EXCLUDE_FOLDERS`    | `cuprum/unittests`                                                           | Test-only paths excluded from the production scan.                                                                          |
+| `SKYLOS_WHITELIST_LOCK`     | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                                                                               |
+| `LOCAL_TOOL_ENV`            | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
+| `UV_ENV`                    | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
+| `UV_RUN_ENV`                | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -3752,6 +3833,79 @@ If a workflow's behaviour genuinely depends on a feature only present from a
 particular commit onwards, express that as a comment or a changelog note, not
 as a test assertion on the SHA string.
 
+## Mutation-testing workflow contract tests
+
+This repository runs scheduled, informational mutation testing through a thin
+caller workflow,
+[`.github/workflows/mutation-testing.yml`](../.github/workflows/mutation-testing.yml),
+which delegates to the shared reusable workflow
+`leynos/shared-actions/.github/workflows/mutation-mutmut.yml`. The heavy
+lifting — running `mutmut` and summarizing survivors — lives in
+`shared-actions`; this repository carries only declarative configuration. The
+run is **informational only**: it never gates a pull request. Survivors are
+reported through the job summary and downloadable artefacts so they can be
+triaged into tests, not enforced as a blocking check. Only the Python package
+is enrolled: the pinned `mutation-cargo.yml` reusable workflow always fans a
+repository-root `cargo-mutants` target out for `workflow_dispatch` full runs,
+and Cuprum has no repository-root `Cargo.toml` (the Rust workspace manifest
+lives at `rust/Cargo.toml`), so a Rust job cannot ride the shared workflow at
+this pin. The mutation targets and test selection are configured separately in
+`[tool.mutmut]` in `pyproject.toml` (`source_paths`,
+`pytest_add_cli_args_test_selection`, `do_not_mutate`).
+
+The workflow runs in two modes. A **daily schedule** fires a change-scoped run
+that mutates only the source files touched within the detection window, so
+quiet days are cheap no-ops. A **manual dispatch** (the Actions "Run workflow"
+control) mutates the whole package; select a branch in that control to exercise
+a feature branch.
+
+The caller passes two configuration inputs:
+
+- `paths` — `cuprum/`, the change-detection glob that decides whether a
+  scheduled run has anything to mutate. The flat repository layout puts the
+  mutable source directly at the repository root, so change detection watches
+  the package itself.
+- `module-prefix-strip` — the empty string, because the flat layout has no
+  `src/` prefix to strip before module-glob translation.
+
+The `uses:` reference pins the shared workflow to a full 40-character commit
+SHA rather than a branch or tag, so a force-push upstream cannot silently
+change what runs here. The contract test asserts only that the pin is a full
+commit SHA, not a particular value, so Dependabot bumps it automatically
+without any accompanying test edit (see
+[Workflow pins and Dependabot](#workflow-pins-and-dependabot) above for the
+shape-only rationale).
+
+### Workflow contract tests
+
+Because the caller is configuration rather than code,
+`tests/test_workflow_contract.py` pins the shape it must uphold, failing the
+pull request when the caller drifts — repointing the pin at a branch, widening
+the token scope, or dropping a configuration input — rather than letting the
+breakage surface only in a scheduled run. Unlike some sibling repositories,
+this module has no `skipif` guard: `.github/` is listed in
+`[tool.mutmut].also_copy`, so the workflow file is present inside mutmut's
+sandbox and the contract test runs there too. Run it locally with:
+
+```bash
+uv run --with pytest --with pyyaml pytest tests/test_workflow_contract.py -q
+```
+
+There is no dedicated Makefile target for this test; it also falls outside
+`PYTEST_TARGETS`, the glob list `make test` uses, so it must be run directly
+with the command above (or as part of a full mutmut pass). The test validates:
+
+- the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
+  SHA;
+- the `with:` block carries exactly
+  `{"paths": "cuprum/", "module-prefix-strip": ""}`;
+- job permissions are least-privilege (`contents: read`, `id-token: write`)
+  and the workflow-level default token scope is empty;
+- `concurrency` serializes runs per ref without cancelling one in progress;
+  and
+- the triggers keep the daily 08:20 UTC schedule and a plain
+  `workflow_dispatch` with no inputs.
+
 ## Compile-time UI tests (trybuild)
 
 The Rust crate at `rust/cuprum-rust/` uses
@@ -3847,15 +4001,19 @@ without updating snapshot files and any downstream tooling.
 Two canonical helpers own the subprocess spawn flags used by the subprocess
 spawn paths:
 
-- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
-  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
-  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
-  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
-  stages always pipe stdout, while the final stage pipes stdout only when
-  output is captured or echoed; stderr is piped exactly when output is captured
-  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
-  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
-  for single-command spawning.
+- `_get_stage_stream_fds(idx, last_idx, *, consumes_stdout, consumes_stderr)`
+  in `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. Its input
+  domain is the stage position (first / intermediate / final) crossed with the
+  two independent boolean parent-consumption gates. A gate is true when
+  capture, that stream's echo, or an idle heartbeat requires the parent to read
+  the stream. The first stage reads stdin from `DEVNULL` and every later stage
+  from a `PIPE`; a non-final stage always pipes stdout so it can relay into the
+  next stage regardless of capture or echo; the final stage's stdout follows
+  its own `consumes_stdout` gate, and every stage's stderr follows its own
+  `consumes_stderr` gate. `_spawn_pipeline_processes` routes through this
+  helper — do not re-derive the flags inline at pipeline-stage spawn sites, and
+  do not use it for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
@@ -3867,16 +4025,23 @@ Changes to stdio selection (for example, adding stdin handling to pipelines)
 belong in `_get_stage_stream_fds` so pipeline-stage behaviour and the
 exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
 authoritative. That test module covers the full finite input domain (stage
-position × capture/echo) and asserts agreement with the single-command policy
-on the overlapping cases.
+position × the two parent-consumption booleans) and asserts agreement with the
+single-command policy on the overlapping cases.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
-output behaviour. Public command execution should accept or construct this
-object rather than threading separate `capture` and `echo` keyword arguments
-through new APIs. Keep that pairing intact so stdout/stderr handling stays
-explicit, testable, and compatible with the `IOOptions` deprecation path.
+`RunOutputOptions` is the canonical carrier for command output behaviour: it
+holds `capture`, the `echo` shorthand, the resolved `echo_stdout` and
+`echo_stderr` gates, and the idle-reporting fields `idle_after` and `on_idle`.
+`capture` is one joint switch for both streams, while an unset per-stream gate
+inherits `echo`. The idle fields follow the same rule as the rest of the
+carrier: spawn paths read `idle_after` and `on_idle` off the object rather than
+threading them as separate arguments, and a run that sets neither idle field
+keeps the existing no-stream fast path. Public command execution should accept
+or construct this object rather than threading separate `capture` and `echo`
+keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
+handling stays explicit, testable, and compatible with the `IOOptions`
+deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
@@ -3900,12 +4065,43 @@ must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
 
+### Per-stream echo mechanics
+
+`RunOutputOptions.__post_init__` resolves the `echo` shorthand into
+`echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
+while an explicit field overrides it for that stream alone. `capture` remains
+one joint boolean, so a stream that is not echoed is still captured when
+`capture` is `True`.
+
+`ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
+fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.
+
+`_SubprocessExecution` carries separate `echo_stdout` and `echo_stderr` gates
+and the run-owned idle monitor. Its `consumes_stdout` and `consumes_stderr`
+predicates each report `capture or echo_<stream> or an idle watchdog exists`;
+spawning pipes a stream exactly when its own predicate holds, so a run with
+idle reporting enabled reads both streams even when `capture` and echo are off.
+
+Pipeline fd selection follows the same per-stream predicates through
+`_get_stage_stream_fds`. A non-final stage always pipes stdout so it can relay
+into the next stage, regardless of capture or echo. The final stage's stdout
+and every stage's stderr are piped only when their own parent-consumption gate
+is true. `_PipelineRunConfig` builds a `_StreamConfig` per stream so both
+streams can share capture while differing in echo, attaches the idle monitor's
+`note_activity` callback as the `activity` hook on final-stage stdout and every
+stage's stderr, and gives each config the shared `mirror` cursor when that
+stream's resolved sink is the keepalive's own destination: stderr normally, and
+final-stage stdout too when the caller points both sinks at one object, since
+either echo can then strand a keepalive mid-line.
+
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. The two idle-heartbeat modules,
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -3913,9 +4109,23 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; and orchestration that coordinates them —
-spawning, wiring streams, and assembling the result — belongs in
-`_subprocess_execution`.
+belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
+deciding which streams are consumed, and assembling the result — belongs in
+`_subprocess_execution`; and single-command stream-consumer construction
+belongs in `_subprocess_streams`. The idle heartbeat's timing belongs in
+`_idle_heartbeat` and its rendering and write-failure policy in
+`_idle_diagnostic`.
+
+`cuprum/_subprocess_execution.py` stays the composition root. It is what calls
+`_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
+a change in *which* streams a run consumes is an orchestration change and
+belongs there, while a change to how one `_StreamConfig` is assembled or how
+its consumer task is created belongs in `_subprocess_streams`. The split is
+what keeps the execution module under the Pylint module ceiling now that the
+idle-heartbeat wiring reaches into the stream configs; see the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-09-16 for why this boundary was accepted after an earlier, differently
+shaped one was withdrawn.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,

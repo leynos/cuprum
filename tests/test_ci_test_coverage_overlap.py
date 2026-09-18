@@ -240,7 +240,7 @@ def test_the_extension_gate_is_not_a_duplicate_run() -> None:
 def test_make_keeps_both_suites_available_locally() -> None:
     """Keep `make test` running everything, whatever CI splits apart."""
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert "\ntest: test-python test-rust" in makefile, (
+    assert "\ntest: makeutil test-python test-rust" in makefile, (
         "`make test` must still run both suites for contributors, even though "
         "CI calls the halves separately"
     )

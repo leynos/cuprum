@@ -22,6 +22,7 @@ import time
 import typing as typ
 from pathlib import Path
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -253,7 +254,31 @@ async def _run_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
 ) -> PipelineResult:
-    """Execute a pipeline and return a structured result."""
+    """Execute a pipeline and return a structured result.
+
+    A thin wrapper, so that the aggregate idle heartbeat is settled on every
+    exit path without threading a ``finally`` through the spawn and drive
+    halves below.
+
+    Returns
+    -------
+    PipelineResult
+        The assembled stage results and the index of the first failing stage.
+    """
+    try:
+        return await _spawn_and_drive_pipeline(parts, config)
+    finally:
+        # Completion, a deadline, cancellation, or a partial spawn: whichever
+        # ended this run, it has stopped producing output. Stopping is
+        # idempotent, so the earlier stops are not undone by this one.
+        await _shielded_cleanup(_stop_idle_monitor(config.idle))
+
+
+async def _spawn_and_drive_pipeline(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+) -> PipelineResult:
+    """Spawn every stage, then drive the spawned pipeline to a result."""
     pending_tasks: list[asyncio.Task[None]] = []
     observations = _build_pipeline_observations(
         parts,
@@ -282,6 +307,7 @@ async def _run_pipeline(
                 wall_clock_started_at=tuple(wall_clock_started_at),
                 observations=observations,
             ),
+            idle=config.idle,
         )
     except BaseException as spawn_error:
         await _shielded_cleanup(

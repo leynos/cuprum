@@ -19,6 +19,7 @@ import sys
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_stream_results import (
     _gather_optional_text_tasks,
     _reconcile_pipe_tasks,
@@ -77,6 +78,11 @@ async def _await_pipeline_wait_result(
     ``_wait_for_pipeline`` before the ``finally`` that would reconcile them,
     so the caller reconciles them instead (see the developers' guide).
 
+    The run's idle heartbeat is stopped here as well. Once every stage has
+    settled -- or a deadline is taking over their teardown -- the pipeline is no
+    longer "still running", and the output gathering that follows can be held
+    open by a grandchild's inherited pipe long after the stages are gone.
+
     Returns
     -------
     _PipelineWaitResult
@@ -92,9 +98,12 @@ async def _await_pipeline_wait_result(
         cancel_grace=config.ctx.cancel_grace,
         stages=spawn.stages,
     )
-    if wait_timeout is None:
-        return await pipeline_wait
-    return await asyncio.wait_for(pipeline_wait, wait_timeout)
+    try:
+        if wait_timeout is None:
+            return await pipeline_wait
+        return await asyncio.wait_for(pipeline_wait, wait_timeout)
+    finally:
+        await _shielded_cleanup(_stop_idle_monitor(spawn.idle))
 
 
 async def _gather_pipeline_outputs(

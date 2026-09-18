@@ -164,6 +164,53 @@ def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
     )
 
 
+def single_step_using(
+    workflow_name: str,
+    job_name: str,
+    *,
+    uses: str,
+    prefix: bool = False,
+) -> Step:
+    """Return the single step of a job that invokes a named action.
+
+    Exactly one, not merely the first: a job that invokes the same action twice
+    runs its work twice, and a contract that reported the first would call that
+    clean. Every caller wants the same rule, so it lives here rather than being
+    restated, slightly differently, in each contract module.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the workflow under ``.github/workflows``.
+    job_name : str
+        Job the step is expected in.
+    uses : str
+        The ``uses:`` value to match. An action pin carries its revision after
+        an ``@``, so callers that know only the action set ``prefix``.
+    prefix : bool
+        Match a ``uses:`` that starts with ``uses`` rather than equalling it.
+
+    Returns
+    -------
+    Step
+        The one matching step.
+    """
+
+    def invokes(step: Step) -> bool:
+        declared = str(step.get("uses", ""))
+        return declared.startswith(uses) if prefix else declared == uses
+
+    matched = [step for step in steps(workflow_name, job_name) if invokes(step)]
+    _require(
+        condition=len(matched) == 1,
+        message=(
+            f"{workflow_name}:{job_name} must invoke {uses!r} exactly once, "
+            f"found {len(matched)}"
+        ),
+    )
+    return matched[0]
+
+
 def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
     """Flatten a workflow-to-job-names manifest into per-job cases."""
     return [
