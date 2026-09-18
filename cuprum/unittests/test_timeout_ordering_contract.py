@@ -1,11 +1,15 @@
 """Contract for the timers that can end a coverage run.
 
 Four independent budgets can end a coverage lane, each set somewhere
-different, and they only work if each sits above the one inside it. Two
-of the four apply here: the shared coverage action's wall-clock watchdog
-on the ``cargo`` invocation, and the job's own ``timeout-minutes``. The
-two nextest tiers do not, because there is no ``.config/nextest.toml``
-for anyone to have set them in.
+different, and they only work if each sits above the one inside it:
+nextest's per-test allowance and whole-run budget, the shared coverage
+action's wall-clock watchdog on the ``cargo`` invocation, and the job's
+own ``timeout-minutes``.
+
+The two nextest tiers live in the Cargo workspace's ``.config/nextest.toml``
+rather than the repository root's, because nextest resolves that path from
+the workspace root and searches no parent directory. Cuprum keeps no root
+``Cargo.toml``, so the workspace is ``rust/``.
 
 Both coverage lanes ran on the action's 1,800 s default until this
 contract was written, and nothing in this repository mentioned it. A
@@ -28,13 +32,11 @@ import typing as typ
 
 import pytest
 
-from cuprum.unittests._timeout_lane_support import (
+from cuprum.unittests._coverage_timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
     COVERAGE_ACTION,
     COVERAGE_WORKFLOWS,
-    EXPECTED_WATCHDOG_SECONDS,
     OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
-    WATCHDOG_VARIABLE,
     CoverageLane,
     Workflow,
     _cargo_manifest_of,
@@ -42,6 +44,18 @@ from cuprum.unittests._timeout_lane_support import (
     _lanes,
     lanes_in,
     required_ceiling,
+)
+from cuprum.unittests._timeout_lane_support import (
+    COLD_BUILD_ALLOWANCE_SECONDS,
+    EXPECTED_WATCHDOG_SECONDS,
+    NEXTEST_CONFIG,
+    WATCHDOG_VARIABLE,
+    _default_nextest_profile,
+    _slow_timeout_of,
+    global_timeout_seconds,
+    largest_per_test_allowance_seconds,
+    nextest_config_path,
+    termination_allowance_seconds,
 )
 from tests.helpers.docs import repo_root
 
@@ -140,26 +154,99 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
     )
 
 
-def test_the_nextest_tiers_are_absent_rather_than_unset() -> None:
-    """The inner two tiers do not exist here, and their absence is a gap.
+def test_the_nextest_config_sits_where_nextest_looks_for_it() -> None:
+    """Nextest reads its config from the workspace root, not the repository root.
 
-    The canonical section has four tiers because nextest contributes two
-    of them: a per-test allowance and a whole-run budget. There is no
-    `.config/nextest.toml` in this repository, so neither is set.
+    Nextest resolves repository configuration from
+    `<workspace>/.config/nextest.toml` and searches no parent directory, so a
+    copy at the repository root is never read. Cuprum keeps no root
+    `Cargo.toml`, making `rust/` the workspace; a config written one level up
+    would leave both inner tiers inert while every value assertion below still
+    passed, because those read the file rather than the run.
 
-    That is recorded rather than asserted away. Adding the file would
-    give a hung test a bound that names the test rather than `cargo`, and
-    this test exists to fail when it appears, so the budgets arrive with
-    the guide updated in the same change rather than unbounded beneath a
-    watchdog sized for neither.
+    Proved by mutation: moving the file to the repository root and running
+    `cargo nextest list --manifest-path rust/Cargo.toml` exits 0 and reports
+    no parse error, while an invalid value at the workspace root exits 96.
     """
-    config = repo_root() / ".config" / "nextest.toml"
-    assert not config.is_file(), (
-        "a nextest configuration has appeared; set a per-test slow-timeout "
-        "and a global-timeout in it, check the global-timeout sits above the "
-        "largest per-test allowance (period multiplied by terminate-after) "
-        "and inside the cargo watchdog, and update the developers' guide's "
-        "timeout section in the same change"
+    misplaced = repo_root() / ".config" / "nextest.toml"
+    assert not misplaced.is_file(), (
+        "a nextest configuration at the repository root is never read; nextest "
+        f"resolves {NEXTEST_CONFIG} from the Cargo workspace root and searches "
+        "no parent directory, so the tiers it declares would be inert beneath "
+        "a watchdog sized for neither"
+    )
+    assert nextest_config_path().is_file(), (
+        f"expected the nextest configuration at {NEXTEST_CONFIG}, the path "
+        "nextest resolves from the Cargo workspace root"
+    )
+
+
+def test_the_nextest_tiers_are_explicitly_set() -> None:
+    """The default profile declares both inner timeout tiers in full."""
+    profile = _default_nextest_profile()
+    slow_timeout = _slow_timeout_of(profile)
+    for key in ("period", "terminate-after"):
+        assert key in slow_timeout, (
+            f"{NEXTEST_CONFIG} must set [profile.default].slow-timeout.{key}"
+        )
+    assert "global-timeout" in profile, (
+        f"{NEXTEST_CONFIG} must set [profile.default].global-timeout"
+    )
+
+
+def test_the_nextest_global_timeout_contains_the_per_test_allowance() -> None:
+    """A whole-run budget must outlast a test's termination budget."""
+    assert global_timeout_seconds() > largest_per_test_allowance_seconds(), (
+        f"{NEXTEST_CONFIG}'s global-timeout must exceed its largest per-test "
+        "allowance (slow-timeout.period multiplied by terminate-after)"
+    )
+
+
+def test_the_nextest_global_timeout_stays_inside_the_cargo_watchdog() -> None:
+    """The watchdog must remain an outer tier rather than pre-empting nextest."""
+    assert global_timeout_seconds() < EXPECTED_WATCHDOG_SECONDS, (
+        f"{NEXTEST_CONFIG}'s global-timeout must stay below the "
+        f"{EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog"
+    )
+
+
+def test_the_watchdog_contains_the_global_timeout_and_its_termination() -> None:
+    """Tier three must cover everything tier two can spend, and the build.
+
+    The two clocks do not start together and the terms are not the same
+    work. The watchdog starts with `cargo` and covers the build; nextest's
+    global timeout starts only when tests begin, and hitting it starts a
+    termination procedure rather than stopping the run. A watchdog merely
+    above the global timeout therefore still cuts off the run while nextest
+    is terminating it, and the failure it reports names `cargo` rather than
+    the test.
+
+    The cold-build term is the one that makes the watchdog a hang detector
+    rather than a schedule. Making the global timeout and the build share
+    one budget means a branch's first run, which compiles everything the
+    cache cannot serve, can spend the timeout before its tests start and be
+    reported as a hang. The shared action sizes for exactly this, warning
+    that a build which is merely cold must not look like one.
+    """
+    global_timeout = global_timeout_seconds()
+    termination = termination_allowance_seconds()
+    required = global_timeout + termination + COLD_BUILD_ALLOWANCE_SECONDS
+    assert required <= EXPECTED_WATCHDOG_SECONDS, (
+        f"the {EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog must "
+        f"cover {NEXTEST_CONFIG}'s {global_timeout} s global-timeout, the "
+        f"{termination} s termination allowance, and the "
+        f"{COLD_BUILD_ALLOWANCE_SECONDS} s cold-build allowance, {required} s "
+        f"in all; a watchdog that covers only the first two reads a cold "
+        f"compile as a hang and reports it against cargo rather than the test"
+    )
+
+
+def test_the_nextest_slow_timeout_terminates_hung_tests() -> None:
+    """Slow warnings must eventually kill the test that caused them."""
+    assert "terminate-after" in _slow_timeout_of(_default_nextest_profile()), (
+        f"{NEXTEST_CONFIG} must set "
+        "[profile.default].slow-timeout.terminate-after so a hung test is "
+        "killed rather than reported slow indefinitely"
     )
 
 
