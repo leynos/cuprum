@@ -149,8 +149,17 @@ def test_every_job_running_steps_declares_a_ceiling(
     rule keyed on the label stops applying on exactly the arm that hangs.
     """
     timeout = job(workflow_name, job_name).get("timeout-minutes")
-    assert isinstance(timeout, int), (
-        f"{workflow_name}:{job_name} must declare timeout-minutes, got {timeout!r}"
+    # `isinstance(True, int)` is true, so an `isinstance` check also accepts
+    # `timeout-minutes: true`, and it accepts `0` and negative values besides.
+    # GitHub requires a positive integer. No upper bound is asserted: 360 is
+    # the GitHub-hosted execution limit, not a repository-wide job ceiling.
+    assert type(timeout) is int, (
+        f"{workflow_name}:{job_name} must declare an integer timeout-minutes, "
+        f"got {timeout!r}; note YAML's `true` is an int to `isinstance`"
+    )
+    assert timeout > 0, (
+        f"{workflow_name}:{job_name} must declare a positive timeout-minutes, "
+        f"got {timeout!r}"
     )
 
 

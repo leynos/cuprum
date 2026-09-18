@@ -13,6 +13,7 @@ import typing as typ
 
 from tests.helpers.ci_placement import declares_steps
 from tests.helpers.ci_runners import (
+    GENERATE_COVERAGE,
     steps,
     workflow_document,
     workflow_sources,
@@ -28,9 +29,9 @@ INSTALL_VERBS = ("install", "curl", "wget")
 #: The upstream install host. Its name does not contain "nextest", so it needs
 #: its own token, and it only ever appears in an install command.
 NEXTEST_INSTALL_HOST = "get.nexte.st"
-#: Steps invoking a shared action are exempt: the coverage action installs
-#: nextest on purpose, and that is the only sanctioned place.
-SHARED_ACTION_PREFIX = "leynos/shared-actions/"
+#: The one sanctioned installer, matched exactly. A prefix over the whole
+#: shared-actions namespace would exempt setup-rust, install-mdtablefix and
+#: every sibling, so any of them could take a nextest input unremarked.
 
 
 def test_ci_does_not_build_tools_from_source() -> None:
@@ -77,9 +78,10 @@ def test_no_workflow_installs_cargo_nextest() -> None:
 
 def _installs_nextest_by_input(step: Step) -> bool:
     """Report whether a step asks an installer action for cargo-nextest."""
-    if str(step.get("uses", "")).startswith(SHARED_ACTION_PREFIX):
+    if str(step.get("uses", "")) == GENERATE_COVERAGE:
         # The coverage action installs nextest deliberately; that is the one
-        # place it is meant to happen.
+        # place it is meant to happen, and it is matched exactly rather than by
+        # namespace so no sibling action inherits the exemption.
         return False
     inputs = step.get("with")
     if not isinstance(inputs, dict):
