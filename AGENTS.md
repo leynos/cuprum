@@ -228,7 +228,8 @@ working on the Rust portions of the project:
   the maintenance formatter, then restores the project toolchain. The current
   `fmt` and `check-fmt` recipes still use the project toolchain. Linux-only
   debug Rust work additionally uses the separately pinned dev-fast nightly
-  through `tools/dev-fast/config.toml`; run `make dev-fast-check` first. The
+  through `tools/dev-fast/config.toml`; run `make dev-fast-check` first, since
+  it requires both the `rustc-codegen-cranelift` and `clippy` components. The
   stable toolchain remains mandatory for release, coverage, Whitaker, the
   explicit `make msrv-check` verification target, and the macOS and Windows
   platform alternatives. All Rust packages inherit Cargo's
