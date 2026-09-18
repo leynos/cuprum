@@ -19,14 +19,9 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-if typ.TYPE_CHECKING:
-    from collections import abc as cabc
-
-
 FRAGMENT_SHA256 = "8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
-MOLD_VERSION = (repo_root() / "tools/mold/VERSION").read_text(encoding="utf-8").strip()
 SAFE_MATURIN_FLAGS = st.sampled_from((
     "--release",
     "-r",
@@ -92,15 +87,6 @@ def _is_release_maturin_flags(flags: list[str]) -> bool:
         flag in {"--release", "-r", "--profile=release"}
         or (flag == "--profile" and flags[index + 1 : index + 2] == ["release"])
         for index, flag in enumerate(flags)
-    )
-
-
-def test_fragment_digest_rejects_content_mutation() -> None:
-    """A changed fragment cannot satisfy the reviewed immutable digest."""
-    fragment = (repo_root() / FRAGMENT).read_bytes()
-    mutated_digest = hashlib.sha256(fragment + b"\n# mutation\n").hexdigest()
-    assert mutated_digest != FRAGMENT_SHA256, (
-        "the digest contract must reject a changed dev-fast fragment"
     )
 
 

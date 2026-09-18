@@ -192,7 +192,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
-        test-dev-fast-contract dev-fast-check dev-build dev-test \
+        test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
