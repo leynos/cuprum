@@ -45,6 +45,18 @@
   later hop in the same pipeline drains its pipe, so queueing a submission or
   waiting for a free worker would deadlock the very pipelines the pool exists
   to serve. Only idle retention is bounded, and `submit` never blocks.
+- **Deferred native-pump cleanup releases its paused reader:** When a
+  cancellation's cleanup grace expires before the Rust worker settles, the
+  caller now closes the paused reader transport at expiry, while its event loop
+  can still run the close, rather than leaving it for the completion callback
+  that outlives that loop. A hop that was only paused kept its descriptor and
+  its subprocess transport alive past `loop.close()`, which surfaced later as
+  an unclosed-transport report and a `RuntimeError: Event loop is closed`
+  raised from the transport's own finalizer. The deferred callback still closes
+  its borrowed worker reader, restores callback-owned state, and emits
+  `cleanup_deferred`; resuming the already-closed transport is a no-op. A
+  release that fails is recorded at `DEBUG` as `rust_pump_teardown_failed` with
+  `cuprum_site="reader_close"`.
 
 ### Added
 

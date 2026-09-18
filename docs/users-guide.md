@@ -2281,21 +2281,28 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 Handing the descriptors back is best-effort: closing worker-owned duplicates,
 restoring their blocking mode, and resuming the reader transport occur only
 after the pump has settled, so an error there is suppressed rather than raised.
-The asyncio transports retain ownership of their original reader and writer
-descriptors, which remain non-blocking. Rust borrows the worker reader
-duplicate and consumes and closes the worker writer duplicate; Python closes
-the reader duplicate after settlement and closes either duplicate when setup or
-executor submission fails. No descriptor number is closed by both owners. Each
+Closing the paused reader transport is the one step that does not wait for
+settlement: when a hop's cleanup grace expires, the caller closes the
+asyncio-owned reader transport at expiry — while the loop can still run the
+close — so the descriptor does not outlive the loop that can no longer resume
+it. Every other step still runs only after the pump has settled. The asyncio
+transports retain ownership of their original reader and writer descriptors,
+which remain non-blocking. Rust borrows the worker reader duplicate and
+consumes and closes the worker writer duplicate; Python closes the reader
+duplicate after settlement and closes either duplicate when setup or executor
+submission fails. No descriptor number is closed by both owners. Each
 suppression records a `DEBUG` event with a `cuprum_action` of
 `rust_pump_teardown_failed`, a `cuprum_site` naming the step — `resume`,
-`restore_blocking`, or `writer_close` — and the exception class and errno. The
-record carries nothing drawn from the transfer itself.
+`reader_close`, `restore_blocking`, `writer_close`, `resume_reader`, or
+`restore_state` — and the exception class and errno. The record carries nothing
+drawn from the transfer itself.
 
 An `EBADF` at `writer_close` is therefore not expected merely because Rust
 completed: the transport is closing its distinct original descriptor. Any
-`writer_close` error, like errors at the other two sites, indicates a teardown
-problem worth investigating. The `resume` and `restore_blocking` records come
-from the `cuprum._pipeline_stream_fds` logger; `writer_close` comes from
+`writer_close` error, like errors at the other five sites, indicates a teardown
+problem worth investigating. The `resume`, `reader_close`, and
+`restore_blocking` records come from the `cuprum._pipeline_stream_fds` logger;
+`writer_close`, `resume_reader`, and `restore_state` come from
 `cuprum._pipeline_streams`.
 
 ### Counting pump routing decisions
@@ -2330,7 +2337,9 @@ nor resumes a reader while native I/O can still use it. The native-pump
 executor is independent of `asyncio.run()` shutdown, so this caller-facing
 bound also holds for `run_sync()`. If the worker completes after the
 originating event loop has closed, the completion callback still closes and
-restores its descriptors; the closed loop's reader transport is not resumed.
+restores its descriptors; the closed loop's reader transport is not resumed. A
+deferred hop's paused reader transport is instead released — closed — at grace
+expiry, before the loop closes, which is why nothing needs to resume it later.
 
 Cleanup can also be correlated with the active pipeline-stage span. Register
 the same `TracingHook` with both `sh.observe(hook)` and
