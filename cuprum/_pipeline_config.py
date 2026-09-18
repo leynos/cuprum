@@ -6,10 +6,14 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
+from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._streams import _MirrorCursor
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
@@ -32,16 +36,17 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    idle: _IdleMonitor | None = None
 
     @property
-    def stdout_capture_or_echo(self) -> bool:
-        """Whether stdout must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout
+    def consumes_stdout(self) -> bool:
+        """Whether the parent must consume the final stage's stdout."""
+        return self.capture or self.echo_stdout or self.idle is not None
 
     @property
-    def stderr_capture_or_echo(self) -> bool:
-        """Whether stderr must be consumed for capture or echo."""
-        return self.capture or self.echo_stderr
+    def consumes_stderr(self) -> bool:
+        """Whether the parent must consume a stage's stderr."""
+        return self.capture or self.echo_stderr or self.idle is not None
 
     @property
     def stream_config(self) -> _StreamConfig:
@@ -54,6 +59,8 @@ class _PipelineRunConfig:
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stdout_sink),
         )
 
     @property
@@ -67,7 +74,29 @@ class _PipelineRunConfig:
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stderr_sink),
         )
+
+    def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
+        """Return the cursor for an echo whose sink is the keepalive's own.
+
+        The cursor tracks where the keepalive's destination ended up, not which
+        stream wrote there: a caller may point both sinks at one object, and
+        then a newline-less final-stage stdout echo strands the diagnostic
+        exactly as a stderr one would. Resolved sinks are compared, because
+        that is where the bytes land.
+
+        Returns
+        -------
+        _MirrorCursor | None
+            The run's cursor when *sink* is the diagnostic destination, or
+            ``None`` when this echo cannot reach the keepalive.
+        """
+        idle = self.idle
+        if idle is None or sink is not self.stderr_sink:
+            return None
+        return idle.mirror
 
 
 def _prepare_pipeline_config(
@@ -101,4 +130,13 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        # One aggregate heartbeat for the whole pipeline, labelled for what it
+        # actually observes: the parent-facing output, not the health of every
+        # stage. The clock starts when the first stage starts.
+        idle=_build_idle_monitor(
+            output.idle_after,
+            output.on_idle,
+            _PIPELINE_IDLE_SUBJECT,
+            ctx.stderr_sink,
+        ),
     )

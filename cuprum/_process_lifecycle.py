@@ -30,6 +30,7 @@ import contextlib
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._pipeline_types import _EventDetails, _StageObservation
@@ -213,8 +214,8 @@ async def _spawn_pipeline_processes(
             stream_fds = _get_stage_stream_fds(
                 idx,
                 last_idx,
-                stdout_capture_or_echo=config.stdout_capture_or_echo,
-                stderr_capture_or_echo=config.stderr_capture_or_echo,
+                consumes_stdout=config.consumes_stdout,
+                consumes_stderr=config.consumes_stderr,
             )
             process = await asyncio.create_subprocess_exec(
                 *observation.cmd.argv_with_program,
@@ -227,6 +228,11 @@ async def _spawn_pipeline_processes(
             processes.append(process)
             started_at.append(time.perf_counter())
             observation.emit("start", _EventDetails(pid=process.pid))
+            if idx == 0 and config.idle is not None:
+                # The aggregate clock starts with the first stage actually
+                # running, so the plan events and before hooks that preceded it
+                # are not mistaken for pipeline silence.
+                config.idle.launch()
 
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
                 process,
@@ -238,6 +244,9 @@ async def _spawn_pipeline_processes(
             if new_stdout_task is not None:
                 stdout_task = new_stdout_task
     except BaseException:
+        # Teardown begins here, so the heartbeat stops here: it must not narrate
+        # a pipeline that is already being torn down.
+        await _stop_idle_monitor(config.idle)
         await _cleanup_spawned_processes(
             processes,
             stderr_tasks,

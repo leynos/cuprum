@@ -34,6 +34,43 @@
   `ProjectSettings.documentation_locations` and `noise_rules` now default to
   empty tuples, so a project that needs neither can omit them
   ([#396](https://github.com/leynos/cuprum/issues/396)).
+- **Idle heartbeat for quiet children:** `RunOutputOptions` accepts
+  `idle_after` and `on_idle`, so a run that produces no output for a given
+  number of seconds says so instead of leaving a blank CI log to be
+  interpreted. With `idle_after` set and no callback, Cuprum writes one bounded
+  keepalive line — `[cuprum] still running cargo (idle 30s, total 4m10s)`, at
+  most 512 bytes including its newline, ASCII-safe and control-safe — to the
+  parent's stderr, reporting the total elapsed time and the time since the last
+  observed output and repeating for each further interval of silence; any
+  output on a monitored stream resets the interval. `on_idle` receives the same
+  two durations as a synchronous `(elapsed_total, elapsed_idle)` callback and
+  replaces the built-in line rather than joining it. A callback that raises an
+  ordinary exception, or a diagnostic destination that refuses the line,
+  disables the channel for the remainder of that run with one sanitized
+  `cuprum.idle` warning; the child's exit status, capture, and echo are
+  unchanged, and `KeyboardInterrupt` and `SystemExit` are not absorbed. A
+  callback that returns a value instead of `None` — including a synchronous
+  wrapper around an asynchronous one, which returns a coroutine — is reported
+  once and then silences the channel for the remainder of the run, on the same
+  terms as a raising callback rather than repeating the report every interval.
+  The keepalive starts a fresh line whenever the echo it would otherwise join
+  ended mid-line, including when a caller points `stdout_sink` and
+  `stderr_sink` at one sink and the child's newline-less stdout shares the
+  diagnostic's destination. A pipeline reports one aggregate clock over its
+  outward-facing output — the final stage's stdout and every stage's stderr,
+  never inter-stage transfers — labelled `pipeline output idle`. The feature is
+  off by default, adds no timer, task, or pipe to a run that does not ask for
+  it, never terminates a process, and never extends a timeout. A run may watch
+  its streams without retaining them: `capture=False, echo=False, idle_after=…`
+  drains them while leaving `stdout` and `stderr` as `None`. A value that
+  converts to a float but is not one — the string `"30"`, say — is normalized
+  at construction rather than accepted and then left for the schedule's
+  arithmetic to reject from inside the run. The built-in line is written to the
+  configured `stderr_sink` synchronously on the run's event loop, so that sink's
+  `write` and `flush` must return promptly. The heartbeat reports absent
+  output, not absent progress, so it is never a deadlock diagnosis
+  ([#359](https://github.com/leynos/cuprum/issues/359)).
+
 - **Bounded mirrored lines:** `RunOutputOptions.max_echo_line_bytes` defaults to
   64 KiB and limits each echoed logical line, including retained child bytes,
   the encoded truncation marker, and its line ending. Captured output remains

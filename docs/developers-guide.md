@@ -1142,6 +1142,21 @@ text-only sinks, it owns an incremental decoder configured with
 `config.encoding` and `config.errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
 
+`_drain_chunks` invokes `config.activity` immediately after a non-empty raw
+read, before decoding, echoing, truncation, and line callbacks. This is the
+only activity signal the idle heartbeat sees, so a partial line, a multibyte
+sequence split across reads, discarded output, and a chunk that is never echoed
+all count as activity, while EOF and parent-generated diagnostics do not. The
+callback receives no child bytes: it exists to reset a timer, not to observe
+output.
+
+The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
+write and the incremental decoder and records where a mirrored sink ended up;
+the mirror cursor it records into is created and retained by the idle heartbeat
+(`cuprum/_idle_heartbeat.py`) and reaches the renderer through `_StreamConfig`.
+The drain loop in `cuprum/_streams.py` only reads the bytes and owns the state
+it renders.
+
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through
@@ -1201,6 +1216,17 @@ propagates.
 
 Callers must not share one `asyncio.StreamReader` between two `_drain()`
 invocations. Each invocation must receive its own reader.
+
+The idle heartbeat is run-owned rather than stream-owned: exactly one watchdog
+exists per run, never one per stream and never a task per chunk.
+`_build_idle_monitor` returns `None` when idle reporting is off, so a disabled
+run creates no task and no timer. When enabled it is armed once after the first
+successful spawn and settled exactly once through `_stop_idle_monitor`, the
+idempotent stop/cancel/await that every exit path shares, with the shielded
+cleanup path as the backstop; a timeout, a cancellation, a callback failure,
+and a partial pipeline spawn all leave no task behind. The watchdog is a second
+owner of the run's lifetime, not of the child's: it observes silence and never
+terminates a process or extends a timeout.
 
 ### Canonical adapter event projection and locked-store base
 
@@ -3957,15 +3983,19 @@ without updating snapshot files and any downstream tooling.
 Two canonical helpers own the subprocess spawn flags used by the subprocess
 spawn paths:
 
-- `_get_stage_stream_fds(idx, last_idx, capture_or_echo=...)` in
-  `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
-  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. The first
-  stage reads stdin from `DEVNULL`, later stages from a `PIPE`; intermediate
-  stages always pipe stdout, while the final stage pipes stdout only when
-  output is captured or echoed; stderr is piped exactly when output is captured
-  or echoed. `_spawn_pipeline_processes` routes through this helper — do not
-  re-derive the flags inline at pipeline-stage spawn sites, and do not use it
-  for single-command spawning.
+- `_get_stage_stream_fds(idx, last_idx, *, consumes_stdout, consumes_stderr)`
+  in `cuprum/_pipeline_stage_streams.py` is the single source of truth for the
+  PIPE-versus-DEVNULL stdio selection when spawning pipeline stages. Its input
+  domain is the stage position (first / intermediate / final) crossed with the
+  two independent boolean parent-consumption gates. A gate is true when
+  capture, that stream's echo, or an idle heartbeat requires the parent to read
+  the stream. The first stage reads stdin from `DEVNULL` and every later stage
+  from a `PIPE`; a non-final stage always pipes stdout so it can relay into the
+  next stage regardless of capture or echo; the final stage's stdout follows
+  its own `consumes_stdout` gate, and every stage's stderr follows its own
+  `consumes_stderr` gate. `_spawn_pipeline_processes` routes through this
+  helper — do not re-derive the flags inline at pipeline-stage spawn sites, and
+  do not use it for single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
@@ -3977,16 +4007,23 @@ Changes to stdio selection (for example, adding stdin handling to pipelines)
 belong in `_get_stage_stream_fds` so pipeline-stage behaviour and the
 exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
 authoritative. That test module covers the full finite input domain (stage
-position × capture/echo) and asserts agreement with the single-command policy
-on the overlapping cases.
+position × the two parent-consumption booleans) and asserts agreement with the
+single-command policy on the overlapping cases.
 
 ## Output behaviour carrier
 
-`RunOutputOptions` (`capture`, `echo`) is the canonical carrier for command
-output behaviour. Public command execution should accept or construct this
-object rather than threading separate `capture` and `echo` keyword arguments
-through new APIs. Keep that pairing intact so stdout/stderr handling stays
-explicit, testable, and compatible with the `IOOptions` deprecation path.
+`RunOutputOptions` is the canonical carrier for command output behaviour: it
+holds `capture`, the `echo` shorthand, the resolved `echo_stdout` and
+`echo_stderr` gates, and the idle-reporting fields `idle_after` and `on_idle`.
+`capture` is one joint switch for both streams, while an unset per-stream gate
+inherits `echo`. The idle fields follow the same rule as the rest of the
+carrier: spawn paths read `idle_after` and `on_idle` off the object rather than
+threading them as separate arguments, and a run that sets neither idle field
+keeps the existing no-stream fast path. Public command execution should accept
+or construct this object rather than threading separate `capture` and `echo`
+keyword arguments through new APIs. Keep that carrier intact so stdout/stderr
+handling stays explicit, testable, and compatible with the `IOOptions`
+deprecation path.
 
 `SafeCmd.run` / `run_sync` accept `RunOutputOptions` via the `output` parameter
 and pass it straight through to `_prepare_execution_observation`, which reads
@@ -4010,12 +4047,43 @@ must not be combined with `output=RunOutputOptions(...)`; mixed usage raises
 `ValueError` before any deprecation warning is emitted, so warning filters do
 not obscure the documented ambiguity error.
 
+### Per-stream echo mechanics
+
+`RunOutputOptions.__post_init__` resolves the `echo` shorthand into
+`echo_stdout` and `echo_stderr`: a `None` per-stream field inherits `echo`,
+while an explicit field overrides it for that stream alone. `capture` remains
+one joint boolean, so a stream that is not echoed is still captured when
+`capture` is `True`.
+
+`ConcurrentConfig` exposes `echo_stdout` and `echo_stderr` as keyword-only
+fields and forwards them, with `capture` and `echo`, into `RunOutputOptions`.
+
+`_SubprocessExecution` carries separate `echo_stdout` and `echo_stderr` gates
+and the run-owned idle monitor. Its `consumes_stdout` and `consumes_stderr`
+predicates each report `capture or echo_<stream> or an idle watchdog exists`;
+spawning pipes a stream exactly when its own predicate holds, so a run with
+idle reporting enabled reads both streams even when `capture` and echo are off.
+
+Pipeline fd selection follows the same per-stream predicates through
+`_get_stage_stream_fds`. A non-final stage always pipes stdout so it can relay
+into the next stage, regardless of capture or echo. The final stage's stdout
+and every stage's stderr are piped only when their own parent-consumption gate
+is true. `_PipelineRunConfig` builds a `_StreamConfig` per stream so both
+streams can share capture while differing in echo, attaches the idle monitor's
+`note_activity` callback as the `activity` hook on final-stage stdout and every
+stage's stderr, and gives each config the shared `mirror` cursor when that
+stream's resolved sink is the keepalive's own destination: stderr normally, and
+final-stage stdout too when the caller points both sinks at one object, since
+either echo can then strand a keepalive mid-line.
+
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
+`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. The two idle-heartbeat modules,
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -4023,9 +4091,23 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; and orchestration that coordinates them —
-spawning, wiring streams, and assembling the result — belongs in
-`_subprocess_execution`.
+belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
+deciding which streams are consumed, and assembling the result — belongs in
+`_subprocess_execution`; and single-command stream-consumer construction
+belongs in `_subprocess_streams`. The idle heartbeat's timing belongs in
+`_idle_heartbeat` and its rendering and write-failure policy in
+`_idle_diagnostic`.
+
+`cuprum/_subprocess_execution.py` stays the composition root. It is what calls
+`_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
+a change in *which* streams a run consumes is an orchestration change and
+belongs there, while a change to how one `_StreamConfig` is assembled or how
+its consumer task is created belongs in `_subprocess_streams`. The split is
+what keeps the execution module under the Pylint module ceiling now that the
+idle-heartbeat wiring reaches into the stream configs; see the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-09-16 for why this boundary was accepted after an earlier, differently
+shaped one was withdrawn.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
