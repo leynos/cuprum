@@ -109,49 +109,54 @@ def _stderr() -> typ.IO[str]:
 class GitHubActionsSession:
     """One run's framed presentation session on GitHub Actions.
 
-    The session opens the group when the run's first write goes through
-    :attr:`log` (or eagerly via :meth:`open_group`), holds a stop-commands
-    lease for the run's entire lifetime, and closes the group with an error
+    Framing is complete the moment the session exists: the group opening and
+    the stop-commands lease are written before the sink returns it, so child
+    output can never appear above the group opening. The session holds that
+    lease for the run's entire lifetime and closes the group with an error
     annotation when the run's terminal outcome is a failure.
     """
 
-    def __init__(self, log: typ.IO[str], label: str) -> None:
-        """Frame the session; group emission is deferred until first use."""
+    def __init__(
+        self,
+        log: typ.IO[str],
+        label: str,
+        *,
+        annotation_label: str,
+    ) -> None:
+        """Frame the run: the group opening, then the stop-commands lease.
+
+        Parameters
+        ----------
+        log : typ.IO[str]
+            The parent-facing destination for the framing and framed output.
+        label : str
+            The group title. Bounded by the caller and escaped here.
+        annotation_label : str
+            The title for a failure annotation. Kept separate from *label* so
+            a group titled with the run's argv never republishes those
+            arguments in an annotation.
+        """
         self._log = log
         self._label = label
+        self._annotation_label = annotation_label
         self._closed = False
-        self._group_open = False
         self._stop_token = _new_stop_token()
+        self._log.write(f"{_GROUP_PREFIX}{_escape_data(self._label)}\n")
+        # The lease opens *inside* the group, after the ``::group::`` command,
+        # so the runner processes that command itself and then stops
+        # interpreting child output as workflow commands for the rest of the
+        # run.
+        self._log.write(f"{_STOP_PREFIX}{self._stop_token}\n")
 
     @property
     def log(self) -> typ.IO[str]:
-        """The ordered parent-facing log destination for this run.
-
-        The first access opens the group, so mirrored child output lands
-        inside the framing even when the execution layer never calls
-        :meth:`open_group` eagerly.
-        """
-        self.open_group()
+        """The ordered parent-facing log destination for this run."""
         return self._log
 
     @property
     def stop_token(self) -> str:
         """The unique stop-commands token leased for this run."""
         return self._stop_token
-
-    def open_group(self) -> None:
-        """Emit the group opening command, entering the stop-commands lease.
-
-        Called by the execution layer before the subprocess starts. The lease
-        opens *inside* the group, after the ``::group::`` command, so the
-        runner processes the group command itself and then stops interpreting
-        child output as workflow commands for the rest of the run.
-        """
-        if self._group_open or self._closed:
-            return
-        self._log.write(f"{_GROUP_PREFIX}{_escape_property(self._label)}\n")
-        self._log.write(f"{_STOP_PREFIX}{self._stop_token}\n")
-        self._group_open = True
 
     def close(self, outcome: SessionOutcome) -> None:
         """Close the group, release the lease, and annotate failures.
@@ -166,20 +171,26 @@ class GitHubActionsSession:
         if self._closed:
             return
         self._closed = True
-        if self._group_open:
-            # Release the lease *before* closing the group: the endgroup
-            # command itself must be interpreted by the runner, so it has to
-            # be written after the stop-commands bracket has ended.
-            self._log.write(f"{_STOP_PREFIX}{self._stop_token}\n")
-            self._log.write(f"{_ENDGROUP}\n")
-            self._group_open = False
+        # Release the lease *before* closing the group: the endgroup command
+        # itself must be interpreted by the runner, so it has to be written
+        # after the stop-commands bracket has ended. The runner resumes on
+        # reading the token as a command of its own, so this is
+        # ``::<token>::``, not the stop command repeated.
+        self._log.write(f"::{self._stop_token}::\n")
+        self._log.write(f"{_ENDGROUP}\n")
         if outcome.outcome == TerminalOutcome.EXIT_ZERO:
             return
         self._emit_error_annotation(outcome)
 
     def _emit_error_annotation(self, outcome: SessionOutcome) -> None:
-        """Write one ``::error::`` workflow command for a failed run."""
-        title = _escape_property(self._label)
+        """Write one ``::error::`` workflow command for a failed run.
+
+        The title is the session's bounded annotation label — never the argv
+        a group may be titled with — and the message is the categorical
+        detail, so neither argument values nor exception text reach the
+        workflow log.
+        """
+        title = _escape_property(self._annotation_label)
         detail = outcome.detail or outcome.outcome.value
         message = _escape_data(detail)
         self._log.write(f"{_ERROR_PREFIX}title={title}::{message}\n")
@@ -200,7 +211,8 @@ class GitHubActionsSink:
         Actions reads workflow commands from.
     title:
         Optional display label overriding the derived
-        ``"<project>: <program>"`` label.
+        ``"<project>: <program>"`` label, used for both the group title and a
+        failure annotation's title.
     force:
         Activate the sink even when the parent process does not run on
         GitHub Actions. Intended for local reproduction of CI framing and
@@ -227,7 +239,10 @@ class GitHubActionsSink:
         ----------
         start : SessionStart
             Bounded run metadata; ``start.argv`` titles the group so the
-            collapsed log entry reads ``<program args>``.
+            collapsed log entry reads ``<program args>``, while
+            ``start.label`` titles a failure annotation — an annotation is a
+            workflow-command property, so it never publishes argument
+            values.
 
         Returns
         -------
@@ -245,8 +260,15 @@ class GitHubActionsSink:
             label = " ".join(start.argv)
         else:
             label = start.label
+        # The annotation keeps the bounded label even when the group is titled
+        # with argv: an annotation is a workflow command property, so publishing
+        # arguments there would leak them into the run summary.
         log = self.destination if self.destination is not None else _stderr()
-        return GitHubActionsSession(log=log, label=label)
+        return GitHubActionsSession(
+            log=log,
+            label=label,
+            annotation_label=self.title or start.label,
+        )
 
     def _is_active(self) -> bool:
         """Return whether this run's environment demands Actions framing.

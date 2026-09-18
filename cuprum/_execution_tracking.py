@@ -13,7 +13,7 @@ if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._pipeline_internals import _ExecutionHooks
-    from cuprum.sinks import OutputSession
+    from cuprum._sink_lifecycle import _SinkBracket
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -22,7 +22,7 @@ class _ExecutionTracking:
 
     execution_hooks: _ExecutionHooks
     pending_tasks: list[asyncio.Task[None]]
-    sink_session: OutputSession | None = None
+    sink_bracket: _SinkBracket
 
 
 __all__ = ["_ExecutionTracking"]

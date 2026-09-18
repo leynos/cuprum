@@ -103,12 +103,18 @@ Framing order per run:
    detail (`timeout`) or the outcome value. Exception text and argv never reach
    it.
 
-The execution layer opens the session before the subprocess starts and closes
-it on every terminal path — success, non-zero exit, timeout, cancellation, and
-spawn failure — through the same shielded finalization that drains observe-hook
-tasks. Pipelines map their first failing stage's exit code onto the outcome;
-the annotation reports the pipeline, not one stage. `close` is idempotent, so
-overlapping terminal paths cannot double-annotate.
+The execution layer opens the session before the subprocess starts and
+finalizes the run's `_SinkBracket` on every terminal path — success, non-zero
+exit, timeout, cancellation, and spawn failure. The bracket is take-once, so
+the first close wins and a later guard cannot overwrite an early, precise
+outcome. The close runs before the shielded drain of observe-hook tasks: the
+drain can aggregate a failing after-hook or observe task into a
+`BaseExceptionGroup`, so closing afterwards would record that aggregate instead
+of the precise timeout/cancellation outcome, and a drain that raised would skip
+the close entirely. The adapter's own `close` idempotency remains a protocol
+requirement (`OutputSession.close` in `cuprum.sinks.base`), now the backstop
+rather than the primary mechanism. Pipelines map their first failing stage's
+exit code onto the outcome; the annotation reports the pipeline, not one stage.
 
 Echoed output reaches the adapter only when a run echoes (`echo=True` or a
 pipeline's stage streams); capture is unaffected in every configuration.

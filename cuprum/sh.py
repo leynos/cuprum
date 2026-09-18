@@ -38,11 +38,10 @@ from cuprum._pipeline_internals import (
 )
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import (
-    _close_sink_session,
     _command_session_start,
-    _open_sink_session,
     _outcome_for_error,
     _outcome_for_result,
+    _SinkBracket,
 )
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
@@ -679,6 +678,11 @@ async def _execute_with_hooks(
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
+        # Close before the drain. The drain aggregates a hook failure with the
+        # error that ended the run, so closing afterwards would record the
+        # aggregate — an ``error`` annotation standing in for a timeout — and
+        # a drain that raised would skip the close entirely.
+        tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(
                 tracking.pending_tasks,
@@ -686,15 +690,8 @@ async def _execute_with_hooks(
                 message=_COMMAND_FINALIZATION_ERROR,
             )
         )
-        _close_sink_session(
-            execution.sink_session,
-            outcome=_outcome_for_error(run_error),
-        )
         raise
-    _close_sink_session(
-        execution.sink_session,
-        outcome=_outcome_for_result(result),
-    )
+    tracking.sink_bracket.close(outcome=_outcome_for_result(result))
     await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
     return result
 
@@ -775,32 +772,40 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        # The bracket owns the session for the whole run: a plan observer, a
+        # before hook, or anything else that raises before execution starts
+        # still finalizes the adapter's framing rather than stranding an open
+        # group, and the guard below closes exactly what those paths leave.
+        sink_bracket = _SinkBracket.open(
+            out.sink,
+            _command_session_start(self, out.sink),
+        )
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
-            sink_session=_open_sink_session(
-                out.sink,
-                _command_session_start(self, out.sink),
-            ),
+            sink_bracket=sink_bracket,
         )
-        observation = _prepare_execution_observation(self, ctx, tracking, out)
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(self)
-        return await _execute_with_hooks(
-            self,
-            _build_subprocess_execution(
-                self,
-                ctx,
-                out,
-                timeout=effective_timeout,
-                observation=observation,
-                stdin_data=stdin_data,
-                on_line=out.on_line,
-                sink_session=tracking.sink_session,
-            ),
-            tracking,
-        )
+        try:
+            observation = _prepare_execution_observation(self, ctx, tracking, out)
+            observation.emit("plan", _EventDetails(pid=None))
+            for hook in tracking.execution_hooks.before_hooks:
+                hook(self)
+            return await _execute_with_hooks(
+                _build_subprocess_execution(
+                    self,
+                    ctx,
+                    out,
+                    timeout=effective_timeout,
+                    observation=observation,
+                    stdin_data=stdin_data,
+                    on_line=out.on_line,
+                    sink_session=sink_bracket.session,
+                ),
+                tracking,
+            )
+        except BaseException as run_error:
+            sink_bracket.close(outcome=_outcome_for_error(run_error))
+            raise
 
     def lines(
         self,
@@ -852,6 +857,11 @@ class SafeCmd:
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
+            # Line iteration never opens a presentation session: the line
+            # events are the caller's own consumption of the streams, so there
+            # is no adapter framing to bracket. The empty bracket keeps the
+            # required field satisfied.
+            sink_bracket=_SinkBracket(None),
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
 
@@ -996,7 +1006,14 @@ class Pipeline:
             timeout=effective_timeout,
             context=context,
         )
-        return await _run_pipeline(self.parts, config)
+        # The bracket opened with the config; this guard is the last word on
+        # every path out of the pipeline, including one the runner itself
+        # raises on the way to its first stage.
+        try:
+            return await _run_pipeline(self.parts, config)
+        except BaseException as run_error:
+            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
+            raise
 
     def run_sync(
         self,

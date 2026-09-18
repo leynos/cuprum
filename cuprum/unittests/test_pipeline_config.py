@@ -8,6 +8,7 @@ import typing as typ
 import pytest
 
 from cuprum._pipeline_config import _PipelineRunConfig
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum.sh import ExecutionContext
 
 if typ.TYPE_CHECKING:
@@ -52,6 +53,9 @@ def test_stream_config_uses_requested_stream_settings(
         timeout=None,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        # No presentation session: the run's mirrored streams fall back to the
+        # sinks supplied above, which is what this test asserts they retain.
+        sink_bracket=_SinkBracket(None),
     )
 
     stream_config = accessor(config)

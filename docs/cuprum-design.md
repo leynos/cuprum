@@ -1595,10 +1595,10 @@ and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
 the timeout paths, so a stage never reports a `timeout` and then falls silent.
 
 `cuprum._sink_lifecycle` owns the presentation-sink session lifecycle the two
-runners share: opening a session before the work starts and calling its eager
-framing hook (`_open_sink_session`), closing it on every exit path
-(`_close_sink_session`), and mapping a result or an error onto the bounded
-`SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
+runners share: the `_SinkBracket`, the take-once owner of one run's session,
+opening it before the work starts (`_open_sink_session`), closing it on every
+exit path (`_close_sink_session`), and mapping a result or an error onto the
+bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
 `cuprum._pipeline_sink` keeps only the pipeline-specific part of that mapping,
 `_pipeline_result_outcome`, which reports the first failing stage's exit code.
 

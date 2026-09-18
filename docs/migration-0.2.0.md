@@ -157,3 +157,30 @@ the run's own loop. An ordinary exception from the callback, or a failed
 diagnostic write, disables further notifications for that run, emits one
 sanitized warning, and leaves the child's exit status and captured output
 untouched. `KeyboardInterrupt` and `SystemExit` are never suppressed.
+
+## Opt-in presentation sink
+
+Cuprum 0.2.0 adds an opt-in presentation sink,
+`cuprum.sinks.GitHubActionsSink`, which frames a run's echoed output in a
+GitHub Actions collapsible log group and turns a failed run into one
+`::error::` annotation. Existing applications do not need to change: nothing is
+framed unless a sink is passed, and capture, success semantics, and the
+returned result are unchanged.
+
+To adopt the sink, pass it through `RunOutputOptions` on the `SafeCmd` or
+`Pipeline` to be framed:
+
+```python
+from cuprum import ECHO, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+command = sh.make(ECHO)("hello")
+result = command.run_sync(
+    output=RunOutputOptions(echo=True, sink=GitHubActionsSink()),
+)
+```
+
+`GitHubActionsSink` activates automatically when the parent process runs on
+GitHub Actions, which is when `GITHUB_ACTIONS` holds the runner's value `true`.
+For local reproduction of CI framing, or on a non-standard runner that does not
+export the variable, pass `force=True` to activate the sink deliberately.
