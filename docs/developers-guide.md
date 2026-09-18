@@ -1151,8 +1151,11 @@ callback receives no child bytes: it exists to reset a timer, not to observe
 output.
 
 The renderer itself lives in `cuprum/_stream_echo.py`, which owns the sink
-write, the incremental decoder, and the mirror cursor; the drain loop in
-`cuprum/_streams.py` only reads the bytes and owns the state it renders.
+write and the incremental decoder and records where a mirrored sink ended up;
+the mirror cursor it records into is created and retained by the idle heartbeat
+(`cuprum/_idle_heartbeat.py`) and reaches the renderer through `_StreamConfig`.
+The drain loop in `cuprum/_streams.py` only reads the bytes and owns the state
+it renders.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing

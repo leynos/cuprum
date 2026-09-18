@@ -601,10 +601,14 @@ writes and flushes `ExecutionContext.stderr_sink` on that loop too, so a sink
 whose `write` or `flush` blocks delays the parent's stream reads, timeout
 handling, and cancellation for as long as it takes to return. A destination
 that is slow — a network log, a lock held by another process — should be
-wrapped in a queue that a separate task drains, so the write the run performs
-is a prompt handoff. There is deliberately no timeout around the write: a
-synchronous call cannot be interrupted from the same loop, so a bound there
-would change what the sink is promised without ever enforcing it.
+wrapped so that the write and flush the run performs hand off without blocking:
+either the blocking call runs in a worker thread or an executor, or it is a
+genuinely non-blocking drain such as a queue fed with `put_nowait`. A separate
+asyncio task is not enough on its own, because draining that queue still runs
+on the run's own loop and competes with the parent's stream reads. There is
+deliberately no timeout around the write: a synchronous call cannot be
+interrupted from the same loop, so a bound there would change what the sink is
+promised without ever enforcing it.
 
 ```python
 from cuprum import Program, RunOutputOptions, sh

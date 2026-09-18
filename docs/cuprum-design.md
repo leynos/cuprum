@@ -1348,22 +1348,27 @@ preserving the `SafeCmd.run()` execution contract:
 
 - `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
   assembling the `CommandResult`. It remains the composition root for a run: it
-  decides whether each stream is consumed, and it is where the consumer tasks
-  are created from the configs built for it.
+  decides whether each stream is consumed, and it calls `_build_stream_config`
+  and `_spawn_stream_consumers` to act on that decision.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
-  *construction*. It builds the stdout `_StreamConfig`, derives the stderr
-  config from it, and spawns the pair of consumer tasks. Fixing the stderr
-  config's echo, sink, and `EchoStream.STDERR` on the derived config is what
-  keeps the two streams distinguishable when both sinks resolve to one object.
-  It is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`.
-  This boundary exists to keep `_subprocess_execution` within the Pylint module
-  ceiling once the idle-heartbeat wiring joined the stream configs; see the
+  *construction*: `_build_stream_config` assembles the stdout `_StreamConfig`,
+  and `_spawn_stream_consumers` derives the stderr config from it and creates
+  the pair of consumer tasks. Fixing the stderr config's echo, sink, and
+  `EchoStream.STDERR` on the derived config is what keeps the two streams
+  distinguishable when both sinks resolve to one object, and it is where the
+  idle monitor's mirror cursor reaches the configs whose resolved sink is the
+  keepalive's destination. It is the single-command counterpart of
+  `cuprum/_pipeline_stage_streams.py`. This boundary exists to keep
+  `_subprocess_execution` within the Pylint module ceiling once the
+  idle-heartbeat wiring joined the stream configs; see the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
   validation and normalization, the `_IdleSchedule` state machine that decides
   when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
-  lifecycle, and the activity and mirror cursors the stream consumers drive.
+  lifecycle, and the activity hook the stream consumers drive. It also creates
+  and retains the `_MirrorCursor`, which records where the keepalive's
+  destination ended up.
 - `cuprum/_idle_diagnostic.py` owns the heartbeat's *presentation*: rendering
   one bounded, ASCII-safe keepalive line, resolving and writing it to the
   parent's diagnostic sink, and the failure policy when that write raises.
@@ -2189,8 +2194,9 @@ core functions affected are:
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
 for compatibility. The bounded echo renderer sits beside the drain loop in
-`cuprum/_stream_echo.py`, which owns the sink write, the incremental decoder,
-and the cursor recording where a mirrored sink ended up.
+`cuprum/_stream_echo.py`, which owns the sink write and the incremental decoder
+and records where a mirrored sink ended up; the cursor itself is created and
+retained by the idle heartbeat.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The
