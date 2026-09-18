@@ -376,8 +376,8 @@ establish exact runtime parity or success for unrelated hosted CI jobs; the
 pre-rebase CodeScene parser and installer TLS failures are recorded above, and
 the head reached by the first rebase, `67539822`, passed all 17 jobs in run
 `35337586749`. That receipt predates the second rebase onto `b63a0f21`, so the
-current head `3051257e` needs its own hosted run before the same claim is made
-about it.
+head reached by that rebase, `3051257e`, still needs its own hosted run before
+the same claim is made about it.
 
 ## Revision note
 
