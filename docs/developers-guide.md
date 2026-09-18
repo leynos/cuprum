@@ -177,7 +177,7 @@ would miss a stale registration, which is the other half of the equality.
 
 `tests/helpers/ci_placement.py` is the one reader of `runs-on` in the test
 suite. Its scope is deliberately narrow: it models the three shapes this
-repository declares, a literal label, the fork fallback and a matrix key
+repository declares, a literal label, the fork fallback, and a matrix key
 resolved through its `include` entries, and refuses everything else by name.
 Every contract that asks where a job runs, whether it runs, or what label it
 resolves to goes through it, including the cache-family resolver in
@@ -186,10 +186,27 @@ rather than two that drift.
 
 Refusal is the design, not a gap. An expression recorded as one opaque label
 carries no vendor prefix, so an Ubicloud classifier drops the lane and it sits
-exempt from every placement, ceiling and registry rule while still asking for a
-paid runner. `tests/test_ci_placement_reader.py` drives the reader with
+exempt from every placement, ceiling, and registry rule while still asking for
+a paid runner. `tests/test_ci_placement_reader.py` drives the reader with
 synthetic declarations, because a rule parametrized over this repository's own
 correct workflows passes whether or not it discriminates.
+
+Three layers sit above it, each answering a question the layer below cannot:
+
+- `tests/test_ci_placement_guards.py` covers whether a job runs and which
+  context properties a declaration reads.
+- `tests/test_ci_placement_properties.py` generates the input space rather than
+  enumerating it. Every reader defect found in review was an input nobody had
+  written down, and the properties have since found one more of their own: a
+  condition carrying a hyphen, such as `matrix.python-version`, was refused as
+  unmodellable.
+- `tests/behaviour/test_ci_runner_selection.py` evaluates the composed
+  workflows against an event, following the call from `ci.yml` into
+  `build-wheels.yml`, and asserts the runner each event actually selects. That
+  is where the property that matters lives: a fork's pull request must never
+  select a runner a fork cannot obtain. `act` cannot stand in for it, because
+  it skips a job whose label it cannot map and exits zero, so the Ubicloud
+  lanes would go unexercised while the run reported success.
 
 ### Cache ownership
 

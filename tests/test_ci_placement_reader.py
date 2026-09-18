@@ -9,7 +9,7 @@ with the shapes a workflow could acquire.
 The shapes that must be *refused* matter as much as the ones that must be
 read. An unparsable `runs-on` recorded as one opaque label carries no vendor
 prefix, so the Ubicloud classifier drops the lane and it sits exempt from every
-placement, ceiling and registry assertion while still asking for a paid runner
+placement, ceiling, and registry assertion while still asking for a paid runner
 (axinite #372).
 """
 
@@ -116,6 +116,24 @@ def test_a_sibling_field_is_reported_as_a_different_condition(
     )
 
 
+def test_a_hyphenated_condition_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read a condition whose property path carries a hyphen.
+
+    `matrix.python-version` is a legitimate condition, and a character class
+    without `-` refused the whole expression as unmodellable. The refusal
+    failed safe, so nothing went unchecked, but it would have rejected a
+    correct lane. Found by the generated property in
+    `test_ci_placement_properties.py` rather than by any example.
+    """
+    hyphenated = f"${{{{ matrix.python-version && '{HOSTED}' || '{OWNED}' }}}}"
+    _declare(monkeypatch, {"runs-on": hyphenated, "steps": []})
+    placed = reader.placement("w.yml", "j")
+    assert placed.kind == "fork", f"read as {placed.kind}"
+    assert placed.references == frozenset({"matrix.python-version"}), (
+        f"condition read as {sorted(placed.references)}"
+    )
+
+
 def test_a_matrix_placement_resolves_through_its_include(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -213,23 +231,29 @@ def test_an_interpolated_label_is_refused(monkeypatch: pytest.MonkeyPatch) -> No
         reader.placement("w.yml", "j")
 
 
-def test_incidental_whitespace_around_an_expression_is_read(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param(f" {FORK_EXPRESSION}", id="leading-space"),
+        pytest.param(f"{FORK_EXPRESSION} ", id="trailing-space"),
+        pytest.param(" ${{ inputs.chosen-os }}", id="padded-opaque"),
+    ],
+)
+def test_a_padded_expression_is_refused(
+    monkeypatch: pytest.MonkeyPatch, declared: str
 ) -> None:
-    """Keep a correctly written lane readable when a scalar leaves a space.
+    """Refuse a padded expression rather than reading it as the bare one.
 
-    A folded scalar can leave a trailing space. Without tolerating it the whole
-    declaration falls through to the literal branch, and a correct fork lane
-    quietly stops being read as one, which is a false negative rather than a
-    false positive and so is the harder kind to notice.
+    GitHub interpolates into the surrounding string and keeps what is around
+    the expression, so `" ${{ ... }}"` resolves to a label with a leading space
+    that matches no runner. Reading it as the unpadded expression would report
+    a broken lane as a correct fork placement, which is the dangerous
+    direction: the contract would go green on a job that can never be
+    scheduled.
     """
-    _declare(monkeypatch, {"runs-on": f"  {FORK_EXPRESSION} ", "steps": []})
-    placed = reader.placement("w.yml", "j")
-    assert placed.kind == "fork", (
-        f"incidental whitespace must not change the shape, got {placed.kind}"
-    )
-    assert placed.owned == OWNED, f"owned arm was {placed.owned!r}"
-    assert placed.fork == HOSTED, f"fork arm was {placed.fork!r}"
+    _declare(monkeypatch, {"runs-on": declared, "steps": []})
+    with pytest.raises(AssertionError, match="interpolates its runner label"):
+        reader.placement("w.yml", "j")
 
 
 def test_the_refusal_of_an_opaque_expression_is_still_needed(
@@ -245,124 +269,3 @@ def test_the_refusal_of_an_opaque_expression_is_still_needed(
     _declare(monkeypatch, {"runs-on": "${{ inputs.chosen-os }}", "steps": []})
     with pytest.raises(AssertionError):
         reader.placement("w.yml", "j")
-
-
-@pytest.mark.parametrize(
-    "condition",
-    ["false", "${{ false }}", "'false'", "false && matrix.target == 'x'", "0"],
-)
-def test_a_constant_false_guard_is_reported(
-    monkeypatch: pytest.MonkeyPatch, condition: str
-) -> None:
-    """Catch a lane that satisfies every declaration rule and runs nothing."""
-    _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "if": condition})
-    assert reader.never_runs("w.yml", "j"), (
-        f"{condition!r} can never be true, so the job gates nothing"
-    )
-
-
-@pytest.mark.parametrize(
-    "condition",
-    [
-        "github.event_name == 'pull_request'",
-        "needs.changes.outputs.bench == 'true'",
-        "${{ !cancelled() }}",
-        "matrix.python-suite",
-    ],
-)
-def test_a_real_guard_is_not_reported_as_never_running(
-    monkeypatch: pytest.MonkeyPatch, condition: str
-) -> None:
-    """Prove the rule narrow: a legitimate condition must still pass.
-
-    Sufficiency alone is not enough. A guard rule that also refused the
-    conditions this repository genuinely uses would be switched off, and a
-    contract with a false positive gates nothing (femtologging #480).
-    """
-    _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "if": condition})
-    assert not reader.never_runs("w.yml", "j"), (
-        f"{condition!r} is a legitimate guard and must not be refused"
-    )
-
-
-@pytest.mark.parametrize(
-    ("declared", "expected"),
-    [
-        pytest.param({"steps": []}, True, id="steps"),
-        pytest.param({"uses": "./w.yml"}, False, id="caller"),
-        pytest.param({"uses": "./w.yml", "steps": []}, False, id="both"),
-        pytest.param({}, False, id="neither"),
-    ],
-)
-def test_the_caller_exemption_is_keyed_on_uses(
-    monkeypatch: pytest.MonkeyPatch, declared: dict[str, object], expected: bool
-) -> None:
-    """Exempt a reusable-workflow caller, and refuse a job with neither key.
-
-    A blanket tolerance of a missing `runs-on` would exempt a malformed job
-    too; keying on `uses` leaves that job refused (whitaker #438).
-    """
-    _declare(monkeypatch, declared)
-    assert reader.declares_steps("w.yml", "j") is expected, (
-        f"{sorted(declared)} must read as declares_steps={expected}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        pytest.param("plain", frozenset(), id="no-reference"),
-        pytest.param("${{ matrix.os }}", frozenset({"matrix.os"}), id="one"),
-        pytest.param(
-            "a ${{ matrix.a }} b ${{ matrix.b }}",
-            frozenset({"matrix.a", "matrix.b"}),
-            id="two",
-        ),
-        pytest.param(None, frozenset(), id="absent"),
-        pytest.param(True, frozenset(), id="non-string"),
-    ],
-)
-def test_references_are_read_from_any_declaration(
-    value: object, expected: frozenset[str]
-) -> None:
-    """Read every reference, so a name and a runner can be compared."""
-    assert reader.references(value) == expected, (
-        f"{value!r} reads {sorted(reader.references(value))}"
-    )
-
-
-def test_a_matrix_leg_missing_the_runner_key_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Refuse an incomplete matrix rather than silently dropping a leg."""
-    _declare(
-        monkeypatch,
-        {
-            "runs-on": "${{ matrix.os }}",
-            "steps": [],
-            "strategy": {"matrix": {"include": [{"os": HOSTED}, {"arch": "x86_64"}]}},
-        },
-    )
-    with pytest.raises(AssertionError, match="declares no 'os'"):
-        reader.placement("w.yml", "j")
-
-
-def test_all_jobs_reaches_every_workflow() -> None:
-    """Name the traversal, or the claim that it is complete is unasserted.
-
-    Falcon-pachinko #149: a `workflow_call` file with no caller is one line
-    from gaining one, and a caller can live in another repository, so the
-    registry counts its labels rather than excluding the file by rule.
-    """
-    reached = {workflow_name for workflow_name, _ in reader.all_jobs()}
-    assert reached == ESTATE_WORKFLOWS, (
-        f"the traversal must reach every workflow; reached {sorted(reached)}"
-    )
-
-
-def test_the_frozen_hosted_set_holds_no_paid_label() -> None:
-    """Keep the exemption list free of the labels it exists to expose."""
-    assert all(
-        not label.startswith(("ubicloud-", "namespace-", "buildjet-", "warpbuild-"))
-        for label in reader.FROZEN_HOSTED_LABELS
-    ), "a paid provider's label must never be frozen out of the registry question"

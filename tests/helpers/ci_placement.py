@@ -6,7 +6,7 @@ fork-reachable lane selects its runner from an expression, and a reader that
 narrows that value with ``str()`` sees one opaque label that carries no vendor
 prefix. Axinite #372 recorded what that costs: the Ubicloud classifier said no,
 the job was dropped before any assertion ran, and the lane sat exempt from the
-placement, ceiling and registry contracts while still asking for a paid runner.
+placement, ceiling, and registry contracts while still asking for a paid runner.
 
 This module therefore fails towards refusal. It models the three shapes the
 repository actually declares and rejects everything else by name, so an
@@ -61,28 +61,46 @@ FROZEN_HOSTED_LABELS: typ.Final = (
     "windows-latest",
 )
 
-# Surrounding whitespace is incidental: a folded scalar can leave a trailing
-# space, and a lane written that way is correct. Without the `\s*` the whole
-# declaration falls through to the literal branch, which is how a correctly
-# written fork lane would quietly stop being read as one.
-_EXPRESSION = re.compile(r"^\s*\$\{\{(?P<body>.*)\}\}\s*$", re.DOTALL)
+# Anchored with no tolerance for surrounding characters. GitHub interpolates
+# into the surrounding string and keeps what is around the expression, so
+# `runs-on: " ${{ ... }}"` resolves to a label with a leading space that no
+# runner matches. Tolerating the padding would report such a lane as a correct
+# fork placement, a false positive in the dangerous direction; anything padded
+# falls to the interpolation refusal instead.
+_EXPRESSION = re.compile(r"^\$\{\{(?P<body>.*)\}\}$", re.DOTALL)
 #: An expression *fragment*, used to refuse a value that interpolates without
-#: being wholly an expression.
+#: being wholly an expression, whether padded or concatenated.
 _INTERPOLATION = re.compile(r"\$\{\{")
 #: The canonical fork fallback, anchored end to end so the arms are read by
 #: position rather than by membership. `\A`/`\Z` rather than a bare `fullmatch`
 #: on a pattern that could otherwise be satisfied by a prefix.
 _FORK_EXPRESSION = re.compile(
-    r"\A\s*(?P<condition>[A-Za-z_][\w.]*)"
+    # Hyphens belong in the character class: `matrix.python-version` is a
+    # legitimate condition, and excluding `-` refused it as unmodellable. Found
+    # by the generated property, not by any example anyone wrote down.
+    r"\A\s*(?P<condition>[A-Za-z_][\w.-]*)"
     r"\s*&&\s*'(?P<fork_arm>[^']+)'"
     r"\s*\|\|\s*'(?P<owned_arm>[^']+)'\s*\Z"
 )
 _MATRIX_EXPRESSION = re.compile(r"\A\s*matrix\.(?P<key>[\w-]+)\s*\Z")
 #: Every ``${{ ... }}`` reference in a string, for the job-name stability rule.
-_REFERENCE = re.compile(r"\$\{\{(?P<body>[^}]*)\}\}")
+#: One `${{ ... }}` span. Non-greedy to the first `}}`, because `[^}]*` stops
+#: at the `}` inside `format('{0}', matrix.os)` and reports no reference at all.
+_EXPRESSION_SPAN = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
+#: A quoted literal inside an expression body. Stripped before references are
+#: read, so a label such as `'ubuntu-22.04'` is not mistaken for a property
+#: path on the strength of its dot.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+#: A dotted context property such as `matrix.os` or
+#: `github.event.pull_request.head.repo.fork`. A bare function name such as
+#: `format` carries no dot and is correctly not a reference.
+_PROPERTY = re.compile(r"[A-Za-z_][\w-]*(?:\.[\w-]+)+")
 #: Expressions a job-level ``if:`` may not reduce to. A job that cannot run
 #: satisfies every declaration-reading rule while gating nothing.
-_NEVER_RUNS: typ.Final = frozenset({"false", "0", "'false'", '"false"'})
+#: GitHub Actions evaluates `false`, numeric zero, the empty string and `null`
+#: as falsy, and **a non-empty string as truthy**, so the quoted `'false'`
+#: belongs on the other side of this line rather than in it.
+_NEVER_RUNS: typ.Final = frozenset({"false", "0", "0.0", "''", '""', "null"})
 
 
 def _require(*, condition: bool, message: str) -> None:
@@ -314,10 +332,26 @@ def placement(workflow_name: str, job_name: str) -> Placement:
 
 
 def references(value: object) -> frozenset[str]:
-    """Return every ``${{ ... }}`` reference a declaration reads."""
+    """Return every context property a declaration reads.
+
+    Property paths rather than whole expression bodies. A name built with
+    ``${{ format('{0}', matrix.os) }}`` reads ``matrix.os`` and has to be
+    comparable with a ``runs-on`` reading the same key; returning the body made
+    that comparison miss entirely, so an unstable name passed the stability
+    rule.
+
+    Returns
+    -------
+    frozenset[str]
+        Every dotted context property the value reads, across every
+        ``${{ ... }}`` span, with quoted literals excluded.
+    """
     if not isinstance(value, str):
         return frozenset()
-    return frozenset(body.strip() for body in _REFERENCE.findall(value) if body.strip())
+    found: set[str] = set()
+    for body in _EXPRESSION_SPAN.findall(value):
+        found.update(_PROPERTY.findall(_QUOTED.sub(" ", body)))
+    return frozenset(found)
 
 
 def never_runs(workflow_name: str, job_name: str) -> bool:
@@ -339,6 +373,10 @@ def never_runs(workflow_name: str, job_name: str) -> bool:
     expression = _EXPRESSION.match(text)
     if expression is not None:
         text = " ".join(expression.group("body").split())
-    # A containment test would accept `false && matrix.target == 'x'`; the
-    # leading clause is matched explicitly instead.
-    return text.lower() in _NEVER_RUNS or text.lower().startswith("false &&")
+    lowered = text.lower()
+    if lowered in _NEVER_RUNS:
+        return True
+    # A containment test would accept `false && matrix.target == 'x'`, so the
+    # leading clause is matched explicitly, and for every falsy literal rather
+    # than only `false`: `null && ...` and `0 && ...` are equally unreachable.
+    return any(lowered.startswith(f"{literal} &&") for literal in _NEVER_RUNS)

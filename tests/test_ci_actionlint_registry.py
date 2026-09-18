@@ -25,6 +25,17 @@ ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
 #: allowance that would let a deleted variable's typo pass.
 CONFIGURATION_VARIABLE = re.compile(r"vars\.([A-Za-z_][A-Za-z0-9_]*)")
 ALL_CASES = all_jobs()
+#: The GitHub-hosted labels this repository actually runs on, maintained
+#: independently of `FROZEN_HOSTED_LABELS`. The frozen set is an allowance
+#: list, so a misspelling added to both it and a matrix leg would satisfy every
+#: assertion that reads one against the other; this second list has to be
+#: edited too, and it is an equality rather than a membership test.
+HOSTED_LABELS_IN_USE = frozenset({
+    "macos-15-intel",
+    "macos-latest",
+    "ubuntu-latest",
+    "windows-2022",
+})
 
 
 def _labels_in_use() -> frozenset[str]:
@@ -100,6 +111,13 @@ def test_every_hosted_label_in_use_is_named_in_the_frozen_set() -> None:
     failure the named set exists to prevent.
     """
     hosted = _labels_in_use() & frozenset(FROZEN_HOSTED_LABELS)
+    assert hosted == HOSTED_LABELS_IN_USE, (
+        "the GitHub-hosted labels in use must match the independently "
+        f"maintained list; in use {sorted(hosted)}, expected "
+        f"{sorted(HOSTED_LABELS_IN_USE)}. A misspelt label added to both a "
+        "matrix leg and the frozen set fails here, where it would otherwise "
+        "leave a job queued for a runner that does not exist"
+    )
     config = yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8"))
     registered = frozenset(config["self-hosted-runner"]["labels"])
     assert not (hosted & registered), (
