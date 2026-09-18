@@ -1,6 +1,6 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IMPLEMENTED; hosted receipt verified, rebased candidate green
+Status: IMPLEMENTED; hosted receipt verified, rebased candidate green, rebased again onto `b63a0f21`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -147,6 +147,13 @@ persistent receipt and publication map to M3 and a downloaded hosted artefact.
   passed all 17 jobs, re-validated its downloaded decision and measurement
   artefacts, corrected PR #418's stale "unresolved failure" claim, and marked
   it ready for review at the user's direction.
+- [x] 2026-09-18: Rebasing onto the advanced `origin/main` head `b63a0f21`,
+  which brought five new commits (the idle heartbeat in `#359`, Dependabot
+  alignment `#304`, mutation-testing workflow-contract docs `#209`, Skylos
+  dead-code detection `#307`, and a §13.2 design-doc alignment `#248`). Exactly
+  one of 24 replays conflicted: `.PHONY` in the `Makefile`, where main's
+  `makeutil`/`skylos-allow` reflow met the branch's `test-act`. Resolved as a
+  union, preserving both sides' targets; the other 23 replays applied cleanly.
 
 ## Surprises & discoveries
 
@@ -222,6 +229,14 @@ its hosted run `35337586749` passed all 17 jobs. The residual risk is external
 service behaviour, not a suppressed check: a default-branch CodeScene change or
 a rustup/registry outage can still fail unrelated jobs without touching this
 boundary.
+
+The second rebase onto `b63a0f21` inherited main's new `makeutil` prerequisite
+on `make test` and `make test-python`. That is an added external binary
+requirement for local and CI runs of those targets, and it is now installed in
+both `ci.yml` jobs that need it. The harness workflow's `make test-act` does not
+depend on `makeutil`, so the opt-in scenario lane is unaffected. Installation of
+`makeutil` remains a failure mode for `make test` that the branch neither
+introduces nor can remove.
 
 ## Verification plan
 
@@ -358,7 +373,10 @@ matrix; the hosted receipt proves the configured upload boundary. The hosted
 benchmark also ran successfully and retained its measurements. This does not
 establish exact runtime parity or success for unrelated hosted CI jobs; the
 pre-rebase CodeScene parser and installer TLS failures are recorded above, and
-the rebased head's run `35337586749` passed all 17 jobs.
+the head reached by the first rebase, `67539822`, passed all 17 jobs in run
+`35337586749`. That receipt predates the second rebase onto `b63a0f21`, so the
+current head `3051257e` needs its own hosted run before the same claim is made
+about it.
 
 ## Revision note
 
@@ -401,3 +419,23 @@ The plan's Risks, Outcomes, and M3 sections were updated to match: the PR is
 open for review rather than a draft, and the earlier failures are retained as
 history rather than as an open blocker. Historical entries that describe what
 was true on 2026-09-17 are deliberately left unchanged.
+
+2026-09-18: Rebased the 24-commit series from `83cd8df2` (its exclusive base)
+onto `b63a0f21`, the advanced `origin/main` head. Main had gained five commits,
+including Skylos dead-code detection (`6a9b2de4`) and the idle heartbeat for
+quiet children (`b63a0f21`). A `git merge-tree` preview taken before any
+mutation showed exactly one conflicted file: the branch's `test-act` addition
+to `.PHONY` and main's `makeutil`/`skylos-allow` reflow collided in the same
+target list, while the branch's other `Makefile` hunks and all four other
+overlapping paths (`ci.yml`, `contents.md`, `developers-guide.md`, and
+`test_workflow_lint.py`) merged without conflict. The resolution keeps the union
+of both sides' targets, so main's `makeutil` and `skylos-allow` and the
+branch's `test-act` are all present; `makeutil parse Makefile` reports
+`status: complete` with no diagnostics, and the contract assertions in
+`test_ci_test_coverage_overlap.py` and `test_skylos_lint_contract.py` hold. The
+branch owns no `uv.lock` or `pyproject.toml` delta, so both files match the
+target byte-for-byte and `uv lock --check` passes without a rebuild. The
+semantic audit after the replay found no unexplained deletions and no new
+repeated blocks: the only repeated-line count changes in `ci.yml` are the
+branch's own persistence steps matching counts already present at the
+pre-rebase head.
