@@ -96,8 +96,8 @@ class QueueSink:
         pass
 ```
 
-A separate asyncio task is not enough, because draining that queue still runs
-on the run's own loop. An ordinary exception from the callback, or a failed
+A separate asyncio task is not enough because draining that queue still runs on
+the run's own loop. An ordinary exception from the callback, or a failed
 diagnostic write, disables further notifications for that run, emits one
 sanitized warning, and leaves the child's exit status and captured output
 untouched. `KeyboardInterrupt` and `SystemExit` are never suppressed.

@@ -604,8 +604,8 @@ that is slow — a network log, a lock held by another process — should be
 wrapped so that the write and flush the run performs hand off without blocking:
 either the blocking call runs in a worker thread or an executor, or it is a
 genuinely non-blocking drain such as a queue fed with `put_nowait`. A separate
-asyncio task is not enough on its own, because draining that queue still runs
-on the run's own loop and competes with the parent's stream reads. There is
+asyncio task is not enough on its own because draining that queue still runs on
+the run's own loop and competes with the parent's stream reads. There is
 deliberately no timeout around the write: a synchronous call cannot be
 interrupted from the same loop, so a bound there would change what the sink is
 promised without ever enforcing it.

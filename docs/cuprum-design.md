@@ -992,7 +992,7 @@ A third reason the parent reads a child's stream is idle reporting: when
 interval in which no monitored stream produces output, and any non-empty read
 resets the timer. The line reports the absence of observed output — it is not a
 deadlock or CPU diagnosis, it never terminates a child, and it never extends a
-timeout. For a single command either stream resets it; for a pipeline only the
+timeout. For a single command, either stream resets it; for a pipeline only the
 final stage's stdout and every stage's stderr do, never an inter-stage
 transfer, hence the label `pipeline output idle`. The line goes to the parent's
 stderr sink, resolved at emission time, so it never enters capture, echo, line
@@ -1007,7 +1007,7 @@ resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
 `RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
 independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
 consume those gates: `_spawn_subprocess` for a single command and
-`_get_stage_stream_fds` for a pipeline. For a single command each stream
+`_get_stage_stream_fds` for a pipeline. For a single command, each stream
 independently becomes a `PIPE` or `DEVNULL` according to its own
 parent-consumption gate (capture, that stream's echo, or idle reporting). For a
 pipeline, the stdout of a non-final stage is always a `PIPE` so that it can

@@ -79,19 +79,21 @@ class IdleRecorder:
             1 for earlier, later in itertools.pairwise(self.idles()) if later < earlier
         )
 
-    def write_origins(self, *, quantum: float = 0.05) -> list[float]:
-        """Return the distinct times the child's output moved the idle clock.
+    def observed_restarts(self, *, quantum: float = 0.05) -> list[float]:
+        """Return the distinct restarts the run's notifications observed.
 
         Every notification reports the total elapsed time and the idle age it
         observed, so the moment the idle clock last restarted is recoverable as
         their difference. Readings that agree to within *quantum* describe the
         same restart.
 
-        This counts writes, not notifications, which is what makes it usable
-        under load. A starved heartbeat may notify twice as slowly as its
-        interval, folding two writes into one notification; `resets` then sees
-        a single fall where two writes arrived, but the timestamps reported for
-        those notifications still record both restarts.
+        This reads the reported timestamps rather than comparing consecutive
+        notifications, which is what makes it usable under load: a starved
+        heartbeat may notify twice as slowly as its interval, folding two
+        writes into one notification, where `resets` then sees a single fall.
+        It is bounded by what the run reported, not by what happened: a write
+        is only recoverable once a notification follows it, so two writes
+        arriving inside a single beat leave just the later one observable.
 
         Parameters
         ----------
@@ -102,9 +104,9 @@ class IdleRecorder:
         Returns
         -------
         list[float]
-            One entry per write the run observed, ascending. The quiet phase
-            before the child's first write reports the run's own start and is
-            not counted.
+            One entry per restart a notification observed, ascending. The
+            quiet phase before the child's first write reports the run's own
+            start and is not counted.
         """
         origins: list[float] = []
         for total, idle in self.seen:

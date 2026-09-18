@@ -54,14 +54,11 @@ class _ActivityRecorder:
 
     def reads_lead_lines(self) -> bool:
         """Report whether every line callback was preceded by a raw read."""
-        activities = 0
-        lines = 0
+        has_activity = False
         for event in self.events:
             if event == _ACTIVITY:
-                activities += 1
-            else:
-                lines += 1
-            if activities < lines:
+                has_activity = True
+            elif not has_activity:
                 return False
         return True
 

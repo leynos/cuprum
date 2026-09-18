@@ -221,10 +221,13 @@ class _IdleHeartbeatMachine(RuleBasedStateMachine):
 
     @invariant()
     def reporting_stays_bounded(self) -> None:
-        """Check that no due notification is reported as still pending."""
-        assert self._schedule().seconds_until_due(self._now) >= 0.0, (
-            "a due notification must not be reported as still pending for "
-            f"now={self._now!r}, deadline={self._next_deadline!r}"
+        """Check that the reported wait agrees with the model's deadline."""
+        reported = self._schedule().seconds_until_due(self._now)
+        expected = max(0.0, self._next_deadline - self._now)
+        assert reported == expected, (
+            "the reported wait must match the model's deadline for "
+            f"now={self._now!r}, deadline={self._next_deadline!r}, "
+            f"reported={reported!r}, expected={expected!r}"
         )
 
 
