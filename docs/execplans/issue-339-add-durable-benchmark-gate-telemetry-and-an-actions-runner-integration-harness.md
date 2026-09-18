@@ -159,7 +159,8 @@ persistent receipt and publication map to M3 and a downloaded hosted artefact.
   plan prose that `make check-fmt` rejected, re-ran all four gates green at
   `2a671157`, updated PR #418's body for the new base and head, and validated
   the resulting hosted run `35394569533`, whose decision and measurement
-  artefacts were downloaded and checked.
+  artefacts were downloaded and checked. Committing that record produced
+  `b61c5d3d`, whose own hosted run `35396687688` passed every job as well.
 
 ## Surprises & discoveries
 
@@ -394,7 +395,10 @@ holds eleven valid JSON files plus the comparison summary, whose ratchet
 decision is `passed` with no regressions against a five-sample compatible
 history. Both request 90-day retention. The `changes` job's
 `Persist the benchmark gate decision` and `Upload the benchmark gate log` steps
-both succeeded, and the warn step was correctly skipped.
+both succeeded, and the warn step was correctly skipped. Recording that receipt
+added plan commits, so the receipt is bound to `2a671157`, not to the head that
+carries this note; run `35396687688` repeated the same checks for that head and
+passed all jobs too, with both steps succeeding and both artefacts retained.
 
 ## Revision note
 
