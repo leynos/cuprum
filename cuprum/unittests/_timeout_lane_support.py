@@ -16,6 +16,9 @@ import yaml
 
 from tests.helpers.docs import repo_root
 
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
 #: The workflows carrying a coverage lane. Both are read, so a lane that
 #: gained a budget in one and lost it in the other cannot pass by being
 #: half right.
@@ -24,8 +27,18 @@ COVERAGE_WORKFLOWS: typ.Final[tuple[str, ...]] = (
     ".github/workflows/coverage-main.yml",
 )
 
+#: The Cargo workspace that nextest reads its repository configuration
+#: for. Cuprum keeps no root ``Cargo.toml``, so the workspace is the
+#: ``rust/`` crate tree rather than the repository root.
+CARGO_WORKSPACE_DIR: typ.Final[str] = "rust"
+
 #: The repository configuration carrying nextest's inner timeout tiers.
-NEXTEST_CONFIG: typ.Final[str] = ".config/nextest.toml"
+#:
+#: Relative to the Cargo workspace root, not the repository root, because
+#: nextest resolves ``.config/nextest.toml`` from the former and searches
+#: no parent directories. A copy at the repository root is never read, so
+#: the tiers it declares would be inert while every assertion passed.
+NEXTEST_CONFIG: typ.Final[str] = f"{CARGO_WORKSPACE_DIR}/.config/nextest.toml"
 
 #: The environment variable the shared coverage action reads for its
 #: wall-clock cap on one `cargo` invocation.
@@ -221,6 +234,17 @@ def _workflow(path: str) -> Workflow:
     parsed = yaml.safe_load((repo_root() / path).read_text(encoding="utf-8"))
     assert isinstance(parsed, dict), f"{path} must parse to a mapping"
     return typ.cast("Workflow", parsed)
+
+
+def cargo_workspace_dir() -> Path:
+    """Return the Cargo workspace root nextest resolves its config from.
+
+    Returns
+    -------
+    Path
+        The workspace directory below the repository root.
+    """
+    return repo_root() / CARGO_WORKSPACE_DIR
 
 
 @functools.cache

@@ -35,6 +35,7 @@ _Figure 1: Simplified repository tree for contributor orientation._
 | `docs/`                  | User, maintainer, design, decision, roadmap, and reference documentation.                                                     |
 | `docs/execplans/`        | Durable execution plans for non-trivial implementation work.                                                                  |
 | `rust/`                  | Cargo workspace for Rust extension code and Rust-specific build/test targets.                                                 |
+| `rust/.config/`          | nextest repository configuration, resolved from the Cargo workspace root.                                                     |
 | `rust/clippy.toml`       | Shared Clippy thresholds and environment-access policy used by every workspace member.                                        |
 | `rust/cuprum-rust/`      | Thin PyO3/maturin integration crate for the optional native backend; raw Python resource hand-off lives here.                 |
 | `rust/cuprum-streams/`   | Safe stream orchestration, pump policy, state machine, errors, and checked UTF-8 decoding; unsafe Rust is forbidden.          |
