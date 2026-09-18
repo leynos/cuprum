@@ -19,8 +19,6 @@ import typing as typ
 from contextvars import ContextVar
 
 if typ.TYPE_CHECKING:
-    from contextvars import Token
-
     from cuprum.line_stream_events import LineStreamEvent, LineStreamHook
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,30 +35,35 @@ class LineStreamHookRegistration:
     Attributes
     ----------
     _detached
-        Whether the registration has already restored its prior context state.
+        Whether the registration has already removed its own hook.
 
     Notes
     -----
     Entering the registration leaves its hook active in the current context.
-    Exiting the scope or calling :meth:`detach` restores the exact hook set
-    that preceded registration.
+    Exiting the scope or calling :meth:`detach` removes exactly the hook this
+    handle registered, so detaching out of last-in-first-out order cannot
+    resurrect a stale hook that was already removed.
     """
 
-    __slots__ = ("_detached", "_token")
+    __slots__ = ("_detached", "_hook")
 
     def __init__(self, hook: LineStreamHook) -> None:
         """Append ``hook`` to the current line-stream observation scope."""
         self._detached = False
-        self._token: Token[tuple[LineStreamHook, ...]] = _line_stream_hooks.set((
-            *_line_stream_hooks.get(),
-            hook,
-        ))
+        self._hook = hook
+        _line_stream_hooks.set((*_line_stream_hooks.get(), hook))
 
     def detach(self) -> None:
-        """Restore the hook collection active before this registration."""
-        if not self._detached:
-            _line_stream_hooks.reset(self._token)
-            self._detached = True
+        """Remove this registration's own hook without restoring stale state."""
+        if self._detached:
+            return
+        hooks = list(_line_stream_hooks.get())
+        for index in range(len(hooks) - 1, -1, -1):
+            if hooks[index] is self._hook:
+                del hooks[index]
+                break
+        _line_stream_hooks.set(tuple(hooks))
+        self._detached = True
 
     def __enter__(self) -> typ.Self:
         """Enter the already-registered observation scope."""

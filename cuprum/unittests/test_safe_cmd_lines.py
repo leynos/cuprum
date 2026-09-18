@@ -185,13 +185,15 @@ def test_lines_keep_capture_and_echo(
         )
         async for _event in stream:
             pass
-        assert stream.result is not None
+        assert stream.result is not None, (
+            "a completed line stream must expose its CommandResult"
+        )
         return stream.result
 
     result = asyncio.run(iterate())
 
-    assert result is not None
-    assert result.ok
+    assert result is not None, "line iteration must return a command result"
+    assert result.ok, f"line iteration command must succeed, got {result!r}"
     assert result.stdout == "captured line\n", (
         f"capture must survive iteration, got {result.stdout!r}"
     )
@@ -563,7 +565,7 @@ def test_emit_line_awaits_an_asynchronous_sink() -> None:
 
     async def sink(line: str) -> None:
         """Signal that the sink was entered, then wait to be released."""
-        assert line == "line"
+        assert line == "line", f"the sink must receive the decoded line, got {line!r}"
         started.set()
         await released.wait()
 
@@ -611,6 +613,27 @@ def test_lines_timeout_raises_timeout_expired(
     asyncio.run(iterate())
 
 
+def test_lines_empty_output_completes_and_publishes_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A child that writes nothing still completes and publishes its result."""
+    command = python_builder("-c", "pass")
+
+    async def collect() -> tuple[list[LineEvent], CommandResult]:
+        """Iterate a silent command and retain its published result."""
+        stream = command.lines()
+        events = [event async for event in stream]
+        assert stream.result is not None, (
+            "a silent line stream must still publish its CommandResult"
+        )
+        return events, stream.result
+
+    events, result = asyncio.run(collect())
+
+    assert events == [], f"a silent child must yield no line events, got {events!r}"
+    assert result.ok, f"a silent child must still succeed, got {result!r}"
+
+
 def test_lines_behaviour_streams_tags_and_text(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
@@ -624,10 +647,18 @@ def test_lines_behaviour_streams_tags_and_text(
 
     observed = asyncio.run(follow())
 
-    assert ("stdout", "o1") in observed
-    assert ("stdout", "o2") in observed
-    assert ("stderr", "e1") in observed
-    assert ("stderr", "e2") in observed
+    assert ("stdout", "o1") in observed, (
+        f"stdout line o1 must be observed, got {observed!r}"
+    )
+    assert ("stdout", "o2") in observed, (
+        f"stdout line o2 must be observed, got {observed!r}"
+    )
+    assert ("stderr", "e1") in observed, (
+        f"stderr line e1 must be observed, got {observed!r}"
+    )
+    assert ("stderr", "e2") in observed, (
+        f"stderr line e2 must be observed, got {observed!r}"
+    )
     assert len(observed) == 6, f"expected 6 line events, got {observed!r}"
 
 

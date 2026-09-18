@@ -70,11 +70,17 @@ def test_compose_stamps_elapsed_monotonic_time(monkeypatch: pytest.MonkeyPatch) 
     reading["value"] = 12.5
     typ.cast("_LineConsumer", callback)("a line")
 
-    assert len(received) == 1
+    assert len(received) == 1, f"one line must yield one event, got {received!r}"
     event = received[0]
-    assert event.stream == "stderr"
-    assert event.at == pytest.approx(3.25)
-    assert event.text == "a line"
+    assert event.stream == "stderr", (
+        f"the emission context must tag the stream, got {event!r}"
+    )
+    assert event.at == pytest.approx(3.25), (
+        f"the stamp must be the relative monotonic reading, got {event!r}"
+    )
+    assert event.text == "a line", (
+        f"the event must retain the decoded line text, got {event!r}"
+    )
 
 
 def test_compose_fans_out_to_user_callback_with_stream_tag(
@@ -95,9 +101,15 @@ def test_compose_fans_out_to_user_callback_with_stream_tag(
 
     typ.cast("_LineConsumer", callback)("tagged")
 
-    assert [event.stream for event in received] == ["stdout"]
-    assert [event.text for event in received] == ["tagged"]
-    assert received[0].at == pytest.approx(1.0)
+    assert [event.stream for event in received] == ["stdout"], (
+        f"each composed callback must stamp its own stream, got {received!r}"
+    )
+    assert [event.text for event in received] == ["tagged"], (
+        f"the user callback must receive the decoded line, got {received!r}"
+    )
+    assert received[0].at == pytest.approx(1.0), (
+        f"the stamp must be measured from the start reference, got {received!r}"
+    )
 
 
 def test_compose_fans_out_to_observe_output_event() -> None:
@@ -129,7 +141,9 @@ def test_fan_out_hooks_runs_synchronous_hooks_in_order() -> None:
 
     callback = _fan_out_hooks((first, second))
 
-    assert callback(lines.LineEvent(stream="stdout", at=0.0, text="line")) is None
+    assert callback(lines.LineEvent(stream="stdout", at=0.0, text="line")) is None, (
+        "synchronous hooks must not return an awaitable outcome"
+    )
     assert received == ["first", "second"], (
         f"synchronous hooks must preserve registration order, got {received!r}"
     )
