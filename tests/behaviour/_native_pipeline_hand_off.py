@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import pathlib
+import threading
 import time
 import typing as typ
 
@@ -39,7 +40,13 @@ class _NativePipelineHandOff:
     active_backend: StreamBackend
     make_pipeline: cabc.Callable[[str], tuple[Pipeline, frozenset[Program]]]
 
-    def run_attempt(self, attempt: int, timeout_s: float, fd_delta: int) -> None:
+    def run_attempt(
+        self,
+        attempt: int,
+        timeout_s: float,
+        fd_delta: int,
+        thread_delta: int,
+    ) -> None:
         """Run one native hand-off and retain diagnostic context on failure."""
         pipeline, allowlist = self.make_pipeline(
             "import sys; sys.stdout.write(sys.stdin.read().upper())",
@@ -54,7 +61,8 @@ class _NativePipelineHandOff:
                     "AUTO native pipeline hand-off exceeded its local deadline "
                     f"(attempt={attempt}, backend={self.active_backend.value}, "
                     f"attempt_elapsed_s={attempt_elapsed_s:.3f}, "
-                    f"fd_delta={fd_delta}, task={pipeline!r}, error={error!r})",
+                    f"fd_delta={fd_delta}, thread_delta={thread_delta}, "
+                    f"task={pipeline!r}, error={error!r})",
                 )
         if result.stdout != "HELLO":
             pytest.fail(
@@ -76,6 +84,7 @@ def assert_repeated_native_pipeline_hand_off(
     hand_off = _NativePipelineHandOff(active_backend, make_pipeline)
     started_at = time.monotonic()
     initial_fd_count = _open_fd_count()
+    initial_thread_count = threading.active_count()
     for attempt in range(_REPEATED_NATIVE_PIPELINE_ATTEMPTS):
         fd_count = _open_fd_count()
         fd_delta = fd_count - initial_fd_count
@@ -91,17 +100,22 @@ def assert_repeated_native_pipeline_hand_off(
             pytest.fail(
                 "AUTO native pipeline hand-off exceeded its aggregate deadline "
                 f"before attempt {attempt} (elapsed_s={elapsed_s:.3f}, "
-                f"fd_delta={fd_delta})",
+                f"fd_delta={fd_delta}, "
+                "thread_delta="
+                f"{threading.active_count() - initial_thread_count})",
             )
         hand_off.run_attempt(
             attempt,
             min(_REPEATED_NATIVE_PIPELINE_ATTEMPT_TIMEOUT_S, remaining_s),
             fd_delta,
+            threading.active_count() - initial_thread_count,
         )
         elapsed_s = time.monotonic() - started_at
         if elapsed_s > _REPEATED_NATIVE_PIPELINE_TIMEOUT_S:
             pytest.fail(
                 "AUTO native pipeline hand-off exceeded its aggregate deadline "
                 f"(attempt={attempt}, elapsed_s={elapsed_s:.3f}, "
-                f"fd_delta={fd_delta})",
+                f"fd_delta={fd_delta}, "
+                "thread_delta="
+                f"{threading.active_count() - initial_thread_count})",
             )

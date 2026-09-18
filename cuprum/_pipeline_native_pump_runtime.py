@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import dataclasses as dc
-import functools
+import queue
 import threading
 import typing as typ
 
@@ -39,8 +39,41 @@ def _settle_native_pump_future(
         future.set_exception(error)
 
 
+# The pool stays deliberately small: it only has to cover the native pumps of
+# concurrently running pipelines, not general-purpose parallelism.
+_PERSISTENT_NATIVE_PUMP_WORKERS = 4
+
+
 class _PersistentNativePumpExecutor(_NativePumpExecutor):
     """Run uninterruptible native I/O without interpreter-shutdown joining."""
+
+    def __init__(self, worker_count: int = _PERSISTENT_NATIVE_PUMP_WORKERS) -> None:
+        """Start a fixed pool of daemon workers that outlive this executor.
+
+        The workers are daemon threads on purpose: ``concurrent.futures``
+        executors register an ``atexit`` join that would block interpreter
+        shutdown on a stuck native worker, which is the exact failure mode
+        this executor exists to avoid.
+        """
+        self._work: queue.SimpleQueue[
+            tuple[cabc.Callable[[int, int], int], int, int, cf.Future[int]]
+        ] = queue.SimpleQueue()
+        self._workers = tuple(
+            threading.Thread(
+                target=self._worker_loop,
+                name="cuprum-native-pump",
+                daemon=True,
+            )
+            for _ in range(worker_count)
+        )
+        for worker in self._workers:
+            worker.start()
+
+    def _worker_loop(self) -> None:
+        """Settle one submitted pump at a time, forever."""
+        while True:
+            function, reader_fd, writer_fd, future = self._work.get()
+            _settle_native_pump_future(future, function, reader_fd, writer_fd)
 
     @typ.override
     def submit(
@@ -50,20 +83,9 @@ class _PersistentNativePumpExecutor(_NativePumpExecutor):
         writer_fd: int,
         /,
     ) -> cf.Future[int]:
-        """Submit one native reader/writer descriptor pair."""
+        """Submit one native reader/writer descriptor pair to the pool."""
         future: cf.Future[int] = cf.Future()
-        worker = threading.Thread(
-            target=functools.partial(
-                _settle_native_pump_future,
-                future,
-                function,
-                reader_fd,
-                writer_fd,
-            ),
-            name="cuprum-native-pump",
-            daemon=True,
-        )
-        worker.start()
+        self._work.put((function, reader_fd, writer_fd, future))
         return future
 
 
