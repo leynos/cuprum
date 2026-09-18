@@ -12,7 +12,8 @@ open each document.
 - [Users' guide](users-guide.md) - user-facing command-building, catalogue,
   runtime, pipeline, and Rust backend behaviour.
 - [0.2.0 migration guide][migration-020] - upgrade guidance for the optional
-  aggregate Python stream-operation observation API.
+  aggregate Python stream-operation observation API and the opt-in idle
+  heartbeat for quiet children.
 - [Developers' guide](developers-guide.md) - maintainer workflows for profiling,
   linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and

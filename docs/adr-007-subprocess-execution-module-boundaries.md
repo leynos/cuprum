@@ -55,7 +55,10 @@ and stream-consumer draining to `_subprocess_wait.py`.
 The original proposal exposed the drain helpers through `_subprocess_drain.py`
 as a narrow compatibility boundary for focused tests and private imports rather
 than a second live implementation. The 2026-08-30 addendum records that this
-former boundary was removed.
+former boundary was removed. The 2026-09-16 addendum records that
+single-command stream-consumer construction later moved to
+`cuprum/_subprocess_streams.py`, while the execution module kept the
+composition-root role.
 
 This makes ownership explicit while retaining the runner as the composition
 root.
@@ -80,14 +83,17 @@ _Table 1: Trade-offs for organizing private subprocess execution._
 ## Decision outcome / proposed direction
 
 Choose Option B. `_subprocess_execution` remains the composition root for
-spawning and stream-consumer creation/wiring. `_subprocess_stdin` owns
-`_emit_stdin_error`, `_write_stdin`, and `_spawn_stdin_writer`, including the
-`cuprum.stdin` logger. `_subprocess_timeout` owns timeout details/errors,
-timeout translation, and the exit-event helpers shared by timeout and normal
-completion paths. `_subprocess_wait` owns the deadline wait, process
-termination, and remains the single owner of stream-consumer draining. The
-formerly proposed `_subprocess_drain` compatibility boundary was removed by the
-2026-08-30 addendum.
+spawning and stream-consumer wiring: it decides which streams a run consumes,
+and it calls `_build_stream_config` and `_spawn_stream_consumers`, whose
+single-command construction now lives in `cuprum/_subprocess_streams.py` (see
+the 2026-09-16 addendum). `_subprocess_stdin` owns `_emit_stdin_error`,
+`_write_stdin`, and `_spawn_stdin_writer`, including the `cuprum.stdin` logger.
+`_subprocess_timeout` owns timeout details/errors, timeout translation, and the
+exit-event helpers shared by timeout and normal completion paths.
+`_subprocess_wait` owns the deadline wait, process termination, and remains the
+single owner of stream-consumer draining. The formerly proposed
+`_subprocess_drain` compatibility boundary was removed by the 2026-08-30
+addendum.
 
 The drain is capture-aware. A capturing drain waits for up to
 `_CAPTURE_EOF_GRACE_S` for terminated-process readers to observe EOF, then
