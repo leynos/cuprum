@@ -395,10 +395,14 @@ holds eleven valid JSON files plus the comparison summary, whose ratchet
 decision is `passed` with no regressions against a five-sample compatible
 history. Both request 90-day retention. The `changes` job's
 `Persist the benchmark gate decision` and `Upload the benchmark gate log` steps
-both succeeded, and the warn step was correctly skipped. Recording that receipt
-added plan commits, so the receipt is bound to `2a671157`, not to the head that
-carries this note; run `35396687688` repeated the same checks for that head and
-passed all jobs too, with both steps succeeding and both artefacts retained.
+both succeeded, and the warn step was correctly skipped.
+
+Every hosted receipt in this plan is bound to the commit its run names, not to
+whatever head the branch carries when the plan is read: recording a receipt
+necessarily adds commits, and the head moves on. Later runs repeat the same
+checks for their own heads; run `35396687688`, for example, passed all jobs for
+`b61c5d3d` and retained both artefacts, and every push to this branch starts a
+fresh run in the same way. Read the head from the run, never from the plan.
 
 ## Revision note
 
