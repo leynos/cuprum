@@ -29,19 +29,22 @@ VOCABULARIES = {
 }
 
 
-@pytest.mark.parametrize("event_class", sorted(VOCABULARIES["event_class"]))
-@pytest.mark.parametrize("detector_status", sorted(VOCABULARIES["detector_status"]))
-@pytest.mark.parametrize("decision", sorted(VOCABULARIES["decision"]))
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        Verdict(event_class, detector_status, decision)
+        for event_class in sorted(VOCABULARIES["event_class"])
+        for detector_status in sorted(VOCABULARIES["detector_status"])
+        for decision in sorted(VOCABULARIES["decision"])
+    ],
+)
 def test_closed_label_combinations_are_stored_verbatim(
     tmp_path: pth.Path,
     workflow_data: Workflow,
     *,
-    event_class: str,
-    detector_status: str,
-    decision: str,
+    verdict: Verdict,
 ) -> None:
     """Every permitted label combination remains unchanged in the real file."""
-    verdict = Verdict(event_class, detector_status, decision)
     run = run_log_script(
         verdict=verdict, workflow_data=workflow_data, tmp_path=tmp_path
     )
