@@ -136,6 +136,13 @@ artefact.
   `benchmark-ratchet` passed. CodeScene coverage parsing and a rustup TLS
   connection failed independently of the implemented boundary. Final-head
   results are tracked in draft PR #418.
+- [x] 2026-09-18: Re-rebased onto `83cd8df2` after review feedback. All 21
+  commits replayed as identical patches; the semantic audit confirmed every
+  branch-only path byte-identical and every target-only path inherited
+  unmodified.
+- [x] 2026-09-18: Repaired the two CodeScene argument-count diagnostics in the
+  summary-support and telemetry-execution tests, then re-ran the repository
+  gates for the rebased candidate.
 
 ## Surprises & discoveries
 
@@ -353,3 +360,23 @@ work, and separated local runtime proof from hosted artefact receipt.
 2026-09-17: Added successful full-gate and final-review evidence, verified
 hosted decision and measurement downloads, and recorded terminal external CI
 failures without weakening their checks.
+
+2026-09-18: Rebased the 21-commit series from `a97d0a8b` (its exclusive base)
+onto `83cd8df2`, the current `origin/main` head. Main had advanced by two
+commits: the pull-request coverage change in `2070a41b` and a pyright bump in
+`83cd8df2`. Every replay applied as an identical patch, so no conflict
+resolution was needed and no branch-only path changed. Main's `ci.yml` coverage
+rewrite, its `job_env` helper, and its pyright `uv.lock` revision are inherited
+unchanged; the branch owns no `uv.lock` delta, so no lockfile rebuild was
+required. Verified with `git range-diff`, a byte-identity check over all 39
+branch-only paths, and the target-only-path check from the semantic audit.
+
+2026-09-18: Repaired two CodeScene "Excess Number of Function Arguments"
+diagnostics by replacing parameter bundles with values that already represent
+the data. `_execute_summary_script` now takes one `_SummaryScriptExecution`
+dataclass instead of five keyword arguments, and the closed-label matrix test
+takes one `Verdict` per parametrized case instead of three stacked
+parametrizations. `SummaryCase` was deliberately left unchanged: it models
+expected results rather than execution inputs. The subprocess command,
+environment, output files, return-code assertion, the 18-case matrix, and its
+deterministic ordering are all unchanged.
