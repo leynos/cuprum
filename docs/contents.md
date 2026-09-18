@@ -52,6 +52,8 @@ open each document.
   govern identifiers and source prose with the repository spelling gate.
 - [ADR-010: Rust-pump executor-hop spans][adr-010] - accepted decision to add
   opt-in executor-hop tracing without extending the pump event channel.
+- [ADR-011: Audited Rust safety boundaries][adr-011] - accepted decision to
+  isolate native resource operations from safe stream policy.
 
 ## Planning and validation references
 
@@ -67,6 +69,9 @@ open each document.
 - [Tee hot-path read-size sweep (2026-08-29)][tee-read-size-sweep] - the
   interleaved measurement that selected the Python stream read size for roadmap
   item 5.1.1.
+- [Rust boundary verification and unsafe inventory][rust-boundary-verification]
+  - unsafe inventory, crate contracts, verifier evidence, and trusted
+  assumptions for the native stream boundaries.
 
 [adr-003]: adr-003-two-tier-python-linting.md
 [adr-004]: adr-004-interrogate-docstring-gate.md
@@ -76,7 +81,9 @@ open each document.
 [adr-008]: adr-008-rust-pump-observation-channel.md
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [adr-010]: adr-010-rust-pump-hop-span.md
+[adr-011]: adr-011-audited-rust-boundaries.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
+[rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md

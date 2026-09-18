@@ -133,10 +133,9 @@ fn utf8_error_drain_bound_stays_in_range() {
     }
 }
 
-/// Symbolic bound: the unsafe `from_utf8_unchecked` inside
-/// `append_valid_prefix` produces exactly the same string as a checked
-/// decode of the same prefix, for *any* short payload. This upholds the
-/// SAFETY claim that the `valid_up_to` prefix is genuinely valid UTF-8.
+/// For every three-byte payload, append exactly its valid UTF-8 prefix.
+/// The checked decoder replaces the former unchecked conversion; this proof
+/// retains the prefix-selection contract rather than claiming residual unsafety.
 #[kani::proof]
 #[kani::unwind(4)]
 fn append_valid_prefix_matches_checked_decode() {
@@ -147,11 +146,11 @@ fn append_valid_prefix_matches_checked_decode() {
     };
 
     // Cover both branches of `append_valid_prefix`: the non-empty prefix that
-    // reaches the `unsafe from_utf8_unchecked` call, and the `valid_up_to == 0`
+    // reaches the checked decode, and the `valid_up_to == 0`
     // early return. Pairing them proves neither became unreachable.
     kani::cover!(
         valid_up_to > 0,
-        "reaches the unchecked decode of a non-empty prefix"
+        "reaches the checked decode of a non-empty prefix"
     );
     kani::cover!(valid_up_to == 0, "reaches the empty-prefix early return");
 
@@ -159,11 +158,11 @@ fn append_valid_prefix_matches_checked_decode() {
     append_valid_prefix(&bytes, &mut output, ValidUpTo(valid_up_to));
 
     // The prefix is valid UTF-8 by construction, so the checked decode
-    // cannot fail; the unchecked path must produce the identical string.
+    // cannot fail; the append operation must produce the identical string.
     let prefix = &bytes[..valid_up_to];
     let checked = core::str::from_utf8(prefix).expect("the valid_up_to prefix decodes as UTF-8");
     kani::assert(
         output == checked,
-        "unchecked prefix decode must equal the checked decode",
+        "appended prefix must equal the checked decode",
     );
 }

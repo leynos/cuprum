@@ -127,6 +127,26 @@ def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
     return size
 
 
+def _prepare_native_reader(reader_fd: int) -> int:
+    """Validate ABI representation while Python still owns the writer."""
+    # A negative value is rejected before the platform conversion: on Windows
+    # the conversion calls ``msvcrt.get_osfhandle``, which raises ``OSError``
+    # for a negative CRT descriptor rather than the documented ``ValueError``.
+    raw_reader = operator.index(reader_fd)
+    if raw_reader < 0:
+        resource = "file handle" if os.name == "nt" else "file descriptor"
+        msg = f"{resource} must be non-negative"
+        raise ValueError(msg)
+    reader = operator.index(_convert_fd_for_platform(raw_reader))
+    if not _I64_MIN <= reader <= _I64_MAX:
+        msg = "Python int too large to convert to C long"
+        raise OverflowError(msg)
+    if os.name != "nt" and not -(1 << 31) <= reader < (1 << 31):
+        msg = "file descriptor out of range"
+        raise ValueError(msg)
+    return reader
+
+
 def _prepare_rust_pump_call(
     *,
     reader_fd: int,
@@ -141,7 +161,15 @@ def _prepare_rust_pump_call(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
         raise
     try:
-        reader = _convert_fd_for_platform(reader_fd)
+        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
+            buffer_size
+        )
+    except BaseException:
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
+        raise
+    try:
+        reader = _prepare_native_reader(reader_fd)
     except BaseException as error:
         _pump_obs._log_native_pump_handoff_failed(
             _LOGGER,
@@ -152,14 +180,6 @@ def _prepare_rust_pump_call(
         _emit_rust_pump_handoff_outcome(
             RustPumpHandoffOutcome.READER_PREPARATION_FAILED
         )
-        raise
-    try:
-        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
-            buffer_size
-        )
-    except BaseException:
-        _close_writer_after_pre_native_failure(writer_fd)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
         raise
     return _PreparedRustPumpCall(
         native_pump=native_pump,
@@ -279,15 +299,19 @@ def rust_pump_stream(
     ------
     OSError
         If the Rust pump encounters an I/O error.
+    ValueError
+        If the wrapper rejects an argument before any native hand-off:
+        ``buffer_size`` that is not positive or exceeds 1 GiB, or a negative
+        ``reader_fd``.
 
     Notes
     -----
-    The wrapper validates ``buffer_size`` before transferring a Windows writer
-    resource, preserving the native entry point's errors without leaking a
-    duplicated handle. Other failures propagate unchanged from the Rust
-    extension: ``ImportError`` if the native module cannot be imported and
-    ``OSError`` if an I/O error occurs while pumping bytes.
-    """
+    The wrapper validates ``buffer_size`` and ``reader_fd`` before transferring
+    a Windows writer resource, preserving the native entry point's errors
+    without leaking a duplicated handle. Other failures propagate unchanged
+    from the Rust extension: ``ImportError`` if the native module cannot be
+    imported and ``OSError`` if an I/O error occurs while pumping bytes.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _prepare_rust_pump_call.
     prepared = _prepare_rust_pump_call(
         reader_fd=reader_fd,
         writer_fd=writer_fd,
