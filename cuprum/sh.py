@@ -254,7 +254,10 @@ class ExecutionContext:
         flushed synchronously on the run's event loop, so its ``write`` and
         ``flush`` must return promptly: a sink that blocks delays the run's
         stream reads, timeout handling, and cancellation. Hand a slow
-        destination to a queue that another task drains.
+        destination to a worker thread, an executor, or a genuinely
+        non-blocking drain such as a queue fed with ``put_nowait``. A separate
+        asyncio task on the run's own loop is not enough: draining that queue
+        still competes with the parent's stream reads.
     encoding:
         Character encoding used when decoding subprocess output.
     errors:
