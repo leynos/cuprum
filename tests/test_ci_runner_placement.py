@@ -1,62 +1,51 @@
-"""Contract tests for where Cuprum's CI jobs run and how wide they fan out.
+"""Contract tests for where Cuprum's CI jobs run and whether they run.
 
-Runner placement and worker counts are declarations no functional test can
-reach: a job that drifts back to a GitHub-hosted label, or that asks
-`pytest-xdist` for more workers than the runner has cores, still produces a
-green suite while queueing for hours or thrashing two vCPUs. These tests read
-the declarations back against the manifests in `tests/helpers/ci_runners.py`.
+Runner placement is a declaration no functional test can reach: a job that
+drifts back to a GitHub-hosted label, asks for a paid runner a fork can never
+obtain, or carries no ceiling at all still produces a green suite while
+queueing for hours or billing for six. These tests read the declarations back
+against the manifests in `tests/helpers/ci_runners.py`, through the one reader
+in `tests/helpers/ci_placement.py`.
+
+Companion modules cover the neighbouring declarations: the label registry in
+`test_ci_actionlint_registry.py`, worker counts in `test_ci_worker_bounds.py`,
+and tool installation in `test_ci_tool_installation.py`.
 """
 
 from __future__ import annotations
-
-import re
-import typing as typ
 
 import pytest
 import yaml
 
 from tests.helpers.ci_runners import (
+    CONTINUE_ON_ERROR_JOBS,
+    EXPERIMENTAL_LEG_KEY,
+    FORK_FIELD,
+    FORK_REACHABLE_UBICLOUD_JOBS,
     GITHUB_HOSTED_JOBS,
     GITHUB_LABEL,
-    ROOT,
     UBICLOUD_JOBS,
     UBICLOUD_LABEL,
-    UBICLOUD_VCPUS,
     WINDOWS_HOSTED_JOBS,
     WINDOWS_LABEL,
+    all_jobs,
+    declares_steps,
     expand,
     job,
-    step_inputs,
-    steps,
+    never_runs,
+    placement,
+    references,
     workflow_document,
-    workflow_env,
     workflow_sources,
 )
-
-if typ.TYPE_CHECKING:
-    from tests.helpers.workflow_types import Step
-
-ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
-MAKEFILE = ROOT / "Makefile"
-VCPU_CONSTANT = "LINUX_RUNNER_VCPUS"
-#: Any spelling of the tool, so `nextest@` and `cargo-nextest@` both match.
-NEXTEST_TOOL_NAME = "nextest"
-#: Shell fragments that mean "fetch a binary" rather than "run one".
-INSTALL_VERBS = ("install", "curl", "wget")
-#: The upstream install host. Its name does not contain "nextest", so it needs
-#: its own token, and it only ever appears in an install command.
-NEXTEST_INSTALL_HOST = "get.nexte.st"
-#: Steps invoking a shared action are exempt: the coverage action installs
-#: nextest on purpose, and that is the only sanctioned place.
-SHARED_ACTION_PREFIX = "leynos/shared-actions/"
-#: Make variables that carry the runner's vCPU count into the test command.
-#: Only the pytest one remains here: the Rust suite moved to the coverage job,
-#: which bounds itself through `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`.
-PARALLELISM_OVERRIDES = ("PYTEST_CARGO_BUILD_JOBS",)
 
 UBICLOUD_CASES = expand(UBICLOUD_JOBS)
 GITHUB_HOSTED_CASES = expand(GITHUB_HOSTED_JOBS)
 WINDOWS_HOSTED_CASES = expand(WINDOWS_HOSTED_JOBS)
+FORK_REACHABLE_CASES = expand(FORK_REACHABLE_UBICLOUD_JOBS)
+ALL_CASES = all_jobs()
+STEP_CASES = [case for case in ALL_CASES if declares_steps(*case)]
+CALLER_CASES = [case for case in ALL_CASES if not declares_steps(*case)]
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), UBICLOUD_CASES)
@@ -64,19 +53,187 @@ def test_linux_build_and_test_jobs_use_the_ubicloud_default_shape(
     workflow_name: str, job_name: str
 ) -> None:
     """Keep every repository-owned Linux gate on the reviewed Ubicloud shape."""
-    runner = job(workflow_name, job_name).get("runs-on")
-    assert runner == UBICLOUD_LABEL, (
+    owned = placement(workflow_name, job_name).owned
+    assert owned == UBICLOUD_LABEL, (
         f"{workflow_name}:{job_name} must run on {UBICLOUD_LABEL}; escalating to a "
-        f"larger shape needs recorded measurements, got {runner!r}"
+        f"larger shape needs recorded measurements, got {owned!r}"
     )
 
 
-@pytest.mark.parametrize(("workflow_name", "job_name"), UBICLOUD_CASES)
-def test_ubicloud_jobs_declare_a_timeout(workflow_name: str, job_name: str) -> None:
-    """Bound a wedged paid runner rather than paying for its default six hours."""
+@pytest.mark.parametrize(("workflow_name", "job_name"), FORK_REACHABLE_CASES)
+def test_fork_reachable_lanes_fall_back_by_position(
+    workflow_name: str, job_name: str
+) -> None:
+    """Send a fork's pull request to a runner it can actually obtain.
+
+    Read by position, not by membership. Nile-valley #106's contract asserted
+    that the expression named one hosted and one Ubicloud label somewhere, so
+    swapping the arms passed while sending forks to a runner no fork can get.
+    The condition is full-matched too: a sibling field such as
+    `head.repo.private` produces a well-formed expression that branches on the
+    wrong thing.
+    """
+    placed = placement(workflow_name, job_name)
+    assert placed.kind == "fork", (
+        f"{workflow_name}:{job_name} must select its runner with the fork "
+        f"fallback expression, got a {placed.kind} placement"
+    )
+    assert placed.references == frozenset({FORK_FIELD}), (
+        f"{workflow_name}:{job_name} must branch on {FORK_FIELD}, "
+        f"got {sorted(placed.references)}"
+    )
+    assert placed.fork == GITHUB_LABEL, (
+        f"{workflow_name}:{job_name} must send a fork to {GITHUB_LABEL}, "
+        f"got {placed.fork!r}"
+    )
+    assert placed.owned == UBICLOUD_LABEL, (
+        f"{workflow_name}:{job_name} must keep {UBICLOUD_LABEL} on the owned "
+        f"arm, got {placed.owned!r}"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), STEP_CASES)
+def test_placement_expressions_parse_to_one_line(
+    workflow_name: str, job_name: str
+) -> None:
+    """Refuse a folded scalar whose continuation kept its line break.
+
+    A continuation indented one level deeper puts a newline inside the
+    expression. GitHub evaluates the broken value regardless, so a green run is
+    no evidence; only the parsed document shows it (dev-env-rocky #216).
+
+    Reading the declaration is the assertion: the reader refuses an embedded
+    line break, a list, an absent value and any expression it cannot model.
+    """
+    placement(workflow_name, job_name)
+
+
+def test_fork_reachability_matches_the_manifest() -> None:
+    """Hold the fallback manifest against the triggers it rests on.
+
+    `runs-on` can never check the premise these rules depend on: that a fork
+    can reach the lane at all. Without the assertion a silent trigger change
+    leaves the consequence looking deliberate (falcon-pachinko). YAML 1.1 reads
+    the bare word `on` as the boolean `True`, so the triggers are read under
+    that key; reading the string `"on"` would find nothing and pass vacuously.
+    """
+    ci_triggers = workflow_document("ci.yml")[True]
+    assert isinstance(ci_triggers, dict), "ci.yml must declare its triggers"
+    assert "pull_request" in ci_triggers, (
+        "ci.yml must declare the pull_request trigger; without it no fork "
+        "reaches these lanes and every fallback arm below is dead code"
+    )
+    caller = job("ci.yml", "build-wheels").get("uses")
+    assert caller == "./.github/workflows/build-wheels.yml", (
+        "ci.yml must call build-wheels.yml; that call, not build-wheels.yml's "
+        "own workflow_call trigger, is what exposes its jobs to forks"
+    )
+    coverage_triggers = workflow_document("coverage-main.yml")[True]
+    assert isinstance(coverage_triggers, dict), (
+        "coverage-main.yml must declare its triggers"
+    )
+    assert "pull_request" not in coverage_triggers, (
+        "coverage-main.yml is absent from the fork manifest because no fork "
+        "can trigger it; a pull_request trigger here would make that false"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), STEP_CASES)
+def test_every_job_running_steps_declares_a_ceiling(
+    workflow_name: str, job_name: str
+) -> None:
+    """Bound a wedged runner rather than paying for the six-hour default.
+
+    Keyed on declaring steps rather than on carrying an Ubicloud label. Once a
+    label is an expression, "an Ubicloud lane" is a property of the event, so a
+    rule keyed on the label stops applying on exactly the arm that hangs.
+    """
     timeout = job(workflow_name, job_name).get("timeout-minutes")
-    assert isinstance(timeout, int), (
-        f"{workflow_name}:{job_name} must declare timeout-minutes, got {timeout!r}"
+    # `isinstance(True, int)` is true, so an `isinstance` check also accepts
+    # `timeout-minutes: true`, and it accepts `0` and negative values besides.
+    # GitHub requires a positive integer. No upper bound is asserted: 360 is
+    # the GitHub-hosted execution limit, not a repository-wide job ceiling.
+    assert type(timeout) is int, (
+        f"{workflow_name}:{job_name} must declare an integer timeout-minutes, "
+        f"got {timeout!r}; note YAML's `true` is an int to `isinstance`"
+    )
+    assert timeout > 0, (
+        f"{workflow_name}:{job_name} must declare a positive timeout-minutes, "
+        f"got {timeout!r}"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), CALLER_CASES)
+def test_reusable_workflow_callers_declare_no_ceiling(
+    workflow_name: str, job_name: str
+) -> None:
+    """Keep placing a job and bounding it as separate ideas.
+
+    GitHub rejects `timeout-minutes` on a job with `uses:`, so the bound lives
+    in the callee. Each of this repository's callers calls a workflow whose own
+    jobs are bounded by the rule above (weaver).
+    """
+    declared = job(workflow_name, job_name)
+    assert "uses" in declared, (
+        f"{workflow_name}:{job_name} declares neither steps nor uses"
+    )
+    assert declared.get("timeout-minutes") is None, (
+        f"{workflow_name}:{job_name} calls a reusable workflow, where GitHub "
+        "rejects timeout-minutes; bound the callee instead"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), ALL_CASES)
+def test_no_reviewed_lane_is_switched_off(workflow_name: str, job_name: str) -> None:
+    """Read whether a job runs, not only how it is configured.
+
+    Every placement, budget and cache rule in this repository reads a
+    declaration. `if: false` leaves all of them satisfied and runs nothing
+    (lille #349). A containment test would accept `false && matrix.x == 'y'`,
+    so the leading clause is matched explicitly.
+    """
+    assert not never_runs(workflow_name, job_name), (
+        f"{workflow_name}:{job_name} can never run, so every rule about where "
+        "it runs and what it costs holds vacuously"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), ALL_CASES)
+def test_only_the_experimental_matrix_leg_may_fail_silently(
+    workflow_name: str, job_name: str
+) -> None:
+    """Keep `continue-on-error` to the leg that is allowed to be broken."""
+    declared = job(workflow_name, job_name).get("continue-on-error")
+    if declared is None:
+        return
+    assert (workflow_name, job_name) in CONTINUE_ON_ERROR_JOBS, (
+        f"{workflow_name}:{job_name} tolerates its own failure but is not in "
+        "the manifest; a gate that cannot fail the workflow gates nothing"
+    )
+    assert references(declared) == frozenset({f"matrix.{EXPERIMENTAL_LEG_KEY}"}), (
+        f"{workflow_name}:{job_name} must tolerate failure only on the leg its "
+        f"matrix marks {EXPERIMENTAL_LEG_KEY!r}, got {declared!r}"
+    )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), STEP_CASES)
+def test_job_names_do_not_follow_their_runner(
+    workflow_name: str, job_name: str
+) -> None:
+    """Keep a required check's context stable across events.
+
+    With the fork fallback the runner follows the event, so a name that reads
+    the runner renders differently on a fork's pull request and an internal
+    one, and no single required context exists on both. Resolved through the
+    matrix: rstest-bdd #788's contract compared the name's references with
+    `runs-on`'s, which read `matrix.os` and stopped, while the matrix value
+    behind that key held the fork expression.
+    """
+    declared_name = job(workflow_name, job_name).get("name")
+    shared = references(declared_name) & placement(workflow_name, job_name).references
+    assert not shared, (
+        f"{workflow_name}:{job_name} names itself from {sorted(shared)}, which "
+        "its runner also reads; the check context would follow the event"
     )
 
 
@@ -85,9 +242,10 @@ def test_administrative_and_serial_jobs_stay_github_hosted(
     workflow_name: str, job_name: str
 ) -> None:
     """Keep sleeping, API-bound, and publish-only work off metered build slots."""
-    runner = job(workflow_name, job_name).get("runs-on")
-    assert runner == GITHUB_LABEL, (
-        f"{workflow_name}:{job_name} must stay on {GITHUB_LABEL}, got {runner!r}"
+    placed = placement(workflow_name, job_name)
+    assert placed.labels == frozenset({GITHUB_LABEL}), (
+        f"{workflow_name}:{job_name} must stay on {GITHUB_LABEL}, "
+        f"got {sorted(placed.labels)}"
     )
 
 
@@ -95,18 +253,30 @@ def test_administrative_and_serial_jobs_stay_github_hosted(
 def test_windows_native_jobs_stay_on_github_hosted_windows(
     workflow_name: str, job_name: str
 ) -> None:
-    """Keep native Windows validation on the reviewed hosted runner image."""
-    runner = job(workflow_name, job_name).get("runs-on")
-    assert runner == WINDOWS_LABEL, (
-        f"{workflow_name}:{job_name} must stay on {WINDOWS_LABEL}, got {runner!r}"
+    """Keep native Windows validation on the reviewed hosted runner image.
+
+    A hosted-at-all predicate is not a placement predicate: an API-bound job
+    moved to windows-latest satisfied a contract whose message named
+    ubuntu-latest (lille #349), so the label is asserted by equality.
+    """
+    placed = placement(workflow_name, job_name)
+    assert placed.labels == frozenset({WINDOWS_LABEL}), (
+        f"{workflow_name}:{job_name} must stay on {WINDOWS_LABEL}, "
+        f"got {sorted(placed.labels)}"
     )
 
 
 def test_native_wheel_matrix_keeps_its_platform_runners() -> None:
     """Ubicloud has no Windows or macOS capacity, so the matrix stays hosted."""
     matrix_job = job("build-wheels.yml", "build-native-wheels")
-    assert matrix_job.get("runs-on") == "${{ matrix.os }}", (
+    placed = placement("build-wheels.yml", "build-native-wheels")
+    assert placed.kind == "matrix", (
         "build-wheels.yml:build-native-wheels must keep its platform matrix"
+    )
+    assert UBICLOUD_LABEL not in placed.labels, (
+        "both ubuntu legs are named verbatim in the main-required-checks "
+        "ruleset, so moving either renames a required context; that is the "
+        "repository owner's decision, not a placement change"
     )
     strategy = matrix_job.get("strategy")
     assert isinstance(strategy, dict), "the native wheel job must declare a strategy"
@@ -144,227 +314,6 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
     assert declared == known, (
         "every workflow job must be classified in tests/helpers/ci_runners.py; "
         f"unclassified: {sorted(declared - known)}; stale: {sorted(known - declared)}"
-    )
-
-
-def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
-    """Register intentional labels so a typo fails lint instead of queueing."""
-    config = yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8"))
-    declared = config["self-hosted-runner"]["labels"]
-    used = {
-        str(job(workflow_name, job_name).get("runs-on"))
-        for workflow_name, job_name in UBICLOUD_CASES
-    }
-    assert sorted(declared) == sorted(used), (
-        "actionlint must list every self-hosted label the workflows use and no "
-        f"others; declared {declared}, used {sorted(used)}"
-    )
-    assert config["config-variables"] == ["CODESCENE_CLI_SHA256"], (
-        "list only the configuration variables the workflows read, so a typo "
-        f"in a vars.* reference fails lint; got {config['config-variables']}"
-    )
-
-
-def test_no_retired_runner_labels_remain() -> None:
-    """Leave no Namespace label or cache action behind after the migration."""
-    for workflow_name, source in workflow_sources():
-        assert "namespace-profile" not in source, (
-            f"{workflow_name} still references a Namespace runner profile"
-        )
-        assert "nscloud" not in source, (
-            f"{workflow_name} still references the Namespace cache action"
-        )
-
-
-def test_the_vcpu_constant_matches_the_assigned_label() -> None:
-    """Tie the one parallelism constant to the shape the job is billed for."""
-    declared = workflow_env("ci.yml")[VCPU_CONSTANT]
-    assert declared == str(UBICLOUD_VCPUS), (
-        f"{VCPU_CONSTANT} must equal the vCPU count of {UBICLOUD_LABEL}, "
-        f"got {declared!r}"
-    )
-
-
-def test_python_tests_derive_their_worker_counts_from_that_constant() -> None:
-    """Size the matrix suite's Cargo work from the constant, not a literal."""
-    script = next(
-        step["run"]
-        for step in steps("ci.yml", "typecheck-test")
-        if step.get("name") == "Run tests"
-    )
-    assert isinstance(script, str), "ci.yml:typecheck-test must run a test script"
-    for variable in PARALLELISM_OVERRIDES:
-        assert f'{variable}="${{{VCPU_CONSTANT}}}"' in script, (
-            f"ci.yml:typecheck-test must pass {variable} from {VCPU_CONSTANT}"
-        )
-
-
-def test_extension_and_benchmark_builds_are_bounded_too() -> None:
-    """Bound the two jobs that compile outside `make test` to the same count."""
-    for job_name, step_name in (
-        ("extension-tests", "Build the native extension"),
-        ("benchmark-ratchet", "Run throughput benchmarks and ratchet comparison"),
-    ):
-        script = next(
-            step["run"]
-            for step in steps("ci.yml", job_name)
-            if step.get("name") == step_name
-        )
-        assert isinstance(script, str), f"ci.yml:{job_name} must run {step_name!r}"
-        assert f'CARGO_BUILD_JOBS="${{{VCPU_CONSTANT}}}"' in script, (
-            f"ci.yml:{job_name} must bound Cargo build jobs by {VCPU_CONSTANT}"
-        )
-
-
-def test_python_suites_never_ask_for_unbounded_workers() -> None:
-    """Reject `-n auto`: the runner has two cores whatever the host reports."""
-    sources = [source for _, source in workflow_sources()]
-    sources.append(MAKEFILE.read_text(encoding="utf-8"))
-    for source in sources:
-        assert "-n auto" not in source, "xdist worker counts must be explicit"
-
-
-def test_the_python_suite_stays_serial() -> None:
-    """Keep pytest serial while its batches contend on one Cargo target."""
-    makefile = MAKEFILE.read_text(encoding="utf-8")
-    assert re.search(r"^PYTEST_WORKERS \?= 0$", makefile, re.MULTILINE), (
-        "PYTEST_WORKERS must default to 0; the batches compile and reuse the "
-        "same Rust artefacts, so xdist workers would contend on one build lock"
-    )
-    for workflow_name, job_name in (("ci.yml", "coverage"),):
-        coverage_step = next(
-            step
-            for step in steps(workflow_name, job_name)
-            if str(step.get("uses", "")).startswith(
-                "leynos/shared-actions/.github/actions/generate-coverage@"
-            )
-        )
-        inputs = step_inputs(coverage_step, f"{workflow_name}:{job_name} inputs")
-        workers = inputs.get("pytest-workers")
-        assert isinstance(workers, str), (
-            f"{workflow_name}:{job_name} coverage must declare pytest-workers"
-        )
-        assert not workers, (
-            f"{workflow_name}:{job_name} coverage must run pytest serially, "
-            f"got {workers!r}"
-        )
-
-
-def test_ci_does_not_build_tools_from_source() -> None:
-    """Keep CI tool installation on trusted, pinned prebuilt paths."""
-    for workflow_name, source in workflow_sources():
-        assert "cargo install" not in source, (
-            f"{workflow_name} must not source-build a Cargo tool"
-        )
-        assert "get.nexte.st/latest" not in source, (
-            f"{workflow_name} must pin the nextest binary version"
-        )
-        if "cargo binstall" in source:
-            assert "--disable-strategies compile" in source, (
-                f"{workflow_name} must stop cargo-binstall falling back to a "
-                "source build"
-            )
-
-
-def test_no_workflow_installs_cargo_nextest() -> None:
-    """Leave the nextest install to the coverage action that now needs it.
-
-    The matrix jobs stopped running the Rust suite, so an installer here would
-    be an unused download whose failure mode nothing in this repository
-    exercises.
-
-    Checked structurally rather than by one literal string. A `tool:` input
-    naming either spelling, a different installer action, or a shell command
-    that fetches nextest would all pass a check for `tool: nextest@`.
-    """
-    offenders: list[str] = []
-    for workflow_name, _ in workflow_sources():
-        document = workflow_document(workflow_name)
-        jobs_mapping = document.get("jobs")
-        if not isinstance(jobs_mapping, dict):
-            continue
-        for job_name in jobs_mapping:
-            offenders.extend(
-                _nextest_installers(workflow_name, str(job_name)),
-            )
-    assert not offenders, (
-        f"only the shared coverage action may install cargo-nextest; found {offenders}"
-    )
-
-
-def _declares_own_steps(workflow_name: str, job_name: str) -> bool:
-    """Report whether a job runs steps rather than calling a reusable workflow."""
-    return isinstance(job(workflow_name, job_name).get("steps"), list)
-
-
-def _installs_nextest_by_input(step: Step) -> bool:
-    """Report whether a step asks an installer action for cargo-nextest."""
-    if str(step.get("uses", "")).startswith(SHARED_ACTION_PREFIX):
-        # The coverage action installs nextest deliberately; that is the one
-        # place it is meant to happen.
-        return False
-    inputs = step.get("with")
-    if not isinstance(inputs, dict):
-        return False
-    return any(NEXTEST_TOOL_NAME in str(value).lower() for value in inputs.values())
-
-
-def _installs_nextest_by_script(step: Step) -> bool:
-    """Report whether a step's script fetches cargo-nextest rather than runs it."""
-    script = str(step.get("run", "")).lower()
-    named = NEXTEST_TOOL_NAME in script and any(
-        verb in script for verb in INSTALL_VERBS
-    )
-    # The install host needs its own token: its name does not contain
-    # "nextest", and it only ever appears in an install command.
-    return named or NEXTEST_INSTALL_HOST in script
-
-
-def _nextest_installers(workflow_name: str, job_name: str) -> list[str]:
-    """Return descriptions of steps in one job that would install nextest."""
-    if not _declares_own_steps(workflow_name, job_name):
-        return []
-    return [
-        f"{workflow_name}:{job_name}:{step.get('name') or step.get('uses')}"
-        for step in steps(workflow_name, job_name)
-        if _installs_nextest_by_input(step) or _installs_nextest_by_script(step)
-    ]
-
-
-def test_markdown_lint_runs_through_the_pinned_action() -> None:
-    """Keep the Markdown linter on a reproducible, SHA-pinned release.
-
-    The estate's markdown-formatting-baseline rule requires CI to lint
-    Markdown through the upstream markdownlint-cli2 action rather than a
-    shell install, so the pin lives on the action reference.
-    """
-    lint_steps = [
-        step
-        for step in steps("ci.yml", "lint-test")
-        if str(step.get("uses", "")).startswith("DavidAnson/markdownlint-cli2-action@")
-    ]
-    assert len(lint_steps) == 1, (
-        "ci.yml:lint-test must lint Markdown with the action once"
-    )
-    reference = str(lint_steps[0]["uses"]).split("@", 1)[1]
-    assert re.fullmatch(r"[0-9a-f]{40}", reference), (
-        "ci.yml:lint-test must pin the markdownlint-cli2 action to a full SHA"
-    )
-    inputs = lint_steps[0].get("with")
-    assert isinstance(inputs, dict), "ci.yml:lint-test action step must carry inputs"
-    assert str(inputs.get("globs", "")).splitlines() == [
-        "**/*.md",
-        "**/*.markdown",
-        "**/*.mdx",
-    ], "ci.yml:lint-test must lint every supported Markdown extension"
-    script = next(
-        step["run"]
-        for step in steps("ci.yml", "lint-test")
-        if step.get("name") == "Install CLI tools"
-    )
-    assert isinstance(script, str), "ci.yml:Install CLI tools must run a script"
-    assert "markdownlint-cli2" not in script, (
-        "ci.yml:Install CLI tools must not install markdownlint-cli2 from npm"
     )
 
 

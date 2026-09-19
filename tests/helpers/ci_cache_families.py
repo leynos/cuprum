@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import typing as typ
 
+from tests.helpers.ci_placement import placement
 from tests.helpers.ci_workflows import job, save_steps, step_inputs, steps
 
 if typ.TYPE_CHECKING:
@@ -43,6 +44,13 @@ KEY_SCOPES: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 
 #: ``runner.environment`` renders from the runner label, and the two lanes read
 #: different cache services, so an archive can never cross between them.
+#:
+#: A fork-fallback lane resolves to two labels and therefore to two lanes. The
+#: lane an archive is *published* to is the owned one, because every save step
+#: here is guarded on a push to ``refs/heads/main`` and a fork's pull request is
+#: neither a push nor on that ref. That premise is not assumed: it is asserted
+#: by ``test_saves_happen_only_on_trunk_and_only_after_a_miss``, and removing
+#: the guard from a save fails it.
 LANE_OF_LABEL: typ.Final[cabc.Mapping[str, str]] = {
     "ubicloud-standard-2": "self-hosted",
     "ubicloud-standard-4": "self-hosted",
@@ -84,8 +92,15 @@ class CacheFamily(typ.NamedTuple):
 
 
 def _lane(workflow_name: str, job_name: str) -> str:
-    """Return the cache lane a job's runner label resolves to."""
-    label = job(workflow_name, job_name).get("runs-on")
+    """Return the cache lane a job publishes its archives to."""
+    label = placement(workflow_name, job_name).owned
+    _require(
+        condition=label is not None,
+        message=(
+            f"{workflow_name}:{job_name} has no single owned runner, so the "
+            "lane its archives land in is undefined"
+        ),
+    )
     _require(
         condition=label in LANE_OF_LABEL,
         message=f"{workflow_name}:{job_name} runs on unmapped label {label!r}",

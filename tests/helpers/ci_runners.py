@@ -13,6 +13,16 @@ from __future__ import annotations
 
 import typing as typ
 
+from tests.helpers.ci_placement import (
+    FORK_FIELD,
+    FROZEN_HOSTED_LABELS,
+    Placement,
+    all_jobs,
+    declares_steps,
+    never_runs,
+    placement,
+    references,
+)
 from tests.helpers.ci_workflows import (
     CACHE_ACTION_PIN,
     CACHE_PLAIN,
@@ -44,9 +54,11 @@ if typ.TYPE_CHECKING:
 # fmt: off
 __all__ = (
     "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",
-    "ROOT", "WORKFLOW_DIR", "cache_paths", "cache_steps", "expand", "job",
-    "job_env", "jobs", "restore_steps", "save_steps", "step_inputs", "steps",
-    "workflow_document", "workflow_env", "workflow_sources",
+    "FORK_FIELD", "FROZEN_HOSTED_LABELS", "ROOT", "WORKFLOW_DIR",
+    "Placement", "all_jobs", "cache_paths", "cache_steps",
+    "declares_steps", "expand", "job", "job_env", "jobs", "never_runs",
+    "placement", "references", "restore_steps", "save_steps", "step_inputs",
+    "steps", "workflow_document", "workflow_env", "workflow_sources",
 )
 # fmt: on
 
@@ -95,14 +107,45 @@ OBSERVATION_STEP = "Record cache observations"
 #: and does real work, which is what buys it a paid runner.
 UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
-    "ci.yml": ("typecheck-test", "extension-tests", "coverage", "benchmark-ratchet"),
+    "ci.yml": (
+        "lint-test",
+        "typecheck-test",
+        "extension-tests",
+        "coverage",
+        "benchmark-ratchet",
+    ),
     "coverage-main.yml": ("coverage-upload",),
 }
+#: Ubicloud lanes a pull request from a fork can reach, which must therefore
+#: declare the fallback arm. Derived intent, not derived fact: the workflows
+#: are read back against it, and `test_fork_reachability_matches_the_manifest`
+#: holds it against the triggers so a lane cannot quietly leave the set.
+#:
+#: `coverage-upload` is absent because `coverage-main.yml` triggers only on a
+#: push to `main` and a dispatch, neither of which a fork can cause. The two
+#: `build-wheels.yml` jobs are present because `ci.yml` calls that workflow on
+#: every pull request, so its own `workflow_call` trigger understates its
+#: exposure (weaver: a called workflow's triggers are its callers').
+FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
+    "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
+    "ci.yml": (
+        "lint-test",
+        "typecheck-test",
+        "extension-tests",
+        "coverage",
+        "benchmark-ratchet",
+    ),
+}
+#: The one job permitted to fail without failing the workflow, and the matrix
+#: key that says so. The 3.15a leg tracks a pre-release interpreter and is not
+#: a required context; every other leg gates a merge.
+EXPERIMENTAL_LEG_KEY = "experimental"
+CONTINUE_ON_ERROR_JOBS: typ.Final = (("ci.yml", "typecheck-test"),)
 #: Jobs that stay on GitHub-hosted runners, and why. Ubicloud offers Linux
 #: only, and a job that sleeps, calls an API, or publishes an artefact someone
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("lint-test", "changes"),
+    "ci.yml": ("changes",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),
@@ -171,7 +214,11 @@ FORBIDDEN_CACHE_PATHS: typ.Final = ("target", "rust/target", "target/debug")
 #: the GitHub-hosted lane and the Ubicloud lane render different values and
 #: read different cache services; a key with two writers has one on each side.
 CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
-    "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "lint-test")),
+    # `lint-test` restores this key and no longer saves it. On its owned arm
+    # it renders the `self-hosted` lane, which is the family `extension-tests`
+    # writes, and the registry holds the resolved dependency graph either job
+    # would have archived.
+    "CARGO_CACHE_KEY": (("ci.yml", "extension-tests"),),
     # The compiler cache is written by whichever job actually compiles, and
     # each compile shape is its own family. See CACHE_FAMILY_WRITERS: this
     # mapping only says which jobs hold a save step, not which archive each
@@ -206,12 +253,11 @@ CACHE_FAMILY_WRITERS: typ.Final[
     cabc.Mapping[tuple[str, str, tuple[str, ...]], tuple[str, str]]
 ] = {
     ("CARGO_CACHE_KEY", "self-hosted", ()): ("ci.yml", "extension-tests"),
-    ("CARGO_CACHE_KEY", "github-hosted", ()): ("ci.yml", "lint-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.12",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.14",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.15",)): ("ci.yml", "typecheck-test"),
-    ("SCCACHE_CACHE_KEY", "github-hosted", ("3.13", "lint")): (
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "lint")): (
         "ci.yml",
         "lint-test",
     ),

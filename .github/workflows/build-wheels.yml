@@ -25,7 +25,16 @@ jobs:
   # `~/.cache/uv` a second writer alongside ci.yml's tool cache for a job that
   # would save less time than the archive costs to move.
   build-pure-wheel:
-    runs-on: ubicloud-standard-2
+    # Reached from ci.yml on every pull request, forks included, and from
+    # release.yml on a tag. A called workflow inherits its caller's `github`
+    # context, so this expression reads the caller's event: on the tag caller
+    # `github.event.pull_request` is null and the Ubicloud arm is selected,
+    # and on a fork's pull request the hosted arm is, because a fork cannot
+    # obtain an Ubicloud runner. Keep the continuation at this indent; a
+    # more-indented one would put a newline inside the expression.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
@@ -37,7 +46,16 @@ jobs:
           artifact-name: wheels-pure
 
   build-native-wheels:
+    # Unchanged placement. GitHub spells matrix values into the check name, so
+    # both `ubuntu-latest` legs are named verbatim in the `main-required-checks`
+    # ruleset; moving either renames a required context, and nine steps here
+    # are guarded by `startsWith(matrix.os, 'ubuntu')`, which an expression
+    # would switch off. That is a decision for the repository owner, not a
+    # placement change.
     runs-on: ${{ matrix.os }}
+    # Measured at 29 to 107 s across the five legs; the Linux ones build in a
+    # container and the aarch64 leg emulates under QEMU.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +174,16 @@ jobs:
   # Also uncached: it installs published wheels into a throwaway virtual
   # environment and imports them. There is nothing expensive to keep.
   verify-wheel-install:
-    runs-on: ubicloud-standard-2
+    # Reached from ci.yml on every pull request, forks included, and from
+    # release.yml on a tag. A called workflow inherits its caller's `github`
+    # context, so this expression reads the caller's event: on the tag caller
+    # `github.event.pull_request` is null and the Ubicloud arm is selected,
+    # and on a fork's pull request the hosted arm is, because a fork cannot
+    # obtain an Ubicloud runner. Keep the continuation at this indent; a
+    # more-indented one would put a newline inside the expression.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 20
     needs:
       - build-pure-wheel

@@ -97,13 +97,21 @@ to measure warm caches without churning the generation they are measuring.
 | Family                                | Writer                                |
 | ------------------------------------- | ------------------------------------- |
 | Cargo registry, Ubicloud              | `ci.yml` `extension-tests`            |
-| Cargo registry, GitHub-hosted         | `ci.yml` `lint-test`                  |
 | Tools, per interpreter                | `ci.yml` `typecheck-test`, that leg   |
 | Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`            |
 | Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg   |
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`          |
 | Compiler, 3.13 instrumented           | `coverage-main.yml` `coverage-upload` |
 | Compiler, Cranelift lint              | `ci.yml` `lint-test`                  |
+
+Every family in that table is now on the Ubicloud lane. `lint-test` moved there
+with the fork fallback, taking its Cranelift lint family with it, and stopped
+saving the Cargo registry: on its owned arm it renders the same family
+`extension-tests` writes, and one writer per family is the invariant. The fork
+arm renders `runner.environment` as `github-hosted` and reads a scope with no
+writer at all, so a fork's pull request runs cold. Every save is guarded on a
+push to `refs/heads/main`, which a fork can never produce, so the fork arm
+restores and never publishes.
 
 _Table 2: The single job that publishes each family on a push to `main`._
 
