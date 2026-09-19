@@ -12,6 +12,10 @@ import pytest
 import benchmarks.pipeline_throughput_runner as runner
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    WORKLOAD_PLAN_KEY,
+)
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
     PipelineBenchmarkConfig,
@@ -252,6 +256,46 @@ def test_pipeline_worker_config_rejects_excessive_iterations() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("workload", "error", "error_match"),
+    [
+        pytest.param(
+            "hyperfine-sweep",
+            ValueError,
+            "workload must be one of",
+            id="unknown",
+        ),
+        pytest.param("", ValueError, "workload must be a non-empty", id="empty"),
+        pytest.param(
+            typ.cast("str", 42),
+            TypeError,
+            "workload must be a non-empty",
+            id="not_a_string",
+        ),
+    ],
+)
+def test_pipeline_benchmark_config_rejects_an_unusable_workload(
+    workload: str,
+    error: type[Exception],
+    error_match: str,
+) -> None:
+    """A workload the runner cannot produce must not configure a run.
+
+    The config is what the runner records in its plan, so accepting an
+    unknown identifier here would put a value in the plan that no reader can
+    resolve back to a scenario matrix.
+    """
+    with pytest.raises(error, match=error_match):
+        PipelineBenchmarkConfig(
+            output_path=pth.Path("dist/benchmarks/bench.json"),
+            worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+            scenarios=(),
+            warmup=0,
+            runs=1,
+            workload=workload,
+        )
+
+
 def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
     """Non-path-like values for output_path raise a clear TypeError."""
     with pytest.raises(
@@ -395,7 +439,13 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
 
 
 def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None:
-    """Dry-run mode writes plan JSON without invoking hyperfine."""
+    """Dry-run mode writes plan JSON without invoking hyperfine.
+
+    The configured workload is asserted against a non-default value so the
+    check cannot pass on a constant: the plan must record *which* workload
+    selected its scenarios, because nothing downstream can recover that from
+    the scenario matrix.
+    """
     output_path = tmp_path / "bench.json"
     scenarios = (
         PipelineBenchmarkScenario(
@@ -413,6 +463,7 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
         dry_run=True,
         warmup=1,
         runs=2,
+        workload=CI_RATCHET_WORKLOAD,
     )
     result = run_pipeline_benchmarks(config=config)
 
@@ -423,6 +474,9 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     assert payload["dry_run"] is True, "expected payload dry_run flag to be True"
     assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
     assert payload["worker_iterations"] == 20
+    assert payload[WORKLOAD_PLAN_KEY] == CI_RATCHET_WORKLOAD, (
+        "expected the plan to record the workload that selected its scenarios"
+    )
     assert "rust_available" in payload, (
         "expected payload to include rust_available metadata"
     )
