@@ -1690,6 +1690,17 @@ jobs:
             local prefix="$2"
             pushd "${workspace}" >/dev/null
 
+            # Every command below is guarded with `|| return $?`. Bash
+            # suspends `errexit` for a function body invoked as a condition
+            # operand, and the confirmation path invokes this function as
+            # `run_ratchet_benchmarks ... || confirmation_ratchet_status=$?`,
+            # so without the guards a failed `make develop` or a failed
+            # benchmark would fall through to the next command and the
+            # function would return the *last* command's status. The
+            # confirmation branch would then read a stale or missing plan as
+            # a measured result. An explicit `set -e` inside the body does not
+            # restore aborting, so the guard has to be on each command.
+
             # `make develop` is the one definition of the extension build:
             # `make build`, then `ensurepip --upgrade`, then `maturin
             # develop`. The ratchet must measure an optimized build, and that
@@ -1699,7 +1710,8 @@ jobs:
             # UV_TOOL_DIR resolve against the same directory the inline
             # commands used.
             CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" \
-              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'
+              make develop MATURIN_DEVELOP_FLAGS='--release --skip-install' || \
+              return $?
 
             # `--ci-ratchet` selects the one payload this gate measures and
             # `--worker-iterations 5` states the per-process iteration count
@@ -1726,13 +1738,15 @@ jobs:
               --ci-ratchet \
               --dry-run \
               --worker-iterations 5 \
-              --output "${artifact_dir}/${prefix}-full-plan.json"
+              --output "${artifact_dir}/${prefix}-full-plan.json" || \
+              return $?
 
             UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
               benchmarks/ci_benchmark_ratchet_profile.py \
               --full-plan "${artifact_dir}/${prefix}-full-plan.json" \
               --filtered-plan "${artifact_dir}/${prefix}-plan.json" \
-              --throughput "${artifact_dir}/${prefix}-throughput.json"
+              --throughput "${artifact_dir}/${prefix}-throughput.json" || \
+              return $?
 
             popd >/dev/null
           }
