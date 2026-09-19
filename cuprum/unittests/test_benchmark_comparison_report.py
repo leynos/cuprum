@@ -15,7 +15,7 @@ from benchmarks.benchmark_workload import (
     WORKLOADS,
     WorkloadProtocol,
 )
-from benchmarks.comparison_report import describe_workload
+from benchmarks.comparison_report import describe_protocol, describe_workload
 from benchmarks.pipeline_throughput_scenarios import (
     CI_RATCHET_PAYLOAD_BYTES,
     CI_RATCHET_WORKER_ITERATIONS,
@@ -631,3 +631,81 @@ def test_summary_omits_protocol_fields_the_plan_does_not_carry() -> None:
     )
     # The workload defaults to the sweep, which is what such a plan measured.
     assert "the throughput-sweep workload" in protocol_line
+
+
+def _sweep_protocol(
+    *,
+    profile_version: str | None = None,
+    worker_iterations: int | None = None,
+    payload_bytes: tuple[int, ...] = (),
+) -> WorkloadProtocol:
+    """Return the throughput-sweep protocol carrying only the given fields."""
+    return WorkloadProtocol(
+        workload=THROUGHPUT_SWEEP_WORKLOAD,
+        profile_version=profile_version,
+        worker_iterations=worker_iterations,
+        payload_bytes=payload_bytes,
+    )
+
+
+@pytest.mark.parametrize(
+    ("protocol", "expected"),
+    [
+        pytest.param(
+            _sweep_protocol(),
+            "the throughput-sweep workload",
+            id="nothing-recorded",
+        ),
+        pytest.param(
+            _sweep_protocol(payload_bytes=(1024 * 1024,)),
+            "the throughput-sweep workload, payload 1 MiB",
+            id="one-payload",
+        ),
+        pytest.param(
+            _sweep_protocol(payload_bytes=(1024 * 1024, 4 * 1024 * 1024)),
+            "the throughput-sweep workload, payloads 1/4 MiB",
+            id="several-payloads",
+        ),
+        pytest.param(
+            _sweep_protocol(profile_version="pipeline-worker-release-ratio-v5"),
+            "the throughput-sweep workload, profile pipeline-worker-release-ratio-v5",
+            id="profile-only",
+        ),
+        pytest.param(
+            _sweep_protocol(worker_iterations=5),
+            "the throughput-sweep workload, 5 worker iterations",
+            id="iterations-only",
+        ),
+        pytest.param(
+            _sweep_protocol(
+                profile_version="pipeline-worker-release-ratio-v5",
+                worker_iterations=5,
+                payload_bytes=(64 * 1024 * 1024,),
+            ),
+            (
+                "the throughput-sweep workload, profile "
+                "pipeline-worker-release-ratio-v5, payload 64 MiB, "
+                "5 worker iterations"
+            ),
+            id="everything-recorded",
+        ),
+    ],
+)
+def test_protocol_description_names_the_recorded_measurement(
+    protocol: WorkloadProtocol,
+    expected: str,
+) -> None:
+    """The summary names each recorded field, and singularises one payload.
+
+    This line is what tells a maintainer reading the workflow summary what the
+    ratios beneath it measured. "payloads 1 MiB" for a single-payload plan
+    describes a different measurement from the one that ran, so the singular is
+    pinned as firmly as the plural. The omission row matters for the same
+    reason: a description that named a default the plan never recorded would
+    state a protocol as fact, and the fixtures elsewhere in this module all
+    carry every field, so only a deliberately bare protocol can show the
+    difference. The full ordering is asserted rather than the fields'
+    presence, because a reordered sentence makes a different claim about what
+    was and was not varied.
+    """
+    assert describe_protocol(protocol) == expected
