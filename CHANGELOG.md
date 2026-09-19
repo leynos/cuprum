@@ -48,6 +48,11 @@
 
 ### Added
 
+- **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
+  an existing `ProjectSettings` without repeating the
+  `ProgramCatalogue(projects=(...))` wrapper
+  ([#374](https://github.com/leynos/cuprum/issues/374), part of
+  [#361](https://github.com/leynos/cuprum/issues/361)).
 - **`ProgramCatalogue.from_programs()`:** Build the single-project catalogue
   that a standalone script needs from its programs alone — for example
   `ProgramCatalogue.from_programs("git", "cargo")` — instead of spelling out

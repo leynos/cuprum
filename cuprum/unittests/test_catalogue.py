@@ -34,6 +34,12 @@ def test_program_newtype_round_trip() -> None:
     assert program == "echo", "Program must preserve wrapped value"
 
 
+def test_catalogue_public_annotations_resolve_program_at_runtime() -> None:
+    """Public catalogue annotations remain available to runtime introspection."""
+    assert typ.get_type_hints(ProjectSettings)["programs"] == tuple[Program, ...]
+    assert typ.get_type_hints(ProgramCatalogue.lookup)["program"] == Program | str
+
+
 def test_default_allowlist_contains_curated_programs() -> None:
     """The default allowlist surfaces curated program constants."""
     assert ECHO in DEFAULT_CATALOGUE.allowlist, "Echo missing from allowlist"
@@ -247,6 +253,36 @@ def test_from_programs_rejects_duplicate_programs() -> None:
     assert exc.value.owner == "git-git", (
         "Error must name the project that registered the program first"
     )
+
+
+def test_from_project_preserves_allowlist_and_metadata() -> None:
+    """A prepared project becomes the catalogue's sole visible project."""
+    settings = ProjectSettings(
+        name="gate-runner",
+        programs=(Program("cargo"),),
+        documentation_locations=("docs/runbooks/rust-tests.md",),
+        noise_rules=(r"^warning:",),
+    )
+
+    catalogue = ProgramCatalogue.from_project(settings=settings)
+
+    assert catalogue.allowlist == frozenset({Program("cargo")}), (
+        "Allowlist must contain the supplied project's program"
+    )
+    assert catalogue.visible_settings == {"gate-runner": settings}, (
+        "Visible settings must preserve the supplied project metadata"
+    )
+
+
+def test_from_project_rejects_repeated_programs() -> None:
+    """Repeated programs fail through the normal catalogue constructor path."""
+    settings = ProjectSettings(
+        name="duplicate-tools",
+        programs=(Program("cargo"), Program("cargo")),
+    )
+
+    with pytest.raises(DuplicateProgramError, match="cargo"):
+        ProgramCatalogue.from_project(settings=settings)
 
 
 def test_program_hash_and_equality_usage() -> None:
