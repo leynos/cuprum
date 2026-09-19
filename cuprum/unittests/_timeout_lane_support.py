@@ -233,8 +233,8 @@ def _allowance_of(slow_timeout: SlowTimeout) -> int:
     return _duration_seconds(period) * int(str(terminate_after))
 
 
-def _override_slow_timeouts(profile: NextestProfile) -> list[SlowTimeout]:
-    """Return every ``slow-timeout`` the profile's overrides declare.
+def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestProfile]:
+    """Return the profile's overrides that declare a ``slow-timeout``.
 
     Parameters
     ----------
@@ -243,8 +243,12 @@ def _override_slow_timeouts(profile: NextestProfile) -> list[SlowTimeout]:
 
     Returns
     -------
-    list[SlowTimeout]
-        One entry per override that sets ``slow-timeout``.
+    list[NextestProfile]
+        One entry per override that sets ``slow-timeout``, whole rather than
+        reduced to the timeout, so a caller can also read the ``filter``
+        granting that allowance to particular tests. An allowance and a
+        filter read from separate lists could report a widened tier
+        alongside a filter that does not carry it.
     """
     overrides = profile.get("overrides")
     if overrides is None:
@@ -252,13 +256,13 @@ def _override_slow_timeouts(profile: NextestProfile) -> list[SlowTimeout]:
     assert isinstance(overrides, list), (
         f"{NEXTEST_CONFIG} must declare profile overrides as an array of tables"
     )
-    declared: list[SlowTimeout] = []
+    declared: list[NextestProfile] = []
     for override in overrides:
         assert isinstance(override, dict), (
             f"{NEXTEST_CONFIG} must declare each profile override as a table"
         )
         if "slow-timeout" in override:
-            declared.append(_slow_timeout_of(typ.cast("NextestProfile", override)))
+            declared.append(typ.cast("NextestProfile", override))
     return declared
 
 
@@ -280,7 +284,9 @@ def largest_per_test_allowance_seconds() -> int:
     required fields fail the contract assertion that reads them.
     """
     profile = _default_nextest_profile()
-    declared = [_slow_timeout_of(profile), *_override_slow_timeouts(profile)]
+    overrides = _slow_timeout_overrides(profile)
+    declared = [_slow_timeout_of(profile)]
+    declared.extend(_slow_timeout_of(override) for override in overrides)
     return max(_allowance_of(slow_timeout) for slow_timeout in declared)
 
 

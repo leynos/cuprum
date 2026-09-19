@@ -27,8 +27,8 @@ from cuprum.unittests._timeout_lane_support import (
     NEXTEST_CONFIG,
     _allowance_of,
     _default_nextest_profile,
-    _override_slow_timeouts,
     _slow_timeout_of,
+    _slow_timeout_overrides,
 )
 from tests.helpers.docs import repo_root
 
@@ -75,24 +75,20 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     """
     profile = _default_nextest_profile()
     base = _allowance_of(_slow_timeout_of(profile))
-    overrides = _override_slow_timeouts(profile)
+    overrides = _slow_timeout_overrides(profile)
     assert overrides, (
         f"{NEXTEST_CONFIG} grants every test the profile's allowance, but the "
         f"`trybuild` UI tests are bounded by a compilation and were measured "
         f"at 277 s against 62 s in CI under `make test`'s dev-fast flags; a "
         f"healthy test reaching the allowance means it is no longer a bound"
     )
-    widest = max(_allowance_of(override) for override in overrides)
+    widest = max(_allowance_of(_slow_timeout_of(override)) for override in overrides)
     assert widest > base, (
         f"{NEXTEST_CONFIG}'s widest override grants {widest} s, no more than "
         f"the profile's {base} s, so it does not widen the tier the `trybuild` "
         f"tests need widened"
     )
-    filters = [
-        str(override.get("filter"))
-        for override in typ.cast("list[dict[str, object]]", profile["overrides"])
-        if "slow-timeout" in override
-    ]
+    filters = [str(override.get("filter")) for override in overrides]
     assert COMPILE_TEST_FILTER in filters, (
         f"none of {NEXTEST_CONFIG}'s {filters} is {COMPILE_TEST_FILTER!r}, so "
         f"the widened tier is granted to whatever those filters select instead "
