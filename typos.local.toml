@@ -42,6 +42,44 @@ ignore = [
   '--artifact-server-path(?:[=\s"`]|$)',
   '`color`',
   '\brust-analyzer\b',
+  # `mold` is the fixed external linker name. Typos tokenizes words before
+  # applying this list, so each expression carries enough linker-specific
+  # syntax to retain ordinary-prose checks for the word on its own.
+  '`mold`',
+  '"mold"',
+  'checksum-verified mold binary',
+  'unsupported mold architecture',
+  'Only the Linux debug route selects Cranelift and mold',
+  '\bDEV_FAST_MOLD_VERSION(?:_(?:FILE|PATTERN))?\b',
+  '\bMOLD_VERSION\b',
+  '_write_mold_metadata',
+  '\bmissing_mold\b',
+  '\bwrong_mold_version\b',
+  # The prerequisite tests name their fixture and template placeholders after
+  # the linker; each form carries identifier or template syntax, so prose uses
+  # of the word on its own remain flagged.
+  '\bmold_version\b',
+  '\bmold \{version\}',
+  '\bmold \{mold_version\}',
+  'command -v mold',
+  'mold --version',
+  '\^mold \$',
+  'mold %s is required',
+  '-fuse-ld=mold',
+  '\bmold 2\.41\.0\b',
+  '\bmold 2\.41\.00\b',
+  '"mold\\t--version"',
+  '\bmold-\$\{version\}-\$\{architecture\}-linux\.tar\.gz\b',
+  '\bmold-\{MOLD_VERSION\}-\{canonical\}-linux\.tar\.gz\b',
+  '\bmold-\d+\.\d+\.\d+-(?:x86_64|aarch64)-linux\.tar\.gz\b',
+  '\bmold \{MOLD_VERSION\}',
+  'mold selection',
+  'mold linker flag',
+  'mold release',
+  'mold ships',
+  'upstream mold binaries',
+  'downloaded mold',
+  '\btools/mold/',
 ]
 
 # ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced

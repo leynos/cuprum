@@ -21,9 +21,38 @@
   overrode the new per-stream resolver with a warning-only initializer, so
   `IOOptions(echo=True)` left both streams silent. It now resolves the
   inherited per-stream fields before emitting the deprecation warning.
+- **Native pump no longer wedges a hop it could not duplicate:** Extracting a
+  transport's descriptor and duplicating it for the Rust worker are separate
+  steps, so a short-lived process whose descriptor asyncio closed in between
+  used to fail the duplication. That failure was re-raised, which left the
+  writer transport open — the downstream stage never saw EOF and the pipeline
+  hung until its deadline. The failure now declines the fast path instead and
+  the hop completes on the Python pump, reported like any other decline with a
+  `duplicate_fds_unavailable` reason and a `duplicate_writer_failed` hand-off
+  outcome. Two failures still report to the caller: an executor rejection, and
+  a failure to duplicate descriptors Cuprum already owns, which means
+  descriptor exhaustion rather than a race. Those now close the writer
+  transport before the error propagates, so a downstream stage exits and the
+  failure reaches the caller instead of the pipeline waiting out its deadline.
+  Intermittent pipeline hangs on `auto` or `rust` backends are what this
+  addresses.
+- **Native pump workers are pooled instead of one thread per hop:** Repeated
+  native hand-offs used to start a thread per submitted pump and never reclaim
+  it, so a long-lived process with many pipelines grew a thread for every hop
+  ever taken. Submitted pumps now run on a small pool that keeps up to four
+  idle workers for reuse and lets the rest exit once their pump settles.
+  Concurrency stays unbounded by design: a native pump cannot finish until a
+  later hop in the same pipeline drains its pipe, so queueing a submission or
+  waiting for a free worker would deadlock the very pipelines the pool exists
+  to serve. Only idle retention is bounded, and `submit` never blocks.
 
 ### Added
 
+- **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
+  an existing `ProjectSettings` without repeating the
+  `ProgramCatalogue(projects=(...))` wrapper
+  ([#374](https://github.com/leynos/cuprum/issues/374), part of
+  [#361](https://github.com/leynos/cuprum/issues/361)).
 - **`ProgramCatalogue.from_programs()`:** Build the single-project catalogue
   that a standalone script needs from its programs alone — for example
   `ProgramCatalogue.from_programs("git", "cargo")` — instead of spelling out
@@ -114,6 +143,30 @@
 - **`RunOutputOptions.on_line`:** Register a synchronous line callback that
   receives the same `LineEvent` values while `run()` executes. Independent of
   `capture` and `echo`; registering it keeps the stream on the Python pathway.
+
+- **Per-command echo-fallback diagnostics:** Every `CommandResult` — including
+  each pipeline stage's result — now carries `relay_fallbacks`, a defaulted
+  trailing tuple of frozen `RelayFallback` records (`stream` and
+  `error_category`, reusing the existing echo vocabulary) describing the
+  handled echo-disablement transitions of that command's own streams: one
+  record per affected drain, ordered stdout-then-stderr, empty when nothing was
+  handled, and never affecting `exit_code` or `ok` [^2]. Diagnostics are
+  collected without a registered observer and with capture disabled, are
+  isolated per command, stage, and nested or concurrent run, and on a timeout
+  or cancellation that prevents a result the already-emitted echo events stay
+  available through `observe_echo` with no new exception payload fields. The
+  `cuprum.stream` warning for this transition now carries only stable
+  categorical extras (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
+  `cuprum_error_category`) and no longer attaches the exception object or sink
+  encoding: `UnicodeEncodeError.object` retains the rejected input, so neither
+  the payload nor the original exception may reach the log, the events, or the
+  result records, and metric labels stay bounded. Lading can consume these
+  records and the existing echo observation channel
+  ([lading#253](https://github.com/leynos/lading/issues/253)); this alone does
+  not let Lading delete `stream_relay.py`, whose text-first and broken-pipe
+  semantics differ from Cuprum's binary-first policy, so a linked downstream
+  migration issue owns caller migration, thread-name utility removal, and the
+  helper's final deletion.
 
 - **Pipeline fail-fast telemetry:** A pipeline now emits one
   `pipeline_fail_fast` `ExecEvent`, marking a termination decision, when a
@@ -275,3 +328,4 @@
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
 [^1]: <https://github.com/leynos/cuprum/issues/348>
+[^2]: <https://github.com/leynos/cuprum/issues/356>

@@ -4,8 +4,11 @@ Mirroring a child's bytes to the parent is more than a write. Each logical line
 is bounded before it reaches the sink (see ``cuprum._echo_truncation``), a sink
 whose encoding cannot represent the child's bytes disables echo for that stream
 alone, and the cursor recording whether the sink is mid-line advances only on a
-write that actually landed. The drain loop in ``cuprum._streams`` reads the
-bytes and owns the state this module renders.
+write that actually landed. A disablement is also recorded on the drain's
+caller-owned relay diagnostics, so the owning command can surface it as a
+result record without going through the process-wide echo hook registry. The
+drain loop in ``cuprum._streams`` reads the bytes and owns the state this
+module renders.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import logging
 import typing as typ
 
 from cuprum._echo_truncation import _split_echo_segments
-from cuprum.echo_events import EchoErrorCategory, EchoEvent
+from cuprum.echo_events import EchoErrorCategory, EchoEvent, RelayFallback
 from cuprum.echo_observation import _emit_echo_event
 
 if typ.TYPE_CHECKING:
@@ -145,24 +148,32 @@ def _echo_write(
             # Only a chunk that reached the sink moves the cursor: a write that
             # raised left the sink where it was.
             mirror.note(chunk)
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         state.echo_guard.disabled = True
         # The first failure emits both projections; the guard prevents retries.
+        state.relay_diagnostics.fallbacks.append(
+            RelayFallback(
+                stream=state.config.stream,
+                error_category=EchoErrorCategory.UNICODE_ENCODE,
+            ),
+        )
         _emit_echo_event(
             EchoEvent(
                 stream=state.config.stream,
                 error_category=EchoErrorCategory.UNICODE_ENCODE,
             ),
         )
+        # The child's bytes and the sink's identity stay out of the log: the
+        # record names the transition, the stream, and the category, which is
+        # what a caller needs to react, and nothing a caller could not already
+        # see on its own result.
         _LOGGER.warning(
-            "echo_disabled encoding=%s error=%s",
-            state.config.encoding,
-            type(exc).__name__,
-            exc_info=exc,
+            "echo_disabled_stream_rejected_output",
             extra={
-                "cuprum_encoding": state.config.encoding,
-                "cuprum_sink_type": type(state.config.sink).__name__,
-                "cuprum_error_type": type(exc).__name__,
+                "cuprum_operation": "echo_chunk",
+                "cuprum_stream": str(state.config.stream),
+                "cuprum_transition": "echo_disabled",
+                "cuprum_error_category": EchoErrorCategory.UNICODE_ENCODE.value,
             },
         )
         return False

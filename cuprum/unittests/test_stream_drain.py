@@ -18,6 +18,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
+from cuprum._streams_pump import _READ_SIZE
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -64,6 +65,7 @@ def _config(
     *,
     capture: bool = True,
     echo: bool = False,
+    read_size: int = _READ_SIZE,
 ) -> _StreamConfig:
     """Build a UTF-8 stream config for direct drain tests."""
     return _StreamConfig(
@@ -72,6 +74,7 @@ def _config(
         sink=sink,
         encoding="utf-8",
         errors="replace",
+        read_size=read_size,
     )
 
 
@@ -188,8 +191,7 @@ def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:
     captured = asyncio.run(
         _drain(
             typ.cast("asyncio.StreamReader", reader),
-            _config(io.StringIO()),
-            read_size=17,
+            _config(io.StringIO(), read_size=17),
         )
     )
 

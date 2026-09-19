@@ -51,6 +51,19 @@ _BOUNDED_REASONS = frozenset(
     {reason.value for reason in RustPumpDeclineReason} | {UNKNOWN_DECLINE_REASON},
 )
 
+# The bounded hand-off outcome each refusing seam reports, for the seams that
+# got as far as the hand-off machinery. A seam that refuses before it — no
+# descriptor, no pause, the wrong platform — never builds one at all, so it
+# reports no outcome and is absent here.
+_HANDOFF_OUTCOME_BY_REASON = {
+    RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE.value: (
+        RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED
+    ),
+    RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE.value: (
+        RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED
+    ),
+}
+
 
 @pytest.mark.parametrize(
     ("trigger", "expected_reason"),
@@ -76,6 +89,7 @@ def test_each_real_decline_path_increments_once(
         f"a {expected_reason!r} decline must increment exactly one decline "
         f"counter, found {collector.counters}"
     )
+    expected_outcome = _HANDOFF_OUTCOME_BY_REASON.get(expected_reason)
     name, value, labels = decline_counters[0]
     assert name == RUST_PUMP_DECLINED_TOTAL, (
         f"expected {RUST_PUMP_DECLINED_TOTAL!r}, found {name!r}"
@@ -94,15 +108,15 @@ def test_each_real_decline_path_increments_once(
             (
                 RUST_PUMP_HANDOFF_TOTAL,
                 1.0,
-                {"outcome": RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED},
+                {"outcome": expected_outcome},
             )
         ]
-        if expected_reason == RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE.value
+        if expected_outcome is not None
         else []
     )
     assert handoff_counters == expected_handoff, (
-        "only a blocking-mode refusal must report its matching bounded hand-off "
-        f"failure, found {handoff_counters}"
+        "a refusal that reached the hand-off machinery must report its matching "
+        f"bounded hand-off failure, found {handoff_counters}"
     )
 
 

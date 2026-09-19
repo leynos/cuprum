@@ -8,12 +8,12 @@ completion waiting with optional timeouts, and per-stage
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
-``BaseExceptionGroup``. It collaborates with ``cuprum._process_lifecycle``,
+``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
 ``cuprum._pipeline_collect``, ``cuprum._pipeline_streams``,
 ``cuprum._pipeline_types``, ``cuprum._pipeline_wait``,
-``cuprum._observability``, and
+``cuprum._process_lifecycle``, ``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``/``_process_lifecycle``.
+``cuprum._subprocess_execution``.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
+from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
     _EventDetails,
@@ -50,7 +51,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
     _StageWaitContext,
 )
-from cuprum._process_lifecycle import _shielded_cleanup, _spawn_pipeline_processes
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
@@ -292,6 +293,7 @@ async def _spawn_and_drive_pipeline(
             stderr_tasks,
             stdout_task,
             started_at,
+            relay_diagnostics_by_stage,
         ) = await _spawn_pipeline_processes(
             parts,
             config,
@@ -301,6 +303,7 @@ async def _spawn_and_drive_pipeline(
             processes=processes,
             stderr_tasks=stderr_tasks,
             stdout_task=stdout_task,
+            relay_diagnostics_by_stage=tuple(relay_diagnostics_by_stage),
             stages=_StageWaitContext(
                 started_at=tuple(started_at),
                 observations=observations,

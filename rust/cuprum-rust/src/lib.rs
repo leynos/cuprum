@@ -1,49 +1,23 @@
-//! Optional Rust extension for Cuprum stream operations.
+//! Python integration boundary for Cuprum's optional native stream backend.
 //!
-//! This crate exposes a `PyO3` module providing stream pump and consume
-//! helpers alongside an availability check for the Rust backend.
+//! Raw-resource obligations are confined here and in `cuprum-native-io`.
+//! Stream policy lives in `cuprum-streams`, which forbids unsafe code.
+#![deny(unsafe_op_in_unsafe_fn)]
 
+use cuprum_native_io::PlatformFd;
+use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-
-use std::mem::ManuallyDrop;
-
-#[cfg(unix)]
-use std::os::fd::{FromRawFd, OwnedFd};
-
-#[cfg(windows)]
-use std::fs::File;
-
-#[cfg(windows)]
-use std::os::windows::io::{FromRawHandle, RawHandle};
-
-#[cfg(test)]
-mod buffer_size_tests;
-#[cfg(all(test, unix))]
-mod consume_snapshot_tests;
 mod errors;
-#[cfg(kani)]
-mod fd_ownership_kani_proofs;
-#[cfg(any(test, kani))]
-mod fd_ownership_model;
 #[cfg(test)]
 mod fd_tests;
-mod io_utils;
-#[cfg(all(test, unix))]
-mod lib_tests;
-mod pump_machine;
-#[cfg(target_os = "linux")]
-mod splice;
-#[cfg(all(test, unix))]
-mod test_support;
-#[cfg(all(test, unix))]
-mod tracing_capture;
-mod utf8;
 
-use errors::PumpError;
-use io_utils::{StreamHandle, classify_write, operation_span, read_stream};
-use pump_machine::{Flow, PumpState, advance};
-use utf8::{FinalChunk, decode_utf8_replace};
+#[derive(Clone, Copy, Debug)]
+struct ReaderFd(PlatformFd);
+
+fn validate_buffer_size(size: i64) -> PyResult<BufferSize> {
+    BufferSize::new(size).map_err(PyValueError::new_err)
+}
 
 /// Report whether the Rust extension is available.
 ///
@@ -95,243 +69,6 @@ fn convert_platform_fd(value: i64) -> Result<PlatformFd, &'static str> {
         return Err("file handle must be non-negative");
     }
     usize::try_from(value).map_err(|_| "file handle out of range")
-}
-
-/// Maximum accepted stream buffer size, in bytes (1 GiB).
-///
-/// This guards against absurd allocations from a bad `buffer_size` while
-/// comfortably exceeding any realistic transfer buffer — the default is
-/// 64 KiB and even multi-megabyte buffers stay far below this cap.
-const MAX_BUFFER_SIZE: usize = 1 << 30;
-
-/// Validate and convert a raw `buffer_size` into a bounded `usize`.
-///
-/// This is the pure decision core behind [`validate_buffer_size`]: it takes no
-/// Python state and returns a stable, message-carrying error so it can be
-/// property tested directly.
-///
-/// # Errors
-/// Returns a stable error message when `buffer_size` is non-positive, overflows
-/// `usize` on the target platform, or exceeds [`MAX_BUFFER_SIZE`].
-fn checked_buffer_size(buffer_size: i64) -> Result<usize, &'static str> {
-    if buffer_size <= 0 {
-        return Err("buffer_size must be greater than zero");
-    }
-    let size = usize::try_from(buffer_size).map_err(|_| "buffer_size is too large")?;
-    if size > MAX_BUFFER_SIZE {
-        return Err("buffer_size exceeds the maximum permitted size");
-    }
-    Ok(size)
-}
-
-/// Validate that `buffer_size` is positive, in range, and within the cap.
-///
-/// # Errors
-/// Returns `PyValueError` if `buffer_size` is non-positive, out of range, or
-/// exceeds [`MAX_BUFFER_SIZE`].
-fn validate_buffer_size(buffer_size: i64) -> PyResult<BufferSize> {
-    checked_buffer_size(buffer_size)
-        .map(BufferSize)
-        .map_err(PyValueError::new_err)
-}
-
-#[cfg(unix)]
-fn stream_from_raw(fd: PlatformFd) -> StreamHandle {
-    // SAFETY: The caller ensures the fd is valid and owned by the caller.
-    unsafe { OwnedFd::from_raw_fd(fd) }
-}
-
-/// Run `operation` against a `StreamHandle` borrowed from a caller-owned FD.
-///
-/// This is the canonical "borrow this FD without owning it" helper: the
-/// handle is wrapped in [`ManuallyDrop`], so it is **never** closed when the
-/// scope ends — including during unwinding from a panicking `operation`.
-/// The previous pattern (a trailing `std::mem::forget` after the inner call)
-/// was skipped on unwind, closing the caller-owned descriptor and exposing
-/// the Python side to a double close.
-///
-/// There is deliberately no writer variant: the writer FD handed to
-/// [`pump_stream`] is *consumed* — it must close (on drop, including during
-/// unwinding) to signal EOF downstream.
-///
-/// SAFETY: the caller must guarantee that `fd` is a valid open descriptor
-/// (or handle on Windows) for the duration of the call, and that ownership
-/// remains with the caller; the helper guarantees it never closes `fd`.
-fn with_borrowed_reader<T>(fd: PlatformFd, operation: impl FnOnce(&mut StreamHandle) -> T) -> T {
-    let mut handle = ManuallyDrop::new(stream_from_raw(fd));
-    // `ManuallyDrop` suppresses the close in every exit path, so no
-    // drop-guard or forget call is required even if `operation` panics.
-    operation(&mut handle)
-}
-
-#[cfg(windows)]
-fn stream_from_raw(handle: PlatformFd) -> StreamHandle {
-    // The usize-to-pointer cast is a deliberate, documented reinterpretation:
-    // Windows handles are pointer-sized opaque values, so this widens or
-    // narrows nothing.
-    // SAFETY: The caller ensures the handle is valid and owned by the caller.
-    unsafe { File::from_raw_handle(handle as RawHandle) }
-}
-/// Pump bytes between file descriptors with explicit ownership semantics.
-///
-/// The reader FD is borrowed and left open. The writer FD is treated as
-/// consumed and closes on drop to signal EOF downstream — including when
-/// the pump unwinds.
-fn pump_stream(
-    reader_fd: ReaderFd,
-    writer_fd: WriterFd,
-    buffer_size: BufferSize,
-) -> Result<u64, PumpError> {
-    let mut writer = stream_from_raw(writer_fd.0);
-    with_borrowed_reader(reader_fd.0, |reader| {
-        pump_stream_files(reader, &mut writer, buffer_size)
-    })
-}
-
-/// Consume bytes from a file descriptor and decode UTF-8 with replacement.
-fn consume_stream(reader_fd: ReaderFd, buffer_size: BufferSize) -> Result<String, PumpError> {
-    with_borrowed_reader(reader_fd.0, |reader| {
-        consume_stream_files(reader, buffer_size)
-    })
-}
-
-#[cfg(unix)]
-type PlatformFd = i32;
-
-#[cfg(windows)]
-type PlatformFd = usize;
-
-#[derive(Clone, Copy, Debug)]
-struct ReaderFd(PlatformFd);
-
-#[derive(Clone, Copy, Debug)]
-struct WriterFd(PlatformFd);
-
-#[derive(Clone, Copy, Debug)]
-struct BufferSize(usize);
-
-impl BufferSize {
-    const fn value(self) -> usize {
-        self.0
-    }
-}
-
-fn pump_stream_files(
-    reader: &mut StreamHandle,
-    writer: &mut StreamHandle,
-    buffer_size: BufferSize,
-) -> Result<u64, PumpError> {
-    // On Linux, attempt zero-copy splice first.
-    #[cfg(target_os = "linux")]
-    if let Some(result) = splice::try_splice_pump(reader, writer, buffer_size.value()) {
-        return result;
-    }
-
-    // Fallback: read/write loop for non-Linux or unsupported FD types.
-    pump_stream_files_readwrite(reader, writer, buffer_size)
-}
-
-/// Read/write loop fallback for pumping bytes between file descriptors.
-///
-/// This is used when splice is not available (non-Linux) or when the file
-/// descriptors do not support splice (regular files, some sockets).
-fn pump_stream_files_readwrite(
-    reader: &mut StreamHandle,
-    writer: &mut StreamHandle,
-    buffer_size: BufferSize,
-) -> Result<u64, PumpError> {
-    // Operation span (see `operation_span`) so the EINTR (`warn!`) and
-    // fatal-I/O (`error!`) events emitted from the read/write seams inherit
-    // the operation name, `buffer_size`, and `total_bytes` context even under
-    // a `warn`/`error`-only production filter.
-    let span = operation_span("pump_stream_readwrite", buffer_size.value());
-    let _guard = span.enter();
-    io_utils::reset_retry_counters();
-
-    let mut buffer = vec![0_u8; buffer_size.value()];
-    let mut state = PumpState::start();
-
-    loop {
-        let read_len = read_stream(reader, &mut buffer)?;
-        let writer_was_open = state.writer_open();
-
-        // `advance` owns both the zero-length-is-EOF translation and the write
-        // precondition — a chunk read while the writer is still open — so this
-        // loop, the property tests, and the bounded proofs share one
-        // definition of them. Fatal writes propagate the real error and never
-        // reach the pure state machine.
-        let flow = advance(&mut state, read_len, || {
-            let chunk = buffer
-                .get(..read_len)
-                .ok_or(PumpError::BufferRangeExceeded)?;
-            classify_write(writer, chunk)
-        })?;
-
-        // The latch closing is the `head`-style early exit. Mirror splice's
-        // field and message so the event is not visible on one path only, and
-        // observe it here rather than in the deliberately pure `pump_machine`.
-        if writer_was_open && !state.writer_open() {
-            tracing::debug!(
-                bytes_transferred = state.total_written(),
-                "broken pipe; draining reader"
-            );
-        }
-
-        if flow == Flow::Stop {
-            break;
-        }
-    }
-
-    let total_written = state.total_written();
-    span.record("total_bytes", total_written);
-    span.record("read_retries", io_utils::read_retry_count());
-    span.record("write_retries", io_utils::write_retry_count());
-    Ok(total_written)
-}
-
-fn consume_stream_files(
-    reader: &mut StreamHandle,
-    buffer_size: BufferSize,
-) -> Result<String, PumpError> {
-    // Operation span (see `operation_span`) so the read seam's `warn!`/`error!`
-    // events inherit this operation's context even under a `warn`/`error`-only
-    // production filter.
-    let span = operation_span("consume_stream", buffer_size.value());
-    let _guard = span.enter();
-    io_utils::reset_retry_counters();
-
-    let mut buffer = vec![0_u8; buffer_size.value()];
-    let mut pending: Vec<u8> = Vec::new();
-    let mut output = String::new();
-    let mut total_read = 0_u64;
-
-    #[cfg(unix)]
-    let platform = "unix";
-    #[cfg(windows)]
-    let platform = "windows";
-
-    loop {
-        let read_len = read_stream(reader, &mut buffer)?;
-        if read_len == 0 {
-            break;
-        }
-        let read_bytes = u64::try_from(read_len).map_err(|_| {
-            tracing::error!(platform, "read length conversion overflowed");
-            PumpError::LengthOverflow
-        })?;
-        total_read = total_read.saturating_add(read_bytes);
-        let chunk = buffer
-            .get(..read_len)
-            .ok_or(PumpError::BufferRangeExceeded)?;
-        pending.extend_from_slice(chunk);
-        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
-    }
-
-    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
-
-    span.record("total_bytes", total_read);
-    span.record("read_retries", io_utils::read_retry_count());
-    Ok(output)
 }
 
 /// Python module definition for the optional Rust backend.

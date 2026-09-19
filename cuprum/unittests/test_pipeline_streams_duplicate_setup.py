@@ -78,7 +78,7 @@ class _DuplicateSetupFailure:
     def assert_duplicate_cleanup(self) -> None:
         """Assert rollback closed only a duplicate that was actually created."""
         if self.duplicate_creation_fails:
-            assert self.duplicated_fds == [], (
+            assert not self.duplicated_fds, (
                 "failed duplication creates no writer descriptor to clean up"
             )
             return

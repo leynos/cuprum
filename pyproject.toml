@@ -394,6 +394,8 @@ also_copy = [
     "CHANGELOG.md",
     "Makefile",
     "rust/cuprum-rust/",
+    "rust/cuprum-streams/",
+    "rust/cuprum-native-io/",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/dylint.toml",
@@ -429,14 +431,18 @@ type = "function"
 full_name = [
     "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
 ]
-reason = "Passed as the threading.Thread target by _PersistentNativePumpExecutor.submit."
+reason = "Called by _PooledNativePumpExecutor._worker_loop from a daemon worker thread."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
 full_name = [
-    "cuprum._pipeline_native_pump_runtime._PersistentNativePumpExecutor.submit",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor.submit",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._take_worker",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._start_worker",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._worker_loop",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._retire_or_reuse",
 ]
-reason = "Called through _DEFAULT_NATIVE_PUMP_RUNTIME.executor by _submit_rust_pump."
+reason = "Reached only through _DEFAULT_NATIVE_PUMP_RUNTIME.executor, whose _NativePumpExecutor protocol type hides submit from the reference graph; the private helpers are reachable only from submit."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
@@ -487,6 +493,21 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 source-exclude = ["cuprum/unittests/**"]
+# Ship the optional native workspace without including Cargo build artefacts.
+source-include = [
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/rust-toolchain.toml",
+    "rust/dylint.toml",
+    "rust/cuprum-rust/Cargo.toml",
+    "rust/cuprum-rust/src/**",
+    "rust/cuprum-rust/tests/**",
+    "rust/cuprum-streams/Cargo.toml",
+    "rust/cuprum-streams/src/**",
+    "rust/cuprum-streams/tests/**",
+    "rust/cuprum-native-io/Cargo.toml",
+    "rust/cuprum-native-io/src/**",
+]
 
 [tool.maturin]
 bindings = "pyo3"
@@ -494,3 +515,7 @@ manifest-path = "rust/cuprum-rust/Cargo.toml"
 module-name = "cuprum._rust_backend_native"
 python-source = "."
 exclude = ["cuprum/unittests/**"]
+include = [
+    { path = "rust/rust-toolchain.toml", format = "sdist" },
+    { path = "rust/dylint.toml", format = "sdist" },
+]

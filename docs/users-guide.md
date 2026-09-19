@@ -90,6 +90,18 @@ Keep using `ProjectSettings` and `ProgramCatalogue(projects=(...))` directly
 when a script needs several projects, because ownership of each program must
 then be stated explicitly.
 
+When a caller already has a `ProjectSettings`,
+`ProgramCatalogue.from_project(settings)` preserves its name, allowlist, and
+metadata without re-stating the single-project wrapper:
+
+```python
+settings = ProjectSettings(
+    name="rust-test-gates",
+    programs=(Program("cargo"),),
+)
+catalogue = ProgramCatalogue.from_project(settings)
+```
+
 ### Handling duplicate catalogue entries
 
 Catalogue construction rejects ambiguous project metadata before any command is
@@ -462,10 +474,47 @@ stream. The metric carries exactly two labels: `stream`, whose value is
 `stdout` or `stderr`, and `error_category`, whose only value is
 `unicode_encode`. No subprocess payload, sink type, encoding, exception text,
 command, path, PID, or execution identifier becomes a metric label; the
-structured `cuprum_*` extras on the `cuprum.stream` warning carry that
-diagnostic detail instead. The hook is opt-in: without it, no observation is
+structured `cuprum_*` extras on the `cuprum.stream` warning carry only stable
+categorical values (`cuprum_operation`, `cuprum_stream`, `cuprum_transition`,
+`cuprum_error_category`). The hook is opt-in: without it, no observation is
 emitted and no telemetry dependency is added. A failing metrics collector is
 reported and skipped rather than changing the run's capture behaviour.
+
+### Echo-fallback diagnostics on `CommandResult`
+
+The same handled disablement is also reported on the result itself. Every
+`CommandResult` — including each stage of a `PipelineResult` — carries a
+`relay_fallbacks` tuple of `RelayFallback(stream=..., error_category=...)`
+records, one per affected drain (a drain contributes at most one). Records list
+stdout's diagnostics before stderr's within a command; that order does not
+reconstruct chronological interleaving between the two streams. Diagnostics are
+collected whether or not an echo observer is registered and whether or not
+capture is enabled; commands with no handled echo failure return `()`. A sink
+exposing a binary `.buffer` keeps receiving the original bytes and never
+produces a record, warning, or metric increment.
+
+The diagnostics carry only closed-set categorical values. The warning, the
+`EchoEvent`, and the `RelayFallback` records never include the rejected
+payload, decoded output, the sink's encoding, the original `UnicodeEncodeError`
+object (whose `object` attribute retains the rejected input), its message or
+traceback, or the command's arguments.
+
+`relay_fallbacks` appears on a returned `CommandResult`. When a timeout or
+cancellation prevents a result from being produced, no new exception payload is
+added: the already-emitted `EchoEvent` values remain observable through
+`observe_echo`, and partial capture is preserved as before.
+
+### Lading integration boundary
+
+Lading can consume the new `CommandResult.relay_fallbacks` records for
+per-command diagnostics and the existing `observe_echo` / `EchoMetricsHook`
+channel for structured relay-decision telemetry
+([lading#253](https://github.com/leynos/lading/issues/253)). Shipping this
+change alone does not let Lading delete `stream_relay.py`: Lading's helper has
+text-first and broken-pipe semantics that differ from Cuprum's binary-first
+policy, so a separately linked downstream migration issue owns caller
+migration, any thread-name utility removal, and the final deletion of the
+helper.
 
 `RunOutputOptions(capture=True, echo=False)` is the default; you only need to
 supply it explicitly when overriding either flag.
@@ -1944,6 +1993,21 @@ place — a non-integer, or a Python integer outside the signed 64-bit range —
 may instead fail earlier, during PyO3 argument conversion, with a different
 exception.
 
+The internal pump validates the buffer size and reader ABI representation
+before transferring ownership of its duplicated writer. If either check fails,
+the duplicate is closed before native work begins. These checks establish only
+representability and error ordering; they do not prove that a descriptor or
+handle is valid, remains live, or is exclusively owned. The pipeline keeps the
+reader paused and waits for native cleanup after cancellation so those lifetime
+obligations remain in force.
+
+Before borrowing the reader's raw descriptor, the pipeline rejects an asyncio
+transport that is already closing. Asyncio may silently accept
+`pause_reading()` while a queued close callback can still close the descriptor;
+the hop therefore reports `READER_PAUSE_FAILED` and uses the Python fall-back,
+which retains the reader's buffered prefix. This protects the hand-off contract
+without identifying the cause of any historical native payload mismatch.
+
 ### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
@@ -2014,18 +2078,29 @@ Failures that never reached the operating system — an internal overflow or
 bounds condition — surface as a plain `OSError` with a descriptive message and
 no `errno`, because there is no system code to report.
 
+The scratch buffer each helper reads or writes through is allocated fallibly,
+so requesting a `buffer_size` the allocator cannot satisfy is one of those
+systemless failures rather than a crash: it raises an `OSError` with the stable
+message `failed to allocate the stream buffer` and no `errno`. It is an error,
+not a signal, so it unwinds normally and never aborts the process embedding the
+extension. The production cap of 1 GiB (see `MAX_BUFFER_SIZE`) means a request
+large enough to be refused is far outside the range the helpers are designed to
+serve, so the message is the stable interface here — unlike a system failure,
+there is no number to branch on.
+
 ### Rust stream observability (internal)
 
 Both internal helpers emit `tracing` diagnostics; the crate installs no
 subscriber, so the embedding application owns subscriber configuration. Each
 successful read or write logs a `debug` event (with the byte count and
 platform), every `EINTR` retry logs a `warn`, and fatal I/O failures,
-zero-progress writes, and length-conversion overflows log an `error`. The pump
-and consume loops run inside an operation span that carries the `operation` and
-`buffer_size` fields and, on completion, records `total_bytes` and the
-cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
-`error` level so the `warn`/`error` events retain their operation context even
-when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
+zero-progress writes, length-conversion overflows, and refused scratch-buffer
+allocations log an `error`. The pump and consume loops run inside an operation
+span that carries the `operation` and `buffer_size` fields and, on completion,
+records `total_bytes` and the cumulative `EINTR` `read_retries`/`write_retries`
+counts. The span sits at `error` level so the `warn`/`error` events retain
+their operation context even when the subscriber is filtered to `warn`/`error`;
+it emits no log line itself.
 
 One further `debug` event reports the pump's own state rather than an
 individual read or write. When a downstream stage hangs up early — the
@@ -2060,6 +2135,29 @@ itself succeeded.
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
 
+One `error` event reports a refusal rather than a kernel failure, so it carries
+a stable category instead of a system message:
+
+```text
+scratch buffer allocation refused
+    error_category=buffer_allocation_failed
+    buffer_size=<bucket>            platform=<unix|windows>
+```
+
+`error_category` is always `buffer_allocation_failed` for this event. The
+event's `buffer_size` is the requested size rounded up to a power-of-two bucket
+— a bounded magnitude, not the exact caller-supplied number and not any
+allocator internal. `platform` matches the field on the read/write events. The
+event is emitted from inside the operation span, so the span's `operation` and
+exact requested `buffer_size` fields are in scope alongside it, exactly as for
+the fatal I/O failures above.
+
+This event accompanies the `OSError` described under
+[Rust stream error handling (internal)](#rust-stream-error-handling-internal):
+the same refused allocation produces both. A caught exception then still leaves
+a trace for the subscriber, rather than disappearing with the caller's `except`
+clause.
+
 ### Why a hop fell back to Python
 
 Selecting the `rust` backend does not guarantee every inter-stage hop takes it.
@@ -2079,6 +2177,7 @@ Table 1: reasons an inter-stage hop declines the Rust pump
 | `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused        |
 | `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor     |
 | `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                |
+| `duplicate_fds_unavailable` | a transport descriptor was closed before the worker's copy of it could be made              |
 | `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use   |
 
 These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
@@ -2292,14 +2391,25 @@ unchanged — the counters supplement them rather than replacing them.
 
 ### A pump hand-off failed before submission
 
-If Cuprum cannot prepare either worker-owned descriptor, the hand-off is rolled
-back and the original exception is re-raised without a hand-off outcome. If
-executor submission is rejected, Cuprum emits `executor_submission_rejected`
-and re-raises after rollback. A blocking-mode failure selects the Python
-fallback and emits `blocking_setup_failed`. The `cuprum._pipeline_streams`
-logger records a bounded `DEBUG` diagnostic for these setup failures with
+If Cuprum cannot make the worker-owned descriptors, the hand-off is rolled back
+and the hop falls back to the Python pump. That covers both a descriptor pair
+that could not be re-opened — recorded as `duplicate_writer_failed`, since the
+transport may be closed between extraction and duplication — and descriptors
+that could not be switched to blocking mode, recorded as
+`blocking_setup_failed`. The `cuprum._pipeline_streams` logger records a bounded
+`DEBUG` diagnostic for these setup failures with
 `cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
 when available. Descriptor numbers and exception text are not logged.
+
+Two setup failures still report to the caller instead. If executor submission
+is rejected, Cuprum emits `executor_submission_rejected` and re-raises after
+rollback; every later hop would be rejected the same way, so silently falling
+back would hide a broken executor rather than work around it. If the worker
+descriptors cannot be duplicated once they are already Cuprum's own, that is
+descriptor exhaustion — an error in its own right, and not something a fallback
+can route around. Both close the writer transport before the error propagates,
+so a downstream stage exits and the real failure reaches the caller instead of
+the pipeline waiting out its deadline.
 
 ### Choosing a stream backend
 

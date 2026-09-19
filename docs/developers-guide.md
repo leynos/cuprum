@@ -13,6 +13,13 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
 - [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
+- [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
+
+The
+[Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
+is the source of truth for native safety contracts, verifier bounds, trusted
+assumptions, and current proof status.
 
 ## GitHub Actions runners
 
@@ -387,6 +394,62 @@ caret requirements only (for example `"1.2.3"`). Do not use wildcards such as
 When updating Rust dependencies, keep the requested version aligned to the
 patch baseline already present in `Cargo.lock`. This keeps lockfile updates
 focused, small, and easy to review.
+
+## Linux debug-build acceleration
+
+[ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and
+its compatibility rationale.
+
+Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
+verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
+uses the separately pinned `nightly-2026-08-23` and the
+`rustc-codegen-cranelift` component through `tools/dev-fast/config.toml`; the
+Clippy portion of `make rust-lint` additionally requires the `clippy` component
+on that nightly. The fragment is an approved byte-for-byte local extension from
+`leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
+Concordat issue 157; its SHA-256 is
+`8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5`.
+
+Run `make dev-fast-check` before the first Linux accelerated build. It requires
+both the `rustc-codegen-cranelift` and `clippy` components on the dev-fast
+nightly, plus the pinned `mold` 2.41.0 linker. The approved binary route is the
+checksum-verified upstream release archive; it never permits a source-build
+fallback. `make develop`, `make test-rust`, and the Cargo doc and Clippy
+portion of `make rust-lint` select the fragment on a compatible Linux host.
+`make dev-build` and `make dev-test` expose the same route explicitly. Direct
+Cargo invocations leave toolchain selection to the caller; supplying the
+fragment does not select a toolchain.
+
+The routed path is fixed, not configurable. The Makefile resolves the fragment
+from one internal constant that no make variable or environment variable can
+replace, so `make test-rust DEV_FAST_RUST_CONFIG=/tmp/other.toml` cannot
+substitute a different configuration and still report success. Anything needing
+a different Cargo configuration is outside this route and does not use it.
+
+Changing the fragment means changing the bytes that digest authorizes. Update
+`FRAGMENT_SHA256` in `cuprum/unittests/test_dev_fast_contract.py` and the
+digest quoted above in the same commit, or the contract test fails.
+
+Every workspace package inherits `rust-version = "1.85.0"` from the root
+manifest. Cargo treats that as the publication and compatibility contract, and
+MSRV-aware Clippy lints use it while the Linux debug lint route runs on the
+dev-fast nightly. `make msrv-check` separately compiles every workspace target
+on Rust `1.85.0` without the fragment, so the accelerated lint compiler cannot
+replace compatibility verification.
+
+Maturin accepts a Cargo executable but cannot pass Cargo's configuration-file
+flag itself. The Linux-only `tools/dev-fast/cargo` adapter receives the injected
+`CARGO` executable, adds exactly one approved `--config` path, and then
+replaces itself with Cargo. It rejects a second configuration argument. This
+small POSIX adapter is intentionally outside the normal Python scripting
+standard because it must preserve Cargo's exact argv and exit status.
+
+macOS and Windows use the stable backend as the approved alternative. The
+Windows cross-target lint, wheel builds, benchmark release builds, coverage,
+verification, and Whitaker never select the fragment. The fragment documents
+Cuprum's ownership boundary: Makefile pins the dev-fast nightly, while
+`tools/mold/VERSION` pins the linker release. The stable support promise
+remains independently verified.
 
 ## Tar and rsync builder helpers
 
@@ -810,7 +873,13 @@ partial-failure paths in one place rather than inlined in the pump:
   caller falls back to the Python pump rather than racing it. A transport
   exposing no pause hooks answers `True`, since there are no callbacks to
   suspend. A transport with `pause_reading()` but no `resume_reading()` answers
-  `False`: pausing it could not be undone.
+  `False`: pausing it could not be undone. A transport that is already closing
+  is never paused — `_pause_reader_transport` asks `is_closing()` before
+  pausing — because asyncio silently ignores a pause there and its queued
+  `connection_lost` callback can still close the descriptor during hand-off.
+  The outcome is an instance of `_ReaderPause`, the frozen slots dataclass that
+  carries `may_hand_off`, `resume`, `decline_reason`, and the
+  `closing_transport` marker, reporting a `reader_pause_failed` decline.
 
 Before native I/O begins, the reader transport is paused and callbacks queued
 before the pause are allowed to settle. If `StreamReader._buffer` contains
@@ -821,7 +890,17 @@ the remaining raw bytes. Rust borrows the reader duplicate and consumes the
 writer duplicate. After the worker settles, Python closes the remaining reader
 duplicate; it closes the writer duplicate itself only when preparation or
 executor submission fails. If any preparation step cannot be completed safely,
-dispatch falls back to the Python pump.
+dispatch falls back to the Python pump. That fall-back has one exception, and
+it is test-only: `_permit_test_owned_descriptor_handoff` in
+`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
+that one — when the dispatch test seam has installed its own descriptor supply
+(`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
+hand-off derives its worker descriptor from the transport and keeps the
+decline. The permitted verdict carries no resume hook, because nothing was
+paused. That permission depends on the configured test hooks: the stub must be
+cleared with `reset_pump_stream_dispatch_for_testing()`, which the
+`clear_backend_caches` fixture applies around each test in the pump-stream
+dispatch test modules, leaving nothing for a later test to inherit.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` shields
@@ -858,11 +937,14 @@ the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
 
 Table 1: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason`             | Seam that declined                                                 |
-| --------------------------- | ------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
+| `cuprum_reason`             | Seam that declined                                                        |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport        |
+| `reader_unresumable`        | `pause_reading` exists but `resume_reading` does not, so it is not paused |
+| `reader_pause_failed`       | `pause_reading()` raised, or the transport was already closing            |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors             |
+| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be re-opened        |
+| `platform_unsupported`      | the platform cannot safely use synchronous native pipe I/O                |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -908,18 +990,18 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
 | `cuprum_rust_pump_handoff_total`             | `outcome` |
 
-`RustPumpDeclineReason` bounds the decline label to its four declared values.
-The `outcome` label is also closed: it is exactly `submitted`,
-`blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
-`buffer_validation_failed`, `platform_writer_transfer_failed`,
-`native_io_failed`, `duplicate_writer_failed`, or `reader_preparation_failed`.
-The hand-off counter increments once for each such outcome, including a
-successful submission. `outcome` is the only label on the hand-off counter.
-Descriptor numbers, Windows handle values, errno values, exception types,
-exception messages, and tracebacks are never metric labels. Observer failures
-are logged and do not alter the successful fallback or the caller's
-cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md) records the
-decision.
+`RustPumpDeclineReason` bounds the decline label to its declared values — the
+six in Table 1 above. The `outcome` label is also closed: it is exactly
+`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
+`native_load_failed`, `buffer_validation_failed`,
+`platform_writer_transfer_failed`, `native_io_failed`,
+`duplicate_writer_failed`, or `reader_preparation_failed`. The hand-off counter
+increments once for each such outcome, including a successful submission.
+`outcome` is the only label on the hand-off counter. Descriptor numbers,
+Windows handle values, errno values, exception types, exception messages, and
+tracebacks are never metric labels. Observer failures are logged and do not
+alter the successful fallback or the caller's cancellation.
+[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
 
 ### `_pipeline_wait` completion command/query seam
 
@@ -1069,10 +1151,11 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 
 `_StreamConfig.read_size` carries the active private read size for one stream;
 its default is `_READ_SIZE`, currently 65536 bytes. The private
-`cuprum._streams._consume_stream(stream, config, *, on_line=None, read_size=_READ_SIZE)`
-and `_drain(stream, config, *, on_chunk=None, read_size=_READ_SIZE)` functions
-accept an explicit keyword-only override. `_drain` is the single
-read/echo/buffer loop behind both consume variants. It reads in the selected
+`cuprum._streams._consume_stream(stream, config, *, on_line=None,
+relay_diagnostics=None)`
+and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
+functions use `config.read_size` for each read. `_drain` is the single
+read/echo/buffer loop behind both consume variants. It reads in that configured
 size, extends the capture buffer when capturing, echoes each chunk to the
 configured sink when echoing, and hands the chunk to the optional `on_chunk`
 callback for variant-specific processing:
@@ -1161,12 +1244,14 @@ it renders.
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. That helper catches
-`UnicodeEncodeError` only: the first failure disables echo for the rest of that
-drain, logs one `WARNING` on the `cuprum.stream` logger with structured
-`cuprum_*` extras, and lets every other error propagate unchanged. Capture
-(`buffer.extend`) always runs before the echo step, so a rejected echo write
-never loses captured bytes, and the binary `.buffer` fast path inside
+`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
+module owns this write-side policy; `_streams` retains the drain lifecycle and
+re-exports `_write_chunk` for existing internal callers. Its `_echo_chunk`
+helper catches `UnicodeEncodeError` only: the first failure disables echo for
+the rest of that drain, logs one `WARNING` on the `cuprum.stream` logger with
+structured `cuprum_*` extras, and lets every other error propagate unchanged.
+Capture (`buffer.extend`) always runs before the echo step, so a rejected echo
+write never loses captured bytes, and the binary `.buffer` fast path inside
 `_write_chunk` is unchanged.
 
 The first failure is owned entirely by that one `_echo_chunk` transition: the
@@ -1179,6 +1264,22 @@ hook registry rather than a new phase, so consumers opt in by registering and
 unregistered callers pay nothing. Hook failures are reported and skipped,
 mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
 what a run captures.
+
+### Result diagnostics ownership
+
+The same transition also appends one `cuprum.echo_events.RelayFallback` record
+to a caller-owned `cuprum._streams._RelayDiagnostics` collector. Each command
+hands one collector per stream into its `_consume_stream` calls and retains the
+pair on its `_RunTaskOwnership` (single-command) or per-stage spawn state
+(pipeline), so the exactly-once reconciliation point settles each collector and
+its result builder flattens stdout-then-stderr records into that command's
+`CommandResult.relay_fallbacks`. Collectors are never shared between commands,
+stages, or nested runs, and the result diagnostics are not collected by
+registering a public echo observer: context-scoped events carry no execution
+identity, so they cannot attribute nested or concurrent runs. On a timeout or
+cancellation that prevents a result, the records stay on the echo observation
+channel and the collectors are simply never settled; no exception payload
+fields are added.
 
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
@@ -1362,6 +1463,37 @@ guessed from PID: a `start` without an `exec_id` creates no span, and `stdout`/
 `pipeline_fail_fast`/`exit` without one are dropped. Every event Cuprum itself
 emits carries an `exec_id`, so this only affects hand-built event streams.
 
+## Rust-pump executor-hop span boundary
+
+[ADR-010](adr-010-rust-pump-hop-span.md) defines the separate, opt-in tracing
+surface for Rust-pump executor hops. Keep it separate from the `PumpEvent`
+channel: pump events describe routing and cleanup observations, while hop spans
+cover the lifetime of one scheduled native transfer.
+
+The implementation is split by responsibility:
+
+- `cuprum/pump_span_events.py` owns the stable span name, bounded attribute
+  names, and the closed `PumpHopOutcome` vocabulary.
+- `cuprum/pump_span_observation.py` owns the context-local tracer registry,
+  registration handles, observer-failure policy, and opening or closing the
+  spans held by one hop.
+- `cuprum/_pipeline_streams.py` owns Rust-pump dispatch. It opens spans only
+  after the fast path accepts the hop and attaches the carrier to the native
+  executor future.
+- `cuprum/_pipeline_rust_pump_completion.py` owns the completion callback. It
+  determines the terminal outcome, closes the hop spans, restores asyncio
+  stream state, and signals that cleanup is complete.
+- `cuprum/_pipeline_stream_cleanup_observation.py` owns the cancellation drain
+  that waits for native worker settlement and emits the existing cleanup
+  observations.
+
+The completion callback is the lifetime boundary: it must settle the native
+worker before restoration is reported complete, and the cancellation drain must
+remain covered by the hop span. Do not pass trace context through the PyO3
+boundary; the Rust-internal span remains parentless. Keep hop attributes
+bounded and avoid adding command payloads, descriptor values, exception text,
+or identifiers to this surface.
+
 ## Canonical `_TokenRegistration` handle base
 
 All `ContextVar`-backed scope-registration handles — `AllowRegistration`,
@@ -1405,10 +1537,10 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/sh.py`), `_build_pipeline_observations`
 (`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
-(`cuprum/_process_lifecycle.py`, which now delegates to the pipeline builder
-and adds only its no-observe-hooks assertion) — must route through these
-helpers. A new shared tag is added once, in `_base_stage_tags`, or it will
-silently diverge between the single-command and pipeline telemetry.
+(`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
+adds only its no-observe-hooks assertion) — must route through these helpers. A
+new shared tag is added once, in `_base_stage_tags`, or it will silently
+diverge between the single-command and pipeline telemetry.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
@@ -1497,6 +1629,15 @@ execution are covered in [Cuprum design](cuprum-design.md) §8.1.5 (with
 respectively, and are not repeated here.
 
 Runtime (`cuprum/`):
+
+- `cuprum/_catalogue_helpers.py` — pure program coercion and project-name
+  derivation helpers used by `cuprum/catalogue.py`.
+- `cuprum/_catalogue_defaults.py` — immutable built-in project and program
+  metadata consumed by `cuprum/catalogue.py`.
+
+These private modules feed `cuprum/catalogue.py`, which assembles and validates
+the public catalogue APIs. Callers should use those public APIs rather than
+importing the private modules directly.
 
 - `cuprum/_pipeline_wait_records.py` — typed completion-report payloads.
   `_CompletionLogFields` carries shared completion fields; `_CompletionReport`
@@ -1647,7 +1788,8 @@ The split between `merge_env_overlays` and `resolve_env` is deliberate.
 include a snapshot of `os.environ`, otherwise structured event logs would carry
 the entire parent process environment on every emission. `resolve_env` is the
 spawn-time merge that *does* include `os.environ`; it is called from
-`_process_lifecycle._merge_env` for both the single-command and pipeline paths.
+`_merge_env` (`cuprum/_process_lifecycle.py`) for both the single-command and
+pipeline paths.
 
 The live-view contract from issue #100 is enforced at one place only:
 `resolve_env` reads `os.environ` at call time, not when the overlay is
@@ -2279,23 +2421,28 @@ cache and tool directories on both platforms.
 
 ## Rust error taxonomy (`PumpError`)
 
-The `cuprum-rust` crate reports stream pump and consume failures through one
-semantic error enum, `PumpError` (`rust/cuprum-rust/src/errors.rs`), derived
+The `cuprum-streams` crate reports stream pump and consume failures through one
+semantic error enum, `PumpError` (`rust/cuprum-streams/src/errors.rs`), derived
 with `thiserror`:
 
 - `LengthOverflow` — an integer length conversion overflowed its target
   type ("impossible" on supported platforms, kept observable rather than
   silently truncating).
 - `BufferRangeExceeded` — a computed range exceeded the backing buffer.
+- `BufferAllocationFailed` — the scratch buffer could not be allocated. The
+  stream loops reserve fallibly because `vec![0_u8; len]` aborts the process on
+  allocation failure instead of unwinding, which would take an embedding
+  interpreter down with it.
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
-Conversion to a Python exception happens in exactly one place
-(`From<PumpError> for PyErr`). The overflow variants surface as plain
-`OSError`. The non-fatal write classification (broken pipe / connection reset)
-lives on the enum as `PumpError::is_nonfatal_write`, replacing the free
-function the splice and read/write paths previously shared. New failure
-conditions get a variant here rather than a stringly-typed
-`io::Error::other(...)`.
+Conversion to a Python exception happens in exactly one place,
+`pump_error_to_py_err` in `rust/cuprum-rust/src/errors.rs` (called from
+`stream_pyfunctions.rs`). Every non-`Io` variant surfaces as a plain `OSError`
+carrying the stable message from `PumpError::py_os_error_message`. The
+non-fatal write classification (broken pipe / connection reset) lives on the
+enum as `PumpError::is_nonfatal_write`, replacing the free function the splice
+and read/write paths previously shared. New failure conditions get a variant
+here rather than a stringly-typed `io::Error::other(...)`.
 
 ### Preserving the operating-system error code
 
@@ -2400,17 +2547,18 @@ sees the `#[cfg(unix)]` arm and never the Windows one.
 
 ## Rust FD-borrow ownership contract
 
-The pump and consume entry points in `rust/cuprum-rust/src/lib.rs` sort every
-descriptor they touch into a *borrowed* or a *consumed* role. `pump_stream`
-borrows its reader and consumes its writer; `consume_stream` borrows its reader
-and takes no writer at all. The borrow half is centralized in one helper,
-`with_borrowed_reader`. The helper rebuilds a `StreamHandle` from the
-caller-owned raw descriptor, wraps it in `ManuallyDrop`, and runs the caller's
-closure against it. `ManuallyDrop` suppresses the close on *every* exit path —
-a normal return and unwinding from a panicking operation alike — so a
-descriptor the Python side still owns is never closed by Rust. `pump_stream` and
-`consume_stream` both route their reader through the helper, keeping the
-"borrow this FD without owning it" rule in a single place.
+The PyO3 pump and consume entry points in
+`rust/cuprum-rust/src/stream_pyfunctions.rs:42,80` sort every descriptor they
+touch into a *borrowed* or a *consumed* role. `pump_stream` borrows its reader
+and consumes its writer; `consume_stream` borrows its reader and takes no
+writer at all. The unsafe raw-reader constructor
+`cuprum_native_io::borrow_reader` is called only at this PyO3 integration
+boundary. The safe `cuprum_native_io::borrow` API returns a lifetime-bound OS
+borrow; `cuprum-streams` receives typed `AsStream` values and cannot
+reconstruct a resource from an integer. The native crate's
+`with_retained_owner` kernel is used by the Windows `cap_std::fs::File` adapter
+to keep a temporary reconstructed owner from closing a caller-owned handle
+across normal return, error, or real unwind.
 
 The private `stream_pyfunctions::run_stream_operation` helper is limited to the
 two PyO3 stream exports. It owns their shared buffer validation, reader
@@ -2424,53 +2572,182 @@ This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
 past the trailing `forget`, that pattern dropped — and therefore closed — the
 caller-owned descriptor on the unwind path, exposing the Python transport to a
-double close of the same FD (the `#125` panic-unwind hazard). `ManuallyDrop`
-holds regardless of how the scope exits, so no drop guard or `forget` call is
-required.
+double close of the same FD (the `#125` panic-unwind hazard). The borrowed
+reader path now constructs a lifetime-bound `BorrowedStream` directly. The
+Windows adapter uses `ManuallyDrop` through `with_retained_owner`; the real
+`catch_unwind` tests cover that retention path.
 
 There is deliberately no borrowed *writer* variant. The writer FD handed to
 `pump_stream` is consumed: it must close on drop — including during unwinding —
-so downstream readers observe EOF. Reconstruct the writer with
-`stream_from_raw` (which yields an owning handle) and let it drop; reserve
-`with_borrowed_reader` for descriptors whose ownership stays with the caller.
-Python callers must therefore fully relinquish the writer descriptor supplied to
-`pump_stream`/`rust_pump_stream`. The pipeline caller passes worker-owned
-duplicates of both asyncio transport descriptors: asyncio keeps and closes the
-originals, Rust borrows the reader duplicate without closing it, and Rust
-closes the received writer duplicate on drop to signal EOF. The Python hand-off
-owner closes the reader duplicate after the worker settles. The two descriptor
-numbers in each pair must never be shared between those owners. The helper's
-safety contract obliges the caller to guarantee each `fd` is a valid open
-descriptor (or Windows handle) for the duration of the call and that ownership
-remains with the caller; in return the helper guarantees it never closes the
-borrowed reader `fd`.
+so downstream readers observe EOF. The PyO3 boundary calls the unsafe
+`cuprum_native_io::adopt_writer` only after Python has transferred a unique
+resource. `cuprum_native_io::with_owned_writer` then owns the drop scope and
+gives its callback only an immutable reference to the writer. This prevents
+callback code from replacing or moving the actual owned resource out of the
+scope. The normal path explicitly drops the writer after the callback; unwind
+relies on automatic RAII. Reserve `cuprum_native_io::borrow` for resources
+whose ownership stays with the caller. Python callers must therefore fully
+relinquish the writer descriptor supplied to `pump_stream`/`rust_pump_stream`.
+The pipeline caller passes worker-owned duplicates of both asyncio transport
+descriptors: asyncio keeps and closes the originals, Rust borrows the reader
+duplicate without closing it, and Rust closes the received writer duplicate on
+drop to signal EOF. The Python hand-off owner closes the reader duplicate after
+the worker settles. The two descriptor numbers in each pair must never be
+shared between those owners. The helper's safety contract obliges the caller to
+guarantee each `fd` is a valid open descriptor (or Windows handle) for the
+duration of the call and that ownership remains with the caller; in return the
+helper guarantees it never closes the borrowed reader `fd`.
+
+The Windows-handle wording above describes direct Rust extension calls. The
+pipeline dispatcher declines Windows asyncio subprocess-pipe handles with
+`platform_unsupported`, because ProactorEventLoop's overlapped handles cannot
+be used safely by the pump's synchronous Rust I/O. Native Windows wheels and
+the direct extension API remain supported independently of this pipeline
+restriction.
 
 The contract is checked at two levels, which are deliberately not
-interchangeable. `rust/cuprum-rust/src/lib_tests.rs` holds the
+interchangeable. `rust/cuprum-native-io/src/ownership_tests.rs` holds the
 integration-level regression tests: they open *real* descriptors, run the
 helper both normally and through a panicking operation, and assert the borrowed
 FD is still open afterwards. That is the only place actual `close(2)` behaviour
 is exercised, and it stays the authority on it. Alongside them,
-`rust/cuprum-rust/src/fd_ownership_kani_proofs.rs` carries a bounded Kani proof
-of the ownership invariant itself: a borrowed reader FD is never closed by Rust
-on a normal or an unwinding exit, and a `pump_stream` writer is always consumed
-and closes exactly once to signal EOF.
+`rust/cuprum-native-io/src/fd_ownership_kani_proofs.rs` carries the historical
+bounded close-count model proof. The current production drop and progress
+proofs are in `rust/cuprum-native-io/src/kani_proofs.rs`: a borrowed reader is
+retained, an owned writer is dropped once, and checked counts reject invalid
+external progress.
 
-Kani does not interpret I/O, so the proof cannot use real descriptors. It runs
-against the pure model in `fd_ownership_model.rs` — gated
-`#[cfg(any(test, kani))]`, so `make test` exercises it as ordinary unit tests
-too — where `ModelFd` records a close on drop instead of issuing one. The
-`ManuallyDrop` wrapper, the closure call, and the early-exit edge are all real
-Rust, so Rust's own drop elaboration decides the outcome rather than any
-handwritten accounting. Because Kani compiles panics as aborts, the unwind path
-is modelled with `?`: a `?` early return and a real unwind both leave the frame
-without running the statements that follow the operation, so reintroducing the
-superseded trailing-`mem::forget` makes the proof fail (that mutation was run
-to confirm the proof is not vacuous). Being a bounded model checker, Kani
-establishes this over an explicitly bounded state space — the two exit modes,
-and at most three repeated borrows — rather than for all executions. Active
-verification tracking, including whether Verus adds anything beyond the Kani
-model once that model is complete, lives in issue `#89`.
+Kani does not interpret I/O, so the proof cannot use real descriptors. The
+historical model in `rust/cuprum-native-io/src/fd_ownership_model.rs` remains
+provenance for the earlier close-count proof, while the current production
+ownership proof exercises `with_owned_writer` and the shared
+`memory::with_retained_owner` kernel. Neither model observes an OS close. The
+historical model is gated `#[cfg(any(test, kani))]`, so `make test` exercises
+it as ordinary unit tests too — where `ModelFd` records a close on drop instead
+of issuing one. The `ManuallyDrop` wrapper, the closure call, and the
+early-exit edge are all real Rust, so Rust's own drop elaboration decides the
+outcome rather than any handwritten accounting. The model covers only its
+explicit `Normal` and `Error` outcomes; it does not simulate panic unwind. Real
+`catch_unwind` native tests remain authoritative for that path and for OS close
+effects. Being a bounded model checker, Kani establishes its claims over an
+explicitly bounded state space rather than for all executions. The final fault
+run passed its controls and detected the historical trailing-`mem::forget`,
+invalid-prefix-bound, incorrect-accounting, and leaked-writer mutations; the
+archived results and exact command are recorded in the boundary verification
+document. Active verification tracking and the distinction between model
+evidence and real OS effects lives in
+[Rust boundary verification](rust-boundary-verification.md) and issue `#89`.
+
+### Const accessors in the test and Kani ownership model
+
+`CloseLog` in `rust/cuprum-native-io/src/fd_ownership_model.rs` counts modelled
+closes for the bounded model, and its accessor is
+`const fn closes(self) -> u32`. Both details of that signature follow from the
+workspace's Rust 1.85.0 toolchain rather than from an ownership decision.
+
+The workspace denies `missing_const_for_fn`, so an accessor with no reason to
+run at runtime must be `const`. `Cell::get` is not const-stable on 1.85; the
+compiler reports that `Cell::<T>::get` is not yet stable as a const fn.
+`Cell::into_inner` is const-stable, and it consumes the cell, so reaching it
+requires taking `self` by value. The consuming receiver is therefore what keeps
+the accessor `const` on that toolchain. It is not a new ownership rule:
+`CloseLog` stays `pub(crate)` inside a `#[cfg(any(test, kani))]` module, and
+each caller reads the log once as its final use, so the model's unit tests and
+`fd_ownership_kani_proofs.rs` keep their existing call sites. This remains an
+internal test-and-proof helper rather than a supported API.
+
+The pump helpers `step` and `apply_write` in
+`rust/cuprum-streams/src/pump_machine.rs` take `const fn` for the same lint
+reason. `const` qualifies how a function may be called, not who may call it, so
+neither helper widens its visibility and the pump contract is unchanged. The
+compile-fail case `tests/ui/fail/pump_transition_unreachable.rs` still pins the
+encapsulation boundary: it fails if either item is widened, even to
+`pub(crate)`. Because the committed `.stderr` fixture quotes the definition
+line, the added keyword changed that expectation; the private-function
+diagnostic it asserts is the same.
+
+### Native boundary verification
+
+The boundary checks have dedicated Makefile targets so the normal Rust
+toolchain and the verifier toolchains remain separate:
+
+```bash
+make boundary-test
+make boundary-verus
+make boundary-kani
+make boundary-miri
+make boundary-contract
+make boundary-faults
+```
+
+`make boundary-contract` confirms the safe targets reject unsafe Rust, and
+`make boundary-faults` requires the verification harnesses to detect deliberate
+faults.
+
+Install the checksum-verified prebuilt tools first with `make install-verus` and
+`make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
+Python `3.14` explicitly, including when CI exports `UV_PYTHON=3.13`; this
+tool-only runtime does not change the project Python test matrix. Verus uses
+Rust `1.98.0`, Verus `0.2026.09.06.8dea4a2`, and a separately installed
+prebuilt Z3 `4.16.0`. Kani uses `0.67.0` with compiler
+`rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and CBMC `6.8.0`; Miri uses
+`nightly-2026-08-07` with `rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The
+Verus input is regenerated from the production progress kernels on every run.
+The final-source progress proof verifies two functions with zero errors,
+recorded in `/tmp/issue379-round24-verus.log`, while direct assessment of the
+unchanged production `adopt_writer` fails on unsupported `OwnedFd` and
+`FromRawFd::from_raw_fd` representations; see
+`/tmp/issue379-verus-resource-assessment.log`. The installer succeeds in
+fetching and validating the pinned Verus and Kani binary caches. Current proof
+status, bounds, excluded targets, and trusted assumptions are recorded in
+[Rust boundary verification](rust-boundary-verification.md); a tool that is not
+available or compatible is a blocker rather than a passing skip.
+
+The final native Kani boundary run passed 7 harnesses with 0 failures in
+`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 11
+harnesses passed, covered by the current result in
+`/tmp/issue379-round24-kani.log`. The native ownership proofs enumerate two
+exits; the repeated-borrow harness restricts borrows to three and uses
+`#[kani::unwind(4)]`. Production progress proofs use symbolic `usize`
+count/capacity and `u64` total/remaining/written values. Safe pump proofs use
+symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
+three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
+four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
+the final prefix harness. These are bounded results, not an unbounded proof.
+Round 27 Miri passed all 13 isolated native tests with zero ignored; see
+`/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
+`libc::splice`, and unsupported operating-system representations. Round 33's
+prior local checkpoint passed, and Round 35's integrated local run passed the
+native and repository gates. Windows and macOS runtime tests are no longer
+pending hosted execution. On 2026-09-15, `Rust boundary verification` run
+35004943625 succeeded with its `Native contracts (windows-2022)`,
+`Native contracts (macos-latest)`, and `Native contracts (ubuntu-latest)` jobs,
+and `CI` run 35004943782 succeeded with its
+`Extension-gated tests (Windows Python/Rust boundary)` and
+`Extension-gated tests (Python/Rust boundary)` jobs. The boundary workflow's
+`extended` job is skipped on pull requests by design.
+
+The boundary installer and fault harnesses have narrow reuse policies.
+`scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
+installers only: HTTPS-only bounded redirects, digest validation, and no source
+builds. `scripts/check_boundary_faults.py` scopes its runner to the four
+verification commands and a disposable source copy; it is not a general process
+abstraction. Its progress and ownership checks have separate private runners;
+their scope is the existing four mutations, with the same controls and failure
+diagnostics. The download helpers separate bounded redirect traversal, one
+connection's lifetime, and response classification. They remain private to the
+pinned binary installer. The compiler-contract checker uses a named predicate
+requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
+failures cannot pass the probe.
+
+Windows borrowed I/O lives beside its handle adapter in
+`rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
+the borrowed handle and converts the byte count once for both read and write;
+Unix adapters retain their direct syscall and buffer contracts.
+
+`make boundary-faults` archives controls and deliberate fault failures for the
+scheduled `extended` job. The final run passed its controls and detected all
+four mutations; see `/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 
@@ -2488,30 +2765,107 @@ settled, its remaining duplicate is closed, and its mode is restored. This
 prevents cancellation cleanup from racing with native I/O on a descriptor that
 is still in use.
 
-Executor-side failures while creating the duplicate or submitting the executor
-work are re-raised after rollback and recorded at `DEBUG` on the
-`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
-reader or transferring the platform writer are recorded at `DEBUG` on the
+Executor-side failures are handled in two ways, and the split is deliberate.
+Creating the worker duplicates and submitting the executor work happen *before*
+anything is transferred, so a failure there selects the Python fallback: the
+hop is carried by `_pump_stream` exactly as it is when blocking mode is
+unavailable. Both are recorded at `DEBUG` on the `cuprum._pipeline_streams`
+logger. Shim-side failures while preparing the reader or transferring the
+platform writer are likewise recorded at `DEBUG`, but on the
 `cuprum._streams_rs` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
 and reader-preparation failure emits `reader_preparation_failed`. Executor
 rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure selects the Python fallback and emits
-`blocking_setup_failed`. The outcome events are counted by
-`cuprum_rust_pump_handoff_total` as described above.
+Blocking-mode failure emits `blocking_setup_failed`. The outcome events are
+counted by `cuprum_rust_pump_handoff_total` as described above.
+
+Two setup failures still re-raise, and the distinction between them and the
+declines is what the two duplication stages exist to draw.
+
+The first stage, `_open_native_pump_worker_fds`, re-opens each transport's
+descriptor *from its number*: on Linux through `/proc/self/fd/N`, elsewhere
+through `os.dup`. The number was extracted a moment earlier and the re-open is
+therefore a race against asyncio's own close — an EOF'd transport like
+`echo -n hello` exits immediately, so the re-open can hit `ENOENT`. That is a
+*decline*: nothing was transferred, no state outlived the attempt, and the hop
+is perfectly serviceable on the Python pump. Re-raising it left the writer
+transport open, so the downstream stage never saw EOF and the pipeline hung
+until its deadline — an intermittent wedge that only the native fast path could
+produce. The decline records its own `duplicate_fds_unavailable` reason in
+Table 1 above, alongside `blocking_mode_unavailable`.
+
+The second stage, `_duplicate_native_pump_fds`, duplicates descriptors Cuprum
+already owns, so it cannot lose that race: a failure there means descriptor
+exhaustion, which a fallback could not route around and which the caller should
+hear about. It re-raises, as does an executor rejection — the one failure not
+about descriptors at all, where every later hop would be rejected identically
+and a silent fallback would hide a broken executor. Both emit their bounded
+`duplicate_writer_failed` or `executor_submission_rejected` outcome first.
+
+A re-raise with no fallback behind it still has to release the writer
+transport, and `_run_rust_pump` does that on the way out. A hop that declined
+keeps the writer, because the Python pump writes through it; a hop that failed
+fatally has nothing left to write through it, and leaving it open left the
+downstream stage waiting for an EOF that never came. The pipeline then reported
+its deadline rather than the error that caused it — the same wedge as the
+decline fix above, on the paths that must still raise.
+
+### Native pump worker pooling
+
+`_PooledNativePumpExecutor` in `cuprum/_pipeline_native_pump_runtime.py` runs
+submitted pumps on reusable worker threads. It replaced a thread-per-submission
+executor that never reclaimed its threads, so a long-lived process taking many
+hand-offs accumulated one thread per hop ever attempted.
+
+The pool's central invariant is that **`submit` never waits**. It hands the job
+to an idle worker if one is free and starts a fresh worker otherwise, so the
+number of pumps running at once is unbounded, and `_IDLE_NATIVE_PUMP_WORKERS`
+(4) bounds only how many *idle* workers are kept for reuse. A worker that
+finishes above that limit exits instead of parking.
+
+That asymmetry is not an optimization, and it must not be "fixed". A native
+pump cannot finish while its downstream pipe is full, and only a later hop in
+the same pipeline can drain that pipe. A submission that waited for a free
+worker, or that queued behind one, would therefore be waiting on work that
+cannot start until it completes — the deadlock returns, and it returns as a
+hang rather than an error. Bounding the queue is exactly as fatal as bounding
+concurrency here. `test_submission_never_waits_behind_a_busy_worker` in
+`cuprum/unittests/test_pipeline_native_pump_runtime.py` pins this by submitting
+more blocking jobs than the limit allows and asserting every one starts.
+
+Worker threads are daemon threads and are never joined at exit, so a worker
+still blocked in native I/O cannot keep the interpreter from shutting down.
+
+`_prepare_rust_pump_call` completes every Python-side check before the writer
+descriptor reaches native code: it loads the native module, validates the
+buffer size (`_validate_buffer_size_before_writer_transfer`), then prepares the
+reader. Buffer-size validation calls `operator.index` and raises
+`OverflowError` for values outside the `i64` range and `ValueError` for a
+non-positive size or one above the 1 GiB cap (`_MAX_BUFFER_SIZE`). Reader
+preparation (`_prepare_native_reader`) requires a non-negative descriptor
+(`ValueError`, "file descriptor must be non-negative", or "file handle must be
+non-negative" on Windows) before conversion, converts it for the platform, then
+requires an `i64`-representable value (`OverflowError`) and a 32-bit signed
+range on non-Windows platforms (`ValueError`, "file descriptor out of range").
+Each failure closes the writer Python still owns
+(`_close_writer_after_pre_native_failure`) and emits the matching hand-off
+outcome (`native_load_failed`, `buffer_validation_failed`, or
+`reader_preparation_failed`); a reader-preparation failure additionally logs the
+`reader_preparation` phase at `DEBUG` on the `cuprum._streams_rs` logger.
 
 ## Rust splice-loop and drain contract
 
-The Linux zero-copy path in `rust/cuprum-rust/src/splice.rs` follows one
-canonical loop. `try_splice_pump` performs the first `splice_once` solely to
-detect support: `EINVAL` on that first call signals unsupported descriptor
-types and the read/write fallback. Every outcome thereafter — including the
-first call's, which is fed into the loop — is handled by the same arms: `Ok(0)`
-ends the transfer, `Ok(n)` accumulates, a non-fatal write error (broken pipe /
-connection reset) drains the reader and reports the bytes transferred so far,
-and anything else propagates.
+The Linux zero-copy policy in `rust/cuprum-streams/src/splice/mod.rs` follows
+one canonical loop. Its native syscall adapter is
+`rust/cuprum-native-io/src/lib.rs`; `try_splice_pump` performs the first
+`splice_once` solely to detect support: `EINVAL` on that first call signals
+unsupported descriptor types and the read/write fallback. Every outcome
+thereafter — including the first call's, which is fed into the loop — is
+handled by the same arms: `Ok(0)` ends the transfer, `Ok(n)` accumulates, a
+non-fatal write error (broken pipe / connection reset) drains the reader and
+reports the bytes transferred so far, and anything else propagates.
 
 `splice_once` retries at the syscall level: an interrupted splice (`EINTR`) is
 re-issued rather than surfaced, matching the Unix read and write policies, so a
@@ -2599,7 +2953,7 @@ looked like it was guarding against.
 That encapsulation is what the proptests and Kani proofs assume rather than
 establish — neither can observe a transition it cannot spell — so it is pinned
 separately by the compile-fail case
-`rust/cuprum-rust/tests/ui/fail/pump_transition_unreachable.rs`. That case
+`rust/cuprum-streams/tests/ui/fail/pump_transition_unreachable.rs`. That case
 includes `src/pump_machine.rs` as a child module, reproducing the relationship
 `lib.rs` has with it, and asserts the compiler's refusal of an attempt to build
 a `Transition::Wrote` and pass it to `step` from the parent. Widening either
@@ -2672,18 +3026,25 @@ The span is created at `error` level so the `warn`/`error` events keep their
 operation context even under a `warn`/`error`-only production filter, where an
 `info` span would be disabled; it emits no log line of its own.
 
-Unix Rust tests share pipe creation, duplicated-file wrapping, result helpers,
-and descriptor-state checks through `test_support`. Re-use that module for
+Safe stream tests share pipe creation, typed descriptor duplication, result
+helpers, and descriptor-state checks through
+`rust/cuprum-streams/src/test_support.rs`. Re-use that module for
 descriptor-backed test setup; keep production code independent of test helpers.
-The splice behavioural tests expose that shared `make_pipe` as an rstest `pipe`
-fixture, so scenarios needing several independent pipes inject it once per
-`#[from(pipe)]` parameter.
+Its `OwnedFd`-typed cloning API rejects a raw integer by construction, while
+the duplicate-owner lifetime test confirms that dropping the clone leaves the
+original usable. Keep the wrong-direction `EBADF` regressions for attempting to
+write through a pipe reader and read through a pipe writer. The splice
+behavioural tests expose the shared `make_pipe` as an rstest `pipe` fixture, so
+scenarios needing several independent pipes inject it once per `#[from(pipe)]`
+parameter.
 
 ## Rust property testing and verification
 
-Rust-level tests for `cuprum-rust` live with the crate under
-`rust/cuprum-rust/src/`. Use them for pure decoder, parsing, state-machine, and
-adapter logic where Python integration tests would only cover a few examples.
+Rust-level tests for safe stream policy live with `cuprum-streams` under
+`rust/cuprum-streams/src/`; native ownership and syscall tests live with
+`cuprum-native-io` under `rust/cuprum-native-io/src/`. Use them for pure
+decoder, parsing, state-machine, and adapter logic where Python integration
+tests would only cover a few examples.
 
 Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
 development dependency. Prefer generated payloads and small helper functions
@@ -2937,17 +3298,18 @@ make lint
 ```
 
 Run Kani separately because it is a bounded model checker rather than a normal
-unit-test runner. The Kani installer places the verifier under `~/.kani`; the
-dynamic library path is required when invoking the crate harnesses. Resolve the
-toolchain library directory from the installed version rather than hard-coding
-it:
+unit-test runner. Install the checksum-verified prebuilt pinned Kani binaries
+without a source build, then run the boundary harnesses from the repository
+root:
 
 ```bash
-KANI_VERSION=$(cargo kani --version | awk '{print $2}')
-cd rust && \
-  LD_LIBRARY_PATH="$HOME/.kani/kani-${KANI_VERSION}/toolchain/lib" \
-  cargo kani --package cuprum-rust
+make install-boundary-kani
+make boundary-kani
 ```
+
+`make boundary-kani` confirms the pinned Kani `0.67.0` installation and
+verifies both `cuprum-native-io` and `cuprum-streams`. The target supplies the
+dynamic library path itself, so no manual `KANI_VERSION` resolution is needed.
 
 When adding new Kani proofs, keep the bounds explicit with attributes such as
 `#[kani::unwind(N)]`, include `kani::cover!` statements for the intended
@@ -3602,6 +3964,47 @@ probe. Reuse the existing helper rather than re-deriving the `sysconfig` scan;
 extend `maturin_script_locatable()` in place if maturin changes how it locates
 its binary.
 
+## Native Rust source-distribution contract
+
+A source distribution must be able to build the optional native extension, so
+the Rust workspace travels inside the sdist. `tests/test_native_sdist.py` holds
+that contract: it builds a real archive with both packaging frontends and
+checks the members that result.
+
+`[tool.uv].source-include` in `pyproject.toml` lists the workspace files the
+`uv build --sdist` archive must retain:
+
+- the workspace manifests and pins — `rust/Cargo.toml`, `rust/Cargo.lock`,
+  `rust/rust-toolchain.toml`, and `rust/dylint.toml`;
+- each crate manifest — `rust/cuprum-rust/Cargo.toml`,
+  `rust/cuprum-streams/Cargo.toml`, and `rust/cuprum-native-io/Cargo.toml`;
+- all three crate source trees, including each crate's `src/` and the
+  integration `tests/` of `cuprum-rust` and `cuprum-streams`.
+
+Cargo build output is excluded: `target` never appears in an archive, so an
+sdist carries sources rather than a multi-gigabyte build cache.
+
+Maturin builds its archive from the same workspace, and the
+`[tool.maturin].include` entries carry the two files it would not otherwise
+copy — `rust/rust-toolchain.toml` and `rust/dylint.toml`, both restricted with
+`format = "sdist"` so they never enter a wheel.
+
+`tests/test_native_sdist.py` verifies both frontends, and it is deliberately
+not a unit test: each case builds a genuine archive with `uv build --sdist` or
+`uv run maturin sdist`, so the check fails if either frontend stops honouring
+the configuration. Its parametrization covers `uv` and `maturin` separately
+because the two read different manifest keys and can drift independently.
+
+**When the workspace changes.** Adding, renaming, or removing a crate — or
+adding a file a build needs at the workspace root — requires a matching update
+in three places: `[tool.uv].source-include` in `pyproject.toml`, the
+`[tool.maturin].include` list when the file is a root-level pin, and the
+expected-member set in `tests/test_native_sdist.py`. Run the contract with:
+
+```bash
+uv run pytest tests/test_native_sdist.py -q
+```
+
 ## Mutation-testing harness
 
 The mutmut mutation-testing workflow runs the selected test suite from its
@@ -3626,16 +4029,17 @@ uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
 ## Rust stream buffer-size validation
 
 `rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
-`rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through a pure
-`checked_buffer_size(i64) -> Result<usize, &'static str>` helper, wrapped by
-`validate_buffer_size` (which maps the message to `PyValueError`). The contract
-is: reject non-positive values, values that overflow `usize` on the target
-platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
-guards against absurd allocations while comfortably exceeding any realistic
-transfer buffer (the default is 64 KiB). `checked_buffer_size` is kept pure so
-its boundaries are property tested directly in
-`rust/cuprum-rust/src/buffer_size_tests.rs`; the Python-side error mapping is
-exercised in `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
+`rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through
+`validate_buffer_size(i64) -> PyResult<BufferSize>`, which maps the message to
+`PyValueError`. `BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs`
+owns the validation and returns the validated size used by the stream loops.
+The contract is: reject non-positive values, values that overflow `usize` on
+the target platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) —
+the cap guards against absurd allocations while comfortably exceeding any
+realistic transfer buffer (the default is 64 KiB). The Rust boundary cases are
+property tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the
+Python-side error mapping is exercised in
+`cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
 `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
 guide aligned with this contract when the cap changes.
 
@@ -3891,15 +4295,20 @@ with the command above (or as part of a full mutmut pass). The test validates:
 
 ## Compile-time UI tests (trybuild)
 
-The Rust crate at `rust/cuprum-rust/` uses
-[trybuild](https://github.com/dtolnay/trybuild) to validate contracts that hold
-at compile time and so cannot be observed by a runtime test: PyO3 macro
-behaviour, and encapsulation boundaries such as the pump machine's private
-`Transition`. Tests live under `rust/cuprum-rust/tests/ui/`:
+The Rust crates use [trybuild](https://github.com/dtolnay/trybuild) to validate
+contracts that hold at compile time and so cannot be observed by a runtime
+test. PyO3 macro behaviour remains in `rust/cuprum-rust/tests/ui/`; the safe
+stream crate keeps encapsulation and writer-lifetime probes, including the pump
+machine's private `Transition`, in `rust/cuprum-streams/tests/ui/`. Each
+crate's UI directory contains:
 
 - `tests/ui/pass/` — Rust files that **must compile** without error.
 - `tests/ui/fail/` — Rust files that **must fail** compilation with diagnostics
-  matching the corresponding `.stderr` file.
+matching the corresponding `.stderr` file.
+
+The PyO3 pass fixtures include
+`rust/cuprum-rust/tests/ui/pass/const_availability_export.rs`; the safe stream
+fixtures include the `Transition` and writer-lifetime probes.
 
 Run compile-time UI tests with:
 
@@ -3994,9 +4403,10 @@ spawn paths:
   from a `PIPE`; a non-final stage always pipes stdout so it can relay into the
   next stage regardless of capture or echo; the final stage's stdout follows
   its own `consumes_stdout` gate, and every stage's stderr follows its own
-  `consumes_stderr` gate. `_spawn_pipeline_processes` routes through this
-  helper — do not re-derive the flags inline at pipeline-stage spawn sites, and
-  do not use it for single-command spawning.
+  `consumes_stderr` gate. `_spawn_pipeline_processes`
+  (`cuprum/_pipeline_spawn.py`) routes through this helper — do not re-derive
+  the flags inline at pipeline-stage spawn sites, and do not use it for
+  single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
@@ -4010,6 +4420,15 @@ exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
 authoritative. That test module covers the full finite input domain (stage
 position × the two parent-consumption booleans) and asserts agreement with the
 single-command policy on the overlapping cases.
+
+During pipeline startup, the mutable `_SpawnedPipelineStages` accumulator in
+`cuprum/_pipeline_spawn.py` retains the processes, capture tasks, start
+timestamps, and per-stage relay-diagnostics collectors created so far.
+`_spawn_pipeline_stages` fills it one stage at a time, allowing
+`_spawn_pipeline_processes` to clean up a partial spawn without losing task or
+diagnostic ownership. After startup succeeds, `_run_pipeline` projects those
+values into the immutable `_PipelineSpawnResult` used by the wait and
+collection paths.
 
 ## Output behaviour carrier
 
@@ -4143,11 +4562,15 @@ lifecycle modules so timeout and cancellation behaviour remains aligned with
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
-`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
-`cuprum/_subprocess_wait.py`. The two idle-heartbeat modules,
-`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
-the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
+`cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. Pipeline
+startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
+stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
+termination and the shared `_shielded_cleanup` primitive. The two
+idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
+`cuprum/_idle_diagnostic.py`, are private to the same seam. See
+[Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -4158,8 +4581,11 @@ terminating the process, and draining the stream consumers exactly once —
 belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
 deciding which streams are consumed, and assembling the result — belongs in
 `_subprocess_execution`; and single-command stream-consumer construction
-belongs in `_subprocess_streams`. The idle heartbeat's timing belongs in
-`_idle_heartbeat` and its rendering and write-failure policy in
+belongs in `_subprocess_streams`. On the pipeline side, starting stages — and
+cleaning up whatever a failed startup left running — belongs in
+`_pipeline_spawn`, while terminating stages that are already running belongs in
+`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
+belongs in `_idle_heartbeat` and its rendering and write-failure policy in
 `_idle_diagnostic`.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
@@ -4172,6 +4598,16 @@ idle-heartbeat wiring reaches into the stream configs; see the
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
+
+`cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
+the process has been spawned. `_run_subprocess_with_streams` waits for exit,
+reconciles the stdin writer and both stream consumers on every exit path, and
+settles the per-stream relay-diagnostics collectors before returning captured
+output. `_subprocess_execution.py` retains process spawning, stream-consumer
+construction, stream configuration, the non-streaming path, and final
+`CommandResult` assembly. `_StreamConsumerSpawnContext` is its private bundle
+of stream configuration, PID, and the stdout/stderr diagnostics collectors; the
+streamed run creates it before handing those values to the consumer tasks.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -4275,8 +4711,9 @@ covers only the one `await` it wraps, so the wait is resumed behind a fresh
 shield after each cancellation rather than re-awaited bare: only the teardown's
 own completion ends the loop, and the first cancellation is re-raised so the
 caller still sees exactly one. `_terminate_all_shielded` also backs
-`_cleanup_spawned_processes` and `_cleanup_pipeline_on_error`, and the
-fail-fast route in `_terminate_pipeline_remaining_stages` uses the shared
+`_cleanup_spawned_processes` (`cuprum/_pipeline_spawn.py`) and
+`_cleanup_pipeline_on_error`, and the fail-fast route in
+`_terminate_pipeline_remaining_stages` uses the shared
 `_await_teardown_shielded` helper directly.
 
 `_await_teardown_shielded` retries the shielded wait in a loop rather than
@@ -4309,17 +4746,18 @@ passing `return_exceptions=True`.
 
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
-cleanup paths in `_run_subprocess_with_streams` and
-`_run_subprocess_without_streams` (`cuprum/_subprocess_execution.py`); the
-spawn-failure, timeout, and run-failure paths, plus
-`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
-`_execute_with_hooks` in `cuprum/sh.py`, which previously used a bare
-`await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
-shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
-the stdin writer, then drains the stream consumers, and
-`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
-the stream tasks, then drains the observe-hook tasks. Shielding the halves
-separately would let a cancellation landing between them abandon the second.
+cleanup paths in `_run_subprocess_with_streams`
+(`cuprum/_subprocess_stream_run.py`) and `_run_subprocess_without_streams`
+(`cuprum/_subprocess_execution.py`); the spawn-failure, timeout, and
+run-failure paths, plus `_finalize_pipeline_execution`, in
+`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in `cuprum/sh.py`,
+which previously used a bare `await asyncio.shield(...)`. Two further helpers
+keep multi-step cleanup as one shielded unit: `_reconcile_run_tasks` in
+`cuprum/_subprocess_wait.py` cancels the stdin writer, then drains the stream
+consumers, and `_reconcile_pipeline_run_failure` in
+`cuprum/_pipeline_internals.py` cancels the stream tasks, then drains the
+observe-hook tasks. Shielding the halves separately would let a cancellation
+landing between them abandon the second.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
@@ -4416,15 +4854,15 @@ executes:
    without execution disruption. Successful writes emit a `stdin` event with a
    byte count. The metrics adapter increments `cuprum_stdin_bytes_total` for
    successful writes and `cuprum_stdin_errors_total` for failure events.
-5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
-   task runs concurrently with the stdout/stderr consumer tasks. On
-   `TimeoutError` or `asyncio.CancelledError`,
-   `_wait_for_streamed_process_exit` reconciles the stdin writer and stream
-   consumers exactly once via `_reconcile_run_tasks`. The timeout
-   reconciliation passes the execution's capture setting so the bounded EOF
-   grace preserves partial text before `_handle_stream_timeout` raises
-   `_SubprocessTimeoutError`; cancellation passes `capture=False` and re-raises
-   `CancelledError` after all tasks settle.
+5. In the streaming path (`_run_subprocess_with_streams` in
+   `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
+   with the stdout/stderr consumer tasks. On `TimeoutError` or
+   `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
+   stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
+   The timeout reconciliation passes the execution's capture setting so the
+   bounded EOF grace preserves partial text before `_handle_stream_timeout`
+   raises `_SubprocessTimeoutError`; cancellation passes `capture=False` and
+   re-raises `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits `_wait_for_exit_code` itself. On `TimeoutError` or
@@ -4452,11 +4890,12 @@ skeleton (plan event, before-hooks dispatch, delegation).
 
 `_build_stream_config(execution, discard_on_cancel)` centralizes construction
 of the `_StreamConfig` used by the streaming execution path
-(`_run_subprocess_with_streams`). Extracting it removes one branch from that
-function, reducing its cyclomatic complexity below the CodeScene threshold, and
-makes the stdout-sink resolution logic testable in isolation. The required
-`discard_on_cancel` event is shared by both stream consumers and is set by
-`_settle_consumers` only for cleanup paths that must discard retained output.
+(`_run_subprocess_with_streams` in `cuprum/_subprocess_stream_run.py`).
+Extracting it removes one branch from that function, reducing its cyclomatic
+complexity below the CodeScene threshold, and makes the stdout-sink resolution
+logic testable in isolation. The required `discard_on_cancel` event is shared
+by both stream consumers and is set by `_settle_consumers` only for cleanup
+paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.

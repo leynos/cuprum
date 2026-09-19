@@ -114,12 +114,10 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
     def _spawn_blocking_consumers(
         process: object,
         execution: object,
-        stream_config: object,
-        *,
-        pid: int | None,
+        spawn_context: object,
     ) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
         """Return two never-completing consumer tasks and record them."""
-        _ = (process, execution, stream_config, pid)
+        _ = (process, execution, spawn_context)
 
         async def _block() -> str | None:
             """Block until cancelled during stdin-failure cleanup."""
@@ -131,7 +129,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
 
     monkeypatch.setattr("cuprum._subprocess_stdin._write_stdin", _raise_stdin)
     monkeypatch.setattr(
-        "cuprum._subprocess_execution._spawn_stream_consumers",
+        "cuprum._subprocess_streams._spawn_stream_consumers",
         _spawn_blocking_consumers,
     )
 

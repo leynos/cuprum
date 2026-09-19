@@ -21,7 +21,7 @@ if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
 
-    from cuprum._streams import _LineSink, _StreamConfig
+    from cuprum._streams import _LineSink, _RelayDiagnostics, _StreamConfig
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -30,8 +30,8 @@ class _LineConsumption:
 
     config: _StreamConfig
     on_line: _LineSink
-    read_size: int
     drain: cabc.Callable[..., cabc.Awaitable[str | None]]
+    relay_diagnostics: _RelayDiagnostics | None
 
 
 async def _emit_line(sink: _LineSink, line: str) -> None:
@@ -89,7 +89,7 @@ async def _consume_stream_with_lines(
         stream,
         consumption.config,
         on_chunk=feed_decoder,
-        read_size=consumption.read_size,
+        relay_diagnostics=consumption.relay_diagnostics,
     )
     pending_text = await _emit_completed_lines(
         pending_text + decoder.decode(b"", final=True),

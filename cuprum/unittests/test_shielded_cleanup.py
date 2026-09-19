@@ -320,7 +320,7 @@ class TestSuccessPath:
         a reader blocked on a pipe outlives the run it belonged to — the same leak
         the timeout and cancellation paths reconcile against.
         """
-        from cuprum import _subprocess_execution
+        from cuprum import _subprocess_streams
 
         catalogue, python_program = python_catalogue()
         python = sh.make(python_program, catalogue=catalogue)
@@ -347,8 +347,11 @@ class TestSuccessPath:
             spawned["blocked"] = asyncio.create_task(blocked())
             return spawned["boom"], spawned["blocked"]
 
+        # The streamed run loop resolves the helper from its defining module,
+        # so patching the re-export in _subprocess_execution would not replace
+        # what the run actually calls.
         monkeypatch.setattr(
-            _subprocess_execution, "_spawn_stream_consumers", failing_consumers
+            _subprocess_streams, "_spawn_stream_consumers", failing_consumers
         )
 
         async def run_case() -> None:

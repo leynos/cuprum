@@ -8,8 +8,9 @@ stderr and the final stage's stdout, and maps a timeout into a
 the ``cuprum.sh`` lazy-import shim used to build those results. It is a
 companion to ``cuprum._pipeline_internals``, which re-exports its names
 to preserve its public surface, and collaborates with
-``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
-``cuprum._pipeline_wait``, and ``cuprum._process_lifecycle``.
+``cuprum._pipeline_spawn``, ``cuprum._pipeline_streams``,
+``cuprum._pipeline_types``, ``cuprum._pipeline_wait``, and
+``cuprum._process_lifecycle``.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_wait import _PipelineWaitResult
+    from cuprum.echo_events import RelayFallback
     from cuprum.sh import SafeCmd
 
 
@@ -115,6 +117,38 @@ async def _gather_pipeline_outputs(
     return stderr_by_stage, final_stdout
 
 
+def _stage_relay_fallbacks(
+    spawn: _PipelineSpawnResult,
+) -> tuple[tuple[RelayFallback, ...], ...]:
+    """Read each stage's relay diagnostics from its own collectors.
+
+    Every stage's tuple lists its stdout records first (final stage only,
+    matching the single-command result order) and then its stderr records.
+    Unsettled collectors — a drain cancelled during teardown — contribute an
+    empty tuple, keeping those diagnostics on the echo observation channel.
+
+    Returns
+    -------
+    tuple[tuple[RelayFallback, ...], ...]
+        One tuple per stage, in stage order, each listing that stage's stdout
+        records first (final stage only) and then its stderr records.
+    """
+    stage_tuples: list[tuple[RelayFallback, ...]] = []
+    for stderr_diagnostics, stdout_diagnostics in spawn.relay_diagnostics_by_stage:
+        if stdout_diagnostics is not None:
+            stdout_diagnostics.settle()
+        if stderr_diagnostics is not None:
+            stderr_diagnostics.settle()
+        stdout_fallbacks = (
+            () if stdout_diagnostics is None else stdout_diagnostics.snapshot()
+        )
+        stderr_fallbacks = (
+            () if stderr_diagnostics is None else stderr_diagnostics.snapshot()
+        )
+        stage_tuples.append(stdout_fallbacks + stderr_fallbacks)
+    return tuple(stage_tuples)
+
+
 def _build_timeout_expired_error(
     parts: tuple[SafeCmd, ...],
     timeout: float,
@@ -160,6 +194,7 @@ async def _collect_pipeline_inputs(
         await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
+        relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)
         if timeout is None:
             msg = "TimeoutError without a configured timeout"
             raise _PipelineInvariantError(msg) from exc
@@ -167,6 +202,7 @@ async def _collect_pipeline_inputs(
             stderr_by_stage=stderr_by_stage,
             final_stdout=final_stdout,
             capture=config.capture,
+            relay_fallbacks_by_stage=relay_fallbacks_by_stage,
         )
         raise _build_timeout_expired_error(parts, timeout, outputs) from exc
     finally:
@@ -192,4 +228,5 @@ async def _collect_pipeline_inputs(
         wait_result=wait_result,
         stderr_by_stage=stderr_by_stage,
         final_stdout=final_stdout,
+        relay_fallbacks_by_stage=_stage_relay_fallbacks(spawn),
     )

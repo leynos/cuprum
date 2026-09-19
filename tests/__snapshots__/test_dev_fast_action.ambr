@@ -1,0 +1,53 @@
+# serializer version: 1
+# name: test_install_selects_the_pinned_archive_and_exports_its_path[aarch64]
+  dict({
+    'rustup': list([
+      'toolchain',
+      'install',
+      'nightly-2026-08-23',
+      '--profile',
+      'minimal',
+      'component',
+      'add',
+      'rustc-codegen-cranelift',
+      'clippy',
+      '--toolchain',
+      'nightly-2026-08-23',
+    ]),
+    'tar': list([
+      '--extract',
+      '--gzip',
+      '--strip-components=1',
+      '--directory',
+      '<workspace>/.local',
+      '--file',
+      '<workspace>/runner-temp/mold-2.41.0-aarch64-linux.tar.gz',
+    ]),
+  })
+# ---
+# name: test_install_selects_the_pinned_archive_and_exports_its_path[x86_64]
+  dict({
+    'rustup': list([
+      'toolchain',
+      'install',
+      'nightly-2026-08-23',
+      '--profile',
+      'minimal',
+      'component',
+      'add',
+      'rustc-codegen-cranelift',
+      'clippy',
+      '--toolchain',
+      'nightly-2026-08-23',
+    ]),
+    'tar': list([
+      '--extract',
+      '--gzip',
+      '--strip-components=1',
+      '--directory',
+      '<workspace>/.local',
+      '--file',
+      '<workspace>/runner-temp/mold-2.41.0-x86_64-linux.tar.gz',
+    ]),
+  })
+# ---

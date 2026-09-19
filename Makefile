@@ -16,6 +16,46 @@ TOOLS = $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
+# Rust 1.85.0 remains Cuprum's published compatibility toolchain. This
+# separately pinned nightly is selected only for compatible Linux debug work.
+MSRV_TOOLCHAIN ?= 1.85.0
+DEV_FAST_TOOLCHAIN ?= nightly-2026-08-23
+DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
+# Clippy is a separate rustup component from the backend, but `rust-lint` runs
+# it through this same nightly, so the prerequisite gate must require both.
+DEV_FAST_LINT_COMPONENT ?= clippy
+DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_CRANELIFT_COMPONENT) $(DEV_FAST_LINT_COMPONENT)
+# The selected Cargo fragment is repository-fixed state, not a caller input.
+# `override` is load-bearing, not decoration: a plain or `?=` definition still
+# yields to an ordinary environment variable, and any non-override definition
+# yields to a command-line variable. With either, `make dev-build
+# DEV_FAST_RUST_CONFIG=/tmp/other.toml` would run the accelerated route under a
+# configuration the project never approved while `dev-fast-check` still passed.
+# Both names need it: the second because a caller could otherwise replace the
+# derived value directly. Anything needing a different Cargo configuration is
+# outside this route and does not use it.
+override DEV_FAST_CONFIG_RELATIVE := tools/dev-fast/config.toml
+override DEV_FAST_RUST_CONFIG := ../$(DEV_FAST_CONFIG_RELATIVE)
+DEV_FAST_MOLD_VERSION_FILE ?= tools/mold/VERSION
+DEV_FAST_MOLD_VERSION := $(strip $(shell tr -d '\r\n' < $(DEV_FAST_MOLD_VERSION_FILE)))
+DEV_FAST_MOLD_VERSION_PATTERN = $(subst .,\.,$(DEV_FAST_MOLD_VERSION))
+DEV_FAST_CARGO_BRIDGE ?= tools/dev-fast/cargo
+DEV_FAST_HOST_IS_LINUX := $(if $(filter Linux,$(shell uname -s)),yes)
+# `CARGO` remains a caller-injectable single executable. Maturin can select
+# that executable but cannot pass Cargo's configuration-file `--config` form.
+DEV_FAST_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) $(CARGO) --config $(DEV_FAST_RUST_CONFIG)
+MSRV_CARGO_COMMAND = RUSTUP_TOOLCHAIN=$(MSRV_TOOLCHAIN) $(CARGO)
+RUST_DEBUG_CARGO = $(if $(DEV_FAST_HOST_IS_LINUX),$(DEV_FAST_CARGO_COMMAND),$(CARGO))
+RUST_DEBUG_PREREQUISITE = $(if $(DEV_FAST_HOST_IS_LINUX),dev-fast-check)
+# Parse release spellings without re-parsing caller-provided flags in a shell.
+maturin_release_profile = $(strip $(if $(1),$(if $(and $(filter --profile,$(firstword $(1))),$(filter release,$(word 2,$(1)))),yes,$(call maturin_release_profile,$(wordlist 2,$(words $(1)),$(1))))))
+MATURIN_DEVELOP_IS_RELEASE := $(strip $(filter --release -r --profile=release,$(MATURIN_DEVELOP_FLAGS)) $(call maturin_release_profile,$(MATURIN_DEVELOP_FLAGS)))
+DEVELOP_DEV_FAST_ENABLED := $(if $(DEV_FAST_HOST_IS_LINUX),$(if $(MATURIN_DEVELOP_IS_RELEASE),,yes))
+DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
+DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) CARGO=$(DEV_FAST_CARGO_BRIDGE))
+DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG_RELATIVE)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG_RELATIVE)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
+DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
+DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
 WHITAKER ?= whitaker
 BUILD_JOBS ?=
 RUST_FLAGS ?= -D warnings
@@ -60,6 +100,8 @@ TEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_native_sdist.py \
+  scripts/tests/test_boundary_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -158,6 +200,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
+        test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -174,9 +217,9 @@ build: uv .venv ## Build virtual-env and install deps
 
 # Why this exists and why `ensurepip` comes first: see "Building the
 # extension for tests" in docs/developers-guide.md.
-develop: build ## Build the native extension into the dev virtual-env
+develop: build $(DEVELOP_DEV_FAST_PREREQUISITE) ## Build the native extension into the dev virtual-env
 	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) python -m ensurepip --upgrade
-	$(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
+	$(DEVELOP_DEV_FAST_ENV) $(UV_RUN_ENV) uv run $(UV_RUN_FLAGS) maturin develop $(MATURIN_DEVELOP_FLAGS) --manifest-path $(RUST_DIR)/cuprum-rust/Cargo.toml
 
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
@@ -252,8 +295,8 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
-rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
-	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
+rust-lint: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
@@ -309,18 +352,33 @@ test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
 
-test-rust: ## Run the Rust suite
+test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(TEST_RUSTFLAGS)" $(CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
+	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
+
+msrv-check: ## Verify every Rust target compiles on the published MSRV
+	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features
+
+dev-fast-check: ## Verify Linux dev-fast prerequisites
+	@$(DEV_FAST_CHECK_COMMAND)
+
+dev-build: dev-fast-check ## Build Rust debug targets through the accelerated route
+	cd $(RUST_DIR) && $(DEV_FAST_CARGO_COMMAND) build $(CARGO_FLAGS)
+
+dev-test: dev-fast-check ## Test Rust through the accelerated route
+	@$(DEV_FAST_TEST_COMMAND)
 
 # Run `make develop` first. Without the extension the guard fails the run with
 # a message naming that command, which is the intended diagnostic.
 test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiring the extension
 	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
+
+test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
+	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_dev_fast_action.py
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks
@@ -336,3 +394,46 @@ benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
 	awk 'BEGIN {FS=":"; printf "Available targets:\n"} {printf "  %-20s %s\n", $$1, $$2}'
+
+# Boundary verifiers use their own pinned binary toolchains; normal gates keep
+# rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
+PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
+PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
+VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+MIRI_TOOLCHAIN = nightly-2026-08-07
+KANI_VERSION = 0.67.0
+KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.kani/kani-$(KANI_VERSION)/lib
+
+.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
+install-verus: ## Install the checksum-verified prebuilt Verus release
+	$(PROVER_TOOLS) verus install --install-dir $(VERUS_INSTALL_DIR)
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_z3.py
+
+boundary-verus: ## Verify actual production length/accounting kernels
+	$(UV_RUN_ENV) uv run python scripts/render_boundary_proofs.py
+	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
+
+boundary-kani: ## Check bounded native ownership and existing policy proofs
+	$(PROVER_TOOLS) kani check-version
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
+
+boundary-miri: ## Interpret isolated native resource and memory paths
+	cd $(RUST_DIR) && $(CARGO) +$(MIRI_TOOLCHAIN) miri test --package cuprum-native-io --lib
+
+boundary-test: ## Run isolated native integration and verification-tool contracts
+	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
+	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
+
+.PHONY: install-boundary-kani
+install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_kani.py
+	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" $(CARGO) kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
+
+.PHONY: boundary-contract
+boundary-contract: ## Confirm actual safe targets reject all forms of unsafe Rust
+	$(UV_RUN_ENV) uv run python scripts/check_boundary_contract.py
+
+.PHONY: boundary-faults
+boundary-faults: ## Require proof and real-unwind regressions to detect deliberate faults
+	$(UV_RUN_ENV) uv run python -m scripts.check_boundary_faults
