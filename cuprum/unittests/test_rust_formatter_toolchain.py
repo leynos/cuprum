@@ -91,7 +91,7 @@ def _blank(lexeme: str) -> str:
 def _try_lexeme(source: str, index: int) -> int:
     """Find the end of the lexeme starting at ``index``.
 
-    Recognises string literals, raw string literals, line comments, and block
+    Recognizes string literals, raw string literals, line comments, and block
     comments. Block comments nest in Rust, so the terminator is the ``*/`` that
     closes the outermost comment rather than the first one encountered.
 
