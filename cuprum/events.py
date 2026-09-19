@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import enum
 import typing as typ
 import uuid
 
@@ -51,6 +52,7 @@ ExecId = typ.NewType("ExecId", uuid.UUID)
 # at once, without ever awaiting the process.
 type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
 
+
 # The stable ``resource_usage_mode`` values, naming how a terminal ``exit``
 # event obtained the child resource figures it carries. They are shared by the
 # observe event, the ``cuprum_`` log extras, the span attributes, and the
@@ -61,11 +63,30 @@ type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
 # fallback, where ``RUSAGE_CHILDREN`` snapshots bracket the run and
 # ``max_rss_bytes`` stays ``None`` because that high-water mark spans every
 # reaped child. ``unavailable`` means the platform offers neither source.
-type ResourceUsageMode = typ.Literal[
-    "wait4_child",
-    "aggregate_cpu_delta",
-    "unavailable",
-]
+class ResourceUsageMode(enum.StrEnum):
+    """How a terminal ``exit`` event obtained the resource figures it carries.
+
+    A closed set, like :class:`~cuprum.pump_events.RustPumpDeclineReason`: the
+    value is a metric label and a log extra that operators filter on, so a
+    typo at a new call site would produce a value their filters silently miss.
+    As an enum it is a type error instead.
+
+    Members are `str`, so the observe event, the ``cuprum_`` log extras, the
+    span attributes, and the metrics label all keep carrying plain strings —
+    the constant this replaced was a ``Literal`` of exactly these three values,
+    and a member formats as its own value.
+
+    Examples
+    --------
+    The member value is the string consumers see::
+
+        assert ResourceUsageMode.WAIT4_CHILD == "wait4_child"
+
+    """
+
+    WAIT4_CHILD = "wait4_child"
+    AGGREGATE_CPU_DELTA = "aggregate_cpu_delta"
+    UNAVAILABLE = "unavailable"
 
 
 def new_exec_id() -> ExecId:

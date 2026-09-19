@@ -43,9 +43,14 @@ PULL_REQUEST_LANE = ("ci.yml", "coverage")
 #: rather than of one workflow.
 COVERAGE_LANES = (PULL_REQUEST_LANE, PUBLISH_LANE)
 
-#: The CodeScene action's `uses:` prefix. Matched as a prefix rather than a
-#: substring so a step naming a differently owned action cannot satisfy it.
-CODESCENE_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-coverage@"
+#: The CodeScene action's complete pinned `uses:` value, revision included. The
+#: pin is matched exactly: an action moved to another revision is a different
+#: action as far as this contract is concerned, and a prefix match would let a
+#: re-pinned or differently owned step satisfy it.
+CODESCENE_ACTION = (
+    "leynos/shared-actions/.github/actions/upload-codescene-coverage"
+    "@c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+)
 
 #: The formats the pinned CodeScene action accepts. Its `Validate inputs` step
 #: rejects anything else before the CLI is installed, so a format outside this
@@ -127,9 +132,7 @@ def _consumed_path(workflow_name: str, job_name: str) -> str | None:
         The declared path, or ``None`` when the step leaves it to the action.
     """
     where = f"{workflow_name}:{job_name} CodeScene step"
-    step = single_step_using(
-        workflow_name, job_name, uses=CODESCENE_ACTION, prefix=True
-    )
+    step = single_step_using(workflow_name, job_name, uses=CODESCENE_ACTION)
     inputs = step_inputs(step, f"{where} must declare inputs")
     declared = inputs.get("path")
     if declared is None or declared == "__auto__":
@@ -172,7 +175,7 @@ def test_the_generator_runs_before_the_step_that_reads_its_file() -> None:
         workflow_name, job_name, uses=GENERATE_COVERAGE
     )
     consumed_at = single_step_position_using(
-        workflow_name, job_name, uses=CODESCENE_ACTION, prefix=True
+        workflow_name, job_name, uses=CODESCENE_ACTION
     )
 
     assert generated_at < consumed_at, (

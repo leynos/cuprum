@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
 import os
 import signal
 import sys
@@ -70,28 +71,52 @@ def _sleep_config() -> _wait4_process.DirectProcessConfig:
     )
 
 
-def _still_owns_child(pid: int) -> bool:
-    """Return whether ``pid`` is still this process's unreaped child.
+class _ChildOwnership(enum.Enum):
+    """What a ``WNOHANG`` probe found at a pid this test spawned."""
 
-    Any successful ``waitpid`` means the child is still ours, whether it is
-    still running (``(0, 0)`` under ``WNOHANG``) or sitting as a zombie
-    (``(pid, status)``). Only the failure to find it at all proves the child
-    was collected, so the exception — not the returned status — decides this.
+    #: Still running: nothing has collected it and it has not exited.
+    LIVE = enum.auto()
+    #: Exited but unreaped. The probe itself reaped it, so the pid is now a
+    #: free slot the kernel can hand to an unrelated process.
+    REAPED = enum.auto()
+    #: Not this process's child at all; someone else collected it first.
+    COLLECTED = enum.auto()
+
+
+def _probe_child(pid: int) -> _ChildOwnership:
+    """Report what this process still owns at ``pid``.
+
+    A successful ``waitpid`` under ``WNOHANG`` returns the pid once the child
+    has exited, and reaps it as a side effect; it returns ``(0, 0)`` while the
+    child is still running, having reaped nothing. Only the exception proves
+    the child was collected by someone else. The two non-exceptional outcomes
+    are therefore not the same answer, and the caller has to act on them
+    differently: a live child is ours to kill, whereas a pid the probe reaped
+    is already collected and — because that slot is now available — must not
+    be signalled again.
 
     Returns
     -------
-    bool
-        True when this process still owns an unreaped child at ``pid``.
+    _ChildOwnership
+        ``COLLECTED``, ``REAPED``, or ``LIVE``, in that order of precedence.
     """
     try:
-        os.waitpid(pid, os.WNOHANG)
+        waited_pid, _status = os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
-        return False
-    return True
+        return _ChildOwnership.COLLECTED
+    if waited_pid == pid:
+        return _ChildOwnership.REAPED
+    return _ChildOwnership.LIVE
 
 
 def _abandon(pid: int) -> None:
     """Best-effort cleanup so a failing assertion cannot leak a live child."""
+    if _probe_child(pid) is not _ChildOwnership.LIVE:
+        # Nothing is running at this pid that this test owns. A pid the probe
+        # reaped may already have been recycled onto an unrelated process, so
+        # signalling it would kill a stranger rather than clean up after this
+        # test.
+        return
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -133,10 +158,12 @@ def test_pipe_connection_failure_kills_and_reaps_the_child(
 
     assert spawned, "the spawn must have produced a child before the failure"
     pid = spawned[0]
-    leaked = _still_owns_child(pid)
-    if leaked:
-        _abandon(pid)
-    assert not leaked, (
+    # The probe reaps a zombie as it reports one, so whatever it finds is
+    # cleaned up either way: `_abandon` kills a live child, and a child the
+    # probe already reaped is by definition collected. Only `LIVE` is a leak.
+    ownership = _probe_child(pid)
+    _abandon(pid)
+    assert ownership is not _ChildOwnership.LIVE, (
         f"the cleanup must kill and reap pid {pid}, but it is still an "
         "unreaped child of this process"
     )
@@ -168,7 +195,9 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
     spawned: list[int] = []
 
     async def spawn_and_reap() -> tuple[
-        _wait4_process._Wait4Process, BaseException | None
+        _wait4_process._Wait4Process,
+        _wait4_process._Wait4InvariantError,
+        _ChildOwnership,
     ]:
         """Spawn a real child, then reap it through a mismatching ``wait4``."""
         process = await _wait4_process.spawn_wait4_process(_sleep_config())
@@ -177,15 +206,20 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         )
         spawned.append(process.pid)
         monkeypatch.setattr(_wait4_process.os, "wait4", fake_wait4)
-        failure: BaseException | None = None
-        try:
+        # Narrow enough to state the contract: the mismatch must raise this
+        # error and nothing else. A bare `except BaseException` would also
+        # absorb a `CancelledError` or an unrelated failure and let the
+        # assertions below report it as the wrong type.
+        with pytest.raises(_wait4_process._Wait4InvariantError) as caught:
             await process.wait()
-        except BaseException as exc:  # ruff: ignore[blind-except] - the test asserts the exact type below.
-            failure = exc
-        return process, failure
+        # Probed here, before the caller's cleanup reaps it: this is the only
+        # point at which the test can still see what the mismatch branch left
+        # behind. The child is an unexited `sleep`, so a branch that respected
+        # the mismatch leaves it LIVE and unreaped.
+        return process, caught.value, _probe_child(process.pid)
 
     try:
-        process, failure = asyncio.run(spawn_and_reap())
+        process, failure, ownership = asyncio.run(spawn_and_reap())
     finally:
         # Signalling uses the raw pid rather than ``process.kill()``: that
         # method is part of the code under test, and a defect it exists to
@@ -193,8 +227,9 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
         # blocking collect runs here, off the event loop.
         for pid in spawned:
             _abandon(pid)
-    assert not _still_owns_child(process.pid), (
-        "the mismatch branch must not have reaped the real child either"
+    assert ownership is _ChildOwnership.LIVE, (
+        "the mismatch branch must not have reaped the real child either, but "
+        f"the child was found {ownership!r}"
     )
 
     assert isinstance(failure, _wait4_process._Wait4InvariantError), (

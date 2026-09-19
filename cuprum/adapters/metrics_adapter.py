@@ -387,18 +387,22 @@ class MetricsHook:
 
         Notes
         -----
-        An ``exit`` event can yield two operations — a failure counter and a
-        duration observation — applied as two independent collector calls, in
-        that order. There is no atomicity across them, and none is attempted:
-        the collector wraps an arbitrary backend (``prometheus_client``,
-        statsd, OpenTelemetry), and this adapter cannot make two writes to such
-        a backend transactional. Buffering them to apply together would only
-        move the problem, while delaying when metrics appear.
+        An ``exit`` event can yield up to six operations, applied as
+        independent collector calls in a fixed order: the failure counter (only
+        for a known non-zero exit code), then the duration observation (only
+        when a duration was measured), then the resource counter, and finally
+        the resource histograms — maximum RSS, user CPU, and system CPU, each
+        only where that figure was measured. There is no atomicity across them,
+        and none is attempted: the collector wraps an arbitrary backend
+        (``prometheus_client``, statsd, OpenTelemetry), and this adapter cannot
+        make multiple writes to such a backend transactional. Buffering them to
+        apply together would only move the problem, while delaying when metrics
+        appear.
 
-        So if the collector raises on the second call, the first stays applied:
-        a failure can be recorded without its duration. That is accepted rather
-        than hidden. The exception then leaves this hook and is not swallowed:
-        :func:`cuprum._observability._emit_exec_event` logs
+        So if the collector raises part-way through, the earlier calls stay
+        applied: a failure can be recorded without its duration. That is
+        accepted rather than hidden. The exception then leaves this hook and is
+        not swallowed: :func:`cuprum._observability._emit_exec_event` logs
         ``observe_hook_failed`` and re-raises, so a raising collector fails the
         user's command. A collector that must not do that has to swallow its
         own errors.

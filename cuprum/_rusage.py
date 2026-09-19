@@ -13,11 +13,7 @@ import os
 import sys
 import typing as typ
 
-if typ.TYPE_CHECKING:
-    # Annotation-only: the mode is returned as a string literal, so the alias
-    # is never needed at runtime here. ``_timeout_reporting`` imports
-    # ``TimeoutMode`` the same way.
-    from cuprum.events import ResourceUsageMode
+from cuprum.events import ResourceUsageMode
 
 try:
     import resource
@@ -150,12 +146,13 @@ def resource_usage_mode_for(
     Returns
     -------
     ResourceUsageMode
-        ``"wait4_child"`` for an attributable measurement,
-        ``"aggregate_cpu_delta"`` for the CPU-only fallback, and
-        ``"unavailable"`` when nothing was measured.
+        :attr:`~ResourceUsageMode.WAIT4_CHILD` for an attributable
+        measurement, :attr:`~ResourceUsageMode.AGGREGATE_CPU_DELTA` for the
+        CPU-only fallback, and :attr:`~ResourceUsageMode.UNAVAILABLE` when
+        nothing was measured.
     """
     if usage is None:
-        return "unavailable"
+        return ResourceUsageMode.UNAVAILABLE
     if usage.max_rss_bytes is None:
-        return "aggregate_cpu_delta"
-    return "wait4_child"
+        return ResourceUsageMode.AGGREGATE_CPU_DELTA
+    return ResourceUsageMode.WAIT4_CHILD

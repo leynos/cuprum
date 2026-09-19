@@ -18,6 +18,7 @@ import typing as typ
 
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails
+from cuprum.events import ResourceUsageMode
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import (
@@ -34,7 +35,7 @@ if typ.TYPE_CHECKING:
 # ``ExecEvent.resource_usage_mode`` — set on every terminal event, ``None`` on
 # every other phase — true for stages as well as for direct commands, whose
 # returned ``CommandResult`` likewise leaves all three figures ``None``.
-_STAGE_RESOURCE_MODE: typ.Final = "unavailable"
+_STAGE_RESOURCE_MODE: typ.Final = ResourceUsageMode.UNAVAILABLE
 
 
 def _emit_timeout_exit_events(

@@ -30,8 +30,12 @@ def test_measurement_is_unavailable_without_resource_module(
     """Platforms without ``resource`` report unavailable child accounting."""
     monkeypatch.setattr(_rusage, "resource", None)
 
-    assert _rusage.child_resource_measurement_available() is False
-    assert _rusage.capture_child_rusage() is None
+    assert _rusage.child_resource_measurement_available() is False, (
+        "a missing resource module must not count as child accounting"
+    )
+    assert _rusage.capture_child_rusage() is None, (
+        "a missing resource module must yield no snapshot"
+    )
 
 
 @pytest.mark.parametrize("missing_attribute", ["RUSAGE_CHILDREN", "getrusage"])
@@ -47,8 +51,12 @@ def test_measurement_is_unavailable_without_required_api(
     del attributes[missing_attribute]
     monkeypatch.setattr(_rusage, "resource", types.SimpleNamespace(**attributes))
 
-    assert _rusage.child_resource_measurement_available() is False
-    assert _rusage.capture_child_rusage() is None
+    assert _rusage.child_resource_measurement_available() is False, (
+        f"a resource module without {missing_attribute} must not enable accounting"
+    )
+    assert _rusage.capture_child_rusage() is None, (
+        f"a resource module without {missing_attribute} must yield no snapshot"
+    )
 
 
 def test_capture_returns_none_when_getrusage_fails(
@@ -66,7 +74,9 @@ def test_capture_returns_none_when_getrusage_fails(
         types.SimpleNamespace(RUSAGE_CHILDREN=object(), getrusage=raise_os_error),
     )
 
-    assert _rusage.capture_child_rusage() is None
+    assert _rusage.capture_child_rusage() is None, (
+        "a getrusage failure must be reported as no measurement, not raised"
+    )
 
 
 @pytest.mark.parametrize(
@@ -87,10 +97,15 @@ def test_capture_normalizes_platform_rss_units(
     )
     monkeypatch.setattr(_rusage.sys, "platform", platform)
 
-    assert _rusage.capture_child_rusage() == _snapshot(
+    snapshot = _rusage.capture_child_rusage()
+
+    assert snapshot == _snapshot(
         max_rss_bytes=expected_rss_bytes,
         user_cpu_seconds=1.25,
         system_cpu_seconds=2.5,
+    ), (
+        f"{platform} RSS of 4 must normalize to {expected_rss_bytes} bytes, "
+        f"got {snapshot!r}"
     )
 
 
@@ -107,10 +122,15 @@ def test_wait4_usage_normalizes_platform_rss_units(
     usage = types.SimpleNamespace(ru_maxrss=4, ru_utime=1.25, ru_stime=2.5)
     monkeypatch.setattr(_rusage.sys, "platform", platform)
 
-    assert _rusage.resource_usage_from_wait4(usage) == _rusage.ChildResourceUsage(
+    direct = _rusage.resource_usage_from_wait4(usage)
+
+    assert direct == _rusage.ChildResourceUsage(
         max_rss_bytes=expected_rss_bytes,
         user_cpu_seconds=1.25,
         system_cpu_seconds=2.5,
+    ), (
+        f"{platform} wait4 RSS of 4 must normalize to {expected_rss_bytes} bytes, "
+        f"got {direct!r}"
     )
 
 
@@ -118,17 +138,23 @@ def test_wait4_measurement_is_unavailable_without_wait4(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Platforms without a child-specific reaper do not claim direct usage."""
-    monkeypatch.delattr(_rusage.os, "wait4")
+    monkeypatch.delattr(_rusage.os, "wait4", raising=False)
 
-    assert _rusage.wait4_resource_measurement_available() is False
+    assert _rusage.wait4_resource_measurement_available() is False, (
+        "a platform without os.wait4 must not claim direct-child measurement"
+    )
 
 
 def test_delta_requires_two_snapshots() -> None:
     """Missing accounting boundaries cannot produce a resource delta."""
     snapshot = _snapshot()
 
-    assert _rusage.child_rusage_delta(None, snapshot) is None
-    assert _rusage.child_rusage_delta(snapshot, None) is None
+    assert _rusage.child_rusage_delta(None, snapshot) is None, (
+        "a missing pre-spawn snapshot must yield no delta"
+    )
+    assert _rusage.child_rusage_delta(snapshot, None) is None, (
+        "a missing post-exit snapshot must yield no delta"
+    )
 
 
 def test_delta_returns_cpu_usage_without_attributable_rss() -> None:
@@ -142,7 +168,7 @@ def test_delta_returns_cpu_usage_without_attributable_rss() -> None:
         max_rss_bytes=None,
         user_cpu_seconds=3.0,
         system_cpu_seconds=5.0,
-    )
+    ), f"an aggregate delta must carry CPU only, got {result!r}"
 
 
 def test_delta_clamps_decreasing_cpu_counters() -> None:
@@ -156,7 +182,7 @@ def test_delta_clamps_decreasing_cpu_counters() -> None:
         max_rss_bytes=None,
         user_cpu_seconds=0.0,
         system_cpu_seconds=0.0,
-    )
+    ), f"a regressing counter must clamp to zero, got {result!r}"
 
 
 _SNAPSHOTS = st.builds(
@@ -179,7 +205,9 @@ _SNAPSHOTS = st.builds(
 
 def test_mode_is_unavailable_without_a_usage_record() -> None:
     """No source produced a record, so the mode says exactly that."""
-    assert _rusage.resource_usage_mode_for(None) == "unavailable"
+    assert _rusage.resource_usage_mode_for(None) == "unavailable", (
+        "no usage record must classify as unavailable"
+    )
 
 
 def test_mode_names_the_source_of_each_producer() -> None:
@@ -191,9 +219,13 @@ def test_mode_names_the_source_of_each_producer() -> None:
     )
     aggregate = _rusage.child_rusage_delta(_snapshot(), _snapshot())
 
-    assert _rusage.resource_usage_mode_for(wait4) == "wait4_child"
-    assert aggregate is not None
-    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta"
+    assert _rusage.resource_usage_mode_for(wait4) == "wait4_child", (
+        "an attributable measurement must classify as wait4_child"
+    )
+    assert aggregate is not None, "two snapshots must produce an aggregate record"
+    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta", (
+        "a CPU-only delta must classify as aggregate_cpu_delta"
+    )
 
 
 @given(snapshots=st.tuples(_SNAPSHOTS, _SNAPSHOTS))
@@ -210,9 +242,12 @@ def test_mode_reads_the_invariant_that_separates_the_producers(
     """
     before, after = snapshots
     aggregate = _rusage.child_rusage_delta(before, after)
-    assert aggregate is not None
+    assert aggregate is not None, "two snapshots must produce an aggregate record"
 
-    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta"
+    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta", (
+        f"the aggregate path must classify as aggregate_cpu_delta, got "
+        f"{_rusage.resource_usage_mode_for(aggregate)!r}"
+    )
     assert aggregate.max_rss_bytes is None, (
         "the aggregate path must never claim an attributable RSS figure"
     )
@@ -227,18 +262,36 @@ def test_delta_property_preserves_cpu_and_rss_invariants(
     result = _rusage.child_rusage_delta(before, after)
 
     if before is None or after is None:
-        assert result is None
+        assert result is None, (
+            f"a missing boundary must yield no delta, got {result!r} for "
+            f"before={before!r}, after={after!r}"
+        )
         return
 
-    assert result is not None
-    assert result.max_rss_bytes is None
+    assert result is not None, (
+        f"two snapshots must produce a delta for before={before!r}, after={after!r}"
+    )
+    assert result.max_rss_bytes is None, (
+        f"the aggregate path must never carry RSS, got {result.max_rss_bytes!r}"
+    )
     assert result.user_cpu_seconds == max(
         0.0,
         after.user_cpu_seconds - before.user_cpu_seconds,
+    ), (
+        f"the user-CPU delta must be the clamped difference, got "
+        f"{result.user_cpu_seconds!r} for before={before!r}, after={after!r}"
     )
     assert result.system_cpu_seconds == max(
         0.0,
         after.system_cpu_seconds - before.system_cpu_seconds,
+    ), (
+        f"the system-CPU delta must be the clamped difference, got "
+        f"{result.system_cpu_seconds!r} for before={before!r}, after={after!r}"
     )
-    assert result.user_cpu_seconds >= 0.0
-    assert result.system_cpu_seconds >= 0.0
+    assert result.user_cpu_seconds >= 0.0, (
+        f"the user-CPU delta must never go negative, got {result.user_cpu_seconds!r}"
+    )
+    assert result.system_cpu_seconds >= 0.0, (
+        "the system-CPU delta must never go negative, got "
+        f"{result.system_cpu_seconds!r}"
+    )
