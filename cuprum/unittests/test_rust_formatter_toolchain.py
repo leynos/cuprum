@@ -24,14 +24,14 @@ _RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
 _RUSTFMT_FIXTURE_SKIP = re.compile(
     rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
 )
-# Matches a Rust string, character literal, or comment. Each alternative keeps
-# its own length, so code-bearing text stays at its original offset.
+# Matches a Rust string literal, raw string literal, or line comment. Block
+# comments are handled separately below because they nest. Each match keeps its
+# own length, so code-bearing text stays at its original offset.
 _RUST_LEXEME = re.compile(
     r'"(?:\\.|[^"\\])*"'
-    r"|'(?:\\.|[^'\\])'"
-    r"|//[^\n]*"
-    r"|/\*.*?\*/",
-    re.DOTALL,
+    r'|r#*"(?:[^"]|"(?!#*))*"#*'
+    r"|//[^\n]*",
+    re.DOTALL | re.MULTILINE,
 )
 
 
@@ -83,12 +83,59 @@ def test_project_toolchain_declares_maintenance_components() -> None:
     }, "the stable pin must retain its compiler and declare each required component"
 
 
+def _blank(lexeme: str) -> str:
+    """Render a lexeme as blanks, preserving its newlines and offsets."""
+    return "".join("\n" if char == "\n" else " " for char in lexeme)
+
+
+def _try_lexeme(source: str, index: int) -> int:
+    """Find the end of the lexeme starting at ``index``.
+
+    Recognises string literals, raw string literals, line comments, and block
+    comments. Block comments nest in Rust, so the terminator is the ``*/`` that
+    closes the outermost comment rather than the first one encountered.
+
+    Returns
+    -------
+        The offset just past the lexeme, or ``index`` when no lexeme starts here.
+    """
+    if source.startswith("//", index):
+        end = source.find("\n", index)
+        return len(source) if end < 0 else end
+    if source.startswith("/*", index):
+        depth = 0
+        cursor = index
+        while cursor < len(source):
+            if source.startswith("/*", cursor):
+                depth += 1
+                cursor += 2
+            elif source.startswith("*/", cursor):
+                depth -= 1
+                cursor += 2
+                if depth == 0:
+                    return cursor
+            else:
+                cursor += 1
+        return len(source)
+    match = _RUST_LEXEME.match(source, index)
+    return index if match is None else match.end()
+
+
 def _blank_rust_lexemes(source: str) -> str:
     """Blank comments and literals, keeping code at its original offset."""
-    return _RUST_LEXEME.sub(
-        lambda match: "".join("\n" if char == "\n" else " " for char in match.group()),
-        source,
-    )
+    blanked: list[str] = []
+    cursor = 0
+    index = 0
+    while index < len(source):
+        end = _try_lexeme(source, index)
+        if end == index:
+            index += 1
+            continue
+        blanked.extend((source[cursor:index], _blank(source[index:end])))
+        index = end
+        cursor = end
+    blanked.append(source[cursor:])
+    return "".join(blanked)
 
 
 def _line_number(blanked: str, offset: int) -> int:
