@@ -15,7 +15,7 @@
 # by a legacy one (and then another file write) yields two events. Ordinary
 # `$GITHUB_OUTPUT` writes are folded by the runner and emit a single event
 # carrying the final value — see
-# `docs/adr-012-actions-runner-integration-harness.md`.
+# `docs/adr-013-actions-runner-integration-harness.md`.
 #
 # The recorded workflow wrote `value=from-file`, then
 # `::set-output name=value::from-legacy-command`, then `value=from-file-again`,

@@ -91,8 +91,8 @@ open each document.
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [adr-010]: adr-010-rust-pump-hop-span.md
 [adr-011]: adr-011-audited-rust-boundaries.md
-[adr-012]: adr-011-benchmark-gate-telemetry-sink.md
-[adr-013]: adr-012-actions-runner-integration-harness.md
+[adr-012]: adr-012-benchmark-gate-telemetry-sink.md
+[adr-013]: adr-013-actions-runner-integration-harness.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [rust-boundary-verification]: rust-boundary-verification.md

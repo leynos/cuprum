@@ -75,19 +75,19 @@ matrix. JSON webhook templates live under `tests/fixtures/events/`.
 `.github/workflows/benchmark-gate-harness.yml` runs the harness weekly or
 through an opted-in manual dispatch. Its schedule is separate from CI so it
 cannot start paid build jobs. CLI and runner-image pins are documented in
-ADR-012.
+ADR-013.
 
 `tests/helpers/benchmark_gate_telemetry.py` executes the workflow log writer.
 The two `tests/test_ci_benchmark_gate_telemetry*.py` modules check declarations
 and persisted bytes. Operational guidance lives in
-`docs/ci-benchmark-gate-telemetry.md`; ADR-011 records the storage decision.
+`docs/ci-benchmark-gate-telemetry.md`; ADR-012 records the storage decision.
 
 ## Conformance basis
 
 The upstream requirement is issue #339, following PR #289, as amended by the
 maintainer's explicit 2026-09-17 no-Grafana/no-new-application instruction.
 There is no separate terms-of-reference or technical-design document for this
-work. The architecture decisions are ADR-011 for persistent logs and ADR-012
+work. The architecture decisions are ADR-012 for persistent logs and ADR-013
 for the Actions compatibility harness. Repository `AGENTS.md`, documentation
 style, and scripting standards govern implementation and verification.
 
@@ -206,7 +206,7 @@ Both persistence and upload are fail-open and produce visible diagnostics.
 The local harness executes the writer and checks its structured record output.
 It skips the hosted upload under `ACT=true`, avoiding another local artefact
 service. Actual storage receipt is checked separately on GitHub. This
-deliberate boundary is recorded in ADR-012 and the operational guide.
+deliberate boundary is recorded in ADR-013 and the operational guide.
 
 ## Risks
 
@@ -288,7 +288,7 @@ M0 is the completed salvage and parser repair. M1 is the completed runtime
 harness and its review fixes. Reverting their atomic commits restores their
 previous states without rewriting shared history.
 
-M2 replaces the transport and its obsolete tests together, updates ADR-011,
+M2 replaces the transport and its obsolete tests together, updates ADR-012,
 retention and analysis guidance, and exercises the record through the harness.
 Run the following gates sequentially from the repository root, capturing each
 command through `tee` with `set -o pipefail`:

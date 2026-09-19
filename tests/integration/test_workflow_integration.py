@@ -9,7 +9,7 @@ The suite needs `act` and a container runtime, so it is opt-in
 (`make test-act`) rather than part of `make test`. It skips with a stated
 reason where either is missing, and `CUPRUM_REQUIRE_ACT=1` turns that skip into
 a failure so a job that provides a runtime cannot report success for having run
-nothing. See `docs/adr-012-actions-runner-integration-harness.md`.
+nothing. See `docs/adr-013-actions-runner-integration-harness.md`.
 """
 
 from __future__ import annotations

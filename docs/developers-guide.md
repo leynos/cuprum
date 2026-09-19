@@ -15,8 +15,8 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
-- [ADR-012: Durable benchmark-gate telemetry](adr-011-benchmark-gate-telemetry-sink.md)
-- [ADR-013: Actions-runner integration harness](adr-012-actions-runner-integration-harness.md)
+- [ADR-012: Durable benchmark-gate telemetry](adr-012-benchmark-gate-telemetry-sink.md)
+- [ADR-013: Actions-runner integration harness](adr-013-actions-runner-integration-harness.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -3979,7 +3979,7 @@ three values the decision step already computed. The record keeps `run_id`,
 `run_attempt`, and UTC `recorded_at` as metadata outside the exact three-label
 set. The artefact is requested for 90 days, subject to repository and
 organization retention policy, so maintainers can analyse trends after
-downloading recent runs. [ADR-011](adr-011-benchmark-gate-telemetry-sink.md)
+downloading recent runs. [ADR-012](adr-012-benchmark-gate-telemetry-sink.md)
 records the superseding decision and
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
 operational contract: schema, retrieval, analysis, retention, and fail-open
@@ -4046,7 +4046,7 @@ and the benchmark body with an admission marker, then runs
 `act --job benchmark-ratchet` for relevant, irrelevant, mixed, and empty
 changed-path sets, pull-request and push events, and a failing detector. It
 asserts the filter's `bench` output, the recorded gate decision, and the
-admission marker. [ADR-012](adr-012-actions-runner-integration-harness.md)
+admission marker. [ADR-013](adr-013-actions-runner-integration-harness.md)
 records why the boundary is exercised rather than inferred, and
 [the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
 covers running it by hand. The opt-in job is owned by
