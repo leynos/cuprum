@@ -368,7 +368,7 @@ class TestTheConditionReaders:
             "${{ steps[\"ratchet\"].result == 'success' "
             "&& steps.candidate-artefacts.outputs.available == 'true' }}"
         ) == {"ratchet", "candidate-artefacts"}, (
-            "double quotes must be recognised, and both spellings collected"
+            "double quotes must be recognized, and both spellings collected"
         )
 
         assert (
