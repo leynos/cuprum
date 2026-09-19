@@ -97,7 +97,9 @@ failure injection at that boundary.
   perspectives to identify semantics, measurement, and feasibility constraints.
 - [x] (2026-09-19) Resolve dataclass and profiler questions using Firecrawl
   against primary documentation; incorporate review recommendations.
-- [ ] Complete documentation gates and publish the draft plan pull request.
+- [x] (2026-09-19) Pass formatting, Markdown/spelling, and Mermaid gates;
+  publish [draft PR #433](https://github.com/leynos/cuprum/pull/433) with the
+  requested upstream tracking and Lody session reference.
 - [ ] Obtain explicit user approval before starting EP-M1.
 - [ ] EP-M1: establish current control and contract characterization.
 - [ ] EP-M2: implement and validate the bounded stream-factory optimization.
@@ -151,6 +153,10 @@ require checking the explicit callback factory bodies as well.
 ## Outcomes & retrospective
 
 Planning has identified a narrow implementation and an honest stop condition.
+Draft PR #433 publishes the reviewed plan and proposed design note. The initial
+plan commit is `ee8026b2`; `make fmt`, `make check-fmt`, `make markdownlint`
+(including spelling), `make nixie`, and `git diff --check` passed. The branch
+tracks its matching `origin` branch. Implementation approval remains pending.
 No runtime changes, benchmark runs, or implementation acceptance claims belong
 to this draft. Record actual results and gate evidence at each milestone.
 Before COMPLETE, reconcile discoveries with the design, guides, ADRs, and
@@ -605,6 +611,9 @@ work from 5.2.2 and 5.2.3. Implementation remains subject to user approval. The
 final document review preserved optional PID typing, made the red test exercise
 existing factories, covered cleanup of earlier pipeline stages, and made
 classifier commands and measurement tolerances explicit.
+
+2026-09-19: Record publication and documentation-gate evidence after opening
+draft PR #433. All implementation milestones remain pending explicit approval.
 
 [roadmap]: ../roadmap.md#52-make-per-line-event-emission-cheap-for-line-callback-workloads
 [design-events]: ../cuprum-design.md#813-structured-execution-events-observe-hooks
