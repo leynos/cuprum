@@ -1,7 +1,7 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
 Status: IMPLEMENTED; hosted receipts verified for the commits their runs name,
-rebased candidate green, rebased again onto `b63a0f21`
+rebased candidate green, rebased again onto `f48cf8d4`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -161,6 +161,12 @@ persistent receipt and publication map to M3 and a downloaded hosted artefact.
   the resulting hosted run `35394569533`, whose decision and measurement
   artefacts were downloaded and checked. Committing that record produced
   `b61c5d3d`, whose own hosted run `35396687688` passed every job as well.
+- [x] 2026-09-19: Rebased the 32-commit series onto the advanced `origin/main`
+  head `f48cf8d4`, resolving the ADR-011 number collision in the two index
+  documents and renumbering the branch's ADRs to 012 and 013 in a separate
+  commit after the replay. The semantic audit found no corruption, and the
+  edited `contents.md` was checked mechanically for duplicate definitions and
+  unresolved `[adr-NNN]` keys.
 
 ## Surprises & discoveries
 
@@ -244,6 +250,15 @@ both `ci.yml` jobs that need it. The harness workflow's `make test-act` does
 not depend on `makeutil`, so the opt-in scenario lane is unaffected.
 Installation of `makeutil` remains a failure mode for `make test` that the
 branch neither introduces nor can remove.
+
+The third rebase onto `f48cf8d4` inherited main's audited Rust safety
+boundaries (`33bff5db`), which claimed ADR-011 while the branch's telemetry
+ADR held the same number. The branch's ADRs are now 012 and 013; see the
+progress log for why the renumber was deferred to a commit after the replay.
+That rebase also brought main's boundary-verifier toolchain, whose Kani and
+Verus targets are opt-in and are not part of the default gates. They are not
+run here for the same reason `test-act` is not: they need pinned binaries and
+a container or prover runtime beyond the four required gates.
 
 ## Verification plan
 
@@ -480,3 +495,40 @@ measurement artefact shows a ratchet pass with no regressions. The PR body was
 updated in the same pass: the previous text still cited the rebase onto
 `83cd8df2`, and its two branch-relative anchors had drifted (`ci.yml` `#L1089`
 to `#L1113`, and the harness-boundary negative control from `#L88` to `#L98`).
+
+2026-09-19: Rebased the 32-commit series from `b63a0f21` (its exclusive base)
+onto `f48cf8d4`, the advanced `origin/main` head. Main had gained two commits:
+the audited Rust safety boundaries in `33bff5db` and the const-lint repair in
+`f48cf8d4`. A `git merge-tree --write-tree` preview taken before any mutation
+showed exactly two conflicted paths, both documentation indexes: main's
+`adr-011-audited-rust-boundaries.md` and the branch's own ADR-011 collided on
+the same number, and both index documents order ADR entries by that number.
+
+The collision is a genuine content conflict, not a formatting one. Main's ADR
+was accepted on 2026-09-08 and landed in `33bff5db`; the branch's telemetry ADR
+was written on 2026-09-17 against the same sequence. Main landed first, so it
+owns 011 and the branch's ADRs renumber to 012 and 013. The resolution keeps
+both sides' entries in each index and defers the renumber to one commit of its
+own after the replay: eight later commits edit the ADR files by path, so
+renaming them mid-replay would have forced rename detection through every one
+of them. Renumbering the index entries at the same time as the deferred rename
+would also have left the indexes pointing at filenames that did not exist yet,
+and a duplicate `[adr-011]` link definition resolves silently to the last one,
+which would have sent the "Audited Rust safety boundaries" entry to the
+telemetry ADR.
+
+The renumber commit updates both headings, both filenames, and all nine
+reference sites together — the two index documents, the telemetry and local
+validation guides, this plan, and four test-side pointers. `contents.md` has no
+duplicate definitions and every `[adr-NNN]` key resolves to a file that exists,
+checked mechanically rather than by reading.
+
+`git range-diff` over the replay shows 30 of 32 commits applying as identical
+patches. The two that differ are exactly the two whose ADR-index hunks the
+renumber touched, and their range-diff hunks show only the numbering and the
+superseding telemetry wording that `d6c4662e` already introduced. The semantic
+audit found no corruption: all 77 target-only paths are byte-identical to
+`f48cf8d4`, every file with a deletion hunk is one the branch itself modifies,
+and all 18 changed Python modules parse with no duplicated definitions. The
+branch owns no `uv.lock`, `pyproject.toml`, or Rust manifest delta, so no
+lockfile rebuild was required and both match the target byte-for-byte.
