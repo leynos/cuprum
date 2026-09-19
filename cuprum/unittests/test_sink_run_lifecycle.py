@@ -36,6 +36,9 @@ if typ.TYPE_CHECKING:
 # to outlive the caller's own readiness signal by a wide margin.
 _CANCEL_AFTER_SECONDS = 0.2
 _CHILD_LIFETIME_SECONDS = 5
+# Shorter than the child's own lifetime, so at least one keepalive is due
+# before the run ends; the driver needs room to poll, hence the margin.
+_KEEPALIVE_SECONDS = 0.05
 
 
 @pytest.fixture
@@ -153,6 +156,34 @@ def test_stderr_only_echo_lands_in_the_session_log(
     )
     assert "out line" not in framed, (
         f"stdout echo is off, so it must not reach the session log; got {framed!r}"
+    )
+
+
+def test_single_command_keepalive_lands_in_the_session_log(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A command's own keepalive is written inside the session's framing.
+
+    The keepalive is the run's second parent-facing writer, beside the mirrored
+    streams, and it resolves its destination on its own path. An implementation
+    that framed only the streams would leave this line on the parent's stderr
+    while the group was open, which is exactly the output the adapter exists to
+    own.
+    """
+    adapter = RecordingSink()
+    command = python_builder(
+        "-c", f"import time; time.sleep({_CHILD_LIFETIME_SECONDS})"
+    )
+
+    result = command.run_sync(
+        output=RunOutputOptions(sink=adapter, idle_after=_KEEPALIVE_SECONDS),
+    )
+
+    assert result.ok is True, f"the idle run must succeed; got {result!r}"
+    framed = adapter.last_session.framed
+    assert "[cuprum] still running" in framed, (
+        f"the keepalive must be written through the session, not beside it; "
+        f"the session saw {framed!r}"
     )
 
 

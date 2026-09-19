@@ -56,6 +56,12 @@ def _resolve_stream_sink(
     order the adapter received it. Without a session the caller-configured sink
     wins, and the process's own stream is the last resort.
 
+    This is the middle rung of one resolution the whole run shares: the
+    sibling :meth:`cuprum._sink_lifecycle._SinkBracket.resolve_destination`
+    answers the session half for destinations that have no caller-configured
+    sink between them, and :func:`_pipeline_config._framed_sink` composes that
+    half with the caller's choice made here.
+
     Returns
     -------
     typ.IO[str]

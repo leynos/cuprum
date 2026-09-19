@@ -91,6 +91,27 @@ class _SinkBracket:
         """
         return cls(_open_sink_session(sink, start))
 
+    def resolve_destination(self, fallback: typ.IO[str]) -> typ.IO[str]:
+        """Return the active session's log destination, or *fallback*.
+
+        Every parent-facing byte a run writes through the sink belongs inside
+        the adapter's framing, so each destination the run resolves — the
+        mirrored streams and the idle keepalive alike — goes through here
+        rather than each deciding for itself.
+
+        Parameters
+        ----------
+        fallback : typ.IO[str]
+            The destination to use when no session is active.
+
+        Returns
+        -------
+        typ.IO[str]
+            The session's log destination, or *fallback*.
+        """
+        session = self.session
+        return fallback if session is None else session.log
+
     def close(self, *, outcome: sinks.SessionOutcome) -> None:
         """Finalize the owned session, recording *outcome* on the way out.
 

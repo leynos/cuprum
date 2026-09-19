@@ -30,6 +30,7 @@ collection), and :mod:`cuprum.context`, and is invoked by :mod:`cuprum.sh`.
 from __future__ import annotations
 
 import dataclasses as dc
+import sys
 import time
 import typing as typ
 from pathlib import Path
@@ -60,6 +61,7 @@ from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
 )
+from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
@@ -180,7 +182,17 @@ def _build_subprocess_execution(
             state.output.idle_after,
             state.output.on_idle,
             _idle_subject(str(cmd.program)),
-            state.context.stderr_sink,
+            # Resolved the way the stderr drain resolves its own sink — the
+            # same session, the same configured sink, the same last resort —
+            # because the keepalive shares that stream's incomplete-line
+            # state. An active session frames the mirrored streams, so a
+            # keepalive written anywhere else would land outside the group the
+            # run is claiming.
+            _resolve_stream_sink(
+                sink_session,
+                state.context.stderr_sink,
+                sys.stderr,
+            ),
         ),
     )
 

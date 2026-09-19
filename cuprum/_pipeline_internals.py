@@ -279,6 +279,17 @@ async def _run_spawned_pipeline(
         )
     except BaseException as result_error:
         sink_bracket.close(outcome=_outcome_for_error(result_error))
+        # The stage-result build sits between the spawn and finalization, so
+        # the observe-hook tasks this pipeline owns are nobody else's yet: the
+        # run owes the drain here for the same reason the spawn-failure branch
+        # above does, and for the same reason the close comes first.
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                pending_tasks,
+                result_error,
+                message=_PIPELINE_FINALIZATION_ERROR,
+            )
+        )
         raise
     # Finalization owns the close, after the after-hooks have run: a failing
     # after-hook is a terminal run error, so the outcome cannot be committed

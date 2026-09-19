@@ -25,6 +25,7 @@ import pytest
 from cuprum import ScopeConfig, scoped
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum.sh import ExecutionContext, RunOutputOptions
+from cuprum.unittests._sink_test_support import RecordingSink
 from tests.helpers.idle import IdleRecorder, keepalives, pending_tasks
 
 if typ.TYPE_CHECKING:
@@ -255,6 +256,35 @@ def test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line(
         )
     assert sink.getvalue().startswith("partial-final\n"), (
         f"the stage's own bytes must be unchanged: {sink.getvalue()!r}"
+    )
+
+
+def test_pipeline_keepalive_lands_in_the_active_session_log(
+    python_catalogue_env: PythonCatalogue,
+    python: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The aggregate keepalive is written through an active sink session.
+
+    The keepalive reaches the parent beside the mirrored streams, so an active
+    session has to carry it too: written to the configured sink instead, a
+    quiet pipeline's line would surface outside the group the run opened.
+    """
+    adapter = RecordingSink()
+    pipeline = _two_stage(
+        python,
+        producer="print('out')",
+        consumer="import time; time.sleep(0.45); print('done')",
+    )
+
+    with _allowlisted(python_catalogue_env):
+        pipeline.run_sync(
+            output=RunOutputOptions(idle_after=_INTERVAL, sink=adapter),
+        )
+
+    framed = adapter.last_session.framed
+    assert "[cuprum]" in framed, (
+        f"the aggregate keepalive must travel through the active session; "
+        f"the session saw {framed!r}"
     )
 
 
