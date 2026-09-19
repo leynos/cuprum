@@ -91,16 +91,20 @@ def _require_worker_iterations(value: object) -> int:
     return value
 
 
+def _require_payload_byte_size(value: object) -> int:
+    """Return *value* as an integer payload size."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = "payload_bytes must contain only ints"
+        raise TypeError(msg)
+    return value
+
+
 def _require_payload_bytes(value: object) -> tuple[int, ...]:
     """Return *value* as distinct ascending integer payload sizes."""
     if not isinstance(value, tuple):
         msg = "payload_bytes must be a tuple"
         raise TypeError(msg)
-    for size in value:
-        if isinstance(size, bool) or not isinstance(size, int):
-            msg = "payload_bytes must contain only ints"
-            raise TypeError(msg)
-    sizes = typ.cast("tuple[int, ...]", value)
+    sizes = tuple(_require_payload_byte_size(size) for size in value)
     if sizes != tuple(sorted(set(sizes))):
         msg = "payload_bytes must be distinct and ascending"
         raise ValueError(msg)
