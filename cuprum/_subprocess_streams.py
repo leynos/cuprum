@@ -23,16 +23,15 @@ import sys
 import typing as typ
 
 from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
-from cuprum._pipeline_types import _StageObservation
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import LineStreamName, _LineHookOutcome
-
-    import collections.abc as cabc
 
 
 def _create_stream_callback(

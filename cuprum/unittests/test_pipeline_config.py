@@ -10,13 +10,18 @@ import pytest
 from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum.sh import ExecutionContext
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
-def _stdout_config(config: _PipelineRunConfig):
+    from cuprum._streams import _StreamConfig
+
+
+def _stdout_config(config: _PipelineRunConfig) -> _StreamConfig:
     """Return the stdout stream configuration, naming the access route."""
     return config.stream_config
 
 
-def _stderr_config(config: _PipelineRunConfig):
+def _stderr_config(config: _PipelineRunConfig) -> _StreamConfig:
     """Return the stderr stream configuration, naming the access route."""
     return config.stderr_stream_config
 
@@ -32,7 +37,7 @@ def test_stream_config_uses_requested_stream_settings(
     stream: typ.Literal["stdout", "stderr"],
     expected_echo: bool,
     sink_name: typ.Literal["stdout", "stderr"],
-    accessor: typ.Callable[[_PipelineRunConfig], object],
+    accessor: cabc.Callable[[_PipelineRunConfig], _StreamConfig],
 ) -> None:
     """Each stream keeps its own echo route while sharing decode settings."""
     stdout_sink = io.StringIO()

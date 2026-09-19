@@ -32,11 +32,11 @@ from cuprum._subprocess_execution import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
+from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_streams import (
     _build_stream_config,
     _spawn_stream_consumers,
 )
-from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,

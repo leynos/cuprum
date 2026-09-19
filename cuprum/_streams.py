@@ -258,25 +258,30 @@ async def _drain_chunks(
         _record_stream_read(measurement, chunk)
         if not chunk:
             return True
-        # Activity is reported here, on the raw read, so that every way a chunk
-        # can go on to be dropped still counts: undecodable bytes, output with
-        # no line ending yet, a disabled mirror, and text truncated past the
-        # echo bound all mean the child is talking. A run with idle reporting
-        # off has no observer and pays nothing for this.
-        activity = state.config.activity
-        if activity is not None:
-            activity()
-        if state.buffer is not None:
-            state.buffer.extend(chunk)
-        if state.config.echo_output:
-            _echo_chunk(state, chunk)
-        if state.on_chunk is not None:
-            # Sync observers — the idle partition's line feeder, say — return
-            # ``None`` and are simply invoked; an asynchronous sink is awaited
-            # so it can apply backpressure to the producer.
-            outcome = state.on_chunk(chunk)
-            if outcome is not None:
-                await outcome
+        await _deliver_chunk(state, chunk)
+
+
+async def _deliver_chunk(state: _DrainState, chunk: bytes) -> None:
+    """Fan one non-empty chunk out to capture, echo, and the chunk sink."""
+    # Activity is reported here, on the raw read, so that every way a chunk
+    # can go on to be dropped still counts: undecodable bytes, output with
+    # no line ending yet, a disabled mirror, and text truncated past the
+    # echo bound all mean the child is talking. A run with idle reporting
+    # off has no observer and pays nothing for this.
+    activity = state.config.activity
+    if activity is not None:
+        activity()
+    if state.buffer is not None:
+        state.buffer.extend(chunk)
+    if state.config.echo_output:
+        _echo_chunk(state, chunk)
+    if state.on_chunk is not None:
+        # Sync observers — the idle partition's line feeder, say — return
+        # ``None`` and are simply invoked; an asynchronous sink is awaited
+        # so it can apply backpressure to the producer.
+        outcome = state.on_chunk(chunk)
+        if outcome is not None:
+            await outcome
 
 
 async def _consume_stream_without_lines(

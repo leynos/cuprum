@@ -75,16 +75,20 @@ class _SubprocessExecution:
         stdout to ``DEVNULL`` and silently deliver nothing.
         """
         return (
-            self.capture or self.echo_stdout or self.idle is not None or self.on_line
-            is not None
+            self.capture
+            or self.echo_stdout
+            or self.idle is not None
+            or self.on_line is not None
         )
 
     @property
     def consumes_stderr(self) -> bool:
         """Whether the parent must consume stderr, rather than discard it."""
         return (
-            self.capture or self.echo_stderr or self.idle is not None or self.on_line
-            is not None
+            self.capture
+            or self.echo_stderr
+            or self.idle is not None
+            or self.on_line is not None
         )
 
 
