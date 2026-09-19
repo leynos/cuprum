@@ -260,6 +260,29 @@ def decline_on_blocking_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _decline_on_blocking_refusal(monkeypatch, fail_engage_with_value_error)
 
 
+def decline_on_duplicate_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route a hop whose worker descriptors cannot be duplicated.
+
+    This is the seam the intermittent native hand-off hang lived on. The
+    descriptors are extracted and then re-opened for the worker, so a
+    transport that asyncio closes in between makes the re-open fail — an
+    ``ENOENT`` from ``/proc/self/fd``, or a ``dup`` refusal off Linux. The
+    trigger doubles that refusal out rather than provoking the race, because
+    a test that waits for a genuine race reports flaky, not failing.
+    """
+    allow_pause(monkeypatch, may_hand_off=True)
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        lambda **_kwargs: None,
+    )
+    handled = run_raw_fd_pump()
+    assert handled is False, (
+        "a duplicate-setup failure must decline the fast path and fall back to "
+        f"the Python pump, found handled={handled!r}"
+    )
+
+
 def run_raw_fd_pump() -> bool:
     """Drive ``_pump_over_raw_fds`` over a pipe this helper owns."""
     reader = typ.cast("asyncio.StreamReader", object())
@@ -482,6 +505,11 @@ DECLINE_PATHS: tuple[
         decline_on_blocking_value_error,
         "blocking_mode_unavailable",
     ),
+    (
+        "duplicate_failure",
+        decline_on_duplicate_failure,
+        "duplicate_fds_unavailable",
+    ),
 )
 """Each real decline path paired with the ``reason`` it must report.
 
@@ -489,4 +517,8 @@ Two paths share ``blocking_mode_unavailable`` because the blocking seam can
 refuse in two ways, and only one of them was originally caught: a hop that met
 ``ValueError`` there crashed instead of declining, so the reason is pinned for
 both refusals rather than for the exception type that happened to be handled.
+
+``duplicate_fds_unavailable`` is separate for the opposite reason: it used to
+be a *fatal* hand-off, published as ``duplicate_writer_failed`` and re-raised,
+so the reason name is what stops it drifting back to a raise.
 """
