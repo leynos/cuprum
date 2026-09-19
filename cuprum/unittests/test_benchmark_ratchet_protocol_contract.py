@@ -61,6 +61,11 @@ ARTEFACT_STEP = "candidate-artefacts"
 
 ARTEFACT_AVAILABLE = f"steps.{ARTEFACT_STEP}.outputs.available == 'true'"
 
+#: GitHub status functions that would make publication depend on the run's
+#: outcome. `!cancelled()` is deliberately absent: it is the one status term
+#: that runs whatever the verdict, and these steps require it.
+STATUS_FUNCTIONS = ("success(", "failure(")
+
 
 def test_the_ratchet_policy_matches_the_module_defaults(
     workflow_data: Workflow,
@@ -264,6 +269,15 @@ def test_the_main_sample_is_published_whatever_the_ratchet_decides(
         "passed one, so its condition needs `!cancelled()`; an interrupted run "
         f"that measured half a sample still publishes nothing. Found: {condition!r}"
     )
+    for status_function in STATUS_FUNCTIONS:
+        assert status_function not in condition, (
+            f"the {step_name!r} step must not name {status_function!r}. "
+            "Naming one is what makes publication depend on the run's outcome: "
+            "`success()` withholds the sample of every run that measured a "
+            "slowdown, which is the low-biased window of issue #219, and "
+            "`failure()` publishes nothing at all. `!cancelled()` is the only "
+            f"status term that runs whatever the verdict. Found: {condition!r}"
+        )
     assert top_level_operators(condition, "||") == 0, (
         f"the {step_name!r} step must require all of its guards, not any of "
         "them: a top-level disjunction would let publication proceed with no "
