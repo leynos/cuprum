@@ -311,7 +311,7 @@ def test_select_ci_ratchet_scenarios_keeps_payloads_readable() -> None:
     plan, which `benchmark_workload` then reads. JSON has no integer type, so a
     plan may spell a whole payload as `67108864.0`; passing that through puts a
     float in the filtered plan, and the reader rejects it as a payload size.
-    The band accepts the value, so the filter must normalise it to the `int`
+    The band accepts the value, so the filter must normalize it to the `int`
     the reader requires rather than hand on what it was given.
     """
     plan = {

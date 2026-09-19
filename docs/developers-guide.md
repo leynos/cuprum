@@ -2189,8 +2189,11 @@ older baseline artefacts whose profile metadata does not match the current
 benchmark shape.
 
 The CI job measures the `--ci-ratchet` workload, not the throughput sweep: one
-64 MiB payload with four scenarios per backend rather than the sweep's three
-payload tiers. Each worker process batches five pipeline runs
+64 MiB payload in four scenarios — two per backend, one per callback mode —
+rather than the sweep's three payload tiers. The workload's plan carries four
+scenarios per backend, but `benchmarks/ci_benchmark_ratchet_profile.py` keeps
+only the two-stage ones, so the three-stage variants are filtered out before
+hyperfine runs. Each worker process batches five pipeline runs
 (`--worker-iterations 5`) and each command is measured twenty times after one
 discarded warm-up. The two counts are independent, and both are protocol rather
 than tuning: the ratchet compares only samples whose profile metadata agrees,

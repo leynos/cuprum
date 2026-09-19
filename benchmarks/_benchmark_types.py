@@ -238,10 +238,11 @@ class PipelineBenchmarkConfig:
     ------
     TypeError
         If boolean settings are not booleans, or if a configured executable
-        name is not a string.
+        name or ``workload`` is not a string.
     ValueError
-        If configured executable names are empty or whitespace-only, or if
-        ``workload`` is not a known benchmark workload.
+        If configured executable names or ``workload`` are empty or
+        whitespace-only, or if ``workload`` is not a known benchmark
+        workload.
 
     Examples
     --------
@@ -292,10 +293,9 @@ class PipelineBenchmarkConfig:
             name="worker_iterations",
             min_value=1,
         )
-        if self.workload not in WORKLOADS:
-            msg = (
-                f"workload must be one of {', '.join(WORKLOADS)}; got {self.workload!r}"
-            )
+        workload = _require_non_empty_string(self.workload, name="workload")
+        if workload not in WORKLOADS:
+            msg = f"workload must be one of {', '.join(WORKLOADS)}; got {workload!r}"
             raise ValueError(msg)
 
 
