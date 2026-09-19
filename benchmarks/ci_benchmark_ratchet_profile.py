@@ -37,6 +37,7 @@ from benchmarks._validation import (
     _require_non_empty_string,
 )
 from benchmarks.benchmark_profile import require_worker_iterations
+from benchmarks.benchmark_workload import WORKLOAD_PLAN_KEY, read_workload
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -287,6 +288,12 @@ def write_filtered_plan(
 ) -> None:
     """Write the filtered dry-run plan used by the benchmark ratchet."""
     rust_available = _require_rust_available(full_payload)
+    # The workload is carried through rather than restated: the filter selects
+    # scenarios from the plan it was handed, so the workload that produced them
+    # is whatever that plan recorded, and a summary rendering the filtered plan
+    # must be able to name it. `read_workload` validates it on the way through,
+    # so a plan naming an unknown workload is rejected here rather than being
+    # summarized as the sweep.
     filtered_payload = {
         "benchmark_profile_version": _require_non_empty_string(
             full_payload.get("benchmark_profile_version"),
@@ -295,6 +302,7 @@ def write_filtered_plan(
         "dry_run": True,
         "rust_available": rust_available,
         "worker_iterations": require_worker_iterations(full_payload),
+        WORKLOAD_PLAN_KEY: read_workload(full_payload),
         "command": command,
         "scenarios": [scenario for scenario, _ in selected],
     }

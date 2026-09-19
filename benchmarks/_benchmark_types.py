@@ -51,6 +51,7 @@ from benchmarks._benchmark_type_validators import (
     _validate_stages,
 )
 from benchmarks._validation import _require_non_empty_string
+from benchmarks.benchmark_workload import THROUGHPUT_SWEEP_WORKLOAD, WORKLOADS
 
 
 class PipelineBenchmarkScenarioDict(typ.TypedDict):
@@ -227,6 +228,11 @@ class PipelineBenchmarkConfig:
         Whether Rust backend support is available in the current environment.
     worker_iterations:
         Number of pipeline executions performed inside one worker process.
+    workload:
+        Identifier of the workload that produced ``scenarios``. The scenarios
+        themselves do not record which workload selected them, so the plan
+        carries the name alongside them and maintainer-facing summaries
+        render it rather than inferring a workload from the scenario shape.
 
     Raises
     ------
@@ -234,7 +240,8 @@ class PipelineBenchmarkConfig:
         If boolean settings are not booleans, or if a configured executable
         name is not a string.
     ValueError
-        If configured executable names are empty or whitespace-only.
+        If configured executable names are empty or whitespace-only, or if
+        ``workload`` is not a known benchmark workload.
 
     Examples
     --------
@@ -259,6 +266,7 @@ class PipelineBenchmarkConfig:
     dry_run: bool = False
     rust_available: bool = False
     worker_iterations: int = 20
+    workload: str = THROUGHPUT_SWEEP_WORKLOAD
 
     def __post_init__(self) -> None:
         """Validate benchmark configuration values."""
@@ -284,6 +292,11 @@ class PipelineBenchmarkConfig:
             name="worker_iterations",
             min_value=1,
         )
+        if self.workload not in WORKLOADS:
+            msg = (
+                f"workload must be one of {', '.join(WORKLOADS)}; got {self.workload!r}"
+            )
+            raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)

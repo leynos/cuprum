@@ -207,13 +207,23 @@ def render_summary_markdown(
     Returns
     -------
     str
-        A Markdown document with a heading, the ratchet detail, and a table of
+        A Markdown document with a heading, the workload and protocol the
+        compared plan recorded, the ratchet detail, and a table of
         per-scenario Python and Rust means, speed-up, and faster backend.
     """
     lines = [
         "## Python vs Rust benchmark comparison",
         "",
-        "Candidate smoke benchmark results for the current workflow run.",
+        (
+            "Candidate results for the current workflow run, measured on "
+            f"{report.protocol.describe()}."
+        ),
+        "",
+        (
+            f"The compared scenarios are {report.protocol.describe_workload()}, "
+            "which is what the ratchet compares between runs; a report for a "
+            "different workload does not describe the ratchet's own measurement."
+        ),
         "",
         ratchet_status.detail,
         "",

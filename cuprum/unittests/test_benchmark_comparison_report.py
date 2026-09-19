@@ -8,6 +8,14 @@ import typing as typ
 import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    WORKLOAD_PLAN_KEY,
+)
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_PAYLOAD_BYTES,
+    CI_RATCHET_WORKER_ITERATIONS,
+)
 from benchmarks.python_vs_rust_comparison_report import (
     BenchmarkComparisonRow,
     RatchetStatus,
@@ -87,6 +95,58 @@ def _write_json(
     path = tmp_path / filename
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def _ci_ratchet_plan_payload() -> dict[str, object]:
+    """Return the filtered plan the CI ratchet job actually measures.
+
+    The shape mirrors what ``ci_benchmark_ratchet_profile.write_filtered_plan``
+    writes after filtering a ``--ci-ratchet`` plan: one 64 MiB payload, the
+    ratchet's own worker iteration count, and the workload recorded so a
+    summary can name it.
+
+    Returns
+    -------
+    dict[str, object]
+        A filtered CI-ratchet plan payload.
+    """
+    scenarios = [
+        _scenario_payload(
+            name=f"{backend}-ratchet-{depth}-{cb}",
+            backend=backend,
+            payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
+            stages=stages,
+            with_line_callbacks=cb == "cb",
+        )
+        for backend in ("python", "rust")
+        for depth, stages in (("single", 2), ("multi", 3))
+        for cb in ("nocb", "cb")
+    ]
+    return {
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+        WORKLOAD_PLAN_KEY: CI_RATCHET_WORKLOAD,
+        "dry_run": True,
+        "rust_available": True,
+        "command": ["hyperfine", "placeholder"],
+        "scenarios": scenarios,
+    }
+
+
+def _ratchet_throughput_payload(plan_payload: dict[str, object]) -> dict[str, object]:
+    """Return per-scenario results aligned with a plan's scenarios."""
+    scenarios = typ.cast("list[dict[str, object]]", plan_payload["scenarios"])
+    return {
+        "results": [
+            {
+                "command": scenario["name"],
+                # Rust is the faster backend in every pair, so the rendered
+                # table has one unambiguous winner per row.
+                "mean": 0.15 if scenario["backend"] == "rust" else 0.30,
+            }
+            for scenario in scenarios
+        ],
+    }
 
 
 def test_compare_candidate_backend_results_builds_sorted_rows() -> None:
@@ -367,3 +427,86 @@ def test_summary_renders_durable_ratchet_decision_fields(tmp_path: pth.Path) -> 
             "the workflow summary must render durable ratchet decision evidence; "
             f"missing {expected!r} from:\n{markdown}"
         )
+
+
+def test_summary_renders_the_ci_ratchet_workload_for_the_ratchet_path() -> None:
+    """The ratchet job's summary must name the CI-ratchet workload.
+
+    The comparison-report step runs against the filtered plan the ratchet job
+    measured, so a summary that described it as smoke results would misname
+    the workload behind every ratio in the table. This pins the identity and
+    the protocol a maintainer needs to read the table correctly.
+    """
+    plan_payload = _ci_ratchet_plan_payload()
+    report = compare_candidate_backend_results(
+        plan_payload=plan_payload,
+        throughput_payload=_ratchet_throughput_payload(plan_payload),
+    )
+
+    markdown = render_summary_markdown(
+        report=report,
+        ratchet_status=RatchetStatus(status="passed", detail="passed"),
+    )
+
+    assert "smoke" not in markdown, (
+        "the ratchet job measures the CI-ratchet workload, so its summary must "
+        f"not describe the results as smoke results:\n{markdown}"
+    )
+    for expected in (
+        "CI-ratchet workload",
+        f"profile {BENCHMARK_PROFILE_VERSION}",
+        "payload 64 MiB",
+        f"{CI_RATCHET_WORKER_ITERATIONS} worker iterations",
+    ):
+        assert expected in markdown, (
+            "the ratchet summary must carry the workload's measurement "
+            f"protocol; missing {expected!r} from:\n{markdown}"
+        )
+
+
+def test_report_serialization_carries_the_workload_protocol() -> None:
+    """The JSON report must record which workload produced the comparison."""
+    plan_payload = _ci_ratchet_plan_payload()
+    report = compare_candidate_backend_results(
+        plan_payload=plan_payload,
+        throughput_payload=_ratchet_throughput_payload(plan_payload),
+    )
+
+    payload = report.as_dict()
+
+    assert payload["workload"] == CI_RATCHET_WORKLOAD
+    assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
+    assert payload["worker_iterations"] == CI_RATCHET_WORKER_ITERATIONS
+
+
+def test_summary_omits_protocol_fields_the_plan_does_not_carry() -> None:
+    """A plan without protocol metadata must not be summarized with defaults.
+
+    Older plans predate the workload field and may lack a worker iteration
+    count. Rendering one must not invent a protocol: a default would state a
+    measurement the plan never recorded.
+    """
+    report = compare_candidate_backend_results(
+        plan_payload={"scenarios": []},
+        throughput_payload={"results": []},
+    )
+
+    markdown = render_summary_markdown(
+        report=report,
+        ratchet_status=RatchetStatus(status="passed", detail="passed"),
+    )
+
+    # The protocol is rendered on the line naming the measured results; the
+    # prose sentence below it describes the workload in general and may name a
+    # payload without claiming this plan measured one.
+    protocol_line = next(
+        line for line in markdown.splitlines() if line.startswith("Candidate results")
+    )
+    assert "worker iterations" not in protocol_line, (
+        f"an absent worker iteration count must not be defaulted:\n{protocol_line}"
+    )
+    assert "payload" not in protocol_line, (
+        f"a plan without scenarios must not claim a payload:\n{protocol_line}"
+    )
+    # The workload defaults to the sweep, which is what such a plan measured.
+    assert "the throughput-sweep workload" in protocol_line

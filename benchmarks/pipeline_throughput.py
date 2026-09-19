@@ -37,6 +37,11 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkScenario,
     PipelineBenchmarkScenarioDict,
 )
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    SMOKE_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
+)
 from benchmarks.pipeline_throughput_runner import (
     build_hyperfine_command,
     render_prefixed_command,
@@ -144,6 +149,31 @@ def _resolve_worker_iterations(args: argparse.Namespace) -> int:
     return _DEFAULT_WORKER_ITERATIONS
 
 
+def _resolve_workload(args: argparse.Namespace) -> str:
+    """Return the workload identifier for the selected flags.
+
+    The identifiers are recorded in the plan so that a summary rendering the
+    plan can name the workload that produced it; the scenario shape alone
+    cannot distinguish a smoke matrix from a ratchet one beyond its payload
+    labels.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed arguments whose workload flags select the matrix.
+
+    Returns
+    -------
+    str
+        The identifier recorded in the plan the run writes.
+    """
+    if args.ci_ratchet:
+        return CI_RATCHET_WORKLOAD
+    if args.smoke:
+        return SMOKE_WORKLOAD
+    return THROUGHPUT_SWEEP_WORKLOAD
+
+
 def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Run the benchmark CLI entry point.
 
@@ -176,6 +206,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         dry_run=args.dry_run,
         rust_available=rust_available,
         worker_iterations=_resolve_worker_iterations(args),
+        workload=_resolve_workload(args),
     )
     run_pipeline_benchmarks(config=config)
     return 0
