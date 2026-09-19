@@ -293,14 +293,14 @@ resolves it, which for the spawn context and consumer construction is
 Merging the idle-heartbeat work with the relay-diagnostics work put two
 independent additions into `cuprum/_process_lifecycle.py` at once and carried
 the module past the repository's `max-module-lines` ceiling. The module had
-accumulated two lifecycles with no shared state: *starting* a pipeline, and
-*terminating* processes.
+accumulated two lifecycles with no shared state: _starting_ a pipeline, and
+_terminating_ processes.
 
 Pipeline startup therefore moved to `cuprum/_pipeline_spawn.py`:
 `_spawn_pipeline_processes`, the `_SpawnedPipelineStages` accumulator it fills
 through `_spawn_pipeline_stages`, `_build_spawn_observations`, and
 `_cleanup_spawned_processes`. That last helper is why the split is a real seam
-rather than a size fix: it exists only to tear down a *partial* spawn — the
+rather than a size fix: it exists only to tear down a _partial_ spawn — the
 processes and capture tasks that a failed stage left running — and it is
 reachable only from the startup path that can fail that way. Pipeline teardown
 after a successful spawn is a different subject, decided by
