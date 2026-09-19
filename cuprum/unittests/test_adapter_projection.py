@@ -27,7 +27,7 @@ from cuprum.adapters.logging_adapter import _build_extra
 from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.adapters.tracing_memory import InMemoryTracer
-from cuprum.events import ExecEvent, ExecPhase, new_exec_id
+from cuprum.events import ExecEvent, ExecPhase, ResourceUsageMode, new_exec_id
 from cuprum.program import Program
 
 if typ.TYPE_CHECKING:
@@ -90,10 +90,7 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         max_rss_bytes=draw(st.none() | st.integers(min_value=0, max_value=2**32)),
         user_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
         system_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
-        resource_usage_mode=draw(
-            st.none()
-            | st.sampled_from(("wait4_child", "aggregate_cpu_delta", "unavailable")),
-        ),
+        resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
     )
 
 
@@ -333,7 +330,7 @@ class TestAdapterProjection:
             max_rss_bytes=4_194_304 if is_exit else None,
             user_cpu_seconds=0.375 if is_exit else None,
             system_cpu_seconds=0.125 if is_exit else None,
-            resource_usage_mode="wait4_child" if is_exit else None,
+            resource_usage_mode=ResourceUsageMode.WAIT4_CHILD if is_exit else None,
         )
 
     @staticmethod

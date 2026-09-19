@@ -120,6 +120,9 @@ def _inputs(
         ),
         stderr_by_stage=tuple(f"stderr-{idx}" for idx in range(len(exit_codes))),
         final_stdout="captured",
+        # This seam builds stage results from injected wait outcomes, so no
+        # echo-disablement records exist to carry into them.
+        relay_fallbacks_by_stage=tuple(() for _ in exit_codes),
     )
 
 
@@ -257,6 +260,9 @@ def test_timeout_events_publish_each_stages_own_injected_duration(
         ),
         stderr_tasks=[],
         stdout_task=None,
+        # A timeout emits each stage's terminal ``exit`` without consulting the
+        # relay collectors, so no per-stage diagnostics are needed here.
+        relay_diagnostics_by_stage=((None, None), (None, None)),
         stages=_StageWaitContext(started_at=_MONOTONIC_START),
     )
 

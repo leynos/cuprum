@@ -241,7 +241,10 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     mode = event.resource_usage_mode
     if mode is None:
         return ()
-    labels = {"resource_usage_mode": mode}
+    # Rendered, not passed through: the mode is a ``StrEnum``, and the label
+    # must reach the collector as the plain string that appears in the series
+    # an operator filters on rather than as the member's ``repr``.
+    labels = {"resource_usage_mode": str(mode)}
     operations.append(
         _CounterOp("cuprum_resource_usage_measurements_total", 1.0, labels)
     )

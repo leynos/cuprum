@@ -785,21 +785,23 @@ contrast, formatting an unrecognized phase generically.
 Applying the operations is deliberately non-atomic, and that is a contract
 collectors rely on rather than an implementation detail. An `exit` event yields
 up to six operations — the failure counter, then the duration observation, then
-the resource counter, and finally the resource histograms — applied as separate
-collector calls in that order, so a collector that raises part-way through
-leaves the earlier calls applied. The exception propagates out of the hook and
-is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and wraps the
-error in `_ExecEventEmissionError` so already-scheduled observe tasks survive
-cleanup, then `_StageObservation.emit` unwraps it and re-raises the collector's
-original exception — so a raising collector fails the user's command. A
-collector that must not do that has to swallow its own errors. The labels are
-extracted once before the loop and are read-only within it. A collector must
-therefore treat each call as independent and never infer a duration observation
-from a failure increment. No operation identifier is passed either, so a
-repeated call increments again — nothing here is idempotent, and the hook never
-retries. See the metrics-hook dispatch figure in
-[the design document](cuprum-design.md) for the full statement, and
-`test_metrics_adapter_stateful.py` for the case that pins it.
+the resource counter, and finally up to three resource histograms (maximum RSS,
+user CPU, and system CPU, each only where that figure was measured) — applied
+as separate collector calls in that order, so a collector that raises part-way
+through leaves the earlier calls applied. The exception propagates out of the
+hook and is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and
+wraps the error in `_ExecEventEmissionError` so already-scheduled observe tasks
+survive cleanup, then `_StageObservation.emit` unwraps it and re-raises the
+collector's original exception — so a raising collector fails the user's
+command. A collector that must not do that has to swallow its own errors. The
+labels are extracted once before the loop and are read-only within it. A
+collector must therefore treat each call as independent and never infer a
+duration observation from a failure increment. No operation identifier is
+passed either, so a repeated call increments again — nothing here is
+idempotent, and the hook never retries. See the metrics-hook dispatch figure in
+[the design document](cuprum-design.md)
+for the full statement, and `test_metrics_adapter_stateful.py` for the case
+that pins it.
 
 ### Choosing a test shape per observe hook
 

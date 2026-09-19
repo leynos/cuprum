@@ -9,7 +9,8 @@ run loop that waits for exit and reconciles the consumer tasks lives in
 drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
 importers of this module keep working unchanged. Timing and child resource
 usage are measured here, with ``cuprum._wait4_process`` owning the direct
-child's ``wait4`` reap and the aggregate fallback.
+child's ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps
+the three pre-spawn readings together so their shared ordering cannot drift.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
@@ -104,6 +106,33 @@ class _SubprocessExecution:
             or self.idle is not None
             or self.on_line is not None
         )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _DirectRunStart:
+    """The three readings every direct run takes before its child exists.
+
+    They are captured as one record because they share a single ordering
+    invariant rather than merely happening to sit together: all three are read
+    *before* the spawn await, so a run's recorded duration includes the time
+    its spawn blocked, and the rusage bracket spans the child's whole life.
+    Sampling any of them after the await would silently change what the
+    published figures mean, so the type keeps the readings from being taken
+    apart and reordered.
+    """
+
+    rusage_before: _ChildRusageSnapshot | None
+    monotonic_started_at: float
+    wall_clock_started_at: float
+
+
+def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
+    """Take the pre-spawn readings, in the order the timing tests pin."""
+    return _DirectRunStart(
+        rusage_before=_wait4_process.capture_resource_before_spawn(),
+        monotonic_started_at=time.perf_counter(),
+        wall_clock_started_at=observation.wall_clock(),
+    )
 
 
 async def _spawn_subprocess(
@@ -191,18 +220,19 @@ def _relay_fallbacks_for_result(
 
 async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
-    rusage_before = _wait4_process.capture_resource_before_spawn()
-    started_at = time.perf_counter()
-    # The published result timestamp is a separate reading from the monotonic
-    # one above: ``started_at`` is a monotonic reference the line stamps and
-    # the duration are measured against, while this is the wall-clock instant
-    # the result reports to callers. Both are sampled before the spawn await,
-    # so a run's recorded duration includes the time the spawn itself blocked.
-    wall_clock_started_at = execution.observation.wall_clock()
+    # All three pre-spawn readings are taken here, before the spawn await, so
+    # a run's recorded duration includes the time its spawn blocked and the
+    # rusage bracket spans the child's whole life. ``started_at`` is the
+    # monotonic reference the duration and every line stamp are measured
+    # against; ``wall_clock_started_at`` is the separate wall-clock instant the
+    # result reports to callers.
+    run_start = _sample_run_start(execution.observation)
+    started_at = run_start.monotonic_started_at
     # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
     # consumers read ``started_at`` off it when stamping each ``LineEvent``.
     # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
-    # uptime rather than seconds since this command started.
+    # uptime rather than seconds since this command started. Stamping the
+    # bundle reads no clock, so it does not disturb the sampling order above.
     execution = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(execution)
     pid = process.pid
@@ -246,7 +276,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         # entirely; repeats are no-ops.
         await _shielded_cleanup(_stop_idle_monitor(execution.idle))
 
-    rusage = _wait4_process.resource_usage_for(process, rusage_before)
+    rusage = _wait4_process.resource_usage_for(process, run_start.rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(
@@ -267,7 +297,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         pid=process.pid if process.pid is not None else -1,
         stdout=stdout_text,
         stderr=stderr_text,
-        started_at=wall_clock_started_at,
+        started_at=run_start.wall_clock_started_at,
         duration=max(0.0, exited_at - started_at),
         max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
         user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
@@ -277,6 +307,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
 
 
 __all__ = [
+    "_DirectRunStart",
     "_StreamConsumerSpawnContext",
     "_SubprocessExecution",
     "_build_stream_config",

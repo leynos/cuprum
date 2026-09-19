@@ -34,6 +34,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._idle_heartbeat import _IdleMonitor
+
     # ``_PipelineWaitResult`` is defined here, not imported: ``_pipeline_wait``
     # imports this module, so taking the record back from it would close a
     # cycle. The other direction is the reason the record lives here.

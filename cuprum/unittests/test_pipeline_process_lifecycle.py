@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from cuprum import ECHO, _pipeline_stage_streams, _process_lifecycle, sh
+from cuprum import ECHO, _pipeline_spawn, _pipeline_stage_streams, sh
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
 from cuprum.sh import RunOutputOptions
 
@@ -123,16 +123,16 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     def fake_create_stage_capture_tasks(
         *_: object,
         **__: object,
-    ) -> tuple[None, None]:
-        """Avoid stream-task setup in this spawn-boundary test."""
-        return None, None
+    ) -> tuple[None, None, tuple[None, None]]:
+        """Avoid stream-task and relay-collector setup in this spawn-boundary test."""
+        return None, None, (None, None)
 
     config = _prepare_pipeline_config(
         output=RunOutputOptions(capture=False, echo=False),
         timeout=None,
         context=None,
     )
-    monkeypatch.setattr(_process_lifecycle.time, "perf_counter", monotonic_clock)
+    monkeypatch.setattr(_pipeline_spawn.time, "perf_counter", monotonic_clock)
     monkeypatch.setattr(sh.time, "time", wall_clock)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(
@@ -141,7 +141,9 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
         fake_create_stage_capture_tasks,
     )
 
-    *_, started_at, wall_clock_started_at = asyncio.run(
+    # The trailing relay-diagnostics list is unused here, but names the last
+    # element so the two clock lists keep binding to their own fields.
+    *_, started_at, wall_clock_started_at, _relay_diagnostics = asyncio.run(
         _spawn_pipeline_processes((sh.make(ECHO)("quiet"),), config),
     )
 

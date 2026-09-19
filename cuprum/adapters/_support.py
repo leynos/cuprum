@@ -41,8 +41,14 @@ def _event_common_fields(
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
-        # The only field the projection renders rather than passing through.
+        # A ``Path``, rendered rather than passed through.
         yield name("cwd"), str(event.cwd)
+    if event.resource_usage_mode is not None:
+        # A ``StrEnum``, rendered for the same reason: ``str`` yields the
+        # member's value, and every transport this projection feeds — the log
+        # extras, the span attributes, and the metric label — must carry the
+        # plain string operators key on, not the member's ``repr``.
+        yield name("resource_usage_mode"), str(event.resource_usage_mode)
     for field, value in _verbatim_fields(event):
         if value is not None:
             yield name(field), value
@@ -52,10 +58,11 @@ def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
     """Return the optional fields the projection carries through unchanged.
 
     Each is omitted when ``None`` like every other optional field. The
-    terminal resource measurements and the mode naming their source are
-    projected the same way as the lifecycle fields, so the mode travels with
-    the figures it describes and a consumer can never read one as the other's
-    explanation.
+    terminal resource measurements are projected here alongside the lifecycle
+    fields, so a consumer reads the figures and the mode that names their
+    source from one record and can never mistake one for the other's
+    explanation. The mode itself is not here: it is a ``StrEnum`` and so is
+    rendered by :func:`_event_common_fields` rather than passed through.
 
     Returns
     -------
@@ -71,7 +78,6 @@ def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
         ("max_rss_bytes", event.max_rss_bytes),
         ("user_cpu_seconds", event.user_cpu_seconds),
         ("system_cpu_seconds", event.system_cpu_seconds),
-        ("resource_usage_mode", event.resource_usage_mode),
     )
 
 
