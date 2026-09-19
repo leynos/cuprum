@@ -34,54 +34,69 @@ def _write_program(directory: Path, name: str, body: str) -> None:
     program.chmod(0o755)
 
 
+class _FailureCase(typ.NamedTuple):
+    """One prerequisite mutation and the diagnostic its failure must report."""
+
+    programs: dict[str, str]
+    variables: dict[str, str]
+    expected_diagnostic: str
+
+
 @pytest.mark.parametrize(
-    ("programs", "variables", "expected_diagnostic"),
+    "case",
     [
-        pytest.param({}, {}, "mold {version} is required", id="missing_mold"),
         pytest.param(
-            {
-                "mold": "printf '%s\\n' 'mold 2.41.00'",
-                "rustup": "exit 0",
-            },
-            {},
-            "mold {version} is required",
+            _FailureCase({}, {}, "mold {version} is required"),
+            id="missing_mold",
+        ),
+        pytest.param(
+            _FailureCase(
+                {
+                    "mold": "printf '%s\\n' 'mold 2.41.00'",
+                    "rustup": "exit 0",
+                },
+                {},
+                "mold {version} is required",
+            ),
             id="wrong_mold_version",
         ),
         pytest.param(
-            {
-                "mold": "printf '%s\\n' 'mold {version}'",
-                "rustup": "exit 0",
-            },
-            {},
-            "install rustc-codegen-cranelift",
+            _FailureCase(
+                {
+                    "mold": "printf '%s\\n' 'mold {version}'",
+                    "rustup": "exit 0",
+                },
+                {},
+                "install rustc-codegen-cranelift",
+            ),
             id="missing_component",
         ),
         pytest.param(
-            {
-                "mold": "printf '%s\\n' 'mold {version}'",
-                "rustup": _installed_components("rustc-codegen-cranelift"),
-            },
-            {},
-            "install clippy",
+            _FailureCase(
+                {
+                    "mold": "printf '%s\\n' 'mold {version}'",
+                    "rustup": _installed_components("rustc-codegen-cranelift"),
+                },
+                {},
+                "install clippy",
+            ),
             id="missing_clippy",
         ),
         pytest.param(
-            {},
-            {"DEV_FAST_CONFIG": "missing-dev-fast.toml"},
-            "dev-fast configuration is missing",
+            _FailureCase(
+                {},
+                {"DEV_FAST_CONFIG": "missing-dev-fast.toml"},
+                "dev-fast configuration is missing",
+            ),
             id="missing_fragment",
         ),
     ],
 )
 def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
-    tmp_path: Path,
-    programs: dict[str, str],
-    variables: dict[str, str],
-    expected_diagnostic: str,
-    mold_version: str,
+    tmp_path: Path, case: _FailureCase, mold_version: str
 ) -> None:
     """Missing or mismatched prerequisites are hard failures with useful output."""
-    for name, body in programs.items():
+    for name, body in case.programs.items():
         _write_program(tmp_path, name, body.format(version=mold_version))
     make = shutil.which("make")
     assert make is not None, "the prerequisite contract requires GNU Make on PATH"
@@ -90,7 +105,7 @@ def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
             make,
             "dev-fast-check",
             "DEV_FAST_HOST_IS_LINUX=yes",
-            *(f"{key}={value}" for key, value in variables.items()),
+            *(f"{key}={value}" for key, value in case.variables.items()),
         ],
         check=False,
         capture_output=True,
@@ -99,7 +114,7 @@ def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
         text=True,
     )
     assert result.returncode != 0, "missing prerequisites must fail closed"
-    assert expected_diagnostic.format(version=mold_version) in result.stderr, (
+    assert case.expected_diagnostic.format(version=mold_version) in result.stderr, (
         f"the prerequisite failure must explain how to repair it: {result.stderr}"
     )
 
