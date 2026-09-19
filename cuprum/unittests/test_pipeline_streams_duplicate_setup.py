@@ -298,9 +298,7 @@ def test_fatal_handoff_failure_closes_the_writer_transport(
         msg = "cannot duplicate owned descriptors"
         raise OSError(msg)
 
-    monkeypatch.setattr(
-        _pipeline_streams, "_close_stream_writer", record_close
-    )
+    monkeypatch.setattr(_pipeline_streams, "_close_stream_writer", record_close)
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup,
         "_duplicate_native_pump_fds",
