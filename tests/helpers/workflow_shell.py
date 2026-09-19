@@ -215,8 +215,66 @@ def top_level_operators(expression: str, operator: str) -> int:
     return state.count
 
 
+def _starts_comment(line: str, index: int) -> bool:
+    """Return whether ``line[index]`` begins a comment rather than a word."""
+    return line[index] == "#" and (index == 0 or line[index - 1].isspace())
+
+
+def _drop_comment(line: str) -> str:
+    """Return *line* with any comment removed, quote-aware.
+
+    A `#` inside a quoted string is part of that string, not the start of a
+    comment, so the scan has to track quoting to find the real one. Workflow
+    scripts quote command names and expressions freely, and truncating at the
+    first `#` would silently shorten a statement a caller then asserts on.
+
+    Parameters
+    ----------
+    line : str
+        The line to strip a trailing comment from.
+
+    Returns
+    -------
+    str
+        The line up to its comment, or unchanged when it carries none.
+    """
+    quote: str | None = None
+    for index, char in enumerate(line):
+        if quote is not None:
+            quote = None if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif _starts_comment(line, index):
+            return line[:index]
+    return line
+
+
+def _split_statements(body: str) -> cabc.Iterator[str]:
+    """Yield *body*'s statements, split on newlines and unquoted `;`."""
+    buffer: list[str] = []
+    quote: str | None = None
+    for char in body:
+        if quote is not None:
+            quote = None if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char in ";\n":
+            yield "".join(buffer)
+            buffer = []
+            continue
+        buffer.append(char)
+    yield "".join(buffer)
+
+
 def shell_statements(body: str) -> tuple[str, ...]:
     """Return *body*'s statements, continuations joined and comments dropped.
+
+    A statement is one command and the guard attached to it, so the split has
+    to happen at every separator the shell honours. Splitting on newlines alone
+    is not enough: `make develop ...; true || return $?` is one physical line
+    carrying an unguarded command followed by a guarded one, and a reader that
+    did not split on the `;` would see a single statement ending in the guard
+    and report the unguarded command as guarded.
 
     Comments are dropped before anything is matched, and the order matters:
     a workflow's own prose quotes the very command names and guards these
@@ -234,15 +292,17 @@ def shell_statements(body: str) -> tuple[str, ...]:
     tuple[str, ...]
         One entry per statement, whitespace-collapsed and stripped.
     """
-    uncommented = "\n".join(
-        line for line in body.splitlines() if not line.lstrip().startswith("#")
-    )
-    joined = re.sub(r"\\\n\s*", " ", uncommented)
+    joined = re.sub(r"\\\n\s*", " ", body)
+    uncommented = "\n".join(_drop_comment(line) for line in joined.splitlines())
     # Continuation folding leaves the joined line's indentation as runs of
     # spaces, so collapse them: callers assert which guard a statement carries,
     # not how it is laid out.
-    collapsed = re.sub(r"[ \t]+", " ", joined)
-    return tuple(line.strip() for line in collapsed.splitlines() if line.strip())
+    collapsed = re.sub(r"[ \t]+", " ", uncommented)
+    return tuple(
+        statement.strip()
+        for statement in _split_statements(collapsed)
+        if statement.strip()
+    )
 
 
 def shell_function(script: str, name: str, *, step: str) -> str:

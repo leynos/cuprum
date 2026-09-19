@@ -31,6 +31,7 @@ from benchmarks.benchmark_workload import (
     CI_RATCHET_WORKLOAD,
     THROUGHPUT_SWEEP_WORKLOAD,
     WORKLOAD_PLAN_KEY,
+    read_workload_protocol,
 )
 from benchmarks.ci_benchmark_ratchet_profile import (
     _CI_RATCHET_MAX_PAYLOAD_BYTES,
@@ -295,6 +296,73 @@ def test_select_ci_ratchet_scenarios_rejects_non_finite_payload(
         )
     )
     with pytest.raises(ValueError, match="scenario payload_bytes must be finite"):
+        select_ci_ratchet_scenarios({
+            "dry_run": True,
+            "rust_available": True,
+            "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
+            "scenarios": [scenario],
+        })
+
+
+def test_select_ci_ratchet_scenarios_keeps_payloads_readable() -> None:
+    """A retained scenario's payload must survive the plan round trip.
+
+    The filter writes the scenarios it keeps straight back out as the filtered
+    plan, which `benchmark_workload` then reads. JSON has no integer type, so a
+    plan may spell a whole payload as `67108864.0`; passing that through puts a
+    float in the filtered plan, and the reader rejects it as a payload size.
+    The band accepts the value, so the filter must normalise it to the `int`
+    the reader requires rather than hand on what it was given.
+    """
+    plan = {
+        "dry_run": True,
+        "rust_available": True,
+        "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+        "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+        WORKLOAD_PLAN_KEY: CI_RATCHET_WORKLOAD,
+        "command": ["a", "b", "c", "d", "e", "f", "g", "rust only"],
+        "scenarios": [
+            _scenario(
+                _ScenarioSpec(
+                    name="rust-ratchet-single-nocb",
+                    backend="rust",
+                    payload_bytes=typ.cast("int", float(CI_RATCHET_PAYLOAD_BYTES)),
+                    stages=2,
+                )
+            )
+        ],
+    }
+    selected = select_ci_ratchet_scenarios(plan)
+
+    read_plan = json.loads(
+        json.dumps({
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+            WORKLOAD_PLAN_KEY: CI_RATCHET_WORKLOAD,
+            "scenarios": [scenario for scenario, _ in selected],
+        })
+    )
+    protocol = read_workload_protocol(read_plan)
+    assert protocol.payload_bytes == (CI_RATCHET_PAYLOAD_BYTES,)
+
+
+def test_select_ci_ratchet_scenarios_rejects_fractional_payload() -> None:
+    """A payload that is not a whole number of bytes is not a payload size.
+
+    The band compares a payload to its bounds, so `67108864.5` lands inside it
+    as readily as the whole number beside it. No measurement reports a
+    fractional byte count, and truncating one would record a payload the plan
+    never declared, so the filter refuses it instead of guessing.
+    """
+    scenario = _scenario(
+        _ScenarioSpec(
+            name="rust-ratchet-single-nocb",
+            backend="rust",
+            payload_bytes=typ.cast("int", CI_RATCHET_PAYLOAD_BYTES + 0.5),
+            stages=2,
+        )
+    )
+    with pytest.raises(ValueError, match="must be a whole number of bytes"):
         select_ci_ratchet_scenarios({
             "dry_run": True,
             "rust_available": True,
