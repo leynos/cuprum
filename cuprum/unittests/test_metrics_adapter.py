@@ -415,3 +415,199 @@ print('err1', file=sys.stderr)""",
         assert recorder.labels == [{"program": "tool", "project": "unknown"}], (
             "explicit None project tags should use the stable unknown label"
         )
+
+
+class TestResourceMetricSurface:
+    """Terminal child-resource figures and the mode that names their source."""
+
+    @staticmethod
+    def _exit_event(**overrides: object) -> ExecEvent:
+        """Build an exit event with the resource fields under test.
+
+        A real terminal event always carries an exit code and an elapsed
+        duration, so the shared factory's unset defaults are filled in here
+        rather than left for each test to restate.
+
+        Returns
+        -------
+        ExecEvent
+            An ``exit`` event carrying the supplied overrides.
+        """
+        return _make_exec_event(
+            phase="exit",
+            overrides={"exit_code": 0, "duration_s": 0.25, **overrides},
+        )
+
+    def test_attributable_measurement_emits_every_resource_metric(self) -> None:
+        """A wait4 child reports RSS, both CPU figures, and their mode."""
+        recorder = _LabelRecordingCollector()
+        hook = MetricsHook(recorder)
+
+        hook(
+            self._exit_event(
+                max_rss_bytes=4_194_304,
+                user_cpu_seconds=0.375,
+                system_cpu_seconds=0.125,
+                resource_usage_mode="wait4_child",
+                tags={"project": "resource-metrics"},
+            )
+        )
+
+        assert recorder.calls == [
+            (
+                "cuprum_duration_seconds",
+                0.25,
+                {
+                    "program": "cat",
+                    "project": "resource-metrics",
+                },
+            ),
+            (
+                "cuprum_resource_usage_measurements_total",
+                1.0,
+                {
+                    "program": "cat",
+                    "project": "resource-metrics",
+                    "resource_usage_mode": "wait4_child",
+                },
+            ),
+            (
+                "cuprum_child_max_rss_bytes",
+                4_194_304.0,
+                {
+                    "program": "cat",
+                    "project": "resource-metrics",
+                    "resource_usage_mode": "wait4_child",
+                },
+            ),
+            (
+                "cuprum_child_user_cpu_seconds",
+                0.375,
+                {
+                    "program": "cat",
+                    "project": "resource-metrics",
+                    "resource_usage_mode": "wait4_child",
+                },
+            ),
+            (
+                "cuprum_child_system_cpu_seconds",
+                0.125,
+                {
+                    "program": "cat",
+                    "project": "resource-metrics",
+                    "resource_usage_mode": "wait4_child",
+                },
+            ),
+        ], (
+            "an attributable measurement must emit every resource metric, each "
+            "labelled with the mode, and must not add that mode to the duration "
+            "histogram it shares the event with"
+        )
+
+    def test_cpu_only_fallback_omits_rss_and_names_its_mode(self) -> None:
+        """The aggregate delta reports CPU without inventing an RSS figure."""
+        recorder = _LabelRecordingCollector()
+        hook = MetricsHook(recorder)
+
+        hook(
+            self._exit_event(
+                user_cpu_seconds=0.5,
+                system_cpu_seconds=0.25,
+                resource_usage_mode="aggregate_cpu_delta",
+            )
+        )
+
+        observed = [name for name, _, _ in recorder.calls]
+        assert "cuprum_child_max_rss_bytes" not in observed, (
+            "an aggregate high-water mark is not attributable, so no RSS "
+            f"histogram may be observed, got {observed!r}"
+        )
+        modes = {
+            labels["resource_usage_mode"]
+            for name, _, labels in recorder.calls
+            if name.startswith("cuprum_child_") or name.endswith("measurements_total")
+        }
+        assert modes == {"aggregate_cpu_delta"}, (
+            "every resource metric must name the fallback as its source"
+        )
+
+    def test_unavailable_measurement_counts_without_observing_values(self) -> None:
+        """A platform that measures nothing is still counted as such.
+
+        The counter is the whole point of the ``unavailable`` mode: a consumer
+        seeing no resource histogram cannot otherwise tell a platform that
+        cannot measure from a deployment where the metrics went missing.
+        """
+        recorder = _LabelRecordingCollector()
+        hook = MetricsHook(recorder)
+
+        hook(self._exit_event(resource_usage_mode="unavailable"))
+
+        assert recorder.calls == [
+            (
+                "cuprum_duration_seconds",
+                0.25,
+                {
+                    "program": "cat",
+                    "project": "unknown",
+                },
+            ),
+            (
+                "cuprum_resource_usage_measurements_total",
+                1.0,
+                {
+                    "program": "cat",
+                    "project": "unknown",
+                    "resource_usage_mode": "unavailable",
+                },
+            ),
+        ], (
+            "an unmeasured platform must count its terminal event without "
+            "observing any resource value"
+        )
+
+    def test_events_without_a_mode_emit_no_resource_metric(self) -> None:
+        """A phase that attempted no measurement contributes no resource metric.
+
+        This is what keeps the counter's meaning narrow: it counts terminal
+        events that recorded a mode, so an unset mode — every non-terminal
+        phase, and any event built before a measurement was attempted — must
+        stay out of the series rather than inflating it as a zero-value entry.
+        """
+        recorder = _LabelRecordingCollector()
+        hook = MetricsHook(recorder)
+
+        hook(self._exit_event())
+
+        observed = [name for name, _, _ in recorder.calls]
+        assert observed == ["cuprum_duration_seconds"], (
+            "only the duration histogram may be observed for an exit event "
+            f"that recorded no resource mode, got {observed!r}"
+        )
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            ("wait4_child", "wait4_child"),
+            ("aggregate_cpu_delta", "aggregate_cpu_delta"),
+            ("unavailable", "unavailable"),
+        ],
+    )
+    def test_mode_label_is_the_recorded_mode(self, mode: str, expected: str) -> None:
+        """Every accepted mode reaches the label unchanged.
+
+        The label is what makes the resource series separable per source, so it
+        must carry the recorded value rather than a normalized or reduced one.
+        """
+        recorder = _LabelRecordingCollector(record_histograms=False)
+        hook = MetricsHook(recorder)
+
+        hook(self._exit_event(resource_usage_mode=mode))
+
+        assert recorder.labels == [
+            {
+                "program": "cat",
+                "project": "unknown",
+                "resource_usage_mode": expected,
+            }
+        ], f"the {mode!r} mode must reach the label unchanged"

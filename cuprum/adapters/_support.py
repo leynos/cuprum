@@ -41,17 +41,38 @@ def _event_common_fields(
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
+        # The only field the projection renders rather than passing through.
         yield name("cwd"), str(event.cwd)
-    if event.exit_code is not None:
-        yield name("exit_code"), event.exit_code
-    if event.duration_s is not None:
-        yield name("duration_s"), event.duration_s
-    if event.stage_index is not None:
-        yield name("stage_index"), event.stage_index
-    if event.stage_count is not None:
-        yield name("stage_count"), event.stage_count
-    if event.line is not None:
-        yield name("line"), event.line
+    for field, value in _verbatim_fields(event):
+        if value is not None:
+            yield name(field), value
+
+
+def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
+    """Return the optional fields the projection carries through unchanged.
+
+    Each is omitted when ``None`` like every other optional field. The
+    terminal resource measurements and the mode naming their source are
+    projected the same way as the lifecycle fields, so the mode travels with
+    the figures it describes and a consumer can never read one as the other's
+    explanation.
+
+    Returns
+    -------
+    tuple[tuple[str, object], ...]
+        Field names paired with their raw values, in emission order.
+    """
+    return (
+        ("exit_code", event.exit_code),
+        ("duration_s", event.duration_s),
+        ("stage_index", event.stage_index),
+        ("stage_count", event.stage_count),
+        ("line", event.line),
+        ("max_rss_bytes", event.max_rss_bytes),
+        ("user_cpu_seconds", event.user_cpu_seconds),
+        ("system_cpu_seconds", event.system_cpu_seconds),
+        ("resource_usage_mode", event.resource_usage_mode),
+    )
 
 
 def _prefixed(prefix: str) -> cabc.Callable[[str], str]:

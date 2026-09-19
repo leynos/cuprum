@@ -51,6 +51,22 @@ ExecId = typ.NewType("ExecId", uuid.UUID)
 # at once, without ever awaiting the process.
 type TimeoutMode = typ.Literal["elapsed_deadline", "non_positive_immediate"]
 
+# The stable ``resource_usage_mode`` values, naming how a terminal ``exit``
+# event obtained the child resource figures it carries. They are shared by the
+# observe event, the ``cuprum_`` log extras, the span attributes, and the
+# metrics label, so a consumer keying on any of them sees the same strings.
+#
+# ``wait4_child`` is the attributable case: one reaped child's own usage, with
+# ``max_rss_bytes`` populated. ``aggregate_cpu_delta`` is the CPU-only
+# fallback, where ``RUSAGE_CHILDREN`` snapshots bracket the run and
+# ``max_rss_bytes`` stays ``None`` because that high-water mark spans every
+# reaped child. ``unavailable`` means the platform offers neither source.
+type ResourceUsageMode = typ.Literal[
+    "wait4_child",
+    "aggregate_cpu_delta",
+    "unavailable",
+]
+
 
 def new_exec_id() -> ExecId:
     """Return a fresh, process-unique execution correlation token.
@@ -167,6 +183,40 @@ class ExecEvent:
     pending_readers:
         Number of readers (one or two) still pending when the capture EOF
         grace elapsed. ``None`` for other phases.
+    max_rss_bytes:
+        Maximum resident set size attributable to this execution's own child,
+        in bytes, as reported by ``wait4``. Carried on the terminal ``exit``
+        event of a direct command on Linux and macOS. ``None`` on Windows, on
+        platforms whose child-specific interface is unavailable, on pipeline
+        stages whose concurrently reaped children cannot be separated, and on
+        the aggregate CPU-only fallback — whose ``RUSAGE_CHILDREN`` high-water
+        mark spans every reaped child and cannot be attributed to this one.
+        Also ``None`` on a ``timeout`` terminal event, where the child was
+        signalled rather than reaped by its owner.
+    user_cpu_seconds:
+        User CPU time in seconds attributable to this execution's child.
+        Populated from the same ``wait4`` result as ``max_rss_bytes`` on the
+        attributable path, and from the clamped ``RUSAGE_CHILDREN`` delta on
+        the CPU-only fallback. ``None`` where neither source applies.
+    system_cpu_seconds:
+        System CPU time in seconds attributable to this execution's child,
+        from the same sources and under the same conditions as
+        ``user_cpu_seconds``.
+    resource_usage_mode:
+        How the resource fields above were obtained. See
+        :data:`~cuprum.events.ResourceUsageMode`. It is carried so a consumer
+        can tell an attributable measurement from the aggregate fallback and
+        from a platform that measures nothing, without inferring that from a
+        ``None`` in ``max_rss_bytes`` alone.
+
+        Every terminal ``exit`` event carries a mode: ``wait4_child`` or
+        ``aggregate_cpu_delta`` where a source produced figures, and
+        ``unavailable`` where none did — Windows, a platform without the
+        child-specific interface, a pipeline stage, and the timeout path, which
+        signals its child rather than reaping it. An ``unavailable`` terminal
+        event therefore still distinguishes a platform that cannot measure from
+        one whose samples went missing, which a bare ``None`` cannot. The mode
+        is ``None`` on every non-terminal phase.
 
     New optional fields are appended after ``exec_id`` rather than inserted
     beside the field they relate to. Inserting one ahead of ``exec_id`` would
@@ -201,6 +251,10 @@ class ExecEvent:
     stage_count: int | None = None
     eof_grace_s: float | None = None
     pending_readers: int | None = None
+    max_rss_bytes: int | None = None
+    user_cpu_seconds: float | None = None
+    system_cpu_seconds: float | None = None
+    resource_usage_mode: ResourceUsageMode | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
@@ -211,6 +265,7 @@ __all__ = [
     "ExecHook",
     "ExecId",
     "ExecPhase",
+    "ResourceUsageMode",
     "TimeoutMode",
     "new_exec_id",
 ]

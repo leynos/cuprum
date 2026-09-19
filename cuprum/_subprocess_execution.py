@@ -254,6 +254,10 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             exit_code=exit_code,
             started_at=started_at,
             exited_at=exited_at,
+            # The same measurement the returned result carries, so a consumer
+            # reading the event stream sees the figures the caller sees rather
+            # than having to correlate an event with a result object.
+            resource_usage=rusage,
         ),
     )
     return _sh_module().CommandResult(

@@ -13,6 +13,12 @@ import os
 import sys
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    # Annotation-only: the mode is returned as a string literal, so the alias
+    # is never needed at runtime here. ``_timeout_reporting`` imports
+    # ``TimeoutMode`` the same way.
+    from cuprum.events import ResourceUsageMode
+
 try:
     import resource
 except ImportError:  # pragma: no cover - exercised on Windows
@@ -121,3 +127,35 @@ def child_rusage_delta(
             after.system_cpu_seconds - before.system_cpu_seconds,
         ),
     )
+
+
+def resource_usage_mode_for(
+    usage: ChildResourceUsage | None,
+) -> ResourceUsageMode:
+    """Name how a usage record was obtained, for the terminal event's mode.
+
+    The two producers in this module are told apart by exactly one thing:
+    :func:`resource_usage_from_wait4` always publishes an RSS figure, because
+    one reaped child's own ``ru_maxrss`` is attributable to it, while
+    :func:`child_rusage_delta` never does, because an aggregate high-water mark
+    is not. That correspondence is the invariant this classifier reads, so it
+    lives beside the two producers rather than being restated by each caller
+    that needs to label a measurement.
+
+    Parameters
+    ----------
+    usage:
+        The record to classify, or ``None`` when no source produced one.
+
+    Returns
+    -------
+    ResourceUsageMode
+        ``"wait4_child"`` for an attributable measurement,
+        ``"aggregate_cpu_delta"`` for the CPU-only fallback, and
+        ``"unavailable"`` when nothing was measured.
+    """
+    if usage is None:
+        return "unavailable"
+    if usage.max_rss_bytes is None:
+        return "aggregate_cpu_delta"
+    return "wait4_child"

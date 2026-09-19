@@ -41,6 +41,10 @@ _OPTIONAL_FIELDS = (
     "stage_index",
     "stage_count",
     "line",
+    "max_rss_bytes",
+    "user_cpu_seconds",
+    "system_cpu_seconds",
+    "resource_usage_mode",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 _REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
@@ -83,6 +87,13 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         project=draw(st.none() | st.text(max_size=20)),
         stage_index=draw(st.none() | st.integers(min_value=0, max_value=7)),
         stage_count=draw(st.none() | st.integers(min_value=1, max_value=8)),
+        max_rss_bytes=draw(st.none() | st.integers(min_value=0, max_value=2**32)),
+        user_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
+        system_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
+        resource_usage_mode=draw(
+            st.none()
+            | st.sampled_from(("wait4_child", "aggregate_cpu_delta", "unavailable")),
+        ),
     )
 
 
@@ -317,6 +328,12 @@ class TestAdapterProjection:
             stage_count=2 if is_fail_fast else None,
             eof_grace_s=0.25 if is_grace_expiry else None,
             pending_readers=1 if is_grace_expiry else None,
+            # Fixed, not volatile: the snapshot may pin the exact figures the
+            # attributable path publishes, unlike pid and duration.
+            max_rss_bytes=4_194_304 if is_exit else None,
+            user_cpu_seconds=0.375 if is_exit else None,
+            system_cpu_seconds=0.125 if is_exit else None,
+            resource_usage_mode="wait4_child" if is_exit else None,
         )
 
     @staticmethod

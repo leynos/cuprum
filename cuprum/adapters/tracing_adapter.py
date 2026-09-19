@@ -75,6 +75,7 @@ from cuprum.adapters._support import (
     _prefixed,
     _project_tag,
 )
+from cuprum.adapters._tracing_fields import _SPAN_FIELDS, write_exit_attributes
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
@@ -83,18 +84,6 @@ from cuprum.tracing_protocols import Span, Tracer
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecEvent, ExecHook, ExecId
 
-
-# Ancillary span-event fields distinguish expiry modes and bounded drain outcomes.
-_SPAN_FIELDS = (
-    "line",
-    "operation",
-    "error_type",
-    "note",
-    "timeout_s",
-    "timeout_mode",
-    "eof_grace_s",
-    "pending_readers",
-)
 
 # ``teardown_error`` can be the last event, so without a bound it could retain a
 # span for the hook's lifetime. See ``_evict_overflow_locked`` for the ordering
@@ -118,7 +107,11 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
     Attributes include ``cuprum.program``, ``cuprum.argv``, ``cuprum.pid``,
     ``cuprum.cwd``, ``cuprum.exit_code``, ``cuprum.duration_s``,
     ``cuprum.project``, ``cuprum.pipeline_stage_index``, and
-    ``cuprum.pipeline_stages``.
+    ``cuprum.pipeline_stages``. A terminal ``exit`` event that measured its
+    child's resource usage also carries ``cuprum.max_rss_bytes``,
+    ``cuprum.user_cpu_seconds``, ``cuprum.system_cpu_seconds``, and
+    ``cuprum.resource_usage_mode``; each is absent rather than null when it
+    does not apply.
 
     Parameters
     ----------
@@ -293,10 +286,7 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
             if active.is_closed:
                 return
             active.is_closed = True
-            if event.exit_code is not None:
-                active.span.set_attribute("cuprum.exit_code", event.exit_code)
-            if event.duration_s is not None:
-                active.span.set_attribute("cuprum.duration_s", event.duration_s)
+            write_exit_attributes(active.span, event)
 
             ok = event.exit_code == 0 if event.exit_code is not None else True
             active.span.set_status(ok=ok)
