@@ -143,6 +143,46 @@ rather than through a redundant execution-module re-export.
 - Imports span several private modules instead of one.
 - Maintainers must preserve the boundaries when adding execution behaviour.
 
+## Addendum (2026-09-19): split single-command orchestration out of cuprum/sh.py
+
+CodeScene reported a `Low Cohesion` finding on `cuprum/sh.py`. The file carried
+at least four distinct responsibilities across its 31 functions, crossing
+CodeScene's LCOM4 threshold of 4. Extraction was the remedy that worked for
+this shape: CodeScene's code health for the file moved from 8.54 to 10.00.
+
+The single-command orchestration therefore moved to
+`cuprum/_command_internals.py`: `_ExecutionTracking`,
+`_prepare_execution_observation`, `_build_subprocess_execution`,
+`_execute_with_hooks`, and `_run_prepared_command`. That cluster is the whole
+of what a single command's execution owes — preparing one validated command's
+observation, bundling everything the run needs before it spawns, driving that
+bundle through the subprocess layer with after-hook dispatch, and finalizing
+the run's presentation-sink session on every terminal path. What stays in
+`cuprum/sh.py` is the public command surface, the value types it exchanges, and
+pipeline orchestration.
+
+That is why the split is a real seam rather than a size fix: it is the same
+seam this ADR already draws, with the orchestration a run owes living in a
+private module while the public surface, and the names callers import, stay in
+`cuprum.sh`. Pipeline orchestration is the corresponding concern of
+`cuprum/_pipeline_internals.py`, which already exists and stays as it is. The
+two modules now mirror each other: one module per execution shape.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: importers of `cuprum.sh` continue to resolve the public surface
+without change, but a test that replaces one of the moved private helpers must
+now target `cuprum._command_internals`, the module that resolves it.
+`cuprum/unittests/test_stage_observation_builder.py` was the only such test,
+and it was re-pointed to `cuprum._command_internals`.
+
+`SafeCmd.run` and `SafeCmd.run_sync` keep their public signatures, and
+allowlist ordering, stdin resolution timing, timeout precedence, plan-event
+timing, before-hook timing, and the capture, echo, exit-code, cancellation, and
+result semantics are all unchanged. The relocation is a behavioural no-op.
+Unlike the 2026-09-14 addendum, it was not driven by the repository's
+`max-module-lines` ceiling — a cohesion finding prompted it — although it also
+reduces `cuprum/sh.py` by the moved cluster as a side effect.
+
 ## Addendum (2026-07-28): wait-helper decomposition and timeout observability
 
 Enabling the Ruff `ASYNC` family (`ASYNC109`) prompted a follow-up refinement

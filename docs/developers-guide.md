@@ -1579,7 +1579,7 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
   per-call tags are merged over the base via `_merge_tags`.
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
-(`cuprum/sh.py`), `_build_pipeline_observations`
+(`cuprum/_command_internals.py`), `_build_pipeline_observations`
 (`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
 (`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
 adds only its no-observe-hooks assertion) — must route through these helpers. A
@@ -4861,14 +4861,14 @@ cleanup paths in `_run_subprocess_with_streams`
 (`cuprum/_subprocess_stream_run.py`) and `_run_subprocess_without_streams`
 (`cuprum/_subprocess_execution.py`); the spawn-failure, timeout, and
 run-failure paths, plus `_finalize_pipeline_execution`, in
-`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in `cuprum/sh.py`,
-which previously used a bare `await asyncio.shield(...)`. Two further helpers
-keep multi-step cleanup as one shielded unit: `_reconcile_run_tasks` in
-`cuprum/_subprocess_wait.py` cancels the stdin writer, then drains the stream
-consumers, and `_reconcile_pipeline_run_failure` in
-`cuprum/_pipeline_internals.py` cancels the stream tasks, then drains the
-observe-hook tasks. Shielding the halves separately would let a cancellation
-landing between them abandon the second.
+`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in
+`cuprum/_command_internals.py`, which previously used a bare
+`await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
+shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
+the stdin writer, then drains the stream consumers, and
+`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
+the stream tasks, then drains the observe-hook tasks. Shielding the halves
+separately would let a cancellation landing between them abandon the second.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
