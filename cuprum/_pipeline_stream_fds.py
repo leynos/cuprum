@@ -87,17 +87,24 @@ class _ReaderPause:
     A transport with no ``pause_reading`` hook has no callbacks to race. One
     with a pause hook but no ``resume_reading`` hook is unsafe to hand off: it
     cannot be paused and later returned to asyncio, so it must fall back.
+
+    ``closing_transport`` marks the one decline its caller may overrule. A
+    closing transport must not have its descriptor duplicated, but a caller
+    that supplies its own descriptors is never exposed to that hazard.
     """
 
     may_hand_off: bool
     resume: cabc.Callable[[], None] | None
     decline_reason: RustPumpDeclineReason | None
+    closing_transport: bool
 
     def __init__(
         self,
         may_hand_off: object = None,
         resume: cabc.Callable[[], None] | None = None,
         decline_reason: RustPumpDeclineReason | None = None,
+        *,
+        closing_transport: bool = False,
     ) -> None:
         """Record a pause outcome, deriving its verdict from a decline reason."""
         object.__setattr__(
@@ -107,13 +114,33 @@ class _ReaderPause:
         )
         object.__setattr__(self, "resume", resume)
         object.__setattr__(self, "decline_reason", decline_reason)
+        object.__setattr__(self, "closing_transport", closing_transport)
 
 
 def _pause_reader_transport(
     reader: asyncio.StreamReader,
 ) -> _ReaderPause:
-    """Pause reader callbacks while a duplicate-backed native worker pumps."""
+    """Pause reader callbacks while a duplicate-backed native worker pumps.
+
+    A closing transport is reported as ``closing_transport`` rather than
+    declined outright: only a caller that derives the worker descriptor from
+    this transport is exposed to the hazard, and only that caller may overrule
+    the decline.
+
+    Returns
+    -------
+    _ReaderPause
+        The hand-off verdict, and the resume hook when a pause was applied.
+    """
     transport = _stream_transport(reader)
+    is_closing = getattr(transport, "is_closing", None)
+    if callable(is_closing) and is_closing():
+        # asyncio silently ignores pause on a closing transport. Its queued
+        # connection_lost callback can still close the FD during hand-off.
+        return _ReaderPause(
+            decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
+            closing_transport=True,
+        )
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
     if not callable(pause_reading):
@@ -209,26 +236,6 @@ class _BlockingModeGuard:
         )
 
 
-@contextlib.contextmanager
-def _paused_reader(reader: asyncio.StreamReader) -> cabc.Iterator[_ReaderPause]:
-    """Pause ``reader`` for the block and report whether hand-off is safe.
-
-    An unsupported or unresumable transport is never paused, and a failed pause
-    is corrected at the failure site, so this scope resumes only a completed
-    pause.
-
-    Yields
-    ------
-    _ReaderPause
-        The outcome describing whether the raw-descriptor hand-off is safe.
-    """
-    pause = _pause_reader_transport(reader)
-    try:
-        yield pause
-    finally:
-        _resume_reader_transport(pause.resume)
-
-
 def _resume_reader_transport(
     resume_reader: cabc.Callable[[], None] | None,
 ) -> None:
@@ -247,12 +254,6 @@ def _close_native_pump_worker_fd(worker_fd: int) -> None:
     """Close a worker-owned reader descriptor after native pumping settles."""
     with contextlib.suppress(OSError):
         os.close(worker_fd)
-
-
-def _close_native_pump_worker_fds(worker_fds: _NativePumpWorkerFds) -> None:
-    """Close both worker descriptors before abandoning native preparation."""
-    _close_native_pump_worker_fd(worker_fds.reader_fd)
-    _close_rust_writer_fd(worker_fds.writer_fd)
 
 
 def _close_rust_reader_fd(reader_fd: int) -> None:

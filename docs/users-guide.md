@@ -376,6 +376,10 @@ and echo semantics and returns a structured `CommandResult`:
 - `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
   while still capturing them when `capture=True`; configured text sinks
   preserve multibyte characters split across subprocess reads.
+- `output=RunOutputOptions(idle_after=30.0)` reports a child that has produced
+  no output on either stream for that many seconds, and keeps reporting for
+  each further interval of silence; see
+  [Idle heartbeat for quiet children](#idle-heartbeat-for-quiet-children).
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
@@ -576,6 +580,110 @@ before, and capture continues for a stream that is not echoed.
 The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
 remain accepted for backwards compatibility but emit a `DeprecationWarning`;
 passing them together with `output` raises `ValueError`.
+
+### Idle heartbeat for quiet children
+
+A long build or fetch can go minutes without a byte of output, and a CI log
+that has been blank for minutes reads the same whether the child is working or
+wedged. `RunOutputOptions(idle_after=...)` asks Cuprum to say something when a
+child falls silent: after that many seconds with no output on a monitored
+stream, it reports how long the run has been going and how long it has been
+quiet, and repeats for each further interval of silence. Any output resets the
+interval.
+
+```python
+from cuprum import Program, RunOutputOptions, sh
+
+CARGO = Program("cargo")
+
+cmd = sh.make(CARGO)("build", "--locked")
+result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0))
+```
+
+With no callback the built-in renderer writes one bounded line to the parent's
+stderr — `ExecutionContext.stderr_sink` when configured, otherwise the live
+`sys.stderr`, resolved when the line is due:
+
+```text
+[cuprum] still running cargo (idle 30s, total 4m10s)
+```
+
+The line is at most 512 bytes including its newline, ASCII-safe, and limited to
+a single line whatever the programme name contains. It is never written into
+captured stdout or stderr, into the observers that watch the child's lines, or
+into the activity tracker that decides whether the child is quiet. Any echo
+whose sink *is* the keepalive's destination can share it — the child's own
+stderr does by default, and a caller who points `stdout_sink` and `stderr_sink`
+at the same object adds its stdout — so the renderer starts a fresh line when
+such an echo ended mid-line and otherwise leaves both the captured and the
+mirrored bytes exactly as they were.
+
+A pipeline has one aggregate clock rather than one per stage, because the
+parent only observes its outward-facing output: the final stage's stdout and
+every stage's stderr. Bytes handed from one stage to the next are not the
+parent's business, so a busy producer feeding a slow consumer does not defer
+the report. The aggregate labels itself accordingly:
+
+```text
+[cuprum] pipeline output idle (idle 30s, total 4m10s)
+```
+
+`on_idle` replaces the built-in line rather than joining it. It receives two
+arguments, both in seconds: the total elapsed time for the run, and the time
+since the last observed output. It is called synchronously on the run's own
+event loop, so it must not block; hand long work to another task.
+
+The same requirement applies to the destination itself. The built-in renderer
+writes and flushes `ExecutionContext.stderr_sink` on that loop too, so a sink
+whose `write` or `flush` blocks delays the parent's stream reads, timeout
+handling, and cancellation for as long as it takes to return. A destination
+that is slow — a network log, a lock held by another process — should be
+wrapped so that the write and flush the run performs hand off without blocking:
+either the blocking call runs in a worker thread or an executor, or it is a
+genuinely non-blocking drain such as a queue fed with `put_nowait`. A separate
+asyncio task is not enough on its own because draining that queue still runs on
+the run's own loop and competes with the parent's stream reads. There is
+deliberately no timeout around the write: a synchronous call cannot be
+interrupted from the same loop, so a bound there would change what the sink is
+promised without ever enforcing it.
+
+```python
+from cuprum import Program, RunOutputOptions, sh
+
+
+def note(elapsed_total: float, elapsed_idle: float) -> None:
+    print(f"still waiting after {elapsed_total:.0f}s ({elapsed_idle:.0f}s quiet)")
+
+
+cmd = sh.make(Program("cargo"))("build", "--locked")
+result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0, on_idle=note))
+```
+
+An ordinary exception from the callback is not allowed to damage the run: it
+disables idle reporting for the remainder of that run and logs one sanitized
+`WARNING` on the `cuprum.idle` logger. The child keeps running, the exit status
+is unchanged, and capture and echo are unaffected. `KeyboardInterrupt` and
+`SystemExit` are not absorbed. If the callback should have been asynchronous,
+Cuprum closes the coroutine it returns and reports that once, in the same
+sanitized way. A destination that refuses the built-in line disables the
+channel the same way, rather than failing the run.
+
+Idle reporting is off by default: without `idle_after`, a run creates no timer,
+no watchdog task, and no pipe it was not already reading. Enabling it does not
+change what a run retains. `capture=False, echo=False, idle_after=30.0` drains
+the child's streams in order to watch them but stores nothing, so
+`CommandResult.stdout` and `.stderr` stay `None`.
+
+`idle_after` must be finite and strictly positive; zero, negative values,
+`NaN`, and infinity raise `ValueError`. `on_idle` must be callable and
+synchronous, and supplying it without an interval raises `ValueError`; a
+non-callable or detectably asynchronous callback (including an object with an
+`async def` `__call__`) raises `TypeError`.
+
+The heartbeat reports an absence of observed output, not an absence of
+progress: a quiet child may be compiling, waiting on a lock, or blocked on a
+network read, and Cuprum cannot tell those apart. It never terminates a process
+and never extends a timeout.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates
@@ -1791,6 +1899,21 @@ place — a non-integer, or a Python integer outside the signed 64-bit range —
 may instead fail earlier, during PyO3 argument conversion, with a different
 exception.
 
+The internal pump validates the buffer size and reader ABI representation
+before transferring ownership of its duplicated writer. If either check fails,
+the duplicate is closed before native work begins. These checks establish only
+representability and error ordering; they do not prove that a descriptor or
+handle is valid, remains live, or is exclusively owned. The pipeline keeps the
+reader paused and waits for native cleanup after cancellation so those lifetime
+obligations remain in force.
+
+Before borrowing the reader's raw descriptor, the pipeline rejects an asyncio
+transport that is already closing. Asyncio may silently accept
+`pause_reading()` while a queued close callback can still close the descriptor;
+the hop therefore reports `READER_PAUSE_FAILED` and uses the Python fall-back,
+which retains the reader's buffered prefix. This protects the hand-off contract
+without identifying the cause of any historical native payload mismatch.
+
 ### Rust stream consumption (internal)
 
 The Rust extension also exposes `cuprum._streams_rs.rust_consume_stream`, which
@@ -1861,18 +1984,29 @@ Failures that never reached the operating system — an internal overflow or
 bounds condition — surface as a plain `OSError` with a descriptive message and
 no `errno`, because there is no system code to report.
 
+The scratch buffer each helper reads or writes through is allocated fallibly,
+so requesting a `buffer_size` the allocator cannot satisfy is one of those
+systemless failures rather than a crash: it raises an `OSError` with the stable
+message `failed to allocate the stream buffer` and no `errno`. It is an error,
+not a signal, so it unwinds normally and never aborts the process embedding the
+extension. The production cap of 1 GiB (see `MAX_BUFFER_SIZE`) means a request
+large enough to be refused is far outside the range the helpers are designed to
+serve, so the message is the stable interface here — unlike a system failure,
+there is no number to branch on.
+
 ### Rust stream observability (internal)
 
 Both internal helpers emit `tracing` diagnostics; the crate installs no
 subscriber, so the embedding application owns subscriber configuration. Each
 successful read or write logs a `debug` event (with the byte count and
 platform), every `EINTR` retry logs a `warn`, and fatal I/O failures,
-zero-progress writes, and length-conversion overflows log an `error`. The pump
-and consume loops run inside an operation span that carries the `operation` and
-`buffer_size` fields and, on completion, records `total_bytes` and the
-cumulative `EINTR` `read_retries`/`write_retries` counts. The span sits at
-`error` level so the `warn`/`error` events retain their operation context even
-when the subscriber is filtered to `warn`/`error`; it emits no log line itself.
+zero-progress writes, length-conversion overflows, and refused scratch-buffer
+allocations log an `error`. The pump and consume loops run inside an operation
+span that carries the `operation` and `buffer_size` fields and, on completion,
+records `total_bytes` and the cumulative `EINTR` `read_retries`/`write_retries`
+counts. The span sits at `error` level so the `warn`/`error` events retain
+their operation context even when the subscriber is filtered to `warn`/`error`;
+it emits no log line itself.
 
 One further `debug` event reports the pump's own state rather than an
 individual read or write. When a downstream stage hangs up early — the
@@ -1906,6 +2040,29 @@ itself succeeded.
 
 Both the `splice` fast path and the read/write fallback emit the event
 identically, so the message does not depend on which path handled the transfer.
+
+One `error` event reports a refusal rather than a kernel failure, so it carries
+a stable category instead of a system message:
+
+```text
+scratch buffer allocation refused
+    error_category=buffer_allocation_failed
+    buffer_size=<bucket>            platform=<unix|windows>
+```
+
+`error_category` is always `buffer_allocation_failed` for this event. The
+event's `buffer_size` is the requested size rounded up to a power-of-two bucket
+— a bounded magnitude, not the exact caller-supplied number and not any
+allocator internal. `platform` matches the field on the read/write events. The
+event is emitted from inside the operation span, so the span's `operation` and
+exact requested `buffer_size` fields are in scope alongside it, exactly as for
+the fatal I/O failures above.
+
+This event accompanies the `OSError` described under
+[Rust stream error handling (internal)](#rust-stream-error-handling-internal):
+the same refused allocation produces both. A caught exception then still leaves
+a trace for the subscriber, rather than disappearing with the caller's `except`
+clause.
 
 ### Why a hop fell back to Python
 

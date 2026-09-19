@@ -3,47 +3,36 @@
 Termination sends SIGTERM, waits out a grace period, then escalates to
 SIGKILL and reaps the exit, whether for one process
 (``_terminate_process``, ``_terminate_process_with_wait``) or a whole
-pipeline (``_spawn_pipeline_processes``, ``_cleanup_spawned_processes``,
-``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
-``_terminate_pipeline_remaining_stages``).
-``_shielded_cleanup`` underlies all of that: it is the cancellation-safe
-primitive shared by the pipeline paths (``_pipeline_internals``,
-``_pipeline_collect``) and the single-command subprocess paths
-(``_subprocess_execution``, ``_subprocess_wait``,
-``sh._execute_with_hooks``). A bare ``asyncio.shield`` is not enough on
-its own: it stops cancellation reaching the inner coroutine, but the
-awaiting coroutine resumes immediately, so a caller's
-``CancelledError`` propagates while cleanup is still running.
-``_shielded_cleanup`` instead retries the wait under a shield until the
-owned task is done, absorbing however many cancellations arrive before
-re-raising.
+pipeline (``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
+``_terminate_pipeline_remaining_stages``). ``_shielded_cleanup`` underlies all
+of that: it is the cancellation-safe primitive shared by the pipeline paths
+(``_pipeline_internals``, ``_pipeline_collect``) and the single-command
+subprocess paths (``_subprocess_execution``, ``_subprocess_wait``,
+``sh._execute_with_hooks``). A bare ``asyncio.shield`` is not enough on its
+own: it stops cancellation reaching the inner coroutine, but the awaiting
+coroutine resumes immediately, so a caller's ``CancelledError`` propagates
+while cleanup is still running. ``_shielded_cleanup`` instead retries the wait
+under a shield until the owned task is done, absorbing however many
+cancellations arrive before re-raising.
 
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and
-error cleanup.
+error cleanup. Starting that pipeline — and cleaning up the resources left by
+a partial spawn — belongs to ``cuprum._pipeline_spawn``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses as dc
-import time
 import typing as typ
 
-from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
-from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_exit import _await_process_exit
-from cuprum._subprocess_context import _cwd_arg
 from cuprum.context import current_context, resolve_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    from cuprum._pipeline_config import _PipelineRunConfig
-    from cuprum._streams import _RelayDiagnostics
-    from cuprum.sh import SafeCmd
 
 
 async def _terminate_process(
@@ -122,30 +111,6 @@ async def _terminate_all_shielded(
     )
 
 
-async def _cleanup_spawned_processes(
-    processes: list[asyncio.subprocess.Process],
-    stderr_tasks: list[asyncio.Task[str | None] | None],
-    stdout_task: asyncio.Task[str | None] | None,
-    cancel_grace: float,
-) -> None:
-    """Terminate processes and cancel tasks after a spawn failure.
-
-    Terminates all started processes and cancels any capture tasks to prevent
-    resource leaks when a pipeline stage fails to spawn.
-    """
-    await _terminate_all_shielded(processes, cancel_grace)
-
-    tasks: list[asyncio.Task[str | None]] = [
-        task for task in stderr_tasks if task is not None
-    ]
-    if stdout_task is not None:
-        tasks.append(stdout_task)
-
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-
 async def _cleanup_pipeline_on_error(
     processes: list[asyncio.subprocess.Process],
     pipe_tasks: list[asyncio.Task[None]],
@@ -168,113 +133,6 @@ def _merge_env(
     """Overlay environment variables on the live :func:`os.environ`."""
     overlay = current_context().env_overlay if include_context_overlay else None
     return resolve_env(overlay, extra)
-
-
-def _build_spawn_observations(
-    parts: tuple[SafeCmd, ...],
-    config: _PipelineRunConfig,
-) -> tuple[_StageObservation, ...]:
-    """Build per-stage observation state for spawning a pipeline."""
-    from cuprum._pipeline_internals import _build_pipeline_observations
-
-    observations = _build_pipeline_observations(parts, config, pending_tasks=[])
-    # The pending-task list built here is discarded, so observe hooks (which
-    # rely on it) cannot run on the spawn path; callers must supply explicit
-    # observations instead.
-    if any(obs.hooks.observe_hooks for obs in observations):
-        msg = "spawn helpers require explicit observations when observe hooks exist"
-        raise RuntimeError(msg)
-    return observations
-
-
-@dc.dataclass(slots=True)
-class _SpawnedPipelineStages:
-    """Resources accumulated while spawning pipeline stages."""
-
-    processes: list[asyncio.subprocess.Process] = dc.field(default_factory=list)
-    stderr_tasks: list[asyncio.Task[str | None] | None] = dc.field(default_factory=list)
-    stdout_task: asyncio.Task[str | None] | None = None
-    started_at: list[float] = dc.field(default_factory=list)
-    relay_diagnostics_by_stage: list[
-        tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
-    ] = dc.field(default_factory=list)
-
-
-async def _spawn_pipeline_stages(
-    resources: _SpawnedPipelineStages,
-    observations: tuple[_StageObservation, ...],
-    config: _PipelineRunConfig,
-) -> None:
-    """Spawn stages and accumulate their runtime resources."""
-    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
-
-    last_idx = len(observations) - 1
-    for idx, observation in enumerate(observations):
-        stream_fds = _get_stage_stream_fds(
-            idx,
-            last_idx,
-            stdout_capture_or_echo=config.stdout_capture_or_echo,
-            stderr_capture_or_echo=config.stderr_capture_or_echo,
-        )
-        process = await asyncio.create_subprocess_exec(
-            *observation.cmd.argv_with_program,
-            stdin=stream_fds.stdin,
-            stdout=stream_fds.stdout,
-            stderr=stream_fds.stderr,
-            env=_merge_env(config.ctx.env),
-            cwd=_cwd_arg(config.ctx.cwd),
-        )
-        resources.processes.append(process)
-        resources.started_at.append(time.perf_counter())
-        observation.emit("start", _EventDetails(pid=process.pid))
-
-        stage_tasks = _create_stage_capture_tasks(
-            process,
-            config,
-            is_last_stage=(idx == last_idx),
-            observation=observation,
-        )
-        resources.stderr_tasks.append(stage_tasks[0])
-        resources.relay_diagnostics_by_stage.append(stage_tasks[2])
-        if stage_tasks[1] is not None:
-            resources.stdout_task = stage_tasks[1]
-
-
-async def _spawn_pipeline_processes(
-    parts: tuple[SafeCmd, ...],
-    config: _PipelineRunConfig,
-    *,
-    observations: tuple[_StageObservation, ...] | None = None,
-) -> tuple[
-    list[asyncio.subprocess.Process],
-    list[asyncio.Task[str | None] | None],
-    asyncio.Task[str | None] | None,
-    list[float],
-    list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]],
-]:
-    """Start subprocesses and wire up their capture tasks."""
-    if observations is None:
-        observations = _build_spawn_observations(parts, config)
-
-    resources = _SpawnedPipelineStages()
-    try:
-        await _spawn_pipeline_stages(resources, observations, config)
-    except BaseException:
-        await _cleanup_spawned_processes(
-            resources.processes,
-            resources.stderr_tasks,
-            resources.stdout_task,
-            config.ctx.cancel_grace,
-        )
-        raise
-
-    return (
-        resources.processes,
-        resources.stderr_tasks,
-        resources.stdout_task,
-        resources.started_at,
-        resources.relay_diagnostics_by_stage,
-    )
 
 
 async def _terminate_process_via_wait_task(

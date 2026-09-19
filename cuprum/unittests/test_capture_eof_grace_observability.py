@@ -51,7 +51,7 @@ def readers_that_expire_grace_immediately(
         """Close the test-only grace window without elapsed wall-clock time."""
 
     monkeypatch.setattr(
-        "cuprum._subprocess_execution._consume_stream",
+        "cuprum._subprocess_streams._consume_stream",
         consume_forever,
     )
     monkeypatch.setattr("cuprum._subprocess_wait._await_eof_grace", expire_immediately)

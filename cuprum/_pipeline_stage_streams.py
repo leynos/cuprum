@@ -1,14 +1,14 @@
 """Canonical stream policy and capture-task helpers for pipeline stages.
 
 This module owns the pipeline-specific PIPE-versus-DEVNULL decision used while
-spawning subprocess stages. ``cuprum._process_lifecycle`` asks
+spawning subprocess stages. ``cuprum._pipeline_spawn`` asks
 ``_get_stage_stream_fds`` for each stage's stdio handles before it calls
 ``asyncio.create_subprocess_exec``, while ``cuprum._pipeline_streams`` re-exports
 the capture-task helper used after each process is started.
 
-Keep stdio policy changes here so the process lifecycle code stays focused on
-starting, observing, waiting for, and cleaning up subprocesses rather than
-duplicating stream-selection rules inline.
+Keep stdio policy changes here so the spawning code stays focused on starting,
+observing, waiting for, and cleaning up subprocesses rather than duplicating
+stream-selection rules inline.
 """
 
 from __future__ import annotations
@@ -40,14 +40,15 @@ def _get_stage_stream_fds(
     idx: int,
     last_idx: int,
     *,
-    stdout_capture_or_echo: bool,
-    stderr_capture_or_echo: bool,
+    consumes_stdout: bool,
+    consumes_stderr: bool,
 ) -> _StageStreamConfig:
     """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode.
 
     A non-final stage always pipes stdout so its output can relay into the
     next stage's stdin, regardless of capture or echo. The final stage's
-    stdout and every stage's stderr follow their own capture-or-echo gate.
+    stdout and every stage's stderr follow their own parent-consumption gate,
+    which is capture, echo, or an idle heartbeat watching for output.
 
     Returns
     -------
@@ -57,14 +58,10 @@ def _get_stage_stream_fds(
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
-        if idx != last_idx or stdout_capture_or_echo
+        if idx != last_idx or consumes_stdout
         else asyncio.subprocess.DEVNULL
     )
-    stderr = (
-        asyncio.subprocess.PIPE
-        if stderr_capture_or_echo
-        else asyncio.subprocess.DEVNULL
-    )
+    stderr = asyncio.subprocess.PIPE if consumes_stderr else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 
@@ -106,7 +103,7 @@ def _create_stage_capture_tasks(
     )
 
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
-    if config.stderr_capture_or_echo:
+    if config.consumes_stderr:
         stderr_relay_diagnostics = _RelayDiagnostics()
         stderr_task = asyncio.create_task(
             _consume_stream(
@@ -130,7 +127,7 @@ def _create_stage_capture_tasks(
     )
 
     stdout_relay_diagnostics: _RelayDiagnostics | None = None
-    if config.stdout_capture_or_echo:
+    if config.consumes_stdout:
         stdout_relay_diagnostics = _RelayDiagnostics()
         stdout_task = asyncio.create_task(
             _consume_stream(

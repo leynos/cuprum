@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _spawn_stdin_writer
@@ -136,12 +137,17 @@ async def _run_subprocess_with_streams(
     """
     # Imported here to avoid the orchestration module importing this one at
     # module load time (they reference each other's helpers).
-    from cuprum._subprocess_execution import (
+    from cuprum._subprocess_streams import (
         _build_stream_config,
         _spawn_stream_consumers,
         _StreamConsumerSpawnContext,
     )
 
+    if execution.idle is not None:
+        # Armed here, once the child is running: the catalogue checks and the
+        # before hooks that preceded this spawn are the parent's work, not the
+        # child's silence.
+        execution.idle.launch()
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
     relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
@@ -164,6 +170,7 @@ async def _run_subprocess_with_streams(
         ),
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
+        idle=execution.idle,
     )
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
@@ -171,6 +178,10 @@ async def _run_subprocess_with_streams(
         tasks,
         pid,
     )
+    # The child has exited, so silence no longer means anything: stop before
+    # waiting on stream EOF, which a grandchild's inherited pipe can hold open
+    # long after its parent is gone.
+    await _stop_idle_monitor(execution.idle)
     await _await_stdin_writer_and_reconcile_consumers(tasks, execution, pid)
     try:
         stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)

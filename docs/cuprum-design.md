@@ -1013,6 +1013,61 @@ Users should be able to choose:
 - `echo=True, capture=False` – stream only;
 - `echo=False, capture=True` – capture silently.
 
+Echo is per stream: `echo_stdout` and `echo_stderr` override the `echo`
+shorthand independently, so a command can capture stdout silently while stderr
+still mirrors to the log. Capture stays a single joint switch — `capture=True`
+keeps both streams captured even when neither echoes.
+
+A third reason the parent reads a child's stream is idle reporting: when
+`idle_after` is set, a run-owned heartbeat emits one keepalive line for every
+interval in which no monitored stream produces output, and any non-empty read
+resets the timer. The line reports the absence of observed output — it is not a
+deadlock or CPU diagnosis, it never terminates a child, and it never extends a
+timeout. For a single command, either stream resets it; for a pipeline only the
+final stage's stdout and every stage's stderr do, never an inter-stage
+transfer, hence the label `pipeline output idle`. The line goes to the parent's
+stderr sink, resolved at emission time, so it never enters capture, echo, line
+observers, or the activity tracker. An `on_idle` callback is synchronous and
+replaces the built-in renderer rather than joining it.
+
+Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+stream consumers
+
+For screen readers: The following flowchart shows how per-stream echo
+resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
+`RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
+independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
+consume those gates: `_spawn_subprocess` for a single command and
+`_get_stage_stream_fds` for a pipeline. For a single command, each stream
+independently becomes a `PIPE` or `DEVNULL` according to its own
+parent-consumption gate (capture, that stream's echo, or idle reporting). For a
+pipeline, the stdout of a non-final stage is always a `PIPE` so that it can
+relay into the next stage, while the stdout of the final stage and the stderr
+of every stage follow their own independent gates. `capture` remains a single
+joint switch, so both streams are still captured when `capture=True` even if
+neither echoes. The flow ends at the stream consumers:
+`_spawn_stream_consumers` for a single command and
+`_create_stage_capture_tasks` for pipeline stages.
+
+```mermaid
+flowchart TD
+    A[RunOutputOptions] --> B[__post_init__ resolves echo_stdout and echo_stderr from echo]
+    B --> C{Execution path}
+    C -->|single command| D[_spawn_subprocess]
+    C -->|pipeline| E[_get_stage_stream_fds]
+    D --> F{capture, stream echo, or idle reporting enabled}
+    F -->|stdout gate| G[stdout PIPE or DEVNULL]
+    F -->|stderr gate| H[stderr PIPE or DEVNULL]
+    G --> I[_spawn_stream_consumers]
+    H --> I
+    E --> J[non-final stdout always PIPE for relay]
+    E --> K[final stdout and every stderr use independent consumption gates]
+    J --> L[_create_stage_capture_tasks]
+    K --> L
+    I --> M[Capture remains joint when capture is true]
+    L --> M
+```
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -1323,7 +1378,9 @@ The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
 - `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  stdout/stderr consumer wiring.
+  assembling the `CommandResult`. It remains the composition root for a run: it
+  decides whether each stream is consumed, and it calls `_build_stream_config`
+  and `_spawn_stream_consumers` to act on that decision.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured text and settled relay
@@ -1331,6 +1388,29 @@ preserving the `SafeCmd.run()` execution contract:
   process identifier, and per-stream collectors into the consumer tasks;
   `_RunTaskOwnership` retains those consumers and collectors until the one
   success or teardown reconciliation point.
+- `cuprum/_subprocess_streams.py` owns single-command stream-consumer
+  *construction*: `_build_stream_config` assembles the stdout `_StreamConfig`,
+  and `_spawn_stream_consumers` derives the stderr config from it and creates
+  the pair of consumer tasks. Fixing the stderr config's echo, sink, and
+  `EchoStream.STDERR` on the derived config is what keeps the two streams
+  distinguishable when both sinks resolve to one object, and it is where the
+  idle monitor's mirror cursor reaches the configs whose resolved sink is the
+  keepalive's destination. It is the single-command counterpart of
+  `cuprum/_pipeline_stage_streams.py`. This boundary exists to keep
+  `_subprocess_execution` within the Pylint module ceiling once the
+  idle-heartbeat wiring joined the stream configs; see the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-16.
+- `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
+  validation and normalization, the `_IdleSchedule` state machine that decides
+  when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
+  lifecycle, and the activity hook the stream consumers drive. It also creates
+  and retains the `_MirrorCursor`, which records where the keepalive's
+  destination ended up.
+- `cuprum/_idle_diagnostic.py` owns the heartbeat's *presentation*: rendering
+  one bounded, ASCII-safe keepalive line, resolving and writing it to the
+  parent's diagnostic sink, and the failure policy when that write raises.
+  Nothing there reads a clock, a process, or a child's output.
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
   and early-close diagnostics through the `cuprum.stdin` logger.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
@@ -1399,13 +1479,23 @@ sequenceDiagram
 - `cuprum/_subprocess_context.py` owns small shared context helpers
   (`_cwd_arg`, `_sh_module`) used across the subprocess modules.
 
-Pipeline spawning applies the same ownership rule per stage.
-`_process_lifecycle` uses `_SpawnedPipelineStages` to retain started processes,
-capture tasks, start times, and the stderr/final-stdout collector pairs while
-stages are being spawned. `_pipeline_stage_streams` selects descriptors and
-creates those consumers; `_pipeline_collect` settles and reads each collector
-after its stage outputs settle, then `_pipeline_results` assigns the records to
-the owning stage result in stage order.
+Pipeline spawning applies the same ownership rule per stage. `_pipeline_spawn`
+uses `_SpawnedPipelineStages` to retain started processes, capture tasks, start
+times, and the stderr/final-stdout collector pairs while stages are being
+spawned. `_pipeline_stage_streams` selects descriptors and creates those
+consumers; `_pipeline_collect` settles and reads each collector after its stage
+outputs settle, then `_pipeline_results` assigns the records to the owning
+stage result in stage order.
+
+Pipeline startup is separated from pipeline termination for the same reason the
+single-command path separates them. `cuprum/_pipeline_spawn.py` starts the
+stages, arms the idle heartbeat once the first stage is actually running, and
+owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
+`cuprum/_process_lifecycle.py` keeps the subprocess handles and the shared
+`_shielded_cleanup` primitive, and executes the fail-fast, timeout, and error
+teardown decisions the waiter makes. Splitting startup from termination keeps
+each module within the Pylint module ceiling while leaving every helper that
+existing importers reach importable from its previous definition site.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout
@@ -2118,7 +2208,10 @@ over cleverness—especially in the type‑system and configuration layers.
 
 [ADR-009](adr-009-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
 spelling for identifiers and source prose; the repository spelling gate
-enforces that policy.
+enforces that policy. [ADR-011](adr-011-audited-rust-boundaries.md) governs the
+separation between safe stream policy and the audited native resource boundary.
+The inventory and verification status are maintained in
+[Rust boundary verification](rust-boundary-verification.md).
 
 ______________________________________________________________________
 
@@ -2159,7 +2252,10 @@ core functions affected are:
 
 `cuprum/_streams_pump.py` owns the pump implementation and `_READ_SIZE`, while
 `cuprum/_streams.py` owns stream consumption and re-exports the pump surface
-for compatibility.
+for compatibility. The bounded echo renderer sits beside the drain loop in
+`cuprum/_stream_echo.py`, which owns the sink write and the incremental decoder
+and records where a mirrored sink ended up; the cursor itself is created and
+retained by the idle heartbeat.
 
 `_drain()` owns the shared mechanics for reading stream chunks, forwarding
 echoed text to a configured sink, and accumulating captured bytes. The
@@ -2171,6 +2267,24 @@ line-emitting variant configures its incremental decoder from `config.encoding`
 and `config.errors`, and `_drain()` applies the same error policy when decoding
 captured bytes. New consume variants should reuse `_drain()` unless they
 deliberately replace the whole stream-consumption contract.
+
+The bounded echo path is deliberately a Python consumer concern. When
+`RunOutputOptions.max_echo_line_bytes` is set, `_stream_echo.py` splits raw
+reads with `_echo_truncation.py` and keeps a per-stream limiter across chunks.
+The limiter reserves space for the encoded truncation marker and line ending,
+so each mirrored line stays within the inclusive byte bound; it resets its body
+and dropped-byte counters at every line boundary. A carriage return is held
+until the next byte identifies CRLF, which keeps a CRLF ending equivalent when
+reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
+remains line data. The limiter never sees the capture buffer: complete child
+output remains owned by `_drain()`'s capture path. Text sinks receive complete
+characters through the configured incremental decoder, while sinks exposing
+`.buffer` receive the kept raw bytes and marker bytes. The marker follows the
+configured encoding and error policy, using an ASCII-compatible fallback when
+the preferred ellipsis cannot be represented; `None` leaves the existing
+unbounded echo path unchanged. For a positive bound too small for a complete
+marker or CRLF terminator, it abbreviates the marker or omits the terminator to
+preserve the inclusive bound.
 
 At the former 4 KiB setting, a 1 GiB data stream required approximately 262,000
 parent-side read iterations. At the tuned setting, the same stream requires
@@ -2216,12 +2330,26 @@ and performs any platform-specific file descriptor conversion (for example,
 translating Windows file descriptors into OS handles). This keeps the native
 module name stable while allowing Python-only adaptations.
 
+The Rust implementation is split internally by safety responsibility:
+`cuprum-streams` contains safe orchestration, state-machine policy, fallback
+selection, and checked UTF-8 decoding; `cuprum-native-io` contains lifetime
+bound operating-system borrows, unique writer adoption, single-call native I/O,
+and platform fixtures; and `cuprum-rust` remains the thin PyO3/maturin
+integration boundary. Only the latter two approved boundaries contain unsafe
+Rust, and only `cuprum-rust` reconstructs resources from Python raw values.
+This preserves the public module and maturin path while allowing
+`cuprum-streams` to forbid unsafe code.
+
 The availability probe is separate from the stream shim. The Python module
 `cuprum._rust_backend` exposes the raw `is_available()` probe, which imports
 `cuprum._rust_backend_native`, returns `False` when that native module is
 missing, and re-raises other import failures after logging a warning. The
 cached resolver in `cuprum._backend._check_rust_available()` wraps that probe
-for `cuprum.rust.is_rust_available()` and `get_stream_backend()`.
+for `cuprum.rust.is_rust_available()` and — through the
+`_probe_rust_availability()` seam — `get_stream_backend()`. Section 13.4
+describes the full `_parse_backend_value` → `_probe_rust_availability` →
+`_resolve_backend` resolution; `get_stream_backend()` does not delegate to
+`_check_rust_available()` directly.
 
 For screen readers: The following flowchart shows how Cuprum selects between
 the Python and Rust stream pathways based on environment configuration and
@@ -2851,7 +2979,7 @@ contract.
 
 The non-splice read/write loop keeps its control flow — how each read and write
 outcome moves the running byte total and the latched writer state — in a pure,
-`io::Error`-free state machine in `rust/cuprum-rust/src/pump_machine.rs`,
+`io::Error`-free state machine in `rust/cuprum-streams/src/pump_machine.rs`,
 separate from the descriptor I/O that feeds it.
 
 `advance` is the whole public surface. It takes a `PumpState`, the length just

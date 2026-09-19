@@ -517,3 +517,107 @@ and 5).
   - Requires 8.3.1.
   - Success: the decision and its rationale (likely continued deferral) are
     recorded in adr-002-additional-rust-components.md.
+
+### 8.4. Isolate unsafe Rust in audited boundary crates
+
+This step resolves issue #379 by keeping abstract stream policy safe while
+placing native descriptor, handle, and syscall obligations behind small
+workspace boundaries. See [ADR-011](adr-011-audited-rust-boundaries.md) and
+[Rust boundary verification](rust-boundary-verification.md).
+
+- [x] 8.4.1. Keep `cuprum-streams` free of unsafe Rust, including test and
+  helper targets, and keep `cuprum-rust` limited to the PyO3/maturin hand-off.
+  - Success: the safe-crate contract rejects deliberate unsafe probes, the
+    workspace allowlist names only approved boundary crates, and Python API,
+    optional backend, packaging, and supported-platform behaviour retain
+    regression coverage.
+- [x] 8.4.2. Maintain native ownership and I/O contracts for borrowed readers,
+  uniquely transferred writers, initialized buffers, short or interrupted
+  calls, byte accounting, and real cleanup on normal, error, and unwind paths.
+  - Success: native Unix/Linux and Windows tests observe descriptor/handle
+    effects, EOF, fallback, broken pipes, and setup or cancellation cleanup;
+    fault sensitivity detects leaks, double closes, invalid bounds, and bad
+    accounting.
+- [x] 8.4.3. Run and archive the applicable Verus, Kani, and Miri evidence with
+  exact pinned toolchains, bounds, coverage witnesses, exclusions, and trusted
+  assumptions.
+  - Success: Verus verifies exact production kernels where feasible; Kani is
+    used for unsuitable representations with bounded results labelled as such;
+    Miri runs applicable isolated targets; CI has affordable pull-request
+    checks and documented scheduled or manual heavier validation.
+
+## 9. Idle heartbeat for quiet children (issue `#359`)
+
+Idea: a run that emits nothing for minutes is indistinguishable in a CI log
+from a run that has wedged, and the caller has no sanctioned way to say so
+without polling the child itself. This stage gives output silence a bounded,
+opt-in voice on the parent's stderr, without turning the runner into a
+supervisor: the heartbeat reports an absence of observed output, never an
+absence of progress, and never terminates a child or extends a timeout. It is
+the second half of
+[leynos/lading#251](https://github.com/leynos/lading/issues/251), whose
+subprocess-capture half is already closed.
+
+- [x] 9.1.1. Add `RunOutputOptions(idle_after=…, on_idle=…)` and the
+  `cuprum/_idle_heartbeat.py` state machine behind it.
+  - Completion evidence (2026-09-14): `idle_after` is a finite, strictly
+    positive number of seconds and is `None` (disabled) by default; `on_idle`
+    is a synchronous `(elapsed_total, elapsed_idle)` callback, allowed only
+    alongside an interval, and any output on a monitored stream resets the
+    deadline. The schedule is separated from emission and from the asyncio
+    driver, so tests move a controllable monotonic clock instead of sleeping.
+    One monitor is owned per run, armed after a successful spawn, and settled
+    exactly once through the existing shielded cleanup path.
+
+- [x] 9.1.2. Observe child output without changing what a run retains.
+  - Completion evidence (2026-09-14): `_StreamConfig` gained an optional
+    `activity` hook invoked immediately after a non-empty raw read in
+    `_drain_chunks`, before decoding, echoing, truncation, and line callbacks.
+    The parent-consumption gate is now `capture or echo or an idle watchdog
+    exists`, applied to the single-command streams, the final pipeline stage's
+    stdout, and every stage's stderr. `capture=False, echo=False,
+    idle_after=…` therefore drains a child's pipes while leaving `stdout` and
+    `stderr` as `None`, and a run that sets neither keeps the existing
+    no-stream fast path.
+
+- [x] 9.1.3. Deliver the built-in keepalive and its failure policy.
+  - Completion evidence (2026-09-14): `cuprum/_idle_diagnostic.py` renders
+    `[cuprum] still running cargo (idle 30s, total 4m10s)` (512-byte bound
+    including the newline, ASCII-safe, control-safe, programme name clamped)
+    to `ExecutionContext.stderr_sink` or the live `sys.stderr`, resolved when
+    the line is due, with a presentation-only separator when the mirrored
+    child line it would otherwise join is unfinished. Recorded decision: an
+    ordinary callback failure and a destination that refuses the line each
+    disable the channel for the remainder of the run with one sanitized
+    `cuprum.idle` warning, leaving exit status, capture, and echo untouched;
+    `KeyboardInterrupt` and `SystemExit` are never absorbed, and an
+    accidentally returned coroutine is closed and reported once.
+
+- [x] 9.1.4. Aggregate a pipeline's silence on one clock.
+  - Completion evidence (2026-09-14): a pipeline arms a single monitor when
+    its first stage starts and counts only parent-facing output — the final
+    stage's stdout and every stage's stderr — so inter-stage transfers do not
+    defer it. Recorded decision: the aggregate labels itself
+    `pipeline output idle` rather than claiming every child is idle, and
+    silence reporting stops when the managed processes have exited rather than
+    when their pipes reach end-of-file, so a grandchild holding a descriptor
+    open cannot keep a finished run "still running". Inter-stage pumping was
+    not modified for a console diagnostic.
+
+- [x] 9.1.5. Cover the contract, the ordering rules, and the aftermath.
+  - Completion evidence (2026-09-14): `cuprum/unittests/test_idle_heartbeat*.py`
+    pins the option contract, the renderer, the state machine
+    (Hypothesis), the drain's activity partition (Hypothesis), the exit paths,
+    and concurrent, nested, and pipeline runs; the controlled 30/60/90-second
+    sequence produces exactly two notifications, with a real child's
+    third-deadline overlap settled by construction rather than by a wall-clock
+    race.
+
+- [ ] 9.1.6. Route activity monitoring through any future native consume
+  backend, or declare it outside that backend's supported envelope.
+  - Requires a native consume dispatcher (issue `#314`).
+  - Success: either the backend reports non-empty reads to the run-owned
+    tracker, or the feature is disabled for that backend and served by the
+    canonical Python fallback, with the boundary recorded in the developers'
+    guide. The current implementation needs no new Rust telemetry and no
+    per-read cross-language call.

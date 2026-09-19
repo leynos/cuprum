@@ -55,7 +55,10 @@ and stream-consumer draining to `_subprocess_wait.py`.
 The original proposal exposed the drain helpers through `_subprocess_drain.py`
 as a narrow compatibility boundary for focused tests and private imports rather
 than a second live implementation. The 2026-08-30 addendum records that this
-former boundary was removed.
+former boundary was removed. The 2026-09-16 addendum records that
+single-command stream-consumer construction later moved to
+`cuprum/_subprocess_streams.py`, while the execution module kept the
+composition-root role.
 
 This makes ownership explicit while retaining the runner as the composition
 root.
@@ -80,14 +83,17 @@ _Table 1: Trade-offs for organizing private subprocess execution._
 ## Decision outcome / proposed direction
 
 Choose Option B. `_subprocess_execution` remains the composition root for
-spawning and stream-consumer creation/wiring. `_subprocess_stdin` owns
-`_emit_stdin_error`, `_write_stdin`, and `_spawn_stdin_writer`, including the
-`cuprum.stdin` logger. `_subprocess_timeout` owns timeout details/errors,
-timeout translation, and the exit-event helpers shared by timeout and normal
-completion paths. `_subprocess_wait` owns the deadline wait, process
-termination, and remains the single owner of stream-consumer draining. The
-formerly proposed `_subprocess_drain` compatibility boundary was removed by the
-2026-08-30 addendum.
+spawning and stream-consumer wiring: it decides which streams a run consumes,
+and it calls `_build_stream_config` and `_spawn_stream_consumers`, whose
+single-command construction now lives in `cuprum/_subprocess_streams.py` (see
+the 2026-09-16 addendum). `_subprocess_stdin` owns `_emit_stdin_error`,
+`_write_stdin`, and `_spawn_stdin_writer`, including the `cuprum.stdin` logger.
+`_subprocess_timeout` owns timeout details/errors, timeout translation, and the
+exit-event helpers shared by timeout and normal completion paths.
+`_subprocess_wait` owns the deadline wait, process termination, and remains the
+single owner of stream-consumer draining. The formerly proposed
+`_subprocess_drain` compatibility boundary was removed by the 2026-08-30
+addendum.
 
 The drain is capture-aware. A capturing drain waits for up to
 `_CAPTURE_EOF_GRACE_S` for terminated-process readers to observe EOF, then
@@ -240,3 +246,73 @@ This keeps execution ownership explicit: collectors are caller-owned state
 handed into drains, not global observation state, while the existing
 `observe_echo` channel remains the event projection for consumers that need
 transition timing.
+
+## Addendum (2026-09-16): split single-command stream-consumer construction
+
+The idle heartbeat's option contract added two fields to the single-command
+stream configs (`read_size`, and the `mirror` cursor) and grew the code that
+assembles them. Carrying that growth inline pushed
+`cuprum/_subprocess_execution.py` past the repository's `max-module-lines`
+ceiling, which `make lint` does enforce per module.
+
+The stream-consumer construction was therefore moved to
+`cuprum/_subprocess_streams.py`: `_build_stream_config` (the stdout config),
+`_spawn_stream_consumers` (the stderr config derived from it, and the pair of
+consumer tasks), and `_create_stream_callback`. The names stay importable from
+`_subprocess_execution`, so direct private imports remain compatible. Tests
+that patch implementation dependencies must target `_subprocess_streams`:
+patching the re-export does not replace what `_spawn_stream_consumers`
+resolves. This is the single-command counterpart of the existing
+`cuprum/_pipeline_stage_streams.py`.
+
+The decision above originally assigned stream-consumer creation to
+`_subprocess_execution`, and the preceding addendum records a differently
+shaped boundary (`_subprocess_drain.py`) that was withdrawn. This split is
+accepted on the same test that withdrew that one: it is a real seam, not a
+compatibility shim. `_subprocess_streams` has no callers other than the
+composition root, and the module it feeds keeps the decisions — which streams
+are consumed, whether stdin is written, and what the result is — rather than
+delegating them. The execution module is still the composition root; only the
+construction it calls moved. The earlier withdrawal does not apply to this
+shape, and the boundary documented in §8.1.5 of the design and developer guides
+now names it.
+
+### Reconciliation with the 2026-09-15 addendum
+
+Both extractions stand. The streamed run loop lives in
+`cuprum/_subprocess_stream_run.py` (2026-09-15) and the consumer construction
+it drives lives in `cuprum/_subprocess_streams.py` (2026-09-16), so
+`cuprum/_subprocess_execution.py` is a composition root that re-exports both
+for import compatibility. The patch-target rule above covers both modules: a
+test that replaces an implementation dependency must target the module that
+resolves it, which for the spawn context and consumer construction is
+`cuprum._subprocess_streams`.
+
+## Addendum (2026-09-19): split pipeline startup from pipeline termination
+
+Merging the idle-heartbeat work with the relay-diagnostics work put two
+independent additions into `cuprum/_process_lifecycle.py` at once and carried
+the module past the repository's `max-module-lines` ceiling. The module had
+accumulated two lifecycles with no shared state: *starting* a pipeline, and
+*terminating* processes.
+
+Pipeline startup therefore moved to `cuprum/_pipeline_spawn.py`:
+`_spawn_pipeline_processes`, the `_SpawnedPipelineStages` accumulator it fills
+through `_spawn_pipeline_stages`, `_build_spawn_observations`, and
+`_cleanup_spawned_processes`. That last helper is why the split is a real seam
+rather than a size fix: it exists only to tear down a *partial* spawn — the
+processes and capture tasks that a failed stage left running — and it is
+reachable only from the startup path that can fail that way. Pipeline teardown
+after a successful spawn is a different subject, decided by
+`cuprum._pipeline_wait` and executed by `_terminate_timed_out_stages`,
+`_terminate_pipeline_remaining_stages`, and `_cleanup_pipeline_on_error`, all
+of which stay in `_process_lifecycle` next to `_shielded_cleanup`.
+
+`_merge_env` also stays in `_process_lifecycle`: both the single-command and
+pipeline spawn paths call it, so it belongs to neither side exclusively.
+`_pipeline_spawn` imports it, along with `_terminate_all_shielded`, from its
+previous definition site. The private import compatibility rule from the
+2026-09-16 addendum applies unchanged: importers of `cuprum._process_lifecycle`
+and `cuprum._pipeline_internals` continue to resolve
+`_spawn_pipeline_processes` without change, but a test that replaces it must
+target `cuprum._pipeline_spawn`, the module that now resolves it.

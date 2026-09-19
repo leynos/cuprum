@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_wait import _PipelineWaitResult
     from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
@@ -242,6 +243,7 @@ class _PipelineSpawnResult:
         ...,
     ]
     stages: _StageWaitContext
+    idle: _IdleMonitor | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

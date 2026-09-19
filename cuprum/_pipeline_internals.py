@@ -8,12 +8,12 @@ completion waiting with optional timeouts, and per-stage
 finalization: when a stage fails or an after-hook raises, pending
 observe-hook tasks must still be drained and every independent
 failure preserved, grouping after-hook and task failures into a
-``BaseExceptionGroup``. It collaborates with ``cuprum._process_lifecycle``,
+``BaseExceptionGroup``. It collaborates with ``cuprum._pipeline_spawn``,
 ``cuprum._pipeline_collect``, ``cuprum._pipeline_streams``,
 ``cuprum._pipeline_types``, ``cuprum._pipeline_wait``,
-``cuprum._observability``, and
+``cuprum._process_lifecycle``, ``cuprum._observability``, and
 ``cuprum.context``, and is invoked by ``cuprum.sh`` and
-``cuprum._subprocess_execution``/``_process_lifecycle``.
+``cuprum._subprocess_execution``.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import time
 import typing as typ
 from pathlib import Path
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
     _drain_tasks_during_cleanup,
@@ -40,6 +41,7 @@ from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
     _emit_timeout_exit_events,
 )
+from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_stream_results import _cancel_stream_tasks
 from cuprum._pipeline_types import (
     _EventDetails,
@@ -49,7 +51,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
     _StageWaitContext,
 )
-from cuprum._process_lifecycle import _shielded_cleanup, _spawn_pipeline_processes
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import current_context
 
@@ -253,7 +255,31 @@ async def _run_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
 ) -> PipelineResult:
-    """Execute a pipeline and return a structured result."""
+    """Execute a pipeline and return a structured result.
+
+    A thin wrapper, so that the aggregate idle heartbeat is settled on every
+    exit path without threading a ``finally`` through the spawn and drive
+    halves below.
+
+    Returns
+    -------
+    PipelineResult
+        The assembled stage results and the index of the first failing stage.
+    """
+    try:
+        return await _spawn_and_drive_pipeline(parts, config)
+    finally:
+        # Completion, a deadline, cancellation, or a partial spawn: whichever
+        # ended this run, it has stopped producing output. Stopping is
+        # idempotent, so the earlier stops are not undone by this one.
+        await _shielded_cleanup(_stop_idle_monitor(config.idle))
+
+
+async def _spawn_and_drive_pipeline(
+    parts: tuple[SafeCmd, ...],
+    config: _PipelineRunConfig,
+) -> PipelineResult:
+    """Spawn every stage, then drive the spawned pipeline to a result."""
     pending_tasks: list[asyncio.Task[None]] = []
     observations = _build_pipeline_observations(
         parts,
@@ -282,6 +308,7 @@ async def _run_pipeline(
                 started_at=tuple(started_at),
                 observations=observations,
             ),
+            idle=config.idle,
         )
     except BaseException as spawn_error:
         await _shielded_cleanup(

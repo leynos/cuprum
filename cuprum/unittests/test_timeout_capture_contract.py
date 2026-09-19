@@ -270,7 +270,7 @@ def readers_that_never_reach_eof(
         return
 
     monkeypatch.setattr(
-        "cuprum._subprocess_execution._consume_stream",
+        "cuprum._subprocess_streams._consume_stream",
         consume_forever,
     )
 

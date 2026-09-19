@@ -1,0 +1,376 @@
+//! Direct tests for descriptor-backed I/O helper contracts.
+
+use std::io;
+use std::os::fd::OwnedFd;
+
+use proptest::prelude::*;
+
+use super::{
+    PumpError, WriteOutcome, classify_write_outcome, classify_write_with, handle_write,
+    map_short_write_error, read_raw_fd, read_raw_fd_with, read_stream, write_all_unix_with,
+};
+use crate::pump_machine::WriteEvent;
+use crate::test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to};
+use rstest::{fixture, rstest};
+
+/// A fresh `pipe(2)` pair (`read_end`, `write_end`) for descriptor-backed
+/// tests, so the shared setup lives in one place rather than a repeated
+/// `make_pipe()` call per test.
+// `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
+// form that triggers `unused_braces` under Rust 1.85. Remove this skip when
+// that formatter/rstest combination compiles the configured profile cleanly.
+#[rustfmt::skip]
+#[fixture]
+fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+    make_pipe()
+}
+
+/// Representative error kinds spanning the non-fatal and fatal partitions.
+const ERROR_KINDS: [io::ErrorKind; 7] = [
+    io::ErrorKind::BrokenPipe,
+    io::ErrorKind::ConnectionReset,
+    io::ErrorKind::NotFound,
+    io::ErrorKind::PermissionDenied,
+    io::ErrorKind::WriteZero,
+    io::ErrorKind::Interrupted,
+    io::ErrorKind::Other,
+];
+
+const fn is_nonfatal_kind(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+    )
+}
+
+fn ssize(len: usize) -> libc::ssize_t {
+    // Test buffers are a handful of bytes, so the saturating fallback is
+    // never reached; it merely avoids an `expect`/`unwrap` in test code.
+    libc::ssize_t::try_from(len).unwrap_or(libc::ssize_t::MAX)
+}
+
+/// Reading from a pipe copies the complete payload into the supplied buffer.
+#[rstest]
+fn read_stream_reads_pipe_bytes(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
+    let (read_end, write_end) = unwrap_ok(pipe);
+    unwrap_ok(write_all_to(&write_end, b"chunk"));
+    drop(write_end);
+    let mut buffer = [0_u8; 8];
+
+    let read_len = unwrap_ok(read_stream(&read_end, &mut buffer));
+
+    assert_eq!(read_len, 5);
+    assert_eq!(buffer.get(..read_len), Some(&b"chunk"[..]));
+}
+
+/// Passing a pipe's write end to the reader reports the underlying I/O error.
+#[rstest]
+fn read_stream_reports_unreadable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
+    let (_read_end, write_end) = unwrap_ok(pipe);
+    let mut buffer = [0_u8; 8];
+
+    let err = unwrap_err(read_stream(&write_end, &mut buffer));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// A closed pipe writer is surfaced as a zero-byte read at EOF.
+#[rstest]
+fn read_raw_fd_reports_eof(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
+    let (read_end, write_end) = unwrap_ok(pipe);
+    drop(write_end);
+    let mut buffer = [0_u8; 8];
+
+    let read_len = unwrap_ok(read_raw_fd(
+        cuprum_native_io::borrow(&read_end),
+        &mut buffer,
+    ));
+
+    assert_eq!(read_len, 0);
+}
+
+#[test]
+fn read_raw_fd_retries_after_interruption() {
+    let mut attempts = 0_u8;
+
+    let read_len = unwrap_ok(read_raw_fd_with(|| {
+        attempts = attempts.saturating_add(1);
+        if attempts == 1 {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        Ok(0)
+    }));
+
+    assert_eq!(read_len, 0);
+    assert_eq!(attempts, 2);
+}
+
+/// Writing to an open pipe reports a complete write with its byte count.
+#[rstest]
+fn handle_write_returns_complete_outcome(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
+    let (read_end, write_end) = unwrap_ok(pipe);
+
+    let outcome = unwrap_ok(handle_write(&write_end, b"chunk"));
+
+    assert_eq!(outcome, WriteOutcome::Complete(5));
+    drop(read_end);
+}
+
+/// Passing a pipe's read end to the writer propagates the fatal I/O error.
+#[rstest]
+fn handle_write_reports_unwritable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
+    let (read_end, _write_end) = unwrap_ok(pipe);
+
+    let err = unwrap_err(handle_write(&read_end, b"chunk"));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+#[test]
+fn nonfatal_short_write_records_accepted_bytes() {
+    let outcome = unwrap_ok(map_short_write_error(
+        io::Error::from(io::ErrorKind::BrokenPipe),
+        3,
+    ));
+
+    assert_eq!(outcome, WriteOutcome::NonFatalShortWrite(3));
+}
+
+#[test]
+fn fatal_short_write_errors_propagate() {
+    let err = unwrap_err(map_short_write_error(
+        io::Error::from(io::ErrorKind::PermissionDenied),
+        3,
+    ));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+#[test]
+fn write_all_unix_with_retries_after_interruption() {
+    let mut attempts = 0_u8;
+
+    let outcome = unwrap_ok(write_all_unix_with(b"chunk", |buffer| {
+        attempts = attempts.saturating_add(1);
+        if attempts == 1 {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        Ok(ssize(buffer.len()))
+    }));
+
+    assert_eq!(outcome, WriteOutcome::Complete(5));
+    assert_eq!(attempts, 2);
+}
+
+#[test]
+fn write_all_unix_with_reports_zero_progress() {
+    let err = unwrap_err(write_all_unix_with(b"chunk", |_| Ok(0)));
+
+    assert!(matches!(err, PumpError::Io(ref io_err) if io_err.kind() == io::ErrorKind::WriteZero));
+}
+
+#[test]
+fn write_all_unix_with_accumulates_partial_writes() {
+    let mut calls = 0_u8;
+
+    let outcome = unwrap_ok(write_all_unix_with(b"chunk", |buffer| {
+        calls = calls.saturating_add(1);
+        let take = if calls == 1 { 2 } else { buffer.len() };
+        Ok(ssize(take))
+    }));
+
+    assert_eq!(outcome, WriteOutcome::Complete(5));
+    assert_eq!(calls, 2);
+}
+
+#[test]
+fn write_all_unix_with_rejects_overlong_progress() {
+    let err = unwrap_err(write_all_unix_with(b"ab", |buffer| {
+        Ok(ssize(buffer.len() + 1))
+    }));
+
+    assert!(matches!(err, PumpError::BufferRangeExceeded));
+}
+
+#[test]
+fn write_all_unix_with_treats_broken_pipe_as_nonfatal_short_write() {
+    let mut calls = 0_u8;
+
+    let outcome = unwrap_ok(write_all_unix_with(b"chunk", |_| {
+        calls = calls.saturating_add(1);
+        if calls == 1 {
+            return Ok(2);
+        }
+        Err(io::Error::from(io::ErrorKind::BrokenPipe))
+    }));
+
+    assert_eq!(outcome, WriteOutcome::NonFatalShortWrite(2));
+}
+
+#[test]
+fn write_all_unix_with_propagates_fatal_error() {
+    let err = unwrap_err(write_all_unix_with(b"chunk", |_| {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+proptest! {
+    /// Only broken-pipe and connection-reset kinds are non-fatal writes.
+    #[test]
+    fn nonfatal_classification_matches_kind(
+        kind in proptest::sample::select(ERROR_KINDS.to_vec()),
+    ) {
+        let err = PumpError::from(io::Error::from(kind));
+        prop_assert_eq!(err.is_nonfatal_write(), is_nonfatal_kind(kind));
+    }
+
+    /// `map_short_write_error` suppresses exactly the non-fatal kinds and
+    /// preserves the accepted byte total when it does.
+    #[test]
+    fn map_short_write_error_suppresses_only_nonfatal(
+        kind in proptest::sample::select(ERROR_KINDS.to_vec()),
+        total in any::<u64>(),
+    ) {
+        let result = map_short_write_error(io::Error::from(kind), total);
+        match result {
+            Ok(WriteOutcome::NonFatalShortWrite(bytes)) => {
+                prop_assert!(is_nonfatal_kind(kind));
+                prop_assert_eq!(bytes, total);
+            }
+            Ok(other) => prop_assert!(false, "unexpected outcome {:?}", other),
+            Err(_) => prop_assert!(!is_nonfatal_kind(kind)),
+        }
+    }
+}
+
+#[rstest]
+#[case::zero_bytes(0)]
+#[case::positive_bytes(7)]
+fn classify_write_outcome_maps_nonfatal_short_write_to_closed(#[case] accepted: u64) {
+    // A non-fatal short write latches the writer closed while preserving the
+    // bytes accepted before the pipe broke — including none at all.
+    let event = unwrap_ok(classify_write_outcome(Ok(
+        WriteOutcome::NonFatalShortWrite(accepted),
+    )));
+
+    assert_eq!(event, WriteEvent::Closed { bytes: accepted });
+}
+
+#[test]
+fn classify_write_outcome_maps_complete_write_to_complete() {
+    let event = unwrap_ok(classify_write_outcome(Ok(WriteOutcome::Complete(5))));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+#[test]
+fn classify_write_outcome_propagates_fatal_errors() {
+    // map_short_write_error has already absorbed the non-fatal partition, so
+    // every error arriving here is fatal and must not latch the writer closed.
+    let err = unwrap_err(classify_write_outcome(Err(PumpError::from(
+        io::Error::from(io::ErrorKind::PermissionDenied),
+    ))));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// Both non-fatal mappings, driven through `classify_write`'s own pipeline.
+///
+/// These go through [`classify_write_with`], which is what `classify_write`
+/// itself calls with the real `write(2)`; only the syscall differs. So the
+/// partial-write loop, the non-fatal error partitioning in
+/// `map_short_write_error`, and the outcome mapping all run exactly as they do
+/// in production — unlike a test that hands `classify_write_outcome` a
+/// pre-built `WriteOutcome` and therefore skips the two steps that produce it.
+///
+/// The short-write case cannot be forced through a real descriptor: it needs
+/// the peer to close *after* the kernel has accepted some bytes but before the
+/// rest, which no test can schedule deterministically.
+#[rstest]
+#[case::non_fatal_after_partial_progress(io::ErrorKind::BrokenPipe, 3, 3)]
+#[case::non_fatal_before_any_progress(io::ErrorKind::BrokenPipe, 0, 0)]
+#[case::reset_after_partial_progress(io::ErrorKind::ConnectionReset, 2, 2)]
+#[case::reset_before_any_progress(io::ErrorKind::ConnectionReset, 0, 0)]
+fn classify_write_latches_closed_carrying_accepted_bytes(
+    #[case] kind: io::ErrorKind,
+    #[case] accepted: usize,
+    #[case] expected_bytes: u64,
+) {
+    let chunk = b"chunk-of-bytes";
+    assert!(
+        accepted < chunk.len(),
+        "the injected write must stop short of the whole chunk",
+    );
+
+    // Accept `accepted` bytes on the first call, then fail non-fatally. With
+    // `accepted == 0` the failure precedes any progress.
+    let mut calls = 0_u32;
+    let event = unwrap_ok(classify_write_with(chunk, |_buffer| {
+        calls += 1;
+        if calls == 1 && accepted > 0 {
+            Ok(libc::ssize_t::try_from(accepted).unwrap_or(0))
+        } else {
+            Err(io::Error::from(kind))
+        }
+    }));
+
+    assert_eq!(
+        event,
+        WriteEvent::Closed {
+            bytes: expected_bytes
+        },
+        "a non-fatal write must latch the writer closed carrying the bytes it accepted",
+    );
+}
+
+/// A completed write through the same seam reports the full byte count and
+/// does not latch the writer closed.
+#[rstest]
+fn classify_write_with_reports_a_completed_write() {
+    let chunk = b"chunk";
+
+    let event = unwrap_ok(classify_write_with(chunk, |buffer| {
+        Ok(libc::ssize_t::try_from(buffer.len()).unwrap_or(0))
+    }));
+
+    assert_eq!(event, WriteEvent::Complete { bytes: 5 });
+}
+
+/// A fatal error is not swallowed by the non-fatal partition: it propagates
+/// out of `classify_write` rather than latching the writer closed.
+#[rstest]
+fn classify_write_with_propagates_a_fatal_error() {
+    let err = unwrap_err(classify_write_with(b"chunk", |_buffer| {
+        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+    }));
+
+    assert!(matches!(err, PumpError::Io(_)));
+}
+
+/// Invalid progress must not partially commit the buffer or accounting state.
+#[rstest]
+#[case::overflow(u64::MAX, 1, "integer length conversion overflowed")]
+#[case::oversized(7, 2, "computed range exceeded the buffer bounds")]
+fn invalid_progress_leaves_chunk_and_count_unchanged(
+    #[case] starting_total: u64,
+    #[case] written: usize,
+    #[case] expected_message: &str,
+) {
+    let original = b"x".as_slice();
+    let mut chunk = original;
+    let mut total = starting_total;
+    let error = unwrap_err(super::record_write_progress(
+        &mut chunk, written, &mut total,
+    ));
+    assert_eq!(error.to_string(), expected_message);
+    assert_eq!(
+        chunk, original,
+        "rejected progress must retain the original tail"
+    );
+    assert_eq!(
+        total, starting_total,
+        "rejected progress must not commit accounting"
+    );
+}

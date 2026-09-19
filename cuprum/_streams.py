@@ -2,7 +2,8 @@
 
 The pure-Python home for consuming a subprocess's stdout/stderr.
 ``_consume_stream`` and the shared ``_drain`` loop decode bytes, optionally tee
-each chunk to a sink, capture the text, and emit decoded lines. The writer side
+each chunk to a sink, capture the text, and emit decoded lines; the bounded echo
+renderer those two call into lives in ``cuprum._stream_echo``. The writer side
 that pumps one pipeline stage's stdout into the next stage's stdin lives in
 ``cuprum._streams_pump`` and is re-exported here (``_pump_stream``,
 ``_close_stream_writer``, ``_write_to_stream_writer``, ``_WriteOutcome``,
@@ -19,13 +20,16 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._echo_relay import (
+from cuprum._echo_truncation import (
+    _EchoLineLimiter,
+    _validate_bounded_echo_encoding,
+)
+from cuprum._stream_echo import (
     _echo_chunk,
     _echo_decoder,
     _flush_echo_decoder,
     _write_chunk,
 )
-from cuprum._echo_truncation import _EchoLineLimiter, _validate_bounded_echo_encoding
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams_pump import (
@@ -73,6 +77,13 @@ class _StreamConfig:
     # Defaults to stdout because every production call site names the stderr
     # config explicitly when it replaces the stdout one.
     stream: EchoStream = EchoStream.STDOUT
+    # Run-owned observers, both optional and both unable to change what is
+    # captured: ``activity`` reports that a non-empty chunk arrived, before any
+    # decoding, truncation, or line callback could drop it, and ``mirror``
+    # records where the echo sink ended up so a keepalive written later knows
+    # whether it would land mid-line.
+    activity: cabc.Callable[[], None] | None = None
+    mirror: _MirrorCursor | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -142,6 +153,26 @@ class _EchoGuard:
     """Mutable holder tracking whether echo is disabled for one drain."""
 
     disabled: bool = False
+
+
+@dc.dataclass(slots=True)
+class _MirrorCursor:
+    """Presentation-only record of whether a mirrored sink is mid-line.
+
+    Shared with the idle heartbeat, which needs to know whether the last bytes
+    echoed to the parent's stderr ended a line: a keepalive written now would
+    otherwise become the tail of an unfinished mirrored line. Recording the
+    position here, on the echo path, keeps the diagnostic free of any
+    knowledge about the child's stream, and nothing in this class can affect
+    what was captured.
+    """
+
+    is_mid_line: bool = False
+
+    def note(self, chunk: bytes) -> None:
+        """Record one written echo chunk; an empty chunk changes nothing."""
+        if chunk:
+            self.is_mid_line = not chunk.endswith(b"\n")
 
 
 async def _consume_stream(
@@ -271,6 +302,14 @@ async def _drain_chunks(
         _record_stream_read(measurement, chunk)
         if not chunk:
             return True
+        # Activity is reported here, on the raw read, so that every way a chunk
+        # can go on to be dropped still counts: undecodable bytes, output with
+        # no line ending yet, a disabled mirror, and text truncated past the
+        # echo bound all mean the child is talking. A run with idle reporting
+        # off has no observer and pays nothing for this.
+        activity = state.config.activity
+        if activity is not None:
+            activity()
         if state.buffer is not None:
             state.buffer.extend(chunk)
         if state.config.echo_output:
@@ -298,6 +337,7 @@ async def _consume_stream_without_lines(
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
+    "_MirrorCursor",
     "_RelayDiagnostics",
     "_StreamConfig",
     "_WriteOutcome",

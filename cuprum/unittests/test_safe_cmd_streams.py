@@ -129,7 +129,7 @@ def test_streamed_run_reconciles_consumers_on_stdin_writer_failure(
 
     monkeypatch.setattr("cuprum._subprocess_stdin._write_stdin", _raise_stdin)
     monkeypatch.setattr(
-        "cuprum._subprocess_execution._spawn_stream_consumers",
+        "cuprum._subprocess_streams._spawn_stream_consumers",
         _spawn_blocking_consumers,
     )
 

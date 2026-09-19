@@ -1,13 +1,13 @@
 """Pipeline stream pumping, capture collection, and backend dispatch.
 
-This module handles data movement after ``cuprum._process_lifecycle`` has
+This module handles data movement after ``cuprum._pipeline_spawn`` has
 spawned each subprocess with the canonical stdio handles from
 ``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
 stdout and per-stage stderr, pumps stdout from one stage into the next stage's
 stdin, and chooses between the Python and Rust stream backends for that pump.
 
 The module intentionally consumes the canonical stage stream policy instead of
-recomputing it. That keeps lifecycle code responsible for process ownership,
+recomputing it. That keeps spawning code responsible for process ownership,
 ``_pipeline_stage_streams`` responsible for stdio shape, and this module
 responsible for moving and collecting bytes once those streams exist.
 """
@@ -35,6 +35,7 @@ from cuprum._pipeline_pipe_tasks import (
 from cuprum._pipeline_stream_fds import (
     _extract_stream_fd,
     _pause_reader_transport,
+    _ReaderPause,
     _resume_reader_transport,
     _suppressed_teardown_failure,
 )
@@ -165,6 +166,28 @@ async def _run_rust_pump(
     return True
 
 
+def _permit_test_owned_descriptor_handoff(reader_pause: _ReaderPause) -> _ReaderPause:
+    """Overrule a closing-reader decline when the test seam supplies descriptors.
+
+    The dispatch seam lends descriptors it owns, so a reader whose transport is
+    already closing no longer invalidates this hand-off. A real hand-off derives
+    the worker descriptor from the transport's descriptor and keeps the decline.
+
+    Returns
+    -------
+    _ReaderPause
+        A permitted verdict for a closing reader under the seam, or
+        ``reader_pause`` unchanged.
+    """
+    if (
+        reader_pause.closing_transport
+        and _PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor is not None
+    ):
+        # Nothing was paused, so the permitted verdict carries no resume.
+        return _ReaderPause(may_hand_off=True)
+    return reader_pause
+
+
 async def _pump_over_raw_fds(
     *,
     reader: asyncio.StreamReader,
@@ -173,6 +196,7 @@ async def _pump_over_raw_fds(
 ) -> bool:
     """Transfer a hop after acquiring the reader and descriptor hand-off."""
     reader_pause = _pause_reader_transport(reader)
+    reader_pause = _permit_test_owned_descriptor_handoff(reader_pause)
     if not reader_pause.may_hand_off:
         _log_rust_pump_declined(
             reader_pause.decline_reason or RustPumpDeclineReason.READER_PAUSE_FAILED,

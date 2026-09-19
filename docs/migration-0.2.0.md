@@ -53,3 +53,67 @@ time out or are cancelled do not produce a result-level diagnostics tuple;
 their already-emitted echo events remain available through `observe_echo`. The
 warning, echo event, and result record carry only bounded categorical values
 and never include output, sink details, exception objects, or command arguments.
+
+## Idle heartbeat for quiet children
+
+Cuprum 0.2.0 also adds an opt-in idle heartbeat. `RunOutputOptions.idle_after`
+defaults to `None`, so the feature is off by default: existing applications
+need no change, and a run with no interval creates no timer and no watchdog
+task. When set, `idle_after` is a strictly positive, finite number of seconds
+of silence on the monitored streams before a notification is due. Further
+notifications repeat once per further interval of silence, and any non-empty
+read on a monitored stream resets the timer.
+
+To adopt the heartbeat, set the interval on the run's output options:
+
+```python
+from cuprum import Program, RunOutputOptions, sh
+
+cmd = sh.make(Program("cargo"))("build", "--locked")
+result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0))
+```
+
+By default, the built-in renderer writes one flushed, newline-terminated,
+at-most-512-byte, ASCII-safe line to `ExecutionContext.stderr_sink`, falling
+back to `sys.stderr`, for example
+`[cuprum] still running cargo (idle 30s, total 4m10s)`. That line is never
+written into captured stdout or stderr, into child-output line observers, or
+into the activity tracker. The heartbeat is an observation only: it reports the
+absence of observed output, and never diagnoses a deadlock, terminates a
+process, or extends a timeout.
+
+A pipeline uses one aggregate clock over the parent's outward-facing output:
+the final stage's stdout and every stage's stderr. Inter-stage transfers do not
+reset it, and its line is labelled `pipeline output idle`.
+
+`on_idle(elapsed_total, elapsed_idle)` replaces the built-in renderer rather
+than joining it. It is called synchronously on the run's own event loop, so it
+must not block. The sink the built-in renderer writes to is written and flushed
+on that same loop as well, so a blocking `write` or `flush` delays the parent's
+stream reads, timeout handling, and cancellation. Wrap a slow sink so that the
+write and flush hand off without blocking: run the blocking call in a worker
+thread or an executor, or use a genuinely non-blocking drain such as a queue
+fed with `put_nowait`.
+
+```python
+import queue
+
+
+class QueueSink:
+    """Feed a queue that something off the run's loop drains."""
+
+    def __init__(self, pending: queue.Queue[str]) -> None:
+        self._pending = pending
+
+    def write(self, text: str) -> None:
+        self._pending.put_nowait(text)
+
+    def flush(self) -> None:
+        pass
+```
+
+A separate asyncio task is not enough because draining that queue still runs on
+the run's own loop. An ordinary exception from the callback, or a failed
+diagnostic write, disables further notifications for that run, emits one
+sanitized warning, and leaves the child's exit status and captured output
+untouched. `KeyboardInterrupt` and `SystemExit` are never suppressed.

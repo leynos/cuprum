@@ -60,6 +60,8 @@ TEST_CARGO_BUILD_JOBS ?= 1
 PYTEST_WORKERS ?= 0
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_native_sdist.py \
+  scripts/tests/test_boundary_*.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -139,6 +141,14 @@ DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
+SKYLOS_VERSION = 4.33.2
+# Skylos parses source using its own Python AST, so Python 3.14 prevents
+# phantom dead-code findings from syntax older tool runtimes cannot parse.
+SKYLOS_CLI = $(UV_RUN_ENV) uv tool run --python 3.14 --from 'skylos==$(SKYLOS_VERSION)' skylos
+SKYLOS = $(SKYLOS_CLI) --config-file pyproject.toml
+SKYLOS_PRODUCTION_TARGETS ?= cuprum
+SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
+SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 # `git ls-files` covers tracked files and nonignored untracked files without
 # traversing ignored paths. The shell filter keeps only regular non-symlink
 # files, and prefixes a leading dash so the linter cannot parse it as an option.
@@ -148,9 +158,8 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling \
-        nixie test test-python test-rust typecheck \
-        test-extension test-markdown-format develop \
+        markdownlint spelling nixie test test-python test-rust typecheck \
+        test-extension test-markdown-format develop makeutil skylos-allow \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
 .NOTPARALLEL: lint
@@ -243,12 +252,20 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
+	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
 rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(CARGO) doc --no-deps $(DOC_FLAGS) && $(CARGO) clippy $(CLIPPY_FLAGS)
 	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
 	+$(MAKE) spelling
+
+skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
+skylos-allow: export SKYLOS_REASON = $(value REASON)
+skylos-allow: ## Document one named Skylos exception, not an entry point
+	@case "$${SKYLOS_SYMBOL}" in *[![:space:]]*) ;; *) printf "Error: SYMBOL is required for a named whitelist exception\\n" >&2; exit 2;; esac
+	@case "$${SKYLOS_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2;; esac
+	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
 github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
 	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows
@@ -279,13 +296,16 @@ nixie: ## Validate Mermaid diagrams
 	$(call ensure_tool,nixie)
 	$(LOCAL_TOOL_ENV) $(NIXIE) --no-sandbox
 
+makeutil: ## Verify the Makefile parser used by contract tests
+	$(call ensure_tool,$@)
+
 # Both suites, which is what a contributor wants locally. CI splits them: the
 # coverage job is the only place the Rust suite runs, under instrumentation, so
 # the interpreter matrix calls `test-python` alone. See "One execution per
 # suite" in docs/developers-guide.md.
-test: test-python test-rust ## Run the Python and Rust suites
+test: makeutil test-python test-rust ## Run the Python and Rust suites
 
-test-python: build uv $(VENV_TOOLS) ## Run the Python suite
+test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
@@ -318,3 +338,46 @@ benchmark-e2e: build uv ## Run hyperfine end-to-end throughput benchmark
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | \
 	awk 'BEGIN {FS=":"; printf "Available targets:\n"} {printf "  %-20s %s\n", $$1, $$2}'
+
+# Boundary verifiers use their own pinned binary toolchains; normal gates keep
+# rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
+PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
+PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
+VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
+MIRI_TOOLCHAIN = nightly-2026-08-07
+KANI_VERSION = 0.67.0
+KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.kani/kani-$(KANI_VERSION)/lib
+
+.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
+install-verus: ## Install the checksum-verified prebuilt Verus release
+	$(PROVER_TOOLS) verus install --install-dir $(VERUS_INSTALL_DIR)
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_z3.py
+
+boundary-verus: ## Verify actual production length/accounting kernels
+	$(UV_RUN_ENV) uv run python scripts/render_boundary_proofs.py
+	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
+
+boundary-kani: ## Check bounded native ownership and existing policy proofs
+	$(PROVER_TOOLS) kani check-version
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
+	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
+
+boundary-miri: ## Interpret isolated native resource and memory paths
+	cd $(RUST_DIR) && $(CARGO) +$(MIRI_TOOLCHAIN) miri test --package cuprum-native-io --lib
+
+boundary-test: ## Run isolated native integration and verification-tool contracts
+	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
+	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
+
+.PHONY: install-boundary-kani
+install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
+	$(UV_RUN_ENV) uv run python scripts/install_boundary_kani.py
+	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" $(CARGO) kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
+
+.PHONY: boundary-contract
+boundary-contract: ## Confirm actual safe targets reject all forms of unsafe Rust
+	$(UV_RUN_ENV) uv run python scripts/check_boundary_contract.py
+
+.PHONY: boundary-faults
+boundary-faults: ## Require proof and real-unwind regressions to detect deliberate faults
+	$(UV_RUN_ENV) uv run python -m scripts.check_boundary_faults

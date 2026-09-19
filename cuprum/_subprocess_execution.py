@@ -5,24 +5,30 @@ stream consumers, and assembling the ``CommandResult``. The rules for ending a
 run — applying the deadline, terminating the process, and draining the stream
 consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
 run loop that waits for exit and reconciles the consumer tasks lives in
-``cuprum._subprocess_stream_run``.
+``cuprum._subprocess_stream_run``, and the consumer construction those two
+drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
+importers of this module keep working unchanged.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import sys
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
-from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
+from cuprum._subprocess_streams import (
+    _build_stream_config,
+    _create_stream_callback,
+    _spawn_stream_consumers,
+    _StreamConsumerSpawnContext,
+)
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -31,11 +37,10 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
-from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
+    from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
@@ -62,26 +67,17 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
 
+    idle: _IdleMonitor | None = None
+
     @property
-    def consumes_any_stream(self) -> bool:
-        """Whether any stream must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout or self.echo_stderr
+    def consumes_stdout(self) -> bool:
+        """Whether the parent must consume stdout, rather than discard it."""
+        return self.capture or self.echo_stdout or self.idle is not None
 
-
-@dc.dataclass(frozen=True, slots=True)
-class _StreamConsumerSpawnContext:
-    """Inputs a run hands to its stream-consumer spawn.
-
-    Bundles the stdout stream configuration, the subprocess PID, and the
-    per-stream relay diagnostics collectors so the spawn helper takes one
-    argument instead of three. The context is created before any consumer
-    task exists; ownership of the collectors stays with the run, which
-    continues to retain the same tuple on its ``_RunTaskOwnership``.
-    """
-
-    stream_config: _StreamConfig
-    pid: int | None
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+    @property
+    def consumes_stderr(self) -> bool:
+        """Whether the parent must consume stderr, rather than discard it."""
+        return self.capture or self.echo_stderr or self.idle is not None
 
 
 async def _spawn_subprocess(
@@ -92,101 +88,17 @@ async def _spawn_subprocess(
         *execution.cmd.argv_with_program,
         stdout=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stdout
+            if execution.consumes_stdout
             else asyncio.subprocess.DEVNULL
         ),
         stderr=(
             asyncio.subprocess.PIPE
-            if execution.capture or execution.echo_stderr
+            if execution.consumes_stderr
             else asyncio.subprocess.DEVNULL
         ),
         stdin=(asyncio.subprocess.PIPE if execution.stdin_data is not None else None),
         env=_merge_env(execution.ctx.env),
         cwd=_cwd_arg(execution.ctx.cwd),
-    )
-
-
-def _create_stream_callback(
-    observation: _StageObservation,
-    event_type: typ.Literal["stdout", "stderr"],
-    pid: int | None,
-) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
-
-
-def _spawn_stream_consumers(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    spawn_context: _StreamConsumerSpawnContext,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks.
-
-    Each consumer drains into its collector from ``spawn_context``:
-    index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
-    pair on its ``_RunTaskOwnership`` so its single reconciliation point can
-    settle and read them exactly once.
-
-    Returns
-    -------
-    tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
-        The stdout and stderr consumer tasks, in that order.
-    """
-    pid = spawn_context.pid
-    stream_config = spawn_context.stream_config
-    relay_diagnostics = spawn_context.relay_diagnostics
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
-    stderr_config = dc.replace(
-        stream_config,
-        echo_output=execution.echo_stderr,
-        sink=(
-            execution.ctx.stderr_sink
-            if execution.ctx.stderr_sink is not None
-            else sys.stderr
-        ),
-        stream=EchoStream.STDERR,
-    )
-    return (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
-                on_line=stdout_on_line,
-                relay_diagnostics=relay_diagnostics[0],
-            ),
-        ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                stderr_config,
-                on_line=stderr_on_line,
-                relay_diagnostics=relay_diagnostics[1],
-            ),
-        ),
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context."""
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        sink=(
-            execution.ctx.stdout_sink
-            if execution.ctx.stdout_sink is not None
-            else sys.stdout
-        ),
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        read_size=_current_read_size(),
     )
 
 
@@ -260,7 +172,7 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     stderr_text: str | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     try:
-        if execution.consumes_any_stream:
+        if execution.consumes_stdout or execution.consumes_stderr:
             (
                 exit_code,
                 exited_at,
@@ -288,6 +200,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             ),
             exc,
         )
+    finally:
+        # Every exit path settles the watchdog exactly once, including the
+        # failures converted above and any that bypass the stream helpers
+        # entirely; repeats are no-ops.
+        await _shielded_cleanup(_stop_idle_monitor(execution.idle))
 
     _emit_exit_event(
         execution.observation,
@@ -316,6 +233,7 @@ __all__ = [
     "_build_stream_config",
     "_create_stream_callback",
     "_execute_subprocess",
+    "_run_subprocess_with_streams",
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
     "_spawn_subprocess",

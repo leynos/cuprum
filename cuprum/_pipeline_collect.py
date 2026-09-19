@@ -8,8 +8,9 @@ stderr and the final stage's stdout, and maps a timeout into a
 the ``cuprum.sh`` lazy-import shim used to build those results. It is a
 companion to ``cuprum._pipeline_internals``, which re-exports its names
 to preserve its public surface, and collaborates with
-``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
-``cuprum._pipeline_wait``, and ``cuprum._process_lifecycle``.
+``cuprum._pipeline_spawn``, ``cuprum._pipeline_streams``,
+``cuprum._pipeline_types``, ``cuprum._pipeline_wait``, and
+``cuprum._process_lifecycle``.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import sys
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_stream_results import (
     _gather_optional_text_tasks,
     _reconcile_pipe_tasks,
@@ -78,6 +80,11 @@ async def _await_pipeline_wait_result(
     ``_wait_for_pipeline`` before the ``finally`` that would reconcile them,
     so the caller reconciles them instead (see the developers' guide).
 
+    The run's idle heartbeat is stopped here as well. Once every stage has
+    settled -- or a deadline is taking over their teardown -- the pipeline is no
+    longer "still running", and the output gathering that follows can be held
+    open by a grandchild's inherited pipe long after the stages are gone.
+
     Returns
     -------
     _PipelineWaitResult
@@ -93,9 +100,12 @@ async def _await_pipeline_wait_result(
         cancel_grace=config.ctx.cancel_grace,
         stages=spawn.stages,
     )
-    if wait_timeout is None:
-        return await pipeline_wait
-    return await asyncio.wait_for(pipeline_wait, wait_timeout)
+    try:
+        if wait_timeout is None:
+            return await pipeline_wait
+        return await asyncio.wait_for(pipeline_wait, wait_timeout)
+    finally:
+        await _shielded_cleanup(_stop_idle_monitor(spawn.idle))
 
 
 async def _gather_pipeline_outputs(

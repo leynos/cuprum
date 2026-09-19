@@ -22,6 +22,7 @@ import logging
 import time
 import typing as typ
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_exit import _await_process_exit
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._subprocess_stdin import _cancel_stdin_writer
@@ -33,6 +34,7 @@ from cuprum._timeout_reporting import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -76,6 +78,7 @@ class _RunTaskOwnership:
     consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
     discard_on_cancel: asyncio.Event
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+    idle: _IdleMonitor | None = None
 
 
 async def _await_eof_grace(
@@ -338,17 +341,23 @@ async def _reconcile_run_tasks(
     tasks: _RunTaskOwnership,
     context: _DrainContext,
 ) -> tuple[str | None, str | None]:
-    """Cancel the stdin writer and drain the stream consumers, in that order.
+    """Stop the idle heartbeat, cancel the stdin writer, then drain the streams.
 
     The stream consumers drain with ``return_exceptions=True``, so their
     already-recorded diagnostics survive the cancellation that a teardown
     performs: a cancelled reader keeps the fallback it recorded before it was
     cancelled.
 
-    The two halves are one unit so a caller can run them under
-    :func:`_shielded_cleanup` and know both finish: draining first would leave
-    a writer blocked on a pipe nobody is reading, and shielding them separately
-    would let a cancellation landing between the two strand the consumers.
+    The halves are one unit so a caller can run them under
+    :func:`_shielded_cleanup` and know all of them finish: draining first would
+    leave a writer blocked on a pipe nobody is reading, and shielding them
+    separately would let a cancellation landing between two of them strand the
+    rest.
+
+    The heartbeat goes first. Reconciliation runs once the run is already
+    ending, and a keepalive announcing that a terminated child is "still
+    running" is worse than no keepalive at all. Stopping is idempotent, so the
+    run's other exit paths can call it too.
 
     Returns
     -------
@@ -356,6 +365,7 @@ async def _reconcile_run_tasks(
         The decoded stdout and stderr text, as produced by
         :func:`_drain_stream_consumers`.
     """
+    await _stop_idle_monitor(tasks.idle)
     await _cancel_stdin_writer(tasks.stdin_task)
     stdout_text, stderr_text = await _drain_stream_consumers(
         tasks.consumers,

@@ -102,8 +102,10 @@ def test_fixture_config_rejects_invalid_fields(
     wrap=st.sampled_from([0, 76]),
 )
 @settings(
-    deadline=None,
     max_examples=30,
+    # This property writes two fixtures; host scheduling does not affect its
+    # deterministic-content invariant.
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_fixture_generation_is_deterministic(
@@ -160,8 +162,10 @@ def test_fixture_output_bytes_matches_manifest(
     raw_bytes=st.integers(min_value=0, max_value=4096),
 )
 @settings(
-    deadline=None,
     max_examples=30,
+    # Fixture generation writes local files; scheduling and cache pressure do
+    # not affect the output-size invariant this property verifies.
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_fixture_output_size_follows_base64_expansion_ratio(
