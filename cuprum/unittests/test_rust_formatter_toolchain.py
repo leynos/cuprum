@@ -24,15 +24,24 @@ _RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
 _RUSTFMT_FIXTURE_SKIP = re.compile(
     rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
 )
-# Matches a Rust string literal, raw string literal, or line comment. Block
-# comments are handled separately below because they nest. Each match keeps its
-# own length, so code-bearing text stays at its original offset.
-_RUST_LEXEME = re.compile(
-    r'"(?:\\.|[^"\\])*"'
-    r'|r#*"(?:[^"]|"(?!#*))*"#*'
-    r"|//[^\n]*",
-    re.DOTALL | re.MULTILINE,
-)
+# A raw string opener such as `r"`, `r#"`, or `r##"`. The captured hash count
+# must be repeated exactly to close the literal, so a quote carrying a
+# different count cannot terminate it early.
+_RAW_STRING_OPEN = re.compile(r'r(?P<hashes>#*)"')
+# A plain string literal. Escapes are consumed so an escaped quote does not
+# close the literal early.
+_QUOTED_STRING = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL)
+# A character literal: one escape sequence, one non-quote character, or one
+# `\u{..}` escape, closed by an immediately adjacent quote. Requiring that
+# closing quote keeps a lifetime such as `'a` in `&'a str` from being read as
+# the start of a literal.
+_CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\])'|'\\u\{[0-9a-fA-F_]+\}'")
+# Either block-comment delimiter. Scanning for both at once lets the nesting
+# depth be tracked in a flat loop.
+_BLOCK_COMMENT_TOKEN = re.compile(r"/\*|\*/")
+# Only these characters can begin a lexeme: `/` for comments, `r` for raw
+# strings, `"` for strings, and `'` for character literals.
+_LEXEME_STARTS = frozenset("/r\"'")
 
 
 def test_formatter_toolchain_precedes_the_project_toolchain(
@@ -88,37 +97,109 @@ def _blank(lexeme: str) -> str:
     return "".join("\n" if char == "\n" else " " for char in lexeme)
 
 
-def _try_lexeme(source: str, index: int) -> int:
-    """Find the end of the lexeme starting at ``index``.
-
-    Recognizes string literals, raw string literals, line comments, and block
-    comments. Block comments nest in Rust, so the terminator is the ``*/`` that
-    closes the outermost comment rather than the first one encountered.
+def _try_line_comment(source: str, index: int) -> int:
+    """Find the end of the line comment starting at ``index``.
 
     Returns
     -------
-        The offset just past the lexeme, or ``index`` when no lexeme starts here.
+        The offset just past the comment, or ``index`` when none starts here.
     """
-    if source.startswith("//", index):
-        end = source.find("\n", index)
-        return len(source) if end < 0 else end
-    if source.startswith("/*", index):
-        depth = 0
-        cursor = index
-        while cursor < len(source):
-            if source.startswith("/*", cursor):
-                depth += 1
-                cursor += 2
-            elif source.startswith("*/", cursor):
-                depth -= 1
-                cursor += 2
-                if depth == 0:
-                    return cursor
-            else:
-                cursor += 1
-        return len(source)
-    match = _RUST_LEXEME.match(source, index)
+    if not source.startswith("//", index):
+        return index
+    end = source.find("\n", index)
+    return len(source) if end < 0 else end
+
+
+def _try_block_comment(source: str, index: int) -> int:
+    """Find the end of the block comment starting at ``index``.
+
+    Block comments nest in Rust, so the terminator is the ``*/`` that closes
+    the outermost comment rather than the first one encountered. An
+    unterminated comment consumes the remainder of the source.
+
+    Returns
+    -------
+        The offset just past the comment, or ``index`` when none starts here.
+    """
+    if not source.startswith("/*", index):
+        return index
+    depth = 0
+    for token in _BLOCK_COMMENT_TOKEN.finditer(source, index):
+        depth += 1 if token.group() == "/*" else -1
+        if depth == 0:
+            return token.end()
+    return len(source)
+
+
+def _try_raw_string(source: str, index: int) -> int:
+    """Find the end of the raw string literal starting at ``index``.
+
+    The closing delimiter repeats the opening hash count exactly, so a quote
+    carrying a different count cannot close the literal. An unterminated
+    literal consumes the remainder of the source.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    opener = _RAW_STRING_OPEN.match(source, index)
+    if opener is None:
+        return index
+    terminator = '"' + opener["hashes"]
+    end = source.find(terminator, opener.end())
+    return len(source) if end < 0 else end + len(terminator)
+
+
+def _try_char_literal(source: str, index: int) -> int:
+    """Find the end of the character literal starting at ``index``.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    match = _CHAR_LITERAL.match(source, index)
     return index if match is None else match.end()
+
+
+def _try_quoted_string(source: str, index: int) -> int:
+    """Find the end of the plain string literal starting at ``index``.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    match = _QUOTED_STRING.match(source, index)
+    return index if match is None else match.end()
+
+
+# Scanners for each lexeme kind, in the order they are tried. Each returns
+# ``index`` when it does not apply, so the first scanner that advances wins.
+_LEXEME_SCANNERS = (
+    _try_line_comment,
+    _try_block_comment,
+    _try_raw_string,
+    _try_char_literal,
+    _try_quoted_string,
+)
+
+
+def _try_lexeme(source: str, index: int) -> int:
+    """Find the end of the lexeme starting at ``index``.
+
+    Recognizes line comments, block comments, raw string literals, character
+    literals, and plain string literals.
+
+    Returns
+    -------
+        The offset just past the lexeme, or ``index`` when none starts here.
+    """
+    if source[index] not in _LEXEME_STARTS:
+        return index
+    for scanner in _LEXEME_SCANNERS:
+        end = scanner(source, index)
+        if end != index:
+            return end
+    return index
 
 
 def _blank_rust_lexemes(source: str) -> str:

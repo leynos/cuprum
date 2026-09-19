@@ -3321,10 +3321,13 @@ toolchains first, then update the exact approved set in
 the mutation proof: it scans every Rust source file and fails unless every skip
 directly precedes one of the approved `rstest` fixtures. The scan blanks
 comments and literals before matching so attribute text quoted in prose or in a
-string cannot trip it, tracking block-comment nesting because Rust block
-comments nest. Detection of real attributes is unaffected: the contract still
-reports the offending file and line for a skip that does not precede an
-approved fixture.
+string cannot trip it. Each literal is delimited by its own rules: block
+comments track nesting depth to the `*/` that closes the outermost comment, a
+raw string closes only on the exact hash count from its opener, and a character
+literal is recognized before a plain string so a quoted character does not
+desynchronize the scan. Detection of real attributes is unaffected: the
+contract still reports the offending file and line for a skip that does not
+precede an approved fixture.
 
 Run Kani separately because it is a bounded model checker rather than a normal
 unit-test runner. Install the checksum-verified prebuilt pinned Kani binaries
