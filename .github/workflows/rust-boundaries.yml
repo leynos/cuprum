@@ -42,7 +42,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       RUSTFLAGS: '-D warnings'
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # The job builds and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
@@ -92,7 +92,7 @@ jobs:
         run: sccache --show-stats --stats-format json
       - name: Archive native evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: native-boundaries-${{ runner.os }}
           path: rust/target/boundary-verification
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # The job builds and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
@@ -126,7 +126,7 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           python-version: '3.13'
       - name: Restore pinned verifier, solver, and compiler objects
@@ -162,7 +162,7 @@ jobs:
         run: sccache --show-stats --stats-format json
       - name: Archive proof and negative compiler evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: verus-and-compiler-contracts
           path: rust/target/boundary-verification
@@ -191,7 +191,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # The job builds and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
@@ -208,7 +208,7 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           python-version: '3.13'
       - name: Restore proof tools and Miri sysroots
@@ -246,7 +246,7 @@ jobs:
           make boundary-faults
       - name: Archive proof summaries and failures
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: extended-${{ matrix.check }}
           path: rust/target/boundary-verification
