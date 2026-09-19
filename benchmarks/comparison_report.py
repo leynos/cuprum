@@ -41,9 +41,13 @@ _DECISION_FIELDS = (
 #: Rendered workload descriptions, keyed by workload identifier. This is report
 #: prose, so it lives with the report rather than with the protocol value the
 #: plan recorded — wording changes here cannot reach what a run measured. The
-#: ``WorkloadName`` key type is what makes the lookup total: a protocol cannot
-#: be constructed carrying a workload absent from this table, so rendering one
-#: cannot fail.
+#: key type keeps the lookup honest at the edges: a protocol cannot carry a
+#: workload outside ``WorkloadName``, so a typo here is caught rather than
+#: reaching a render. It does not make the table complete — no type checker
+#: enforces that a literal-keyed dict covers every member — so
+#: ``test_every_workload_the_runner_produces_can_be_described`` holds this
+#: table against ``WORKLOADS`` and fails when a workload is added to one and
+#: not the other.
 _WORKLOAD_DESCRIPTIONS: dict[WorkloadName, str] = {
     THROUGHPUT_SWEEP_WORKLOAD: "the throughput sweep, covering three payload tiers",
     SMOKE_WORKLOAD: "the smoke workload, the sweep's shape at reduced payloads",

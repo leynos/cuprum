@@ -3492,8 +3492,8 @@ Artefacts uploaded by CI include:
 
 The workflow summary table is generated from matched Python and Rust candidate
 scenarios using the backend-independent scenario label (for the ratchet,
-`single-nocb` or `multi-cb`; for the throughput sweep, `small-single-nocb`).
-Each row reports:
+`ratchet-single-nocb` or `ratchet-single-cb`; for the throughput sweep,
+`small-single-nocb`). Each row reports:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds

@@ -11,7 +11,10 @@ from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.benchmark_workload import (
     CI_RATCHET_WORKLOAD,
     WORKLOAD_PLAN_KEY,
+    WORKLOADS,
+    WorkloadProtocol,
 )
+from benchmarks.comparison_report import describe_workload
 from benchmarks.pipeline_throughput_scenarios import (
     CI_RATCHET_PAYLOAD_BYTES,
     CI_RATCHET_WORKER_ITERATIONS,
@@ -26,6 +29,8 @@ from benchmarks.python_vs_rust_comparison_report import (
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
+
+    from benchmarks.benchmark_workload import WorkloadName
 
 
 def _scenario_payload(
@@ -486,6 +491,30 @@ def test_report_serialization_carries_the_workload_protocol() -> None:
     assert payload["worker_iterations"] == CI_RATCHET_WORKER_ITERATIONS
     assert payload["payload_bytes"] == [CI_RATCHET_PAYLOAD_BYTES], (
         "the JSON report must state the payload its ratios were measured at"
+    )
+
+
+@pytest.mark.parametrize("workload", WORKLOADS)
+def test_every_workload_the_runner_produces_can_be_described(workload: str) -> None:
+    """The report can describe every workload a plan may record.
+
+    The description table is keyed by ``WorkloadName``, but neither the type
+    checker nor the runtime enforces that a literal-keyed dict is complete: a
+    workload added to ``WORKLOADS`` without a matching entry would raise a
+    ``KeyError`` while rendering a workflow summary, in a job whose whole
+    purpose is to report a measurement. This test is what makes the two
+    collections move together.
+    """
+    protocol = WorkloadProtocol(
+        workload=typ.cast("WorkloadName", workload),
+        profile_version=None,
+        worker_iterations=None,
+        payload_bytes=(),
+    )
+
+    assert describe_workload(protocol).strip(), (
+        f"workload {workload!r} is producible by the runner, so the report must "
+        "describe it rather than failing to render a summary"
     )
 
 

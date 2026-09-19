@@ -2251,10 +2251,13 @@ This module owns the identifiers and the value object; the prose that renders
 them lives with the report that writes it, in
 `benchmarks/comparison_report.py`. A wording change there therefore cannot
 reach the data a plan recorded. Add a workload by extending `WORKLOADS`, the
-`WorkloadName` literal, and the report's description table together; the
-report's lookup is keyed by `WorkloadName` precisely so that a workload the
-runner can produce but the report cannot describe is a type error rather than a
-render-time failure.
+`WorkloadName` literal, and the report's description table together. The
+report's lookup is keyed by `WorkloadName`, which stops a misspelt key from
+reaching a render, but no type checker enforces that a literal-keyed dict
+covers every member — so
+`test_every_workload_the_runner_produces_can_be_described` is what holds the
+two collections together, and it fails when a workload is added to one and not
+the other.
 
 ### The baseline the ratchet compares against
 

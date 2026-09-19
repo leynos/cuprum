@@ -2968,8 +2968,9 @@ The continuous integration (CI) workflows run the following checks:
     the bar: the window only moves when `main` moves.
 
 The workflow summary table is derived from the filtered candidate ratchet plan
-and throughput JSON. Rows are matched by the shared scenario label — for the
-ratchet, `single-nocb`, `single-cb`, `multi-nocb`, and `multi-cb` — and include:
+and throughput JSON. Rows are matched by the shared scenario label — the
+ratchet retains only the two-stage scenarios, so its rows carry
+`ratchet-single-nocb` and `ratchet-single-cb` — and include:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds
