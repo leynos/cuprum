@@ -170,6 +170,44 @@ def test_the_ratchet_benchmarks_invocation_propagates_failure(
             )
 
 
+def test_the_guard_reader_splits_on_every_shell_separator() -> None:
+    """A guard is attached to a command, not to the line carrying it.
+
+    The test above only holds if the reader hands it commands. `make develop
+    ...; true || return $?` is one physical line holding an unguarded command
+    and a guarded one; a reader that split on newlines would report the whole
+    line as a single guarded statement and pass. These are the shapes that
+    distinguish the two, checked directly so the guard test's own reliability
+    does not rest on the workflow happening to be laid out one command per
+    line.
+    """
+    assert shell_statements("make develop X=x; true || return $?") == (
+        "make develop X=x",
+        "true || return $?",
+    ), "an unquoted semicolon must end a statement"
+
+    assert shell_statements("a || return $?; b || return $?") == (
+        "a || return $?",
+        "b || return $?",
+    ), "each command on a shared line must be its own statement"
+
+    assert shell_statements("sh -c 'echo a; echo b' || return $?") == (
+        "sh -c 'echo a; echo b' || return $?",
+    ), "a separator inside quotes is part of the command, not a split point"
+
+    assert shell_statements("echo 'a # b' || return $?") == (
+        "echo 'a # b' || return $?",
+    ), "a hash inside quotes is part of the command, not a comment"
+
+    assert shell_statements("cmd || return $?  # guarded deliberately") == (
+        "cmd || return $?",
+    ), "a trailing comment must be dropped without truncating the command"
+
+    assert shell_statements("cmd a \\\n  || return $?") == ("cmd a || return $?",), (
+        "a line continuation must join rather than split"
+    )
+
+
 def test_the_ratchet_worker_iterations_match_the_scenario_default(
     workflow_data: Workflow,
 ) -> None:

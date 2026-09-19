@@ -105,8 +105,8 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
     return full_payload
 
 
-def _require_numeric_payload_bytes(value: object) -> int | float:
-    """Return *value* as a finite numeric payload size, or raise."""
+def _require_payload_bytes(value: object) -> int:
+    """Return *value* as a whole, finite payload size in bytes, or raise."""
     # `json.loads` accepts the bare `NaN` and `Infinity` literals, and every
     # comparison against a NaN is false, so a NaN payload would pass the
     # non-negative check and both band bounds and be measured. An `int` is
@@ -115,16 +115,29 @@ def _require_numeric_payload_bytes(value: object) -> int | float:
     # the caller expects — so only floats reach the check, and an out-of-range
     # integer is dropped by the ceiling like any other oversized payload.
     # `bool` is an `int` subclass, so it is excluded before the numeric case.
+    #
+    # A whole float is converted rather than passed through. The retained
+    # scenarios are written out as the filtered plan and read back by
+    # `benchmark_workload`, which requires an `int` and rejects a float; a
+    # JSON payload written as `67108864.0` would otherwise pass every check
+    # here and make the plan unreadable later. A fractional payload is not a
+    # size any measurement could report, and truncating it would record a
+    # payload the plan never declared, so it is refused outright.
     match value:
         case bool():
             msg = "scenario payload_bytes must be numeric"
             raise TypeError(msg)
         case int():
             return value
-        case float() if math.isfinite(value):
-            return value
-        case float():
+        case float() if not math.isfinite(value):
             msg = f"scenario payload_bytes must be finite, got {value!r}"
+            raise ValueError(msg)
+        case float() if value.is_integer():
+            return int(value)
+        case float():
+            msg = (
+                f"scenario payload_bytes must be a whole number of bytes, got {value!r}"
+            )
             raise ValueError(msg)
         case _:
             msg = "scenario payload_bytes must be numeric"
@@ -151,7 +164,7 @@ def _select_scenario(
     )
     if scenario.get("stages") != _CI_RATCHET_STAGE_COUNT:
         return None
-    payload_bytes = _require_numeric_payload_bytes(scenario.get("payload_bytes", 0))
+    payload_bytes = _require_payload_bytes(scenario.get("payload_bytes", 0))
     if payload_bytes < 0:
         msg = "scenario payload_bytes must be >= 0"
         raise ValueError(msg)
@@ -159,7 +172,12 @@ def _select_scenario(
         return None
     if payload_bytes > _CI_RATCHET_MAX_PAYLOAD_BYTES:
         return None
-    return scenario, scenario_command
+    # The validated size replaces whatever the plan spelled. A whole float is
+    # the case that needs it: it passes the band checks, and the retained
+    # scenarios are written out verbatim as the filtered plan, so leaving it
+    # as a float would put the same value back into the JSON that
+    # `benchmark_workload` then refuses to read as a payload size.
+    return {**scenario, "payload_bytes": payload_bytes}, scenario_command
 
 
 def select_ci_ratchet_scenarios(
@@ -210,7 +228,7 @@ def select_ci_ratchet_scenarios(
         raise ValueError(msg)
     selected.sort(
         key=lambda entry: (
-            _require_numeric_payload_bytes(entry[0].get("payload_bytes", 0)),
+            _require_payload_bytes(entry[0].get("payload_bytes", 0)),
             _require_bool(
                 entry[0].get("with_line_callbacks", False),
                 name="scenario with_line_callbacks",
