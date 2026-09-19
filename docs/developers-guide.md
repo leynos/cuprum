@@ -597,8 +597,9 @@ The coverage lanes contain four timeout tiers in this order: per-test allowance
 `rust/.config/nextest.toml`; the third is the shared coverage action's cargo
 watchdog; and the fourth is GitHub Actions' job timer. The contract in
 `cuprum/unittests/test_timeout_ordering_contract.py` pins the first three
-relationships, and the compile-test tier has a contract of its own in
-`cuprum/unittests/test_compile_test_timeout_tier.py`.
+relationships, the compile-test tier has a contract of its own in
+`cuprum/unittests/test_compile_test_timeout_tier.py`, and the termination
+allowance is pinned by `cuprum/unittests/test_termination_allowance.py`.
 
 Table 3: Coverage timeout tiers
 
