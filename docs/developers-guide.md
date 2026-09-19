@@ -4387,7 +4387,7 @@ and the benchmark body with an admission marker, then runs
 `act --job benchmark-ratchet` for relevant, irrelevant, mixed, and empty
 changed-path sets, pull-request and push events, and a failing detector. It
 asserts the filter's `bench` output, the recorded gate decision, and the
-admission marker. [ADR-013](adr-014-actions-runner-integration-harness.md)
+admission marker. [ADR-014](adr-014-actions-runner-integration-harness.md)
 records why the boundary is exercised rather than inferred, and
 [the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
 covers running it by hand. The opt-in job is owned by

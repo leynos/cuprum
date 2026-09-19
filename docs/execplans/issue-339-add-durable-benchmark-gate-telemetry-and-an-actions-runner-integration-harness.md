@@ -1,7 +1,8 @@
 # Persist benchmark-gate decisions and verify Actions-runner admission
 
-Status: IMPLEMENTED; hosted receipts verified for the commits their runs name,
-rebased candidate green, rebased again onto `f48cf8d4`
+Status: IMPLEMENTED; hosted receipts verified for the commits their runs name
+and for no other commit, all local gates green on the rebased candidate, most
+recently rebased onto `861fe2f0`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -651,3 +652,35 @@ without a redundant comparison.
 After the repair `pylint-pypy benchmarks conftest.py cuprum scripts tests`
 exits 0 with no findings and a 10.00/10 rating, and the focused suites for
 every touched module pass 118 tests.
+
+2026-09-19: Rebased the 38-commit series from `cb59f204` (its exclusive base)
+onto `861fe2f0`, the current `origin/main` head and therefore the pull
+request's target. Main had gained one commit,
+`Add project catalogue constructor (roadmap 3.2.4) (#374) (#404)`, which added
+two private catalogue modules, a snapshot entry, and nine lines of
+`docs/developers-guide.md`. That document was the only path both sides touched,
+so the replay carried exactly one overlapping file and no conflict stop: all 38
+commits replayed as identical patches under `git range-diff`.
+
+Because the series is patch-identical, the decisive audit is preservation
+rather than reconstruction. Every one of the 45 branch-touched paths is
+byte-identical to its pre-rebase blob except the overlapping document, all 623
+paths the branch does not touch are byte-identical to `861fe2f0`, and every
+path the branch deletes is still absent. The single differing path differs by
+exactly the target's addition with zero deletions, inserted at the intended
+anchor, and `git diff --check` is clean. No merge attribute selected a driver
+anywhere in the change surface, so the built-in merge ran throughout and no
+semantic reconstruction was possible.
+
+The renumber commit that the previous two rebases had to repair produced a
+third-class defect this time, and it is worth naming because the first two
+generations found different ones. Renumbering `012` to `014` in
+`docs/developers-guide.md` bumped the visible label and the link target for the
+telemetry reference, but for the harness reference it bumped only the label,
+leaving `[ADR-013](adr-014-actions-runner-integration-harness.md)` — a link
+whose text promises ADR-013 and whose target is ADR-014. A sweep of every
+`[ADR-NNN](adr-MMM-*.md)` label/target pair and every reference-style
+`[adr-NNN]` definition across `docs/` and `README.md` now reports no mismatch
+and no link to a missing file. The lesson is that a renumber is a two-field
+edit — number and target — and reviewing it as one field is how this survives
+three generations of replay.
