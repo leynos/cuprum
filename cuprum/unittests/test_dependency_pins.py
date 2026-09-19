@@ -101,41 +101,43 @@ def _pin_section() -> str:
     return extract_markdown_subsection(text, heading=_PIN_SECTION_HEADING, level=2)
 
 
-def test_pytest_constraint_excludes_the_deprecating_release() -> None:
-    """The dev group must constrain pytest below the release that warns."""
-    constraint = _pytest_constraint()
-    assert f"<{_DEPRECATING_RELEASE}" in constraint, (
-        f"the pytest constraint {constraint!r} no longer excludes "
-        f"{_DEPRECATING_RELEASE}, which pytest-bdd 8.1.0 cannot use without "
-        f"raising {_WARNING_NAME}"
-    )
+class TestPytestDependencyPins:
+    """The pytest pin, its rationale, and the sites that document them."""
 
+    def test_pytest_constraint_excludes_the_deprecating_release(self) -> None:
+        """The dev group must constrain pytest below the release that warns."""
+        constraint = _pytest_constraint()
+        assert f"<{_DEPRECATING_RELEASE}" in constraint, (
+            f"the pytest constraint {constraint!r} no longer excludes "
+            f"{_DEPRECATING_RELEASE}, which pytest-bdd 8.1.0 cannot use without "
+            f"raising {_WARNING_NAME}"
+        )
 
-def test_pytest_constraint_carries_its_rationale() -> None:
-    """The constraint's comment block must name the tracking issue."""
-    block = _constraint_comment_block()
-    assert _TRACKING_ISSUE in block, (
-        f"the pytest constraint's comment block must name {_TRACKING_ISSUE} "
-        f"so the pin can be lifted when the fix ships; found {block!r}"
-    )
-    assert _WARNING_NAME in block, (
-        f"the comment block must name {_WARNING_NAME}, the warning the "
-        f"constraint suppresses; found {block!r}"
-    )
+    def test_pytest_constraint_carries_its_rationale(self) -> None:
+        """The constraint's comment block must name the tracking issue."""
+        block = _constraint_comment_block()
+        assert _TRACKING_ISSUE in block, (
+            f"the pytest constraint's comment block must name {_TRACKING_ISSUE} "
+            f"so the pin can be lifted when the fix ships; found {block!r}"
+        )
+        assert _WARNING_NAME in block, (
+            f"the comment block must name {_WARNING_NAME}, the warning the "
+            f"constraint suppresses; found {block!r}"
+        )
 
-
-@pytest.mark.parametrize(
-    "term",
-    [
-        f"pytest<{_DEPRECATING_RELEASE}",
-        _TRACKING_ISSUE,
-        _WARNING_NAME,
-        "pytest-bdd",
-    ],
-)
-def test_developers_guide_documents_the_pin(term: str) -> None:
-    """The guide must document the pin, its cause, and how to lift it."""
-    section = _pin_section()
-    assert term in section, (
-        f"{_DEVELOPERS_GUIDE}'s {_PIN_SECTION_HEADING!r} section must mention {term!r}"
+    @pytest.mark.parametrize(
+        "term",
+        [
+            f"pytest<{_DEPRECATING_RELEASE}",
+            _TRACKING_ISSUE,
+            _WARNING_NAME,
+            "pytest-bdd",
+        ],
     )
+    def test_developers_guide_documents_the_pin(self, term: str) -> None:
+        """The guide must document the pin, its cause, and how to lift it."""
+        section = _pin_section()
+        assert term in section, (
+            f"{_DEVELOPERS_GUIDE}'s {_PIN_SECTION_HEADING!r} section must "
+            f"mention {term!r}"
+        )
