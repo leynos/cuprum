@@ -67,6 +67,34 @@ ARTEFACT_AVAILABLE = f"steps.{ARTEFACT_STEP}.outputs.available == 'true'"
 STATUS_FUNCTIONS = ("success(", "failure(")
 
 
+def _referenced_steps(condition: str) -> set[str]:
+    """Return every step whose state a publication condition reads.
+
+    GitHub expressions reach a step's state in two spellings — `steps.name.…`
+    and `steps['name']…` — and the second is easy to overlook. A condition
+    that withheld publication with `steps['ratchet'].outcome == 'success'`
+    reads the ratchet's verdict while presenting nothing the dotted pattern
+    can see, so both spellings are collected. The caller then requires the set
+    to be exactly the steps publication is allowed to consult, which is a
+    stronger statement than rejecting the reads someone thought to name.
+
+    Parameters
+    ----------
+    condition : str
+        A step's `if:` expression, with or without the `${{ }}` wrapper.
+
+    Returns
+    -------
+    set[str]
+        The identifiers the expression reads from `steps`, in either spelling.
+    """
+    dotted = set(re.findall(r"steps\.([A-Za-z0-9_-]+)", condition))
+    bracketed = set(re.findall(r"steps\[\s*['\"]([A-Za-z0-9_-]+)['\"]\s*\]", condition))
+    # `outputs` and `result` follow the step identifier rather than root it, so
+    # neither is captured above and neither is a step name.
+    return dotted | bracketed
+
+
 def test_the_ratchet_policy_matches_the_module_defaults(
     workflow_data: Workflow,
 ) -> None:
@@ -213,6 +241,38 @@ def test_the_guard_reader_splits_on_every_shell_separator() -> None:
     )
 
 
+def test_the_published_step_reader_sees_both_step_spellings() -> None:
+    """A step may be read as `steps.name` or `steps['name']`, and both count.
+
+    The publication test requires the steps its conditions read to be exactly
+    `candidate-artefacts`. That requirement is only as strong as the reader
+    behind it: a reader that matched the dotted spelling alone would pass a
+    condition of the form `steps['ratchet'].outcome == 'success'`, which is a
+    verdict-dependent condition wearing a spelling the reader cannot see. The
+    two spellings are checked directly so the publication test's reliability
+    does not rest on the workflow happening to use one of them.
+    """
+    assert _referenced_steps(
+        "steps.candidate-artefacts.outputs.available == 'true'"
+    ) == {"candidate-artefacts"}, "the dotted spelling must be read"
+
+    assert _referenced_steps(
+        "${{ !cancelled() && steps['ratchet'].outcome == 'success' }}"
+    ) == {"ratchet"}, "the bracketed spelling must be read too"
+
+    assert _referenced_steps(
+        "${{ steps[\"ratchet\"].result == 'success' "
+        "&& steps.candidate-artefacts.outputs.available == 'true' }}"
+    ) == {"ratchet", "candidate-artefacts"}, (
+        "double quotes must be recognised, and both spellings collected"
+    )
+
+    assert (
+        _referenced_steps("${{ !cancelled() && github.ref == 'refs/heads/main' }}")
+        == set()
+    ), "a condition reading no step state must report none"
+
+
 def test_the_ratchet_worker_iterations_match_the_scenario_default(
     workflow_data: Workflow,
 ) -> None:
@@ -293,7 +353,7 @@ def test_the_main_sample_is_published_whatever_the_ratchet_decides(
         f"candidate artefacts. Found: {condition!r}"
     )
 
-    referenced = set(re.findall(r"steps\.([A-Za-z0-9_-]+)\.", condition))
+    referenced = _referenced_steps(condition)
     assert referenced == {ARTEFACT_STEP}, (
         f"the {step_name!r} step may read only {ARTEFACT_STEP!r} step state; found "
         f"{sorted(referenced)}. Reading the ratchet's outcome here would withhold "
