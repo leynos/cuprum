@@ -253,13 +253,11 @@ def run_summary_script(
 
 
 def _read_outputs(path: pth.Path) -> SummaryOutputs:
-    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``.
-
-    The keys are the script's, not this function's: it parses whatever the step
-    appended. The behavioural test asserts the parsed mapping equals the
-    expected bounded values, so a missing or misspelled output fails there
-    rather than surfacing as a `KeyError` in whichever consumer reads first.
-    """
+    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``."""
+    # The keys are the script's, not this function's: it parses whatever the
+    # step appended. The behavioural test asserts the parsed mapping equals the
+    # expected bounded values, so a missing or misspelled output fails there
+    # rather than surfacing as a `KeyError` in whichever consumer reads first.
     pairs = (
         line.split("=", maxsplit=1)
         for line in path.read_text(encoding="utf-8").splitlines()
