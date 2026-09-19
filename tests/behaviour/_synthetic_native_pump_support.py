@@ -46,20 +46,24 @@ def force_synthetic_native_pump_path(
             case _:
                 return None
 
-    with monkeypatch.context() as scoped_monkeypatch:
-        scoped_monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
-        scoped_monkeypatch.setattr(
-            _pipeline_streams,
-            "_native_pump_supported_on_platform",
-            lambda: True,
-        )
-        configure_pump_stream_dispatch_for_testing(raw_fd_extractor=extract_raw_fd)
-        set_rust_availability_for_testing(is_available=True)
-        try:
-            yield
-        finally:
-            reset_pump_stream_dispatch_for_testing()
-            set_rust_availability_for_testing(is_available=None)
-            for fd in (*extracted_fds, reader_pipe_fd, writer_pipe_fd):
-                with contextlib.suppress(OSError):
-                    os.close(fd)
+    try:
+        with monkeypatch.context() as scoped_monkeypatch:
+            scoped_monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+            scoped_monkeypatch.setattr(
+                _pipeline_streams,
+                "_native_pump_supported_on_platform",
+                lambda: True,
+            )
+            try:
+                configure_pump_stream_dispatch_for_testing(
+                    raw_fd_extractor=extract_raw_fd
+                )
+                set_rust_availability_for_testing(is_available=True)
+                yield
+            finally:
+                reset_pump_stream_dispatch_for_testing()
+                set_rust_availability_for_testing(is_available=None)
+    finally:
+        for fd in (*extracted_fds, reader_pipe_fd, writer_pipe_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
