@@ -3297,6 +3297,39 @@ make check-fmt
 make lint
 ```
 
+### Rustfmt fixture compatibility
+
+The formatter maintenance pin is `nightly-2026-05-28`; Continuous Integration
+(CI) provisions it before restoring the supported Rust 1.85.0 project
+toolchain. The formatter profile's `fn_single_line` option formats some
+`rstest` fixtures into a form that triggers `unused_braces` when Rust 1.85.0
+compiles the configured profile. This is a formatter and `rstest` compatibility
+constraint, not a lint-policy exception.
+
+Exactly three fixtures carry a direct `#[rustfmt::skip]` while that combination
+remains incompatible:
+
+- `rust/cuprum-native-io/src/ownership_tests.rs`: `descriptor_guard`
+- `rust/cuprum-streams/src/io_utils/tests.rs`: `pipe`
+- `rust/cuprum-streams/src/splice/tests.rs`: `pipe`
+
+Remove each skip only when the pinned formatter formats the source first and
+Rust 1.85.0 then compiles the formatted `rstest` fixture with warnings denied,
+reporting no `unused_braces` diagnostic. Do not add another skip merely to
+preserve a formatter shape. Reproduce the incompatibility with the pinned
+toolchains first, then update the exact approved set in
+`cuprum/unittests/test_rust_formatter_toolchain.py`. That source contract is
+the mutation proof: it scans every Rust source file and fails unless every skip
+directly precedes one of the approved `rstest` fixtures. The scan blanks
+comments and literals before matching so attribute text quoted in prose or in a
+string cannot trip it. Each literal is delimited by its own rules: block
+comments track nesting depth to the `*/` that closes the outermost comment, a
+raw string closes only on the exact hash count from its opener, and a character
+literal is recognized before a plain string so a quoted character does not
+desynchronize the scan. Detection of real attributes is unaffected: the
+contract still reports the offending file and line for a skip that does not
+precede an approved fixture.
+
 Run Kani separately because it is a bounded model checker rather than a normal
 unit-test runner. Install the checksum-verified prebuilt pinned Kani binaries
 without a source build, then run the boundary harnesses from the repository

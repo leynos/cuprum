@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 
 from tests.helpers.docs import repo_root
@@ -13,6 +14,34 @@ _SETUP_RUST = (
 )
 _FORMATTER_TOOLCHAIN = "nightly-2026-05-28"
 _PROJECT_TOOLCHAIN = "1.85.0"
+_FORMATTER_FIXTURE_SKIPS = {
+    ("rust/cuprum-native-io/src/ownership_tests.rs", "descriptor_guard"),
+    ("rust/cuprum-streams/src/io_utils/tests.rs", "pipe"),
+    ("rust/cuprum-streams/src/splice/tests.rs", "pipe"),
+}
+_RUSTFMT_SKIP = "#[rustfmt::skip]"
+_RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
+_RUSTFMT_FIXTURE_SKIP = re.compile(
+    rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
+)
+# A raw string opener such as `r"`, `r#"`, or `r##"`. The captured hash count
+# must be repeated exactly to close the literal, so a quote carrying a
+# different count cannot terminate it early.
+_RAW_STRING_OPEN = re.compile(r'r(?P<hashes>#*)"')
+# A plain string literal. Escapes are consumed so an escaped quote does not
+# close the literal early.
+_QUOTED_STRING = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL)
+# A character literal: one escape sequence, one non-quote character, or one
+# `\u{..}` escape, closed by an immediately adjacent quote. Requiring that
+# closing quote keeps a lifetime such as `'a` in `&'a str` from being read as
+# the start of a literal.
+_CHAR_LITERAL = re.compile(r"'(?:\\.|[^'\\])'|'\\u\{[0-9a-fA-F_]+\}'")
+# Either block-comment delimiter. Scanning for both at once lets the nesting
+# depth be tracked in a flat loop.
+_BLOCK_COMMENT_TOKEN = re.compile(r"/\*|\*/")
+# Only these characters can begin a lexeme: `/` for comments, `r` for raw
+# strings, `"` for strings, and `'` for character literals.
+_LEXEME_STARTS = frozenset("/r\"'")
 
 
 def test_formatter_toolchain_precedes_the_project_toolchain(
@@ -61,3 +90,157 @@ def test_project_toolchain_declares_maintenance_components() -> None:
         "profile": "minimal",
         "components": ["rustfmt", "clippy", "rust-analyzer"],
     }, "the stable pin must retain its compiler and declare each required component"
+
+
+def _blank(lexeme: str) -> str:
+    """Render a lexeme as blanks, preserving its newlines and offsets."""
+    return "".join("\n" if char == "\n" else " " for char in lexeme)
+
+
+def _try_line_comment(source: str, index: int) -> int:
+    """Find the end of the line comment starting at ``index``.
+
+    Returns
+    -------
+        The offset just past the comment, or ``index`` when none starts here.
+    """
+    if not source.startswith("//", index):
+        return index
+    end = source.find("\n", index)
+    return len(source) if end < 0 else end
+
+
+def _try_block_comment(source: str, index: int) -> int:
+    """Find the end of the block comment starting at ``index``.
+
+    Block comments nest in Rust, so the terminator is the ``*/`` that closes
+    the outermost comment rather than the first one encountered. An
+    unterminated comment consumes the remainder of the source.
+
+    Returns
+    -------
+        The offset just past the comment, or ``index`` when none starts here.
+    """
+    if not source.startswith("/*", index):
+        return index
+    depth = 0
+    for token in _BLOCK_COMMENT_TOKEN.finditer(source, index):
+        depth += 1 if token.group() == "/*" else -1
+        if depth == 0:
+            return token.end()
+    return len(source)
+
+
+def _try_raw_string(source: str, index: int) -> int:
+    """Find the end of the raw string literal starting at ``index``.
+
+    The closing delimiter repeats the opening hash count exactly, so a quote
+    carrying a different count cannot close the literal. An unterminated
+    literal consumes the remainder of the source.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    opener = _RAW_STRING_OPEN.match(source, index)
+    if opener is None:
+        return index
+    terminator = '"' + opener["hashes"]
+    end = source.find(terminator, opener.end())
+    return len(source) if end < 0 else end + len(terminator)
+
+
+def _try_char_literal(source: str, index: int) -> int:
+    """Find the end of the character literal starting at ``index``.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    match = _CHAR_LITERAL.match(source, index)
+    return index if match is None else match.end()
+
+
+def _try_quoted_string(source: str, index: int) -> int:
+    """Find the end of the plain string literal starting at ``index``.
+
+    Returns
+    -------
+        The offset just past the literal, or ``index`` when none starts here.
+    """
+    match = _QUOTED_STRING.match(source, index)
+    return index if match is None else match.end()
+
+
+# Scanners for each lexeme kind, in the order they are tried. Each returns
+# ``index`` when it does not apply, so the first scanner that advances wins.
+_LEXEME_SCANNERS = (
+    _try_line_comment,
+    _try_block_comment,
+    _try_raw_string,
+    _try_char_literal,
+    _try_quoted_string,
+)
+
+
+def _try_lexeme(source: str, index: int) -> int:
+    """Find the end of the lexeme starting at ``index``.
+
+    Recognizes line comments, block comments, raw string literals, character
+    literals, and plain string literals.
+
+    Returns
+    -------
+        The offset just past the lexeme, or ``index`` when none starts here.
+    """
+    if source[index] not in _LEXEME_STARTS:
+        return index
+    for scanner in _LEXEME_SCANNERS:
+        end = scanner(source, index)
+        if end != index:
+            return end
+    return index
+
+
+def _blank_rust_lexemes(source: str) -> str:
+    """Blank comments and literals, keeping code at its original offset."""
+    blanked: list[str] = []
+    cursor = 0
+    index = 0
+    while index < len(source):
+        end = _try_lexeme(source, index)
+        if end == index:
+            index += 1
+            continue
+        blanked.extend((source[cursor:index], _blank(source[index:end])))
+        index = end
+        cursor = end
+    blanked.append(source[cursor:])
+    return "".join(blanked)
+
+
+def _line_number(blanked: str, offset: int) -> int:
+    """Return the one-based line number at a character offset."""
+    return blanked.count("\n", 0, offset) + 1
+
+
+def test_formatter_skips_are_limited_to_known_rstest_fixtures() -> None:
+    """The formatter exception set remains auditable and deliberately small."""
+    root = repo_root()
+    rust_root = root / "rust"
+    observed: set[tuple[str, str]] = set()
+
+    for source_path in rust_root.glob("**/*.rs"):
+        relative = source_path.relative_to(root).as_posix()
+        source = _blank_rust_lexemes(source_path.read_text(encoding="utf-8"))
+        for skip in _RUSTFMT_SKIP_FINDER.finditer(source):
+            fixture = _RUSTFMT_FIXTURE_SKIP.match(source, skip.start())
+            assert fixture is not None, (
+                f"{relative}:{_line_number(source, skip.start())}: every rustfmt "
+                "skip must apply directly to one rstest fixture"
+            )
+            observed.add((relative, fixture["name"]))
+
+    assert observed == _FORMATTER_FIXTURE_SKIPS, (
+        "add a mutation proof before extending the formatter exception set"
+    )
