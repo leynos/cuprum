@@ -63,7 +63,6 @@ from cuprum._subprocess_execution import (
 from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
-    from cuprum.lines import _LineHookFn
     from cuprum.sh import (
         CommandResult,
         ExecutionContext,
@@ -73,6 +72,7 @@ if typ.TYPE_CHECKING:
     from cuprum.sinks import base as sinks
 
 __all__ = [
+    "_ExecutionState",
     "_ExecutionTracking",
     "_build_subprocess_execution",
     "_execute_with_hooks",
@@ -83,6 +83,22 @@ __all__ = [
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ExecutionState:
+    """One run's already-resolved inputs, carried as a unit.
+
+    Every field is resolved before the sink session opens — the allowlist is
+    enforced, stdin is resolved against the context, and the timeout
+    precedence is settled — so the bundle changes nothing about when those
+    steps happen, only how many names the spawn helper has to take.
+    """
+
+    context: ExecutionContext
+    output: RunOutputOptions
+    stdin_data: bytes | None
+    timeout: float | None
 
 
 def _prepare_execution_observation(
@@ -114,19 +130,20 @@ def _prepare_execution_observation(
     )
 
 
-# ruff: ignore[too-many-arguments]  # the seven inputs are one run's resolved state, carried together rather than derived
 def _build_subprocess_execution(
     cmd: SafeCmd,
-    context: ExecutionContext,
-    output: RunOutputOptions,
+    state: _ExecutionState,
     *,
-    timeout: float | None,
     observation: _StageObservation,
-    stdin_data: bytes | None,
-    on_line: _LineHookFn | None = None,
     sink_session: sinks.OutputSession | None = None,
 ) -> _SubprocessExecution:
     """Bundle everything one command's execution needs, before it spawns.
+
+    The run's already-resolved inputs arrive together as *state*, so this
+    helper stays a pure translation from what the run decided to what the
+    subprocess layer consumes; *observation* and *sink_session* stay separate
+    because they are the two products of the run's own preparation rather
+    than inputs it was handed.
 
     The idle monitor is part of the bundle rather than an execution-time
     argument because its presence is what decides whether the child's stdout
@@ -143,25 +160,25 @@ def _build_subprocess_execution(
     """
     return _SubprocessExecution(
         cmd=cmd,
-        ctx=context,
-        capture=output.capture,
-        echo_stdout=output.resolved_echo[0],
-        echo_stderr=output.resolved_echo[1],
-        max_echo_line_bytes=output.max_echo_line_bytes,
+        ctx=state.context,
+        capture=state.output.capture,
+        echo_stdout=state.output.resolved_echo[0],
+        echo_stderr=state.output.resolved_echo[1],
+        max_echo_line_bytes=state.output.max_echo_line_bytes,
         sink_session=sink_session,
-        timeout=timeout,
+        timeout=state.timeout,
         observation=observation,
-        stdin_data=stdin_data,
-        on_line=on_line,
+        stdin_data=state.stdin_data,
+        on_line=state.output.on_line,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes
         # the spawn is the parent's work, and must not read as the child's
         # silence.
         idle=_build_idle_monitor(
-            output.idle_after,
-            output.on_idle,
+            state.output.idle_after,
+            state.output.on_idle,
             _idle_subject(str(cmd.program)),
-            context.stderr_sink,
+            state.context.stderr_sink,
         ),
     )
 
@@ -227,6 +244,12 @@ async def _run_prepared_command(
     timeout: float | None,  # ruff: ignore[async-function-with-timeout]  # the deadline is already resolved; this only carries it into the bundle.
 ) -> CommandResult:
     """Run one validated command after its public inputs are resolved."""
+    state = _ExecutionState(
+        context=context,
+        output=output,
+        stdin_data=stdin_data,
+        timeout=timeout,
+    )
     # The bracket owns the session for the whole run: a plan observer, a
     # before hook, or anything else that raises before execution starts
     # still finalizes the adapter's framing rather than stranding an open
@@ -249,16 +272,12 @@ async def _run_prepared_command(
             cmd,
             _build_subprocess_execution(
                 cmd,
-                context,
-                output,
-                timeout=timeout,
+                state,
                 observation=observation,
-                stdin_data=stdin_data,
-                on_line=output.on_line,
-                sink_session=sink_bracket.session,
+                sink_session=tracking.sink_bracket.session,
             ),
             tracking,
         )
     except BaseException as run_error:
-        sink_bracket.close(outcome=_outcome_for_error(run_error))
+        tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
         raise

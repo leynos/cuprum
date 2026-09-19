@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cuprum._command_internals import (
     _build_subprocess_execution,
+    _ExecutionState,
     _prepare_execution_observation,
     _run_prepared_command,
 )
@@ -63,7 +64,7 @@ type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 if typ.TYPE_CHECKING:
-    from cuprum.lines import LineHook, _LineHookFn
+    from cuprum.lines import LineHook
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
@@ -691,12 +692,13 @@ class SafeCmd:
             _iter_line_events(
                 _build_subprocess_execution(
                     self,
-                    ctx,
-                    out,
-                    timeout=effective_timeout,
+                    _ExecutionState(
+                        context=ctx,
+                        output=out,
+                        stdin_data=stdin_data,
+                        timeout=effective_timeout,
+                    ),
                     observation=observation,
-                    stdin_data=stdin_data,
-                    on_line=out.on_line,
                 ),
                 tracking,
             ),
