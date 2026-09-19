@@ -392,32 +392,50 @@ PR records provide the durable review history. Useful logs from this session:
 
 ## Pre-merge check dispositions
 
-The hosted walkthrough's failed checks were re-read against the current tree
-after the third rebase. All four rows describe the code as it exists now, so
-each was verified rather than inherited:
+CodeRabbit's pre-merge table assesses the commit of its last formal review, not
+the branch head. That is a property of the tool, and it will recur here: the
+current table cites `4256e18d`, a fourth-generation head. The branch has since
+been rebased onto `861fe2f0`, and generation 4's commit series is a strict
+prefix of generation 5's, so a row about a file the branch added after
+`4256e18d` describes a tree that no longer exists.
 
-- **Testing (Overall), error.** `ci.yml` does check `GITHUB_RUN_ID` and
-  `GITHUB_RUN_ATTEMPT` as ASCII decimal, and the only execution helper that
-  runs that writer supplies fixed valid values, so no test would fail if the
-  check were deleted. The remedy is new execution cases with invalid identities
-  plus Makefile contract tests. Open.
-- **Unit Architecture, error.** `persist_decision()` calls
-  `dt.datetime.now(dt.UTC)` inline while also owning validation, persistence,
-  and step-output publication, so record construction cannot be tested
-  deterministically. Open; the remedy is to pass `recorded_at` in at the
-  command boundary.
-- **Developer Documentation, warning.** `docs/developers-guide.md` names the
-  hosted harness job but never states how to run `make test-act`, that it is
-  excluded from `make test`, or that `act` and a container runtime are
-  required. Open.
-- **Testing (Property / Proof), warning.** The changed parser suite uses
-  parametrized fixtures only; no Hypothesis property covers the last-value-wins
-  output contract or the shell analyser. Open.
+A reconciliation comment on PR #418 (id 5745299944) records the current
+dispositions, read against the head `ab977364` rather than the assessed commit:
 
-Each row is a scope decision, not a defect found in existing code: the rows ask
-for additional coverage and one refactor, and none claims the current behaviour
-is wrong. They are recorded here so the dispositions survive context loss; the
-review loop closes them with replies linked to this section.
+- **Testing (Overall), error — addressed.** Both remedies landed in
+  `d5fa932a`, after the assessed commit.
+  `tests/test_ci_act_harness_contract.py` asserts that the recipe invokes
+  `$(ACT_SCENARIO_TARGETS)`, sets `CUPRUM_REQUIRE_ACT=1`, keeps
+  `ACT_SCENARIO_TARGETS` out of `PYTEST_TARGETS`, and includes
+  `ACT_PARSER_TARGETS` in it.
+  `tests/test_ci_benchmark_gate_telemetry_execution.py` drives empty, padded,
+  non-ASCII-decimal, and ASCII-non-decimal identities through both identity
+  keys.
+- **Linked Issues, warning — open, awaiting a maintainer decision.** The
+  external sink that #339's original text required is absent by design: the
+  maintainer's 2026-09-17 instruction superseded it, and ADR-013 records that
+  the repository provisions no external service, credential, or new
+  application. This plan must not claim the row is satisfied, and reversing
+  ADR-013 is not the branch author's decision.
+- **Developer Documentation, warning — addressed.**
+  `docs/developers-guide.md` gained a "Running the scenarios locally" section in
+  `d5fa932a`.
+- **Testing (Property / Proof), warning — addressed.** Two Hypothesis modules,
+  `tests/test_ci_act_stream_properties.py` and
+  `tests/test_ci_workflow_shell_properties.py`, landed in `d5fa932a` and
+  `8ead4495`, keeping the example-based tests beside them.
+- **Observability, warning — addressed, with one half disputed.** The
+  writer-outcome warning (`steps.gate-log.outcome == 'failure'`) already exists
+  in `.github/workflows/ci.yml` and is pinned by
+  `tests/test_ci_benchmark_gate_telemetry.py`. The requested tracing spans are
+  disputed: the changed file is a GitHub Actions workflow, which has no span
+  construct, and an OpenTelemetry exporter would provision the external service
+  ADR-013 rules out. The bounded attributes already exist as a
+  `::notice title=benchmark-gate-decision::` annotation.
+
+The earlier **Unit Architecture, error** disposition is discharged: the row now
+appears in the walkthrough's PASSED list, so it is recorded here as closed
+rather than carried forward as open.
 
 ## Outcomes & retrospective
 
@@ -684,3 +702,23 @@ whose text promises ADR-013 and whose target is ADR-014. A sweep of every
 and no link to a missing file. The lesson is that a renumber is a two-field
 edit — number and target — and reviewing it as one field is how this survives
 three generations of replay.
+
+2026-09-19: Diagnosed the branch's CodeRabbit pre-merge table as a stale
+artefact, not a merely outdated one. The live walkthrough comment on PR #418
+(id 5715261306) carries its assessed commit in its own metadata:
+`change_assessment_commit:"4256e18dfcbf4edf1b779460d4458461883db65c"`, so the
+table assessed generation 4's head, not the current head `ab977364`. Generation
+4's commit-subject series is a strict prefix of generation 5's, so `4256e18d`
+is not an ancestor of the current head, and several rows demand files added
+later by `d5fa932a` and `8ead4495`.
+
+All five rows were reconciled against `ab977364`, not the assessed commit, with
+the dispositions recorded in a reconciliation comment (id 5745299944) and in
+`## Pre-merge check dispositions`. The three inline findings were verified
+against the current tree and already satisfied: the `EventName` StrEnum and
+`match`-based payload dispatch in `tests/helpers/act_event.py` (`8ead4495`),
+and the `DOCKER_HOST` precedence in `tests/helpers/act_runtime.py`, each
+confirmed by CodeRabbit's own replies. The lesson is that a walkthrough
+`updated_at` refresh is not re-evaluation: read the assessed commit from the
+walkthrough's own metadata before actioning any row, because acting on an
+unread table means repairing a tree that no longer exists.
