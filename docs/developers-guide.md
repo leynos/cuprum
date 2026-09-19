@@ -4394,6 +4394,28 @@ covers running it by hand. The opt-in job is owned by
 `.github/workflows/benchmark-gate-harness.yml`, runs weekly or by dispatch on
 the GitHub-hosted `ubuntu-latest` runner, and never consumes the paid runner.
 
+### Running the scenarios locally
+
+`make test-act` runs the opt-in scenario suite. The target sets
+`CUPRUM_REQUIRE_ACT=1`, which turns a missing runtime from a skip into a
+failure, so a job that provides a runtime cannot report success for having
+skipped every scenario. Running it by hand needs `act` and a container
+runtime — Docker or Podman — whose socket `act` can reach, because each
+scenario starts a real container. The pinned tooling is `act` 0.2.89 and one
+immutable runner image, which every projected job is bound to:
+
+```bash
+image='catthehacker/ubuntu:act-latest@sha256:c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43'
+```
+
+The local validation guide covers the prerequisites and the checksum-verified
+install; the scenario targets themselves stay out of `make test`, because
+`ACT_SCENARIO_TARGETS` is deliberately absent from `PYTEST_TARGETS`, the glob
+list `make test` uses. Each scenario costs 15-27s warm plus image warm-up, and
+`make test` cannot require a container runtime. The hosted entry point is
+`.github/workflows/benchmark-gate-harness.yml`, which runs the same target
+weekly or by dispatch.
+
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern
 outside those forms is added, so the model cannot silently stop describing the

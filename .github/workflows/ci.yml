@@ -1303,6 +1303,16 @@ jobs:
         run: |
           echo '::warning title=benchmark-gate-log::Decision log upload failed; benchmark admission is unchanged.'
 
+      # The guard above keys on the *upload*, which is skipped when the writer
+      # never advertised a record. A writer that failed for any unexpected
+      # reason therefore skipped the upload and skipped this warning with it,
+      # and the telemetry outage was invisible. Keying on the writer's own
+      # outcome closes that gap; admission stays fail-open either way.
+      - name: Warn when the benchmark gate record could not be written
+        if: ${{ !cancelled() && steps.gate-log.outcome == 'failure' }}
+        run: |
+          echo '::warning title=benchmark-gate-log::Decision log write failed; benchmark admission is unchanged.'
+
   loom-smoke:
     name: Loom model smoke test
     needs: changes

@@ -30,12 +30,14 @@ from __future__ import annotations
 
 import copy
 import dataclasses as dc
+import enum
 import json
 import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - required act process boundary with explicit argv and timeout.
 import typing as typ
 
 from tests.helpers.act_runtime import (
+    DOCKER_HOST_ENV,
     REQUIRE_ACT_ENV,
     SKIP_REASON_ENV,
     docker_host,
@@ -58,11 +60,13 @@ __all__ = (
     "CHANGES_JOB",
     "CI_WORKFLOW",
     "DEFAULT_BRANCH",
+    "DOCKER_HOST_ENV",
     "IMAGE",
     "REQUIRE_ACT_ENV",
     "SKIP_REASON_ENV",
     "ActRun",
     "Event",
+    "EventName",
     "branch",
     "break_detector",
     "commit_paths",
@@ -96,10 +100,20 @@ _EVENT_PATH = ".act-event.json"
 #: `owner/name` the scenario reports as its repository, matching the
 #: `full_name` the payload builder fills in.
 _REPOSITORY = "cuprum/act-harness"
-#: The event names the harness knows how to deliver. `event_payload` builds a
-#: different body for each, so a name outside this set is a harness bug, not a
-#: payload the workflow could parse.
-_EVENT_NAMES = ("pull_request", "push")
+
+
+class EventName(enum.StrEnum):
+    """A GitHub event the harness knows how to deliver.
+
+    `event_payload` builds a different body for each, so a name outside this
+    set is a harness bug rather than a payload the workflow could parse. The
+    member value is the spelling `github.event_name` carries, and a `StrEnum`
+    member is a `str`, so either member or value reaches `act`, the payload
+    JSON, and the fixtures unchanged.
+    """
+
+    PULL_REQUEST = "pull_request"
+    PUSH = "push"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -108,9 +122,9 @@ class Event:
 
     Attributes
     ----------
-    name : str
-        Event name, as `github.event_name` would carry it. Only the names in
-        `_EVENT_NAMES` are deliverable; `event_payload` rejects the rest.
+    name : EventName
+        Event name, as `github.event_name` would carry it. Only the members of
+        `EventName` are deliverable; `event_payload` rejects the rest.
     payload : dict[str, object]
         Webhook payload written to the event-path file. `act` injects
         `github.event_name`, so the payload carries only the body.
@@ -123,7 +137,7 @@ class Event:
         Value for `github.ref_name`, without the `refs/heads/` prefix.
     """
 
-    name: str
+    name: EventName
     payload: dict[str, object]
     ref: str
     sha: str
@@ -148,26 +162,34 @@ def event_payload(event: Event, repository: str) -> dict[str, object]:
 
     Raises
     ------
-    AssertionError
+    ValueError
         If `event.name` is not one the harness knows how to deliver. Without
         this, any unrecognized name would silently receive push semantics.
     """
-    if event.name not in _EVENT_NAMES:
+    # `event.name` may be a member or its value, because a `StrEnum` member is
+    # a `str`. Converting to the enum is both the membership test and the
+    # normalization: one object decides which event is being built, so the
+    # branches below cannot disagree about it, and an unknown name is refused
+    # here rather than silently given push semantics.
+    try:
+        name = EventName(event.name)
+    except ValueError as exc:
         message = (
             f"unsupported event name {event.name!r}; the harness delivers "
-            f"{' and '.join(_EVENT_NAMES)}"
+            f"{' and '.join(EventName)}"
         )
-        raise AssertionError(message)
+        raise ValueError(message) from exc
     payload = copy.deepcopy(event.payload)
     payload["ref"] = event.ref
-    if event.name == "pull_request":
-        pull_request = mapping(
-            payload.get("pull_request"), "event must define pull_request"
-        )
-        head = mapping(pull_request.get("head"), "pull_request must define head")
-        head.update({"sha": event.sha, "ref": event.branch})
-    else:
-        payload["after"] = event.sha
+    match name:
+        case EventName.PULL_REQUEST:
+            pull_request = mapping(
+                payload.get("pull_request"), "event must define pull_request"
+            )
+            head = mapping(pull_request.get("head"), "pull_request must define head")
+            head.update({"sha": event.sha, "ref": event.branch})
+        case EventName.PUSH:
+            payload["after"] = event.sha
     payload["repository"] = {
         "full_name": repository,
         "default_branch": "main",
@@ -210,7 +232,7 @@ def run_act(
         text=True,
         timeout=_TIMEOUT_SECONDS,
         cwd=repository,
-        env={**os.environ, "DOCKER_HOST": docker_host()},
+        env={**os.environ, DOCKER_HOST_ENV: docker_host()},
     )
     return ActRun(
         exit_code=result.returncode,

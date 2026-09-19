@@ -16,6 +16,11 @@ from tests.helpers.workflow import CHANGES_JOB, mapping, script_of, step_named, 
 if typ.TYPE_CHECKING:
     from tests.helpers.workflow import Workflow
 
+#: The step that announces a writer failure. Named here because the step's own
+#: name is the contract: a reader looking for the annotation in `ci.yml` finds
+#: it by this string, so a rename is a change to the observable surface.
+RECORD_FAILURE_WARNING = "Warn when the benchmark gate record could not be written"
+
 
 def test_decision_logs_need_no_external_service(workflow_data: Workflow) -> None:
     """Persist decisions using existing GitHub storage without a service token."""
@@ -72,6 +77,38 @@ def test_archive_retention_and_fail_open_contract(workflow_data: Workflow) -> No
         "${{ !cancelled() && steps.gate-log-upload.outcome == 'failure' }}"
     ), "failed uploads must produce a visible warning even after detector failure"
     assert "::warning" in (script_of(warning) or ""), "upload failure needs a warning"
+
+
+def test_every_way_the_log_can_be_lost_is_announced(workflow_data: Workflow) -> None:
+    """Announce a writer failure, not only an upload failure.
+
+    The upload is guarded by `steps.gate-log.outputs.written == 'true'`, so a
+    writer that failed before publishing a record causes the upload to be
+    *skipped* — and a warning keyed to the upload's outcome skips with it. The
+    whole telemetry path then fails silently: the job is green, no annotation
+    appears, and the missing records are only discoverable by querying the
+    artefact store. Fail-open is about admission, not about going unobserved.
+
+    Both halves are pinned here together, because the defect is the *gap*
+    between them: either assertion alone passes while the pair is wrong.
+    """
+    writer = step_named(workflow_data, CHANGES_JOB, LOG_STEP)
+    assert writer.get("continue-on-error") is True, (
+        "a writer failure must not fail the job; the record is the observation, "
+        "not the gate"
+    )
+    announce = step_named(workflow_data, CHANGES_JOB, RECORD_FAILURE_WARNING)
+    assert announce.get("if") == (
+        "${{ !cancelled() && steps.gate-log.outcome == 'failure' }}"
+    ), "a failed write must be announced even though the upload is skipped"
+    assert "::warning" in (script_of(announce) or ""), "a write failure needs a warning"
+    guard = str(
+        step_named(workflow_data, CHANGES_JOB, UPLOAD_STEP).get("if", "")
+    )
+    assert "steps.gate-log.outcome" not in guard, (
+        "the upload must stay skipped when no record was written; announcing the "
+        "failure is the warning step's job, not the uploader's"
+    )
 
 
 def test_measurement_reports_have_the_same_retention(workflow_data: Workflow) -> None:

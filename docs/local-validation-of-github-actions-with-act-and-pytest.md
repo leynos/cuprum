@@ -41,6 +41,12 @@ shaped the way it is.
 
 - A container runtime. Docker is the default; rootless Podman also works when
   its socket is running. The hosted harness uses Docker on `ubuntu-latest`.
+  A runtime reached over a non-default endpoint is selected by setting
+  `DOCKER_HOST`, which the harness passes through unchanged and treats as
+  authoritative: a value you set is never replaced by a discovered socket, and
+  its presence satisfies the readiness probe even when no local socket exists.
+  That is what makes a remote or TCP daemon usable, so set it rather than
+  relying on socket discovery when the default paths are wrong.
 - `act` 0.2.89, or the version pinned by the repository's checksum-verified
   install step.
 - Python 3.10+ with `pytest`.

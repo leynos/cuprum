@@ -22,6 +22,7 @@ from cuprum import ProgramCatalogue
 from cuprum.sh import ExecutionContext, SafeCmd
 
 __all__ = (
+    "DOCKER_HOST_ENV",
     "REQUIRE_ACT_ENV",
     "SKIP_REASON_ENV",
     "docker_host",
@@ -46,6 +47,11 @@ SKIP_REASON_ENV = "CUPRUM_ACT_SKIP_REASON"
 # `act` accepts several spellings for the same runtime, and `DOCKER_HOST` can
 # point at any of them. The probe checks the sockets rather than the
 # executables alone, because podman can be installed with no machine started.
+#: The variable naming the runtime endpoint. A value set by the caller is
+#: authoritative: it is the only spelling that can name a daemon this host
+#: cannot probe — a remote one — so the harness must neither replace it with a
+#: local socket nor skip because no local socket was found.
+DOCKER_HOST_ENV = "DOCKER_HOST"
 _RUNTIME_PROBES = (
     "/run/user/{uid}/podman/podman.sock",
     "/var/run/docker.sock",
@@ -76,6 +82,12 @@ def _socket_paths() -> tuple[str, ...]:
 def _probe_reason() -> str:
     """Return why `act` cannot run here, or ``""`` when it can.
 
+    A configured `DOCKER_HOST` answers the endpoint question by itself, so the
+    local-socket test is skipped for it: the value may name a remote daemon
+    that no probe here can reach, and a run that would have worked must not be
+    skipped for want of a local socket. The `act` and runtime-command checks
+    still apply, because both are still needed to run anything.
+
     Returns
     -------
     str
@@ -89,6 +101,11 @@ def _probe_reason() -> str:
         )
     if not any(shutil.which(command) for command in _RUNTIME_COMMANDS):
         return "neither podman nor docker is installed, so act has no container runtime"
+    if os.environ.get(DOCKER_HOST_ENV, ""):
+        # A configured endpoint is this host's answer, and it may name a
+        # daemon no local probe can reach. Testing the local sockets instead
+        # would skip a run the caller has already said how to perform.
+        return ""
     paths = _socket_paths()
     if not paths:
         return "this host has no POSIX user id, so act has no container socket"
@@ -131,18 +148,31 @@ def harness_skip_reason() -> str:
 
 
 def docker_host() -> str:
-    """Return the runtime socket `act` should use.
+    """Return the runtime endpoint `act` should use.
+
+    A caller-supplied `DOCKER_HOST` wins, because it names an endpoint this
+    function cannot discover: a daemon on another host, a TCP listener, or a
+    socket outside the probed set. Overriding it with a local socket would
+    silently redirect the run away from the daemon the caller configured, and
+    failing because no *local* socket exists would refuse to run a harness that
+    would have worked. Both are failures of a supported configuration, so the
+    configured value is returned unchanged and unprobed.
 
     Returns
     -------
     str
-        A `DOCKER_HOST` value naming an existing socket.
+        The configured endpoint, or a `DOCKER_HOST` value naming an existing
+        local socket.
 
     Raises
     ------
     AssertionError
-        If no known socket exists, so the probe and the run cannot disagree.
+        If no endpoint is configured and no known local socket exists, so the
+        probe and the run cannot disagree.
     """
+    configured = os.environ.get(DOCKER_HOST_ENV, "")
+    if configured:
+        return configured
     for path in _socket_paths():
         if pth.Path(path).exists():
             return f"unix://{path}"

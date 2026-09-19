@@ -9,6 +9,7 @@ import typing as typ
 from tests.helpers.workflow import CHANGES_JOB, mapping, script_of, step_named
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
     from tests.helpers.workflow import Workflow
@@ -17,6 +18,19 @@ LOG_STEP = "Persist the benchmark gate decision"
 UPLOAD_STEP = "Upload the benchmark gate log"
 LABEL_NAMES = ("event_class", "detector_status", "decision")
 VALUE_INPUTS = ("EVENT_CLASS", "DETECTOR_STATUS", "DECISION")
+#: The run identity the writer is verified against. Both values are ASCII
+#: decimal, so the accepted case and every refused case are the same code path
+#: with different inputs.
+VALID_RUN_ID = "123456789"
+VALID_RUN_ATTEMPT = "2"
+VALID_IDENTITY = {
+    "GITHUB_RUN_ID": VALID_RUN_ID,
+    "GITHUB_RUN_ATTEMPT": VALID_RUN_ATTEMPT,
+}
+#: The run identity keys the writer reads. A test that exercises the refusal
+#: path substitutes one of these rather than adding a new variable, so the
+#: accepted and refused cases reach the writer through the same environment.
+IDENTITY_KEYS = tuple(VALID_IDENTITY)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -117,7 +131,11 @@ def log_env(workflow_data: Workflow) -> dict[str, object]:
 
 
 def run_log_script(
-    *, verdict: Verdict, workflow_data: Workflow, tmp_path: pth.Path
+    *,
+    verdict: Verdict,
+    workflow_data: Workflow,
+    tmp_path: pth.Path,
+    identity: cabc.Mapping[str, str] | None = None,
 ) -> LogRun:
     """Run the checked-in log writer and capture its persisted record.
 
@@ -130,6 +148,13 @@ def run_log_script(
     tmp_path : pathlib.Path
         Isolated runner temporary directory. A file named `benchmark-gate`
         here can deliberately prevent directory creation for failure tests.
+    identity : collections.abc.Mapping[str, str] | None
+        Override for the run identity the step reads. Defaults to
+        :data:`VALID_IDENTITY`; a caller supplies values that are absent,
+        non-ASCII, or non-decimal to exercise the refusal path. Keys may be
+        omitted, which is how a *missing* variable is expressed — the writer
+        reads the environment with a default, so an absent key and an empty
+        value reach the same refusal.
 
     Returns
     -------
@@ -143,8 +168,7 @@ def run_log_script(
             "PATH": "/usr/bin:/bin",
             "RUNNER_TEMP": str(tmp_path),
             "GITHUB_OUTPUT": str(output),
-            "GITHUB_RUN_ID": "123456789",
-            "GITHUB_RUN_ATTEMPT": "2",
+            **(VALID_IDENTITY if identity is None else identity),
             **verdict.as_inputs(),
         },
         capture_output=True,

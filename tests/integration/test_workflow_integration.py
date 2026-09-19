@@ -26,6 +26,7 @@ from tests.helpers.act_harness import (
     DEFAULT_BRANCH,
     ActRun,
     Event,
+    EventName,
     branch,
     break_detector,
     commit_paths,
@@ -138,7 +139,7 @@ def pull_request(repository: pth.Path, paths: list[str], *, case: str) -> ActRun
     return run_act(
         repository,
         Event(
-            name="pull_request",
+            name=EventName.PULL_REQUEST,
             payload=event_fixture("pull_request", case),
             ref="refs/pull/1/merge",
             sha=head,
@@ -173,7 +174,7 @@ def push(repository: pth.Path, paths: list[str], *, case: str) -> ActRun:
     return run_act(
         repository,
         Event(
-            name="push",
+            name=EventName.PUSH,
             payload={
                 **event_fixture("push", case),
                 "before": base,
@@ -266,7 +267,7 @@ def assert_decision(
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
-@pytest.mark.parametrize("event_name", ["pull_request", "push"])
+@pytest.mark.parametrize("event_name", list(EventName))
 @pytest.mark.parametrize(
     ("case", "change"),
     [
@@ -277,17 +278,18 @@ def assert_decision(
     ],
 )
 def test_changed_paths_control_benchmark_admission(
-    scenario: pth.Path, event_name: str, case: str, change: tuple[list[str], str]
+    scenario: pth.Path, event_name: EventName, case: str, change: tuple[list[str], str]
 ) -> None:
     """Execute detector output propagation and the downstream job condition."""
     paths, bench = change
-    replay = pull_request if event_name == "pull_request" else push
+    replay = pull_request if event_name is EventName.PULL_REQUEST else push
     run = replay(scenario, paths, case=case)
     assert run.exit_code == 0, run.failure_context()
-    decision = "run" if event_name == "push" or bench == DETECTOR_TRUE else "skip"
+    push_admits = event_name is EventName.PUSH
+    decision = "run" if push_admits or bench == DETECTOR_TRUE else "skip"
     assert_decision(run, bench, bench, decision)
     assert run.output("event_class") == (
-        "pull_request" if event_name == "pull_request" else "other"
+        "pull_request" if event_name is EventName.PULL_REQUEST else "other"
     ), "event class must survive runtime event delivery"
     assert run.output("detector_status") == "success", (
         "healthy detector must report success"
@@ -296,12 +298,13 @@ def test_changed_paths_control_benchmark_admission(
 
 
 @pytest.mark.timeout(SCENARIO_TIMEOUT)
-@pytest.mark.parametrize("event_name", ["pull_request", "push"])
+@pytest.mark.parametrize("event_name", list(EventName))
 def test_a_failed_detector_still_records_a_decision(
-    scenario: pth.Path, event_name: str
+    scenario: pth.Path, event_name: EventName
 ) -> None:
     """A real failed action must record failure and prevent benchmark admission."""
-    if event_name == "pull_request":
+    is_pull_request = event_name is EventName.PULL_REQUEST
+    if is_pull_request:
         branch(scenario, FEATURE_BRANCH)
     base = commit_paths(scenario, [RELEVANT_PATH], message="scenario change")
     head = break_detector(scenario)
@@ -313,10 +316,10 @@ def test_a_failed_detector_still_records_a_decision(
             name=event_name,
             payload=payload,
             ref="refs/pull/1/merge"
-            if event_name == "pull_request"
+            if is_pull_request
             else f"refs/heads/{DEFAULT_BRANCH}",
             sha=head,
-            branch=FEATURE_BRANCH if event_name == "pull_request" else DEFAULT_BRANCH,
+            branch=FEATURE_BRANCH if is_pull_request else DEFAULT_BRANCH,
         ),
         job="benchmark-ratchet",
     )
