@@ -27,6 +27,11 @@ import typing as typ
 import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
+    WORKLOAD_PLAN_KEY,
+)
 from benchmarks.ci_benchmark_ratchet_profile import (
     _CI_RATCHET_MAX_PAYLOAD_BYTES,
     _CI_RATCHET_MIN_PAYLOAD_BYTES,
@@ -524,7 +529,69 @@ def test_write_filtered_plan_preserves_selected_scenarios(tmp_path: pth.Path) ->
         "rust_available": True,
         "scenarios": [scenario for scenario, _ in selected],
         "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+        # The full plan above declares no workload, which describes the
+        # throughput sweep. The filtered plan must carry the default through
+        # rather than dropping the key: a summary reading it back needs an
+        # answer, and dropping it would leave the summary to infer one.
+        WORKLOAD_PLAN_KEY: THROUGHPUT_SWEEP_WORKLOAD,
     }
+
+
+def test_write_filtered_plan_carries_the_declared_workload(
+    tmp_path: pth.Path,
+) -> None:
+    """A filtering step must not relabel the workload it was handed.
+
+    The filter selects scenarios from the plan it is given, so the workload
+    that produced them is whatever that plan recorded. Restating it here
+    instead would let the ratchet job's summary name a workload the plan
+    never declared.
+    """
+    filtered_plan_path = tmp_path / "plan.json"
+    selected = [
+        (
+            _scenario(
+                _ScenarioSpec(
+                    name="python-ratchet-single-nocb",
+                    backend="python",
+                    payload_bytes=CI_RATCHET_PAYLOAD_BYTES,
+                    stages=2,
+                )
+            ),
+            "python cmd",
+        ),
+    ]
+
+    write_filtered_plan(
+        filtered_plan_path=filtered_plan_path,
+        full_payload={
+            "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+            "rust_available": True,
+            "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+            WORKLOAD_PLAN_KEY: CI_RATCHET_WORKLOAD,
+        },
+        command=["hyperfine"],
+        selected=selected,
+    )
+
+    payload = json.loads(filtered_plan_path.read_text(encoding="utf-8"))
+    assert payload[WORKLOAD_PLAN_KEY] == CI_RATCHET_WORKLOAD
+
+
+def test_write_filtered_plan_rejects_an_unknown_workload(tmp_path: pth.Path) -> None:
+    """An unrecognized workload must fail rather than be summarized as a default."""
+    with pytest.raises(ValueError, match="unknown benchmark workload"):
+        write_filtered_plan(
+            filtered_plan_path=tmp_path / "plan.json",
+            full_payload={
+                "benchmark_profile_version": BENCHMARK_PROFILE_VERSION,
+                "rust_available": True,
+                "worker_iterations": CI_RATCHET_WORKER_ITERATIONS,
+                WORKLOAD_PLAN_KEY: "not-a-workload",
+            },
+            command=["hyperfine"],
+            selected=[],
+        )
 
 
 def test_main_rejects_non_bool_rust_availability(
