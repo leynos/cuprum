@@ -10,6 +10,7 @@ import pytest
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
 from benchmarks.benchmark_workload import (
     CI_RATCHET_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
     WORKLOAD_PLAN_KEY,
     WORKLOADS,
     WorkloadProtocol,
@@ -491,6 +492,87 @@ def test_report_serialization_carries_the_workload_protocol() -> None:
     assert payload["worker_iterations"] == CI_RATCHET_WORKER_ITERATIONS
     assert payload["payload_bytes"] == [CI_RATCHET_PAYLOAD_BYTES], (
         "the JSON report must state the payload its ratios were measured at"
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error", "error_match"),
+    [
+        pytest.param(
+            {"workload": "not-a-workload"},
+            ValueError,
+            "unknown benchmark workload",
+            id="unknown-workload",
+        ),
+        pytest.param(
+            {"benchmark_profile_version": "   "},
+            ValueError,
+            "must be a non-empty string",
+            id="blank-profile-version",
+        ),
+        pytest.param(
+            {"worker_iterations": 0},
+            ValueError,
+            "must be >= 1",
+            id="non-positive-iterations",
+        ),
+        pytest.param(
+            {"worker_iterations": "5"},
+            TypeError,
+            "must be an int",
+            id="non-integer-iterations",
+        ),
+    ],
+)
+def test_report_rejects_a_plan_whose_protocol_cannot_describe_a_run(
+    overrides: dict[str, object],
+    error: type[Exception],
+    error_match: str,
+) -> None:
+    """A plan recording an impossible protocol is refused where it is read.
+
+    The comparison is the boundary a plan enters the report through, and the
+    protocol it reads is what the summary names as the measurement behind every
+    ratio. A plan recording a workload the runner cannot produce, or a run count
+    no run could have had, would be summarized as though it described one — so
+    the rejection has to happen here, on the way in, rather than being noticed
+    by whoever reads the rendered report and finds it implausible. These cases
+    are driven through the public entry point rather than the parser alone,
+    which is what proves the validation is reached on this path.
+    """
+    plan_payload = {**_candidate_plan_payload(), **overrides}
+
+    with pytest.raises(error, match=error_match):
+        compare_candidate_backend_results(
+            plan_payload=plan_payload,
+            throughput_payload=_candidate_throughput_payload(),
+        )
+
+
+def test_report_reads_a_legacy_plan_as_the_sweep() -> None:
+    """A plan predating the workload field is compared, not refused.
+
+    Recorded plans outlive the code that wrote them, so the field being absent
+    is a statement about when the plan was made, not a malformed plan. Reading
+    one as the throughput sweep — the only workload that existed then — keeps
+    older artefacts usable. This is the accepting half of the test above:
+    without it, rejecting every plan that omits the field would pass that test's
+    cases just as well.
+    """
+    plan_payload = _candidate_plan_payload()
+    assert WORKLOAD_PLAN_KEY not in plan_payload, (
+        "this fixture must not carry the workload key, or it does not describe "
+        "a plan written before the field existed"
+    )
+
+    report = compare_candidate_backend_results(
+        plan_payload=plan_payload,
+        throughput_payload=_candidate_throughput_payload(),
+    )
+
+    assert report.protocol.workload == THROUGHPUT_SWEEP_WORKLOAD, (
+        "a plan with no recorded workload predates the field and must read as "
+        "the sweep, which is the only workload it could have come from"
     )
 
 
