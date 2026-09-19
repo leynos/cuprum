@@ -1602,6 +1602,24 @@ bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
 `cuprum._pipeline_sink` keeps only the pipeline-specific part of that mapping,
 `_pipeline_result_outcome`, which reports the first failing stage's exit code.
 
+`cuprum._command_internals` owns *single-command* orchestration, the
+counterpart of `_pipeline_internals` for one process rather than a graph of
+them: `_prepare_execution_observation` builds the stage observation,
+`_run_prepared_command` sequences a validated command's execution after its
+public inputs are resolved, and `_execute_with_hooks` drives the bundle with
+after-hook dispatch and finalizes the run's sink session on every terminal path.
+`_ExecutionState` carries one run's already-resolved inputs — context, output
+options, resolved stdin, and the settled deadline — so the spawn helper stays a
+translation from what the run decided to what the subprocess layer consumes.
+Finalization is the reason the sequence lives in one module: the sink session
+must close *before* the observe-hook tasks drain, because the drain aggregates
+a hook failure with the error that ended the run, so closing afterwards would
+record the aggregate — an `error` annotation standing in for a timeout — and a
+drain that raised would skip the close entirely. The module was split out of
+`cuprum/sh.py` to resolve a file-level CodeScene `Low Cohesion` finding; see the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+2026-09-19.
+
 Error propagation policy (to be finalized, but roughly):
 
 - Pipelines fail fast: once any stage exits non-zero, Cuprum terminates every

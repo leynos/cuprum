@@ -150,6 +150,17 @@ at least four distinct responsibilities across its 31 functions, crossing
 CodeScene's LCOM4 threshold of 4. Extraction was the remedy that worked for
 this shape: CodeScene's code health for the file moved from 8.54 to 10.00.
 
+Both figures are `cs check` scores of `cuprum/sh.py`, the first taken at the
+pre-extraction tip of this branch and the second after the extraction. Do not
+expect `cs delta` against the branch's base to reproduce them: `cs delta`
+scores the _base revision's_ copy of the file, and `main`'s copy already scores
+9.68 because it is a different lineage — the base revision carries the
+six-argument `_build_subprocess_execution`, not the branch's seven-argument
+one. The delta therefore reports `9.68 -> 10.00`, which is a comparison across
+revisions rather than the branch's own 8.54 to 10.00 improvement. The `8.54`
+figure is reproducible from the pre-extraction blob, which is byte-identical to
+the pushed pre-extraction head (`git show a6751bd9:cuprum/sh.py`).
+
 The single-command orchestration therefore moved to
 `cuprum/_command_internals.py`: `_ExecutionTracking`,
 `_prepare_execution_observation`, `_build_subprocess_execution`,
