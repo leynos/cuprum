@@ -424,14 +424,19 @@ dispositions, read against the head `ab977364` rather than the assessed commit:
   `tests/test_ci_act_stream_properties.py` and
   `tests/test_ci_workflow_shell_properties.py`, landed in `d5fa932a` and
   `8ead4495`, keeping the example-based tests beside them.
-- **Observability, warning — addressed, with one half disputed.** The
-  writer-outcome warning (`steps.gate-log.outcome == 'failure'`) already exists
-  in `.github/workflows/ci.yml` and is pinned by
-  `tests/test_ci_benchmark_gate_telemetry.py`. The requested tracing spans are
-  disputed: the changed file is a GitHub Actions workflow, which has no span
-  construct, and an OpenTelemetry exporter would provision the external service
-  ADR-013 rules out. The bounded attributes already exist as a
-  `::notice title=benchmark-gate-decision::` annotation.
+- **Observability, warning — addressed.** The writer-outcome warning
+  (`steps.gate-log.outcome == 'failure'`) exists in `.github/workflows/ci.yml`
+  and is pinned by `tests/test_ci_benchmark_gate_telemetry.py`, which also
+  confirms the writer guard is distinct from the upload guard. The workflow
+  emits a bounded `::notice title=benchmark-gate-decision::` annotation carrying
+  `event_class`, `detector_status`, and `decision`. CodeRabbit, replying on PR
+  #418 at 2026-09-19T21:07:31Z (comment id 5745306375), marked the row
+  ADDRESSED for the revised design and withdrew its external tracing request:
+  "I withdraw the request for an external tracing mechanism." The annotation
+  must not be described as distributed tracing, since Actions annotations
+  provide neither trace-context propagation nor spans; CodeRabbit called it the
+  appropriate bounded workflow-level observation mechanism for the ADR-013
+  storage-only architecture.
 
 The earlier **Unit Architecture, error** disposition is discharged: the row now
 appears in the walkthrough's PASSED list, so it is recorded here as closed
@@ -722,3 +727,19 @@ confirmed by CodeRabbit's own replies. The lesson is that a walkthrough
 `updated_at` refresh is not re-evaluation: read the assessed commit from the
 walkthrough's own metadata before actioning any row, because acting on an
 unread table means repairing a tree that no longer exists.
+
+2026-09-20: CodeRabbit re-evaluated the pre-merge table against `ab977364`,
+rather than the assessed commit, in its reply of 2026-09-19T21:07:31Z (comment
+id 5745306375), and disposed of all five rows. Testing (Overall), Developer
+Documentation, Testing (Property / Proof), and Observability were ADDRESSED.
+Linked Issues was NOT SATISFIED only against the superseded original
+external-sink requirement, and was explicitly not classified as an
+implementation omission in this PR. CodeRabbit also withdrew its request for an
+external tracing mechanism and asked that the `benchmark-gate-decision`
+annotation not be described as distributed tracing.
+
+The lesson is that the branch had argued the tracing half as a *dispute* while
+the reviewer was willing to withdraw the request, so that half was closed by
+the reviewer conceding rather than by the branch winning it. The plan's own
+Observability disposition had to be corrected afterwards to match, and its
+replacement records the withdrawal instead of a dispute.
