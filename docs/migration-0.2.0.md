@@ -1,5 +1,25 @@
 # Migration guide for 0.2.0
 
+## Single-project catalogue construction
+
+`ProjectSettings.documentation_locations` and `noise_rules` now default to
+empty tuples. Callers whose project has no documentation references or output
+noise rules can omit both fields:
+
+```python
+from cuprum import Program
+from cuprum.catalogue import ProgramCatalogue, ProjectSettings
+
+settings = ProjectSettings(name="rust-test-gates", programs=(Program("cargo"),))
+catalogue = ProgramCatalogue.from_project(settings)
+```
+
+Callers with project metadata can continue to pass `documentation_locations=`
+and `noise_rules=` explicitly. When a complete `ProjectSettings` is already
+available, `from_project()` removes the repeated
+`ProgramCatalogue(projects=(settings,))` wrapper; existing catalogue
+construction remains compatible.
+
 ## Aggregate Python stream-operation observation
 
 Cuprum 0.2.0 adds an opt-in observation channel for completed operations in the

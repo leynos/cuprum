@@ -12,36 +12,23 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 
-from cuprum.program import Program
-
-
-def _coerce_program(raw: Program | str) -> Program:
-    """Return input as Program for type narrowing; no transformation performed."""
-    return Program(raw)
-
-
-def _derive_project_name(programs: cabc.Iterable[Program | str]) -> str:
-    r"""Return a deterministic project name from the programs' base names.
-
-    Absolute paths reduce to their final path component so a catalogue built
-    from ``/usr/bin/python3`` is named after ``python3`` rather than the whole
-    invocation path. Windows drive paths reduce the same way on every host,
-    while a POSIX filename containing a literal backslash keeps it.
-
-    Returns
-    -------
-    str
-        The programs' base names joined with ``-``.
-    """
-    return "-".join(
-        PureWindowsPath(program).name
-        if PureWindowsPath(program).drive
-        else Path(program).name
-        for program in programs
-    )
+from cuprum._catalogue_defaults import (
+    CORE_OPS_PROJECT,
+    DEFAULT_PROJECT_DATA,
+    DOC_TOOL,
+    DOCUMENTATION_PROJECT,
+    ECHO,
+    GIT,
+    LS,
+    RSYNC,
+    TAR,
+)
+from cuprum._catalogue_helpers import coerce_program, derive_project_name
+from cuprum.program import (
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
 
 
 class UnknownProgramError(LookupError):
@@ -99,6 +86,19 @@ class ProjectSettings:
 
     ``documentation_locations`` and ``noise_rules`` default to empty tuples so
     a small script can declare a project from its name and programs alone.
+
+    Attributes
+    ----------
+    name : str
+        The project's descriptive name.
+    programs : tuple[Program, ...]
+        Curated programs owned by the project.
+    documentation_locations : tuple[str, ...]
+        Runbook/reference links visible through ``visible_settings``. Empty means no
+        documentation references are declared.
+    noise_rules : tuple[str, ...]
+        Patterns a logger may drop; Cuprum stores them but does not apply them.
+        Empty means no project output lines are marked as noise.
     """
 
     name: str
@@ -185,20 +185,12 @@ class ProgramCatalogue:
     ) -> ProgramCatalogue:
         """Build a single-project catalogue from the given programs.
 
-        A convenience for standalone scripts that run one or two programs and
-        would otherwise spell out ``ProjectSettings`` and ``ProgramCatalogue``
-        by hand.
-
         Parameters
         ----------
         *programs : Program | str
-            Programs to allowlist. Strings are coerced to ``Program``, so
-            bare names and absolute paths are both accepted.
+            Programs to allowlist; bare names and absolute paths are accepted.
         name : str | None, optional
-            Project name for the resulting catalogue. When ``None``, the
-            programs' base names joined with ``-`` are used instead, so
-            ``from_programs("/usr/bin/git", "cargo")`` is named
-            ``git-cargo``.
+            Project name, derived from the programs' base names when omitted.
         documentation_locations : tuple[str, ...], optional
             Documentation references for the project.
         noise_rules : tuple[str, ...], optional
@@ -207,14 +199,14 @@ class ProgramCatalogue:
         Returns
         -------
         ProgramCatalogue
-            A catalogue whose sole project owns every supplied program.
+            A catalogue whose sole project owns the supplied programs.
 
         Raises
         ------
         ValueError
             If no programs are supplied.
         DuplicateProgramError
-            If the same program is supplied more than once.
+            If a program is supplied more than once.
 
         Examples
         --------
@@ -228,14 +220,42 @@ class ProgramCatalogue:
         if not programs:
             msg = "from_programs requires at least one program"
             raise ValueError(msg)
-        coerced = tuple(_coerce_program(program) for program in programs)
+        coerced = tuple(coerce_program(program) for program in programs)
         project = ProjectSettings(
-            name=_derive_project_name(coerced) if name is None else name,
+            name=derive_project_name(coerced) if name is None else name,
             programs=coerced,
             documentation_locations=documentation_locations,
             noise_rules=noise_rules,
         )
         return cls(projects=(project,))
+
+    @classmethod
+    def from_project(cls, settings: ProjectSettings) -> ProgramCatalogue:
+        """Build a catalogue containing a supplied project.
+
+        Parameters
+        ----------
+        settings : ProjectSettings
+            The sole project to register.
+
+        Returns
+        -------
+        ProgramCatalogue
+            A catalogue exposing the supplied project's allowlist and metadata.
+
+        Raises
+        ------
+        DuplicateProgramError
+            If ``settings`` declares a program more than once.
+
+        Examples
+        --------
+        >>> from cuprum import Program, ProgramCatalogue, ProjectSettings
+        >>> settings = ProjectSettings(name="tools", programs=(Program("git"),))
+        >>> ProgramCatalogue.from_project(settings).is_allowed("git")
+        True
+        """  # ruff: ignore[docstring-extraneous-exception] - DuplicateProgramError propagates from the constructor
+        return cls(projects=(settings,))
 
     @property
     def allowlist(self) -> frozenset[Program]:
@@ -262,7 +282,7 @@ class ProgramCatalogue:
         bool
             True if the program is present in the curated allowlist.
         """
-        program_value = _coerce_program(program)
+        program_value = coerce_program(program)
         return program_value in self._allowlist
 
     def lookup(self, program: Program | str) -> ProgramEntry:
@@ -283,7 +303,7 @@ class ProgramCatalogue:
         UnknownProgramError
             If the program is not present in the catalogue allowlist.
         """
-        program_value = _coerce_program(program)
+        program_value = coerce_program(program)
         project = self._program_to_project.get(program_value)
         if project is None:
             msg = f"Program '{program_value}' is not in the catalogue allowlist"
@@ -348,29 +368,14 @@ class ProgramCatalogue:
         return program_map
 
 
-CORE_OPS_PROJECT = "core-ops"
-DOCUMENTATION_PROJECT = "docs"
-
-ECHO = Program("echo")
-GIT = Program("git")
-LS = Program("ls")
-RSYNC = Program("rsync")
-TAR = Program("tar")
-DOC_TOOL = Program("mdbook")
-
-DEFAULT_PROJECTS: tuple[ProjectSettings, ...] = (
+DEFAULT_PROJECTS: tuple[ProjectSettings, ...] = tuple(
     ProjectSettings(
-        name=CORE_OPS_PROJECT,
-        programs=(ECHO, GIT, LS, RSYNC, TAR),
-        documentation_locations=("docs/users-guide.md#program-catalogue",),
-        noise_rules=(r"^progress:", r"^note:"),
-    ),
-    ProjectSettings(
-        name=DOCUMENTATION_PROJECT,
-        programs=(DOC_TOOL,),
-        documentation_locations=("https://docs.example.invalid/cuprum/catalogue",),
-        noise_rules=(r"^\[INFO\]",),
-    ),
+        name=name,
+        programs=programs,
+        documentation_locations=documentation_locations,
+        noise_rules=noise_rules,
+    )
+    for name, programs, documentation_locations, noise_rules in DEFAULT_PROJECT_DATA
 )
 
 DEFAULT_CATALOGUE = ProgramCatalogue(projects=DEFAULT_PROJECTS)
