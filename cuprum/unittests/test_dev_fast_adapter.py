@@ -13,6 +13,7 @@ from hypothesis import strategies as st
 
 from tests.helpers.docs import repo_root
 
+ADAPTER = "tools/dev-fast/cargo"
 FRAGMENT = "tools/dev-fast/config.toml"
 SAFE_CARGO_ARGUMENTS = st.sampled_from((
     "rustc",
@@ -55,11 +56,24 @@ def _bridge_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
 
 
 def _run_bridge(
-    arguments: list[str], environment: dict[str, str]
+    arguments: list[str],
+    environment: dict[str, str],
+    *,
+    path: str = f"./{ADAPTER}",
 ) -> subprocess.CompletedProcess[str]:
-    """Run the controlled adapter process with captured diagnostics."""
+    """Run the controlled adapter process with captured diagnostics.
+
+    ``path`` defaults to the relative spelling because that is how the
+    Makefile actually invokes the adapter; pass an absolute path to cover the
+    other form. The adapter reads its own ``$0``, so neither spelling may
+    change which fragment it selects.
+
+    Returns
+    -------
+        The completed adapter process, with captured output and exit status.
+    """
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed adapter argv.
-        [repo_root() / "tools/dev-fast/cargo", *arguments],
+        [path, *arguments],
         check=False,
         capture_output=True,
         cwd=repo_root(),
@@ -68,33 +82,21 @@ def _run_bridge(
     )
 
 
-def _run_bridge_relatively(
-    arguments: list[str], environment: dict[str, str]
-) -> subprocess.CompletedProcess[str]:
-    """Run the adapter exactly as the Makefile does: by relative path."""
-    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed adapter argv.
-        [f"./{FRAGMENT.rsplit('/', 1)[0]}/cargo", *arguments],
-        check=False,
-        capture_output=True,
-        cwd=repo_root(),
-        env={**os.environ, **environment},
-        text=True,
-    )
-
-
-def test_bridge_resolves_the_fragment_from_a_relative_invocation(
-    tmp_path: Path,
+@pytest.mark.parametrize("invocation", ["relative", "absolute"])
+def test_bridge_resolves_its_fragment_from_either_invocation_form(
+    tmp_path: Path, invocation: str
 ) -> None:
-    """A relative adapter path resolves to the repository fragment, not cwd."""
+    """The adapter finds the repository fragment however it is invoked."""
     environment, argv_path, _ = _bridge_environment(tmp_path)
-    result = _run_bridge_relatively(["rustc", "--lib"], environment)
-    assert result.returncode == 47, "the relative invocation must reach Cargo"
+    path = f"./{ADAPTER}" if invocation == "relative" else str(repo_root() / ADAPTER)
+    result = _run_bridge(["rustc", "--lib"], environment, path=path)
+    assert result.returncode == 47, f"the {invocation} invocation must reach Cargo"
     assert argv_path.read_text(encoding="utf-8").splitlines() == [
         "--config",
         _adapter_fragment(),
         "rustc",
         "--lib",
-    ], "the adapter must resolve its fragment independently of the invocation form"
+    ], f"the {invocation} invocation must select the repository fragment"
 
 
 def test_bridge_injects_one_fragment_and_preserves_child_exit(tmp_path: Path) -> None:
