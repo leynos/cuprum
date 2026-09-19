@@ -637,10 +637,14 @@ nested `cargo` obeys in turn; the coverage lane passes only `-D warnings`.
 
 The scratch directory does persist, and a repeat run with it warm took 1.271 s
 here. A cold one is the cost that matters, because it recurs on every fresh
-checkout, every clean, and every change to `RUSTFLAGS`. Measured on 2026-09-19
-with the gate's exact flags against a cold scratch directory, `compile_time_ui`
-took 277.049 s, while the coverage lane on run 35400748402 measured the same
-test at 62.484 s. A gate run on that date killed it at the 300 s allowance —
+checkout, every clean, and every change to `RUSTFLAGS`. Two measurements of
+that cost were taken on 2026-09-19 with the gate's exact flags and an emptied
+`rust/target/tests/trybuild/`, and they differ by more than a factor of two: a
+single-test run took 277.049 s, and a full `make test` took 124.884 s. The gap
+is `sccache` and machine load, not the test, so the budget is sized for the
+larger figure. The coverage lane on run 35400748402 measured the same test at
+62.484 s, with its scratch directory and compiler cache already warm. A gate
+run on the same date killed it at the 300 s allowance —
 `TERMINATING [>300.000s]` — while it was still compiling a dependency, that is,
 while it was healthy.
 
