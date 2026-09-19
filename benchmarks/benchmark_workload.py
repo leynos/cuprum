@@ -1,4 +1,4 @@
-"""Benchmark workload identity for maintainer-facing summaries.
+"""Benchmark workload identity and the measurement protocol a plan records.
 
 The throughput runner exposes three workloads that differ only in the
 scenario matrix they select. Once a plan is read back, those scenarios are
@@ -7,10 +7,13 @@ workload has to be told which one it is describing rather than inferring it
 from the scenario names — a smoke matrix and the CI ratchet both carry
 per-backend scenarios, and naming the wrong one misdescribes the measurement.
 
-This module owns both halves of that answer: the identifiers the runner
-records in a plan, and the protocol summary a report renders from them. They
-live together because a description changed here must not be able to leave a
-summary claiming a workload the plan did not record.
+This module owns the identifiers the runner records in a plan and the validated
+protocol read back from them. How that protocol is *rendered* is a separate
+concern with a separate reason to change, and lives with the report that
+renders it, in ``benchmarks.comparison_report``. Keeping the value object free
+of prose means a change to report wording cannot reach the data a plan
+recorded, and the object a formatter accepts is validated on construction
+rather than merely annotated.
 """
 
 from __future__ import annotations
@@ -64,24 +67,60 @@ WORKLOADS: tuple[str, ...] = (
 
 type WorkloadName = typ.Literal["throughput-sweep", "smoke", "ci-ratchet"]
 
-#: Rendered descriptions, keyed by workload identifier.
-_DESCRIPTIONS: dict[str, str] = {
-    THROUGHPUT_SWEEP_WORKLOAD: "the throughput sweep, covering three payload tiers",
-    SMOKE_WORKLOAD: "the smoke workload, the sweep's shape at reduced payloads",
-    CI_RATCHET_WORKLOAD: (
-        "the CI-ratchet workload, one large payload measured at the ratchet's "
-        "own worker-iteration count"
-    ),
-}
+
+def _require_known_workload(value: object) -> WorkloadName:
+    """Return *value* as a workload identifier the runner can produce."""
+    workload = _require_non_empty_string(value, name=WORKLOAD_PLAN_KEY)
+    if workload not in WORKLOADS:
+        msg = (
+            f"unknown benchmark workload {workload!r}; expected one of "
+            f"{', '.join(WORKLOADS)}"
+        )
+        raise ValueError(msg)
+    return typ.cast("WorkloadName", workload)
+
+
+def _require_worker_iterations(value: object) -> int:
+    """Return *value* as a positive worker iteration count."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = "worker_iterations must be an int"
+        raise TypeError(msg)
+    if value < 1:
+        msg = "worker_iterations must be >= 1"
+        raise ValueError(msg)
+    return value
+
+
+def _require_payload_bytes(value: object) -> tuple[int, ...]:
+    """Return *value* as distinct ascending integer payload sizes."""
+    if not isinstance(value, tuple):
+        msg = "payload_bytes must be a tuple"
+        raise TypeError(msg)
+    for size in value:
+        if isinstance(size, bool) or not isinstance(size, int):
+            msg = "payload_bytes must contain only ints"
+            raise TypeError(msg)
+    sizes = typ.cast("tuple[int, ...]", value)
+    if sizes != tuple(sorted(set(sizes))):
+        msg = "payload_bytes must be distinct and ascending"
+        raise ValueError(msg)
+    return sizes
 
 
 @dc.dataclass(frozen=True, slots=True)
 class WorkloadProtocol:
     """Measurement protocol a benchmark plan describes.
 
+    Every field is validated on construction. The ratchet only compares
+    samples whose profile metadata agrees, so a protocol value carrying a
+    workload the runner cannot produce, or a payload list that is not the
+    ascending distinct form a plan reads back as, would describe a measurement
+    no run could have made. Rejecting those here means a formatter accepting a
+    ``WorkloadProtocol`` cannot be handed one that describes nothing.
+
     Parameters
     ----------
-    workload : str
+    workload : WorkloadName
         Identifier of the workload that produced the plan's scenarios.
     profile_version : str | None
         The plan's ``benchmark_profile_version``, or ``None`` when the plan
@@ -92,45 +131,44 @@ class WorkloadProtocol:
     payload_bytes : tuple[int, ...]
         Payload sizes the plan's scenarios measure at, ascending and without
         duplicates. Empty when the plan carries no scenarios.
+
+    Raises
+    ------
+    TypeError
+        If ``workload`` is not a string, ``profile_version`` is present but
+        not a string, ``worker_iterations`` is present but not an integer, or
+        ``payload_bytes`` is not a tuple of integers.
+    ValueError
+        If ``workload`` is empty, whitespace-only, or unknown;
+        ``profile_version`` is present but blank; ``worker_iterations`` is
+        less than one; or ``payload_bytes`` is unsorted or carries a
+        duplicate.
+
+    Examples
+    --------
+    >>> WorkloadProtocol(
+    ...     workload="ci-ratchet",
+    ...     profile_version="profile-1",
+    ...     worker_iterations=5,
+    ...     payload_bytes=(1024, 4096),
+    ... )
+    WorkloadProtocol(workload='ci-ratchet', profile_version='profile-1', \
+worker_iterations=5, payload_bytes=(1024, 4096))
     """
 
-    workload: str
+    workload: WorkloadName
     profile_version: str | None
     worker_iterations: int | None
     payload_bytes: tuple[int, ...]
 
-    def describe(self) -> str:
-        """Return a one-line summary of the workload and its protocol.
-
-        Only the metadata the plan actually carried is named. A plan that
-        omits a field is summarized without it rather than with a default,
-        because a default here would state a measurement protocol as fact
-        when nothing recorded it.
-
-        Returns
-        -------
-        str
-            The summary rendered into maintainer-facing report prose.
-        """
-        parts = [f"the {self.workload} workload"]
+    def __post_init__(self) -> None:
+        """Validate the protocol a plan recorded before a report renders it."""
+        _require_known_workload(self.workload)
         if self.profile_version is not None:
-            parts.append(f"profile {self.profile_version}")
-        if self.payload_bytes:
-            sizes = "/".join(
-                f"{size / (1024 * 1024):.0f}" for size in self.payload_bytes
-            )
-            parts.append(
-                f"payload {sizes} MiB"
-                if len(self.payload_bytes) == 1
-                else f"payloads {sizes} MiB"
-            )
+            _require_non_empty_string(self.profile_version, name="profile_version")
         if self.worker_iterations is not None:
-            parts.append(f"{self.worker_iterations} worker iterations")
-        return ", ".join(parts)
-
-    def describe_workload(self) -> str:
-        """Return the prose sentence naming this plan's workload."""
-        return _DESCRIPTIONS[self.workload]
+            _require_worker_iterations(self.worker_iterations)
+        _require_payload_bytes(self.payload_bytes)
 
 
 def read_workload(payload: cabc.Mapping[str, object]) -> WorkloadName:
@@ -160,14 +198,7 @@ def read_workload(payload: cabc.Mapping[str, object]) -> WorkloadName:
     value = payload.get(WORKLOAD_PLAN_KEY)
     if value is None:
         return typ.cast("WorkloadName", THROUGHPUT_SWEEP_WORKLOAD)
-    workload = _require_non_empty_string(value, name=WORKLOAD_PLAN_KEY)
-    if workload not in WORKLOADS:
-        msg = (
-            f"unknown benchmark workload {workload!r}; expected one of "
-            f"{', '.join(WORKLOADS)}"
-        )
-        raise ValueError(msg)
-    return typ.cast("WorkloadName", workload)
+    return _require_known_workload(value)
 
 
 def _optional_str(payload: cabc.Mapping[str, object], key: str) -> str | None:
@@ -183,13 +214,7 @@ def _optional_worker_iterations(payload: cabc.Mapping[str, object]) -> int | Non
     value = payload.get("worker_iterations")
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        msg = "worker_iterations must be an int"
-        raise TypeError(msg)
-    if value < 1:
-        msg = "worker_iterations must be >= 1"
-        raise ValueError(msg)
-    return value
+    return _require_worker_iterations(value)
 
 
 def _scenario_payload_size(index: int, value: object) -> int | None:

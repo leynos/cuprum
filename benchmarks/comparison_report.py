@@ -6,6 +6,12 @@ import json
 import typing as typ
 
 from benchmarks._validation import _require_mapping
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    SMOKE_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
+    WorkloadProtocol,
+)
 from benchmarks.comparison_analysis import (
     BenchmarkComparisonReport,
     RatchetStatus,
@@ -22,6 +28,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
+    from benchmarks.benchmark_workload import WorkloadName
+
 _BOOTSTRAP_SKIP_REASON = "no_previous_main_benchmark_baseline"
 _DECISION_FIELDS = (
     "baseline_source",
@@ -29,6 +37,21 @@ _DECISION_FIELDS = (
     "compatible_sample_count",
     "comparison_state",
 )
+
+#: Rendered workload descriptions, keyed by workload identifier. This is report
+#: prose, so it lives with the report rather than with the protocol value the
+#: plan recorded — wording changes here cannot reach what a run measured. The
+#: ``WorkloadName`` key type is what makes the lookup total: a protocol cannot
+#: be constructed carrying a workload absent from this table, so rendering one
+#: cannot fail.
+_WORKLOAD_DESCRIPTIONS: dict[WorkloadName, str] = {
+    THROUGHPUT_SWEEP_WORKLOAD: "the throughput sweep, covering three payload tiers",
+    SMOKE_WORKLOAD: "the smoke workload, the sweep's shape at reduced payloads",
+    CI_RATCHET_WORKLOAD: (
+        "the CI-ratchet workload, one large payload measured at the ratchet's "
+        "own worker-iteration count"
+    ),
+}
 
 
 def _complete_decision_fields(
@@ -190,6 +213,81 @@ def load_ratchet_report(path: pth.Path) -> RatchetStatus:
     return _ratchet_passed_status(report)
 
 
+def describe_protocol(protocol: WorkloadProtocol) -> str:
+    """Return a one-line summary of a workload and the protocol it recorded.
+
+    Only the metadata the plan actually carried is named. A plan that omits a
+    field is summarized without it rather than with a default, because a
+    default here would state a measurement protocol as fact when nothing
+    recorded it.
+
+    Parameters
+    ----------
+    protocol : WorkloadProtocol
+        The validated protocol a plan described.
+
+    Returns
+    -------
+    str
+        The summary rendered into maintainer-facing report prose.
+
+    Examples
+    --------
+    >>> describe_protocol(
+    ...     WorkloadProtocol(
+    ...         workload="ci-ratchet",
+    ...         profile_version=None,
+    ...         worker_iterations=5,
+    ...         payload_bytes=(1024,),
+    ...     )
+    ... )
+    'the ci-ratchet workload, payload 0 MiB, 5 worker iterations'
+    """
+    parts = [f"the {protocol.workload} workload"]
+    if protocol.profile_version is not None:
+        parts.append(f"profile {protocol.profile_version}")
+    if protocol.payload_bytes:
+        sizes = "/".join(
+            f"{size / (1024 * 1024):.0f}" for size in protocol.payload_bytes
+        )
+        parts.append(
+            f"payload {sizes} MiB"
+            if len(protocol.payload_bytes) == 1
+            else f"payloads {sizes} MiB"
+        )
+    if protocol.worker_iterations is not None:
+        parts.append(f"{protocol.worker_iterations} worker iterations")
+    return ", ".join(parts)
+
+
+def describe_workload(protocol: WorkloadProtocol) -> str:
+    """Return the prose sentence naming the protocol's workload.
+
+    Parameters
+    ----------
+    protocol : WorkloadProtocol
+        The validated protocol a plan described.
+
+    Returns
+    -------
+    str
+        The workload's expanded description, as rendered into report prose.
+
+    Examples
+    --------
+    >>> describe_workload(
+    ...     WorkloadProtocol(
+    ...         workload="smoke",
+    ...         profile_version=None,
+    ...         worker_iterations=None,
+    ...         payload_bytes=(),
+    ...     )
+    ... )
+    "the smoke workload, the sweep's shape at reduced payloads"
+    """
+    return _WORKLOAD_DESCRIPTIONS[protocol.workload]
+
+
 def render_summary_markdown(
     *,
     report: BenchmarkComparisonReport,
@@ -216,11 +314,11 @@ def render_summary_markdown(
         "",
         (
             "Candidate results for the current workflow run, measured on "
-            f"{report.protocol.describe()}."
+            f"{describe_protocol(report.protocol)}."
         ),
         "",
         (
-            f"The compared scenarios are {report.protocol.describe_workload()}, "
+            f"The compared scenarios are {describe_workload(report.protocol)}, "
             "which is what the ratchet compares between runs; a report for a "
             "different workload does not describe the ratchet's own measurement."
         ),
