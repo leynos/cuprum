@@ -55,6 +55,12 @@ ignore = [
   '_write_mold_metadata',
   '\bmissing_mold\b',
   '\bwrong_mold_version\b',
+  # The prerequisite tests name their fixture and template placeholders after
+  # the linker; each form carries identifier or template syntax, so prose uses
+  # of the word on its own remain flagged.
+  '\bmold_version\b',
+  '\bmold \{version\}',
+  '\bmold \{mold_version\}',
   'command -v mold',
   'mold --version',
   '\^mold \$',
