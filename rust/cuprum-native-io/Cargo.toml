@@ -2,6 +2,7 @@
 name = "cuprum-native-io"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 license = "ISC"
 description = "Audited native resource and syscall boundary for Cuprum"
 publish = false

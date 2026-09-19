@@ -195,8 +195,9 @@ pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
         }
         let error = io::Error::last_os_error();
         match error.raw_os_error() {
-            // A delivered signal interrupted the call; observe again.
-            Some(libc::EINTR) => continue,
+            // A delivered signal interrupted the call. The match ends the loop
+            // body, so falling through here is the retry the `continue` named.
+            Some(libc::EINTR) => {}
             Some(libc::EBADF) => return Ok(false),
             _ => return Err(error),
         }

@@ -40,6 +40,8 @@ _Figure 1: Simplified repository tree for contributor orientation._
 | `rust/cuprum-native-io/` | Audited native descriptor/handle ownership, single-call I/O, progress kernels, and platform test fixtures.                    |
 | `test-wheelhouse/`       | Local wheel artefacts used by validation workflows and compatibility tests.                                                   |
 | `tests/`                 | Behavioural, integration, and regression tests for the Python package and user-visible workflows.                             |
+| `tools/dev-fast/`        | Linux-only explicit Cargo adapter and approved Cranelift configuration for debug work.                                        |
+| `tools/mold/`            | Pinned checksums for the prebuilt Linux linker used by the dev-fast route.                                                    |
 | `AGENTS.md`              | Repository-specific assistant and contributor instructions.                                                                   |
 | `Makefile`               | Canonical entry point for build, format, lint, typecheck, test, documentation lint, and diagram validation gates.             |
 | `pyproject.toml`         | Python project metadata, dependency declarations, and tool configuration.                                                     |

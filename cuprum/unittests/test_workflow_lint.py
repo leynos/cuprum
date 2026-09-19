@@ -10,6 +10,7 @@ that makes the same checked binaries available to the lint job.
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Makefile targets.
 import typing as typ
@@ -83,7 +84,13 @@ class _LintJob(typ.TypedDict, total=False):
     steps: list[_Step]
 
 
-def _write_fake_tool(directory: pth.Path, tool: str, *, exit_code: int = 0) -> None:
+def _write_fake_tool(
+    directory: pth.Path,
+    tool: str,
+    *,
+    exit_code: int = 0,
+    output: str = "",
+) -> None:
     """Write an executable that records its name and arguments."""
     executable = directory / tool
     executable.write_text(
@@ -93,6 +100,7 @@ def _write_fake_tool(directory: pth.Path, tool: str, *, exit_code: int = 0) -> N
         '  printf \'\\t%s\' "${argument}" >> "${LINT_INVOCATION_LOG}"\n'
         "done\n"
         "printf '\\n' >> \"${LINT_INVOCATION_LOG}\"\n"
+        f"printf '%s' {shlex.quote(output)}\n"
         f"exit {exit_code}\n",
         encoding="utf-8",
     )
@@ -104,17 +112,20 @@ def _make_environment(
     *,
     tools: cabc.Iterable[str],
     exit_codes: cabc.Mapping[str, int] | None = None,
+    outputs: cabc.Mapping[str, str] | None = None,
 ) -> tuple[dict[str, str], pth.Path]:
     """Create a Makefile environment with only the requested fake tools."""
     tool_directory = tmp_path / "tools"
     tool_directory.mkdir()
     invocation_log = tmp_path / "invocations.log"
     expected_exit_codes = exit_codes or {}
+    expected_outputs = outputs or {}
     for tool in tools:
         _write_fake_tool(
             tool_directory,
             tool,
             exit_code=expected_exit_codes.get(tool, 0),
+            output=expected_outputs.get(tool, ""),
         )
     environment = {
         **os.environ,
@@ -256,7 +267,15 @@ def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
 def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     """The aggregate lint target reaches both GitHub Actions linters."""
     environment, invocation_log = _make_environment(
-        tmp_path, tools=("uv", "yamllint", "actionlint")
+        tmp_path,
+        tools=("uv", "yamllint", "actionlint", "mold", "rustup"),
+        outputs={
+            "mold": "mold 2.41.0\n",
+            "rustup": (
+                "rustc-codegen-cranelift-x86_64-unknown-linux-gnu (installed)\n"
+                "clippy-x86_64-unknown-linux-gnu (installed)\n"
+            ),
+        },
     )
     overrides = tmp_path / "lint-target-overrides.mk"
     overrides.write_text(
@@ -273,6 +292,8 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
         "uv\trun\twhich\truff",
+        "mold\t--version",
+        "rustup\tcomponent\tlist\t--installed\t--toolchain\tnightly-2026-08-23",
         f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
         "actionlint\t-config-file\t.github/actionlint.yaml",
     ]
