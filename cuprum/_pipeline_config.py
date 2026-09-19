@@ -94,15 +94,29 @@ class _PipelineRunConfig:
         session = self.sink_bracket.session
         return fallback if session is None else session.log
 
-    def _stream_config(self, *, echo: bool, sink: typ.IO[str]) -> _StreamConfig:
-        """Build one stream's configuration for a pipeline stage.
+    def _build_stream_config(
+        self,
+        *,
+        echo_output: bool,
+        fallback_sink: typ.IO[str],
+    ) -> _StreamConfig:
+        """Build one parent-consumed pipeline stream configuration.
+
+        Both pipeline streams are wired identically here; only the echo gate
+        and the resolved destination differ. When a presentation-sink session
+        is active, a mirrored stream routes through the session's log
+        destination instead of its fallback, so it lands inside the adapter's
+        framing in the order the adapter received it. That bracketing is
+        required for stdout and stderr alike: every mirrored stream must fall
+        between the session's opening and closing frames.
 
         Parameters
         ----------
-        echo : bool
+        echo_output : bool
             Whether this stream's lines are mirrored to the parent.
-        sink : typ.IO[str]
-            The stream's resolved parent-facing destination.
+        fallback_sink : typ.IO[str]
+            The stream's resolved parent-facing destination, superseded by the
+            active session's log when one is open.
 
         Returns
         -------
@@ -111,35 +125,31 @@ class _PipelineRunConfig:
         """
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=echo,
+            echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self._framed_sink(sink),
+            sink=self._framed_sink(fallback_sink),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
-            mirror=self._echo_mirror(sink),
+            mirror=self._echo_mirror(fallback_sink),
         )
 
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage.
-
-        When a presentation-sink session is active, mirrored stdout routes
-        through the session's log destination so it lands inside the
-        adapter's framing in the order the adapter received it.
-        """
-        return self._stream_config(echo=self.echo_stdout, sink=self.stdout_sink)
+        """Build the stdout stream configuration for the final pipeline stage."""
+        return self._build_stream_config(
+            echo_output=self.echo_stdout,
+            fallback_sink=self.stdout_sink,
+        )
 
     @property
     def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage.
-
-        Mirrored stderr routes through an active presentation-sink session for
-        the same reason as stdout: the adapter's framing must bracket every
-        mirrored stream.
-        """
-        return self._stream_config(echo=self.echo_stderr, sink=self.stderr_sink)
+        """Build the stderr stream configuration for a pipeline stage."""
+        return self._build_stream_config(
+            echo_output=self.echo_stderr,
+            fallback_sink=self.stderr_sink,
+        )
 
     def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
         """Return the cursor for an echo whose sink is the keepalive's own.
