@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 @dc.dataclass(frozen=True, slots=True)
 class _LoomBounds:
@@ -27,6 +30,15 @@ class _LoomCliOptions:
     max_preemptions: int | None
     max_branches: int | None
     max_threads: int | None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _InvalidExecutionCount:
+    """Cargo outputs and expected error for an invalid Loom execution."""
+
+    discovery_output: str
+    execution_output: str
+    error_match: str
 
 
 class _LoomRunResult(typ.Protocol):
@@ -61,6 +73,24 @@ def loom_driver_fixture(monkeypatch: pytest.MonkeyPatch) -> LoomDriver:
 def _completed(command: list[str], output: str) -> subprocess.CompletedProcess[str]:
     """Build a successful text subprocess result for ``command``."""
     return subprocess.CompletedProcess(command, 0, output, "")
+
+
+def _cargo_run_with_results(
+    discovery_output: str, execution_output: str
+) -> cabc.Callable[..., subprocess.CompletedProcess[str]]:
+    """Build a fixed Cargo discovery, execution, and version-result runner."""
+
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """Return the configured Cargo or tool-version result."""
+        if "--list" in command:
+            return _completed(command, discovery_output)
+        if command[:2] == ["cargo", "test"]:
+            return _completed(command, execution_output)
+        return _completed(command, "version\n")
+
+    return fake_run
 
 
 def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
@@ -107,59 +137,46 @@ def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
     assert result.executed_tests == 2, "execution count must be retained"
 
 
-def test_run_loom_rejects_a_green_zero_test_execution(
-    monkeypatch: pytest.MonkeyPatch,
-    loom_driver: LoomDriver,
-) -> None:
-    """A target that compiles but executes no models is a driver failure."""
-
-    def fake_run(
-        command: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        """Return a non-empty discovery then an invalid green execution."""
-        if "--list" in command:
-            return _completed(command, "one: test\n1 test, 0 benchmarks\n")
-        if command[:2] == ["cargo", "test"]:
-            return _completed(
-                command,
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            _InvalidExecutionCount(
+                "one: test\n1 test, 0 benchmarks\n",
                 (
                     "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; "
                     "1 filtered out;\n"
                 ),
-            )
-        return _completed(command, "version\n")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    with pytest.raises(loom_driver.LoomRunError, match="executed zero tests"):
-        loom_driver.run_loom(mode="full")
-
-
-def test_run_loom_rejects_a_discovery_execution_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-    loom_driver: LoomDriver,
-) -> None:
-    """A target whose selected tests drift after discovery is a driver failure."""
-
-    def fake_run(
-        command: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        """Report two discovered tests but execute only one."""
-        if "--list" in command:
-            return _completed(command, "one: test\ntwo: test\n2 tests, 0 benchmarks\n")
-        if command[:2] == ["cargo", "test"]:
-            return _completed(
-                command,
+                "executed zero tests",
+            ),
+            id="green-zero-execution",
+        ),
+        pytest.param(
+            _InvalidExecutionCount(
+                "one: test\ntwo: test\n2 tests, 0 benchmarks\n",
                 (
                     "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
                     "1 filtered out;\n"
                 ),
-            )
-        return _completed(command, "version\n")
+                "discovery found 2",
+            ),
+            id="discovery-execution-mismatch",
+        ),
+    ],
+)
+def test_run_loom_rejects_invalid_execution_count(
+    monkeypatch: pytest.MonkeyPatch,
+    loom_driver: LoomDriver,
+    case: _InvalidExecutionCount,
+) -> None:
+    """A vacuous or mismatched Cargo execution is a driver failure."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        _cargo_run_with_results(case.discovery_output, case.execution_output),
+    )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    with pytest.raises(loom_driver.LoomRunError, match="discovery found 2"):
+    with pytest.raises(loom_driver.LoomRunError, match=case.error_match):
         loom_driver.run_loom(mode="full")
 
 

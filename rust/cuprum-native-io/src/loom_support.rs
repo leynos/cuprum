@@ -4,7 +4,9 @@
 //! retained-owner contract remains private to this audited boundary crate.
 //! This bridge executes that contract with observable model descriptors.
 
-use crate::fd_ownership_model::{CloseLog, ExitMode, ModelFd, model_consume_stream, model_pump_stream};
+use crate::fd_ownership_model::{
+    CloseLog, ExitMode, ModelFd, model_consume_stream, model_pump_stream,
+};
 
 /// Execute the borrowed-reader ownership cases and return its close count.
 #[must_use]
