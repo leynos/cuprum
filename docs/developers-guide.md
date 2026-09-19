@@ -601,12 +601,13 @@ relationships.
 
 Table 3: Coverage timeout tiers
 
-| Tier               | Configuration key or environment variable | Value  | Scope                                        |
-| ------------------ | ----------------------------------------- | ------ | -------------------------------------------- |
-| Per-test allowance | `profile.default.slow-timeout`            | 300 s  | One Rust test                                |
-| Whole-run budget   | `profile.default.global-timeout`          | 1200 s | One nextest run                              |
-| Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`             | 2700 s | One coverage action cargo call               |
-| Job ceiling        | `timeout-minutes`                         | 65 m   | The `coverage` job and its trunk counterpart |
+| Tier               | Configuration key or environment variable              | Value  | Scope                                        |
+| ------------------ | ------------------------------------------------------ | ------ | -------------------------------------------- |
+| Per-test allowance | `profile.default.slow-timeout`                         | 300 s  | One Rust test                                |
+| Compile-test tier  | `profile.default.overrides` (`binary(compile_tests)`)  | 600 s  | The two `trybuild` UI tests                  |
+| Whole-run budget   | `profile.default.global-timeout`                       | 1200 s | One nextest run                              |
+| Cargo watchdog     | `RUN_RUST_CARGO_WAIT_TIMEOUT`                          | 2700 s | One coverage action cargo call               |
+| Job ceiling        | `timeout-minutes`                                      | 65 m   | The `coverage` job and its trunk counterpart |
 
 The file sits in `rust/` rather than the repository root because nextest
 resolves `.config/nextest.toml` from the Cargo workspace root and searches no
@@ -623,10 +624,32 @@ The 300 s per-test allowance is `period = "60s"` multiplied by
 test as slow. That period also sets when a test is reported slow, and the worst
 healthy test here is long enough to trip it: the `trybuild` UI test
 `compile_time_ui` ran 62 s on run 35400748402, so the coverage log carries a
-`SLOW` line for it. That is the warning working, not a fault. It is reported at
-60 s and killed at 300 s, five times later, and no healthy test approaches
-that. The 1200 s global budget contains that allowance while remaining well
-inside the cargo watchdog. The 2700 s watchdog was sized from roughly fifty
+`SLOW` line for it. That is the warning working, not a fault.
+
+300 s is not, however, a bound no healthy test reaches. `trybuild` compiles a
+scratch crate for each UI case, so those two tests are bounded by a build
+rather than by test work, and they inherit `RUSTFLAGS` from the `cargo` that
+invoked them. Under `make test`'s dev-fast flags (`--jobs 1`,
+`-C codegen-units=1`, `CARGO_BUILD_JOBS=1`) that build is several times slower
+than under the coverage lane's plain `-D warnings`, and the scratch workspace
+is a separate target directory, so nextest's own warm build cannot serve it.
+Measured on 2026-09-19: `compile_time_ui` took 277 s locally against 62 s in
+CI, and a gate run killed it at the 300 s allowance — `TERMINATING [>300.000s]`
+— while it was still compiling a dependency, that is, while it was healthy.
+`terminate-after` is therefore raised to 10 for the `binary(compile_tests)`
+tests, giving them 600 s, and left at 5 for the other 123. The override is
+scoped by binary rather than by test name so both `trybuild` tests carry it:
+`cuprum-streams::compile_tests::transition_privacy` is the same species and
+measured 39.6 s locally, and a bound that covered only the test that happened
+to time out first would leave its sibling as the next tripwire.
+
+`largest_per_test_allowance_seconds()` reads the maximum across the default
+profile and every override, not the profile alone. An override exists
+precisely to exceed the profile it overrides, so reading only the profile
+would understate the allowance and the containment assertions would pass while
+a test could still outlast the tier meant to contain it. The 1200 s global
+budget contains that 600 s allowance while remaining well inside the cargo
+watchdog. The 2700 s watchdog was sized from roughly fifty
 successful runs: the worst coverage step was 418 s in run 34071469378, the
 worst trunk coverage step was 322 s in run 34062626757, and run 34067223641
 measured the worst work outside the watchdog. None was a genuinely cold build.

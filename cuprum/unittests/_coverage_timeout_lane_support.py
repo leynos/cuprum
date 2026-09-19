@@ -4,24 +4,28 @@ The timeout-ordering contract uses these helpers to resolve a coverage action's
 watchdogs, job ceiling, conditions, and manifest inputs without obscuring its
 assertions with YAML traversal. Call :func:`_lanes` for the live lanes or
 :func:`lanes_in` with a synthetic workflow to exercise the reader.
+
+This module owns the workflow shapes and the readers that walk them; the
+nextest tiers live in ``cuprum.unittests._timeout_lane_support``. The two
+halves read different files, and only the contract brings them together, so
+this module depends on that one for the shared constants and not the reverse.
 """
 
 from __future__ import annotations
 
+import functools
 import typing as typ
+
+import yaml
 
 from cuprum.unittests._timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
     COVERAGE_ACTION,
     COVERAGE_WORKFLOWS,
     OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
-    CoverageLane,
-    Job,
-    Step,
-    Workflow,
-    _watchdog_of,
-    _workflow,
+    WATCHDOG_VARIABLE,
 )
+from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -45,6 +49,144 @@ def required_ceiling(budgets: cabc.Sequence[int]) -> int:
         The smallest acceptable ceiling, in seconds.
     """
     return sum(budgets) + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
+
+
+class Step(typ.TypedDict, total=False):
+    """One workflow step, declaring only the fields this contract reads.
+
+    Attributes
+    ----------
+    name : object
+        The declared step name used to locate a failure.
+    uses : object
+        The action the step invokes.
+    env : dict[str, object]
+        The innermost environment that can set the cargo watchdog.
+
+    The ``if`` and ``with`` fields are accessed through casts because ``if`` is
+    a keyword and both fields remain optional in arbitrary workflow steps.
+    """
+
+    name: object
+    uses: object
+    env: dict[str, object]
+
+
+class Job(typ.TypedDict, total=False):
+    """One workflow job, declaring only the fields this contract reads.
+
+    Attributes
+    ----------
+    steps : list[Step]
+        The job's steps in execution order.
+    env : dict[str, object]
+        The job-level watchdog environment, used when its steps inherit it.
+    """
+
+    steps: list[Step]
+    env: dict[str, object]
+
+
+class Workflow(typ.TypedDict, total=False):
+    """A parsed workflow, declaring only the fields this contract reads.
+
+    Attributes
+    ----------
+    jobs : dict[str, Job]
+        Jobs keyed by their workflow identifier.
+    env : dict[str, object]
+        The outermost watchdog environment.
+    """
+
+    jobs: dict[str, Job]
+    env: dict[str, object]
+
+
+#: The condition each coverage lane legitimately carries, keyed by
+#: workflow path and job, as the step's ``if`` and its job's.
+#:
+#: A skipped step runs no `cargo`, so its watchdog never arms and every
+#: assertion below says nothing about it. `if: false` on either would
+#: leave a lane that looks bounded and is not. The values are pinned
+#: rather than merely tolerated, because a lane gaining, losing or
+#: changing a condition changes when it runs at all.
+#:
+#: `ci.yml`'s coverage job runs on pull requests only; the trunk lane
+#: covers pushes and carries no condition.
+class CoverageLane(typ.NamedTuple):
+    """One coverage job's per-step watchdogs, ceiling, and conditions.
+
+    Attributes
+    ----------
+    workflow : str
+        The workflow file path.
+    job : str
+        The job identifier.
+    watchdogs : tuple[int | None, ...]
+        Resolved watchdogs, one for each coverage-action invocation.
+    ceiling : int or None
+        The job's ``timeout-minutes`` value.
+    conditions : tuple[tuple[object, object], ...]
+        Each coverage step's and enclosing job's conditions.
+
+    Watchdogs remain a tuple because separate action invocations can carry
+    different budgets.
+    """
+
+    workflow: str
+    job: str
+    watchdogs: tuple[int | None, ...]
+    ceiling: int | None
+    conditions: tuple[tuple[object, object], ...] = ()
+
+    def __str__(self) -> str:
+        """Return a location suitable for a failure message.
+
+        Returns
+        -------
+        str
+            ``workflow:job`` for this lane.
+        """
+        return f"{self.workflow}:{self.job}"
+
+
+@functools.cache
+def _workflow(path: str) -> Workflow:
+    """Parse one workflow file."""
+    parsed = yaml.safe_load((repo_root() / path).read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict), f"{path} must parse to a mapping"
+    return typ.cast("Workflow", parsed)
+
+
+def _watchdog_of(workflow: Workflow, job: Job, step: Step) -> int | None:
+    """Return the watchdog budget in force for one step.
+
+    All three levels are read, innermost first, as GitHub resolves them.
+    Reading only one of them would report a lane that sets the value
+    elsewhere as inheriting the action's default, which is the opposite
+    of what this contract is for.
+
+    Parameters
+    ----------
+    workflow : Workflow
+        The whole workflow document.
+    job : Job
+        The enclosing job.
+    step : Step
+        The coverage step.
+
+    Returns
+    -------
+    int or None
+        The budget in seconds, or None when no level sets one.
+    """
+    for source in (step.get("env"), job.get("env"), workflow.get("env")):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get(WATCHDOG_VARIABLE)
+        if raw is not None:
+            return int(str(raw))
+    return None
 
 
 def _lanes() -> tuple[CoverageLane, ...]:
