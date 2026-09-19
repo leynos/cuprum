@@ -15,6 +15,9 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
+FRAGMENT = "tools/dev-fast/config.toml"
+
+
 @pytest.fixture
 def mold_version() -> str:
     """Return the linker version recorded by the checked-in pin."""
@@ -82,14 +85,6 @@ class _FailureCase(typ.NamedTuple):
             ),
             id="missing_clippy",
         ),
-        pytest.param(
-            _FailureCase(
-                {},
-                {"DEV_FAST_CONFIG": "missing-dev-fast.toml"},
-                "dev-fast configuration is missing",
-            ),
-            id="missing_fragment",
-        ),
     ],
 )
 def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
@@ -140,6 +135,55 @@ def test_prerequisite_recipe_accepts_the_pinned_dependencies(
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "delivery",
+    [
+        pytest.param("command_line", id="command_line"),
+        pytest.param("environment", id="environment"),
+    ],
+)
+def test_recipe_ignores_an_overridden_configuration(
+    tmp_path: Path, delivery: str
+) -> None:
+    """The evaluated route keeps the repository fragment whatever the caller sets.
+
+    Both delivery mechanisms are exercised. A definition that merely looks safe
+    can still yield to an environment variable or to a command-line variable,
+    so proving only one of them leaves the other as an open redirect.
+    """
+    redirection = str(tmp_path / "other-config.toml")
+    variables = [f"DEV_FAST_RUST_CONFIG={redirection}"]
+    environment = {**os.environ, "PATH": f"{tmp_path}:/usr/bin:/bin"}
+    if delivery == "command_line":
+        extra_arguments = variables
+    else:
+        extra_arguments = []
+        environment["DEV_FAST_RUST_CONFIG"] = redirection
+    make = shutil.which("make")
+    assert make is not None, "the override contract requires GNU Make on PATH"
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.
+        [
+            make,
+            "--dry-run",
+            "dev-build",
+            "DEV_FAST_HOST_IS_LINUX=yes",
+            *extra_arguments,
+        ],
+        check=False,
+        capture_output=True,
+        cwd=repo_root(),
+        env=environment,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert redirection not in result.stdout, (
+        "an overridden configuration path must not reach the evaluated command"
+    )
+    assert f"--config ../{FRAGMENT}" in result.stdout, (
+        "the route must select the repository fragment despite the override"
+    )
 
 
 def test_dev_build_executes_the_approved_fragment(

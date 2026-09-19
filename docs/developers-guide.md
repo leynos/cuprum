@@ -420,6 +420,16 @@ portion of `make rust-lint` select the fragment on a compatible Linux host.
 Cargo invocations leave toolchain selection to the caller; supplying the
 fragment does not select a toolchain.
 
+The routed path is fixed, not configurable. The Makefile resolves the fragment
+from one internal constant that no make variable or environment variable can
+replace, so `make test-rust DEV_FAST_RUST_CONFIG=/tmp/other.toml` cannot
+substitute a different configuration and still report success. Anything needing
+a different Cargo configuration is outside this route and does not use it.
+
+Changing the fragment means changing the bytes that digest authorizes. Update
+`FRAGMENT_SHA256` in `cuprum/unittests/test_dev_fast_contract.py` and the
+digest quoted above in the same commit, or the contract test fails.
+
 Every workspace package inherits `rust-version = "1.85.0"` from the root
 manifest. Cargo treats that as the publication and compatibility contract, and
 MSRV-aware Clippy lints use it while the Linux debug lint route runs on the

@@ -15,8 +15,15 @@ if [ -z "${DEV_FAST_CARGO:-}" ]; then
   exit 2
 fi
 
-if [ -z "${DEV_FAST_CONFIG:-}" ] || [ ! -f "$DEV_FAST_CONFIG" ]; then
-  printf '%s\n' 'dev-fast: DEV_FAST_CONFIG must name the approved configuration file' >&2
+# Derived from this adapter's own location, never from the environment.  A
+# caller-supplied DEV_FAST_CONFIG is ignored: this adapter is the process that
+# must actually use the reviewed fragment, so a variable that redirected it
+# would make the guarantee below false rather than merely configurable.
+adapter_directory=$(cd -- "$(dirname -- "$0")" && pwd)
+fragment="$adapter_directory/config.toml"
+
+if [ ! -f "$fragment" ]; then
+  printf 'dev-fast: the repository configuration is missing: %s\n' "$fragment" >&2
   exit 2
 fi
 
@@ -32,4 +39,4 @@ done
 # Cargo-invoked build scripts inherit CARGO.  Point them to the injected real
 # executable so they cannot recursively enter this adapter.
 export CARGO="$DEV_FAST_CARGO"
-exec "$DEV_FAST_CARGO" --config "$DEV_FAST_CONFIG" "$@"
+exec "$DEV_FAST_CARGO" --config "$fragment" "$@"

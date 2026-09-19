@@ -25,13 +25,21 @@ DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
 # it through this same nightly, so the prerequisite gate must require both.
 DEV_FAST_LINT_COMPONENT ?= clippy
 DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_CRANELIFT_COMPONENT) $(DEV_FAST_LINT_COMPONENT)
-DEV_FAST_CONFIG ?= tools/dev-fast/config.toml
+# The selected Cargo fragment is repository-fixed state, not a caller input.
+# `override` is load-bearing, not decoration: a plain or `?=` definition still
+# yields to an ordinary environment variable, and any non-override definition
+# yields to a command-line variable. With either, `make dev-build
+# DEV_FAST_RUST_CONFIG=/tmp/other.toml` would run the accelerated route under a
+# configuration the project never approved while `dev-fast-check` still passed.
+# Both names need it: the second because a caller could otherwise replace the
+# derived value directly. Anything needing a different Cargo configuration is
+# outside this route and does not use it.
+override DEV_FAST_CONFIG_RELATIVE := tools/dev-fast/config.toml
+override DEV_FAST_RUST_CONFIG := ../$(DEV_FAST_CONFIG_RELATIVE)
 DEV_FAST_MOLD_VERSION_FILE ?= tools/mold/VERSION
 DEV_FAST_MOLD_VERSION := $(strip $(shell tr -d '\r\n' < $(DEV_FAST_MOLD_VERSION_FILE)))
 DEV_FAST_MOLD_VERSION_PATTERN = $(subst .,\.,$(DEV_FAST_MOLD_VERSION))
-DEV_FAST_RUST_CONFIG ?= ../$(DEV_FAST_CONFIG)
 DEV_FAST_CARGO_BRIDGE ?= tools/dev-fast/cargo
-DEV_FAST_ABSOLUTE_CONFIG := $(abspath $(DEV_FAST_CONFIG))
 DEV_FAST_HOST_IS_LINUX := $(if $(filter Linux,$(shell uname -s)),yes)
 # `CARGO` remains a caller-injectable single executable. Maturin can select
 # that executable but cannot pass Cargo's configuration-file `--config` form.
@@ -44,8 +52,8 @@ maturin_release_profile = $(strip $(if $(1),$(if $(and $(filter --profile,$(firs
 MATURIN_DEVELOP_IS_RELEASE := $(strip $(filter --release -r --profile=release,$(MATURIN_DEVELOP_FLAGS)) $(call maturin_release_profile,$(MATURIN_DEVELOP_FLAGS)))
 DEVELOP_DEV_FAST_ENABLED := $(if $(DEV_FAST_HOST_IS_LINUX),$(if $(MATURIN_DEVELOP_IS_RELEASE),,yes))
 DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
-DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) DEV_FAST_CONFIG=$(DEV_FAST_ABSOLUTE_CONFIG) CARGO=$(DEV_FAST_CARGO_BRIDGE))
-DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
+DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) CARGO=$(DEV_FAST_CARGO_BRIDGE))
+DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG_RELATIVE)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG_RELATIVE)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
 DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
 DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
 WHITAKER ?= whitaker

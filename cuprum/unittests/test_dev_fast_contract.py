@@ -130,6 +130,39 @@ def test_fragment_is_the_approved_immutable_extension() -> None:
     )
 
 
+def test_the_routed_fragment_path_cannot_be_overridden() -> None:
+    """The selected fragment is Makefile-fixed, not a caller-supplied variable.
+
+    A `?=` or plain assignment here would let an environment variable or a
+    command-line variable select an unreviewed Cargo configuration while every
+    routing test still passed, because those tests exercise the default
+    invocation. GNU Make's `override` directive is the only definition form that
+    outranks both, so it is required rather than stylistic.
+    """
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "override DEV_FAST_CONFIG_RELATIVE := tools/dev-fast/config.toml" in (
+        makefile
+    ), "the fragment path must be a Makefile-owned constant no caller can replace"
+    assert "DEV_FAST_RUST_CONFIG ?=" not in makefile, (
+        "a `?=` definition still yields to an ordinary environment variable"
+    )
+    assert "\nDEV_FAST_CONFIG ?=" not in makefile, (
+        "the fragment path must not remain caller-overridable"
+    )
+
+
+def test_the_adapter_environment_does_not_expose_the_configuration() -> None:
+    """The Maturin adapter derives its fragment, so nothing passes it one."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "DEV_FAST_CONFIG=" not in makefile, (
+        "the routed adapter environment must not carry a caller-settable fragment"
+    )
+    output = _dry_run("develop", variables={"DEV_FAST_HOST_IS_LINUX": "yes"})
+    assert "DEV_FAST_CONFIG=" not in output, (
+        "develop must not hand the adapter a configuration path to trust"
+    )
+
+
 def test_every_workspace_member_inherits_the_published_msrv() -> None:
     """Keep Clippy's MSRV-aware diagnostics aligned with Cargo metadata."""
     rust_root = repo_root() / "rust"

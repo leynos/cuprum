@@ -39,11 +39,23 @@ the fragment's target flags. `make dev-fast-check` validates the selected
 fragment, the version from `tools/mold/VERSION`, and the installed component
 before an accelerated route runs.
 
+The routed fragment path is internal state, not caller input. The Makefile
+derives it from one constant assigned with GNU Make's `override` directive, so
+neither a make variable on the command line nor an environment variable of the
+same name can replace it. A plain or `?=` assignment would not hold: an
+ordinary environment variable replaces a `?=` definition, and only `override`
+outranks a command-line variable. Without it, a caller could route an
+accelerated build through a configuration the project never reviewed while the
+prerequisite gate still passed. The prerequisite gate checks that fixed
+constant. Anything needing a different Cargo configuration is outside this
+route and does not use it.
+
 The Linux-only `tools/dev-fast/cargo` adapter receives the real Cargo
-executable and immutable fragment path from Make. It adds exactly one
-`--config` option, exports the real executable as `CARGO` for child build
-scripts, rejects caller configuration options, and replaces itself with Cargo
-to preserve argv and exit status.
+executable from Make and derives the fragment from its own location, so the
+configuration it passes is a property of the checked-out tree rather than of
+its environment. It adds exactly one `--config` option, exports the real
+executable as `CARGO` for child build scripts, rejects caller configuration
+options, and replaces itself with Cargo to preserve argv and exit status.
 
 The shared CI action downloads only checksum-pinned upstream mold binaries for
 supported Linux architectures. It has no source-build fallback. CI installs the
