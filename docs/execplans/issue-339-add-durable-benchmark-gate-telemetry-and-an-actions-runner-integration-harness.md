@@ -251,14 +251,14 @@ not depend on `makeutil`, so the opt-in scenario lane is unaffected.
 Installation of `makeutil` remains a failure mode for `make test` that the
 branch neither introduces nor can remove.
 
-The third rebase onto `f48cf8d4` inherited main's audited Rust safety
-boundaries (`33bff5db`), which claimed ADR-011 while the branch's telemetry
-ADR held the same number. The branch's ADRs are now 012 and 013; see the
-progress log for why the renumber was deferred to a commit after the replay.
-That rebase also brought main's boundary-verifier toolchain, whose Kani and
-Verus targets are opt-in and are not part of the default gates. They are not
-run here for the same reason `test-act` is not: they need pinned binaries and
-a container or prover runtime beyond the four required gates.
+The third rebase onto `f48cf8d4` inherited main's audited Rust safety boundaries
+(`33bff5db`), which claimed ADR-011 while the branch's telemetry ADR held the
+same number. The branch's ADRs are now 012 and 013; see the progress log for
+why the renumber was deferred to a commit after the replay. That rebase also
+brought main's boundary-verifier toolchain, whose Kani and Verus targets are
+opt-in and are not part of the default gates. They are not run here for the
+same reason `test-act` is not: they need pinned binaries and a container or
+prover runtime beyond the four required gates.
 
 ## Verification plan
 
@@ -379,6 +379,35 @@ PR records provide the durable review history. Useful logs from this session:
 - `/tmp/issue339-hosted-final.json` records the terminal run result;
   `/tmp/issue339-hosted-coverage-job.log` and
   `/tmp/issue339-hosted-wheel-job.log` contain the two external failures above.
+
+## Pre-merge check dispositions
+
+The hosted walkthrough's failed checks were re-read against the current tree
+after the third rebase. All four rows describe the code as it exists now, so
+each was verified rather than inherited:
+
+- **Testing (Overall), error.** `ci.yml` does check `GITHUB_RUN_ID` and
+  `GITHUB_RUN_ATTEMPT` as ASCII decimal, and the only execution helper that
+  runs that writer supplies fixed valid values, so no test would fail if the
+  check were deleted. The remedy is new execution cases with invalid identities
+  plus Makefile contract tests. Open.
+- **Unit Architecture, error.** `persist_decision()` calls
+  `dt.datetime.now(dt.UTC)` inline while also owning validation, persistence,
+  and step-output publication, so record construction cannot be tested
+  deterministically. Open; the remedy is to pass `recorded_at` in at the
+  command boundary.
+- **Developer Documentation, warning.** `docs/developers-guide.md` names the
+  hosted harness job but never states how to run `make test-act`, that it is
+  excluded from `make test`, or that `act` and a container runtime are
+  required. Open.
+- **Testing (Property / Proof), warning.** The changed parser suite uses
+  parametrized fixtures only; no Hypothesis property covers the last-value-wins
+  output contract or the shell analyser. Open.
+
+Each row is a scope decision, not a defect found in existing code: the rows ask
+for additional coverage and one refactor, and none claims the current behaviour
+is wrong. They are recorded here so the dispositions survive context loss; the
+review loop closes them with replies linked to this section.
 
 ## Outcomes & retrospective
 
