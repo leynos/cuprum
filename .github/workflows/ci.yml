@@ -66,7 +66,7 @@ jobs:
       YAMLLINT_VERSION: '1.38.0'
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
       - name: Compute cache keys
         uses: ./.github/actions/cache-keys
@@ -116,12 +116,12 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Cache yamllint
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -209,7 +209,7 @@ jobs:
       # Merman CLI 0.7.0 needs Rust 1.95+, while the project gates must keep
       # running with the supported Rust 1.85.0 toolchain below.
       - name: Install Rust toolchain for Nixie
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: '1.95.0'
           cache-provider: external
@@ -231,24 +231,24 @@ jobs:
       - name: Install mdtablefix
         # The shared action accepts only releases with correct multi-platform
         # metadata and fails closed instead of compiling a formatter in CI.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Install Nixie
-        uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-nixie@a5765019912a8ab6882b12db049c7cde635f3a85
 
       # The formatter profile needs nightly-only settings. Install its pinned
       # maintenance toolchain before restoring the supported project compiler.
       - name: Install formatter Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: 'nightly-2026-05-28'
           cache-provider: external
           use-sccache: 'false'
 
       - name: Install project Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -260,7 +260,7 @@ jobs:
         uses: ./.github/actions/setup-dev-fast
 
       - name: Install Whitaker
-        uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-whitaker@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
 
@@ -285,7 +285,7 @@ jobs:
         # resolved from the registry at run time, and Dependabot manages the
         # pin alongside the other actions. It reads .markdownlint-cli2.jsonc
         # from the workspace, so the rules and ignores match `make markdownlint`.
-        uses: DavidAnson/markdownlint-cli2-action@4580e1612f6407034edd6c0e4e316d725920867b  # v24.2.0
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff  # v24.2.0
         with:
           globs: |
             **/*.md
@@ -396,7 +396,7 @@ jobs:
             python-suite: true
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           persist-credentials: false
 
@@ -490,18 +490,18 @@ jobs:
         run: sccache --zero-stats
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: ${{ matrix.allow-prereleases }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -522,7 +522,7 @@ jobs:
       # Restoring the tool cache is an optimization, not a prerequisite.
       - name: Install mdtablefix
         if: matrix.python-suite
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
@@ -617,7 +617,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # This job compiles and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
@@ -706,12 +706,12 @@ jobs:
         run: sccache --zero-stats
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: false
 
@@ -719,7 +719,7 @@ jobs:
       # pinned toolchain the other Rust-touching jobs use rather than whatever
       # the runner image happens to ship.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -820,19 +820,19 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           # This job compiles and runs repository code, so the checkout token
           # must not stay in .git/config where that code could reach it.
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: true
 
@@ -899,7 +899,7 @@ jobs:
       MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           persist-credentials: false
 
@@ -988,17 +988,17 @@ jobs:
         run: sccache --zero-stats
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           toolchain: '1.85.0'
           cache-provider: external
@@ -1008,7 +1008,7 @@ jobs:
       # Coverage runs the full Python suite, including native selector parity.
       # The restored tool cache is optional, so provision the pinned binary.
       - name: Install mdtablefix
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
@@ -1039,7 +1039,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@77ea10341249024e22ec5d9069e3caa7596e0d4f
+        uses: leynos/shared-actions/.github/actions/generate-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
@@ -1133,13 +1133,13 @@ jobs:
       bench: ${{ steps.filter.outputs.bench }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           persist-credentials: false
 
       - name: Detect performance-relevant changes
         id: filter
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
         with:
           filters: |
             bench:
@@ -1223,7 +1223,7 @@ jobs:
       needs.changes.outputs.bench == 'true')
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -1310,12 +1310,12 @@ jobs:
         run: sccache --zero-stats
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: false
 
@@ -1575,7 +1575,7 @@ jobs:
 
       - name: Upload benchmark ratchet artefacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: benchmark-ratchet
           path: |
@@ -1650,7 +1650,7 @@ jobs:
           ${{ !cancelled() && github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
           steps.candidate-artefacts.outputs.available == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: benchmark-ratchet-main-baseline
           if-no-files-found: error
