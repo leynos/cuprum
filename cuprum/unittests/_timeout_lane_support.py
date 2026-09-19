@@ -313,8 +313,9 @@ def termination_allowance_seconds() -> int:
     Returns
     -------
     int
-        The larger of the default profile's ``slow-timeout.grace-period``
-        and 60 seconds.
+        The largest configured ``slow-timeout.grace-period``, across the
+        default profile and every override that sets a ``slow-timeout``,
+        with a 60-second floor applied to it.
 
     An allowance rather than a reading of nextest. Nextest's own default is
     10 seconds, so the floor here is this repository's, not the tool's, and
@@ -323,6 +324,25 @@ def termination_allowance_seconds() -> int:
     safe direction for a budget whose purpose is to avoid reporting a slow
     build as a hang. Cuprum configures no grace period, so the floor is
     what this returns today.
+
+    Every override is read, and read whole. An override's ``slow-timeout``
+    replaces the profile's table for the tests its filter matches rather
+    than merging into it — proved by running a binary under an override
+    whose period and multiplier gave 2 s while the profile's gave 300 s,
+    and seeing nextest terminate at 2.014 s — so an override that declares
+    a grace period has replaced whatever the profile declared, and the
+    profile's value cannot speak for those tests. Reading only the profile
+    would let a widened grace period go uncontained by the watchdog, and
+    the failure that produces names ``cargo`` rather than the test.
     """
-    grace_period = _slow_timeout_of(_default_nextest_profile()).get("grace-period")
-    return max(60, _duration_seconds(grace_period) if grace_period else 0)
+    profile = _default_nextest_profile()
+    declared = [_slow_timeout_of(profile)]
+    declared.extend(
+        _slow_timeout_of(override) for override in _slow_timeout_overrides(profile)
+    )
+    configured = [
+        _duration_seconds(slow_timeout["grace-period"])
+        for slow_timeout in declared
+        if "grace-period" in slow_timeout
+    ]
+    return max(60, max(configured, default=0))

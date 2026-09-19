@@ -75,24 +75,26 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     """
     profile = _default_nextest_profile()
     base = _allowance_of(_slow_timeout_of(profile))
-    overrides = _slow_timeout_overrides(profile)
-    assert overrides, (
-        f"{NEXTEST_CONFIG} grants every test the profile's allowance, but the "
-        f"`trybuild` UI tests are bounded by a compilation and were measured "
-        f"at 277 s against 62 s in CI under `make test`'s dev-fast flags; a "
-        f"healthy test reaching the allowance means it is no longer a bound"
+    matching = [
+        override
+        for override in _slow_timeout_overrides(profile)
+        if str(override.get("filter")) == COMPILE_TEST_FILTER
+    ]
+    assert matching, (
+        f"no override in {NEXTEST_CONFIG} carries filter "
+        f"{COMPILE_TEST_FILTER!r}, so the widened tier is granted to whatever "
+        f"the declared filters select instead of to the `trybuild` binaries "
+        f"this tier exists for; they fall back to the profile's {base} s, "
+        f"which this repository has already seen kill one of them while it was "
+        f"still compiling a dependency and was therefore healthy"
     )
-    widest = max(_allowance_of(_slow_timeout_of(override)) for override in overrides)
+    widest = max(_allowance_of(_slow_timeout_of(override)) for override in matching)
     assert widest > base, (
-        f"{NEXTEST_CONFIG}'s widest override grants {widest} s, no more than "
-        f"the profile's {base} s, so it does not widen the tier the `trybuild` "
-        f"tests need widened"
-    )
-    filters = [str(override.get("filter")) for override in overrides]
-    assert COMPILE_TEST_FILTER in filters, (
-        f"none of {NEXTEST_CONFIG}'s {filters} is {COMPILE_TEST_FILTER!r}, so "
-        f"the widened tier is granted to whatever those filters select instead "
-        f"of to the `trybuild` binaries this tier exists for"
+        f"the override carrying filter {COMPILE_TEST_FILTER!r} grants {widest} "
+        f"s, no more than the profile's {base} s, so it does not widen the tier "
+        f"the `trybuild` tests need widened: the gate run of 2026-09-19 "
+        f"terminated `compile_time_ui` at 300 s against 277 s measured for the "
+        f"same test on an unloaded machine, so a healthy test reaches it"
     )
     missing = [
         source
