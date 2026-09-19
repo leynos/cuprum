@@ -19,8 +19,10 @@ _FORMATTER_FIXTURE_SKIPS = {
     ("rust/cuprum-streams/src/io_utils/tests.rs", "pipe"),
     ("rust/cuprum-streams/src/splice/tests.rs", "pipe"),
 }
+_RUSTFMT_SKIP = "#[rustfmt::skip]"
+_RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
 _RUSTFMT_FIXTURE_SKIP = re.compile(
-    r"#\[rustfmt::skip\]\n#\[fixture\]\nfn (?P<name>\w+)\b"
+    rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
 )
 
 
@@ -72,25 +74,28 @@ def test_project_toolchain_declares_maintenance_components() -> None:
     }, "the stable pin must retain its compiler and declare each required component"
 
 
+def _line_number(source: str, offset: int) -> int:
+    """Return the one-based line number at a character offset."""
+    return source.count("\n", 0, offset) + 1
+
+
 def test_formatter_skips_are_limited_to_known_rstest_fixtures() -> None:
     """The formatter exception set remains auditable and deliberately small."""
     root = repo_root()
     rust_root = root / "rust"
     observed: set[tuple[str, str]] = set()
-    skip_count = 0
 
     for source_path in rust_root.glob("**/*.rs"):
+        relative = source_path.relative_to(root).as_posix()
         source = source_path.read_text(encoding="utf-8")
-        matches = list(_RUSTFMT_FIXTURE_SKIP.finditer(source))
-        skip_count += source.count("#[rustfmt::skip]")
-        observed.update(
-            (source_path.relative_to(root).as_posix(), match["name"])
-            for match in matches
-        )
+        for skip in _RUSTFMT_SKIP_FINDER.finditer(source):
+            fixture = _RUSTFMT_FIXTURE_SKIP.match(source, skip.start())
+            assert fixture is not None, (
+                f"{relative}:{_line_number(source, skip.start())}: every rustfmt "
+                "skip must apply directly to one rstest fixture"
+            )
+            observed.add((relative, fixture["name"]))
 
-    assert skip_count == len(observed), (
-        "each rustfmt skip must apply directly to one rstest fixture"
-    )
     assert observed == _FORMATTER_FIXTURE_SKIPS, (
         "add a mutation proof before extending the formatter exception set"
     )

@@ -3312,10 +3312,11 @@ remains incompatible:
 - `rust/cuprum-streams/src/io_utils/tests.rs`: `pipe`
 - `rust/cuprum-streams/src/splice/tests.rs`: `pipe`
 
-Remove each skip when the pinned formatter, `rstest`, and Rust 1.85.0 compile
-the configured profile with warnings denied. Do not add another skip merely to
-preserve a formatter shape. First reproduce the incompatibility with the pinned
-toolchains, then update the exact approved set in
+Remove each skip only when the pinned formatter formats the source first and
+Rust 1.85.0 then compiles the formatted `rstest` fixture with warnings denied,
+reporting no `unused_braces` diagnostic. Do not add another skip merely to
+preserve a formatter shape. Reproduce the incompatibility with the pinned
+toolchains first, then update the exact approved set in
 `cuprum/unittests/test_rust_formatter_toolchain.py`. That source contract is
 the mutation proof: it scans every Rust source file and fails unless every skip
 directly precedes one of the approved `rstest` fixtures.
