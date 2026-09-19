@@ -345,12 +345,16 @@ command line for each scenario, including the `CUPRUM_STREAM_BACKEND`
 environment prefix that is the only difference between a Python and a Rust
 scenario. The profile step keeps the four the job measures — one per callback
 mode per backend, two stages each — and its hyperfine export holds one mean per
-scenario, which is what every ratio in these tables divides. The warmup and run
-counts are `ci_benchmark_ratchet_profile._CI_RATCHET_RUNS`, so the step is the
-job's measurement rather than a copy of it. Expect its two ratios to differ
-from the table's quiet-machine ones rather than to land on them: a re-run on
-this host while it carried other work returned 0.8077 and 0.9469 against that
-table's 0.83–0.84 and 0.92–1.03, which is the drift the band exists to cover.
+scenario, which is what every ratio in these tables divides. The measured run
+count is `ci_benchmark_ratchet_profile._CI_RATCHET_RUNS`, which that module
+passes as `--runs`; the single warm-up is a separate `--warmup 1` literal in
+the same invocation, so the profile measures one discarded run per command
+ahead of the counted ones and `_CI_RATCHET_RUNS` does not govern it. The run
+count is therefore the step's link to the job's measurement rather than a copy
+of it. Expect its two ratios to differ from the table's quiet-machine ones
+rather than to land on them: a re-run on this host while it carried other work
+returned 0.8077 and 0.9469 against that table's 0.83–0.84 and 0.92–1.03, which
+is the drift the band exists to cover.
 
 Repeating that profile step and reading the ratio spread across repeats
 reproduces the bands in "The ratio's spread is load-sensitive and falls no
