@@ -169,41 +169,31 @@ impl NativePumpModel {
     /// Create a model with one callback-owned writer duplicate.
     #[must_use]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            was_cancelled: AtomicBool::new(false),
-            cleanup_count: AtomicUsize::new(0),
-            cleanup_lock: Mutex::new(Lifecycle::new()),
-            completion_signal: Condvar::new(),
-            inject_double_close: false,
-            inject_early_release: false,
-        })
+        Self::with_defects(false, false)
     }
 
     /// Create an explicitly selected defective model for non-vacuity evidence.
     #[cfg(feature = "loom-defect-fixture")]
     #[must_use]
     pub fn with_double_close_defect() -> Arc<Self> {
-        Arc::new(Self {
-            was_cancelled: AtomicBool::new(false),
-            cleanup_count: AtomicUsize::new(0),
-            cleanup_lock: Mutex::new(Lifecycle::new()),
-            completion_signal: Condvar::new(),
-            inject_double_close: true,
-            inject_early_release: false,
-        })
+        Self::with_defects(true, false)
     }
 
     /// Create a model that releases a descriptor while its worker is active.
     #[cfg(feature = "loom-defect-fixture")]
     #[must_use]
     pub fn with_early_release_defect() -> Arc<Self> {
+        Self::with_defects(false, true)
+    }
+
+    fn with_defects(inject_double_close: bool, inject_early_release: bool) -> Arc<Self> {
         Arc::new(Self {
             was_cancelled: AtomicBool::new(false),
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
             completion_signal: Condvar::new(),
-            inject_double_close: false,
-            inject_early_release: true,
+            inject_double_close,
+            inject_early_release,
         })
     }
 
