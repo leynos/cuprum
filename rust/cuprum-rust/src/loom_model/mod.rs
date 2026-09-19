@@ -316,10 +316,10 @@ impl NativePumpModel {
             return;
         }
         if lifecycle.worker_active {
-            lifecycle.released_while_worker_active = true;
             if !self.inject_early_release {
                 return;
             }
+            lifecycle.released_while_worker_active = true;
         }
         lifecycle.writer.close_once(self.inject_double_close);
         lifecycle.blocking_restored = true;
