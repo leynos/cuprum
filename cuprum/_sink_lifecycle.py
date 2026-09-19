@@ -26,31 +26,28 @@ if typ.TYPE_CHECKING:
 _DEFAULT_LABEL_SEPARATOR = ": "
 
 
-def _run_label(cmd: SafeCmd, override: str | None) -> str:
+def _run_label(cmd: SafeCmd) -> str:
     """Build the bounded display label for one run.
 
-    Prefers the caller's explicit ``title`` override; otherwise falls back to
-    ``"<project>: <program>"`` from catalogue metadata. Never includes argv:
-    catalogue membership does not make arguments safe to print, so secrets
-    cannot leak into the label here.
+    Derived from catalogue metadata as ``"<project>: <program>"``. Never
+    includes argv: catalogue membership does not make arguments safe to print,
+    so secrets cannot leak into the label here. An adapter that wants a
+    different label applies its own configuration inside ``open_session``;
+    this layer deliberately reads nothing but the declared protocol, so an
+    adapter's private attributes cannot reach the shared lifecycle.
 
     Returns
     -------
     str
         The bounded display label for the run.
     """
-    if override is not None:
-        return override
     return f"{cmd.project.name}{_DEFAULT_LABEL_SEPARATOR}{cmd.program}"
 
 
-def _command_session_start(
-    cmd: SafeCmd,
-    sink: sinks.OutputSink | None,
-) -> sinks.SessionStart:
+def _command_session_start(cmd: SafeCmd) -> sinks.SessionStart:
     """Build the session start that frames one single-command run."""
     return sinks.SessionStart(
-        label=_run_label(cmd, getattr(sink, "title", None)),
+        label=_run_label(cmd),
         argv=cmd.argv_with_program,
     )
 

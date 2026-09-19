@@ -269,7 +269,7 @@ async def _run_prepared_command(
     # group, and the guard below closes exactly what those paths leave.
     sink_bracket = _SinkBracket.open(
         output.sink,
-        _command_session_start(cmd, output.sink),
+        _command_session_start(cmd),
     )
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
@@ -297,5 +297,21 @@ async def _run_prepared_command(
             tracking,
         )
     except BaseException as run_error:
+        # Close before the drain, for the reason _execute_with_hooks gives: the
+        # drain aggregates a hook failure with the error that ended the run, so
+        # closing afterwards would record the aggregate — an ``error``
+        # annotation standing in for a timeout.
         tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
+        # The plan event above can schedule observe tasks before a later
+        # observer or before-hook raises, and no downstream helper owns them
+        # yet, so the run owes the drain here. The path that already drained in
+        # _execute_with_hooks finds an empty list and returns immediately, so
+        # this cannot double-drain.
+        await _shielded_cleanup(
+            _drain_tasks_during_cleanup(
+                tracking.pending_tasks,
+                run_error,
+                message=_COMMAND_FINALIZATION_ERROR,
+            )
+        )
         raise

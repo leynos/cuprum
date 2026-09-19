@@ -60,9 +60,12 @@ class _RecordingSession:
 
 
 class _RecordingSink:
-    """Minimal OutputSink returning a recording session."""
+    """Minimal OutputSink returning a recording session.
 
-    title: str | None
+    Deliberately carries no ``title``: the shared lifecycle reads only the
+    declared :class:`~cuprum.sinks.base.OutputSink` protocol, so an adapter's
+    private configuration cannot reach ``SessionStart.label``.
+    """
 
     def __init__(
         self,
@@ -72,7 +75,6 @@ class _RecordingSink:
     ) -> None:
         """Configure whether the adapter declines activation."""
         self.decline = decline
-        self.title = None
         self.started_with: SessionStart | None = None
         self.opened = 0
         self.last_session: _RecordingSession | None = None
@@ -151,7 +153,7 @@ def test_sink_declining_activation_is_a_no_op() -> None:
         f"the session start must carry the command's argv; "
         f"got {adapter.started_with.argv!r}"
     )
-    assert adapter.started_with.label == _run_label(command, None), (
+    assert adapter.started_with.label == _run_label(command), (
         f"the session start must carry the derived label; "
         f"got {adapter.started_with.label!r}"
     )
@@ -221,18 +223,33 @@ def test_sink_session_closes_on_timeout() -> None:
     )
 
 
-def test_sink_session_label_prefers_title() -> None:
-    """An adapter's title attribute overrides the catalogue-derived label."""
-    adapter = _RecordingSink()
-    adapter.title = "Custom title"
+class _TitledRecordingSink(_RecordingSink):
+    """A sink carrying an adapter-private ``title`` the protocol never declares."""
+
+    def __init__(self, title: str) -> None:
+        """Record the adapter's own title configuration."""
+        super().__init__()
+        self.title = title
+
+
+def test_sink_session_label_ignores_undeclared_adapter_attributes() -> None:
+    """The shared lifecycle reads only the declared OutputSink protocol.
+
+    ``title`` is ``GitHubActionsSink``'s own configuration, not part of the
+    protocol. An adapter that happens to carry one must not have it reach
+    ``SessionStart.label``, or the shared layer would be depending on a
+    concrete adapter's private attribute. The adapter applies its own title
+    inside ``open_session`` instead.
+    """
+    adapter = _TitledRecordingSink("Custom title")
     command = _python_builder()("-c", "print('titled')")
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
 
     assert result.ok is True, f"the titled run must succeed; got {result!r}"
     assert adapter.started_with is not None, "a run with a sink must open a session"
-    assert adapter.started_with.label == "Custom title", (
-        f"an adapter title must override the derived label; "
+    assert adapter.started_with.label == _run_label(command), (
+        f"an adapter-private title must not reach the shared label; "
         f"got {adapter.started_with.label!r}"
     )
 

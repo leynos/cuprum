@@ -32,6 +32,8 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from syrupy.assertion import SnapshotAssertion
+
     from cuprum.sh import SafeCmd
 
 
@@ -64,6 +66,45 @@ def test_escape_property_additionally_masks_delimiters() -> None:
     combination = _escape_property("50%\n")
     assert combination == "50%25%0A", (
         f"property escaping must combine '%' and newline masking; got {combination!r}"
+    )
+
+
+def _framed_text(sink: GitHubActionsSink, buffer: io.StringIO) -> str:
+    """Open and close one session over a fixed label, with a stable token.
+
+    The lease token is drawn at random per session, so it is replaced with a
+    fixed placeholder before the text reaches a snapshot; every other byte of
+    the frame is deterministic.
+
+    Returns
+    -------
+    str
+        The framed workflow commands, with the stop token normalized.
+    """
+    session = sink.open_session(SessionStart(label="cool-project", argv=()))
+    assert session is not None, "a forced sink must return an active session"
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
+    return buffer.getvalue().replace(session.stop_token, "STOP_TOKEN")
+
+
+def test_framed_workflow_commands_match_the_snapshot(
+    snapshot: SnapshotAssertion,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot: the exact workflow-command sequence a framed run emits.
+
+    The runner parses these lines as a wire format, so the shape of each one —
+    not merely the presence of a group — is the contract. The random stop
+    token is normalized to ``STOP_TOKEN`` so the frame is comparable.
+    """
+    monkeypatch.setattr(
+        "cuprum.sinks.github_actions._new_stop_token",
+        lambda: "0123456789abcdef",
+    )
+    sink, buffer = _gha_sink(force=True)
+
+    assert _framed_text(sink, buffer) == snapshot, (
+        "the framed workflow commands should retain the snapshot wire contract"
     )
 
 

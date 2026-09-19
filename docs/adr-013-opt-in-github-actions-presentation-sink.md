@@ -166,10 +166,20 @@ not an environment-triggered default.
   callers who need child-emitted annotations should run without the sink.
 - Workflow commands assume the runner parses the destination stream; a caller
   redirecting `destination` to a non-Actions stream gets literal command text.
-- Concurrent runs sharing one process's stderr interleave their framing at
-  write granularity; the runner associates each command with the group open
-  immediately before it, which is correct for sequential runs and best-effort
-  for interleaved ones.
+- Concurrent runs sharing one presentation destination are **not** protected by
+  the lease. The runner holds one stop-commands state per stream, so it tracks
+  only the most recent lease: a second session opened while the first is still
+  active writes its `::stop-commands::` line into a destination the first lease
+  is already suppressing, and that line is therefore never acted on. When the
+  first session releases its lease, interpretation resumes for the shared
+  destination while the second session is still open, so child output the
+  second session mirrors after that point *is* interpreted as workflow
+  commands. Framing is additionally misassociated, because the runner closes
+  the group that is open when the first session's release lands rather than the
+  one that session opened. Attach the sink to concurrent runs only when each
+  writes to its own destination. This is a known, unfixed limitation:
+  serializing sessions over one destination, or declining to open an
+  overlapping one, changes the session lifecycle and is tracked separately.
 
 ## Consequences
 

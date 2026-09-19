@@ -113,6 +113,63 @@ def test_child_workflow_commands_stay_inside_the_lease() -> None:
     )
 
 
+def _assert_between_framing(value: str, *lines: str) -> None:
+    """Assert each of *lines* falls between the group opening and lease release.
+
+    Parameters
+    ----------
+    value : str
+        The sink buffer's contents after the run.
+    *lines : str
+        The echoed output lines that must be framed.
+    """
+    opened = value.index("::group::")
+    release = value.index(f"::{_stop_token(value)}::\n")
+    for line in lines:
+        index = value.index(line)
+        assert opened < index < release, (
+            f"the {line!r} echo must land inside the framing; "
+            f"found it at {index} outside ({opened}, {release})"
+        )
+
+
+def test_forced_sink_frames_both_echoed_streams() -> None:
+    """Both echoed streams land inside one session's framing, capture intact.
+
+    A single session brackets the whole run, so the stdout and stderr echoes
+    are written through the same log destination. Both must fall between the
+    session's opening frame and its lease release; a stream that escaped the
+    framing would appear above the group or after the release.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    command = python(
+        "-c",
+        "import sys; print('out line'); sys.stderr.write('err line\\n')",
+    )
+    sink, buffer = _forced_sink()
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
+
+    assert result.ok is True, f"the framed run must still succeed; got {result!r}"
+    assert result.stdout == "out line\n", (
+        f"stdout capture must be unchanged; got {result.stdout!r}"
+    )
+    assert result.stderr == "err line\n", (
+        f"stderr capture must be unchanged; got {result.stderr!r}"
+    )
+
+    value = buffer.getvalue()
+    assert value.startswith("::group::"), (
+        f"the group must open the session before either stream; got {value!r}"
+    )
+    _assert_between_framing(value, "out line", "err line")
+    assert value.endswith("::endgroup::\n"), (
+        f"the group must close after the lease release; got {value!r}"
+    )
+
+
 def test_failing_run_annotates_without_argv() -> None:
     """A real failing run's annotation carries the bounded label, not argv."""
     catalogue, python_program = python_catalogue()
@@ -137,7 +194,7 @@ def test_failing_run_annotates_without_argv() -> None:
         f"the annotation must not republish argv; got {annotation!r}"
     )
     assert annotation == (
-        f"title={_escape_property(_run_label(command, None))}::exit_nonzero\n"
+        f"title={_escape_property(_run_label(command))}::exit_nonzero\n"
     ), "the annotation names the program and no arguments"
 
 

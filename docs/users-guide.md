@@ -691,7 +691,7 @@ capture or the exit code: a failing framed command still returns the same
 By default the title is the joined program arguments for single commands and
 `pipeline` for pipelines. A sink that declines activation (returns `None` from
 its `open_session`) leaves the run unchanged; see `cuprum.sinks.base` for the
-adapter protocol if you need a custom presentation sink.
+adapter protocol for custom presentation sinks.
 
 ### Migrating from `capture`/`echo` keyword arguments
 

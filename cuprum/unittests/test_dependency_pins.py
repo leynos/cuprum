@@ -82,9 +82,16 @@ def _constraint_comment_block() -> str:
     """
     lines = _pyproject_text().splitlines()
     index = next(
-        position
-        for position, line in enumerate(lines)
-        if _CONSTRAINT_RE.match(line.strip().strip('",'))
+        (
+            position
+            for position, line in enumerate(lines)
+            if _CONSTRAINT_RE.match(line.strip().strip('",'))
+        ),
+        None,
+    )
+    assert index is not None, (
+        "pyproject.toml must declare a pytest constraint for the rationale "
+        "comment to introduce"
     )
     block: list[str] = []
     for line in reversed(lines[:index]):
