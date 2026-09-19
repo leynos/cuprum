@@ -1,4 +1,9 @@
-"""Tests for tee-path sink implementations."""
+"""Tests for the tee destinations and blackhole sinks.
+
+The presentation-adapter tests live beside their subjects: the shared session
+lifecycle in ``test_sink_lifecycle.py`` and the GitHub Actions adapter in
+``test_sinks_github_actions.py``.
+"""
 
 from __future__ import annotations
 

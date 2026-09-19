@@ -8,6 +8,7 @@ import typing as typ
 
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
 from cuprum._idle_heartbeat import _build_idle_monitor
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
@@ -15,6 +16,8 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._streams import _MirrorCursor
     from cuprum.sh import ExecutionContext, RunOutputOptions
+
+from cuprum.sinks import base as sinks
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -36,6 +39,7 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    sink_bracket: _SinkBracket
     idle: _IdleMonitor | None = None
 
     @property
@@ -48,14 +52,30 @@ class _PipelineRunConfig:
         """Whether the parent must consume a stage's stderr."""
         return self.capture or self.echo_stderr or self.idle is not None
 
+    def _framed_sink(self, fallback: typ.IO[str]) -> typ.IO[str]:
+        """Return the active session's log destination, or *fallback*.
+
+        Returns
+        -------
+        typ.IO[str]
+            The destination mirrored output for this stream is written to.
+        """
+        session = self.sink_bracket.session
+        return fallback if session is None else session.log
+
     @property
     def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
+        """Build the stdout stream configuration for the final pipeline stage.
+
+        When a presentation-sink session is active, mirrored stdout routes
+        through the session's log destination so it lands inside the
+        adapter's framing in the order the adapter received it.
+        """
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stdout,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stdout_sink,
+            sink=self._framed_sink(self.stdout_sink),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
@@ -65,12 +85,17 @@ class _PipelineRunConfig:
 
     @property
     def stderr_stream_config(self) -> _StreamConfig:
-        """Build the stderr stream configuration for a pipeline stage."""
+        """Build the stderr stream configuration for a pipeline stage.
+
+        Mirrored stderr routes through an active presentation-sink session for
+        the same reason as stdout: the adapter's framing must bracket every
+        mirrored stream.
+        """
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=self.echo_stderr,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stderr_sink,
+            sink=self._framed_sink(self.stderr_sink),
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
@@ -121,6 +146,10 @@ def _prepare_pipeline_config(
     # separate arguments; the developer guide forbids parallel internal
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
+    )
     return _PipelineRunConfig(
         ctx=ctx,
         capture=output.capture,
@@ -130,6 +159,7 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        sink_bracket=sink_bracket,
         # One aggregate heartbeat for the whole pipeline, labelled for what it
         # actually observes: the parent-facing output, not the health of every
         # stage. The clock starts when the first stage starts.

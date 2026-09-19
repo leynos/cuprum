@@ -59,7 +59,6 @@ def _install_value_error_recovery_doubles(
             scenario.resume_calls.append("resume")
 
         return _pipeline_stream_fds._ReaderPause(
-            may_hand_off=True,
             resume=resume_reader,
         )
 

@@ -15,6 +15,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
+- [ADR-012: Opt-in GitHub Actions presentation sink](adr-012-opt-in-github-actions-presentation-sink.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -609,6 +610,42 @@ and the event loop does not pre-empt an `emit()` call halfway through the list
 append, so no explicit lock is required. Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
 
+### Presentation-sink session lifecycle
+
+When `RunOutputOptions.sink` is set, both runners owe the sink's session a
+close on every terminal path. The shared mechanics live in
+`cuprum/_sink_lifecycle.py`; the contract (see
+[ADR-012](adr-012-opt-in-github-actions-presentation-sink.md)):
+
+- `_SinkBracket.open` opens the session *before* any subprocess starts — from
+  `_command_session_start` for a single command and from
+  `_prepare_pipeline_config` for a pipeline. The bracket is the take-once owner
+  of the session, and framing is the adapter's own business: `open_session`
+  writes it before returning, with no hook and no duck typing, so child output
+  can never appear above the group opening. A declined activation (`None`)
+  leaves the bracket empty and the run unchanged with nothing to unwind.
+- Stream configuration routes echoed stdout and stderr through the bracket's
+  `session.log` when a session is active, replacing the default destinations
+  for that run only.
+- Every terminal path finalizes through `_SinkBracket.close`, which releases the
+  session and delegates to `_close_sink_session` with a bounded
+  `SessionOutcome`. The close is exactly-once — only the first reaches the
+  adapter — so a later guard cannot overwrite an early, precise outcome.
+  `_outcome_for_result` maps a completed run's exit code and
+  `_outcome_for_error` maps timeout, cancellation, and earlier failures. A
+  pipeline reports its first failing stage's exit code through
+  `_pipeline_result_outcome` (`cuprum/_pipeline_sink.py`). Only categorical
+  detail reaches the adapter; exception text and argv never do.
+- The close runs before the shielded task drain, deliberately: the drain can
+  aggregate a failing after-hook or observe task into a `BaseExceptionGroup`,
+  so closing afterwards would record the aggregate in place of the precise
+  timeout or cancellation, and a drain that raised would skip the close
+  entirely.
+
+When adding an exit path to `_execute_with_hooks` or the pipeline runner, close
+the run's bracket in the same change. A path that skips the close leaks the
+stop-commands lease and leaves the group open for the rest of the job log.
+
 Private helpers emit diagnostic logs rather than installing a global metrics or
 tracing backend. Hook scheduling and hook failures use the
 `cuprum._observability` logger with structured `extra` fields such as
@@ -821,8 +858,10 @@ partial-failure paths in one place rather than inlined in the pump:
   pausing — because asyncio silently ignores a pause there and its queued
   `connection_lost` callback can still close the descriptor during hand-off.
   The outcome is an instance of `_ReaderPause`, the frozen slots dataclass that
-  carries `may_hand_off`, `resume`, `decline_reason`, and the
-  `closing_transport` marker, reporting a `reader_pause_failed` decline.
+  carries `may_hand_off`, `resume`, `decline_reason`, the `closing_transport`
+  marker, and the `release` hook, reporting a `reader_pause_failed` decline.
+  `may_hand_off` is derived rather than supplied: only a named `decline_reason`
+  refuses the hand-off, so a permit and a decline reason cannot disagree.
 
 Before native I/O begins, the reader transport is paused and callbacks queued
 before the pause are allowed to settle. If `StreamReader._buffer` contains
@@ -847,12 +886,17 @@ dispatch test modules, leaving nothing for a later test to inherit.
 
 Cancellation is handled explicitly. `run_in_executor` cannot interrupt the
 worker thread running the Rust pump. `_run_rust_pump_with_blocking_fds` shields
-the executor future and re-raises `CancelledError` after cleanup; its
-completion callback closes the remaining reader duplicate, restores its
+the executor future and re-raises `CancelledError` after a bounded wait for
+cleanup (`ExecutionContext.native_pump_cleanup_grace`, 0.5 seconds by default);
+its completion callback closes the remaining reader duplicate, restores its
 descriptor state, and resumes the reader transport only once the worker
-settles. Pipeline teardown remains coupled to that cleanup, so restoring
-blocking mode or resuming the transport earlier cannot hand descriptors back to
-asyncio while native code is still mid-transfer.
+settles. If that grace expires first, the caller has already released (closed)
+the paused reader transport at expiry — while its loop could still run the
+close — so the callback's later resume is a no-op. Pipeline teardown remains
+coupled to that cleanup, so restoring blocking mode or resuming the transport
+earlier cannot hand descriptors back to asyncio while native code is still
+mid-transfer; the grace-expiry release closes only the asyncio-owned reader,
+since the worker reads its own duplicate.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry
@@ -2695,9 +2739,11 @@ fails. On Windows, the shim transfers independently owned Win32 handles and
 closes the temporary CRT descriptors before invoking Rust. No descriptor number
 may be closed by both asyncio and the worker. Blocking mode is restricted to
 the duplicates, and the reader transport remains paused until the worker has
-settled, its remaining duplicate is closed, and its mode is restored. This
-prevents cancellation cleanup from racing with native I/O on a descriptor that
-is still in use.
+settled, its remaining duplicate is closed, and its mode is restored — unless
+the hop's grace expired first, in which case the caller releases (closes) the
+paused reader transport at expiry so it cannot outlive the loop that can no
+longer resume it. This prevents cancellation cleanup from racing with native
+I/O on a descriptor that is still in use.
 
 Executor-side failures are handled in two ways, and the split is deliberate.
 Creating the worker duplicates and submitting the executor work happen *before*
@@ -4449,10 +4495,12 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; timeout or exit-event policy belongs in
 `_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
 terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
-deciding which streams are consumed, and assembling the result — belongs in
-`_subprocess_execution`; and single-command stream-consumer construction
-belongs in `_subprocess_streams`. On the pipeline side, starting stages — and
+belong in `_subprocess_wait`; choosing each mirrored stream's destination and
+single-command stream-consumer construction — the stdout `_StreamConfig`, the
+stderr config derived from it, and the consumer tasks that drain into it —
+belong in `_subprocess_streams`; orchestration that coordinates them —
+spawning, deciding which streams are consumed, and assembling the result —
+belongs in `_subprocess_execution`. On the pipeline side, starting stages — and
 cleaning up whatever a failed startup left running — belongs in
 `_pipeline_spawn`, while terminating stages that are already running belongs in
 `_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
@@ -4474,11 +4522,25 @@ shaped one was withdrawn.
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
 settles the per-stream relay-diagnostics collectors before returning captured
-output. `_subprocess_execution.py` retains process spawning, stream-consumer
-construction, stream configuration, the non-streaming path, and final
-`CommandResult` assembly. `_StreamConsumerSpawnContext` is its private bundle
-of stream configuration, PID, and the stdout/stderr diagnostics collectors; the
-streamed run creates it before handing those values to the consumer tasks.
+output. `_subprocess_execution.py` retains process spawning, the non-streaming
+path, and final `CommandResult` assembly, re-exporting stream-consumer
+construction and stream configuration from `_subprocess_streams`.
+`_StreamConsumerSpawnContext` is the private bundle of stream configuration,
+PID, and the stdout/stderr diagnostics collectors that the streamed run creates
+before handing those values to the consumer tasks.
+
+`cuprum/_subprocess_streams.py` holds the consumer wiring itself:
+`_resolve_stream_sink` picks the destination for one mirrored stream — a live
+presentation-sink session's log first, so mirrored output lands inside the
+adapter's framing (the GitHub Actions group, say) in the order the adapter
+received it, then the execution context's configured sink, then the process's
+own stream — `_create_stream_callback` builds the per-line observability hook,
+`_build_stream_config` assembles the stdout `_StreamConfig`, and
+`_spawn_stream_consumers` derives the stderr config from it and starts both
+reader tasks. It was split out of `_subprocess_execution` to keep both modules
+within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
+so callers and the tests that monkeypatch them by module path resolve the same
+names as before.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -4494,12 +4556,13 @@ promptly and discards output. `_await_capture_eof_grace` uses an injected
 waiter when supplied and otherwise delegates to the bounded `_await_eof_grace`;
 `_settle_consumers` is the single optional settlement boundary that sets the
 discard event before cancelling pending readers.
-`_build_stream_config(execution, discard_on_cancel)` passes that shared event
-into each stream's `_StreamConfig`, so timeout capture can retain buffered text
-while cancellation and failure cleanup can discard it. It was split out of
-`_subprocess_execution` so that module stays about orchestration; termination
-routes through `_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a
-caller cancelling during the grace period cannot skip the `SIGKILL` escalation.
+`_build_stream_config(execution, discard_on_cancel)` (in
+`cuprum/_subprocess_streams.py`) passes that shared event into each stream's
+`_StreamConfig`, so timeout capture can retain buffered text while cancellation
+and failure cleanup can discard it. It was split out of `_subprocess_execution`
+so that module stays about orchestration; termination routes through
+`_terminate_all_shielded` (`cuprum/_process_lifecycle.py`), so a caller
+cancelling during the grace period cannot skip the `SIGKILL` escalation.
 
 The pipeline side has an analogous split. `cuprum/_pipeline_results.py` owns
 per-stage *reporting*: the terminal `exit` event a stage owes its observers
@@ -4509,6 +4572,17 @@ per-stage *reporting*: the terminal `exit` event a stage owes its observers
 pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
+
+`cuprum/_sink_lifecycle.py` holds the presentation-sink session lifecycle the
+two runners share: the `_SinkBracket` that is the take-once owner of one run's
+session, opening it before the work starts (`_open_sink_session`, with
+`_command_session_start` framing a single command), closing it on every
+terminal path (`_close_sink_session`), and mapping a result or an error onto
+the bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
+`cuprum/_pipeline_sink.py` keeps only the pipeline's own result mapping,
+`_pipeline_result_outcome`, which reports the first failing stage's exit code;
+the command-versus-pipeline split there is the shape of the run, not of the
+session.
 
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the

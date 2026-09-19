@@ -36,6 +36,12 @@ from cuprum._pipeline_internals import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import (
+    _command_session_start,
+    _outcome_for_error,
+    _outcome_for_result,
+    _SinkBracket,
+)
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
@@ -61,6 +67,11 @@ from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
+# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
+from cuprum.sinks import (
+    base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
+
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
@@ -68,6 +79,8 @@ type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
+
+
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
@@ -338,6 +351,7 @@ class _ExecutionTracking:
 
     execution_hooks: _ExecutionHooks
     pending_tasks: list[asyncio.Task[None]]
+    sink_bracket: _SinkBracket
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -417,6 +431,12 @@ class RunOutputOptions:
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
         loop. Requires ``idle_after``.
+    sink : sinks.OutputSink | None, default=None
+        Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
+        given, it may reframe the parent-facing output of this run (for
+        example, a GitHub Actions group); the default ``None`` keeps the
+        plain two-stream behaviour. An adapter is inactive for a run when it
+        declines activation, in which case output is unchanged.
 
     Examples
     --------
@@ -436,6 +456,7 @@ class RunOutputOptions:
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
+    sink: sinks.OutputSink | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -569,7 +590,7 @@ def _prepare_execution_observation(
     )
 
 
-# ruff: ignore[too-many-arguments]  # the six inputs are one run's resolved state, carried together rather than derived
+# ruff: ignore[too-many-arguments]  # the seven inputs are one run's resolved state, carried together rather than derived
 def _build_subprocess_execution(
     cmd: SafeCmd,
     context: ExecutionContext,
@@ -578,13 +599,17 @@ def _build_subprocess_execution(
     timeout: float | None,
     observation: _StageObservation,
     stdin_data: bytes | None,
+    sink_session: sinks.OutputSession | None,
 ) -> _SubprocessExecution:
     """Bundle everything one command's execution needs, before it spawns.
 
     The idle monitor is part of the bundle rather than an execution-time
     argument because its presence is what decides whether the child's stdout
     and stderr are piped for activity observation. Deferring it would leave
-    the spawn unable to make that choice.
+    the spawn unable to make that choice. The sink session travels with it
+    for the same reason: stream wiring routes mirrored output through the
+    session's log, so it has to be part of the bundle before the consumers
+    are built.
 
     Returns
     -------
@@ -598,6 +623,7 @@ def _build_subprocess_execution(
         echo_stdout=output.resolved_echo[0],
         echo_stderr=output.resolved_echo[1],
         max_echo_line_bytes=output.max_echo_line_bytes,
+        sink_session=sink_session,
         timeout=timeout,
         observation=observation,
         stdin_data=stdin_data,
@@ -647,6 +673,11 @@ async def _execute_with_hooks(
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
+        # Close before the drain. The drain aggregates a hook failure with the
+        # error that ended the run, so closing afterwards would record the
+        # aggregate — an ``error`` annotation standing in for a timeout — and
+        # a drain that raised would skip the close entirely.
+        tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
         await _shielded_cleanup(
             _drain_tasks_during_cleanup(
                 tracking.pending_tasks,
@@ -655,6 +686,7 @@ async def _execute_with_hooks(
             )
         )
         raise
+    tracking.sink_bracket.close(outcome=_outcome_for_result(result))
     await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
     return result
 
@@ -735,26 +767,40 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        # The bracket owns the session for the whole run: a plan observer, a
+        # before hook, or anything else that raises before execution starts
+        # still finalizes the adapter's framing rather than stranding an open
+        # group, and the guard below closes exactly what those paths leave.
+        sink_bracket = _SinkBracket.open(
+            out.sink,
+            _command_session_start(self, out.sink),
+        )
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
+            sink_bracket=sink_bracket,
         )
-        observation = _prepare_execution_observation(self, ctx, tracking, out)
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(self)
-        return await _execute_with_hooks(
-            self,
-            _build_subprocess_execution(
+        try:
+            observation = _prepare_execution_observation(self, ctx, tracking, out)
+            observation.emit("plan", _EventDetails(pid=None))
+            for hook in tracking.execution_hooks.before_hooks:
+                hook(self)
+            return await _execute_with_hooks(
                 self,
-                ctx,
-                out,
-                timeout=effective_timeout,
-                observation=observation,
-                stdin_data=stdin_data,
-            ),
-            tracking,
-        )
+                _build_subprocess_execution(
+                    self,
+                    ctx,
+                    out,
+                    timeout=effective_timeout,
+                    observation=observation,
+                    stdin_data=stdin_data,
+                    sink_session=sink_bracket.session,
+                ),
+                tracking,
+            )
+        except BaseException as run_error:
+            sink_bracket.close(outcome=_outcome_for_error(run_error))
+            raise
 
     def run_sync(
         self,
@@ -882,7 +928,14 @@ class Pipeline:
             timeout=effective_timeout,
             context=context,
         )
-        return await _run_pipeline(self.parts, config)
+        # The bracket opened with the config; this guard is the last word on
+        # every path out of the pipeline, including one the runner itself
+        # raises on the way to its first stage.
+        try:
+            return await _run_pipeline(self.parts, config)
+        except BaseException as run_error:
+            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
+            raise
 
     def run_sync(
         self,

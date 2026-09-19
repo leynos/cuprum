@@ -88,33 +88,40 @@ class _ReaderPause:
     with a pause hook but no ``resume_reading`` hook is unsafe to hand off: it
     cannot be paused and later returned to asyncio, so it must fall back.
 
+    The verdict is derived rather than supplied: only a named decline may
+    refuse the hand-off, so a permit and a decline reason cannot disagree.
+
     ``closing_transport`` marks the one decline its caller may overrule. A
     closing transport must not have its descriptor duplicated, but a caller
     that supplies its own descriptors is never exposed to that hazard.
+
+    A completed pause owns both the way back (``resume``) and the way out
+    (``release``). ``release`` exists because a deferred hand-off outlives the
+    loop that paused the transport: the loop cannot then resume it, so the
+    paused transport and its descriptor would survive unread and unresolved
+    past ``loop.close()``.
     """
 
     may_hand_off: bool
     resume: cabc.Callable[[], None] | None
     decline_reason: RustPumpDeclineReason | None
     closing_transport: bool
+    release: cabc.Callable[[], None] | None
 
     def __init__(
         self,
-        may_hand_off: object = None,
         resume: cabc.Callable[[], None] | None = None,
         decline_reason: RustPumpDeclineReason | None = None,
         *,
         closing_transport: bool = False,
+        release: cabc.Callable[[], None] | None = None,
     ) -> None:
         """Record a pause outcome, deriving its verdict from a decline reason."""
-        object.__setattr__(
-            self,
-            "may_hand_off",
-            decline_reason is None if may_hand_off is None else bool(may_hand_off),
-        )
+        object.__setattr__(self, "may_hand_off", decline_reason is None)
         object.__setattr__(self, "resume", resume)
         object.__setattr__(self, "decline_reason", decline_reason)
         object.__setattr__(self, "closing_transport", closing_transport)
+        object.__setattr__(self, "release", release)
 
 
 def _pause_reader_transport(
@@ -144,10 +151,9 @@ def _pause_reader_transport(
     pause_reading = getattr(transport, "pause_reading", None)
     resume_reading = getattr(transport, "resume_reading", None)
     if not callable(pause_reading):
-        return _ReaderPause(may_hand_off=True)
+        return _ReaderPause()
     if not callable(resume_reading):
         return _ReaderPause(
-            may_hand_off=False,
             decline_reason=RustPumpDeclineReason.READER_UNRESUMABLE,
         )
     try:
@@ -158,7 +164,6 @@ def _pause_reader_transport(
         with contextlib.suppress(RuntimeError, OSError):
             resume_reading()
         return _ReaderPause(
-            may_hand_off=False,
             decline_reason=RustPumpDeclineReason.READER_PAUSE_FAILED,
         )
 
@@ -167,7 +172,29 @@ def _pause_reader_transport(
         with _suppressed_teardown_failure(_LOGGER, "resume", RuntimeError, OSError):
             resume_reading()
 
-    return _ReaderPause(may_hand_off=True, resume=_resume)
+    close_reading = getattr(transport, "close", None)
+
+    def _release() -> None:
+        """Close the paused reader once its loop can no longer resume it.
+
+        Resuming is not enough here. A transport that is merely resumed still
+        owns its descriptor until the pipe reaches EOF, and it holds its
+        subprocess transport open until then, so an abandoned hop that outlives
+        its loop would release nothing. Closing is what the loop itself would
+        have done at EOF, and it must happen while the loop can still run the
+        callbacks that release the descriptor.
+        """
+        if not callable(close_reading):
+            return
+        with _suppressed_teardown_failure(
+            _LOGGER,
+            "reader_close",
+            RuntimeError,
+            OSError,
+        ):
+            close_reading()
+
+    return _ReaderPause(resume=_resume, release=_release)
 
 
 def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:

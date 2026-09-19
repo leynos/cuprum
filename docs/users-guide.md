@@ -535,6 +535,70 @@ async def greet() -> None:
     print(result.stdout)
 ```
 
+### Presentation sinks
+
+A presentation sink reframes a run's parent-facing output without changing
+capture, success semantics, or the returned result. Sinks are opt-in: pass one
+via `RunOutputOptions(sink=...)` on `SafeCmd.run`, `SafeCmd.run_sync`,
+`Pipeline.run`, or `Pipeline.run_sync`. A run without a sink is byte-for-byte
+unchanged.
+
+`GitHubActionsSink` from `cuprum.sinks` frames one run's echoed output in a
+GitHub Actions collapsible log group and turns a failed run into an error
+annotation. The sink is inactive by default outside GitHub Actions: it reads
+`GITHUB_ACTIONS` from the parent process environment each time a run opens a
+session, and frames only when it holds the runner's value `true`. On any other
+value — including `1` or `TRUE` — or when the variable is unset, the sink
+declines activation, writes nothing, and the run keeps its plain output exactly
+as if no sink had been passed.
+
+To reproduce the CI framing locally, or on a non-standard runner that does not
+export the variable, force activation explicitly:
+
+```python
+GitHubActionsSink(force=True)
+```
+
+Passing a sink does not by itself guarantee workflow-command output outside
+GitHub Actions; callers who need the framing there must pass `force=True`.
+
+Inside GitHub Actions the default is sufficient:
+
+```python
+from cuprum import ECHO, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+cmd = sh.make(ECHO)("-n", "hello sink")
+result = cmd.run_sync(
+    output=RunOutputOptions(echo=True, sink=GitHubActionsSink()),
+)
+```
+
+Per run the adapter writes, in order:
+
+1. `::group::<program args>` before the subprocess starts, titled with the
+   program arguments so the collapsed log entry reads as the command;
+2. a random stop-commands bracket, so child output cannot inject workflow
+   commands while the group is open;
+3. the run's echoed stdout and stderr;
+4. `::endgroup::` at teardown, after the stop-commands bracket is released so
+   the runner processes the endgroup command;
+5. one `::error::` annotation when the run ends in a non-zero exit, a timeout,
+   or an error. The annotation title is the derived label (or the sink's
+   `title` override) and the message is a categorical detail (`timeout`) —
+   never exception text or argument values.
+
+Workflow commands are written to the parent's stderr by default; pass
+`destination=` to route them to another text stream. The sink never changes
+capture or the exit code: a failing framed command still returns the same
+`CommandResult` a caller would see without the sink.
+
+`GitHubActionsSink(title="Build and test")` overrides the derived group title.
+By default the title is the joined program arguments for single commands and
+`pipeline` for pipelines. A sink that declines activation (returns `None` from
+its `open_session`) leaves the run unchanged; see `cuprum.sinks.base` for the
+adapter protocol if you need a custom presentation sink.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
@@ -2123,21 +2187,28 @@ stays diagnosable instead of vanishing behind the cancellation. It sits at
 Handing the descriptors back is best-effort: closing worker-owned duplicates,
 restoring their blocking mode, and resuming the reader transport occur only
 after the pump has settled, so an error there is suppressed rather than raised.
-The asyncio transports retain ownership of their original reader and writer
-descriptors, which remain non-blocking. Rust borrows the worker reader
-duplicate and consumes and closes the worker writer duplicate; Python closes
-the reader duplicate after settlement and closes either duplicate when setup or
-executor submission fails. No descriptor number is closed by both owners. Each
+Closing the paused reader transport is the one step that does not wait for
+settlement: when a hop's cleanup grace expires, the caller closes the
+asyncio-owned reader transport at expiry — while the loop can still run the
+close — so the descriptor does not outlive the loop that can no longer resume
+it. Every other step still runs only after the pump has settled. The asyncio
+transports retain ownership of their original reader and writer descriptors,
+which remain non-blocking. Rust borrows the worker reader duplicate and
+consumes and closes the worker writer duplicate; Python closes the reader
+duplicate after settlement and closes either duplicate when setup or executor
+submission fails. No descriptor number is closed by both owners. Each
 suppression records a `DEBUG` event with a `cuprum_action` of
 `rust_pump_teardown_failed`, a `cuprum_site` naming the step — `resume`,
-`restore_blocking`, or `writer_close` — and the exception class and errno. The
-record carries nothing drawn from the transfer itself.
+`reader_close`, `restore_blocking`, `writer_close`, `resume_reader`, or
+`restore_state` — and the exception class and errno. The record carries nothing
+drawn from the transfer itself.
 
 An `EBADF` at `writer_close` is therefore not expected merely because Rust
 completed: the transport is closing its distinct original descriptor. Any
-`writer_close` error, like errors at the other two sites, indicates a teardown
-problem worth investigating. The `resume` and `restore_blocking` records come
-from the `cuprum._pipeline_stream_fds` logger; `writer_close` comes from
+`writer_close` error, like errors at the other five sites, indicates a teardown
+problem worth investigating. The `resume`, `reader_close`, and
+`restore_blocking` records come from the `cuprum._pipeline_stream_fds` logger;
+`writer_close`, `resume_reader`, and `restore_state` come from
 `cuprum._pipeline_streams`.
 
 ### Counting pump routing decisions
@@ -2172,7 +2243,9 @@ nor resumes a reader while native I/O can still use it. The native-pump
 executor is independent of `asyncio.run()` shutdown, so this caller-facing
 bound also holds for `run_sync()`. If the worker completes after the
 originating event loop has closed, the completion callback still closes and
-restores its descriptors; the closed loop's reader transport is not resumed.
+restores its descriptors; the closed loop's reader transport is not resumed. A
+deferred hop's paused reader transport is instead released — closed — at grace
+expiry, before the loop closes, which is why nothing needs to resume it later.
 
 Cleanup can also be correlated with the active pipeline-stage span. Register
 the same `TracingHook` with both `sh.observe(hook)` and
