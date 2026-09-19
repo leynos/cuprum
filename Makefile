@@ -361,6 +361,7 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
+<<<<<<< HEAD
 msrv-check: ## Verify every Rust target compiles on the published MSRV
 	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features
 
@@ -372,6 +373,9 @@ dev-build: dev-fast-check ## Build Rust debug targets through the accelerated ro
 
 dev-test: dev-fast-check ## Test Rust through the accelerated route
 	@$(DEV_FAST_TEST_COMMAND)
+
+loom: build ## Run the full bounded Loom model suite
+	$(UV_RUN_ENV) uv run scripts/run_loom.py --mode full
 
 # Run `make develop` first. Without the extension the guard fails the run with
 # a message naming that command, which is the intended diagnostic.

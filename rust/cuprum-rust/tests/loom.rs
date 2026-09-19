@@ -229,6 +229,23 @@ fn deliberate_double_close_fixture_is_detected() {
     });
 }
 
+#[cfg(feature = "loom-defect-fixture")]
+#[test]
+#[should_panic(expected = "cleanup cannot release a descriptor while native work may use it")]
+fn deliberate_early_release_fixture_is_detected() {
+    model(|| {
+        let state = NativePumpModel::with_early_release_defect();
+        state
+            .release_while_worker_active()
+            .expect("the deliberate defect must preserve model state");
+        assert_safe_terminal(
+            state
+                .snapshot()
+                .expect("snapshot must observe the deliberate defect"),
+        );
+    });
+}
+
 #[test]
 fn cancellation_and_submission_share_the_handoff_linearization_point() {
     model(|| {

@@ -18,15 +18,12 @@ use sync::{Arc, AtomicBool, AtomicUsize, Cell, JoinHandle, Mutex, MutexGuard, Or
 pub enum ModelError {
     /// A Loom mutex became poisoned by an earlier model panic.
     LockPoisoned,
-    /// The ownership model's close count cannot fit the host's `usize`.
-    CloseCountOutOfRange,
 }
 
 impl std::fmt::Display for ModelError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
             Self::LockPoisoned => "a Loom lifecycle mutex was poisoned",
-            Self::CloseCountOutOfRange => "the modelled close count exceeded usize",
         };
         formatter.write_str(message)
     }
@@ -161,6 +158,7 @@ pub struct NativePumpModel {
     cleanup_count: AtomicUsize,
     cleanup_lock: Mutex<Lifecycle>,
     inject_double_close: bool,
+    inject_early_release: bool,
 }
 
 impl NativePumpModel {
@@ -173,6 +171,7 @@ impl NativePumpModel {
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
             inject_double_close: false,
+            inject_early_release: false,
         })
     }
 
@@ -186,7 +185,31 @@ impl NativePumpModel {
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
             inject_double_close: true,
+            inject_early_release: false,
         })
+    }
+
+    /// Create a model that releases a descriptor while its worker is active.
+    #[cfg(feature = "loom-defect-fixture")]
+    #[must_use]
+    pub fn with_early_release_defect() -> Arc<Self> {
+        Arc::new(Self {
+            was_cancelled: AtomicBool::new(false),
+            completion_notified: AtomicBool::new(false),
+            cleanup_count: AtomicUsize::new(0),
+            cleanup_lock: Mutex::new(Lifecycle::new()),
+            inject_double_close: false,
+            inject_early_release: true,
+        })
+    }
+
+    /// Exercise the active-worker release guard for a deliberate defect fixture.
+    #[cfg(feature = "loom-defect-fixture")]
+    pub fn release_while_worker_active(&self) -> Result<(), ModelError> {
+        let mut lifecycle = self.lock_lifecycle()?;
+        lifecycle.worker_active = true;
+        self.complete_locked(&mut lifecycle);
+        Ok(())
     }
 
     /// Run the event-loop submission actor and return the worker, if accepted.
@@ -259,7 +282,7 @@ impl NativePumpModel {
 
     fn run_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         drive_production_pump_machine(native);
-        let reader_closes = borrowed_reader_close_count()?;
+        let reader_closes = native_borrowed_reader_close_count();
         {
             let mut lifecycle = self.lock_lifecycle()?;
             lifecycle.worker_active = false;
@@ -294,7 +317,9 @@ impl NativePumpModel {
         }
         if lifecycle.worker_active {
             lifecycle.released_while_worker_active = true;
-            return;
+            if !self.inject_early_release {
+                return;
+            }
         }
         lifecycle.writer.close_once(self.inject_double_close);
         lifecycle.blocking_restored = true;
@@ -309,10 +334,6 @@ impl NativePumpModel {
             .lock()
             .map_err(|_| ModelError::LockPoisoned)
     }
-}
-
-fn borrowed_reader_close_count() -> Result<usize, ModelError> {
-    Ok(native_borrowed_reader_close_count())
 }
 
 fn drive_production_pump_machine(native: NativeOutcome) {
