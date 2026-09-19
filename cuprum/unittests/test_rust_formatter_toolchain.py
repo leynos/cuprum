@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - expands fixed local Makefile recipes.
+import sys
 import tomllib
 
 from tests.helpers.docs import repo_root
@@ -44,6 +45,10 @@ _BLOCK_COMMENT_TOKEN = re.compile(r"/\*|\*/")
 # Only these characters can begin a lexeme: `/` for comments, `r` for raw
 # strings, `"` for strings, and `'` for character literals.
 _LEXEME_STARTS = frozenset("/r\"'")
+# The Makefile gates dev-fast on `uname -s`, which reports Linux for the hosts
+# `sys.platform` reports as `linux*`. Keeping the check explicit means a broken
+# host probe in the Makefile fails the contract below instead of mirroring it.
+_HOST_IS_LINUX = sys.platform.startswith("linux")
 
 
 def test_formatter_toolchain_precedes_the_project_toolchain(
@@ -284,6 +289,10 @@ def test_make_formatter_targets_select_the_pinned_nightly() -> None:
         "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
         "--config ../tools/dev-fast/config.toml"
     )
+    dev_fast_fragments = (
+        "RUSTUP_TOOLCHAIN=nightly-2026-08-23",
+        "--config ../tools/dev-fast/config.toml",
+    )
     for target in ("lint", "test"):
         target_recipes = expanded_recipes(target)
         cargo_lines = [
@@ -293,6 +302,16 @@ def test_make_formatter_targets_select_the_pinned_nightly() -> None:
         assert all(
             "probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines
         ), f"{target} must not select the formatter's nightly Cargo route"
-        assert any(expected_debug_route in line for line in cargo_lines), (
-            f"{target} must retain the Linux dev-fast Cargo route"
-        )
+        # The Makefile routes debug work through dev-fast only on Linux and falls
+        # back to the bare injected Cargo elsewhere, so the fragment is required
+        # on Linux and must be absent on every other host.
+        if _HOST_IS_LINUX:
+            assert any(expected_debug_route in line for line in cargo_lines), (
+                f"{target} must retain the Linux dev-fast Cargo route"
+            )
+        else:
+            assert all(
+                fragment not in line
+                for line in cargo_lines
+                for fragment in dev_fast_fragments
+            ), f"{target} must omit the Linux-only dev-fast Cargo route off Linux"
