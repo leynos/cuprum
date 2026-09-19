@@ -695,7 +695,7 @@ def test_protocol_description_names_the_recorded_measurement(
     protocol: WorkloadProtocol,
     expected: str,
 ) -> None:
-    """The summary names each recorded field, and singularises one payload.
+    """The summary names each recorded field, and singularizes one payload.
 
     This line is what tells a maintainer reading the workflow summary what the
     ratios beneath it measured. "payloads 1 MiB" for a single-payload plan

@@ -72,7 +72,7 @@ def test_top_level_operators_matches_its_construction(
     adds one each time it joins two subexpressions with `&&`, and adds none
     when it wraps a subexpression in quotes or parentheses, which is exactly
     what binding at depth zero means. A scanner that counted a quoted or
-    parenthesised operator would disagree with the model that built it.
+    parenthesized operator would disagree with the model that built it.
     """
     expression, expected, _ = case
 
