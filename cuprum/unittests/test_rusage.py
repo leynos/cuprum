@@ -177,6 +177,47 @@ _SNAPSHOTS = st.builds(
 )
 
 
+def test_mode_is_unavailable_without_a_usage_record() -> None:
+    """No source produced a record, so the mode says exactly that."""
+    assert _rusage.resource_usage_mode_for(None) == "unavailable"
+
+
+def test_mode_names_the_source_of_each_producer() -> None:
+    """Each producer's own output is classified as the mode it is."""
+    wait4 = _rusage.ChildResourceUsage(
+        max_rss_bytes=4_194_304,
+        user_cpu_seconds=0.5,
+        system_cpu_seconds=0.25,
+    )
+    aggregate = _rusage.child_rusage_delta(_snapshot(), _snapshot())
+
+    assert _rusage.resource_usage_mode_for(wait4) == "wait4_child"
+    assert aggregate is not None
+    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta"
+
+
+@given(snapshots=st.tuples(_SNAPSHOTS, _SNAPSHOTS))
+def test_mode_reads_the_invariant_that_separates_the_producers(
+    snapshots: tuple[_rusage._ChildRusageSnapshot, _rusage._ChildRusageSnapshot],
+) -> None:
+    """The mode never contradicts the RSS figure it accompanies.
+
+    The classifier distinguishes the two producers by exactly one thing: the
+    attributable path always publishes an RSS figure and the aggregate path
+    never does. This pins that correspondence, so a future producer that
+    reported neither, or reported RSS without being attributable, would not
+    silently be mislabelled as one of the two.
+    """
+    before, after = snapshots
+    aggregate = _rusage.child_rusage_delta(before, after)
+    assert aggregate is not None
+
+    assert _rusage.resource_usage_mode_for(aggregate) == "aggregate_cpu_delta"
+    assert aggregate.max_rss_bytes is None, (
+        "the aggregate path must never claim an attributable RSS figure"
+    )
+
+
 @given(before=st.none() | _SNAPSHOTS, after=st.none() | _SNAPSHOTS)
 def test_delta_property_preserves_cpu_and_rss_invariants(
     before: _rusage._ChildRusageSnapshot | None,

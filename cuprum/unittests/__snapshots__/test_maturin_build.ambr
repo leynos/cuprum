@@ -55,6 +55,7 @@
       'cuprum/_wait4_process.py',
       'cuprum/adapters/__init__.py',
       'cuprum/adapters/_support.py',
+      'cuprum/adapters/_tracing_fields.py',
       'cuprum/adapters/_tracing_native_pump_cleanup.py',
       'cuprum/adapters/echo_metrics.py',
       'cuprum/adapters/logging_adapter.py',

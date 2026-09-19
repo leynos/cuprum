@@ -842,6 +842,10 @@ class ExecEvent:
     stage_count: int | None  # pipeline_fail_fast: pipeline width
     eof_grace_s: float | None  # capture_eof_grace_expired: fixed grace budget
     pending_readers: int | None  # capture_eof_grace_expired: 1 or 2
+    max_rss_bytes: int | None  # exit: child max RSS in bytes, from wait4 only
+    user_cpu_seconds: float | None  # exit: child user CPU seconds
+    system_cpu_seconds: float | None  # exit: child system CPU seconds
+    resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1836,14 +1840,25 @@ design decisions guide these adapters:
 - Counter metrics (`cuprum_executions_total`, `cuprum_failures_total`,
   `cuprum_stdout_lines_total`, `cuprum_stderr_lines_total`,
   `cuprum_stdin_bytes_total`, `cuprum_stdin_errors_total`,
-  `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`)
-  are incremented on the corresponding event phases. The EOF-grace counter has
-  only the low-cardinality `program` and `project` labels; duration and
-  pending-reader count remain event fields, not labels.
-- Histogram metrics (`cuprum_duration_seconds`) are observed on `exit` events.
-- All metrics include `program` and `project` labels for multi‑dimensional
+  `cuprum_pipeline_fail_fast_total`, `cuprum_capture_eof_grace_expired_total`,
+  `cuprum_resource_usage_measurements_total`) are incremented on the
+  corresponding event phases. The EOF-grace counter has only the low-cardinality
+  `program` and `project` labels; duration and pending-reader count remain
+  event fields, not labels. The resource-measurement counter belongs to the
+  resource series and therefore carries `resource_usage_mode` alongside
+  `program` and `project`.
+- Histogram metrics (`cuprum_duration_seconds`, `cuprum_child_max_rss_bytes`,
+  `cuprum_child_user_cpu_seconds`, `cuprum_child_system_cpu_seconds`) are
+  observed on `exit` events. The three `cuprum_child_*` histograms are observed
+  only where the figure was actually measured, while
+  `cuprum_resource_usage_measurements_total` is emitted for every recorded
+  mode, including `unavailable`.
+- All metrics carry `program` and `project` labels for multi‑dimensional
   analysis. The `project` label uses `_project_tag` and falls back to
-  `"unknown"` when the event carries no usable project tag.
+  `"unknown"` when the event carries no usable project tag. The four resource
+  series additionally carry a low-cardinality `resource_usage_mode` label
+  naming how the measurement was obtained; that label is scoped to those four,
+  because it is meaningless for every other metric.
 
 **Tracing adapter specifics:**
 
@@ -1950,11 +1965,13 @@ over the operations, applying each: a `_CounterOp` calls
 `observe_histogram(name, value, labels)`.
 
 The loop is the contract, and it is deliberately **not** atomic. An `exit`
-event yields up to two operations — the failure counter, then the duration
-observation — applied as two independent collector calls in that order.
-Atomicity is not attempted: the collector wraps an arbitrary backend
+event yields a sequence of operations, applied as independent collector calls
+in that order. For an `exit` event the sequence is: the failure counter (only
+for a known non-zero exit code), then the duration observation (only when a
+duration was measured), then the resource counter, and finally the resource
+histograms. Atomicity is not attempted: the collector wraps an arbitrary backend
 (`prometheus_client`, statsd, OpenTelemetry) that this adapter cannot make
-transactional, and buffering the pair to apply together would only move the
+transactional, and buffering the sequence to apply together would only move the
 problem while delaying when metrics appear.
 
 Three consequences follow, and collector implementations depend on them:
@@ -1962,8 +1979,10 @@ Three consequences follow, and collector implementations depend on them:
 - **Partial application is possible.** If the collector raises on the second
   call, the first stays applied — a failure can be recorded without its
   duration.
-- **The order is fixed.** The failure counter is applied before the duration
-  observation, so a partial application is always the prefix, never the suffix.
+- **The order is fixed.** For an `exit` event the failure counter is applied
+  before the duration observation, which is applied before the resource counter
+  and then the resource histograms, so a partial application is always the
+  prefix of that sequence, never the suffix.
 - **The exception propagates, and the command fails with it.**
   `cuprum._observability._emit_exec_event` logs `observe_hook_failed`, then
   wraps the error in `_ExecEventEmissionError` so that observe-hook tasks

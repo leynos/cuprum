@@ -4177,6 +4177,14 @@ accounting leave all three resource fields as `None`. Pipeline stages also
 leave them as `None`: concurrently reaped children cannot be attributed safely
 to individual stages.
 
+The terminal `exit` event reports the same measurement the returned
+`CommandResult` carries, along with a `resource_usage_mode` naming how it was
+obtained, so a consumer reading the event stream need not correlate an event
+with a result object. That classifier lives beside the producers it
+distinguishes, in `cuprum/_rusage.py::resource_usage_mode_for`. The timeout
+path deliberately reports `unavailable`, because it signals the child rather
+than reaping it.
+
 The execution boundary supplies the wall-clock callable used for
 `CommandResult.started_at`; direct commands and pipeline stages read it
 immediately before their respective spawn awaits. The monotonic start reading

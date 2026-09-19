@@ -27,6 +27,15 @@ if typ.TYPE_CHECKING:
     )
     from cuprum.sh import CommandResult, SafeCmd
 
+# Every pipeline stage's terminal event reports this. Both exits below are
+# terminal events that attempted no measurement, and a stage can never attempt
+# one: its children are reaped concurrently, so no per-child interface can
+# attribute usage to it. Saying so explicitly is what keeps the contract on
+# ``ExecEvent.resource_usage_mode`` — set on every terminal event, ``None`` on
+# every other phase — true for stages as well as for direct commands, whose
+# returned ``CommandResult`` likewise leaves all three figures ``None``.
+_STAGE_RESOURCE_MODE: typ.Final = "unavailable"
+
 
 def _emit_timeout_exit_events(
     observations: tuple[_StageObservation, ...],
@@ -70,6 +79,7 @@ def _emit_timeout_exit_events(
                         process.returncode if process.returncode is not None else -1
                     ),
                     duration_s=max(0.0, ended_at - spawn.stages.started_at[idx]),
+                    resource_usage_mode=_STAGE_RESOURCE_MODE,
                 ),
             )
 
@@ -98,6 +108,7 @@ def _build_pipeline_stage_results(
                 pid=process.pid,
                 exit_code=inputs.wait_result.exit_codes[idx],
                 duration_s=duration_s,
+                resource_usage_mode=_STAGE_RESOURCE_MODE,
             ),
         )
         stage_results.append(

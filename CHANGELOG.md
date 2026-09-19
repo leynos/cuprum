@@ -42,7 +42,14 @@
   already in bytes. Platforms without that interface retain aggregate CPU-only
   accounting and leave `max_rss_bytes` as `None`; Windows and pipeline stages
   leave all three resource fields as `None`. Existing six-argument positional
-  construction remains valid, with timing fields defaulting to `0.0`.
+  construction remains valid, with timing fields defaulting to `0.0`. The
+  terminal `exit` event also carries these figures, plus a
+  `resource_usage_mode` naming their source; the logging and tracing adapters
+  project them as extras and span attributes. The metrics adapter adds
+  `cuprum_resource_usage_measurements_total` and the three
+  `cuprum_child_max_rss_bytes`, `cuprum_child_user_cpu_seconds`, and
+  `cuprum_child_system_cpu_seconds` histograms, each carrying a
+  `resource_usage_mode` label.
 - **Idle heartbeat for quiet children:** `RunOutputOptions` accepts
   `idle_after` and `on_idle`, so a run that produces no output for a given
   number of seconds says so instead of leaving a blank CI log to be
