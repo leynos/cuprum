@@ -59,8 +59,8 @@ def _resolve_stream_sink(
     This is the middle rung of one resolution the whole run shares: the
     sibling :meth:`cuprum._sink_lifecycle._SinkBracket.resolve_destination`
     answers the session half for destinations that have no caller-configured
-    sink between them, and :func:`_pipeline_config._framed_sink` composes that
-    half with the caller's choice made here.
+    sink between them, and the pipeline config composes that half with the
+    caller's choice made here.
 
     Returns
     -------

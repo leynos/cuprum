@@ -83,16 +83,6 @@ class _PipelineRunConfig:
             or self.on_line is not None
         )
 
-    def _framed_sink(self, fallback: typ.IO[str]) -> typ.IO[str]:
-        """Return the active session's log destination, or *fallback*.
-
-        Returns
-        -------
-        typ.IO[str]
-            The destination mirrored output for this stream is written to.
-        """
-        return self.sink_bracket.resolve_destination(fallback)
-
     def _build_stream_config(
         self,
         *,
@@ -122,7 +112,7 @@ class _PipelineRunConfig:
         _StreamConfig
             The wiring for this stream, framed by any active sink session.
         """
-        framed = self._framed_sink(fallback_sink)
+        framed = self.sink_bracket.resolve_destination(fallback_sink)
         return _StreamConfig(
             capture_output=self.capture,
             echo_output=echo_output,
@@ -165,8 +155,8 @@ class _PipelineRunConfig:
         Parameters
         ----------
         sink : typ.IO[str]
-            The echo's resolved destination, already passed through
-            :meth:`_framed_sink`.
+            The echo's resolved destination, already framed by the sink
+            bracket.
 
         Returns
         -------
@@ -175,9 +165,10 @@ class _PipelineRunConfig:
             ``None`` when this echo cannot reach the keepalive.
         """
         idle = self.idle
-        if idle is None or sink is not self._framed_sink(self.stderr_sink):
+        if idle is None:
             return None
-        return idle.mirror
+        framed_stderr = self.sink_bracket.resolve_destination(self.stderr_sink)
+        return None if sink is not framed_stderr else idle.mirror
 
 
 def _prepare_pipeline_config(
@@ -227,7 +218,7 @@ def _prepare_pipeline_config(
             # The same resolution the mirrored streams use: an active session
             # frames them, so a keepalive written anywhere else would land
             # outside the group the run is claiming. One resolution, not two,
-            # because _echo_mirror recognises the diagnostic by comparing the
+            # because _echo_mirror recognizes the diagnostic by comparing the
             # resolved destinations.
             sink_bracket.resolve_destination(stderr_sink),
         ),
