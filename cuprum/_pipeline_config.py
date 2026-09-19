@@ -94,6 +94,33 @@ class _PipelineRunConfig:
         session = self.sink_bracket.session
         return fallback if session is None else session.log
 
+    def _stream_config(self, *, echo: bool, sink: typ.IO[str]) -> _StreamConfig:
+        """Build one stream's configuration for a pipeline stage.
+
+        Parameters
+        ----------
+        echo : bool
+            Whether this stream's lines are mirrored to the parent.
+        sink : typ.IO[str]
+            The stream's resolved parent-facing destination.
+
+        Returns
+        -------
+        _StreamConfig
+            The wiring for this stream, framed by any active sink session.
+        """
+        return _StreamConfig(
+            capture_output=self.capture,
+            echo_output=echo,
+            echo_max_line_bytes=self.max_echo_line_bytes,
+            sink=self._framed_sink(sink),
+            encoding=self.ctx.encoding,
+            errors=self.ctx.errors,
+            read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(sink),
+        )
+
     @property
     def stream_config(self) -> _StreamConfig:
         """Build the stdout stream configuration for the final pipeline stage.
@@ -102,17 +129,7 @@ class _PipelineRunConfig:
         through the session's log destination so it lands inside the
         adapter's framing in the order the adapter received it.
         """
-        return _StreamConfig(
-            capture_output=self.capture,
-            echo_output=self.echo_stdout,
-            echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self._framed_sink(self.stdout_sink),
-            encoding=self.ctx.encoding,
-            errors=self.ctx.errors,
-            read_size=_current_read_size(),
-            activity=self.idle.note_activity if self.idle is not None else None,
-            mirror=self._echo_mirror(self.stdout_sink),
-        )
+        return self._stream_config(echo=self.echo_stdout, sink=self.stdout_sink)
 
     @property
     def stderr_stream_config(self) -> _StreamConfig:
@@ -122,17 +139,7 @@ class _PipelineRunConfig:
         the same reason as stdout: the adapter's framing must bracket every
         mirrored stream.
         """
-        return _StreamConfig(
-            capture_output=self.capture,
-            echo_output=self.echo_stderr,
-            echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self._framed_sink(self.stderr_sink),
-            encoding=self.ctx.encoding,
-            errors=self.ctx.errors,
-            read_size=_current_read_size(),
-            activity=self.idle.note_activity if self.idle is not None else None,
-            mirror=self._echo_mirror(self.stderr_sink),
-        )
+        return self._stream_config(echo=self.echo_stderr, sink=self.stderr_sink)
 
     def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
         """Return the cursor for an echo whose sink is the keepalive's own.
