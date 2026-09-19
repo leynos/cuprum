@@ -462,10 +462,10 @@ closed. An expired hop therefore releases the paused reader transport at expiry
 instead, closing it while the caller's loop can still run the close that frees
 the descriptor. The later resumption at settlement becomes a no-op.
 
-This narrows, rather than replaces, the ownership rule above. What must not race
-native I/O is the worker's duplicated descriptors; the release closes only the
-asyncio-owned original, once the worker — reading its own duplicate — can no
-longer need the loop's reader. Descriptor-mode restoration and the
+This narrows, rather than replaces, the ownership rule above. What must not
+race native I/O is the worker's duplicated descriptors; the release closes only
+the asyncio-owned original, once the worker — reading its own duplicate — can
+no longer need the loop's reader. Descriptor-mode restoration and the
 completion-callback contract are unchanged. See
 [ADR-008](adr-008-rust-pump-observation-channel.md)'s `2026-09-19` addendum for
 the emitted phases and counters.

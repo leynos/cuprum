@@ -248,11 +248,12 @@ event loop, so the resumption it performs there cannot free the reader: an
 expired hop handed the paused transport to a callback that ran after
 `loop.close()`, which left the transport owning the fd1 pipe descriptor and,
 through `SubprocessStreamProtocol._pipe_fds`, its whole subprocess transport.
-The callback's `loop.call_soon_threadsafe` raised `RuntimeError('Event loop is
-closed')` into a suppression, and the retained bound `resume_reading` kept the
-transport past `loop.close()`, surfacing as an unclosed-transport
-`ResourceWarning` and a `RuntimeError` from the transport's own `close()`, which
-pytest reported as `PytestUnraisableExceptionWarning` on the Python 3.12 job.
+The callback's `loop.call_soon_threadsafe` raised
+`RuntimeError('Event loop is closed')` into a suppression, and the retained
+bound `resume_reading` kept the transport past `loop.close()`, surfacing as an
+unclosed-transport `ResourceWarning` and a `RuntimeError` from the transport's
+own `close()`, which pytest reported as `PytestUnraisableExceptionWarning` on
+the Python 3.12 job.
 
 `_ReaderPause` therefore carries a second hook beside `resume`: `release`
 closes the paused reader rather than merely resuming it, because a resumed

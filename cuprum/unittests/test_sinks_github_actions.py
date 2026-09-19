@@ -315,6 +315,52 @@ def test_timeout_close_annotates_without_exit_code() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected_message"),
+    [
+        pytest.param(
+            TerminalOutcome.CANCELLED,
+            "cancelled",
+            id="cancelled",
+        ),
+        pytest.param(
+            TerminalOutcome.ERROR,
+            "error",
+            id="error",
+        ),
+    ],
+)
+def test_cancellation_and_error_close_annotate_categorically(
+    outcome: TerminalOutcome,
+    expected_message: str,
+) -> None:
+    """A cancelled or failed run annotates once with its own category.
+
+    Neither outcome carries an exit code or a detail, so the annotation falls
+    back to the member's own value. Both are terminal paths the run reaches
+    without a child exit status, and both must still surface as one
+    categorical annotation rather than none or an invented code.
+    """
+    session, buffer = _open_gha_session(("deploy", "--token", "s3cret-token-9f2aXq7"))
+    buffer.seek(0)
+    buffer.truncate()
+
+    session.close(SessionOutcome(outcome))
+
+    value = buffer.getvalue()
+    errors = value.count("::error ")
+    assert errors == 1, (
+        f"{outcome} must annotate exactly once; found {errors} in {value!r}"
+    )
+    assert value.endswith(f"::error title=project%3A program::{expected_message}\n"), (
+        f"{outcome} must annotate with its categorical value; got {value!r}"
+    )
+    annotation = value.split("::error ", 1)[1]
+    assert "s3cret-token-9f2aXq7" not in annotation, (
+        f"the annotation must not republish argv; got {annotation!r}"
+    )
+
+
 def test_failure_annotation_omits_argv() -> None:
     """A group titled with argv must not republish those arguments.
 

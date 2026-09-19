@@ -9,7 +9,6 @@ outcomes that reach an adapter at the end of a real run.
 from __future__ import annotations
 
 import asyncio
-import io
 import typing as typ
 
 import pytest
@@ -23,11 +22,11 @@ from cuprum._sink_lifecycle import (
 )
 from cuprum.sh import RunOutputOptions, TimeoutExpired
 from cuprum.sinks import (
-    OutputSession,
     SessionOutcome,
     SessionStart,
     TerminalOutcome,
 )
+from cuprum.unittests._sink_test_support import RecordingSession, RecordingSink
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -41,66 +40,9 @@ def _python_builder() -> cabc.Callable[..., SafeCmd]:
     return build_python_builder()
 
 
-class _RecordingSession:
-    """Minimal OutputSession recording writes and the close outcome."""
-
-    def __init__(self) -> None:
-        """Start with an in-memory log and no closed outcome."""
-        self.log_io = io.StringIO()
-        self.closed_with: SessionOutcome | None = None
-
-    @property
-    def log(self) -> typ.IO[str]:
-        """The in-memory log destination."""
-        return self.log_io
-
-    def close(self, outcome: SessionOutcome) -> None:
-        """Record the terminal outcome."""
-        self.closed_with = outcome
-
-
-class _RecordingSink:
-    """Minimal OutputSink returning a recording session.
-
-    Deliberately carries no ``title``: the shared lifecycle reads only the
-    declared :class:`~cuprum.sinks.base.OutputSink` protocol, so an adapter's
-    private configuration cannot reach ``SessionStart.label``.
-    """
-
-    def __init__(
-        self,
-        *,
-        decline: bool = False,
-        session_factory: cabc.Callable[[], _RecordingSession] = _RecordingSession,
-    ) -> None:
-        """Configure whether the adapter declines activation."""
-        self.decline = decline
-        self.started_with: SessionStart | None = None
-        self.opened = 0
-        self.last_session: _RecordingSession | None = None
-        self._session_factory = session_factory
-
-    def open_session(self, start: SessionStart) -> OutputSession | None:
-        """Record the start and return a fresh recording session."""
-        self.started_with = start
-        self.opened += 1
-        if self.decline:
-            return None
-        self.last_session = self._session_factory()
-        return self.last_session
-
-
-def _recorded_outcome(adapter: _RecordingSink) -> SessionOutcome:
+def _recorded_outcome(adapter: RecordingSink) -> SessionOutcome:
     """Return the outcome recorded by the adapter's most recent session."""
-    session = adapter.last_session
-    assert session is not None, (
-        f"the run must have opened a sink session; the adapter was consulted "
-        f"{adapter.opened} time(s) and returned none"
-    )
-    assert session.closed_with is not None, (
-        "every terminal path must close the sink session, whatever the run's outcome"
-    )
-    return session.closed_with
+    return adapter.recorded_outcome
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +73,7 @@ def test_no_sink_keeps_plain_destinations() -> None:
 
 def test_sink_declining_activation_is_a_no_op() -> None:
     """A sink that returns None from open_session leaves the run unchanged."""
-    adapter = _RecordingSink(decline=True)
+    adapter = RecordingSink(decline=True)
     command = _python_builder()("-c", "print('declined')")
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
@@ -161,7 +103,7 @@ def test_sink_declining_activation_is_a_no_op() -> None:
 
 def test_sink_session_opens_once_and_closes_on_success() -> None:
     """The sink session is opened once per run and closed with exit_zero."""
-    adapter = _RecordingSink()
+    adapter = RecordingSink()
     command = _python_builder()("-c", "print('framed')")
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
@@ -183,7 +125,7 @@ def test_sink_session_opens_once_and_closes_on_success() -> None:
 
 def test_sink_session_closes_on_nonzero_exit() -> None:
     """A failing command still closes its session with exit_nonzero."""
-    adapter = _RecordingSink()
+    adapter = RecordingSink()
     command = _python_builder()("-c", "raise SystemExit(3)")
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
@@ -204,7 +146,7 @@ def test_sink_session_closes_on_nonzero_exit() -> None:
 
 def test_sink_session_closes_on_timeout() -> None:
     """A timed-out command still closes its session with the timeout outcome."""
-    adapter = _RecordingSink()
+    adapter = RecordingSink()
     command = _python_builder()("-c", "import time; time.sleep(2)")
 
     with pytest.raises(TimeoutExpired, match=r"timed out"):
@@ -223,7 +165,7 @@ def test_sink_session_closes_on_timeout() -> None:
     )
 
 
-class _TitledRecordingSink(_RecordingSink):
+class _TitledRecordingSink(RecordingSink):
     """A sink carrying an adapter-private ``title`` the protocol never declares."""
 
     def __init__(self, title: str) -> None:
@@ -256,7 +198,7 @@ def test_sink_session_label_ignores_undeclared_adapter_attributes() -> None:
 
 def test_sink_session_label_omits_argv() -> None:
     """The derived label never contains arguments, only the program name."""
-    adapter = _RecordingSink()
+    adapter = RecordingSink()
     secret = "s3cret-token-9f2aXq7"  # ruff: ignore[hardcoded-password-string] - synthetic test token, never a real credential.
     command = _python_builder()("-c", f"print('{secret}')")
 
@@ -275,8 +217,8 @@ def test_sink_session_label_omits_argv() -> None:
 
 def test_bracket_opens_once_and_closes_once() -> None:
     """The bracket returns the adapter's session and releases it on close."""
-    session = _RecordingSession()
-    adapter = _RecordingSink(session_factory=lambda: session)
+    session = RecordingSession()
+    adapter = RecordingSink(session_factory=lambda: session)
     start = SessionStart(label="project: program", argv=("python", "-c"))
 
     bracket = _SinkBracket.open(adapter, start)
@@ -302,9 +244,9 @@ def test_bracket_opens_once_and_closes_once() -> None:
 
 def test_bracket_ignores_a_later_close() -> None:
     """Only the first close reaches the adapter, so its outcome stands."""
-    session = _RecordingSession()
+    session = RecordingSession()
     bracket = _SinkBracket.open(
-        _RecordingSink(session_factory=lambda: session),
+        RecordingSink(session_factory=lambda: session),
         SessionStart(label="project: program", argv=()),
     )
 
@@ -334,7 +276,7 @@ def test_bracket_without_a_sink_is_empty_and_closes_silently() -> None:
 
 def test_bracket_over_a_declining_adapter_is_empty() -> None:
     """An adapter that declines activation leaves an empty bracket."""
-    adapter = _RecordingSink(decline=True)
+    adapter = RecordingSink(decline=True)
 
     bracket = _SinkBracket.open(adapter, SessionStart(label="l", argv=()))
 
@@ -348,8 +290,8 @@ def test_bracket_over_a_declining_adapter_is_empty() -> None:
 
 def test_open_sink_session_returns_the_adapters_session() -> None:
     """Opening a sink hands back the session the adapter returned."""
-    session = _RecordingSession()
-    adapter = _RecordingSink(session_factory=lambda: session)
+    session = RecordingSession()
+    adapter = RecordingSink(session_factory=lambda: session)
 
     opened = _open_sink_session(adapter, SessionStart(label="l", argv=("p",)))
 
