@@ -2,13 +2,21 @@ r"""Benchmark end-to-end pipeline throughput with hyperfine.
 
 Renders a scenario matrix into prefixed worker commands and hands them to
 hyperfine, which times each one; the dry-run mode writes the same plan as
-JSON instead of executing it. Three workloads are available, and the
-matrix they select is the only thing that varies between them:
+JSON instead of executing it. Three workloads are available, and each selects
+both a scenario matrix and, for the ratchet, the iteration count its samples
+are recorded at:
 
 - the throughput sweep (the default), which covers three payload tiers;
 - ``--smoke``, the same shape at reduced payloads, for fast validation;
 - ``--ci-ratchet``, the single large payload the CI ratchet compares
   between runs, where streaming dominates the fixed per-run cost.
+
+The iteration count varies because it is measurement protocol rather than
+tuning: it is recorded in every sample, and the ratchet compares only samples
+whose profile metadata agrees. ``--ci-ratchet`` therefore defaults to
+``CI_RATCHET_WORKER_ITERATIONS``, the count the workflow passes explicitly and
+the recorded samples were taken at, while the other two keep the sweep's own
+count. An explicit ``--worker-iterations`` overrides either.
 
 ``--smoke`` and ``--ci-ratchet`` select contradictory payloads and are
 mutually exclusive on the command line; ``default_pipeline_scenarios``

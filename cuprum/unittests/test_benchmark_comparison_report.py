@@ -465,7 +465,14 @@ def test_summary_renders_the_ci_ratchet_workload_for_the_ratchet_path() -> None:
 
 
 def test_report_serialization_carries_the_workload_protocol() -> None:
-    """The JSON report must record which workload produced the comparison."""
+    """The JSON report must record which workload produced the comparison.
+
+    The payload sizes are part of that: a ratio between two backends is a
+    statement about how they compare *at some payload*, and a consumer reading
+    the JSON has only this metadata to place it. The Markdown summary renders
+    the sizes, so omitting them here would make the two renderings disagree
+    about the same report.
+    """
     plan_payload = _ci_ratchet_plan_payload()
     report = compare_candidate_backend_results(
         plan_payload=plan_payload,
@@ -477,6 +484,9 @@ def test_report_serialization_carries_the_workload_protocol() -> None:
     assert payload["workload"] == CI_RATCHET_WORKLOAD
     assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
     assert payload["worker_iterations"] == CI_RATCHET_WORKER_ITERATIONS
+    assert payload["payload_bytes"] == [CI_RATCHET_PAYLOAD_BYTES], (
+        "the JSON report must state the payload its ratios were measured at"
+    )
 
 
 def test_summary_omits_protocol_fields_the_plan_does_not_carry() -> None:

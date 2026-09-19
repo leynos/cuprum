@@ -108,6 +108,12 @@ class BenchmarkComparisonReport:
             "workload": self.protocol.workload,
             "benchmark_profile_version": self.protocol.profile_version,
             "worker_iterations": self.protocol.worker_iterations,
+            # Sizes are read from the scenarios during analysis, but a reader
+            # of this JSON has only the metadata to go on. The measured
+            # ratios are meaningless without the payload they were taken at,
+            # so the sizes are stated rather than left to be inferred from
+            # rows that a consumer may not be reading.
+            "payload_bytes": list(self.protocol.payload_bytes),
         }
 
 
