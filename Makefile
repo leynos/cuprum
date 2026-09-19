@@ -361,7 +361,6 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
 
-<<<<<<< HEAD
 msrv-check: ## Verify every Rust target compiles on the published MSRV
 	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features
 
