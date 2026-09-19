@@ -41,7 +41,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoStream
+from cuprum.echo_events import EchoStream, RelayFallback
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
     _complete_stream_operation,
@@ -67,10 +67,15 @@ class _StreamConfig:
     errors: str
     # Profiled private read size; production callers use the default.
     read_size: int = _READ_SIZE
-    # Byte cap per echoed line; capture remains byte-for-byte complete.
+    # Byte bound for each line mirrored to the echo sink; ``None`` keeps the
+    # raw chunk-for-chunk echo. Bounded echoing protects consumers that stop
+    # accepting a line past a size limit (GitHub Actions job logs end at a
+    # 64 KiB line) while capture stays byte-for-byte complete.
     echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
-    # Drained output stream for bounded-echo observability.
+    # Which output stream this config drains, for bounded echo observability.
+    # Defaults to stdout because every production call site names the stderr
+    # config explicitly when it replaces the stdout one.
     stream: EchoStream = EchoStream.STDOUT
     # Run-owned observers, both optional and both unable to change what is
     # captured: ``activity`` reports that a non-empty chunk arrived, before any
@@ -97,8 +102,50 @@ class _DrainState:
     # decoder flush without rebinding this frozen field.
 
     echo_guard: _EchoGuard
-
+    # Caller-owned result diagnostics: the collector a command hands to this
+    # drain so a handled echo disablement can be surfaced on that command's
+    # ``CommandResult.relay_fallbacks`` without touching the shared echo-hook
+    # registry, which cannot attribute events to nested or concurrent runs.
+    relay_diagnostics: _RelayDiagnostics
     echo_limiter: _EchoLineLimiter | None = None
+
+
+@dc.dataclass(slots=True)
+class _RelayDiagnostics:
+    """Per-drain collector for handled echo-disablement records.
+
+    One collector belongs to one command stream. Because the echo guard stops
+    any later echo write after the first handled failure, a drain appends at
+    most one :class:`~cuprum.echo_events.RelayFallback` here.
+    """
+
+    fallbacks: list[RelayFallback] = dc.field(default_factory=list)
+    is_settled: bool = False
+
+    def settle(self) -> None:
+        """Publish the collected records for the owning command's result.
+
+        Idempotent: the reconciliation paths run exactly once per drain, and a
+        second call keeps whichever record list that call captured.
+        """
+        self.is_settled = True
+
+    def snapshot(self) -> tuple[RelayFallback, ...]:
+        """Return the collected records, or ``()`` before the drain settled.
+
+        A drain that never settled — cancelled or abandoned during teardown —
+        leaves its records unread: those diagnostics remain on the echo
+        observation channel, so callers on a non-result path see ``()``.
+
+        Returns
+        -------
+        tuple[RelayFallback, ...]
+            The records collected before settlement, empty when the drain
+            never settled or recorded nothing.
+        """
+        if not self.is_settled:
+            return ()
+        return tuple(self.fallbacks)
 
 
 @dc.dataclass(slots=True)
@@ -133,18 +180,31 @@ async def _consume_stream(
     config: _StreamConfig,
     *,
     on_line: cabc.Callable[[str], None] | None = None,
-    read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
-    """Read from a subprocess stream, teeing to sink when requested."""
+    """Read from a subprocess stream, teeing to sink when requested.
+
+    ``relay_diagnostics`` defaults to a fresh collector, so a caller that does
+    not own result diagnostics still gets a correct drain.
+
+    Returns
+    -------
+    str | None
+        The captured text, or ``None`` when capture is disabled.
+    """
     if on_line is None:
-        return await _consume_stream_without_lines(stream, config, read_size=read_size)
+        return await _consume_stream_without_lines(
+            stream,
+            config,
+            relay_diagnostics=relay_diagnostics,
+        )
     return await _consume_stream_with_lines(
         stream,
         _LineConsumption(
             config=config,
             on_line=on_line,
-            read_size=read_size,
             drain=_drain,
+            relay_diagnostics=relay_diagnostics,
         ),
     )
 
@@ -154,9 +214,17 @@ async def _drain(
     config: _StreamConfig,
     *,
     on_chunk: cabc.Callable[[bytes], None] | None = None,
-    read_size: int = _READ_SIZE,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
+    # This is the single source of truth for the consume mechanics shared by
+    # :func:`_consume_stream_without_lines` and
+    # :func:`_consume_stream_with_lines`: read in ``_READ_SIZE`` chunks, extend
+    # the capture buffer when capturing, echo each chunk to the configured
+    # sink when echoing, then hand the chunk to ``on_chunk`` for
+    # variant-specific processing (for example incremental line decoding).
+    # Fixes to the loop must be made here so the capture path and the
+    # line-emitting path cannot drift.
     if config.echo_output and config.echo_max_line_bytes is not None:
         _validate_bounded_echo_encoding(config.encoding, config.errors)
     buffer = bytearray() if config.capture_output else None
@@ -172,6 +240,7 @@ async def _drain(
         echo_decoder,
         on_chunk,
         echo_guard,
+        relay_diagnostics or _RelayDiagnostics(),
         echo_limiter=echo_limiter,
     )
     measurement = _start_stream_operation(StreamOperation.DRAIN)
@@ -179,7 +248,6 @@ async def _drain(
         reached_eof = await _drain_chunks(
             stream,
             state,
-            read_size=read_size,
             measurement=measurement,
         )
         if reached_eof:
@@ -223,13 +291,12 @@ async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
     *,
-    read_size: int,
     measurement: _StreamOperationMeasurement | None,
 ) -> bool:
     """Consume chunks until EOF, updating the caller-owned capture buffer."""
     while True:
         try:
-            chunk = await stream.read(read_size)
+            chunk = await stream.read(state.config.read_size)
         except asyncio.CancelledError:
             return False
         _record_stream_read(measurement, chunk)
@@ -255,18 +322,23 @@ async def _consume_stream_without_lines(
     stream: asyncio.StreamReader | None,
     config: _StreamConfig,
     *,
-    read_size: int,
+    relay_diagnostics: _RelayDiagnostics | None = None,
 ) -> str | None:
     """Read from a subprocess stream without emitting line callbacks."""
     if stream is None:
         return "" if config.capture_output else None
-    return await _drain(stream, config, read_size=read_size)
+    return await _drain(
+        stream,
+        config,
+        relay_diagnostics=relay_diagnostics,
+    )
 
 
 __all__ = [
     "_POST_CLOSE_DRAIN_TIMEOUT_S",
     "_READ_SIZE",
     "_MirrorCursor",
+    "_RelayDiagnostics",
     "_StreamConfig",
     "_WriteOutcome",
     "_close_stream_writer",

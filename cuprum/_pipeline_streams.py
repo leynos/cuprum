@@ -1,13 +1,13 @@
 """Pipeline stream pumping, capture collection, and backend dispatch.
 
-This module handles data movement after ``cuprum._process_lifecycle`` has
+This module handles data movement after ``cuprum._pipeline_spawn`` has
 spawned each subprocess with the canonical stdio handles from
 ``cuprum._pipeline_stage_streams``. It creates the tasks that capture final
 stdout and per-stage stderr, pumps stdout from one stage into the next stage's
 stdin, and chooses between the Python and Rust stream backends for that pump.
 
 The module intentionally consumes the canonical stage stream policy instead of
-recomputing it. That keeps lifecycle code responsible for process ownership,
+recomputing it. That keeps spawning code responsible for process ownership,
 ``_pipeline_stage_streams`` responsible for stdio shape, and this module
 responsible for moving and collecting bytes once those streams exist.
 """
@@ -140,11 +140,23 @@ async def _run_rust_pump(
     handoff: _RustPumpHandoff,
 ) -> bool:
     """Run the Rust pump while the executor future owns native cleanup."""
-    handled = await _pump_over_raw_fds(
-        reader=reader,
-        writer=writer,
-        handoff=handoff,
-    )
+    try:
+        handled = await _pump_over_raw_fds(
+            reader=reader,
+            writer=writer,
+            handoff=handoff,
+        )
+    except BaseException:
+        # A fatal hand-off failure has no fallback to carry the hop, so the
+        # writer transport is the only thing left to release. Left open, the
+        # downstream stage waits for an EOF that never arrives and the
+        # pipeline reports its deadline instead of the real error; closing it
+        # lets that stage exit and the failure surface promptly. Declines
+        # return normally above and keep the writer, because the Python pump
+        # still has to write through it.
+        with _suppressed_teardown_failure(_LOGGER, "writer_close", OSError):
+            await _close_stream_writer(writer)
+        raise
     if not handled:
         return False
     # Rust closed only its duplicate, so the transport descriptor is still
@@ -201,14 +213,23 @@ async def _pump_over_raw_fds(
         # after native I/O has stopped.
         state = _create_rust_pump_state(handoff, reader_pause.resume)
     except _RustPumpStateDuplicationError as failure:
+        # Duplication is best-effort, and declining is the only safe response.
+        # The descriptor set was extracted a moment earlier, but asyncio closes
+        # an EOF'd transport on its own schedule, so a duplicate can race that
+        # close. Raising here used to leave the writer transport open: the
+        # downstream stage never saw EOF and the pipeline wedged until its
+        # deadline. Nothing was transferred and no state outlived the attempt,
+        # so the Python pump carries the hop exactly as it does when blocking
+        # mode is unavailable.
         _resume_reader_transport(reader_pause.resume)
         _pump_obs._log_native_pump_handoff_failed(
             _LOGGER,
             "duplicate_writer",
             failure.error,
         )
+        _log_rust_pump_declined(RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
-        raise failure.error from failure
+        return False
     except _RustPumpBlockingModeError:
         _resume_reader_transport(reader_pause.resume)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)

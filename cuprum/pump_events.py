@@ -33,7 +33,10 @@ class RustPumpDeclineReason(enum.StrEnum):
     error instead. Members are `str`, so the logged field and the metric label
     stay plain strings. ``PLATFORM_UNSUPPORTED`` means the current operating
     system and asyncio transport combination cannot safely use the native Rust
-    pump.
+    pump. ``DUPLICATE_FDS_UNAVAILABLE`` means a transport's pipe description
+    could not be re-opened or duplicated for the native worker: the
+    descriptors existed when extraction read them, but one was already closed
+    by the time duplication re-opened it.
 
     Examples
     --------
@@ -47,6 +50,7 @@ class RustPumpDeclineReason(enum.StrEnum):
     READER_UNRESUMABLE = "reader_unresumable"
     READER_PAUSE_FAILED = "reader_pause_failed"
     BLOCKING_MODE_UNAVAILABLE = "blocking_mode_unavailable"
+    DUPLICATE_FDS_UNAVAILABLE = "duplicate_fds_unavailable"
     PLATFORM_UNSUPPORTED = "platform_unsupported"
 
 

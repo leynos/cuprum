@@ -86,7 +86,13 @@ class _RustPumpHandoff:
 
 
 class _RustPumpStateDuplicationError(Exception):
-    """Retain a state-duplication failure for the caller to re-raise."""
+    """Retain a state-duplication failure for the caller to turn into fallback.
+
+    Duplication is best-effort: the descriptors were extracted moments earlier,
+    so a transport asyncio closed in between makes this fail on a hop that would
+    otherwise have taken the fast path. It is a decline, not a fault — raising
+    it used to leave the writer transport open and wedge the pipeline.
+    """
 
     def __init__(self, error: OSError | ValueError) -> None:
         """Store the original descriptor duplication failure."""

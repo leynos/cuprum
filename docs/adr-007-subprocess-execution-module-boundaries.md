@@ -209,6 +209,44 @@ them, while non-capturing cleanup settles promptly without that window and
 discards output. Cancellation during capture grace still settles the consumers
 before propagating, so process cleanup cannot leave stream readers pending.
 
+## Addendum (2026-09-15): streamed relay diagnostics ownership
+
+The per-command echo fallback diagnostics introduced a small refinement to the
+Option B boundaries while preserving the public execution contract.
+
+- `cuprum/_subprocess_stream_run.py` owns streamed single-command execution.
+  `_StreamConsumerSpawnContext` passes the stream configuration, process
+  identifier, and per-stream `_RelayDiagnostics` collectors to the consumers.
+  `_RunTaskOwnership` retains those consumers and collectors until the single
+  success or teardown reconciliation point, so concurrent and nested runs do
+  not share result state.
+- `_process_lifecycle.py` uses `_SpawnedPipelineStages` while starting a
+  pipeline. It retains each process, capture task, start timestamp, and the
+  per-stage stderr/final-stage-stdout collector pair. The pipeline collection
+  path settles and reads those collectors after output tasks settle, and the
+  result builder assigns each stage only the records owned by its streams.
+- `RelayFallback` is the result vocabulary: a frozen two-field record holding
+  only `EchoStream` and `EchoErrorCategory` categorical values. A successful
+  `CommandResult` exposes its records through the trailing defaulted
+  `relay_fallbacks` field, in stdout-then-stderr order. A pipeline preserves
+  stage order, with final-stage stdout records followed by that stage's stderr
+  records; intermediate stages have no result stdout stream.
+- A handled text-sink `UnicodeEncodeError` is a first-failure transition for
+  one drain. It disables later echo writes, preserves capture, emits the
+  existing `EchoEvent`, and appends one `RelayFallback`. The warning, event,
+  and record use closed categorical values only; rejected payloads, sink
+  metadata, exception data, and command arguments remain outside every
+  reporting surface.
+- Timeout and cancellation do not produce a `CommandResult`, so no
+  `relay_fallbacks` tuple is surfaced on those paths. Reconciliation still
+  settles the owned stream tasks, and an `EchoEvent` emitted before teardown
+  remains observable through `observe_echo`.
+
+This keeps execution ownership explicit: collectors are caller-owned state
+handed into drains, not global observation state, while the existing
+`observe_echo` channel remains the event projection for consumers that need
+transition timing.
+
 ## Addendum (2026-09-16): split single-command stream-consumer construction
 
 The idle heartbeat's option contract added two fields to the single-command
@@ -238,3 +276,43 @@ delegating them. The execution module is still the composition root; only the
 construction it calls moved. The earlier withdrawal does not apply to this
 shape, and the boundary documented in §8.1.5 of the design and developer guides
 now names it.
+
+### Reconciliation with the 2026-09-15 addendum
+
+Both extractions stand. The streamed run loop lives in
+`cuprum/_subprocess_stream_run.py` (2026-09-15) and the consumer construction
+it drives lives in `cuprum/_subprocess_streams.py` (2026-09-16), so
+`cuprum/_subprocess_execution.py` is a composition root that re-exports both
+for import compatibility. The patch-target rule above covers both modules: a
+test that replaces an implementation dependency must target the module that
+resolves it, which for the spawn context and consumer construction is
+`cuprum._subprocess_streams`.
+
+## Addendum (2026-09-19): split pipeline startup from pipeline termination
+
+Merging the idle-heartbeat work with the relay-diagnostics work put two
+independent additions into `cuprum/_process_lifecycle.py` at once and carried
+the module past the repository's `max-module-lines` ceiling. The module had
+accumulated two lifecycles with no shared state: _starting_ a pipeline, and
+_terminating_ processes.
+
+Pipeline startup therefore moved to `cuprum/_pipeline_spawn.py`:
+`_spawn_pipeline_processes`, the `_SpawnedPipelineStages` accumulator it fills
+through `_spawn_pipeline_stages`, `_build_spawn_observations`, and
+`_cleanup_spawned_processes`. That last helper is why the split is a real seam
+rather than a size fix: it exists only to tear down a _partial_ spawn — the
+processes and capture tasks that a failed stage left running — and it is
+reachable only from the startup path that can fail that way. Pipeline teardown
+after a successful spawn is a different subject, decided by
+`cuprum._pipeline_wait` and executed by `_terminate_timed_out_stages`,
+`_terminate_pipeline_remaining_stages`, and `_cleanup_pipeline_on_error`, all
+of which stay in `_process_lifecycle` next to `_shielded_cleanup`.
+
+`_merge_env` also stays in `_process_lifecycle`: both the single-command and
+pipeline spawn paths call it, so it belongs to neither side exclusively.
+`_pipeline_spawn` imports it, along with `_terminate_all_shielded`, from its
+previous definition site. The private import compatibility rule from the
+2026-09-16 addendum applies unchanged: importers of `cuprum._process_lifecycle`
+and `cuprum._pipeline_internals` continue to resolve
+`_spawn_pipeline_processes` without change, but a test that replaces it must
+target `cuprum._pipeline_spawn`, the module that now resolves it.

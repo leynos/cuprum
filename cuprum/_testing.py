@@ -20,6 +20,7 @@ from cuprum._pipeline_internals import (
     _enforce_allowlist,
     _run_pipeline,
 )
+from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (
     _pump_stream_dispatch,
     configure_pump_stream_dispatch_for_testing,
@@ -29,7 +30,6 @@ from cuprum._pipeline_types import _StageWaitContext
 from cuprum._pipeline_wait import _PipelineWaitResult, _wait_for_pipeline
 from cuprum._process_lifecycle import (
     _merge_env,
-    _spawn_pipeline_processes,
     _terminate_process,
 )
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
@@ -38,11 +38,43 @@ from cuprum._streams import (
     _close_stream_writer,
     _consume_stream,
     _pump_stream,
+    _RelayDiagnostics,
     _StreamConfig,
     _write_chunk,
 )
 from cuprum.sh import _resolve_timeout
 
+if typ.TYPE_CHECKING:
+    import asyncio
+
+
+"""Test-only re-exports of internal helpers.
+Cuprum keeps most implementation details private to allow changes without
+breaking user code. Some unit tests still need access to internal helpers to
+validate tricky edge cases (process/pipe coordination, stream handling, etc.).
+This module provides a single, explicit surface for those tests so they do not
+depend on incidental re-exports from public modules like ``cuprum.sh``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+
+
+"""Test-only re-exports of internal helpers.
+Cuprum keeps most implementation details private to allow changes without
+breaking user code. Some unit tests still need access to internal helpers to
+validate tricky edge cases (process/pipe coordination, stream handling, etc.).
+This module provides a single, explicit surface for those tests so they do not
+depend on incidental re-exports from public modules like ``cuprum.sh``.
+"""
+if typ.TYPE_CHECKING:
+    import asyncio
+"""Test-only re-exports of internal helpers.
+Cuprum keeps most implementation details private to allow changes without
+breaking user code. Some unit tests still need access to internal helpers to
+validate tricky edge cases (process/pipe coordination, stream handling, etc.).
+This module provides a single, explicit surface for those tests so they do not
+depend on incidental re-exports from public modules like ``cuprum.sh``.
+"""
 if typ.TYPE_CHECKING:
     import asyncio
 
@@ -95,6 +127,7 @@ _EXPORTS = {
     "_READ_SIZE": _READ_SIZE,
     "_close_stream_writer": _close_stream_writer,
     "_consume_stream": _consume_stream,
+    "_RelayDiagnostics": _RelayDiagnostics,
     "_pump_stream": _pump_stream,
     "_split_complete_lines": _split_complete_lines,
     "_StreamConfig": _StreamConfig,

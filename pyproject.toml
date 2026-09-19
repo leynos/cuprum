@@ -431,14 +431,18 @@ type = "function"
 full_name = [
     "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
 ]
-reason = "Passed as the threading.Thread target by _PersistentNativePumpExecutor.submit."
+reason = "Called by _PooledNativePumpExecutor._worker_loop from a daemon worker thread."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
 full_name = [
-    "cuprum._pipeline_native_pump_runtime._PersistentNativePumpExecutor.submit",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor.submit",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._take_worker",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._start_worker",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._worker_loop",
+    "cuprum._pipeline_native_pump_runtime._PooledNativePumpExecutor._retire_or_reuse",
 ]
-reason = "Called through _DEFAULT_NATIVE_PUMP_RUNTIME.executor by _submit_rust_pump."
+reason = "Reached only through _DEFAULT_NATIVE_PUMP_RUNTIME.executor, whose _NativePumpExecutor protocol type hides submit from the reference graph; the private helpers are reachable only from submit."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"

@@ -38,6 +38,22 @@ The registration is context-local. Remove the registration by leaving its
 context manager or calling `detach()` on the returned handle. The existing
 `ExecEvent` observation API and Rust-pump observation channel are unchanged.
 
+## Echo-fallback diagnostics
+
+`CommandResult` now exposes handled text-sink echo failures through its
+`relay_fallbacks` tuple. Each `RelayFallback` contains the affected stream and
+the closed `unicode_encode` error category, so consumers can count or report
+per-command fallbacks without parsing log messages. Pipeline stage results
+expose the records owned by that stage, with stdout records before stderr
+records.
+
+The field is trailing and defaults to `()`, so existing six-argument positional
+construction and existing keyword construction remain compatible. Commands that
+time out or are cancelled do not produce a result-level diagnostics tuple;
+their already-emitted echo events remain available through `observe_echo`. The
+warning, echo event, and result record carry only bounded categorical values
+and never include output, sink details, exception objects, or command arguments.
+
 ## Idle heartbeat for quiet children
 
 Cuprum 0.2.0 also adds an opt-in idle heartbeat. `RunOutputOptions.idle_after`

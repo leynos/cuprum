@@ -856,6 +856,37 @@ The concrete shape is an implementation detail, but the design assumes:
 - Events can be consumed synchronously or asynchronously.
 - Hooks may choose to ignore most phases and only act on `start`/`exit`.
 
+#### Echo fallback diagnostics
+
+Echo disablement has a dedicated projection alongside the command lifecycle
+events. When a text-only echo sink raises `UnicodeEncodeError`, the first
+handled failure for that drain disables further echo writes while capture and
+stream consumption continue. The transition emits one `EchoEvent` through
+`observe_echo` and appends one `RelayFallback` to the caller-owned diagnostics
+collector. Independent stdout and stderr drains, commands, and pipeline stages
+have independent collectors.
+
+`RelayFallback` is a frozen record with exactly two categorical fields:
+`stream`, one of `EchoStream.STDOUT` or `EchoStream.STDERR`, and
+`error_category`, one of the closed `EchoErrorCategory` vocabulary. The
+warning, the `EchoEvent`, and the result record carry these bounded values
+only. They do not carry the rejected output, decoded text, sink type or
+encoding, exception object or text, traceback, or command arguments.
+
+`CommandResult.relay_fallbacks` is a trailing, defaulted tuple, so existing
+six-argument positional construction remains valid. A successful single-command
+result lists stdout records before stderr records; this order is a projection,
+not a reconstruction of cross-stream timing. A pipeline stage owns the records
+from its own stderr drain and, for the final stage only, its stdout drain. The
+same stdout-then-stderr order applies within each stage, and `PipelineResult`
+retains stage order.
+
+Timeout and cancellation paths do not return a `CommandResult`, so they expose
+no result-level fallback tuple. Their collectors are reconciled as part of
+teardown, while any `EchoEvent` emitted synchronously before the transition is
+still available through `observe_echo`. Observer failures remain isolated from
+capture and fallback collection.
+
 #### Aggregate Python stream-operation observation
 
 The pure-Python stream paths have a separate, opt-in completion channel for
@@ -1350,6 +1381,13 @@ preserving the `SafeCmd.run()` execution contract:
   assembling the `CommandResult`. It remains the composition root for a run: it
   decides whether each stream is consumed, and it calls `_build_stream_config`
   and `_spawn_stream_consumers` to act on that decision.
+- `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
+  waiting for process exit, reconciling the stdin writer and both stream
+  consumers exactly once, and returning their captured text and settled relay
+  diagnostics. `_StreamConsumerSpawnContext` carries the stream configuration,
+  process identifier, and per-stream collectors into the consumer tasks;
+  `_RunTaskOwnership` retains those consumers and collectors until the one
+  success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
   *construction*: `_build_stream_config` assembles the stdout `_StreamConfig`,
   and `_spawn_stream_consumers` derives the stderr config from it and creates
@@ -1440,6 +1478,24 @@ sequenceDiagram
   `_subprocess_timeout` without closing an import cycle.
 - `cuprum/_subprocess_context.py` owns small shared context helpers
   (`_cwd_arg`, `_sh_module`) used across the subprocess modules.
+
+Pipeline spawning applies the same ownership rule per stage. `_pipeline_spawn`
+uses `_SpawnedPipelineStages` to retain started processes, capture tasks, start
+times, and the stderr/final-stdout collector pairs while stages are being
+spawned. `_pipeline_stage_streams` selects descriptors and creates those
+consumers; `_pipeline_collect` settles and reads each collector after its stage
+outputs settle, then `_pipeline_results` assigns the records to the owning
+stage result in stage order.
+
+Pipeline startup is separated from pipeline termination for the same reason the
+single-command path separates them. `cuprum/_pipeline_spawn.py` starts the
+stages, arms the idle heartbeat once the first stage is actually running, and
+owns `_cleanup_spawned_processes`, the teardown of a *partial* spawn.
+`cuprum/_process_lifecycle.py` keeps the subprocess handles and the shared
+`_shielded_cleanup` primitive, and executes the fail-fast, timeout, and error
+teardown decisions the waiter makes. Splitting startup from termination keeps
+each module within the Pylint module ceiling while leaving every helper that
+existing importers reach importable from its previous definition site.
 
 The runner composes the specialized modules; neither specialized module owns
 public command APIs or creates subprocesses. This separation keeps the timeout

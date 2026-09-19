@@ -880,11 +880,14 @@ the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
 
 Table 1: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason`             | Seam that declined                                                 |
-| --------------------------- | ------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, or the transport was already closing     |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
+| `cuprum_reason`             | Seam that declined                                                        |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport        |
+| `reader_unresumable`        | `pause_reading` exists but `resume_reading` does not, so it is not paused |
+| `reader_pause_failed`       | `pause_reading()` raised, or the transport was already closing            |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors             |
+| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be re-opened        |
+| `platform_unsupported`      | the platform cannot safely use synchronous native pipe I/O                |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -930,18 +933,18 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
 | `cuprum_rust_pump_handoff_total`             | `outcome` |
 
-`RustPumpDeclineReason` bounds the decline label to its four declared values.
-The `outcome` label is also closed: it is exactly `submitted`,
-`blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
-`buffer_validation_failed`, `platform_writer_transfer_failed`,
-`native_io_failed`, `duplicate_writer_failed`, or `reader_preparation_failed`.
-The hand-off counter increments once for each such outcome, including a
-successful submission. `outcome` is the only label on the hand-off counter.
-Descriptor numbers, Windows handle values, errno values, exception types,
-exception messages, and tracebacks are never metric labels. Observer failures
-are logged and do not alter the successful fallback or the caller's
-cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md) records the
-decision.
+`RustPumpDeclineReason` bounds the decline label to its declared values — the
+six in Table 1 above. The `outcome` label is also closed: it is exactly
+`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
+`native_load_failed`, `buffer_validation_failed`,
+`platform_writer_transfer_failed`, `native_io_failed`,
+`duplicate_writer_failed`, or `reader_preparation_failed`. The hand-off counter
+increments once for each such outcome, including a successful submission.
+`outcome` is the only label on the hand-off counter. Descriptor numbers,
+Windows handle values, errno values, exception types, exception messages, and
+tracebacks are never metric labels. Observer failures are logged and do not
+alter the successful fallback or the caller's cancellation.
+[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
 
 ### `_pipeline_wait` completion command/query seam
 
@@ -1091,10 +1094,11 @@ unsupported tracer, and confirms its contracts on every supported interpreter.
 
 `_StreamConfig.read_size` carries the active private read size for one stream;
 its default is `_READ_SIZE`, currently 65536 bytes. The private
-`cuprum._streams._consume_stream(stream, config, *, on_line=None, read_size=_READ_SIZE)`
-and `_drain(stream, config, *, on_chunk=None, read_size=_READ_SIZE)` functions
-accept an explicit keyword-only override. `_drain` is the single
-read/echo/buffer loop behind both consume variants. It reads in the selected
+`cuprum._streams._consume_stream(stream, config, *, on_line=None,
+relay_diagnostics=None)`
+and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
+functions use `config.read_size` for each read. `_drain` is the single
+read/echo/buffer loop behind both consume variants. It reads in that configured
 size, extends the capture buffer when capturing, echoes each chunk to the
 configured sink when echoing, and hands the chunk to the optional `on_chunk`
 callback for variant-specific processing:
@@ -1183,12 +1187,14 @@ it renders.
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
 independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. That helper catches
-`UnicodeEncodeError` only: the first failure disables echo for the rest of that
-drain, logs one `WARNING` on the `cuprum.stream` logger with structured
-`cuprum_*` extras, and lets every other error propagate unchanged. Capture
-(`buffer.extend`) always runs before the echo step, so a rejected echo write
-never loses captured bytes, and the binary `.buffer` fast path inside
+`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
+module owns this write-side policy; `_streams` retains the drain lifecycle and
+re-exports `_write_chunk` for existing internal callers. Its `_echo_chunk`
+helper catches `UnicodeEncodeError` only: the first failure disables echo for
+the rest of that drain, logs one `WARNING` on the `cuprum.stream` logger with
+structured `cuprum_*` extras, and lets every other error propagate unchanged.
+Capture (`buffer.extend`) always runs before the echo step, so a rejected echo
+write never loses captured bytes, and the binary `.buffer` fast path inside
 `_write_chunk` is unchanged.
 
 The first failure is owned entirely by that one `_echo_chunk` transition: the
@@ -1201,6 +1207,22 @@ hook registry rather than a new phase, so consumers opt in by registering and
 unregistered callers pay nothing. Hook failures are reported and skipped,
 mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
 what a run captures.
+
+### Result diagnostics ownership
+
+The same transition also appends one `cuprum.echo_events.RelayFallback` record
+to a caller-owned `cuprum._streams._RelayDiagnostics` collector. Each command
+hands one collector per stream into its `_consume_stream` calls and retains the
+pair on its `_RunTaskOwnership` (single-command) or per-stage spawn state
+(pipeline), so the exactly-once reconciliation point settles each collector and
+its result builder flattens stdout-then-stderr records into that command's
+`CommandResult.relay_fallbacks`. Collectors are never shared between commands,
+stages, or nested runs, and the result diagnostics are not collected by
+registering a public echo observer: context-scoped events carry no execution
+identity, so they cannot attribute nested or concurrent runs. On a timeout or
+cancellation that prevents a result, the records stay on the echo observation
+channel and the collectors are simply never settled; no exception payload
+fields are added.
 
 `cuprum/unittests/test_stream_property_based.py` and
 `tests/behaviour/test_stream_property_preservation_behaviour.py` hold the
@@ -1458,10 +1480,10 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/sh.py`), `_build_pipeline_observations`
 (`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
-(`cuprum/_process_lifecycle.py`, which now delegates to the pipeline builder
-and adds only its no-observe-hooks assertion) — must route through these
-helpers. A new shared tag is added once, in `_base_stage_tags`, or it will
-silently diverge between the single-command and pipeline telemetry.
+(`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
+adds only its no-observe-hooks assertion) — must route through these helpers. A
+new shared tag is added once, in `_base_stage_tags`, or it will silently
+diverge between the single-command and pipeline telemetry.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
@@ -1700,7 +1722,8 @@ The split between `merge_env_overlays` and `resolve_env` is deliberate.
 include a snapshot of `os.environ`, otherwise structured event logs would carry
 the entire parent process environment on every emission. `resolve_env` is the
 spawn-time merge that *does* include `os.environ`; it is called from
-`_process_lifecycle._merge_env` for both the single-command and pipeline paths.
+`_merge_env` (`cuprum/_process_lifecycle.py`) for both the single-command and
+pipeline paths.
 
 The live-view contract from issue #100 is enforced at one place only:
 `resolve_env` reads `os.environ` at call time, not when the overlay is
@@ -2676,19 +2699,78 @@ settled, its remaining duplicate is closed, and its mode is restored. This
 prevents cancellation cleanup from racing with native I/O on a descriptor that
 is still in use.
 
-Executor-side failures while creating the duplicate or submitting the executor
-work are re-raised after rollback and recorded at `DEBUG` on the
-`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
-reader or transferring the platform writer are recorded at `DEBUG` on the
+Executor-side failures are handled in two ways, and the split is deliberate.
+Creating the worker duplicates and submitting the executor work happen *before*
+anything is transferred, so a failure there selects the Python fallback: the
+hop is carried by `_pump_stream` exactly as it is when blocking mode is
+unavailable. Both are recorded at `DEBUG` on the `cuprum._pipeline_streams`
+logger. Shim-side failures while preparing the reader or transferring the
+platform writer are likewise recorded at `DEBUG`, but on the
 `cuprum._streams_rs` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
 and reader-preparation failure emits `reader_preparation_failed`. Executor
 rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure selects the Python fallback and emits
-`blocking_setup_failed`. The outcome events are counted by
-`cuprum_rust_pump_handoff_total` as described above.
+Blocking-mode failure emits `blocking_setup_failed`. The outcome events are
+counted by `cuprum_rust_pump_handoff_total` as described above.
+
+Two setup failures still re-raise, and the distinction between them and the
+declines is what the two duplication stages exist to draw.
+
+The first stage, `_open_native_pump_worker_fds`, re-opens each transport's
+descriptor *from its number*: on Linux through `/proc/self/fd/N`, elsewhere
+through `os.dup`. The number was extracted a moment earlier and the re-open is
+therefore a race against asyncio's own close — an EOF'd transport like
+`echo -n hello` exits immediately, so the re-open can hit `ENOENT`. That is a
+*decline*: nothing was transferred, no state outlived the attempt, and the hop
+is perfectly serviceable on the Python pump. Re-raising it left the writer
+transport open, so the downstream stage never saw EOF and the pipeline hung
+until its deadline — an intermittent wedge that only the native fast path could
+produce. The decline records its own `duplicate_fds_unavailable` reason in
+Table 1 above, alongside `blocking_mode_unavailable`.
+
+The second stage, `_duplicate_native_pump_fds`, duplicates descriptors Cuprum
+already owns, so it cannot lose that race: a failure there means descriptor
+exhaustion, which a fallback could not route around and which the caller should
+hear about. It re-raises, as does an executor rejection — the one failure not
+about descriptors at all, where every later hop would be rejected identically
+and a silent fallback would hide a broken executor. Both emit their bounded
+`duplicate_writer_failed` or `executor_submission_rejected` outcome first.
+
+A re-raise with no fallback behind it still has to release the writer
+transport, and `_run_rust_pump` does that on the way out. A hop that declined
+keeps the writer, because the Python pump writes through it; a hop that failed
+fatally has nothing left to write through it, and leaving it open left the
+downstream stage waiting for an EOF that never came. The pipeline then reported
+its deadline rather than the error that caused it — the same wedge as the
+decline fix above, on the paths that must still raise.
+
+### Native pump worker pooling
+
+`_PooledNativePumpExecutor` in `cuprum/_pipeline_native_pump_runtime.py` runs
+submitted pumps on reusable worker threads. It replaced a thread-per-submission
+executor that never reclaimed its threads, so a long-lived process taking many
+hand-offs accumulated one thread per hop ever attempted.
+
+The pool's central invariant is that **`submit` never waits**. It hands the job
+to an idle worker if one is free and starts a fresh worker otherwise, so the
+number of pumps running at once is unbounded, and `_IDLE_NATIVE_PUMP_WORKERS`
+(4) bounds only how many *idle* workers are kept for reuse. A worker that
+finishes above that limit exits instead of parking.
+
+That asymmetry is not an optimization, and it must not be "fixed". A native
+pump cannot finish while its downstream pipe is full, and only a later hop in
+the same pipeline can drain that pipe. A submission that waited for a free
+worker, or that queued behind one, would therefore be waiting on work that
+cannot start until it completes — the deadlock returns, and it returns as a
+hang rather than an error. Bounding the queue is exactly as fatal as bounding
+concurrency here. `test_submission_never_waits_behind_a_busy_worker` in
+`cuprum/unittests/test_pipeline_native_pump_runtime.py` pins this by submitting
+more blocking jobs than the limit allows and asserting every one starts.
+
+Worker threads are daemon threads and are never joined at exit, so a worker
+still blocked in native I/O cannot keep the interpreter from shutting down.
 
 `_prepare_rust_pump_call` completes every Python-side check before the writer
 descriptor reaches native code: it loads the native module, validates the
@@ -4255,9 +4337,10 @@ spawn paths:
   from a `PIPE`; a non-final stage always pipes stdout so it can relay into the
   next stage regardless of capture or echo; the final stage's stdout follows
   its own `consumes_stdout` gate, and every stage's stderr follows its own
-  `consumes_stderr` gate. `_spawn_pipeline_processes` routes through this
-  helper — do not re-derive the flags inline at pipeline-stage spawn sites, and
-  do not use it for single-command spawning.
+  `consumes_stderr` gate. `_spawn_pipeline_processes`
+  (`cuprum/_pipeline_spawn.py`) routes through this helper — do not re-derive
+  the flags inline at pipeline-stage spawn sites, and do not use it for
+  single-command spawning.
 - `_cwd_arg(cwd)` in `cuprum/_subprocess_context.py` renders an optional
   working directory (`str | Path | None`) into the `cwd` argument for
   `asyncio.create_subprocess_exec`. Every spawn site must use it, so the
@@ -4271,6 +4354,15 @@ exhaustive tests in `cuprum/unittests/test_stage_stream_fds.py` stay
 authoritative. That test module covers the full finite input domain (stage
 position × the two parent-consumption booleans) and asserts agreement with the
 single-command policy on the overlapping cases.
+
+During pipeline startup, the mutable `_SpawnedPipelineStages` accumulator in
+`cuprum/_pipeline_spawn.py` retains the processes, capture tasks, start
+timestamps, and per-stage relay-diagnostics collectors created so far.
+`_spawn_pipeline_stages` fills it one stage at a time, allowing
+`_spawn_pipeline_processes` to clean up a partial spawn without losing task or
+diagnostic ownership. After startup succeeds, `_run_pipeline` projects those
+values into the immutable `_PipelineSpawnResult` used by the wait and
+collection paths.
 
 ## Output behaviour carrier
 
@@ -4341,11 +4433,15 @@ either echo can then strand a keepalive mid-line.
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across
-`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_streams.py`,
-`cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
-`cuprum/_subprocess_wait.py`. The two idle-heartbeat modules,
-`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
-the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
+`cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
+`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. Pipeline
+startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
+stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
+termination and the shared `_shielded_cleanup` primitive. The two
+idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
+`cuprum/_idle_diagnostic.py`, are private to the same seam. See
+[Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
@@ -4356,8 +4452,11 @@ terminating the process, and draining the stream consumers exactly once —
 belong in `_subprocess_wait`; orchestration that coordinates them — spawning,
 deciding which streams are consumed, and assembling the result — belongs in
 `_subprocess_execution`; and single-command stream-consumer construction
-belongs in `_subprocess_streams`. The idle heartbeat's timing belongs in
-`_idle_heartbeat` and its rendering and write-failure policy in
+belongs in `_subprocess_streams`. On the pipeline side, starting stages — and
+cleaning up whatever a failed startup left running — belongs in
+`_pipeline_spawn`, while terminating stages that are already running belongs in
+`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
+belongs in `_idle_heartbeat` and its rendering and write-failure policy in
 `_idle_diagnostic`.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
@@ -4370,6 +4469,16 @@ idle-heartbeat wiring reaches into the stream configs; see the
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
+
+`cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
+the process has been spawned. `_run_subprocess_with_streams` waits for exit,
+reconciles the stdin writer and both stream consumers on every exit path, and
+settles the per-stream relay-diagnostics collectors before returning captured
+output. `_subprocess_execution.py` retains process spawning, stream-consumer
+construction, stream configuration, the non-streaming path, and final
+`CommandResult` assembly. `_StreamConsumerSpawnContext` is its private bundle
+of stream configuration, PID, and the stdout/stderr diagnostics collectors; the
+streamed run creates it before handing those values to the consumer tasks.
 
 `cuprum/_subprocess_wait.py` holds `_wait_for_exit_code`,
 `_wait_for_exit_code_within_timeout`, `_drain_stream_consumers`,
@@ -4473,8 +4582,9 @@ covers only the one `await` it wraps, so the wait is resumed behind a fresh
 shield after each cancellation rather than re-awaited bare: only the teardown's
 own completion ends the loop, and the first cancellation is re-raised so the
 caller still sees exactly one. `_terminate_all_shielded` also backs
-`_cleanup_spawned_processes` and `_cleanup_pipeline_on_error`, and the
-fail-fast route in `_terminate_pipeline_remaining_stages` uses the shared
+`_cleanup_spawned_processes` (`cuprum/_pipeline_spawn.py`) and
+`_cleanup_pipeline_on_error`, and the fail-fast route in
+`_terminate_pipeline_remaining_stages` uses the shared
 `_await_teardown_shielded` helper directly.
 
 `_await_teardown_shielded` retries the shielded wait in a loop rather than
@@ -4507,17 +4617,18 @@ passing `return_exceptions=True`.
 
 Callers routed through `_shielded_cleanup` now include
 `_await_teardown_shielded`; the timeout, cancellation, and stdin-failure
-cleanup paths in `_run_subprocess_with_streams` and
-`_run_subprocess_without_streams` (`cuprum/_subprocess_execution.py`); the
-spawn-failure, timeout, and run-failure paths, plus
-`_finalize_pipeline_execution`, in `cuprum/_pipeline_internals.py`; and
-`_execute_with_hooks` in `cuprum/sh.py`, which previously used a bare
-`await asyncio.shield(...)`. Two further helpers keep multi-step cleanup as one
-shielded unit: `_reconcile_run_tasks` in `cuprum/_subprocess_wait.py` cancels
-the stdin writer, then drains the stream consumers, and
-`_reconcile_pipeline_run_failure` in `cuprum/_pipeline_internals.py` cancels
-the stream tasks, then drains the observe-hook tasks. Shielding the halves
-separately would let a cancellation landing between them abandon the second.
+cleanup paths in `_run_subprocess_with_streams`
+(`cuprum/_subprocess_stream_run.py`) and `_run_subprocess_without_streams`
+(`cuprum/_subprocess_execution.py`); the spawn-failure, timeout, and
+run-failure paths, plus `_finalize_pipeline_execution`, in
+`cuprum/_pipeline_internals.py`; and `_execute_with_hooks` in `cuprum/sh.py`,
+which previously used a bare `await asyncio.shield(...)`. Two further helpers
+keep multi-step cleanup as one shielded unit: `_reconcile_run_tasks` in
+`cuprum/_subprocess_wait.py` cancels the stdin writer, then drains the stream
+consumers, and `_reconcile_pipeline_run_failure` in
+`cuprum/_pipeline_internals.py` cancels the stream tasks, then drains the
+observe-hook tasks. Shielding the halves separately would let a cancellation
+landing between them abandon the second.
 
 The inter-stage pump tasks, created by `_create_pipe_tasks`, are created and
 owned by `_collect_pipeline_inputs` rather than by `_wait_for_pipeline`. This
@@ -4614,15 +4725,15 @@ executes:
    without execution disruption. Successful writes emit a `stdin` event with a
    byte count. The metrics adapter increments `cuprum_stdin_bytes_total` for
    successful writes and `cuprum_stdin_errors_total` for failure events.
-5. In the streaming path (`_run_subprocess_with_streams`), the stdin writer
-   task runs concurrently with the stdout/stderr consumer tasks. On
-   `TimeoutError` or `asyncio.CancelledError`,
-   `_wait_for_streamed_process_exit` reconciles the stdin writer and stream
-   consumers exactly once via `_reconcile_run_tasks`. The timeout
-   reconciliation passes the execution's capture setting so the bounded EOF
-   grace preserves partial text before `_handle_stream_timeout` raises
-   `_SubprocessTimeoutError`; cancellation passes `capture=False` and re-raises
-   `CancelledError` after all tasks settle.
+5. In the streaming path (`_run_subprocess_with_streams` in
+   `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
+   with the stdout/stderr consumer tasks. On `TimeoutError` or
+   `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
+   stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
+   The timeout reconciliation passes the execution's capture setting so the
+   bounded EOF grace preserves partial text before `_handle_stream_timeout`
+   raises `_SubprocessTimeoutError`; cancellation passes `capture=False` and
+   re-raises `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
    awaits `_wait_for_exit_code` itself. On `TimeoutError` or
@@ -4650,11 +4761,12 @@ skeleton (plan event, before-hooks dispatch, delegation).
 
 `_build_stream_config(execution, discard_on_cancel)` centralizes construction
 of the `_StreamConfig` used by the streaming execution path
-(`_run_subprocess_with_streams`). Extracting it removes one branch from that
-function, reducing its cyclomatic complexity below the CodeScene threshold, and
-makes the stdout-sink resolution logic testable in isolation. The required
-`discard_on_cancel` event is shared by both stream consumers and is set by
-`_settle_consumers` only for cleanup paths that must discard retained output.
+(`_run_subprocess_with_streams` in `cuprum/_subprocess_stream_run.py`).
+Extracting it removes one branch from that function, reducing its cyclomatic
+complexity below the CodeScene threshold, and makes the stdout-sink resolution
+logic testable in isolation. The required `discard_on_cancel` event is shared
+by both stream consumers and is set by `_settle_consumers` only for cleanup
+paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
