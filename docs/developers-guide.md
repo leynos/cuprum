@@ -629,7 +629,7 @@ healthy test here is long enough to trip it: the `trybuild` UI test
 
 300 s is not, however, a bound no healthy test reaches. `trybuild` compiles a
 scratch crate for each UI case into a target directory of its own,
-`rust/target/tests/trybuild/`, so the artifacts nextest builds in
+`rust/target/tests/trybuild/`, so the artefacts nextest builds in
 `rust/target/` cannot serve that compilation. These tests also inherit
 `RUSTFLAGS` from the `cargo` that invoked them, and `make test` passes
 `--jobs 1`, `-C codegen-units=1` and `CARGO_BUILD_JOBS=1`, which trybuild's
