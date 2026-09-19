@@ -319,7 +319,7 @@ def test_a_configured_runtime_endpoint_satisfies_the_skip_probe(
     monkeypatch.setattr("tests.helpers.act_runtime._socket_paths", lambda: ())
 
     monkeypatch.setenv("DOCKER_HOST", _REMOTE_ENDPOINT)
-    assert harness_skip_reason() == "", (
+    assert not harness_skip_reason(), (
         "a configured endpoint must satisfy the socket half of the probe; "
         "probing local sockets would skip a run that could have proceeded"
     )
@@ -329,7 +329,7 @@ def test_a_configured_runtime_endpoint_satisfies_the_skip_probe(
     )
 
     monkeypatch.delenv("DOCKER_HOST")
-    assert harness_skip_reason() != "", (
+    assert harness_skip_reason(), (
         "with no endpoint configured and no candidate socket, the harness must "
         "still report a skip reason rather than attempting a run it cannot make"
     )

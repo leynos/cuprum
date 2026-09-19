@@ -102,9 +102,7 @@ def test_every_way_the_log_can_be_lost_is_announced(workflow_data: Workflow) -> 
         "${{ !cancelled() && steps.gate-log.outcome == 'failure' }}"
     ), "a failed write must be announced even though the upload is skipped"
     assert "::warning" in (script_of(announce) or ""), "a write failure needs a warning"
-    guard = str(
-        step_named(workflow_data, CHANGES_JOB, UPLOAD_STEP).get("if", "")
-    )
+    guard = str(step_named(workflow_data, CHANGES_JOB, UPLOAD_STEP).get("if", ""))
     assert "steps.gate-log.outcome" not in guard, (
         "the upload must stay skipped when no record was written; announcing the "
         "failure is the warning step's job, not the uploader's"

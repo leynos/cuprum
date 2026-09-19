@@ -20,22 +20,25 @@ checkout. See `docs/adr-014-actions-runner-integration-harness.md` for why the
 harness exists and `docs/local-validation-of-github-actions-with-act-and-pytest.md`
 for the manual recipe it automates.
 
-Four modules, one seam each: this one says what a scenario *is*. It never asks
+Five modules, one seam each: this one says what a scenario *is*. It never asks
 whether the host can run one (`tests.helpers.act_runtime`), how to read `act`'s
-output (`tests.helpers.act_stream`), or how the workflow it runs is derived from
-the repository's own (`tests.helpers.act_workflow`).
+output (`tests.helpers.act_stream`), how the workflow it runs is derived from
+the repository's own (`tests.helpers.act_workflow`), or what event is being
+replayed into it (`tests.helpers.act_event`).
 """
 
 from __future__ import annotations
 
-import copy
-import dataclasses as dc
-import enum
 import json
 import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - required act process boundary with explicit argv and timeout.
 import typing as typ
 
+from tests.helpers.act_event import (
+    Event,
+    EventName,
+    event_payload,
+)
 from tests.helpers.act_runtime import (
     DOCKER_HOST_ENV,
     REQUIRE_ACT_ENV,
@@ -51,7 +54,6 @@ from tests.helpers.act_workflow import (
     copy_actions,
     copy_workflow,
 )
-from tests.helpers.workflow import mapping
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -100,103 +102,6 @@ _EVENT_PATH = ".act-event.json"
 #: `owner/name` the scenario reports as its repository, matching the
 #: `full_name` the payload builder fills in.
 _REPOSITORY = "cuprum/act-harness"
-
-
-class EventName(enum.StrEnum):
-    """A GitHub event the harness knows how to deliver.
-
-    `event_payload` builds a different body for each, so a name outside this
-    set is a harness bug rather than a payload the workflow could parse. The
-    member value is the spelling `github.event_name` carries, and a `StrEnum`
-    member is a `str`, so either member or value reaches `act`, the payload
-    JSON, and the fixtures unchanged.
-    """
-
-    PULL_REQUEST = "pull_request"
-    PUSH = "push"
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Event:
-    """One GitHub event to replay through the workflow.
-
-    Attributes
-    ----------
-    name : EventName
-        Event name, as `github.event_name` would carry it. Only the members of
-        `EventName` are deliverable; `event_payload` rejects the rest.
-    payload : dict[str, object]
-        Webhook payload written to the event-path file. `act` injects
-        `github.event_name`, so the payload carries only the body.
-    ref : str
-        Value for `github.ref`.
-    sha : str
-        Value for `github.sha`. A pull request is checked out at its head;
-        a push is checked out at the commit that was pushed.
-    branch : str
-        Value for `github.ref_name`, without the `refs/heads/` prefix.
-    """
-
-    name: EventName
-    payload: dict[str, object]
-    ref: str
-    sha: str
-    branch: str
-
-
-def event_payload(event: Event, repository: str) -> dict[str, object]:
-    """Return the event body `act` should deliver, with its repository filled in.
-
-    Parameters
-    ----------
-    event : Event
-        The event to deliver. Its payload is deep-copied, never mutated.
-    repository : str
-        ``owner/name`` for the temporary repository the scenario runs in. The
-        workflow reads `repository.default_branch` to resolve a push's base.
-
-    Returns
-    -------
-    dict[str, object]
-        The complete webhook payload.
-
-    Raises
-    ------
-    ValueError
-        If `event.name` is not one the harness knows how to deliver. Without
-        this, any unrecognized name would silently receive push semantics.
-    """
-    # `event.name` may be a member or its value, because a `StrEnum` member is
-    # a `str`. Converting to the enum is both the membership test and the
-    # normalization: one object decides which event is being built, so the
-    # branches below cannot disagree about it, and an unknown name is refused
-    # here rather than silently given push semantics.
-    try:
-        name = EventName(event.name)
-    except ValueError as exc:
-        message = (
-            f"unsupported event name {event.name!r}; the harness delivers "
-            f"{' and '.join(EventName)}"
-        )
-        raise ValueError(message) from exc
-    payload = copy.deepcopy(event.payload)
-    payload["ref"] = event.ref
-    match name:
-        case EventName.PULL_REQUEST:
-            pull_request = mapping(
-                payload.get("pull_request"), "event must define pull_request"
-            )
-            head = mapping(pull_request.get("head"), "pull_request must define head")
-            head.update({"sha": event.sha, "ref": event.branch})
-        case EventName.PUSH:
-            payload["after"] = event.sha
-    payload["repository"] = {
-        "full_name": repository,
-        "default_branch": "main",
-        "html_url": f"https://github.com/{repository}",
-    }
-    payload["sender"] = {"login": "act-harness"}
-    return payload
 
 
 def run_act(

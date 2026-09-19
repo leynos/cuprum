@@ -167,6 +167,15 @@ persistent receipt and publication map to M3 and a downloaded hosted artefact.
   commit after the replay. The semantic audit found no corruption, and the
   edited `contents.md` was checked mechanically for duplicate definitions and
   unresolved `[adr-NNN]` keys.
+- [x] 2026-09-19: Rebased the 36-commit series onto the advanced `origin/main`
+  head `cb59f204`, resolving a second ADR number collision and renumbering the
+  branch's ADRs to 013 and 014. A replay error that had fused the DOC201 repair
+  into the renumber commit was found by `range-diff` and repaired by
+  re-splitting the two commits.
+- [x] 2026-09-19: Cleared the four Pylint convention findings the rebased head
+  carried — two module-length cap breaches and two `use-implicit-booleaness`
+  comparisons — by splitting the over-cap modules along their existing seams
+  rather than suppressing the messages, and re-ran the four commit gates.
 
 ## Surprises & discoveries
 
@@ -561,3 +570,82 @@ audit found no corruption: all 77 target-only paths are byte-identical to
 and all 18 changed Python modules parse with no duplicated definitions. The
 branch owns no `uv.lock`, `pyproject.toml`, or Rust manifest delta, so no
 lockfile rebuild was required and both match the target byte-for-byte.
+
+2026-09-19: Rebased the 36-commit series from `f48cf8d4` (its exclusive base)
+onto `cb59f204`, the advanced `origin/main` head. Main had gained two commits,
+which moved the ADR collision rather than removing it: `3885c5ac` exposed
+per-command echo fallback diagnostics, and `cb59f204` added
+`adr-012-linux-dev-fast-routing.md`. Main therefore owns both 011 and 012 and
+the branch's two ADRs renumber to 013 and 014. `git merge-tree` predicted two
+conflicted paths, `Makefile` and `docs/contents.md`, and the replay produced
+exactly those. The `Makefile` conflict was adjacency rather than disagreement:
+main retargeted `test-rust`'s prerequisite while the branch inserts a new
+`test-act` target immediately above that line, so the resolution keeps main's
+prerequisite and the branch's target.
+
+The renumber commit is replayed unchanged, so its own hunks collide with the
+new collision and are resolved once more in the same way the previous
+generation resolved them: keep both sides at the conflict, defer the renumber
+to the commit that already exists for it, and re-derive its numbering there.
+Collapsing the two collisions into the earlier conflict would have spread the
+renumber across every commit that edits the ADR files by path.
+
+`git range-diff` showed one commit missing from the replayed series, `785485f1`
+(the DOC201 docstring repair). Its content was not lost: an earlier
+conflict-stop resolution had used `git commit --amend`, which amended the
+*replayed* `785485f1` rather than the renumber commit, fusing two logically
+distinct commits into one whose message described only half of its content.
+The fix re-split them — recreate the DOC201 commit on top of `91caabb1`, then
+replay the three descendants — and strip the `cherry picked from` provenance
+lines that `git cherry-pick -x` appended, since they named pre-rebase commits
+that no longer exist in this series. The repaired head is tree-identical to the
+fused one, so no content changed; only the history's accuracy did. The lesson is
+that `git commit --amend` during a rebase conflict stop amends whatever HEAD
+currently is, which is the *previous replayed commit*, never the commit being
+currently applied.
+
+The semantic audit then found no corruption: all 75 target-only paths are
+byte-identical to `cb59f204`, no file is deleted against the target, and
+`git diff --check` is clean. All fourteen ADR files 001-014 exist with no
+duplicate number, and every `[adr-NNN]` link definition in `contents.md` and
+every relative ADR link across `docs/` resolves to a file that exists.
+
+2026-09-19: Cleared the four Pylint convention findings that the rebased head
+carried. Two were module-length cap breaches — `tests/test_ci_act_stream_properties.py`
+at 514 lines and `tests/helpers/act_harness.py` at 407, against a 400-line
+`max-module-lines` — and both were fixed by splitting along seams the modules
+already documented rather than by suppressing the message or trimming prose.
+
+The split follows the harness's own "one seam each" design. `act_harness.py`
+loses its event model to a new `tests/helpers/act_event.py` (312 and 119 lines):
+the four sibling modules already partition scenario, runtime, stream reading,
+and workflow projection, and the event payload is the fifth such concern — it is
+the part that has to match GitHub's format. `test_ci_act_stream_properties.py`
+loses the shell-analyser half to a new `tests/test_ci_workflow_shell_properties.py`
+(323 and 220 lines), because the module held two unrelated subjects, each
+already with its own example-based companion (`test_act_stream_parsing.py` and
+`test_ci_workflow_shell_tokens.py`). Both splits re-export through the original
+module, so `from tests.helpers.act_harness import Event` keeps working and the
+developer-guide and ADD-014 excerpts that name it stay accurate.
+
+Worth recording, because it explains why the gate reported only these two files
+while other modules exceed 400 lines: the Pylint gate runs under PyPy 3.11, and
+`cuprum/sh.py` (983 lines) opens with a PEP 695 `type X = ...` alias that PyPy
+3.11 cannot parse. `pylint-pypy-shim` skips a file it cannot parse, so that
+module is never checked for length at all. The two flagged modules were the only
+ones the gate could actually read that were over the cap — the other long
+modules under `cuprum/unittests/` also report C0302 when Pylint is pointed at
+them directly, but no directory-level gate invocation reaches them. The cap is
+therefore real for any file the gate can parse, and splitting (not suppression)
+is the fix that holds.
+
+The other two findings were `C1804` at `tests/test_ci_act_harness_contract.py`
+lines 322 and 332, where `harness_skip_reason() == ""` and `!= ""` were
+replaced by `not harness_skip_reason()` and `harness_skip_reason()`. The
+surrounding assertions are unaffected: the empty string is the function's
+"no reason to skip" value, so the truthiness reading is the same contract
+stated without a redundant comparison.
+
+After the repair `pylint-pypy benchmarks conftest.py cuprum scripts tests`
+exits 0 with no findings and a 10.00/10 rating, and the focused suites for every
+touched module pass 118 tests.
