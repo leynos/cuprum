@@ -49,6 +49,55 @@ _LEXEME_STARTS = frozenset("/r\"'")
 # `sys.platform` reports as `linux*`. Keeping the check explicit means a broken
 # host probe in the Makefile fails the contract below instead of mirroring it.
 _HOST_IS_LINUX = sys.platform.startswith("linux")
+_EXPECTED_DEBUG_ROUTE = (
+    "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
+    "--config ../tools/dev-fast/config.toml"
+)
+_DEV_FAST_FRAGMENTS = (
+    "RUSTUP_TOOLCHAIN=nightly-2026-08-23",
+    "--config ../tools/dev-fast/config.toml",
+)
+
+
+def _assert_target_avoids_the_formatter_route(
+    target: str, cargo_lines: list[str]
+) -> None:
+    """Assert one lint or test target keeps the formatter's nightly route out.
+
+    Parameters
+    ----------
+    target
+        Makefile target whose expanded recipe is being checked.
+    cargo_lines
+        Cargo command lines from that target's dry-run recipe.
+    """
+    assert all("probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines), (
+        f"{target} must not select the formatter's nightly Cargo route"
+    )
+
+
+def _assert_target_debug_route(target: str, cargo_lines: list[str]) -> None:
+    """Assert one lint or test target carries the host-appropriate debug route.
+
+    The Makefile routes debug work through dev-fast only on Linux and falls back
+    to the bare injected Cargo elsewhere, so the fragment is required on Linux
+    and must be absent on every other host.
+
+    Parameters
+    ----------
+    target
+        Makefile target whose expanded recipe is being checked.
+    cargo_lines
+        Cargo command lines from that target's dry-run recipe.
+    """
+    if _HOST_IS_LINUX:
+        assert any(_EXPECTED_DEBUG_ROUTE in line for line in cargo_lines), (
+            f"{target} must retain the Linux dev-fast Cargo route"
+        )
+        return
+    assert all(
+        fragment not in line for line in cargo_lines for fragment in _DEV_FAST_FRAGMENTS
+    ), f"{target} must omit the Linux-only dev-fast Cargo route off Linux"
 
 
 def test_formatter_toolchain_precedes_the_project_toolchain(
@@ -285,33 +334,11 @@ def test_make_formatter_targets_select_the_pinned_nightly() -> None:
         "formatter targets must use only the injected pinned nightly cargo route"
     )
 
-    expected_debug_route = (
-        "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
-        "--config ../tools/dev-fast/config.toml"
-    )
-    dev_fast_fragments = (
-        "RUSTUP_TOOLCHAIN=nightly-2026-08-23",
-        "--config ../tools/dev-fast/config.toml",
-    )
     for target in ("lint", "test"):
         target_recipes = expanded_recipes(target)
         cargo_lines = [
             line for line in target_recipes.splitlines() if "probe-cargo" in line
         ]
         assert cargo_lines, f"{target} must expand at least one Cargo command"
-        assert all(
-            "probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines
-        ), f"{target} must not select the formatter's nightly Cargo route"
-        # The Makefile routes debug work through dev-fast only on Linux and falls
-        # back to the bare injected Cargo elsewhere, so the fragment is required
-        # on Linux and must be absent on every other host.
-        if _HOST_IS_LINUX:
-            assert any(expected_debug_route in line for line in cargo_lines), (
-                f"{target} must retain the Linux dev-fast Cargo route"
-            )
-        else:
-            assert all(
-                fragment not in line
-                for line in cargo_lines
-                for fragment in dev_fast_fragments
-            ), f"{target} must omit the Linux-only dev-fast Cargo route off Linux"
+        _assert_target_avoids_the_formatter_route(target, cargo_lines)
+        _assert_target_debug_route(target, cargo_lines)
