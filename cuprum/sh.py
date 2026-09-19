@@ -624,10 +624,12 @@ class SafeCmd:
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return await _run_prepared_command(
             self,
-            output=out,
-            context=ctx,
-            stdin_data=stdin_data,
-            timeout=effective_timeout,
+            _ExecutionState(
+                context=ctx,
+                output=out,
+                stdin_data=stdin_data,
+                timeout=effective_timeout,
+            ),
         )
 
     def lines(

@@ -1611,14 +1611,17 @@ after-hook dispatch and finalizes the run's sink session on every terminal path.
 `_ExecutionState` carries one run's already-resolved inputs — context, output
 options, resolved stdin, and the settled deadline — so the spawn helper stays a
 translation from what the run decided to what the subprocess layer consumes.
-Finalization is the reason the sequence lives in one module: the sink session
-must close *before* the observe-hook tasks drain, because the drain aggregates
-a hook failure with the error that ended the run, so closing afterwards would
-record the aggregate — an `error` annotation standing in for a timeout — and a
-drain that raised would skip the close entirely. The module was split out of
-`cuprum/sh.py` to resolve a file-level CodeScene `Low Cohesion` finding; see the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-2026-09-19.
+`SafeCmd.run` resolves those inputs, builds the state, and hands it to
+`_run_prepared_command`; the helper never reconstructs it, which is what keeps
+its own signature small while leaving the public method's resolution order
+unchanged. Finalization is the reason the sequence lives in one module: the
+sink session must close *before* the observe-hook tasks drain, because the
+drain aggregates a hook failure with the error that ended the run, so closing
+afterwards would record the aggregate — an `error` annotation standing in for a
+timeout — and a drain that raised would skip the close entirely. The module was
+split out of `cuprum/sh.py` to resolve a file-level CodeScene `Low Cohesion`
+finding; see the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+addendum of 2026-09-19.
 
 Error propagation policy (to be finalized, but roughly):
 

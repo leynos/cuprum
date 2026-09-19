@@ -89,10 +89,12 @@ _COMMAND_FINALIZATION_ERROR = "command finalization failed"
 class _ExecutionState:
     """One run's already-resolved inputs, carried as a unit.
 
-    Every field is resolved before the sink session opens — the allowlist is
-    enforced, stdin is resolved against the context, and the timeout
-    precedence is settled — so the bundle changes nothing about when those
-    steps happen, only how many names the spawn helper has to take.
+    Every field is resolved by ``SafeCmd.run`` before the sink session opens —
+    the allowlist is enforced, stdin is resolved against the context, and the
+    timeout precedence is settled — so the bundle changes nothing about when
+    those steps happen, only how many names the run's orchestration helpers
+    have to take. ``SafeCmd.run`` builds it and hands it on; nothing here
+    constructs it.
     """
 
     context: ExecutionContext
@@ -234,22 +236,33 @@ async def _execute_with_hooks(
     return result
 
 
-# ruff: ignore[too-many-arguments]  # the five inputs are one run's resolved state, carried together rather than derived
 async def _run_prepared_command(
     cmd: SafeCmd,
-    *,
-    output: RunOutputOptions,
-    context: ExecutionContext,
-    stdin_data: bytes | None,
-    timeout: float | None,  # ruff: ignore[async-function-with-timeout]  # the deadline is already resolved; this only carries it into the bundle.
+    state: _ExecutionState,
 ) -> CommandResult:
-    """Run one validated command after its public inputs are resolved."""
-    state = _ExecutionState(
-        context=context,
-        output=output,
-        stdin_data=stdin_data,
-        timeout=timeout,
-    )
+    """Run one validated command after its public inputs are resolved.
+
+    ``SafeCmd.run`` remains the public entry point and keeps its signature; it
+    resolves the allowlist, stdin, and the effective timeout, bundles them as
+    *state*, and hands the bundle here. This helper takes that bundle instead
+    of the four names it carries, which keeps the orchestration signature
+    within CodeScene's argument limit and makes the bundle what the docstring
+    on :class:`_ExecutionState` claims it is — one run's resolved inputs
+    travelling as a unit — rather than a temporary built only to be unpacked.
+
+    Parameters
+    ----------
+    cmd : SafeCmd
+        The validated command to run.
+    state : _ExecutionState
+        The run's already-resolved inputs.
+
+    Returns
+    -------
+    CommandResult
+        The completed command's result.
+    """
+    output = state.output
     # The bracket owns the session for the whole run: a plan observer, a
     # before hook, or anything else that raises before execution starts
     # still finalizes the adapter's framing rather than stranding an open
@@ -264,7 +277,12 @@ async def _run_prepared_command(
         sink_bracket=sink_bracket,
     )
     try:
-        observation = _prepare_execution_observation(cmd, context, tracking, output)
+        observation = _prepare_execution_observation(
+            cmd,
+            state.context,
+            tracking,
+            output,
+        )
         observation.emit("plan", _EventDetails(pid=None))
         for hook in tracking.execution_hooks.before_hooks:
             hook(cmd)

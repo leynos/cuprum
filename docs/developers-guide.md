@@ -3802,10 +3802,11 @@ family:
   caller own the deadline through `asyncio.timeout()`, but the parameter is
   public, documented ergonomics, so each definition carries a per-line
   `# ruff: ignore[async-function-with-timeout]` with a rationale comment rather
-  than dropping the parameter. Three sites carry the suppression in total: the
-  two public methods above, plus the internal helper `_run_prepared_command`,
-  which takes the *already-resolved* deadline purely so it can be carried into
-  the execution bundle. The deadline itself stays caller-owned: the wait
+  than dropping the parameter. Two sites carry the suppression in total: the
+  two public methods above. The internal helper `_run_prepared_command` no
+  longer takes the deadline as a parameter of its own — it receives the
+  already-resolved deadline inside the run's resolved-inputs bundle — so it
+  carries no suppression. The deadline itself stays caller-owned: the wait
   helpers apply it with `asyncio.timeout()` rather than taking a `timeout`
   parameter of their own (see
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md)).
