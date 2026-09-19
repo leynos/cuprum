@@ -192,6 +192,40 @@ def _optional_worker_iterations(payload: cabc.Mapping[str, object]) -> int | Non
     return value
 
 
+def _scenario_payload_size(index: int, value: object) -> int | None:
+    """Return ``scenarios[index]``'s payload size, or None when it declares none.
+
+    A scenario may legitimately omit the size, so absence is not an error; a
+    present-but-wrong type is, and the message names the position because the
+    plan's scenarios carry no other identifier a reader could act on.
+
+    Parameters
+    ----------
+    index : int
+        Position of the scenario, used in the error message.
+    value : object
+        The scenario entry to read.
+
+    Returns
+    -------
+    int | None
+        The declared payload size, or ``None`` when the scenario declares none.
+
+    Raises
+    ------
+    TypeError
+        If the scenario is not a mapping, or its size is not an int.
+    """
+    scenario = _require_mapping(value, name=f"scenarios[{index}]")
+    size = scenario.get("payload_bytes")
+    if size is None:
+        return None
+    if isinstance(size, bool) or not isinstance(size, int):
+        msg = f"scenarios[{index}].payload_bytes must be an int"
+        raise TypeError(msg)
+    return size
+
+
 def _payload_sizes(payload: cabc.Mapping[str, object]) -> tuple[int, ...]:
     """Return the distinct ascending payload sizes of a plan's scenarios."""
     scenarios = payload.get("scenarios")
@@ -200,16 +234,11 @@ def _payload_sizes(payload: cabc.Mapping[str, object]) -> tuple[int, ...]:
     if isinstance(scenarios, (str, bytes)) or not isinstance(scenarios, cabc.Sequence):
         msg = "scenarios must be a sequence"
         raise TypeError(msg)
-    sizes: set[int] = set()
-    for index, value in enumerate(scenarios):
-        scenario = _require_mapping(value, name=f"scenarios[{index}]")
-        size = scenario.get("payload_bytes")
-        if size is None:
-            continue
-        if isinstance(size, bool) or not isinstance(size, int):
-            msg = f"scenarios[{index}].payload_bytes must be an int"
-            raise TypeError(msg)
-        sizes.add(size)
+    sizes = {
+        size
+        for index, value in enumerate(scenarios)
+        if (size := _scenario_payload_size(index, value)) is not None
+    }
     return tuple(sorted(sizes))
 
 

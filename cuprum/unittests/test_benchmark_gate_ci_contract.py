@@ -64,6 +64,12 @@ from tests.helpers.workflow import (
     step_with_id,
     steps,
 )
+from tests.helpers.workflow_shell import (
+    flag_value,
+    shell_function,
+    shell_statements,
+    top_level_operators,
+)
 
 PATHS_FILTER_ACTION = "dorny/paths-filter@"
 SUMMARY_STEP = "Record the benchmark gate decision"
@@ -236,105 +242,6 @@ def test_the_paid_benchmark_uses_the_shared_optimized_setup(
     )
 
 
-def _top_level_operators(expression: str, operator: str) -> int:
-    """Count *operator* occurrences outside parentheses and quoted strings.
-
-    `&&` and `||` are distinguished by where they bind, not merely by being
-    present: a condition may legitimately parenthesize an inner disjunction
-    while remaining conjunctive overall. Counting at depth zero is what makes
-    "this guard is conjunctive" a statement about the whole condition rather
-    than about whether the character pair appears anywhere in it.
-
-    Parameters
-    ----------
-    expression : str
-        The condition expression to scan.
-    operator : str
-        The operator to count, such as ``&&`` or ``||``.
-
-    Returns
-    -------
-    int
-        How many times *operator* binds at the top level.
-    """
-    depth = 0
-    quote: str | None = None
-    count = 0
-    index = 0
-    while index < len(expression):
-        char = expression[index]
-        if quote is not None:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        elif depth == 0 and expression.startswith(operator, index):
-            count += 1
-            index += len(operator) - 1
-        index += 1
-    return count
-
-
-def _shell_statements(body: str) -> tuple[str, ...]:
-    """Return *body*'s statements, continuations joined and comments dropped.
-
-    Comments are dropped before anything is matched, and the order matters:
-    the workflow's own prose quotes the very command names and guards these
-    tests search for, so a scan that ran over the commented body would find a
-    guard in a comment and conclude the command was guarded. A comment cannot
-    guard a command.
-
-    Parameters
-    ----------
-    body : str
-        The shell body to split into statements.
-
-    Returns
-    -------
-    tuple[str, ...]
-        One entry per statement, whitespace-collapsed and stripped.
-    """
-    uncommented = "\n".join(
-        line for line in body.splitlines() if not line.lstrip().startswith("#")
-    )
-    joined = re.sub(r"\\\n\s*", " ", uncommented)
-    # Continuation folding leaves the joined line's indentation as runs of
-    # spaces, so collapse them: the assertions below are about which guard a
-    # statement carries, not about how it is laid out.
-    collapsed = re.sub(r"[ \t]+", " ", joined)
-    return tuple(line.strip() for line in collapsed.splitlines() if line.strip())
-
-
-def _shell_function(script: str, name: str) -> str:
-    """Return the body of the shell function *name* declared in *script*."""
-    match = re.search(
-        rf"^[ \t]*{re.escape(name)}\(\)\s*\{{(?P<body>.*?)^[ \t]*\}}",
-        script,
-        re.MULTILINE | re.DOTALL,
-    )
-    if match is None:
-        msg = f"{name!r} must be declared as a shell function in {THROUGHPUT_STEP!r}"
-        raise AssertionError(msg)
-    return match.group("body")
-
-
-def _flag_value(body: str, flag: str) -> str:
-    """Return the value the ratchet invocation in *body* passes to *flag*."""
-    match = re.search(
-        rf"^[ \t]*{re.escape(flag)}[ \t]+(?P<value>[^\s\\]+)",
-        body,
-        re.MULTILINE,
-    )
-    if match is None:
-        msg = f"the ratchet comparison must pass {flag} explicitly"
-        raise AssertionError(msg)
-    return match.group("value")
-
-
 def test_the_ratchet_policy_matches_the_module_defaults(
     workflow_data: Workflow,
 ) -> None:
@@ -352,21 +259,21 @@ def test_the_ratchet_policy_matches_the_module_defaults(
     """
     script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
     assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
-    body = _shell_function(script, RATCHET_FUNCTION)
+    body = shell_function(script, RATCHET_FUNCTION, step=THROUGHPUT_STEP)
 
-    max_regression = float(_flag_value(body, "--max-regression"))
+    max_regression = float(flag_value(body, "--max-regression"))
     assert max_regression == DEFAULT_MAX_REGRESSION, (
         f"--max-regression must be the {DEFAULT_MAX_REGRESSION!r} that "
         f"benchmarks/ratchet_history.py owns; found {max_regression!r}"
     )
 
-    noise_sigmas = float(_flag_value(body, "--noise-sigmas"))
+    noise_sigmas = float(flag_value(body, "--noise-sigmas"))
     assert noise_sigmas == DEFAULT_NOISE_SIGMAS, (
         f"--noise-sigmas must be the {DEFAULT_NOISE_SIGMAS!r} that "
         f"benchmarks/ratchet_history.py owns; found {noise_sigmas!r}"
     )
 
-    window_size = int(_flag_value(body, "--history-window"))
+    window_size = int(flag_value(body, "--history-window"))
     assert window_size == DEFAULT_WINDOW_SIZE, (
         f"--history-window must be the {DEFAULT_WINDOW_SIZE!r} that "
         f"benchmarks/ratchet_history.py owns; found {window_size!r}"
@@ -393,7 +300,7 @@ def test_the_ratchet_benchmarks_measure_the_ci_ratchet_workload(
     """
     script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
     assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
-    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+    body = shell_function(script, RATCHET_BENCHMARKS_FUNCTION, step=THROUGHPUT_STEP)
 
     assert "--ci-ratchet" in body, (
         f"{RATCHET_BENCHMARKS_FUNCTION!r} must measure the --ci-ratchet "
@@ -422,9 +329,9 @@ def test_the_ratchet_benchmarks_invocation_propagates_failure(
     """
     script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
     assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
-    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+    body = shell_function(script, RATCHET_BENCHMARKS_FUNCTION, step=THROUGHPUT_STEP)
 
-    statements = _shell_statements(body)
+    statements = shell_statements(body)
     for marker in (
         "make develop MATURIN_DEVELOP_FLAGS",
         "benchmarks/pipeline_throughput.py",
@@ -458,9 +365,9 @@ def test_the_ratchet_worker_iterations_match_the_scenario_default(
     """
     script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
     assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
-    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+    body = shell_function(script, RATCHET_BENCHMARKS_FUNCTION, step=THROUGHPUT_STEP)
 
-    iterations = int(_flag_value(body, "--worker-iterations"))
+    iterations = int(flag_value(body, "--worker-iterations"))
     assert iterations == CI_RATCHET_WORKER_ITERATIONS, (
         f"--worker-iterations must be the {CI_RATCHET_WORKER_ITERATIONS!r} "
         f"that benchmarks/pipeline_throughput_scenarios.py owns; "
@@ -499,12 +406,12 @@ def test_the_main_sample_is_published_whatever_the_ratchet_decides(
         "passed one, so its condition needs `!cancelled()`; an interrupted run "
         f"that measured half a sample still publishes nothing. Found: {condition!r}"
     )
-    assert _top_level_operators(condition, "||") == 0, (
+    assert top_level_operators(condition, "||") == 0, (
         f"the {step_name!r} step must require all of its guards, not any of "
         "them: a top-level disjunction would let publication proceed with no "
         f"candidate artefacts. Found: {condition!r}"
     )
-    assert _top_level_operators(condition, "&&") >= 2, (
+    assert top_level_operators(condition, "&&") >= 2, (
         f"the {step_name!r} step must combine its guards conjunctively, so "
         "that every one of them has to hold for the step to run. "
         f"Found: {condition!r}"
