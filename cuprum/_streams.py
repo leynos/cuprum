@@ -241,23 +241,10 @@ async def _drain(
     # variant-specific processing (for example incremental line decoding).
     # Fixes to the loop must be made here so the capture path and the
     # line-emitting path cannot drift.
-    if config.echo_output and config.echo_max_line_bytes is not None:
-        _validate_bounded_echo_encoding(config.encoding, config.errors)
-    buffer = bytearray() if config.capture_output else None
-    echo_decoder = _echo_decoder(config)
-    echo_guard = _EchoGuard()
-    echo_limiter = _EchoLineLimiter.from_config(
-        echo_output=config.echo_output,
-        echo_max_line_bytes=config.echo_max_line_bytes,
-    )
-    state = _DrainState(
+    state = _build_drain_state(
         config,
-        buffer,
-        echo_decoder,
-        on_chunk,
-        echo_guard,
-        relay_diagnostics or _RelayDiagnostics(),
-        echo_limiter=echo_limiter,
+        on_chunk=on_chunk,
+        relay_diagnostics=relay_diagnostics,
     )
     measurement = _start_stream_operation(StreamOperation.DRAIN)
     try:
@@ -279,6 +266,39 @@ async def _drain(
         _complete_stream_operation(measurement, StreamOperationOutcome.FAILED)
         raise
     return _finish_drain(state, measurement, reached_eof=False)
+
+
+def _build_drain_state(
+    config: _StreamConfig,
+    *,
+    on_chunk: _ChunkSink | None,
+    relay_diagnostics: _RelayDiagnostics | None,
+) -> _DrainState:
+    """Assemble the mutable state one drain loop threads through its chunks.
+
+    The bounded-echo guard is validated here rather than in the loop because a
+    misconfigured encoding must fail before the first byte is read.
+
+    Returns
+    -------
+    _DrainState
+        Fresh state carrying the capture buffer, echo machinery, and the
+        per-chunk and relay diagnostics the loop threads through.
+    """
+    if config.echo_output and config.echo_max_line_bytes is not None:
+        _validate_bounded_echo_encoding(config.encoding, config.errors)
+    return _DrainState(
+        config,
+        bytearray() if config.capture_output else None,
+        _echo_decoder(config),
+        on_chunk,
+        _EchoGuard(),
+        relay_diagnostics or _RelayDiagnostics(),
+        echo_limiter=_EchoLineLimiter.from_config(
+            echo_output=config.echo_output,
+            echo_max_line_bytes=config.echo_max_line_bytes,
+        ),
+    )
 
 
 def _finish_drain(

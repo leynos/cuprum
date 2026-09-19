@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from cuprum.events import new_exec_id
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
 from cuprum.unittests._adapter_test_support import (
@@ -61,28 +63,21 @@ def _assert_projected(
     )
 
 
-def test_projection_carries_the_complete_bounded_attributes(
-    tracing_hook: Traced,
-) -> None:
-    """Every populated field reaches the span under its documented name."""
-    exec_id = new_exec_id()
-    _open_span(tracing_hook, exec_id)
-
-    tracing_hook.hook.record_line_stream_event(
+#: The ``None`` filter is a truth table: a populated field survives, a zero
+#: measurement survives because ``0`` is not ``None``, and an unset field is
+#: dropped. Each row is one point in that table.
+_PROJECTION_ROWS: list[tuple[LineStreamEvent, dict[str, object]]] = [
+    (
         LineStreamEvent(
             phase=LineStreamPhase.QUEUE_SATURATED,
-            exec_id=exec_id,
+            exec_id=new_exec_id(),
             pid=4321,
             stream="stderr",
             sink="queue",
             queue_size=8,
             queue_capacity=8,
             error_type="ValueError",
-        )
-    )
-
-    _assert_projected(
-        tracing_hook.tracer.spans[0],
+        ),
         {
             "phase": "queue_saturated",
             "pid": 4321,
@@ -92,46 +87,17 @@ def test_projection_carries_the_complete_bounded_attributes(
             "queue_capacity": 8,
             "error_type": "ValueError",
         },
-    )
-
-
-def test_projection_omits_every_unset_field(tracing_hook: Traced) -> None:
-    """Unset optional fields are omitted rather than projected as ``None``."""
-    exec_id = new_exec_id()
-    _open_span(tracing_hook, exec_id)
-
-    tracing_hook.hook.record_line_stream_event(
-        LineStreamEvent(
-            phase=LineStreamPhase.SPAWNED,
-            exec_id=exec_id,
-            pid=None,
-        )
-    )
-
-    _assert_projected(tracing_hook.tracer.spans[0], {"phase": "spawned"})
-
-
-def test_projection_keeps_zero_valued_bounds(
-    tracing_hook: Traced,
-) -> None:
-    """A zero bound is a measurement, not an unset field, so it survives."""
-    exec_id = new_exec_id()
-    _open_span(tracing_hook, exec_id)
-
-    tracing_hook.hook.record_line_stream_event(
+    ),
+    (
         LineStreamEvent(
             phase=LineStreamPhase.QUEUE_SATURATED,
-            exec_id=exec_id,
+            exec_id=new_exec_id(),
             pid=4321,
             stream="stdout",
             sink="queue",
             queue_size=0,
             queue_capacity=0,
-        )
-    )
-
-    _assert_projected(
-        tracing_hook.tracer.spans[0],
+        ),
         {
             "phase": "queue_saturated",
             "pid": 4321,
@@ -140,7 +106,32 @@ def test_projection_keeps_zero_valued_bounds(
             "queue_size": 0,
             "queue_capacity": 0,
         },
-    )
+    ),
+    (
+        LineStreamEvent(
+            phase=LineStreamPhase.SPAWNED,
+            exec_id=new_exec_id(),
+            pid=None,
+        ),
+        {"phase": "spawned"},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    _PROJECTION_ROWS,
+    ids=["every-field-populated", "zero-measurements-kept", "unset-fields-dropped"],
+)
+def test_projection_maps_populated_fields_and_drops_unset_ones(
+    tracing_hook: Traced,
+    event: LineStreamEvent,
+    expected: dict[str, object],
+) -> None:
+    """The projection carries exactly the fields that are not ``None``."""
+    _open_span(tracing_hook, event.exec_id)
+    tracing_hook.hook.record_line_stream_event(event)
+    _assert_projected(tracing_hook.tracer.spans[0], expected)
 
 
 def test_events_project_onto_the_span_sharing_their_exec_id(
