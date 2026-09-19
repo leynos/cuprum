@@ -558,15 +558,16 @@ configuration.
 ## Stream line-splitting properties
 
 Line callbacks in the Python stream backend use two pure helpers from
-`cuprum/_stream_line_boundaries.py`:
+`cuprum/_line_splitting.py`:
 
-- `_split_complete_lines(text, *, final=True)` splits text into completed
-  lines, strips each recognized line ending, and returns `(lines, remainder)`.
-  The recognized boundaries match `str.splitlines()`: CRLF, LF, CR, VT, FF, FS,
-  GS, RS, NEL, LS, and PS. With `final=False`, a trailing `"\r"` remains in
-  `remainder` so a following `"\n"` can complete the CRLF pair; the default
-  final call strips that boundary. The line consumer flushes its incremental
-  decoder before making that final call.
+- `_split_complete_lines(text)` calls
+  `text.splitlines(keepends=True)` and returns completed decoded lines plus a
+  trailing partial remainder. It strips one recognized line terminator from
+  each completed line. The recognized boundaries match `str.splitlines()`:
+  CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, LS, and PS. A trailing `"\r"` remains
+  in `remainder` so a following `"\n"` can complete the CRLF pair. The stream
+  consumer flushes its incremental decoder before stripping a final pending
+  terminator.
 - `_strip_line_ending(line)` removes at most one trailing CRLF pair or one of
   the individual LF, CR, VT, FF, FS, GS, RS, NEL, LS, or PS boundaries. It does
   not normalize or edit interior text.
@@ -4494,6 +4495,69 @@ stage's stderr, and gives each config the shared `mirror` cursor when that
 stream's resolved sink is the keepalive's own destination: stderr normally, and
 final-stage stdout too when the caller points both sinks at one object, since
 either echo can then strand a keepalive mid-line.
+
+## Line observation
+
+Line observation has two public entry points. `SafeCmd.lines()` returns a
+`LineStream` async iterator that yields `LineEvent` values and exposes the
+completed `CommandResult` through `LineStream.result`. The
+`RunOutputOptions.on_line` option registers a synchronous `LineHook` for
+`run()` and for the same underlying line-consumer path used by `lines()`. Both
+carry the stream name, decoded text without its terminator, and monotonic
+seconds measured from the subprocess start; per-stream order is preserved.
+
+The two observation channels have separate payloads and responsibilities. The
+line callback path delivers `LineEvent` values. `sh.observe()` delivers
+structured `ExecEvent` lifecycle and output records, including the existing
+`plan`, `start`, `stdout`, `stderr`, and `exit` phases. A line event therefore
+does not extend the closed `ExecPhase` type. In a pipeline, final stdout and
+stage stderr can be observed; an interior stage's stdout feeds the next stage
+and is not exposed as a line event.
+
+Line-stream lifecycle telemetry is a separate `LineStreamEvent` channel exposed
+through `observe_line_stream()`. Its hook is fail-open: a telemetry-hook
+failure is reported through the established diagnostics path and does not
+replace the command's result, timeout, cancellation, or teardown error. Events
+carry the existing `exec_id` and PID correlation fields where available. Queue
+size and capacity are structured event or log details only, never metric
+labels, and line-stream telemetry must remain separate from `ExecEvent`
+lifecycle records.
+
+Line observation is independent of capture and echo. Enabling either line
+interface keeps the relevant subprocess streams consumed even when
+`capture=False` and `echo=False`; capture still controls whether text is kept
+on the result, and echo still controls whether text is mirrored to the
+configured sinks. This is why a line-only result can have `stdout` and `stderr`
+set to `None` while its callers receive every line.
+
+`SafeCmd.lines()` uses a finite, bounded queue between the stream consumers and
+the iterator. Its line sink awaits `queue.put`, and the consumer awaits that
+sink, so a full queue applies backpressure to the child rather than dropping
+lines or retaining an unbounded backlog. The coordinator posts the final
+`CommandResult` after the lines and the shared reconciliation settles the stdin
+writer, stream consumers, and pending observe-hook tasks. Timeout,
+cancellation, explicit close, and other early exits use the same termination
+and drain rules as `run()`.
+
+The implementation boundaries are deliberately narrow:
+
+Table 1: Line-observation implementation boundaries
+
+| Module                                                               | Responsibility                                                                                                                                          |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_line_stream.py`                                             | Owns the line-run queue, queue sink, subprocess start, coordinator, and final result hand-off.                                                          |
+| `cuprum/_line_iteration.py`                                          | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
+| `cuprum/_line_callbacks.py`                                          | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
+| `cuprum/_subprocess_streams.py`                                      | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |
+| `cuprum/_execution_tracking.py`                                      | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                         |
+| `cuprum/_subprocess_execution.py` and `cuprum/_subprocess_wait.py`   | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                 |
+| `cuprum/_process_lifecycle.py`                                       | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                       |
+| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py` | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                 |
+
+Changes to line delivery should keep both public entry points on the shared
+consumer path. Changes to termination or task ownership belong in the shared
+lifecycle modules so timeout and cancellation behaviour remains aligned with
+`run()`.
 
 ## Subprocess execution module boundaries
 

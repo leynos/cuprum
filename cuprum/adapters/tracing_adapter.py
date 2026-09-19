@@ -52,7 +52,6 @@ Example with OpenTelemetry::
     class OTelTracer:
         def __init__(self, tracer):
             self._tracer = tracer
-
         def start_span(self, name, attributes=None):
             span = self._tracer.start_span(name, attributes=attributes)
             return OTelSpan(span)
@@ -76,6 +75,7 @@ from cuprum.adapters._support import (
     _prefixed,
     _project_tag,
 )
+from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.tracing_protocols import Span, Tracer
@@ -111,7 +111,7 @@ class _ActiveSpan:
     is_closed: bool = False
 
 
-class TracingHook(_NativePumpCleanupTracingMixin):
+class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
     """Project correlated execution events onto backend spans.
 
     Events without ``exec_id`` are ignored rather than correlated by a PID.

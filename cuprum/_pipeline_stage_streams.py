@@ -17,14 +17,13 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._streams import _consume_stream, _RelayDiagnostics
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum._pipeline_config import _PipelineRunConfig
-from cuprum._pipeline_types import _EventDetails, _StageObservation
+    from cuprum._pipeline_types import _StageObservation
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -65,43 +64,58 @@ def _get_stage_stream_fds(
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 
-def _create_stage_line_observer(
-    observation: _StageObservation,
-    pid: int | None,
-    stream_name: typ.Literal["stderr", "stdout"],
-) -> cabc.Callable[[str], None] | None:
-    """Create a line observer when stage hooks are configured."""
-    if not observation.hooks.observe_hooks:
-        return None
+@dc.dataclass(frozen=True, slots=True)
+class _StageCaptureRequest:
+    """Everything the capture-task builder needs for one stage.
 
-    def emit_line(line: str) -> None:
-        """Emit one captured stream line."""
-        observation.emit(stream_name, _EventDetails(pid=pid, line=line))
+    Attributes
+    ----------
+    process:
+        The stage's subprocess, whose streams are consumed.
+    config:
+        The pipeline run config owning the stream and echo settings.
+    observation:
+        The stage's observation, carrying the observe-hook set.
+    is_last_stage:
+        Whether this stage's stdout is the pipeline's final output.
+    started_at:
+        Monotonic spawn reference for the stage's line stamps.
 
-    return emit_line
+    """
+
+    process: asyncio.subprocess.Process
+    config: _PipelineRunConfig
+    observation: _StageObservation
+    is_last_stage: bool
+    started_at: float
 
 
 def _create_stage_capture_tasks(
-    process: asyncio.subprocess.Process,
-    config: _PipelineRunConfig,
-    *,
-    is_last_stage: bool,
-    observation: _StageObservation,
+    request: _StageCaptureRequest,
 ) -> tuple[
     asyncio.Task[str | None] | None,
     asyncio.Task[str | None] | None,
     tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
 ]:
     """Create stderr and stdout capture tasks for a pipeline stage."""
+    process = request.process
+    config = request.config
+    observation = request.observation
     stderr_task: asyncio.Task[str | None] | None = None
     stdout_task: asyncio.Task[str | None] | None = None
 
-    stderr_on_line = _create_stage_line_observer(
+    # Every stage's stderr is observed for lines, so the caller's ``on_line``
+    # runs here too; the consumer itself is created whenever the stream is
+    # consumed at all, which includes line observation with capture and echo off.
+    stderr_on_line = _compose_line_callbacks(
         observation,
-        process.pid,
-        "stderr",
+        _LineEmissionContext(
+            stream="stderr",
+            pid=process.pid,
+            on_line=config.on_line,
+            started_at=request.started_at,
+        ),
     )
-
     stderr_relay_diagnostics: _RelayDiagnostics | None = None
     if config.consumes_stderr:
         stderr_relay_diagnostics = _RelayDiagnostics()
@@ -117,13 +131,19 @@ def _create_stage_capture_tasks(
             ),
         )
 
-    if not is_last_stage:
+    # Interior stages' stdout is not observed for lines: it is consumed by the
+    # next stage, so no stage other than the last ever owns a stdout consumer.
+    if not request.is_last_stage:
         return stderr_task, stdout_task, (stderr_relay_diagnostics, None)
 
-    stdout_on_line = _create_stage_line_observer(
+    stdout_on_line = _compose_line_callbacks(
         observation,
-        process.pid,
-        "stdout",
+        _LineEmissionContext(
+            stream="stdout",
+            pid=process.pid,
+            on_line=config.on_line,
+            started_at=request.started_at,
+        ),
     )
 
     stdout_relay_diagnostics: _RelayDiagnostics | None = None

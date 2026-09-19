@@ -1,5 +1,25 @@
 # Migration guide for 0.2.0
 
+## Line-level output observation
+
+Cuprum 0.2.0 adds `SafeCmd.lines()` and the `RunOutputOptions.on_line` callback
+for observing decoded stdout and stderr lines as they arrive. These APIs are
+additive: existing callers using `SafeCmd.run()` or pipeline execution require
+no changes.
+
+`SafeCmd.lines()` yields `LineEvent` values with the stream name, decoded text,
+and monotonic arrival time. Its `LineStream.result` attribute exposes the
+completed `CommandResult`. `RunOutputOptions.on_line` delivers the same event
+payload synchronously during `run()` for callers that do not need an async
+iterator. Capture and echo remain independent of line observation, including
+when both are disabled.
+
+For pipelines, line observation covers the final stage's stdout and every
+stage's stderr. The stdout of an interior stage feeds the next stage and is
+therefore not emitted as a line event. See the
+[line-level output section in the users' guide](users-guide.md#line-level-output)
+for ordering, timestamps, teardown, and capture/echo details.
+
 ## Single-project catalogue construction
 
 `ProjectSettings.documentation_locations` and `noise_rules` now default to

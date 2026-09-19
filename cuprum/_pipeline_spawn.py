@@ -74,7 +74,10 @@ async def _spawn_pipeline_stages(
     config: _PipelineRunConfig,
 ) -> None:
     """Spawn stages and accumulate their runtime resources."""
-    from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
+    from cuprum._pipeline_stage_streams import (
+        _create_stage_capture_tasks,
+        _StageCaptureRequest,
+    )
 
     last_idx = len(observations) - 1
     for idx, observation in enumerate(observations):
@@ -102,10 +105,13 @@ async def _spawn_pipeline_stages(
             config.idle.launch()
 
         stage_tasks = _create_stage_capture_tasks(
-            process,
-            config,
-            is_last_stage=(idx == last_idx),
-            observation=observation,
+            _StageCaptureRequest(
+                process=process,
+                config=config,
+                observation=observation,
+                is_last_stage=(idx == last_idx),
+                started_at=resources.started_at[-1],
+            ),
         )
         resources.stderr_tasks.append(stage_tasks[0])
         resources.relay_diagnostics_by_stage.append(stage_tasks[2])

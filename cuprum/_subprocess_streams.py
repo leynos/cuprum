@@ -11,10 +11,14 @@ The stderr config always carries the keepalive cursor, and the stdout config
 picks it up only when both resolved sinks are the same object, because that is
 the case where a newline-less echo can strand the diagnostic mid-line.
 
-Each consumer drains into the collector the run built for it: index ``0`` is
-stdout's, index ``1`` is stderr's. The spawn helper does not own those
-collectors; the run retains the same tuple so its single reconciliation point
-settles and reads them exactly once.
+The per-line callback for each stream is composed here — the observe-hook
+emission plus the caller's ``on_line``, both via
+``cuprum._line_callbacks._compose_line_callbacks`` — so ``SafeCmd.run()`` and
+``SafeCmd.lines()`` share one composition seam. Each consumer drains into the
+collector the run built for it: index ``0`` is stdout's, index ``1`` is
+stderr's. The spawn helper does not own those collectors; the run retains the
+same tuple so its single reconciliation point settles and reads them exactly
+once.
 """
 
 from __future__ import annotations
@@ -24,12 +28,8 @@ import dataclasses as dc
 import sys
 import typing as typ
 
-from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._streams import (
-    _consume_stream,
-    _RelayDiagnostics,
-    _StreamConfig,
-)
+from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
+from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum.echo_events import EchoStream
 
@@ -37,17 +37,25 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum.lines import LineStreamName, _LineHookOutcome
 
 
 def _create_stream_callback(
-    observation: _StageObservation,
-    event_type: typ.Literal["stdout", "stderr"],
+    execution: _SubprocessExecution,
+    event_type: LineStreamName,
     pid: int | None,
-) -> cabc.Callable[[str], None] | None:
-    """Create a callback for emitting stream line events, or None if no hooks."""
-    if not observation.hooks.observe_hooks:
-        return None
-    return lambda line: observation.emit(event_type, _EventDetails(pid=pid, line=line))
+) -> cabc.Callable[[str], _LineHookOutcome] | None:
+    """Create the composed per-line callback for one stream, or ``None``."""
+    emission = _LineEmissionContext(
+        stream="stdout",
+        pid=pid,
+        on_line=execution.on_line,
+        started_at=execution.started_at,
+    )
+    return _compose_line_callbacks(
+        execution.observation,
+        dc.replace(emission, stream=event_type),
+    )
 
 
 def _build_stream_config(
@@ -108,8 +116,8 @@ def _spawn_stream_consumers(
     pid = spawn_context.pid
     stream_config = spawn_context.stream_config
     relay_diagnostics = spawn_context.relay_diagnostics
-    stdout_on_line = _create_stream_callback(execution.observation, "stdout", pid)
-    stderr_on_line = _create_stream_callback(execution.observation, "stderr", pid)
+    stdout_on_line = _create_stream_callback(execution, "stdout", pid)
+    stderr_on_line = _create_stream_callback(execution, "stderr", pid)
     stderr_config = dc.replace(
         stream_config,
         echo_output=execution.echo_stderr,

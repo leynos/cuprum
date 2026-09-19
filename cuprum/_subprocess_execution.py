@@ -42,6 +42,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
 
 
@@ -66,18 +67,37 @@ class _SubprocessExecution:
     observation: _StageObservation
 
     stdin_data: bytes | None
-
+    on_line: _LineHookFn | None = None
+    # Monotonic reference the per-line ``at`` stamps are measured from; taken
+    # once at spawn so every line of a run shares one time base.
+    started_at: float = 0.0
     idle: _IdleMonitor | None = None
 
     @property
     def consumes_stdout(self) -> bool:
-        """Whether the parent must consume stdout, rather than discard it."""
-        return self.capture or self.echo_stdout or self.idle is not None
+        """Whether the parent must consume stdout, rather than discard it.
+
+        A registered ``on_line`` observes both streams, so it keeps the pipe
+        open and the consumer running even when capture and echo are both off.
+        Without that, ``run(output=RunOutputOptions(on_line=...))`` would attach
+        stdout to ``DEVNULL`` and silently deliver nothing.
+        """
+        return (
+            self.capture
+            or self.echo_stdout
+            or self.idle is not None
+            or self.on_line is not None
+        )
 
     @property
     def consumes_stderr(self) -> bool:
         """Whether the parent must consume stderr, rather than discard it."""
-        return self.capture or self.echo_stderr or self.idle is not None
+        return (
+            self.capture
+            or self.echo_stderr
+            or self.idle is not None
+            or self.on_line is not None
+        )
 
 
 async def _spawn_subprocess(
@@ -163,6 +183,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     """Execute a subprocess and return the command result."""
     process = await _spawn_subprocess(execution)
     started_at = time.perf_counter()
+    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
+    # consumers read ``started_at`` off it when stamping each ``LineEvent``.
+    # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
+    # uptime rather than seconds since this command started.
+    execution = dc.replace(execution, started_at=started_at)
     pid = process.pid
     execution.observation.emit("start", _EventDetails(pid=pid))
 

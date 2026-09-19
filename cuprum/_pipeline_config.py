@@ -1,4 +1,12 @@
-"""Pipeline execution configuration helpers."""
+"""Pipeline execution configuration helpers.
+
+``_PipelineRunConfig`` carries the resolved ``RunOutputOptions``, including
+``on_line``, alongside context-derived stream settings. Its ``consumes_stdout``
+and ``consumes_stderr`` decisions keep a stream readable when capture, echo,
+line observation, or the idle heartbeat needs it, and the ``stream_config`` and
+``stderr_stream_config`` properties supply the stream-specific capture, echo,
+sink, encoding, and error configuration consumed by pipeline stream tasks.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +22,7 @@ from cuprum._streams_pump import _current_read_size
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._streams import _MirrorCursor
+    from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
 
@@ -36,17 +45,37 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    on_line: _LineHookFn | None = None
     idle: _IdleMonitor | None = None
 
     @property
     def consumes_stdout(self) -> bool:
-        """Whether the parent must consume the final stage's stdout."""
-        return self.capture or self.echo_stdout or self.idle is not None
+        """Whether the parent must consume the final stage's stdout.
+
+        A registered ``on_line`` observes the final stage's stdout too, so it
+        keeps the pipe and its consumer even when capture and echo are both
+        off, and the idle heartbeat needs raw chunks for the same reason.
+        """
+        return (
+            self.capture
+            or self.echo_stdout
+            or self.idle is not None
+            or self.on_line is not None
+        )
 
     @property
     def consumes_stderr(self) -> bool:
-        """Whether the parent must consume a stage's stderr."""
-        return self.capture or self.echo_stderr or self.idle is not None
+        """Whether the parent must consume a stage's stderr.
+
+        Every stage's stderr is line-observed by the caller's ``on_line``, so
+        the same gates that keep stdout readable apply here.
+        """
+        return (
+            self.capture
+            or self.echo_stderr
+            or self.idle is not None
+            or self.on_line is not None
+        )
 
     @property
     def stream_config(self) -> _StreamConfig:
@@ -130,6 +159,7 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        on_line=output.on_line,
         # One aggregate heartbeat for the whole pipeline, labelled for what it
         # actually observes: the parent-facing output, not the health of every
         # stage. The clock starts when the first stage starts.

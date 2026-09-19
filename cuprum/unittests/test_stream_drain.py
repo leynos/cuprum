@@ -108,6 +108,44 @@ def _payload_and_chunks(draw: st.DrawFn) -> tuple[bytes, tuple[bytes, ...]]:
     return payload, _split_at(payload, cut_points)
 
 
+@st.composite
+def _line_text_and_chunks(draw: st.DrawFn) -> tuple[str, tuple[bytes, ...]]:
+    """Generate every supported line ending over arbitrary byte partitions."""
+    fragments = draw(
+        st.lists(
+            st.text(
+                alphabet=st.characters(
+                    blacklist_characters=_LINE_BOUNDARY_CHARACTERS,
+                ),
+                max_size=12,
+            ),
+            min_size=len(_LINE_BOUNDARY_CHARACTERS) + 1,
+            max_size=len(_LINE_BOUNDARY_CHARACTERS) + 1,
+        )
+    )
+    segments, tail = fragments[:-1], fragments[-1]
+    text = (
+        "".join(
+            f"{fragment}{boundary}"
+            for fragment, boundary in zip(
+                segments,
+                _LINE_BOUNDARY_CHARACTERS,
+                strict=True,
+            )
+        )
+        + tail
+    )
+    payload = text.encode("utf-8")
+    cut_points = draw(
+        st.lists(
+            st.integers(min_value=1, max_value=max(1, len(payload) - 1)),
+            max_size=min(16, max(0, len(payload) - 1)),
+            unique=True,
+        )
+    )
+    return text, _split_at(payload, cut_points)
+
+
 def _decode_chunks(chunks: cabc.Sequence[bytes]) -> str:
     """Decode chunks as one stream for comparison with text-sink echoing."""
     return b"".join(chunks).decode("utf-8", errors="replace")
@@ -438,4 +476,32 @@ def test_line_emission_is_chunk_boundary_insensitive(
     assert split_lines == whole_lines, (
         "line emission must not depend on chunk boundaries for "
         f"payload={payload!r}, chunks={chunks!r}"
+    )
+
+
+@settings(
+    max_examples=_PROPERTY_MAX_EXAMPLES,
+    deadline=None,
+    derandomize=True,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(case=_line_text_and_chunks())
+def test_line_emission_matches_splitlines_for_every_supported_boundary(
+    case: tuple[str, tuple[bytes, ...]],
+) -> None:
+    """Property: decoded chunk splits preserve the universal-line oracle."""
+    text, chunks = case
+    received: list[str] = []
+
+    asyncio.run(
+        _consume_stream(
+            _reader(chunks),
+            _config(io.StringIO()),
+            on_line=received.append,
+        )
+    )
+
+    assert received == text.splitlines(), (
+        "line emission must match str.splitlines() across every supported "
+        f"boundary and byte partition, got {received!r} for {text!r}"
     )

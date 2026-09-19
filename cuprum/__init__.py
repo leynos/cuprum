@@ -65,6 +65,17 @@ from cuprum.echo_events import (
 )
 from cuprum.echo_observation import EchoHookRegistration, observe_echo
 from cuprum.events import ExecEvent, ExecHook
+from cuprum.line_stream_events import (
+    LineStreamEvent,
+    LineStreamHook,
+    LineStreamPhase,
+    LineStreamSink,
+)
+from cuprum.line_stream_observation import (
+    LineStreamHookRegistration,
+    observe_line_stream,
+)
+from cuprum.lines import LineEvent, LineHook, LineStreamName
 from cuprum.logging_hooks import LoggingHookRegistration, logging_hook
 from cuprum.program import Program
 from cuprum.pump_events import (
@@ -81,6 +92,7 @@ from cuprum.sh import (
     CommandResult,
     ExecutionContext,
     IOOptions,
+    LineStream,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
@@ -123,6 +135,15 @@ __all__ = [
     "ForbiddenProgramError",
     "HookRegistration",
     "IOOptions",
+    "LineEvent",
+    "LineHook",
+    "LineStream",
+    "LineStreamEvent",
+    "LineStreamHook",
+    "LineStreamHookRegistration",
+    "LineStreamName",
+    "LineStreamPhase",
+    "LineStreamSink",
     "LoggingHookRegistration",
     "Pipeline",
     "PipelineResult",
@@ -157,6 +178,7 @@ __all__ = [
     "merge_env_overlays",
     "observe",
     "observe_echo",
+    "observe_line_stream",
     "observe_pump",
     "observe_pump_span",
     "resolve_env",

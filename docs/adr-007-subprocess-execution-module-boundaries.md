@@ -269,13 +269,21 @@ The decision above originally assigned stream-consumer creation to
 `_subprocess_execution`, and the preceding addendum records a differently
 shaped boundary (`_subprocess_drain.py`) that was withdrawn. This split is
 accepted on the same test that withdrew that one: it is a real seam, not a
-compatibility shim. `_subprocess_streams` has no callers other than the
-composition root, and the module it feeds keeps the decisions — which streams
-are consumed, whether stdin is written, and what the result is — rather than
+compatibility shim. The module it feeds keeps the decisions — which streams are
+consumed, whether stdin is written, and what the result is — rather than
 delegating them. The execution module is still the composition root; only the
 construction it calls moved. The earlier withdrawal does not apply to this
 shape, and the boundary documented in §8.1.5 of the design and developer guides
 now names it.
+
+Line observation composes into the same seam: `_create_stream_callback` chains
+the caller's `on_line` ahead of the observe-hook emission through
+`cuprum._line_callbacks._compose_line_callbacks`, so `SafeCmd.run()` and
+`SafeCmd.lines()` share one composition point. The line-iteration path is the
+second importer of the builder, reaching `_build_stream_config` and
+`_spawn_stream_consumers` from `cuprum._line_stream` at the definition site
+rather than through the execution module's re-export, matching the
+`_resolve_timeout` precedent above.
 
 ### Reconciliation with the 2026-09-15 addendum
 
