@@ -1739,11 +1739,26 @@ The ratchet itself compares each scenario's within-run
 `rust_mean / python_mean` ratio between the baseline and candidate runs, so
 runner-speed differences and residual startup overhead cancel out of the
 comparison. Its CI profile places each matched Python/Rust scenario pair next
-to each other and records ten measured runs per command, reducing temporal
-runner drift and three-sample outliers. Dry-run plans record
+to each other and records twenty measured runs per command, reducing temporal
+runner drift and small-sample outliers. Dry-run plans record
 `benchmark_profile_version` and `worker_iterations`; ratchet comparison skips
 older baseline artefacts whose profile metadata does not match the current
 benchmark shape.
+
+The CI job measures the `--ci-ratchet` workload, not the throughput sweep: one
+64 MiB payload in four scenarios — two per backend, one per callback mode —
+rather than the sweep's three payload tiers. The workload's plan carries four
+scenarios per backend, but `benchmarks/ci_benchmark_ratchet_profile.py` keeps
+only the two-stage ones, so the three-stage variants are filtered out before
+hyperfine runs. Each worker process batches five pipeline runs
+(`--worker-iterations 5`) and each command is measured twenty times after one
+discarded warm-up. The two counts are independent, and both are protocol rather
+than tuning: the ratchet compares only samples whose profile metadata agrees,
+so changing either one invalidates the existing baseline rather than merely
+shifting it. `benchmarks/ci_benchmark_ratchet_profile.py` owns the run count as
+`_CI_RATCHET_RUNS` and passes it as `--runs`; the single warm-up is a separate
+`--warmup 1` literal in the same invocation, so `_CI_RATCHET_RUNS` does not
+govern it.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,

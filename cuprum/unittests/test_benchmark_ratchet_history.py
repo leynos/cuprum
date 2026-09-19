@@ -7,10 +7,16 @@ import typing as typ
 import pytest
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_WORKER_ITERATIONS as WORKER_ITERATIONS,
+)
 from benchmarks.ratchet_history import BaselineHistory, HistorySample
 
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
+# Mirrors the CI ratchet's sampling protocol, as `cuprum/unittests/conftest.py`
+# states it: the `ratchet` payload tier at the scenario module's iteration
+# count, imported rather than restated so these fixtures stay comparable with
+# the samples the gate actually records.
+SCENARIO = "ratchet-single-nocb"
 
 
 def _sample(

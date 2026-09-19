@@ -14,6 +14,31 @@ _SMOKE_SMALL_PAYLOAD_BYTES = 1024  # 1 KB (same as normal)
 _SMOKE_MEDIUM_PAYLOAD_BYTES = 64 * 1024  # 64 KB
 _SMOKE_LARGE_PAYLOAD_BYTES = 1024 * 1024  # 1 MB
 
+# The CI ratchet measures one payload and compares the Rust-to-Python ratio of
+# the same scenario between runs, so the workload has to be one where the
+# streaming work dominates the cost that every run pays regardless of payload:
+# the interpreter start, the `cuprum` import, and the per-iteration pipeline
+# set-up (about 17 ms an iteration, measured on the reference runner). At the
+# smoke payloads that fixed cost was the bulk of the measurement, and its
+# variance — not the ratio's — decided most comparisons, which made the gate
+# flaky (issue #219). At 64 MiB the five iterations stream about 300 ms of
+# pure-Python pipeline against about 190 ms of interpreter start, import and
+# set-up, so streaming is most of what is timed and a swing in the fixed
+# component moves the ratio far less than it did at the smoke payloads, while
+# the measurement still fits the job's wall-clock budget (see the tuning
+# record cited from docs/cuprum-design.md 13.9).
+CI_RATCHET_PAYLOAD_BYTES = 64 * 1024 * 1024  # 64 MiB
+
+#: Worker iterations the CI ratchet measures at, matching the
+#: ``--worker-iterations`` the workflow passes. The count is measurement
+#: protocol rather than a tuning dial: it is recorded in every sample, and
+#: the ratchet only compares samples whose profile metadata agrees, so a run
+#: at another count is silently incomparable rather than wrong. Defaulting
+#: ``--ci-ratchet`` to this value keeps a developer's local reproduction on
+#: the same protocol as the job that will judge it; an explicit
+#: ``--worker-iterations`` still overrides it.
+CI_RATCHET_WORKER_ITERATIONS = 5
+
 # Backward-compatible aliases.
 _SMOKE_PAYLOAD_BYTES = _SMOKE_SMALL_PAYLOAD_BYTES
 _DEFAULT_PAYLOAD_BYTES = _MEDIUM_PAYLOAD_BYTES
@@ -46,6 +71,7 @@ def default_pipeline_scenarios(
     *,
     smoke: bool,
     include_rust: bool,
+    ci_ratchet: bool = False,
 ) -> tuple[PipelineBenchmarkScenario, ...]:
     """Build the default benchmark scenario matrix.
 
@@ -55,17 +81,35 @@ def default_pipeline_scenarios(
         Whether to select the reduced smoke-workload payload sizes.
     include_rust : bool
         Whether to include Rust-backend scenarios in the matrix.
+    ci_ratchet : bool
+        Whether to build the single-payload matrix the CI ratchet measures.
+        The ratchet compares one scenario's ratio between runs, so it needs
+        the payload where streaming dominates the fixed per-run cost rather
+        than the varying payloads a throughput sweep wants; this replaces the
+        payload tiers with `CI_RATCHET_PAYLOAD_BYTES` alone.
 
     Returns
     -------
     tuple[PipelineBenchmarkScenario, ...]
         The full scenario matrix for the selected backends.
+
+    Raises
+    ------
+    ValueError
+        If both ``smoke`` and ``ci_ratchet`` are set, which select
+        contradictory workloads.
     """
-    payloads: tuple[tuple[str, int], ...] = (
-        ("small", _SMOKE_SMALL_PAYLOAD_BYTES if smoke else _SMALL_PAYLOAD_BYTES),
-        ("medium", _SMOKE_MEDIUM_PAYLOAD_BYTES if smoke else _MEDIUM_PAYLOAD_BYTES),
-        ("large", _SMOKE_LARGE_PAYLOAD_BYTES if smoke else _LARGE_PAYLOAD_BYTES),
-    )
+    if smoke and ci_ratchet:
+        msg = "smoke and ci_ratchet select different workloads; pass one"
+        raise ValueError(msg)
+    if ci_ratchet:
+        payloads: tuple[tuple[str, int], ...] = (("ratchet", CI_RATCHET_PAYLOAD_BYTES),)
+    else:
+        payloads = (
+            ("small", _SMOKE_SMALL_PAYLOAD_BYTES if smoke else _SMALL_PAYLOAD_BYTES),
+            ("medium", _SMOKE_MEDIUM_PAYLOAD_BYTES if smoke else _MEDIUM_PAYLOAD_BYTES),
+            ("large", _SMOKE_LARGE_PAYLOAD_BYTES if smoke else _LARGE_PAYLOAD_BYTES),
+        )
     depths: tuple[tuple[str, int], ...] = (
         ("single", 2),
         ("multi", 3),

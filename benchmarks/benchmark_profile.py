@@ -8,11 +8,24 @@ import typing as typ
 
 _logger = logging.getLogger(__name__)
 
+# v5: the CI ratchet measures a single 64 MiB payload at five worker
+# iterations, where the streaming work dominates the fixed per-run cost. v4
+# measured 1 KB and 64 KB payloads at twenty iterations, so its ratios were
+# mostly the cost of starting a worker — 16 KB of the measured 250 ms — and
+# their spread was the runner's rather than the pipeline's (issue #219). A
+# payload size is not recorded in a sample, so only this version gate keeps a
+# v4 ratio from being compared with a v5 one. Expect the window to be empty
+# until compatible main-branch runs have accumulated: with no sample at all
+# the comparison is skipped, with one it falls back to a single-sample bar
+# where the flat threshold decides alone, and the noise band only exists from
+# the second sample onwards. Confirmation re-measurement is the guard the
+# transition relies on.
+#
 # v4: the CI ratchet passes Hyperfine --command-name options so throughput
 # JSON results carry stable logical scenario names instead of raw worker
 # command strings. v3 baselines recorded raw worker commands in
 # results[*].command and are therefore not comparable.
-BENCHMARK_PROFILE_VERSION = "pipeline-worker-release-ratio-v4"
+BENCHMARK_PROFILE_VERSION = "pipeline-worker-release-ratio-v5"
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

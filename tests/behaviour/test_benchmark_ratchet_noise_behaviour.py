@@ -14,6 +14,9 @@ import typing as typ
 from pytest_bdd import given, parsers, scenario, then, when
 
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.pipeline_throughput_scenarios import (
+    CI_RATCHET_WORKER_ITERATIONS as WORKER_ITERATIONS,
+)
 from benchmarks.ratchet_history import (
     BaselineHistory,
     HistorySample,
@@ -27,8 +30,10 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 FEATURE = "../features/benchmark_ratchet_noise.feature"
-SCENARIO = "medium-single-nocb"
-WORKER_ITERATIONS = 20
+# Mirrors the CI ratchet's sampling protocol, as `cuprum/unittests/conftest.py`
+# states it: the `ratchet` payload tier at the iteration count imported above,
+# so these measurements stay comparable with the samples the gate records.
+SCENARIO = "ratchet-single-nocb"
 
 
 @scenario(FEATURE, "One anomalous main run does not fail the pull requests after it")

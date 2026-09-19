@@ -13,6 +13,7 @@ from benchmarks._validation import (
     _require_non_empty_string,
     _require_positive_float,
 )
+from benchmarks.benchmark_workload import WorkloadProtocol, read_workload_protocol
 from benchmarks.ratchet_ratio_extraction import (
     _comparison_id_for_scenario,
     _validate_backend,
@@ -86,6 +87,11 @@ class BenchmarkComparisonReport:
 
     rows: tuple[BenchmarkComparisonRow, ...]
     summary: BenchmarkComparisonSummary
+    #: Which workload produced the compared scenarios, plus its measurement
+    #: protocol. The scenario shape does not say whether the matrix was the
+    #: smoke sweep or the CI ratchet, and the two are not interchangeable, so
+    #: a summary that names one has to carry the plan's own answer.
+    protocol: WorkloadProtocol
 
     def as_dict(self) -> dict[str, object]:
         """Serialize the report for JSON output.
@@ -93,12 +99,21 @@ class BenchmarkComparisonReport:
         Returns
         -------
         dict[str, object]
-            The serialized rows and summary keyed by their JSON attribute
-            names.
+            The serialized rows, summary, and workload protocol keyed by
+            their JSON attribute names.
         """
         return {
             "rows": [row.as_dict() for row in self.rows],
             "summary": self.summary.as_dict(),
+            "workload": self.protocol.workload,
+            "benchmark_profile_version": self.protocol.profile_version,
+            "worker_iterations": self.protocol.worker_iterations,
+            # Sizes are read from the scenarios during analysis, but a reader
+            # of this JSON has only the metadata to go on. The measured
+            # ratios are meaningless without the payload they were taken at,
+            # so the sizes are stated rather than left to be inferred from
+            # rows that a consumer may not be reading.
+            "payload_bytes": list(self.protocol.payload_bytes),
         }
 
 
@@ -202,6 +217,8 @@ def _get_required_entries(
 
 def _build_report_from_grouped_entries(
     grouped: dict[str, dict[str, _ScenarioEntry]],
+    *,
+    protocol: WorkloadProtocol,
 ) -> BenchmarkComparisonReport:
     """Build the final report from grouped backend entries."""
     rows: list[BenchmarkComparisonRow] = []
@@ -226,6 +243,7 @@ def _build_report_from_grouped_entries(
             python_wins=tally["python"],
             ties=tally["tie"],
         ),
+        protocol=protocol,
     )
 
 
@@ -288,7 +306,10 @@ def compare_candidate_backend_results(
             raise ValueError(msg)
         group[backend] = entry
 
-    return _build_report_from_grouped_entries(grouped)
+    return _build_report_from_grouped_entries(
+        grouped,
+        protocol=read_workload_protocol(plan_payload),
+    )
 
 
 def _require_optional_bool(

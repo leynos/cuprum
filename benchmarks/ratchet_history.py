@@ -24,6 +24,13 @@ DEFAULT_WINDOW_SIZE = 7
 #: MAD-derived standard deviations a candidate must exceed.
 DEFAULT_NOISE_SIGMAS = 3.0
 
+#: Flat fractional slowdown tolerated before a candidate regresses. This is the
+#: authoritative value: the `RatchetPolicy` default and the
+#: `ratchet_rust_performance` CLI default both read it, and the workflow's
+#: explicit `--max-regression` is held to it by
+#: `test_the_ratchet_policy_matches_the_module_defaults`.
+DEFAULT_MAX_REGRESSION = 0.30
+
 #: MAD-to-standard-deviation scale for normally distributed samples.
 _MAD_TO_SIGMA = 1.4826
 
@@ -48,7 +55,7 @@ class RatchetPolicy:
         Positive count of recent compatible main samples retained in the bar.
     """
 
-    max_regression: float = 0.30
+    max_regression: float = DEFAULT_MAX_REGRESSION
     noise_sigmas: float = DEFAULT_NOISE_SIGMAS
     window_size: int = DEFAULT_WINDOW_SIZE
 

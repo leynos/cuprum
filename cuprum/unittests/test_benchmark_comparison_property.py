@@ -23,11 +23,23 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from benchmarks.benchmark_workload import THROUGHPUT_SWEEP_WORKLOAD, WorkloadProtocol
 from benchmarks.comparison_analysis import (
     _build_report_from_grouped_entries,
     _build_row,
     _ScenarioEntry,
     compare_candidate_backend_results,
+)
+
+# The reducer invariants below are about pairing and ordering, not about the
+# measurement protocol, so the properties supply a fixed protocol rather than
+# generating one: a generated workload could only vary a field none of these
+# assertions read.
+_CANDIDATE_PROTOCOL = WorkloadProtocol(
+    workload=THROUGHPUT_SWEEP_WORKLOAD,
+    profile_version="test-profile",
+    worker_iterations=20,
+    payload_bytes=(1024,),
 )
 
 _MEANS = st.floats(
@@ -108,7 +120,7 @@ def test_report_is_sorted_and_tally_partitions_rows(
         }
         for comparison_id, (pm, rm) in groups.items()
     }
-    report = _build_report_from_grouped_entries(grouped)
+    report = _build_report_from_grouped_entries(grouped, protocol=_CANDIDATE_PROTOCOL)
 
     ids = [row.comparison_id for row in report.rows]
     # Comparing against the sorted group keys pins both ordering and the exact
@@ -151,7 +163,7 @@ def test_group_missing_a_backend_is_rejected(
         },
     }
     with pytest.raises(ValueError, match=missing_pattern):
-        _build_report_from_grouped_entries(grouped)
+        _build_report_from_grouped_entries(grouped, protocol=_CANDIDATE_PROTOCOL)
 
 
 def _candidate_payloads(
