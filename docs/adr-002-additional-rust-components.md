@@ -94,13 +94,10 @@ Rust borrows the worker reader duplicate and never closes it. Rust consumes the
 worker writer duplicate and closes it on every exit path so downstream readers
 observe EOF. The Python hand-off owner closes the reader duplicate after the
 worker settles and closes either duplicate when preparation or executor
-submission fails. Cancellation waits for worker settlement, bounded by the
-caller-configured cleanup grace. On expiry, worker-owned duplicates stay
-quarantined for the completion callback, and the paused reader transport is
-released (closed) at expiry, while the loop can still run the close, rather
-than resumed after settlement. If a safe preparation step cannot complete,
-dispatch falls back to the Python pump with the original asyncio descriptors
-intact.
+submission fails. Cancellation waits for worker settlement before duplicate
+closure, mode restoration, and reader-transport resumption. If a safe
+preparation step cannot complete, dispatch falls back to the Python pump with
+the original asyncio descriptors intact.
 
 ## Options considered
 
@@ -439,15 +436,36 @@ platform-preparation failure, or transfers it to Rust, which closes the
 received resource. On Windows the shim converts the duplicate to an
 independently owned Win32 handle and closes the duplicate CRT descriptor before
 invoking Rust. The completion callback never closes the writer resource.
-Descriptor-mode restoration still occurs at worker settlement. Reader transport
-resumption also occurs there on the ordinary path, but when the hop's grace
-expired first, the caller has already released (closed) the paused reader
-transport at expiry, making the later resumption a no-op. What must not race
-native I/O is the worker's duplicates: the release closes only the
-asyncio-owned original, once the worker, reading its own duplicate, can no
-longer need the loop's reader.
+Descriptor-mode restoration and reader transport resumption still occur at
+worker settlement, which prevents cancellation cleanup from racing with native
+I/O while leaving the original asyncio transport descriptor under Python
+ownership.
 
 The regression coverage in
 `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` exercises native
 load failure and cancellation before worker settlement; the FD-blocking and
 settlement tests retain the duplicate-versus-transport ownership checks.
+
+## Addendum: releasing the paused reader at cleanup-grace expiry (2026-09-19)
+
+Cancellation cleanup now waits for worker settlement only up to a caller
+configuration ceiling, `ExecutionContext.native_pump_cleanup_grace`. Past that
+ceiling the caller stops waiting and the completion callback takes over:
+worker-owned duplicates stay quarantined until the worker settles, and the
+completion callback closes its reader duplicate and restores callback-owned
+state then, as the `2026-08-24` addendum describes.
+
+Worker settlement is the ordinary point for reader transport resumption, but it
+is not a point the caller can wait for once the grace expires: the completion
+callback that would resume the reader runs on a loop the caller has already
+closed. An expired hop therefore releases the paused reader transport at expiry
+instead, closing it while the caller's loop can still run the close that frees
+the descriptor. The later resumption at settlement becomes a no-op.
+
+This narrows, rather than replaces, the ownership rule above. What must not race
+native I/O is the worker's duplicated descriptors; the release closes only the
+asyncio-owned original, once the worker — reading its own duplicate — can no
+longer need the loop's reader. Descriptor-mode restoration and the
+completion-callback contract are unchanged. See
+[ADR-008](adr-008-rust-pump-observation-channel.md)'s `2026-09-19` addendum for
+the emitted phases and counters.

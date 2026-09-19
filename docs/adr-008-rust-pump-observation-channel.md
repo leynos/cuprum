@@ -231,15 +231,42 @@ native I/O can still use.
 
 `cleanup_grace_expired` reports the bounded caller wait and carries
 `PumpEvent.elapsed_s`. Once the worker later settles, its one completion
-callback closes its borrowed worker reader duplicate, restores callback-owned
-state, and emits `cleanup_deferred`. On a deferred hop the caller has already
-released the paused reader transport, closing it at grace expiry while the
-caller's event loop could still run the close; the callback's later
-`resume_reading()` is therefore a no-op rather than what restores the loop's
-reader. Rust owns the submitted writer duplicate, so the callback never
-double-closes it or resumes the reader early. The unlabelled counters
-`cuprum_rust_pump_cleanup_grace_expired_total` and
+callback closes its borrowed reader, restores callback-owned state, resumes the
+reader, and emits `cleanup_deferred`. Rust owns the submitted writer duplicate,
+so the callback never double-closes it or resumes the reader early. The
+unlabelled counters `cuprum_rust_pump_cleanup_grace_expired_total` and
 `cuprum_rust_pump_cleanup_deferred_total` make both outcomes observable without
 widening metric cardinality. Tracing projects the phases as
 `cuprum.cleanup_grace_expired` and `cuprum.cleanup_deferred`; only grace expiry
 has an `elapsed_s` attribute.
+
+## Addendum — 2026-09-19
+
+A deferred hop must release its paused reader at grace expiry. The deferred
+completion callback the `2026-09-04` addendum describes outlives the caller's
+event loop, so the resumption it performs there cannot free the reader: an
+expired hop handed the paused transport to a callback that ran after
+`loop.close()`, which left the transport owning the fd1 pipe descriptor and,
+through `SubprocessStreamProtocol._pipe_fds`, its whole subprocess transport.
+The callback's `loop.call_soon_threadsafe` raised `RuntimeError('Event loop is
+closed')` into a suppression, and the retained bound `resume_reading` kept the
+transport past `loop.close()`, surfacing as an unclosed-transport
+`ResourceWarning` and a `RuntimeError` from the transport's own `close()`, which
+pytest reported as `PytestUnraisableExceptionWarning` on the Python 3.12 job.
+
+`_ReaderPause` therefore carries a second hook beside `resume`: `release`
+closes the paused reader rather than merely resuming it, because a resumed
+transport still owns its descriptor until the pipe reaches EOF. The deferral
+decision calls it inside the caller's coroutine, at the moment the grace
+expires, while the caller's loop can still run the callbacks that close the
+descriptor. `_RustPumpState.defer_cleanup` marks the deferral under its lock
+first, so only the call that wins the transition releases and the hook never
+fires once worker completion owns cleanup.
+
+The rest of the deferred contract is unchanged. The callback still closes its
+borrowed worker reader duplicate, restores callback-owned state, and emits
+`cleanup_deferred`; its later `resume_reading()` on the already-closed
+transport is a no-op rather than what restores the loop's reader. Rust still
+owns the submitted writer duplicate and the callback never double-closes it. A
+release that fails is suppressed like every other teardown step and recorded at
+`DEBUG` as `rust_pump_teardown_failed` with `cuprum_site="reader_close"`.
