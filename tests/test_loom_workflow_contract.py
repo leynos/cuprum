@@ -15,6 +15,7 @@ from tests.helpers.workflow_shell import script_runs_command
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "loom.yml"
 DRIVER_PATH = ROOT / "scripts" / "run_loom.py"
+MAKEFILE_PATH = ROOT / "Makefile"
 
 
 def _object_mapping(value: object, description: str) -> dict[object, object]:
@@ -108,6 +109,17 @@ def test_execution_step_runs_the_driver_and_driver_executes_loom() -> None:
     )
     missing = [fragment for fragment in required_fragments if fragment not in driver]
     assert not missing, f"the driver is missing execution safeguards: {missing!r}"
+
+
+def test_make_loom_runs_the_full_driver() -> None:
+    """The documented local command must execute models rather than just compile."""
+    makefile = MAKEFILE_PATH.read_text(encoding="utf-8")
+    assert "loom: build ## Run the full bounded Loom model suite" in makefile, (
+        "make loom must remain a documented full-model target"
+    )
+    assert "uv run scripts/run_loom.py --mode full" in makefile, (
+        "make loom must execute the full driver"
+    )
 
 
 def test_smoke_job_uses_the_same_loom_shape_and_driver() -> None:
