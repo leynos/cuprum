@@ -24,6 +24,15 @@ _RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
 _RUSTFMT_FIXTURE_SKIP = re.compile(
     rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
 )
+# Matches a Rust string, character literal, or comment. Each alternative keeps
+# its own length, so code-bearing text stays at its original offset.
+_RUST_LEXEME = re.compile(
+    r'"(?:\\.|[^"\\])*"'
+    r"|'(?:\\.|[^'\\])'"
+    r"|//[^\n]*"
+    r"|/\*.*?\*/",
+    re.DOTALL,
+)
 
 
 def test_formatter_toolchain_precedes_the_project_toolchain(
@@ -74,9 +83,17 @@ def test_project_toolchain_declares_maintenance_components() -> None:
     }, "the stable pin must retain its compiler and declare each required component"
 
 
-def _line_number(source: str, offset: int) -> int:
+def _blank_rust_lexemes(source: str) -> str:
+    """Blank comments and literals, keeping code at its original offset."""
+    return _RUST_LEXEME.sub(
+        lambda match: "".join("\n" if char == "\n" else " " for char in match.group()),
+        source,
+    )
+
+
+def _line_number(blanked: str, offset: int) -> int:
     """Return the one-based line number at a character offset."""
-    return source.count("\n", 0, offset) + 1
+    return blanked.count("\n", 0, offset) + 1
 
 
 def test_formatter_skips_are_limited_to_known_rstest_fixtures() -> None:
@@ -87,7 +104,7 @@ def test_formatter_skips_are_limited_to_known_rstest_fixtures() -> None:
 
     for source_path in rust_root.glob("**/*.rs"):
         relative = source_path.relative_to(root).as_posix()
-        source = source_path.read_text(encoding="utf-8")
+        source = _blank_rust_lexemes(source_path.read_text(encoding="utf-8"))
         for skip in _RUSTFMT_SKIP_FINDER.finditer(source):
             fixture = _RUSTFMT_FIXTURE_SKIP.match(source, skip.start())
             assert fixture is not None, (
