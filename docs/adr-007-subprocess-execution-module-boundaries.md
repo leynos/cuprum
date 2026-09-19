@@ -153,13 +153,18 @@ this shape: CodeScene's code health for the file moved from 8.54 to 10.00.
 Both figures are `cs check` scores of `cuprum/sh.py`, the first taken at the
 pre-extraction tip of this branch and the second after the extraction. Do not
 expect `cs delta` against the branch's base to reproduce them: `cs delta`
-scores the _base revision's_ copy of the file, and `main`'s copy already scores
-9.68 because it is a different lineage — the base revision carries the
+scores the _base revision's_ copy of the file, and this branch's base already
+scores 9.68 because it is a different lineage — the base revision carries the
 six-argument `_build_subprocess_execution`, not the branch's seven-argument
 one. The delta therefore reports `9.68 -> 10.00`, which is a comparison across
 revisions rather than the branch's own 8.54 to 10.00 improvement. The `8.54`
 figure is reproducible from the pre-extraction blob, which is byte-identical to
 the pushed pre-extraction head (`git show a6751bd9:cuprum/sh.py`).
+
+The local CLI and CodeScene's service disagree by 0.01 in the last digit on
+every figure measured for this file: the service prints 8.55 and 9.69 where the
+CLI prints 8.54 and 9.68, and both agree on 10.00. Figures quoted in this
+addendum are the CLI's, matching the `cs check` command they came from.
 
 The single-command orchestration therefore moved to
 `cuprum/_command_internals.py`: `_ExecutionTracking`,
