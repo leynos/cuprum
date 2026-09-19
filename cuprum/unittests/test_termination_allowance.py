@@ -94,28 +94,36 @@ def _clear_nextest_config_cache() -> cabc.Iterator[None]:
 
 
 @pytest.mark.parametrize(
-    ("profile", "override", "expected"),
+    ("clauses", "expected"),
     [
-        pytest.param("", "", FLOOR_SECONDS, id="neither-configured"),
-        pytest.param(', grace-period = "5s"', "", FLOOR_SECONDS, id="below-the-floor"),
-        pytest.param(', grace-period = "90s"', "", 90, id="profile-only"),
-        pytest.param("", ', grace-period = "1h"', 3600, id="override-only"),
+        pytest.param(("", ""), FLOOR_SECONDS, id="neither-configured"),
         pytest.param(
-            ', grace-period = "90s"', ', grace-period = "1h"', 3600, id="override-wider"
+            (', grace-period = "5s"', ""), FLOOR_SECONDS, id="below-the-floor"
+        ),
+        pytest.param((', grace-period = "90s"', ""), 90, id="profile-only"),
+        pytest.param(("", ', grace-period = "1h"'), 3600, id="override-only"),
+        pytest.param(
+            (', grace-period = "90s"', ', grace-period = "1h"'),
+            3600,
+            id="override-wider",
         ),
         pytest.param(
-            ', grace-period = "1h"', ', grace-period = "90s"', 3600, id="profile-wider"
+            (', grace-period = "1h"', ', grace-period = "90s"'),
+            3600,
+            id="profile-wider",
         ),
     ],
 )
 def test_the_widest_configured_grace_period_is_the_allowance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    profile: str,
-    override: str,
+    clauses: tuple[str, str],
     expected: int,
 ) -> None:
     """Every grace period is read, and the widest one is reported.
+
+    ``clauses`` is the profile's grace-period clause and the override's, in
+    that order, each the text between a ``slow-timeout`` table's braces.
 
     The ``override-only`` row is the one that matters most: it is the row a
     profile-only reader gets wrong, and the live configuration cannot
@@ -134,7 +142,7 @@ def test_the_widest_configured_grace_period_is_the_allowance(
     profile's value without the floor fails ``below-the-floor``.
     """
     path = tmp_path / "nextest.toml"
-    path.write_text(_config(profile, override), encoding="utf-8")
+    path.write_text(_config(*clauses), encoding="utf-8")
     monkeypatch.setattr(support, "nextest_config_path", lambda: path)
 
     assert support.termination_allowance_seconds() == expected
