@@ -1017,7 +1017,6 @@ stderr sink, resolved at emission time, so it never enters capture, echo, line
 observers, or the activity tracker. An `on_idle` callback is synchronous and
 replaces the built-in renderer rather than joining it.
 
-
 Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
 
@@ -1028,16 +1027,15 @@ independent `echo_stdout` and `echo_stderr` gates. Two execution paths then
 consume those gates: `_spawn_subprocess` for a single command and
 `_get_stage_stream_fds` for a pipeline. For a single command, each stream
 independently becomes a `PIPE` or `DEVNULL` according to its own
-parent-consumption gate (capture, that stream's echo, idle reporting, or
-line observation). `SafeCmd.lines()` adds its queue
-observer before spawning, so both streams remain `PIPE` for line delivery even
-when `capture=False` and echo is disabled; the resulting `CommandResult` still
-has `None` for both captured fields. For a
-pipeline, the stdout of a non-final stage is always a `PIPE` so that it can
-relay into the next stage, while the stdout of the final stage and the stderr
-of every stage follow their own independent gates. `capture` remains a single
-joint switch, so both streams are still captured when `capture=True` even if
-neither echoes. The flow ends at the stream consumers:
+parent-consumption gate (capture, that stream's echo, idle reporting, or line
+observation). `SafeCmd.lines()` adds its queue observer before spawning, so
+both streams remain `PIPE` for line delivery even when `capture=False` and echo
+is disabled; the resulting `CommandResult` still has `None` for both captured
+fields. For a pipeline, the stdout of a non-final stage is always a `PIPE` so
+that it can relay into the next stage, while the stdout of the final stage and
+the stderr of every stage follow their own independent gates. `capture` remains
+a single joint switch, so both streams are still captured when `capture=True`
+even if neither echoes. The flow ends at the stream consumers:
 `_spawn_stream_consumers` for a single command and
 `_create_stage_capture_tasks` for pipeline stages.
 
@@ -1383,11 +1381,10 @@ preserving the `SafeCmd.run()` execution contract:
   keepalive's destination. It also composes each stream's per-line callback
   from the observe hooks and the caller's `on_line`, so `SafeCmd.run()` and
   `SafeCmd.lines()` share one composition point. Because both entry points
-  reach the consumers through this one module, a patched reader covers both.
-  It is the single-command counterpart of
-  `cuprum/_pipeline_stage_streams.py`. This boundary exists to keep
-  `_subprocess_execution` within the Pylint module ceiling once the
-  idle-heartbeat wiring joined the stream configs; see the
+  reach the consumers through this one module, a patched reader covers both. It
+  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`.
+  This boundary exists to keep `_subprocess_execution` within the Pylint module
+  ceiling once the idle-heartbeat wiring joined the stream configs; see the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
