@@ -696,6 +696,53 @@ async def _execute_with_hooks(
     return result
 
 
+# ruff: ignore[too-many-arguments]  # the five inputs are one run's resolved state, carried together rather than derived
+async def _run_prepared_command(
+    cmd: SafeCmd,
+    *,
+    output: RunOutputOptions,
+    context: ExecutionContext,
+    stdin_data: bytes | None,
+    timeout: float | None,  # ruff: ignore[async-function-with-timeout]  # the deadline is already resolved; this only carries it into the bundle.
+) -> CommandResult:
+    """Run one validated command after its public inputs are resolved."""
+    # The bracket owns the session for the whole run: a plan observer, a
+    # before hook, or anything else that raises before execution starts
+    # still finalizes the adapter's framing rather than stranding an open
+    # group, and the guard below closes exactly what those paths leave.
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        _command_session_start(cmd, output.sink),
+    )
+    tracking = _ExecutionTracking(
+        execution_hooks=_collect_hooks(current_context()),
+        pending_tasks=[],
+        sink_bracket=sink_bracket,
+    )
+    try:
+        observation = _prepare_execution_observation(cmd, context, tracking, output)
+        observation.emit("plan", _EventDetails(pid=None))
+        for hook in tracking.execution_hooks.before_hooks:
+            hook(cmd)
+        return await _execute_with_hooks(
+            cmd,
+            _build_subprocess_execution(
+                cmd,
+                context,
+                output,
+                timeout=timeout,
+                observation=observation,
+                stdin_data=stdin_data,
+                on_line=output.on_line,
+                sink_session=sink_bracket.session,
+            ),
+            tracking,
+        )
+    except BaseException as run_error:
+        sink_bracket.close(outcome=_outcome_for_error(run_error))
+        raise
+
+
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -772,40 +819,13 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        # The bracket owns the session for the whole run: a plan observer, a
-        # before hook, or anything else that raises before execution starts
-        # still finalizes the adapter's framing rather than stranding an open
-        # group, and the guard below closes exactly what those paths leave.
-        sink_bracket = _SinkBracket.open(
-            out.sink,
-            _command_session_start(self, out.sink),
+        return await _run_prepared_command(
+            self,
+            output=out,
+            context=ctx,
+            stdin_data=stdin_data,
+            timeout=effective_timeout,
         )
-        tracking = _ExecutionTracking(
-            execution_hooks=_collect_hooks(current_context()),
-            pending_tasks=[],
-            sink_bracket=sink_bracket,
-        )
-        try:
-            observation = _prepare_execution_observation(self, ctx, tracking, out)
-            observation.emit("plan", _EventDetails(pid=None))
-            for hook in tracking.execution_hooks.before_hooks:
-                hook(self)
-            return await _execute_with_hooks(
-                _build_subprocess_execution(
-                    self,
-                    ctx,
-                    out,
-                    timeout=effective_timeout,
-                    observation=observation,
-                    stdin_data=stdin_data,
-                    on_line=out.on_line,
-                    sink_session=sink_bracket.session,
-                ),
-                tracking,
-            )
-        except BaseException as run_error:
-            sink_bracket.close(outcome=_outcome_for_error(run_error))
-            raise
 
     def lines(
         self,
