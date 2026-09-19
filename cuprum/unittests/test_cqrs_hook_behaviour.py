@@ -98,6 +98,8 @@ async def _finalize_with_failing_after_hook(
         pid=123,
         stdout=None,
         stderr=None,
+        started_at=0.0,
+        duration=0.0,
     )
     await _finalize_pipeline_execution(
         (cmd,),

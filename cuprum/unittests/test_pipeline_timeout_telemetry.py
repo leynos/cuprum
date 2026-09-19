@@ -216,6 +216,36 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
         )
 
 
+def test_every_terminal_stage_event_names_its_resource_mode() -> None:
+    """A stage's terminal event reports ``unavailable`` rather than saying nothing.
+
+    ``ExecEvent.resource_usage_mode`` is the one field that separates a
+    platform which cannot measure from a deployment whose samples went missing,
+    so every terminal event must carry it. A pipeline stage can never measure:
+    its children are reaped concurrently, so no per-child interface can
+    attribute usage to one. Saying ``unavailable`` is what keeps that contract
+    true for stages.
+    """
+    events: list[ExecEvent] = []
+    _run_until_timeout(0.2, events, InMemoryMetrics())
+
+    exits = [ev for ev in events if ev.phase == "exit"]
+    assert exits, "the run must emit terminal exit events to inspect"
+    modes = {ev.resource_usage_mode for ev in exits}
+    assert modes == {"unavailable"}, (
+        f"a stage's terminal event must name its measurement source, got {modes!r}"
+    )
+    for ev in exits:
+        assert (ev.max_rss_bytes, ev.user_cpu_seconds, ev.system_cpu_seconds) == (
+            None,
+            None,
+            None,
+        ), (
+            "an unmeasured stage must leave every figure unset rather than "
+            f"reporting zeros, got pid={ev.pid}"
+        )
+
+
 def test_exit_hook_failure_cannot_mask_the_timeout() -> None:
     """A hook raising on ``exit`` must not displace ``TimeoutExpired``.
 

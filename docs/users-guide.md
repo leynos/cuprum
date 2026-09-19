@@ -396,7 +396,30 @@ and echo semantics and returns a structured `CommandResult`:
     The same settings are used when `StdinInput.text` is encoded for
     subprocess stdin.
 - `exit_code`, `pid`, and `ok` on the `CommandResult` make it easy to branch on
-  success.
+  success. `started_at` records the wall-clock start time and `duration`
+  records elapsed monotonic seconds.
+- On Linux and macOS, direct commands report `user_cpu_seconds`,
+  `system_cpu_seconds`, and `max_rss_bytes` from the specific child returned by
+  the platform's `wait4` operation. Linux `ru_maxrss` is converted from KiB to
+  bytes; macOS reports bytes directly. The implementation does not subtract
+  process-global `RUSAGE_CHILDREN.ru_maxrss` high-water marks. On platforms
+  without the child-specific wait interface, CPU fields may use the aggregate
+  `RUSAGE_CHILDREN` fallback and are approximate under `run_concurrent`, while
+  `max_rss_bytes` remains `None`. Windows and platforms without child-resource
+  accounting return `None` for all three fields. Pipeline-stage resource fields
+  are always `None` because concurrently reaped stages cannot be attributed
+  safely.
+
+### Upgrading `CommandResult` consumers
+
+`started_at` and `duration` are public fields on the dataclass with `0.0`
+defaults, so existing six-argument positional construction remains valid.
+Results produced by command execution supply measured values where the platform
+can attribute them. Code that serializes or displays resource fields should
+preserve `None` as unavailable: Linux and macOS direct commands provide
+per-child CPU and RSS figures, the aggregate POSIX fallback can provide only
+approximate CPU deltas under concurrent execution, and Windows, unsupported
+resource APIs, and pipeline stages may not provide resource figures.
 
 ### Output options
 
@@ -1275,6 +1298,10 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
 - `cuprum_eof_grace_s` / `cuprum_pending_readers`: Fixed EOF-grace duration
   and pending-reader count (for `capture_eof_grace_expired` events). Event tags
   are not emitted by this structured logging adapter.
+- `cuprum_max_rss_bytes` / `cuprum_user_cpu_seconds` /
+  `cuprum_system_cpu_seconds` / `cuprum_resource_usage_mode`: Terminal child
+  resource figures and the mode naming their source (for `exit` events that
+  attempted a measurement)
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -1343,9 +1370,25 @@ The hook collects:
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn
   down early because a non-final stage was the first to fail
+- `cuprum_resource_usage_measurements_total`: Counter incremented once per
+  terminal `exit` event that recorded a `resource_usage_mode`, including
+  `unavailable`
+- `cuprum_child_max_rss_bytes`: Histogram of child maximum RSS in bytes, from
+  the attributable `wait4` path only
+- `cuprum_child_user_cpu_seconds`: Histogram of child user CPU seconds,
+  observed only where that figure was actually measured
+- `cuprum_child_system_cpu_seconds`: Histogram of child system CPU seconds,
+  observed only where that figure was actually measured
 
-All metrics include `program` and `project` labels, and only those. Missing,
-empty, or explicit `None` project tags fall back to `unknown`.
+All metrics carry `program` and `project` labels; missing, empty, or explicit
+`None` project tags still fall back to `unknown`. The four resource metrics
+above additionally carry a low-cardinality `resource_usage_mode` label naming
+how the measurement was obtained — `wait4_child`, `aggregate_cpu_delta`, or
+`unavailable`. That label is scoped to those four because it is meaningless for
+every other metric. The three resource histograms are observed only where the
+figure was actually measured, while the counter is emitted for every recorded
+mode, including `unavailable` — so a platform that measures nothing is still
+countable, and distinguishable from a run whose samples went missing.
 
 `cuprum_timeouts_total` counts both modes; use the `timeout` event's
 `timeout_mode`, or the `cuprum.timeout` record, to distinguish an elapsed
@@ -1428,6 +1471,10 @@ The hook creates spans with these attributes:
 - `cuprum.project`: Project name from tags
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
+- `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,
+  `cuprum.system_cpu_seconds`, `cuprum.resource_usage_mode`: Terminal child
+  resource figures and the mode naming their source, set on span end; each is
+  absent rather than null when it does not apply
 
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).

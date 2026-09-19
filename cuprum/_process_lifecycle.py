@@ -196,6 +196,7 @@ async def _spawn_pipeline_processes(
     list[asyncio.Task[str | None] | None],
     asyncio.Task[str | None] | None,
     list[float],
+    list[float],
 ]:
     """Start subprocesses for each stage and wire up capture tasks."""
     from cuprum._pipeline_stage_streams import _create_stage_capture_tasks
@@ -207,13 +208,16 @@ async def _spawn_pipeline_processes(
     stderr_tasks: list[asyncio.Task[str | None] | None] = []
     stdout_task: asyncio.Task[str | None] | None = None
     started_at: list[float] = []
-
-    last_idx = len(observations) - 1
+    wall_clock_started_at: list[float] = []
     try:
         for idx, observation in enumerate(observations):
+            # Both clocks are sampled before the spawn await, so a stage's
+            # recorded start never includes the time its spawn blocked.
+            started_at.append(time.perf_counter())
+            wall_clock_started_at.append(observation.wall_clock())
             stream_fds = _get_stage_stream_fds(
                 idx,
-                last_idx,
+                len(observations) - 1,
                 consumes_stdout=config.consumes_stdout,
                 consumes_stderr=config.consumes_stderr,
             )
@@ -226,7 +230,6 @@ async def _spawn_pipeline_processes(
                 cwd=_cwd_arg(config.ctx.cwd),
             )
             processes.append(process)
-            started_at.append(time.perf_counter())
             observation.emit("start", _EventDetails(pid=process.pid))
             if idx == 0 and config.idle is not None:
                 # The aggregate clock starts with the first stage actually
@@ -237,7 +240,7 @@ async def _spawn_pipeline_processes(
             stderr_task, new_stdout_task = _create_stage_capture_tasks(
                 process,
                 config,
-                is_last_stage=(idx == last_idx),
+                is_last_stage=(idx == len(observations) - 1),
                 observation=observation,
             )
             stderr_tasks.append(stderr_task)
@@ -255,7 +258,7 @@ async def _spawn_pipeline_processes(
         )
         raise
 
-    return processes, stderr_tasks, stdout_task, started_at
+    return processes, stderr_tasks, stdout_task, started_at, wall_clock_started_at
 
 
 async def _terminate_process_via_wait_task(

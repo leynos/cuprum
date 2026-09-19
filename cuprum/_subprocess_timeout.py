@@ -12,6 +12,7 @@ import time
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
+from cuprum._rusage import ChildResourceUsage, resource_usage_mode_for
 from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
@@ -67,25 +68,36 @@ def _get_exit_code(process: asyncio.subprocess.Process) -> int:
 
 @dc.dataclass(frozen=True, slots=True)
 class _ExitEventDetails:
-    """Parameters for emitting an exit event."""
+    """Parameters for emitting an exit event.
+
+    ``resource_usage`` carries the terminal child measurements when a caller
+    obtained them; a caller that has none leaves it ``None`` and the event
+    reports ``unavailable`` rather than implying a measured zero.
+    """
 
     pid: int | None
     exit_code: int
     started_at: float
     exited_at: float
+    resource_usage: ChildResourceUsage | None = None
 
 
 def _emit_exit_event(
     observation: _StageObservation,
     details: _ExitEventDetails,
 ) -> None:
-    """Emit an exit event with process details and duration."""
+    """Emit an exit event with process details, duration, and resource usage."""
+    usage = details.resource_usage
     observation.emit(
         "exit",
         _EventDetails(
             pid=details.pid,
             exit_code=details.exit_code,
             duration_s=max(0.0, details.exited_at - details.started_at),
+            max_rss_bytes=None if usage is None else usage.max_rss_bytes,
+            user_cpu_seconds=None if usage is None else usage.user_cpu_seconds,
+            system_cpu_seconds=None if usage is None else usage.system_cpu_seconds,
+            resource_usage_mode=resource_usage_mode_for(usage),
         ),
     )
 
@@ -197,6 +209,11 @@ def _handle_subprocess_timeout(
             exit_code=exit_code,
             started_at=ctx.started_at,
             exited_at=payload.exited_at,
+            # Deliberately left unmeasured: this path signals the child and
+            # hands it to the timeout teardown rather than reaping it here, so
+            # there is no attributable usage to report. The event says
+            # ``unavailable`` instead of reporting zeros that would read as a
+            # child that consumed nothing.
         ),
     )
     _raise_timeout_expired(

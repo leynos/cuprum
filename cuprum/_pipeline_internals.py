@@ -292,6 +292,7 @@ async def _spawn_and_drive_pipeline(
             stderr_tasks,
             stdout_task,
             started_at,
+            wall_clock_started_at,
         ) = await _spawn_pipeline_processes(
             parts,
             config,
@@ -303,6 +304,7 @@ async def _spawn_and_drive_pipeline(
             stdout_task=stdout_task,
             stages=_StageWaitContext(
                 started_at=tuple(started_at),
+                wall_clock_started_at=tuple(wall_clock_started_at),
                 observations=observations,
             ),
             idle=config.idle,

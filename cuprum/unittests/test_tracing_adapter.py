@@ -170,6 +170,90 @@ print('stderr-line', file=sys.stderr)""",
             )
         ], "grace expiry must attach one bounded event to the matching exec_id"
 
+    def test_sets_exit_resource_attributes(self) -> None:
+        """Hook records the terminal resource figures and the mode naming them.
+
+        These cannot be written at ``start``: the fields are still unset when
+        ``_build_attributes`` runs, so the span-end path is their only writer.
+        A synthetic ``exit`` carries fixed figures so the attributable case is
+        asserted deterministically rather than depending on what the host
+        platform could measure.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        exec_id = new_exec_id()
+
+        hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={
+                    "exec_id": exec_id,
+                    "exit_code": 0,
+                    "duration_s": 0.5,
+                    "max_rss_bytes": 4_194_304,
+                    "user_cpu_seconds": 0.25,
+                    "system_cpu_seconds": 0.125,
+                    "resource_usage_mode": "wait4_child",
+                },
+            )
+        )
+
+        attributes = tracer.spans[0].attributes
+        assert attributes.get("cuprum.max_rss_bytes") == 4_194_304, (
+            "the span must carry the attributable RSS figure the event reported"
+        )
+        assert attributes.get("cuprum.user_cpu_seconds") == pytest.approx(0.25), (
+            "the span must carry the measured user CPU seconds"
+        )
+        assert attributes.get("cuprum.system_cpu_seconds") == pytest.approx(0.125), (
+            "the span must carry the measured system CPU seconds"
+        )
+        assert attributes.get("cuprum.resource_usage_mode") == "wait4_child", (
+            "the span must name how the figures were obtained, so a backend can "
+            "distinguish an attributable measurement from the aggregate fallback"
+        )
+
+    def test_omits_resource_attributes_that_did_not_apply(self) -> None:
+        """A terminal event that measured nothing writes the mode alone.
+
+        An unmeasurable platform still reports ``unavailable``, so the mode is
+        present; the figures are absent rather than null, matching how every
+        other optional attribute on the span behaves.
+        """
+        tracer = InMemoryTracer()
+        hook = TracingHook(tracer)
+        exec_id = new_exec_id()
+
+        hook(_make_exec_event(phase="start", overrides={"exec_id": exec_id}))
+        hook(
+            _make_exec_event(
+                phase="exit",
+                overrides={
+                    "exec_id": exec_id,
+                    "exit_code": 0,
+                    "resource_usage_mode": "unavailable",
+                },
+            )
+        )
+
+        attributes = tracer.spans[0].attributes
+        assert attributes.get("cuprum.resource_usage_mode") == "unavailable", (
+            "a terminal event must name its mode even when nothing was measured"
+        )
+        unmeasured = [
+            name
+            for name in (
+                "cuprum.max_rss_bytes",
+                "cuprum.user_cpu_seconds",
+                "cuprum.system_cpu_seconds",
+            )
+            if name in attributes
+        ]
+        assert not unmeasured, (
+            f"unmeasured figures must be absent rather than null, got {unmeasured}"
+        )
+
     def test_disables_output_recording(self) -> None:
         """Hook skips output events when record_output=False."""
         _, span = self._run_traced_command(

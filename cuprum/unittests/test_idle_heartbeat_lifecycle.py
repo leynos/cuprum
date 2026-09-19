@@ -20,6 +20,7 @@ import typing as typ
 
 import pytest
 
+from cuprum import _subprocess_execution
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
 from cuprum._subprocess_execution import _SubprocessExecution
@@ -359,7 +360,12 @@ def test_a_failed_spawn_leaves_no_watchdog_behind(
         message = "missing"
         raise FileNotFoundError(message)
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse_to_spawn)
+    # Patched at the executor's own spawn seam, not at
+    # `asyncio.create_subprocess_exec`: a direct command that can own its
+    # `wait4` reap is spawned through `cuprum._wait4_process`, so the asyncio
+    # entry point is not on this path and patching it would leave the child
+    # starting for real.
+    monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", refuse_to_spawn)
 
     async def exercise() -> list[asyncio.Task[object]]:
         """Run the command and survey the loop once the failure settles."""

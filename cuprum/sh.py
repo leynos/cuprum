@@ -138,6 +138,31 @@ class CommandResult:
         Captured standard output, or ``None`` when capture was disabled.
     stderr:
         Captured standard error, or ``None`` when capture was disabled.
+    started_at:
+        Wall-clock timestamp at which process execution started.
+    duration:
+        Monotonic process duration in seconds.
+    max_rss_bytes:
+        Peak resident set size of the executed child in bytes. Direct commands
+        on Linux and macOS report this from the platform ``wait4`` call, which
+        attributes the figure to that one child; Linux reports KiB and macOS
+        bytes, both normalized to bytes here. It is never derived from the
+        process-global ``RUSAGE_CHILDREN`` high-water mark, which cannot be
+        attributed safely to one command. ``None`` on Windows, on platforms
+        without the child-specific interface, and for every pipeline stage,
+        whose concurrently reaped children cannot be separated.
+    user_cpu_seconds:
+        User CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
+    system_cpu_seconds:
+        System CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
 
     """
 
@@ -147,6 +172,11 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
+    started_at: float = 0.0
+    duration: float = 0.0
+    max_rss_bytes: int | None = None
+    user_cpu_seconds: float | None = None
+    system_cpu_seconds: float | None = None
 
     @property
     def ok(self) -> bool:

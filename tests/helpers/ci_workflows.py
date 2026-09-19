@@ -164,6 +164,92 @@ def cache_steps(workflow_name: str, job_name: str) -> list[Step]:
     )
 
 
+def _invokes(step: Step, *, uses: str, prefix: bool) -> bool:
+    """Report whether a step's ``uses:`` names the action under test."""
+    declared = str(step.get("uses", ""))
+    return declared.startswith(uses) if prefix else declared == uses
+
+
+def single_step_position_using(
+    workflow_name: str,
+    job_name: str,
+    *,
+    uses: str,
+    prefix: bool = False,
+) -> int:
+    """Return the position of the single step of a job that invokes an action.
+
+    Exactly one, not merely the first: a job that invokes the same action twice
+    runs its work twice, and a contract that reported the first would call that
+    clean. Every caller wants the same rule, so the match and its diagnostic
+    live here rather than being restated in each contract module.
+
+    The position exists so a contract can assert that one step runs before
+    another — a producer and its reader in the same job are only ordered by
+    their order in the file, which nothing else checks.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the workflow under ``.github/workflows``.
+    job_name : str
+        Job the step is expected in.
+    uses : str
+        The ``uses:`` value to match.
+    prefix : bool
+        Match a ``uses:`` that starts with ``uses`` rather than equalling it.
+
+    Returns
+    -------
+    int
+        Zero-based position of the matching step among the job's steps.
+    """
+    matched = [
+        index
+        for index, step in enumerate(steps(workflow_name, job_name))
+        if _invokes(step, uses=uses, prefix=prefix)
+    ]
+    _require(
+        condition=len(matched) == 1,
+        message=(
+            f"{workflow_name}:{job_name} must invoke {uses!r} exactly once, "
+            f"found {len(matched)}"
+        ),
+    )
+    return matched[0]
+
+
+def single_step_using(
+    workflow_name: str,
+    job_name: str,
+    *,
+    uses: str,
+    prefix: bool = False,
+) -> Step:
+    """Return the single step of a job that invokes a named action.
+
+    Parameters
+    ----------
+    workflow_name : str
+        File name of the workflow under ``.github/workflows``.
+    job_name : str
+        Job the step is expected in.
+    uses : str
+        The ``uses:`` value to match.
+    prefix : bool
+        Match a ``uses:`` that starts with ``uses`` rather than equalling it.
+
+    Returns
+    -------
+    Step
+        The one matching step.
+    """
+    position = single_step_position_using(
+        workflow_name, job_name, uses=uses, prefix=prefix
+    )
+    return steps(workflow_name, job_name)[position]
+
+
 def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
     """Flatten a workflow-to-job-names manifest into per-job cases."""
     return [
