@@ -8,11 +8,11 @@ mod buffer_size_tests;
 mod consume_snapshot_tests;
 mod errors;
 mod io_utils;
+#[cfg(all(test, unix))]
+mod lib_tests;
 #[cfg(loom)]
 #[doc(hidden)]
 pub mod loom_support;
-#[cfg(all(test, unix))]
-mod lib_tests;
 mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;
