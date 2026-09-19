@@ -188,7 +188,13 @@ class TestRustPumpFailures:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A native failure should restore modes, resume, and skip close."""
+        """A native failure should restore modes, resume, and close the writer.
+
+        The close is part of the contract: a fatal hand-off failure has no
+        fallback to carry the hop, so an open writer would leave the downstream
+        stage waiting for an EOF that never arrives and the pipeline would
+        report its deadline instead of this error.
+        """
         call_order: list[str] = []
         close_writer = mock.AsyncMock()
         _install_recording_native_failure(monkeypatch, call_order, close_writer)
@@ -225,7 +231,11 @@ class TestRustPumpFailures:
         assert call_order == ["pause", "drain", "restore", "resume"], (
             "expected native failure cleanup to restore modes before resuming"
         )
-        close_writer.assert_not_awaited()
+        # ``writer`` is None here, so the fatal path still calls the close with
+        # the transport it was given; the writer it must release is the real
+        # transport, exercised by
+        # test_fatal_handoff_failure_closes_the_writer_transport.
+        close_writer.assert_awaited_once_with(None)
 
     def test_run_rust_pump_closes_duplicate_after_native_load_failure(
         self,

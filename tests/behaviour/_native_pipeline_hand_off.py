@@ -118,9 +118,14 @@ def assert_deep_native_pipeline_completes(
             f"elapsed_s={time.monotonic() - started_at:.3f}, "
             f"error={error!r})",
         )
-    assert len(result.stdout) == _DEEP_NATIVE_PIPELINE_BYTES, (
+    stdout_text = result.stdout
+    assert stdout_text is not None, (
+        "the final stage of a capturing pipeline must return its stdout, "
+        f"found {result.stdout!r}"
+    )
+    assert len(stdout_text) == _DEEP_NATIVE_PIPELINE_BYTES, (
         "every byte must survive a deep native hand-off, found "
-        f"{len(result.stdout)} of {_DEEP_NATIVE_PIPELINE_BYTES}"
+        f"{len(stdout_text)} of {_DEEP_NATIVE_PIPELINE_BYTES}"
     )
     assert result.ok, "all stages of a deep native pipeline must exit successfully"
 
