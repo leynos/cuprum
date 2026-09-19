@@ -174,7 +174,6 @@ class TestPumpStreamDispatch:
                 call_order.append("resume")
 
             return _pipeline_stream_fds._ReaderPause(
-                may_hand_off=True,
                 resume=_resume,
             )
 

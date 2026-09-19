@@ -358,6 +358,78 @@ def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
     _assert_late_pipeline_completion(lifecycle, native_reader_close, state_fd_close)
 
 
+def test_deferred_grace_releases_paused_reader_before_loop_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hop deferred past its grace releases its reader transport, not just resumes it.
+
+    Deferral hands the reader to a callback that outlives the caller's loop, so
+    that loop can never resume the transport. A paused transport that is never
+    resumed or closed keeps its descriptor, keeps its subprocess transport open,
+    and reports itself once collected — after the loop is gone, which is why the
+    assertion below reads resource ownership rather than warning capture.
+    """
+    lifecycle = _ExecutorLifecycle()
+    sync_run = _SyncPipelineRun()
+    pipeline, allowlist = _make_sync_timeout_pipeline()
+    _install_sync_pipeline_worker(monkeypatch, lifecycle)
+    create_pipe_tasks = mock.Mock(wraps=_pipeline_collect._create_pipe_tasks)
+    monkeypatch.setattr(_pipeline_collect, "_create_pipe_tasks", create_pipe_tasks)
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+    _enable_rust_raw_fd_path(sync_run)
+    caller = threading.Thread(
+        target=_run_sync_timeout_pipeline,
+        args=(pipeline, allowlist, sync_run),
+    )
+    caller.start()
+    try:
+        assert lifecycle.worker_started.wait(timeout=5.0), (
+            "the two-stage pipeline must start the Rust raw-FD pump"
+        )
+        _assert_sync_timeout_returned(caller, sync_run, time.monotonic())
+        _assert_held_native_descriptors_are_valid(lifecycle)
+        _assert_caller_reader_transport_released(create_pipe_tasks)
+    finally:
+        lifecycle.release_worker.set()
+        caller.join(timeout=5.0)
+        _reset_rust_raw_fd_path()
+    assert not caller.is_alive(), "releasing the worker must settle the caller thread"
+
+
+def _assert_caller_reader_transport_released(
+    create_pipe_tasks: mock.Mock,
+) -> None:
+    """Assert the caller's loop left no unresolved reader transport behind."""
+    assert create_pipe_tasks.call_args is not None, (
+        "the pipeline must create its inter-stage pump tasks"
+    )
+    processes = create_pipe_tasks.call_args.args[0]
+    upstream = typ.cast(
+        "asyncio.subprocess.Process",
+        processes[0],
+    )
+    transport = typ.cast(
+        "asyncio.SubprocessTransport",
+        getattr(upstream, "_transport", None),
+    )
+    assert transport is not None, (
+        "the upstream stage must keep its subprocess transport"
+    )
+    reader = transport.get_pipe_transport(1)
+    assert reader is not None, "the upstream stage must keep its piped stdout"
+    assert reader.is_closing(), (
+        "a reader deferred past its cleanup grace must be released before its "
+        "loop closes; a merely paused transport would keep its descriptor and "
+        "report itself once the loop is gone"
+    )
+    assert transport.is_closing(), (
+        "releasing the paused reader must let the subprocess transport close"
+    )
+    assert transport.get_returncode() is not None, (
+        "releasing the paused reader must let the subprocess transport finish"
+    )
+
+
 def _install_blocking_pump(
     monkeypatch: pytest.MonkeyPatch,
     pump: cabc.Callable[[int, int], int],

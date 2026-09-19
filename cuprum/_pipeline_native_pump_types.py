@@ -30,6 +30,7 @@ class _RustPumpState:
     writer_fd: int
     blocking_mode_guard: _BlockingModeGuard
     resume_reader: cabc.Callable[[], None] | None
+    release_reader: cabc.Callable[[], None] | None = None
     was_cancelled: bool = False
     monotonic_clock: cabc.Callable[[], float] = time.monotonic
     cleanup_grace_s: float = _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE
@@ -42,12 +43,26 @@ class _RustPumpState:
     _cleanup_completed: bool = False
 
     def defer_cleanup(self) -> bool:
-        """Atomically defer callback cleanup unless completion has already won."""
+        """Defer callback cleanup and release the reader its loop can no longer resume.
+
+        A deferral hands the reader to a callback that outlives this loop, so
+        that loop can never resume it. A merely resumed transport keeps its
+        descriptor until the pipe reaches EOF and holds its subprocess transport
+        open until then, so the reader is released here instead — while loop
+        callbacks can still run the release that the deferred callback cannot.
+
+        Returns
+        -------
+        bool
+            Whether this call deferred cleanup rather than finding it complete.
+        """
         with self._cleanup_lock:
             if self._cleanup_completed:
                 return False
             self.was_deferred = True
-            return True
+        if self.release_reader is not None:
+            self.release_reader()
+        return True
 
     def complete_cleanup(self) -> bool:
         """Finish callback cleanup and return whether grace expiry won first."""

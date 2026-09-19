@@ -445,3 +445,27 @@ The regression coverage in
 `cuprum/unittests/test_pump_stream_dispatch_rust_failures.py` exercises native
 load failure and cancellation before worker settlement; the FD-blocking and
 settlement tests retain the duplicate-versus-transport ownership checks.
+
+## Addendum: releasing the paused reader at cleanup-grace expiry (2026-09-19)
+
+Cancellation cleanup now waits for worker settlement only up to a caller
+configuration ceiling, `ExecutionContext.native_pump_cleanup_grace`. Past that
+ceiling the caller stops waiting and the completion callback takes over:
+worker-owned duplicates stay quarantined until the worker settles, and the
+completion callback closes its reader duplicate and restores callback-owned
+state then, as the `2026-08-24` addendum describes.
+
+Worker settlement is the ordinary point for reader transport resumption, but it
+is not a point the caller can wait for once the grace expires: the completion
+callback that would resume the reader runs on a loop the caller has already
+closed. An expired hop therefore releases the paused reader transport at expiry
+instead, closing it while the caller's loop can still run the close that frees
+the descriptor. The later resumption at settlement becomes a no-op.
+
+This narrows, rather than replaces, the ownership rule above. What must not
+race native I/O is the worker's duplicated descriptors; the release closes only
+the asyncio-owned original, once the worker — reading its own duplicate — can
+no longer need the loop's reader. Descriptor-mode restoration and the
+completion-callback contract are unchanged. See
+[ADR-008](adr-008-rust-pump-observation-channel.md)'s `2026-09-19` addendum for
+the emitted phases and counters.

@@ -16,6 +16,7 @@ import typing as typ
 
 from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
 from cuprum._idle_heartbeat import _build_idle_monitor
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
@@ -24,6 +25,8 @@ if typ.TYPE_CHECKING:
     from cuprum._streams import _MirrorCursor
     from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
+
+from cuprum.sinks import base as sinks
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -45,7 +48,10 @@ class _PipelineRunConfig:
     stdout_sink: typ.IO[str]
 
     stderr_sink: typ.IO[str]
+    sink_bracket: _SinkBracket
+
     on_line: _LineHookFn | None = None
+
     idle: _IdleMonitor | None = None
 
     @property
@@ -77,34 +83,62 @@ class _PipelineRunConfig:
             or self.on_line is not None
         )
 
-    @property
-    def stream_config(self) -> _StreamConfig:
-        """Build the stdout stream configuration for the final pipeline stage."""
+    def _build_stream_config(
+        self,
+        *,
+        echo_output: bool,
+        fallback_sink: typ.IO[str],
+    ) -> _StreamConfig:
+        """Build one parent-consumed pipeline stream configuration.
+
+        Both pipeline streams are wired identically here; only the echo gate
+        and the resolved destination differ. When a presentation-sink session
+        is active, a mirrored stream routes through the session's log
+        destination instead of its fallback, so it lands inside the adapter's
+        framing in the order the adapter received it. That bracketing is
+        required for stdout and stderr alike: every mirrored stream must fall
+        between the session's opening and closing frames.
+
+        Parameters
+        ----------
+        echo_output : bool
+            Whether this stream's lines are mirrored to the parent.
+        fallback_sink : typ.IO[str]
+            The stream's resolved parent-facing destination, superseded by the
+            active session's log when one is open.
+
+        Returns
+        -------
+        _StreamConfig
+            The wiring for this stream, framed by any active sink session.
+        """
+        framed = self.sink_bracket.resolve_destination(fallback_sink)
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=self.echo_stdout,
+            echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stdout_sink,
+            sink=framed,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
-            mirror=self._echo_mirror(self.stdout_sink),
+            mirror=self._echo_mirror(framed),
+        )
+
+    @property
+    def stream_config(self) -> _StreamConfig:
+        """Build the stdout stream configuration for the final pipeline stage."""
+        return self._build_stream_config(
+            echo_output=self.echo_stdout,
+            fallback_sink=self.stdout_sink,
         )
 
     @property
     def stderr_stream_config(self) -> _StreamConfig:
         """Build the stderr stream configuration for a pipeline stage."""
-        return _StreamConfig(
-            capture_output=self.capture,
+        return self._build_stream_config(
             echo_output=self.echo_stderr,
-            echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=self.stderr_sink,
-            encoding=self.ctx.encoding,
-            errors=self.ctx.errors,
-            read_size=_current_read_size(),
-            activity=self.idle.note_activity if self.idle is not None else None,
-            mirror=self._echo_mirror(self.stderr_sink),
+            fallback_sink=self.stderr_sink,
         )
 
     def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
@@ -114,7 +148,15 @@ class _PipelineRunConfig:
         stream wrote there: a caller may point both sinks at one object, and
         then a newline-less final-stage stdout echo strands the diagnostic
         exactly as a stderr one would. Resolved sinks are compared, because
-        that is where the bytes land.
+        that is where the bytes land: when a session is active both route
+        through the session's log, and the mirrored stream is still the one
+        whose unfinished line the diagnostic would otherwise extend.
+
+        Parameters
+        ----------
+        sink : typ.IO[str]
+            The echo's resolved destination, already framed by the sink
+            bracket.
 
         Returns
         -------
@@ -123,9 +165,10 @@ class _PipelineRunConfig:
             ``None`` when this echo cannot reach the keepalive.
         """
         idle = self.idle
-        if idle is None or sink is not self.stderr_sink:
+        if idle is None:
             return None
-        return idle.mirror
+        framed_stderr = self.sink_bracket.resolve_destination(self.stderr_sink)
+        return None if sink is not framed_stderr else idle.mirror
 
 
 def _prepare_pipeline_config(
@@ -150,6 +193,10 @@ def _prepare_pipeline_config(
     # separate arguments; the developer guide forbids parallel internal
     # output-option objects.
     echo_stdout, echo_stderr = output.resolved_echo
+    sink_bracket = _SinkBracket.open(
+        output.sink,
+        sinks.SessionStart(label="pipeline", argv=()),
+    )
     return _PipelineRunConfig(
         ctx=ctx,
         capture=output.capture,
@@ -159,6 +206,7 @@ def _prepare_pipeline_config(
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
+        sink_bracket=sink_bracket,
         on_line=output.on_line,
         # One aggregate heartbeat for the whole pipeline, labelled for what it
         # actually observes: the parent-facing output, not the health of every
@@ -167,6 +215,11 @@ def _prepare_pipeline_config(
             output.idle_after,
             output.on_idle,
             _PIPELINE_IDLE_SUBJECT,
-            ctx.stderr_sink,
+            # The same resolution the mirrored streams use: an active session
+            # frames them, so a keepalive written anywhere else would land
+            # outside the group the run is claiming. One resolution, not two,
+            # because _echo_mirror recognizes the diagnostic by comparing the
+            # resolved destinations.
+            sink_bracket.resolve_destination(stderr_sink),
         ),
     )

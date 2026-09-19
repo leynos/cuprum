@@ -24,6 +24,7 @@ from cuprum._pipeline_collect import (
 )
 from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._subprocess_timeout import _SubprocessInvariantError
 from cuprum.sh import ExecutionContext
 
@@ -70,6 +71,7 @@ def _timeout_free_config() -> _PipelineRunConfig:
         timeout=None,
         stdout_sink=io.StringIO(),
         stderr_sink=io.StringIO(),
+        sink_bracket=_SinkBracket(None),
     )
 
 

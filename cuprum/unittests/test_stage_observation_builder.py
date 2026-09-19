@@ -25,20 +25,20 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from cuprum import ECHO, sh
+from cuprum._command_internals import (
+    _ExecutionTracking,
+    _prepare_execution_observation,
+)
 from cuprum._observability import _base_stage_tags, _resolve_env_overlay
 from cuprum._pipeline_internals import (
     _build_pipeline_observations,
     _collect_hooks,
     _enforce_allowlist,
 )
+from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._testing import _prepare_pipeline_config
 from cuprum.context import current_context, env, merge_env_overlays
-from cuprum.sh import (
-    ExecutionContext,
-    RunOutputOptions,
-    _ExecutionTracking,
-    _prepare_execution_observation,
-)
+from cuprum.sh import ExecutionContext, RunOutputOptions
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -117,6 +117,7 @@ def _single_command_tags(
     tracking = _ExecutionTracking(
         execution_hooks=_collect_hooks(current_context()),
         pending_tasks=[],
+        sink_bracket=_SinkBracket(None),
     )
     observation = _prepare_execution_observation(
         cmd,

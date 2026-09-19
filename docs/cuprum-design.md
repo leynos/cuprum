@@ -1090,6 +1090,26 @@ flowchart TD
     L --> M
 ```
 
+Beyond the tee sinks above, a run may opt into a *presentation sink* through
+`RunOutputOptions.sink` (see ADR-013). A presentation sink reshapes the
+parent-facing output — framing it in a GitHub Actions log group and annotating
+failures — without changing capture, success semantics, or the returned result.
+The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
+one session before the subprocess starts, route echoed output through the
+session's `log` writer, and close the session exactly once per terminal path
+with a bounded categorical outcome. All presentation knowledge
+(workflow-command syntax, escaping, injection shielding) stays inside the
+adapter; runs without a sink are unchanged. The single-command and pipeline
+runners share this contract, and both close the session through the same
+shielded finalization that reconciles observe-hook tasks, so cancellation
+cannot abandon the framing part-way.
+
+Activation policy is also adapter-local: `GitHubActionsSink` reads
+`GITHUB_ACTIONS` from the parent environment at `open_session` time and
+declines activation (returning `None`) unless it holds the runner's `true`
+value, unless the caller passes `force=True`; the execution layer itself never
+inspects the environment.
+
 ______________________________________________________________________
 
 ## 8. Async Execution Model
@@ -1411,9 +1431,12 @@ preserving the `SafeCmd.run()` execution contract:
   `_RunTaskOwnership` retains those consumers and collectors until the one
   success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
-  *construction*: `_build_stream_config` assembles the stdout `_StreamConfig`,
-  and `_spawn_stream_consumers` derives the stderr config from it and creates
-  the pair of consumer tasks. Fixing the stderr config's echo, sink, and
+  *construction* and *routing*: `_resolve_stream_sink` chooses the destination
+  for each mirrored stream — a live presentation-sink session's log, the
+  execution context's configured sink, or the process's own stream — and
+  `_build_stream_config` assembles the stdout `_StreamConfig`, and
+  `_spawn_stream_consumers` derives the stderr config from it and creates the
+  pair of consumer tasks. Fixing the stderr config's echo, sink, and
   `EchoStream.STDERR` on the derived config is what keeps the two streams
   distinguishable when both sinks resolve to one object, and it is where the
   idle monitor's mirror cursor reaches the configs whose resolved sink is the
@@ -1421,9 +1444,11 @@ preserving the `SafeCmd.run()` execution contract:
   from the observe hooks and the caller's `on_line`, so `SafeCmd.run()` and
   `SafeCmd.lines()` share one composition point. Because both entry points
   reach the consumers through this one module, a patched reader covers both. It
-  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`.
-  This boundary exists to keep `_subprocess_execution` within the Pylint module
-  ceiling once the idle-heartbeat wiring joined the stream configs; see the
+  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`;
+  `_subprocess_execution` re-exports the wiring helpers, so callers and
+  monkeypatch targets resolve the same names as before. This boundary exists to
+  keep `_subprocess_execution` within the Pylint module ceiling once the
+  idle-heartbeat wiring joined the stream configs; see the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
@@ -1568,6 +1593,35 @@ terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
 and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
 `_pipeline_internals` calls into `_pipeline_results` on both the success and
 the timeout paths, so a stage never reports a `timeout` and then falls silent.
+
+`cuprum._sink_lifecycle` owns the presentation-sink session lifecycle the two
+runners share: the `_SinkBracket`, the take-once owner of one run's session,
+opening it before the work starts (`_open_sink_session`), closing it on every
+exit path (`_close_sink_session`), and mapping a result or an error onto the
+bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
+`cuprum._pipeline_sink` keeps only the pipeline-specific part of that mapping,
+`_pipeline_result_outcome`, which reports the first failing stage's exit code.
+
+`cuprum._command_internals` owns *single-command* orchestration, the
+counterpart of `_pipeline_internals` for one process rather than a graph of
+them: `_prepare_execution_observation` builds the stage observation,
+`_run_prepared_command` sequences a validated command's execution after its
+public inputs are resolved, and `_execute_with_hooks` drives the bundle with
+after-hook dispatch and finalizes the run's sink session on every terminal path.
+`_ExecutionState` carries one run's already-resolved inputs — context, output
+options, resolved stdin, and the settled deadline — so the spawn helper stays a
+translation from what the run decided to what the subprocess layer consumes.
+`SafeCmd.run` resolves those inputs, builds the state, and hands it to
+`_run_prepared_command`; the helper never reconstructs it, which is what keeps
+its own signature small while leaving the public method's resolution order
+unchanged. Finalization is the reason the sequence lives in one module: the
+sink session must close *before* the observe-hook tasks drain, because the
+drain aggregates a hook failure with the error that ended the run, so closing
+afterwards would record the aggregate — an `error` annotation standing in for a
+timeout — and a drain that raised would skip the close entirely. The module was
+split out of `cuprum/sh.py` to resolve a file-level CodeScene `Low Cohesion`
+finding; see the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+addendum of 2026-09-19.
 
 Error propagation policy (to be finalized, but roughly):
 
@@ -2989,10 +3043,15 @@ shared between asyncio and the worker.
 Blocking mode is applied only to worker-owned duplicates. After the native
 worker settles, Python closes the remaining reader duplicate, restores the
 worker descriptor modes, and resumes the reader transport in that order. Rust
-has already closed the consumed writer duplicate. Cancellation therefore cannot
-close or reuse a descriptor while native I/O is still running. If any safe
-hand-off preparation step fails, the dispatcher keeps the original asyncio
-descriptors with the Python fallback.
+has already closed the consumed writer duplicate. When a hop's cleanup grace
+expires before that settlement, the caller instead releases the paused reader
+transport at expiry — the asyncio-owned original, not a worker duplicate —
+because the loop that would otherwise resume it cannot outlive the deferral;
+the post-settlement resume is then a no-op. Cancellation therefore cannot close
+or reuse the descriptors native I/O is still using: the release never touches
+the worker's duplicates, and the descriptor it closes is the transport's own.
+If any safe hand-off preparation step fails, the dispatcher keeps the original
+asyncio descriptors with the Python fallback.
 
 #### Raw descriptor lifecycle
 
@@ -3020,7 +3079,10 @@ path is testable without a live pump:
   exit, because the transport may have set its paused flag before whatever
   raised — leaving a reader nobody resumes while the Python fallback reads a
   descriptor nothing is watching. Having already been corrected, it is not
-  resumed again on exit. It yields the pause outcome, whose `decline_reason` is
+  resumed again on exit. A completed pause yields an outcome carrying both the
+  way back (`resume`) and the way out (`release`): the caller closes the paused
+  transport through `release` when a deferred hand-off outlives the loop, so
+  the descriptor cannot survive past `loop.close()`. Its `decline_reason` is
   `None` when the descriptor may be handed to the Rust pump — a failed pause
   sets `reader_pause_failed`, because asyncio may still be consuming the
   reader, and the caller falls back to the Python pump rather than racing it. A
@@ -3036,9 +3098,15 @@ cannot interrupt the worker thread running the Rust pump, and that thread still
 operates with the borrowed reader duplicate and consumed writer duplicate, so
 cancelling the awaiting task waits for the worker to return before its
 duplicates are closed, blocking mode is restored, and the transport resumed.
-The original reader and writer descriptors remain asyncio-owned throughout.
-Restoring or resuming earlier would hand reader or writer state back to asyncio
-while native code was still mid-transfer.
+That wait is bounded by `ExecutionContext.native_pump_cleanup_grace` (default
+0.5 s): on expiry the caller receives its original `CancelledError` while the
+worker keeps its quarantined duplicates and its one completion callback
+finishes cleanup later. On that deferred path the paused reader transport is
+closed at expiry, while the loop can still run the close, so the descriptor is
+released rather than left to outlive its loop. The writer descriptor stays
+asyncio-owned throughout, as does the reader on the ordinary path. Restoring or
+resuming earlier would hand reader or writer state back to asyncio while native
+code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
 and blocking-mode lifecycle for the Rust pump hand-off. Production code

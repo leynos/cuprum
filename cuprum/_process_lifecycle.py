@@ -8,12 +8,12 @@ pipeline (``_cleanup_pipeline_on_error``, ``_terminate_timed_out_stages``,
 of that: it is the cancellation-safe primitive shared by the pipeline paths
 (``_pipeline_internals``, ``_pipeline_collect``) and the single-command
 subprocess paths (``_subprocess_execution``, ``_subprocess_wait``,
-``sh._execute_with_hooks``). A bare ``asyncio.shield`` is not enough on its
-own: it stops cancellation reaching the inner coroutine, but the awaiting
-coroutine resumes immediately, so a caller's ``CancelledError`` propagates
-while cleanup is still running. ``_shielded_cleanup`` instead retries the wait
-under a shield until the owned task is done, absorbing however many
-cancellations arrive before re-raising.
+``_command_internals._execute_with_hooks``). A bare ``asyncio.shield`` is not
+enough on its own: it stops cancellation reaching the inner coroutine, but
+the awaiting coroutine resumes immediately, so a caller's ``CancelledError``
+propagates while cleanup is still running. ``_shielded_cleanup`` instead
+retries the wait under a shield until the owned task is done, absorbing
+however many cancellations arrive before re-raising.
 
 The pipeline waiter decides when fail-fast teardown is necessary; this module
 owns the subprocess handles and executes that decision alongside timeout and

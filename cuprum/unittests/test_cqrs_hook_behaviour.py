@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import itertools
 import typing as typ
 
@@ -28,7 +29,19 @@ from cuprum._pipeline_internals import (
     _PIPELINE_FINALIZATION_ERROR,
     _finalize_pipeline_execution,
 )
-from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
+from cuprum._pipeline_types import (
+    _EventDetails,
+    _ExecutionHooks,
+    _PipelineObservers,
+    _StageObservation,
+)
+from cuprum._sink_lifecycle import _SinkBracket
+from cuprum.sinks import (
+    OutputSession,
+    SessionOutcome,
+    SessionStart,
+    TerminalOutcome,
+)
 from cuprum.unittests._cqrs_fixtures import _echo_cmd, _event
 
 if typ.TYPE_CHECKING:
@@ -62,11 +75,57 @@ class _FatalObserveTaskError(BaseException):
     """Test base exception raised by a scheduled observe task."""
 
 
+class _OutcomeRecordingSession:
+    """Minimal OutputSession recording the outcome it was closed with."""
+
+    def __init__(self) -> None:
+        """Start with an in-memory log and no closed outcome."""
+        self.log_io = io.StringIO()
+        self.closed_with: SessionOutcome | None = None
+
+    @property
+    def log(self) -> typ.IO[str]:
+        """The in-memory log destination."""
+        return self.log_io
+
+    def close(self, outcome: SessionOutcome) -> None:
+        """Record the terminal outcome."""
+        self.closed_with = outcome
+
+
+class _OutcomeRecordingSink:
+    """Minimal OutputSink returning an outcome-recording session."""
+
+    def __init__(self) -> None:
+        """Start with no opened session."""
+        self.session: _OutcomeRecordingSession | None = None
+
+    def open_session(self, start: SessionStart) -> OutputSession | None:
+        """Return a fresh recording session, ignoring the start."""
+        del start
+        self.session = _OutcomeRecordingSession()
+        return self.session
+
+
+def _open_bracket() -> tuple[_SinkBracket, _OutcomeRecordingSession]:
+    """Open a bracket over a recording sink and return it with its session."""
+    sink = _OutcomeRecordingSink()
+    bracket = _SinkBracket.open(sink, SessionStart(label="project: program", argv=()))
+    session = sink.session
+    assert session is not None, "a recording sink must return an active session"
+    return bracket, session
+
+
 async def _finalize_with_failing_after_hook(
     pending_tasks: list[asyncio.Task[None]],
     observe_task_factory: cabc.Callable[[], cabc.Awaitable[None]],
+    sink_bracket: _SinkBracket,
 ) -> None:
-    """Finalize a pipeline with a failing after hook and an observe task."""
+    """Finalize a pipeline with a failing after hook and an observe task.
+
+    The bracket is supplied by the caller so a test can inspect the outcome
+    the failing hook commits, which is the behaviour the ordering protects.
+    """
 
     async def await_observe_task() -> None:
         """Adapt the supplied awaitable for ``asyncio.create_task``."""
@@ -101,9 +160,9 @@ async def _finalize_with_failing_after_hook(
     )
     await _finalize_pipeline_execution(
         (cmd,),
-        (observation,),
+        _PipelineObservers((observation,), pending_tasks),
         [stage_result],
-        pending_tasks,
+        sink_bracket,
     )
 
 
@@ -113,6 +172,7 @@ async def _assert_pipeline_finalization_failure_group(
 ) -> None:
     """Assert finalization groups the after-hook and observe-task failures."""
     pending_tasks: list[asyncio.Task[None]] = []
+    bracket, session = _open_bracket()
 
     async def failing_observe_task() -> None:
         """Yield once, then raise the scenario's observe-task exception."""
@@ -120,7 +180,11 @@ async def _assert_pipeline_finalization_failure_group(
         raise task_exception_class
 
     with pytest.raises(expected_group_class) as exc_info:
-        await _finalize_with_failing_after_hook(pending_tasks, failing_observe_task)
+        await _finalize_with_failing_after_hook(
+            pending_tasks,
+            failing_observe_task,
+            bracket,
+        )
 
     assert type(exc_info.value) is expected_group_class, (
         "finalization should raise the expected concrete exception-group type"
@@ -130,6 +194,13 @@ async def _assert_pipeline_finalization_failure_group(
         task_exception_class,
     ), "finalization should preserve both failures in operation order"
     assert pending_tasks == [], "finalization should clear failed observe tasks"
+    # The hook failure is the run's terminal error, so it is what the adapter
+    # must record: closing with the stage-result outcome first would annotate
+    # a crashed run as an ordinary non-zero exit.
+    assert session.closed_with == SessionOutcome(TerminalOutcome.ERROR), (
+        f"a failing after-hook must close the sink as an error; "
+        f"got {session.closed_with!r}"
+    )
 
 
 def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
@@ -196,6 +267,7 @@ def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
         """Run a failing after hook beside a scheduled observe task."""
         completed: list[bool] = []
         pending_tasks: list[asyncio.Task[None]] = []
+        bracket, _session = _open_bracket()
 
         async def observe_task() -> None:
             """Record that finalization awaited the scheduled task."""
@@ -203,7 +275,11 @@ def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
             completed.append(True)
 
         with pytest.raises(_AfterHookError):
-            await _finalize_with_failing_after_hook(pending_tasks, observe_task)
+            await _finalize_with_failing_after_hook(
+                pending_tasks,
+                observe_task,
+                bracket,
+            )
 
         assert completed == [True], "finalization should await scheduled observe tasks"
         assert pending_tasks == [], "finalization should clear completed observe tasks"

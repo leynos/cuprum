@@ -10,38 +10,29 @@ from __future__ import annotations
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
-import time
 import typing as typ
 import warnings
 from pathlib import Path
 
+from cuprum._command_internals import (
+    _build_subprocess_execution,
+    _ExecutionState,
+    _prepare_execution_observation,
+    _run_prepared_command,
+)
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._execution_tracking import _ExecutionTracking
-from cuprum._idle_diagnostic import _idle_subject
-from cuprum._idle_heartbeat import _build_idle_monitor, _validate_idle_options
+from cuprum._idle_heartbeat import _validate_idle_options
 from cuprum._line_iteration import LineStream, _iter_line_events
-from cuprum._observability import (
-    _base_stage_tags,
-    _drain_tasks_during_cleanup,
-    _merge_tags,
-    _resolve_env_overlay,
-    _wait_for_exec_hook_tasks,
-)
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
     _enforce_allowlist,
-    _EventDetails,
     _run_pipeline,
-    _StageObservation,
 )
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
-from cuprum._subprocess_execution import (
-    _execute_subprocess,
-    _SubprocessExecution,
-)
 from cuprum.catalogue import (
     DEFAULT_CATALOGUE,
     ProgramCatalogue,
@@ -62,19 +53,23 @@ from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
+# ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
+from cuprum.sinks import (
+    base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
+
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 if typ.TYPE_CHECKING:
-    from cuprum.lines import LineHook, _LineHookFn
+    from cuprum.lines import LineHook
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
-# Names the aggregate raised when draining observe-hook tasks fails while a
-# single-command execution is already unwinding.
-_COMMAND_FINALIZATION_ERROR = "command finalization failed"
+
+
 _DEFAULT_ENCODING = "utf-8"
 _DEFAULT_ERROR_HANDLING = "replace"
 
@@ -420,6 +415,12 @@ class RunOutputOptions:
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
         loop. Requires ``idle_after``.
+    sink : sinks.OutputSink | None, default=None
+        Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
+        given, it may reframe the parent-facing output of this run (for
+        example, a GitHub Actions group); the default ``None`` keeps the
+        plain two-stream behaviour. An adapter is inactive for a run when it
+        declines activation, in which case output is unchanged.
 
     Examples
     --------
@@ -440,6 +441,7 @@ class RunOutputOptions:
     on_line: LineHook | None = None
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
+    sink: sinks.OutputSink | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -544,127 +546,6 @@ def _resolve_pipeline_output(
     )
 
 
-def _prepare_execution_observation(
-    cmd: SafeCmd,
-    context: ExecutionContext,
-    tracking: _ExecutionTracking,
-    output: RunOutputOptions,
-) -> _StageObservation:
-    """Prepare the observation context for command execution."""
-    cwd = Path(context.cwd) if context.cwd is not None else None
-    env_overlay = _resolve_env_overlay(context.env)
-    tags = _merge_tags(
-        _base_stage_tags(
-            cmd,
-            capture=output.capture,
-            echo_stdout=output.resolved_echo[0],
-            echo_stderr=output.resolved_echo[1],
-        ),
-        context.tags,
-    )
-    return _StageObservation(
-        cmd=cmd,
-        hooks=tracking.execution_hooks,
-        cwd=cwd,
-        env_overlay=env_overlay,
-        tags=tags,
-        pending_tasks=tracking.pending_tasks,
-        wall_clock=time.time,
-    )
-
-
-# ruff: ignore[too-many-arguments]  # the six inputs are one run's resolved state, carried together rather than derived
-def _build_subprocess_execution(
-    cmd: SafeCmd,
-    context: ExecutionContext,
-    output: RunOutputOptions,
-    *,
-    timeout: float | None,
-    observation: _StageObservation,
-    stdin_data: bytes | None,
-    on_line: _LineHookFn | None = None,
-) -> _SubprocessExecution:
-    """Bundle everything one command's execution needs, before it spawns.
-
-    The idle monitor is part of the bundle rather than an execution-time
-    argument because its presence is what decides whether the child's stdout
-    and stderr are piped for activity observation. Deferring it would leave
-    the spawn unable to make that choice.
-
-    Returns
-    -------
-    _SubprocessExecution
-        The resolved execution bundle, ready for ``_execute_with_hooks``.
-    """
-    return _SubprocessExecution(
-        cmd=cmd,
-        ctx=context,
-        capture=output.capture,
-        echo_stdout=output.resolved_echo[0],
-        echo_stderr=output.resolved_echo[1],
-        max_echo_line_bytes=output.max_echo_line_bytes,
-        timeout=timeout,
-        observation=observation,
-        stdin_data=stdin_data,
-        on_line=on_line,
-        # Built here, during the parent's own preparation, but armed by the run
-        # itself, once the child is actually running: everything that precedes
-        # the spawn is the parent's work, and must not read as the child's
-        # silence.
-        idle=_build_idle_monitor(
-            output.idle_after,
-            output.on_idle,
-            _idle_subject(str(cmd.program)),
-            context.stderr_sink,
-        ),
-    )
-
-
-async def _execute_with_hooks(
-    cmd: SafeCmd,
-    execution: _SubprocessExecution,
-    tracking: _ExecutionTracking,
-) -> CommandResult:
-    """Execute *execution*, dispatch after-hooks, and handle cancellation.
-
-    Draining the observe-hook tasks during cleanup must not let a failing
-    background hook stand in for the error that triggered the cleanup: a caller
-    awaiting ``TimeoutExpired`` (or a cancellation) would otherwise see the
-    hook's exception instead. Both cleanup paths therefore drain through
-    :func:`_drain_tasks_during_cleanup`, which aggregates a drain failure with
-    the active error into a ``BaseExceptionGroup`` rather than replacing it —
-    matching the pipeline path. The drain on the success path still surfaces a
-    hook failure directly, because there is no primary error to preserve.
-
-    Every drain runs through :func:`_shielded_cleanup` rather than a bare
-    ``await asyncio.shield(...)``. The shield alone keeps the cancellation off
-    the drain, but the *awaiting* coroutine resumes immediately, so the run
-    would propagate its ``CancelledError`` while the hook tasks were still
-    settling — leaking exactly the tasks the drain exists to reconcile.
-
-    Returns
-    -------
-    CommandResult
-        The completed command's result, once every after-hook has run and the
-        observe-hook tasks have drained.
-    """
-    try:
-        result = await _execute_subprocess(execution)
-        for hook in tracking.execution_hooks.after_hooks:
-            hook(cmd, result)
-    except BaseException as run_error:
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                run_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
-        )
-        raise
-    await _shielded_cleanup(_wait_for_exec_hook_tasks(tracking.pending_tasks))
-    return result
-
-
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -741,26 +622,14 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        tracking = _ExecutionTracking(
-            execution_hooks=_collect_hooks(current_context()),
-            pending_tasks=[],
-        )
-        observation = _prepare_execution_observation(self, ctx, tracking, out)
-        observation.emit("plan", _EventDetails(pid=None))
-        for hook in tracking.execution_hooks.before_hooks:
-            hook(self)
-        return await _execute_with_hooks(
+        return await _run_prepared_command(
             self,
-            _build_subprocess_execution(
-                self,
-                ctx,
-                out,
-                timeout=effective_timeout,
-                observation=observation,
+            _ExecutionState(
+                context=ctx,
+                output=out,
                 stdin_data=stdin_data,
-                on_line=out.on_line,
+                timeout=effective_timeout,
             ),
-            tracking,
         )
 
     def lines(
@@ -813,6 +682,11 @@ class SafeCmd:
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
+            # Line iteration never opens a presentation session: the line
+            # events are the caller's own consumption of the streams, so there
+            # is no adapter framing to bracket. The empty bracket keeps the
+            # required field satisfied.
+            sink_bracket=_SinkBracket(None),
         )
         observation = _prepare_execution_observation(self, ctx, tracking, out)
 
@@ -820,12 +694,13 @@ class SafeCmd:
             _iter_line_events(
                 _build_subprocess_execution(
                     self,
-                    ctx,
-                    out,
-                    timeout=effective_timeout,
+                    _ExecutionState(
+                        context=ctx,
+                        output=out,
+                        stdin_data=stdin_data,
+                        timeout=effective_timeout,
+                    ),
                     observation=observation,
-                    stdin_data=stdin_data,
-                    on_line=out.on_line,
                 ),
                 tracking,
             ),
@@ -957,7 +832,14 @@ class Pipeline:
             timeout=effective_timeout,
             context=context,
         )
-        return await _run_pipeline(self.parts, config)
+        # The bracket opened with the config; this guard is the last word on
+        # every path out of the pipeline, including one the runner itself
+        # raises on the way to its first stage.
+        try:
+            return await _run_pipeline(self.parts, config)
+        except BaseException as run_error:
+            config.sink_bracket.close(outcome=_outcome_for_error(run_error))
+            raise
 
     def run_sync(
         self,

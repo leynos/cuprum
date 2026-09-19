@@ -143,6 +143,62 @@ rather than through a redundant execution-module re-export.
 - Imports span several private modules instead of one.
 - Maintainers must preserve the boundaries when adding execution behaviour.
 
+## Addendum (2026-09-19): split single-command orchestration out of cuprum/sh.py
+
+CodeScene reported a `Low Cohesion` finding on `cuprum/sh.py`. The file carried
+at least four distinct responsibilities across its 31 functions, crossing
+CodeScene's LCOM4 threshold of 4. Extraction was the remedy that worked for
+this shape: CodeScene's code health for the file moved from 8.54 to 10.00.
+
+Both figures are `cs check` scores of `cuprum/sh.py`, the first taken at the
+pre-extraction tip of this branch and the second after the extraction. Do not
+expect `cs delta` against the branch's base to reproduce them: `cs delta`
+scores the _base revision's_ copy of the file, and this branch's base already
+scores 9.68 because it is a different lineage — the base revision carries the
+six-argument `_build_subprocess_execution`, not the branch's seven-argument
+one. The delta therefore reports `9.68 -> 10.00`, which is a comparison across
+revisions rather than the branch's own 8.54 to 10.00 improvement. The `8.54`
+figure is reproducible from the pre-extraction blob, which is byte-identical to
+the pushed pre-extraction head (`git show a6751bd9:cuprum/sh.py`).
+
+The local CLI and CodeScene's service disagree by 0.01 in the last digit on
+every figure measured for this file: the service prints 8.55 and 9.69 where the
+CLI prints 8.54 and 9.68, and both agree on 10.00. Figures quoted in this
+addendum are the CLI's, matching the `cs check` command they came from.
+
+The single-command orchestration therefore moved to
+`cuprum/_command_internals.py`: `_ExecutionTracking`,
+`_prepare_execution_observation`, `_build_subprocess_execution`,
+`_execute_with_hooks`, and `_run_prepared_command`. That cluster is the whole
+of what a single command's execution owes — preparing one validated command's
+observation, bundling everything the run needs before it spawns, driving that
+bundle through the subprocess layer with after-hook dispatch, and finalizing
+the run's presentation-sink session on every terminal path. What stays in
+`cuprum/sh.py` is the public command surface, the value types it exchanges, and
+pipeline orchestration.
+
+That is why the split is a real seam rather than a size fix: it is the same
+seam this ADR already draws, with the orchestration a run owes living in a
+private module while the public surface, and the names callers import, stay in
+`cuprum.sh`. Pipeline orchestration is the corresponding concern of
+`cuprum/_pipeline_internals.py`, which already exists and stays as it is. The
+two modules now mirror each other: one module per execution shape.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: importers of `cuprum.sh` continue to resolve the public surface
+without change, but a test that replaces one of the moved private helpers must
+now target `cuprum._command_internals`, the module that resolves it.
+`cuprum/unittests/test_stage_observation_builder.py` was the only such test,
+and it was re-pointed to `cuprum._command_internals`.
+
+`SafeCmd.run` and `SafeCmd.run_sync` keep their public signatures, and
+allowlist ordering, stdin resolution timing, timeout precedence, plan-event
+timing, before-hook timing, and the capture, echo, exit-code, cancellation, and
+result semantics are all unchanged. The relocation is a behavioural no-op.
+Unlike the 2026-09-14 addendum, it was not driven by the repository's
+`max-module-lines` ceiling — a cohesion finding prompted it — although it also
+reduces `cuprum/sh.py` by the moved cluster as a side effect.
+
 ## Addendum (2026-07-28): wait-helper decomposition and timeout observability
 
 Enabling the Ruff `ASYNC` family (`ASYNC109`) prompted a follow-up refinement
@@ -324,3 +380,33 @@ previous definition site. The private import compatibility rule from the
 and `cuprum._pipeline_internals` continue to resolve
 `_spawn_pipeline_processes` without change, but a test that replaces it must
 target `cuprum._pipeline_spawn`, the module that now resolves it.
+
+## Addendum (2026-09-14): stream-wiring split for the module-size ceiling
+
+Routing mirrored output through an opt-in presentation-sink session (see
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)) added sink
+resolution to `_subprocess_execution`, which pushed that module back over the
+400-line `max-module-lines` ceiling whose suppression Option B removed. The
+wiring half moves to a new cohesive module rather than reintroducing an
+exception:
+
+- `cuprum/_subprocess_streams.py` owns destination selection
+  (`_resolve_stream_sink`), the per-line observability callback
+  (`_create_stream_callback`), the stdout `_StreamConfig`
+  (`_build_stream_config`), and consumer-task creation
+  (`_spawn_stream_consumers`).
+- `_subprocess_execution` remains the composition root: it invokes that wiring
+  for each run and re-exports `_build_stream_config`,
+  `_create_stream_callback`, and `_spawn_stream_consumers`, so existing imports
+  and the tests that monkeypatch them by module path keep resolving unchanged.
+  `_resolve_stream_sink` is not re-exported; it lives only in
+  `cuprum/_subprocess_streams.py`. Because `_spawn_stream_consumers` resolves
+  `_consume_stream` from that module's own globals, tests must patch
+  `cuprum._subprocess_streams._consume_stream`, as
+  `cuprum/unittests/test_capture_eof_grace_observability.py` and
+  `cuprum/unittests/test_timeout_capture_contract.py` do, rather than an
+  `_subprocess_execution` binding.
+
+No public API changes, and the module-size suppression is still unnecessary.
+`_subprocess_wait` continues to own teardown through the unchanged drain
+interface.

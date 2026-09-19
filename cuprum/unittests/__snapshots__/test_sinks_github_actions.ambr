@@ -1,0 +1,11 @@
+# serializer version: 1
+# name: test_framed_workflow_commands_match_the_snapshot
+  '''
+  ::group::cool-project
+  ::stop-commands::STOP_TOKEN
+  ::STOP_TOKEN::
+  ::endgroup::
+  ::error title=cool-project::exit_nonzero
+  
+  '''
+# ---
