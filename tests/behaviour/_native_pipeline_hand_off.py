@@ -10,7 +10,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, TimeoutExpired, scoped
+from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -74,6 +74,55 @@ class _NativePipelineHandOff:
                 f"attempt {attempt} with backend={self.active_backend.value} had a "
                 "non-zero stage",
             )
+
+
+_DEEP_NATIVE_PIPELINE_HOPS = 6
+_DEEP_NATIVE_PIPELINE_BYTES = 4 * 1024 * 1024
+_DEEP_NATIVE_PIPELINE_TIMEOUT_S = 20.0
+
+
+def assert_deep_native_pipeline_completes(
+    active_backend: StreamBackend,
+    allowlist: frozenset[Program],
+    *,
+    python_builder: cabc.Callable[..., sh.SafeCmd],
+    cat_builder: cabc.Callable[..., sh.SafeCmd],
+) -> None:
+    """Pump a payload through more concurrent native hops than the idle pool.
+
+    Every hop of a pipeline blocks while the pipe below it is full, and only a
+    later hop can drain that pipe. A worker pool that made a submission wait
+    for a free worker therefore deadlocked this shape as soon as the payload
+    outgrew the capacity the hops share, so the chain runs deeper than the
+    idle retention limit on a payload far larger than a single pipe buffer.
+    """
+    payload = (
+        "import sys; "
+        f"sys.stdout.buffer.write(b'x' * {_DEEP_NATIVE_PIPELINE_BYTES}); "
+        "sys.stdout.flush()"
+    )
+    commands = [python_builder("-c", payload)]
+    commands.extend(cat_builder() for _ in range(_DEEP_NATIVE_PIPELINE_HOPS))
+    pipeline = sh.Pipeline(tuple(commands))
+
+    started_at = time.monotonic()
+    try:
+        with scoped(ScopeConfig(allowlist=allowlist)):
+            result = pipeline.run_sync(timeout=_DEEP_NATIVE_PIPELINE_TIMEOUT_S)
+    except TimeoutExpired as error:
+        pytest.fail(
+            "a native pipeline deeper than the idle worker pool must still "
+            f"complete (hops={_DEEP_NATIVE_PIPELINE_HOPS}, "
+            f"bytes={_DEEP_NATIVE_PIPELINE_BYTES}, "
+            f"backend={active_backend.value}, "
+            f"elapsed_s={time.monotonic() - started_at:.3f}, "
+            f"error={error!r})",
+        )
+    assert len(result.stdout) == _DEEP_NATIVE_PIPELINE_BYTES, (
+        "every byte must survive a deep native hand-off, found "
+        f"{len(result.stdout)} of {_DEEP_NATIVE_PIPELINE_BYTES}"
+    )
+    assert result.ok, "all stages of a deep native pipeline must exit successfully"
 
 
 def assert_repeated_native_pipeline_hand_off(

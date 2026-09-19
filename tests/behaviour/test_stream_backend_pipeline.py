@@ -20,9 +20,14 @@ from cuprum._testing import (
     set_rust_availability_for_testing,
 )
 from tests.behaviour._native_pipeline_hand_off import (
+    assert_deep_native_pipeline_completes,
     assert_repeated_native_pipeline_hand_off,
 )
-from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
+from tests.helpers.catalogue import (
+    cat_program,
+    combine_programs_into_catalogue,
+    python_catalogue,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -97,6 +102,35 @@ def test_auto_backend_repeated_native_pipeline_hand_off(
     assert_repeated_native_pipeline_hand_off(
         active_backend,
         _make_echo_python_pipeline,
+    )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux raw-FD hand-off")
+@pytest.mark.usefixtures("requires_rust_backend")
+def test_auto_backend_deep_native_pipeline_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pipeline deeper than the idle worker pool still pumps a large payload."""
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "auto")
+    _check_rust_available.cache_clear()
+    get_stream_backend.cache_clear()
+
+    active_backend = get_stream_backend()
+    assert active_backend is StreamBackend.RUST, (
+        "the deep hand-off regression requires AUTO to resolve to Rust"
+    )
+    _, python_program = python_catalogue()
+    cat = cat_program()
+    catalogue = combine_programs_into_catalogue(
+        python_program,
+        cat,
+        project_name="deep-native-pipeline-tests",
+    )
+    assert_deep_native_pipeline_completes(
+        active_backend,
+        frozenset([python_program, cat]),
+        python_builder=sh.make(python_program, catalogue=catalogue),
+        cat_builder=sh.make(cat, catalogue=catalogue),
     )
 
 
