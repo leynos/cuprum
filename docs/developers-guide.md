@@ -4399,10 +4399,10 @@ the GitHub-hosted `ubuntu-latest` runner, and never consumes the paid runner.
 `make test-act` runs the opt-in scenario suite. The target sets
 `CUPRUM_REQUIRE_ACT=1`, which turns a missing runtime from a skip into a
 failure, so a job that provides a runtime cannot report success for having
-skipped every scenario. Running it by hand needs `act` and a container
-runtime — Docker or Podman — whose socket `act` can reach, because each
-scenario starts a real container. The pinned tooling is `act` 0.2.89 and one
-immutable runner image, which every projected job is bound to:
+skipped every scenario. Running it by hand needs `act` and a container runtime
+— Docker or Podman — whose socket `act` can reach, because each scenario starts
+a real container. The pinned tooling is `act` 0.2.89 and one immutable runner
+image, which every projected job is bound to:
 
 ```bash
 image='catthehacker/ubuntu:act-latest@sha256:c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43'

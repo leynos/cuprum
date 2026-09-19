@@ -40,8 +40,8 @@ shaped the way it is.
 ## Prerequisites
 
 - A container runtime. Docker is the default; rootless Podman also works when
-  its socket is running. The hosted harness uses Docker on `ubuntu-latest`.
-  A runtime reached over a non-default endpoint is selected by setting
+  its socket is running. The hosted harness uses Docker on `ubuntu-latest`. A
+  runtime reached over a non-default endpoint is selected by setting
   `DOCKER_HOST`, which the harness passes through unchanged and treats as
   authoritative: a value you set is never replaced by a discovered socket, and
   its presence satisfies the readiness probe even when no local socket exists.
