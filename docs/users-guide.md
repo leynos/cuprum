@@ -2916,15 +2916,19 @@ The continuous integration (CI) workflows run the following checks:
   baseline artefact. If the path detector fails, every event skips the paid
   benchmark without a path verdict, including pushes to `main`. Each run
   records the detector status and gate decision in its workflow summary.
-  - It benchmarks the current checkout in smoke mode with a release build of
-    the Rust extension.
+  - It benchmarks the current checkout with a release build of the Rust
+    extension. It runs `--ci-ratchet`, not the smoke matrix: the ratchet
+    compares one scenario's ratio between runs, so it measures a single 64 MiB
+    payload rather than a payload sweep, at the five worker iterations that
+    make one measured run long enough for its mean to be stable.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio
     against compatible rolling history from completed `main` runs when it is
     available, including runs whose own ratchet failed. If no compatible
     history exists, it falls back to the latest completed `main` baseline
     artefact, so runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
-    command ten times to reduce temporal runner drift and outlier sensitivity.
+    command twenty times, with one warm-up run, to reduce temporal runner drift
+    and outlier sensitivity.
   - It drops recorded samples that use an older benchmark profile shape,
     because different sampling protocols and worker timings are not
     comparable. It skips comparison only when no comparable history and no
@@ -2933,14 +2937,14 @@ The continuous integration (CI) workflows run the following checks:
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
-    smoke artefacts and appends the same Markdown table to the GitHub Actions
+    ratchet artefacts and appends the same Markdown table to the GitHub Actions
     workflow summary.
   - It uploads candidate JSON artefacts plus `ratchet-report.json` and
     `comparison-report.json`. When a regression was measured a second time,
     `ratchet-report-primary.json` and `ratchet-report-confirmation.json`
     record the two measurements behind the combined verdict, which lists both
     `confirmed_regressions` and `unconfirmed_regressions`.
-  - On pushes to `main`, it also publishes the new smoke benchmark JSON and
+  - On pushes to `main`, it also publishes the new ratchet benchmark JSON and
     the updated `main-baseline-history.json` window as the baseline artefact
     for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
@@ -2963,9 +2967,9 @@ The continuous integration (CI) workflows run the following checks:
     whose own ratchet failed. A re-run of a failing benchmark job cannot change
     the bar: the window only moves when `main` moves.
 
-The workflow summary table is derived from the filtered candidate smoke plan
-and throughput JSON. Rows are matched by the shared scenario label (
-`small-single-nocb`, `small-single-cb`, and so on) and include:
+The workflow summary table is derived from the filtered candidate ratchet plan
+and throughput JSON. Rows are matched by the shared scenario label — for the
+ratchet, `single-nocb`, `single-cb`, `multi-nocb`, and `multi-cb` — and include:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds

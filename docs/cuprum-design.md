@@ -3380,7 +3380,12 @@ cross-origin 401 responses during artefact download. The same job also
 generates a Python-versus-Rust comparison report from the candidate benchmark
 artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
 reviewers can inspect backend speedups even when the Rust ratchet later fails
-the job.
+the job. The summary names the workload the plan recorded and the protocol the
+plan carried, and states that the compared scenarios are the ones the ratchet
+compares — because a table rendered from a throughput-sweep plan would look the
+same while describing a different measurement. A plan that omits a protocol
+field is summarized without it rather than with a default, so no field the plan
+did not record is presented as fact.
 
 The ratchet rule is:
 
@@ -3486,8 +3491,9 @@ Artefacts uploaded by CI include:
   ratchet runs
 
 The workflow summary table is generated from matched Python and Rust candidate
-scenarios using the backend-independent scenario label (for example
-`small-single-nocb`). Each row reports:
+scenarios using the backend-independent scenario label (for the ratchet,
+`single-nocb` or `multi-cb`; for the throughput sweep, `small-single-nocb`).
+Each row reports:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds

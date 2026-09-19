@@ -2216,6 +2216,46 @@ it entirely. Keep it unset in new usage and set `python_bin` when a specific
 interpreter is required. In dry-run mode, command rendering does not resolve
 `python_bin` via PATH.
 
+### Benchmark workload identity (`benchmarks/benchmark_workload.py`)
+
+The runner exposes three workloads that differ only in the scenario matrix they
+select: `throughput-sweep` (the default three payload tiers), `smoke` (the same
+matrix shape at reduced payloads, for fast validation), and `ci-ratchet` (the
+single 64 MiB payload the ratchet measures). `WORKLOAD_PLAN_KEY` names the plan
+field that records which one produced a plan, and `WorkloadName` is the literal
+type of the three identifiers. `PipelineBenchmarkConfig.workload` carries the
+selection into the runner, and the `--smoke` and `--ci-ratchet` CLI flags
+select the latter two.
+
+The field exists because the workload cannot be recovered from the plan's
+scenarios alone. A smoke matrix and the CI ratchet both carry per-backend
+scenarios, so a summary that inferred the workload from scenario names could
+name the wrong one and misdescribe the measurement. A plan that omits the field
+was written before the runner recorded it, and `read_workload` reads those as
+`throughput-sweep`, the only workload then available, so older artefacts stay
+readable.
+
+`WorkloadProtocol` is the frozen value object a plan is parsed back into: the
+validated workload, the optional `benchmark_profile_version` and
+`worker_iterations`, and the distinct ascending payload sizes of its scenarios.
+`read_workload_protocol` builds it from a plan payload and validates every
+field on construction — an unknown workload, a blank profile version, a
+non-positive iteration count, or a payload list that is not the ascending
+distinct form a plan reads back as all raise rather than producing a value that
+describes a measurement no run could have made. Validating at construction is
+what makes the renderer total: a formatter that accepts a `WorkloadProtocol`
+cannot be handed a protocol describing nothing.
+
+Parsing and rendering are separate concerns with separate reasons to change.
+This module owns the identifiers and the value object; the prose that renders
+them lives with the report that writes it, in
+`benchmarks/comparison_report.py`. A wording change there therefore cannot
+reach the data a plan recorded. Add a workload by extending `WORKLOADS`, the
+`WorkloadName` literal, and the report's description table together; the
+report's lookup is keyed by `WorkloadName` precisely so that a workload the
+runner can produce but the report cannot describe is a type error rather than a
+render-time failure.
+
 ### The baseline the ratchet compares against
 
 The bar is the median of a rolling window of the last seven `main` runs, held in
