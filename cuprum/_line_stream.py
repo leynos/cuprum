@@ -27,7 +27,7 @@ from time import perf_counter
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_callbacks import _chain_line_hooks
 from cuprum._pipeline_types import _EventDetails
-from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._subprocess_execution import (
     _spawn_subprocess,
     _SubprocessExecution,
@@ -236,6 +236,55 @@ def _observed_line_hook(
     return deliver
 
 
+async def _abandon_unstarted_run(
+    run: _LineStreamRun,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate, reap, and drain a run that failed before it was returned.
+
+    Reached when post-spawn setup raised, so nothing holds the run: the caller
+    never received it, and none of the exits that settle a handed-back run will
+    ever see it. The heartbeat stops first — the pipeline's spawn helper does
+    the same, and a keepalive narrating a child that is already being torn down
+    is worse than no keepalive at all. The child is then stopped and reaped
+    before its streams are drained, because both drain policies wait for the
+    consumers to reach EOF and a live child can hold its own pipe open.
+    Discarding whatever the drain finds is what keeps the post-spawn failure the
+    one that propagates.
+    """
+    await _stop_idle_monitor(execution.idle)
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
+    await _terminate_all_shielded((run.process,), execution.ctx.cancel_grace)
+    await _discard_drain(run, run.process.pid, execution)
+    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+
+
+def _with_line_sink_hooks(
+    execution: _SubprocessExecution,
+    queue: asyncio.Queue[_LineQueueItem],
+    telemetry: _LineStreamTelemetry,
+) -> _SubprocessExecution:
+    """Chain the caller's ``on_line`` ahead of the driver's queue sink.
+
+    Each hook is wrapped so its failure is correlated before it escapes, and
+    the result is a rebuilt execution rather than a mutated one: the bundle is
+    a frozen dataclass, and the stream consumers read ``on_line`` off it.
+
+    Returns
+    -------
+    _SubprocessExecution
+        The execution whose per-line callback feeds both the caller and the
+        queue.
+    """
+    hooks: list[_LineHookFn] = []
+    if execution.on_line is not None:
+        hooks.append(_observed_line_hook(execution.on_line, "callback", telemetry))
+    hooks.append(
+        _observed_line_hook(_queue_line_sink(queue, telemetry), "queue", telemetry)
+    )
+    return dc.replace(execution, on_line=_chain_line_hooks(hooks))
+
+
 async def _start_line_stream_run(
     execution: _SubprocessExecution,
     queue: asyncio.Queue[_LineQueueItem],
@@ -246,62 +295,84 @@ async def _start_line_stream_run(
     spawn, record the start reference, start the stdin writer, then start the
     consumers with capture and echo as configured.
 
+    Every step between the spawn and the return is owned by
+    :func:`_abandon_unstarted_run`, matching :func:`_spawn_pipeline_processes`.
+    The ``start`` event is not exempt: it invokes synchronous observe hooks
+    inline and re-raises their failures, so without that ownership a failing
+    ``start`` hook leaves the child running with undrained pipes, which a caller
+    that only drains observe tasks can never reclaim.
+
     Returns
     -------
     _LineStreamRun
         The spawned run, with the process, its task ownership, the queue,
         and the monotonic start reference.
+
+    Whatever that setup raises propagates unchanged, once the child has been
+    stopped and reaped and its tasks drained.
     """
-    # Frozen dataclass: the stamped execution carries the start reference the
-    # composed callbacks read, and the caller's ``on_line`` chained ahead of
-    # this driver's queue sink, so it is rebuilt rather than mutated.
     telemetry = _LineStreamTelemetry(
         exec_id=execution.observation.exec_id,
         queue_capacity=queue.maxsize,
     )
-    hooks: list[_LineHookFn] = []
-    if execution.on_line is not None:
-        hooks.append(_observed_line_hook(execution.on_line, "callback", telemetry))
-    hooks.append(
-        _observed_line_hook(_queue_line_sink(queue, telemetry), "queue", telemetry)
-    )
-    execution = dc.replace(execution, on_line=_chain_line_hooks(hooks))
+    # Rebound, not passed straight to the spawn: the stream consumers read
+    # ``on_line`` off the execution too, so a chained hook that only reached
+    # ``_spawn_subprocess`` would leave the queue sink uninstalled and starve
+    # the iterator.
+    execution = _with_line_sink_hooks(execution, queue, telemetry)
     process = await _spawn_subprocess(execution)
     started_at = perf_counter()
+    # Rebuilt, not mutated: the stream consumers read ``started_at`` off the
+    # execution when stamping each ``LineEvent``. Left at its ``0.0`` default,
+    # every ``at`` would be the machine's monotonic uptime rather than seconds
+    # since this command started.
     execution = dc.replace(execution, started_at=started_at)
-    if execution.idle is not None:
-        # Armed here, once the child is running, exactly as the streamed
-        # ``run()`` path arms it: the catalogue checks and before hooks that
-        # preceded this spawn are the parent's work, not the child's silence.
-        execution.idle.launch()
     pid = process.pid
-    telemetry.pid = pid
-    execution.observation.emit("start", _EventDetails(pid=pid))
-    telemetry.emit(LineStreamPhase.SPAWNED)
+    # Built before the run so every task it owns exists by the time the first
+    # step that can fail runs. ``_build_stream_config`` only reads the
+    # execution, so it cannot fail here; the task spawns cannot either, being
+    # plain ``create_task`` calls. The run is not assembled until after, which
+    # is what keeps this preamble free of the abandon path.
     discard_on_cancel = asyncio.Event()
     stream_config = _build_stream_config(execution, discard_on_cancel)
-    tasks = _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
-        ),
-        # The same consumer builder ``run()`` uses, so iterating lines can
-        # never silently diverge from it on capture, echo, or sink selection.
-        consumers=_spawn_stream_consumers(
-            process,
-            execution,
-            stream_config,
-            pid=pid,
-        ),
-        discard_on_cancel=discard_on_cancel,
-        idle=execution.idle,
+    stdin_task = _spawn_stdin_writer(
+        process, execution.stdin_data, execution.observation
     )
-    return _LineStreamRun(
+    # The same consumer builder ``run()`` uses, so iterating lines can never
+    # silently diverge from it on capture, echo, or sink selection.
+    consumers = _spawn_stream_consumers(process, execution, stream_config, pid=pid)
+    run = _LineStreamRun(
         process=process,
-        tasks=tasks,
+        tasks=_RunTaskOwnership(
+            stdin_task=stdin_task,
+            consumers=consumers,
+            discard_on_cancel=discard_on_cancel,
+            idle=execution.idle,
+        ),
         queue=queue,
         started_at=started_at,
         telemetry=telemetry,
     )
+    try:
+        if execution.idle is not None:
+            # Armed here, once the child is running, exactly as the streamed
+            # ``run()`` path arms it: the catalogue checks and before hooks that
+            # preceded this spawn are the parent's work, not the child's
+            # silence.
+            execution.idle.launch()
+        telemetry.pid = pid
+        # Emitted after the consumers exist, which is sound because creating a
+        # task does not run it: nothing between that creation and this emit
+        # suspends, so ``start`` is still the first thing an observer of this
+        # execution sees. Owning every task before the first step that can fail
+        # is what lets the reclaim path drain a whole run rather than guess at
+        # how much of one exists.
+        execution.observation.emit("start", _EventDetails(pid=pid))
+        telemetry.emit(LineStreamPhase.SPAWNED)
+    except BaseException:
+        await _abandon_unstarted_run(run, execution)
+        raise
+    return run
 
 
 async def _wait_for_line_stream_exit(

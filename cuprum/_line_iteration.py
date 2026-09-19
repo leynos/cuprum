@@ -121,19 +121,23 @@ async def _iter_line_events(
     from cuprum._line_stream import _line_event_queue
     from cuprum._pipeline_types import _EventDetails
 
-    execution.observation.emit("plan", _EventDetails(pid=None))
-    for hook in tracking.execution_hooks.before_hooks:
-        hook(execution.cmd)
-
     queue = _line_event_queue()
     result_future: asyncio.Future[CommandResult] = (
         asyncio.get_running_loop().create_future()
     )
-    coordinator = asyncio.create_task(
-        _drive_line_stream(execution, queue, result_future)
-    )
+    coordinator: asyncio.Task[None] | None = None
     failure: BaseException | None = None
+    # The plan event and the before hooks run inside the try, not ahead of it:
+    # both emit, and a synchronous observe hook that raises on either would
+    # otherwise strand the async-hook tasks already queued behind it, which only
+    # this generator's reconcile drains.
     try:
+        execution.observation.emit("plan", _EventDetails(pid=None))
+        for hook in tracking.execution_hooks.before_hooks:
+            hook(execution.cmd)
+        coordinator = asyncio.create_task(
+            _drive_line_stream(execution, queue, result_future)
+        )
         while True:
             item = await _next_queue_item(queue, result_future)
             if isinstance(item, LineEvent):
@@ -199,7 +203,7 @@ def _publish_completion(
 
 
 async def _reconcile_line_stream(
-    coordinator: asyncio.Task[None],
+    coordinator: asyncio.Task[None] | None,
     result_future: asyncio.Future[CommandResult],
     tracking: _ExecutionTracking,
     failure: BaseException | None,
@@ -208,12 +212,15 @@ async def _reconcile_line_stream(
 
     Runs on every exit from iteration — completion, ``break``, generator
     close, and cancellation alike — so the observe-hook tasks are reconciled
-    exactly once however iteration ended.
+    exactly once however iteration ended. ``coordinator`` is ``None`` when a
+    failure landed before iteration started one, and the task drain still runs:
+    those are the tasks an earlier emit in the same block had already queued.
     """
-    if not result_future.done():
+    if coordinator is not None and not result_future.done():
         coordinator.cancel()
     try:
-        await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
+        if coordinator is not None:
+            await _shielded_cleanup(_absorb_coordinator(coordinator, result_future))
     except BaseException as error:
         # A published coordinator failure must not skip observe-hook cleanup.
         # Passing it as the active error means a failing hook is grouped with,
