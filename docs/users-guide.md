@@ -2725,6 +2725,59 @@ matrix shape. Scenarios follow a systematic naming convention:
 `{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
 or `rust-large-multi-cb`.
 
+#### The CI ratchet workload
+
+Separate from the throughput sweep, `--ci-ratchet` selects a single-payload
+matrix for the continuous integration (CI) ratchet to compare between runs:
+
+```bash
+UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+  benchmarks/pipeline_throughput.py \
+  --ci-ratchet \
+  --dry-run \
+  --output /tmp/ratchet-plan.json
+```
+
+The workload replaces the three payload tiers with one 64 MiB payload, which
+yields four scenarios per available backend — single-stage and multi-stage
+depths, each with and without line callbacks — named with a `ratchet` size
+label, for example `python-ratchet-single-nocb`. All scenarios are 64 MiB
+regardless of the size label.
+
+The point of the workload is the ratio the ratchet computes. It compares each
+scenario's within-run `rust_mean / python_mean` between a baseline and a
+candidate, so any cost every run pays regardless of payload — interpreter
+start, the `cuprum` import, per-iteration pipeline set-up — cancels out of the
+comparison only in proportion to how small it is. At the smoke payloads that
+fixed cost was the bulk of what hyperfine timed, so the ratio was dominated by
+the variance of a component the ratchet is designed to eliminate, which made
+the gate flaky (issue #219). At 64 MiB the streaming work dominates the fixed
+per-run cost, so the ratio tracks the pipeline rather than the runner's
+start-up noise, while the measurement still fits the job's wall-clock budget.
+
+`--ci-ratchet` and `--smoke` select contradictory payloads and are mutually
+exclusive: the command line rejects the pair, and `default_pipeline_scenarios`
+raises `ValueError` for a caller that bypasses argparse, so there is no way to
+ask for both.
+
+`--ci-ratchet` also changes the default `--worker-iterations` to `5`, where the
+throughput sweep and smoke matrix default to `20`. The worker iteration count
+is measurement protocol rather than a tuning dial: it is recorded in every
+sample, and the ratchet only compares samples whose benchmark profile metadata
+agrees, so a run at another count is silently incomparable rather than wrong.
+Defaulting the workload to the count its samples are recorded at keeps a local
+reproduction on the same protocol as the job that will judge it. An explicit
+`--worker-iterations` still overrides the default, but the resulting samples
+are not comparable with the CI ratchet's own.
+
+The job itself does not invoke the benchmark once per command; it runs
+`benchmarks/ci_benchmark_ratchet_profile.py`, which rebuilds the filtered
+command line and passes `--warmup 1` with `--runs 20`, so each matched scenario
+pair sits next to its counterpart and records twenty measured runs per command
+after one discarded warm-up. The two counts are independent: the worker
+iteration count says how many pipelines run inside each measured process, and
+the run count says how many times hyperfine measures that process.
+
 ### Linux splice() optimization
 
 On Linux, the Rust extension automatically uses the `splice()` system call for
