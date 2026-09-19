@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import concurrent.futures as cf
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this test isolates interpreter shutdown.
 import sys
 import textwrap
@@ -67,11 +66,11 @@ def test_idle_workers_are_reused_within_the_retention_limit() -> None:
         executor.submit(quick, 0, 0).result(timeout=5.0)
 
     deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and len(executor._idle) < 2:  # noqa: SLF001 - the idle pool is the invariant under test.
+    while time.monotonic() < deadline and len(executor._idle) < 2:
         time.sleep(0.01)
 
-    assert len(executor._idle) <= 2, (  # noqa: SLF001 - retention must stay bounded.
-        f"idle retention must stay within its limit, found {len(executor._idle)}"  # noqa: SLF001
+    assert len(executor._idle) <= 2, (
+        f"idle retention must stay within its limit, found {len(executor._idle)}"
     )
     assert threading.active_count() <= baseline + 2, (
         f"repeated hand-offs must reuse workers rather than start a thread "

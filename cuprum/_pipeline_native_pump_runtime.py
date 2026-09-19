@@ -61,7 +61,7 @@ class _NativePumpWorker:
 
     __slots__ = ("inbox", "thread")
 
-    def __init__(self, run: cabc.Callable[["_NativePumpWorker"], None]) -> None:
+    def __init__(self, run: cabc.Callable[[_NativePumpWorker], None]) -> None:
         """Create an unstarted worker that runs ``run`` over itself."""
         self.inbox: queue.SimpleQueue[_NativePumpJob] = queue.SimpleQueue()
         self.thread = threading.Thread(
@@ -70,10 +70,6 @@ class _NativePumpWorker:
             name="cuprum-native-pump",
             daemon=True,
         )
-
-    def start(self) -> None:
-        """Start the worker thread."""
-        self.thread.start()
 
 
 class _PooledNativePumpExecutor(_NativePumpExecutor):
@@ -111,7 +107,7 @@ class _PooledNativePumpExecutor(_NativePumpExecutor):
     def _start_worker(self) -> _NativePumpWorker:
         """Start one daemon worker with an inbox dedicated to its next job."""
         worker = _NativePumpWorker(self._worker_loop)
-        worker.start()
+        worker.thread.start()
         return worker
 
     def _take_worker(self) -> _NativePumpWorker:
