@@ -3795,16 +3795,20 @@ callee-owned deadlines and accidental blocking I/O.
 Two suppressions are scoped as narrowly as possible rather than disabling the
 family:
 
-- **Public API (`# ruff: ignore[async-function-with-timeout]`).** `SafeCmd.run`
-  and `Pipeline.run` keep their documented `timeout` parameter, which
-  deliberately mirrors `subprocess.run(timeout=...)`. `ASYNC109` would instead
-  have the caller own the deadline through `asyncio.timeout()`, but the
-  parameter is public, documented ergonomics, so each definition carries a
-  per-line `# ruff: ignore[async-function-with-timeout]` with a rationale
-  comment rather than dropping the parameter. Internal helpers do not take a
-  `timeout` parameter (see
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md)); only the
-  public surface is suppressed.
+- **Public API and the prepared-run helper
+  (`# ruff: ignore[async-function-with-timeout]`).** `SafeCmd.run` and
+  `Pipeline.run` keep their documented `timeout` parameter, which deliberately
+  mirrors `subprocess.run(timeout=...)`. `ASYNC109` would instead have the
+  caller own the deadline through `asyncio.timeout()`, but the parameter is
+  public, documented ergonomics, so each definition carries a per-line
+  `# ruff: ignore[async-function-with-timeout]` with a rationale comment rather
+  than dropping the parameter. Three sites carry the suppression in total: the
+  two public methods above, plus the internal helper `_run_prepared_command`,
+  which takes the *already-resolved* deadline purely so it can be carried into
+  the execution bundle. The deadline itself stays caller-owned: the wait
+  helpers apply it with `asyncio.timeout()` rather than taking a `timeout`
+  parameter of their own (see
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md)).
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
   two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
