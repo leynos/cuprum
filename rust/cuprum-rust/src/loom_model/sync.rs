@@ -5,6 +5,8 @@ pub(super) use loom::cell::Cell;
 #[cfg(loom)]
 pub(super) use loom::sync::Arc;
 #[cfg(loom)]
+pub(super) use loom::sync::Condvar;
+#[cfg(loom)]
 pub(super) use loom::sync::Mutex;
 #[cfg(loom)]
 pub(super) use loom::sync::MutexGuard;
@@ -17,6 +19,8 @@ pub(super) use loom::thread::{self, JoinHandle};
 pub(super) use std::cell::Cell;
 #[cfg(not(loom))]
 pub(super) use std::sync::Arc;
+#[cfg(not(loom))]
+pub(super) use std::sync::Condvar;
 #[cfg(not(loom))]
 pub(super) use std::sync::Mutex;
 #[cfg(not(loom))]

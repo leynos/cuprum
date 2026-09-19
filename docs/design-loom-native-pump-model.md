@@ -33,6 +33,7 @@ _Table 1: Production actors and model linearization points._
 | Blocking-mode guard | `_BlockingModeGuard`                     | `blocking_restored` flag     | restored only after worker settlement            |
 | Cancellation        | `_RustPumpState.was_cancelled`           | Loom atomic                  | event loop records request before classification |
 | Cleanup-once state  | `_cleanup_completed` and `_cleanup_lock` | Loom atomic plus Loom mutex  | first settled cleanup wins                       |
+| Completion signal   | executor-future settlement               | Loom `Condvar` and predicate | observer rechecks settlement before cleanup      |
 
 _Table 2: Production resources and model ownership transitions._
 

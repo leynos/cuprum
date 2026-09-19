@@ -11,7 +11,9 @@ use cuprum_native_io::loom_support::borrowed_reader_close_count as native_borrow
 use cuprum_streams::loom_support::{
     drive_downstream_close, drive_failed_pump, drive_successful_pump,
 };
-use sync::{Arc, AtomicBool, AtomicUsize, Cell, JoinHandle, Mutex, MutexGuard, Ordering, thread};
+use sync::{
+    Arc, AtomicBool, AtomicUsize, Cell, Condvar, JoinHandle, Mutex, MutexGuard, Ordering, thread,
+};
 
 /// Error returned when the bounded model cannot preserve its own invariants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,6 +132,7 @@ struct Lifecycle {
     reader_resumed: bool,
     reader_closes: usize,
     worker_active: bool,
+    completion_notified: bool,
     released_while_worker_active: bool,
     observer_saw_completion: bool,
     writer: DescriptorRecord,
@@ -144,6 +147,7 @@ impl Lifecycle {
             reader_resumed: false,
             reader_closes: 0,
             worker_active: false,
+            completion_notified: false,
             released_while_worker_active: false,
             observer_saw_completion: false,
             writer: DescriptorRecord::callback_owned(),
@@ -154,9 +158,9 @@ impl Lifecycle {
 /// Shared state corresponding to Python's `_RustPumpState` surface.
 pub struct NativePumpModel {
     was_cancelled: AtomicBool,
-    completion_notified: AtomicBool,
     cleanup_count: AtomicUsize,
     cleanup_lock: Mutex<Lifecycle>,
+    completion_signal: Condvar,
     inject_double_close: bool,
     inject_early_release: bool,
 }
@@ -167,9 +171,9 @@ impl NativePumpModel {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             was_cancelled: AtomicBool::new(false),
-            completion_notified: AtomicBool::new(false),
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
+            completion_signal: Condvar::new(),
             inject_double_close: false,
             inject_early_release: false,
         })
@@ -181,9 +185,9 @@ impl NativePumpModel {
     pub fn with_double_close_defect() -> Arc<Self> {
         Arc::new(Self {
             was_cancelled: AtomicBool::new(false),
-            completion_notified: AtomicBool::new(false),
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
+            completion_signal: Condvar::new(),
             inject_double_close: true,
             inject_early_release: false,
         })
@@ -195,9 +199,9 @@ impl NativePumpModel {
     pub fn with_early_release_defect() -> Arc<Self> {
         Arc::new(Self {
             was_cancelled: AtomicBool::new(false),
-            completion_notified: AtomicBool::new(false),
             cleanup_count: AtomicUsize::new(0),
             cleanup_lock: Mutex::new(Lifecycle::new()),
+            completion_signal: Condvar::new(),
             inject_double_close: false,
             inject_early_release: true,
         })
@@ -238,27 +242,23 @@ impl NativePumpModel {
     /// Model a cancellation request from the Python event-loop task.
     pub fn cancel(&self) -> Result<(), ModelError> {
         self.was_cancelled.store(true, Ordering::Release);
-        let should_notify = {
-            let mut lifecycle = self.lock_lifecycle()?;
-            if lifecycle.terminal == TerminalState::Pending {
-                self.complete_locked(&mut lifecycle);
-                true
-            } else {
-                false
-            }
-        };
-        if should_notify {
-            self.completion_notified.store(true, Ordering::Release);
+        let mut lifecycle = self.lock_lifecycle()?;
+        if lifecycle.terminal == TerminalState::Pending {
+            self.complete_locked(&mut lifecycle);
+            self.notify_completion_locked(&mut lifecycle);
         }
         Ok(())
     }
 
     /// Model a completion callback or cleanup waiter observing settlement.
     pub fn observe_completion(&self) -> Result<(), ModelError> {
-        while !self.completion_notified.load(Ordering::Acquire) {
-            thread::yield_now();
-        }
         let mut lifecycle = self.lock_lifecycle()?;
+        while !lifecycle.completion_notified {
+            lifecycle = self
+                .completion_signal
+                .wait(lifecycle)
+                .map_err(|_| ModelError::LockPoisoned)?;
+        }
         lifecycle.observer_saw_completion = true;
         self.complete_locked(&mut lifecycle);
         Ok(())
@@ -288,26 +288,18 @@ impl NativePumpModel {
             lifecycle.worker_active = false;
             lifecycle.reader_closes = reader_closes;
             lifecycle.terminal = TerminalState::WorkerFinished(native);
+            self.notify_completion_locked(&mut lifecycle);
         }
-        self.completion_notified.store(true, Ordering::Release);
         Ok(())
     }
 
     fn finish_without_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
-        {
-            let mut lifecycle = self.lock_lifecycle()?;
-            if !lifecycle.cleanup_completed {
-                lifecycle.terminal = TerminalState::WorkerFinished(native);
-            }
-        }
-        self.complete_if_safe()?;
-        self.completion_notified.store(true, Ordering::Release);
-        Ok(())
-    }
-
-    fn complete_if_safe(&self) -> Result<(), ModelError> {
         let mut lifecycle = self.lock_lifecycle()?;
+        if !lifecycle.cleanup_completed {
+            lifecycle.terminal = TerminalState::WorkerFinished(native);
+        }
         self.complete_locked(&mut lifecycle);
+        self.notify_completion_locked(&mut lifecycle);
         Ok(())
     }
 
@@ -327,6 +319,11 @@ impl NativePumpModel {
         lifecycle.cleanup_completed = true;
         lifecycle.terminal = TerminalState::Released;
         self.cleanup_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn notify_completion_locked(&self, lifecycle: &mut Lifecycle) {
+        lifecycle.completion_notified = true;
+        self.completion_signal.notify_all();
     }
 
     fn lock_lifecycle(&self) -> Result<MutexGuard<'_, Lifecycle>, ModelError> {
