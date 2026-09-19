@@ -17,7 +17,7 @@ Nothing here runs a container or touches the network. The parsing is pure
 string handling over a recorded stream, which is what lets its unit tests run
 in the default suite on every machine; `tests/helpers/act_harness.py` is the
 half that needs a runtime. See
-`docs/adr-012-actions-runner-integration-harness.md` for the decision.
+`docs/adr-014-actions-runner-integration-harness.md` for the decision.
 """
 
 from __future__ import annotations

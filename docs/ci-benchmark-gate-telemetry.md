@@ -245,7 +245,7 @@ artefact.
 
 ## Related records
 
-- [ADR-011: Durable benchmark-gate telemetry](adr-011-benchmark-gate-telemetry-sink.md)
+- [ADR-013: Durable benchmark-gate telemetry](adr-013-benchmark-gate-telemetry-sink.md)
   records the superseding storage decision and consequences.
 - [GitHub's artefact storage guidance][github-artefacts] defines the hosted
   retention policy.

@@ -16,7 +16,7 @@ truncated once it has been uploaded.
 Scenarios use local Git history and no credentials: `github.token` is emptied so
 the pinned `dorny/paths-filter` takes its local `git diff` path, and the
 container is bound to the temporary clone rather than to the developer's
-checkout. See `docs/adr-012-actions-runner-integration-harness.md` for why the
+checkout. See `docs/adr-014-actions-runner-integration-harness.md` for why the
 harness exists and `docs/local-validation-of-github-actions-with-act-and-pytest.md`
 for the manual recipe it automates.
 
