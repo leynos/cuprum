@@ -225,6 +225,79 @@ def test_the_paid_benchmark_uses_the_shared_optimized_setup(
     )
 
 
+def _top_level_operators(expression: str, operator: str) -> int:
+    """Count *operator* occurrences outside parentheses and quoted strings.
+
+    `&&` and `||` are distinguished by where they bind, not merely by being
+    present: a condition may legitimately parenthesize an inner disjunction
+    while remaining conjunctive overall. Counting at depth zero is what makes
+    "this guard is conjunctive" a statement about the whole condition rather
+    than about whether the character pair appears anywhere in it.
+
+    Parameters
+    ----------
+    expression : str
+        The condition expression to scan.
+    operator : str
+        The operator to count, such as ``&&`` or ``||``.
+
+    Returns
+    -------
+    int
+        How many times *operator* binds at the top level.
+    """
+    depth = 0
+    quote: str | None = None
+    count = 0
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and expression.startswith(operator, index):
+            count += 1
+            index += len(operator) - 1
+        index += 1
+    return count
+
+
+def _shell_statements(body: str) -> tuple[str, ...]:
+    """Return *body*'s statements, continuations joined and comments dropped.
+
+    Comments are dropped before anything is matched, and the order matters:
+    the workflow's own prose quotes the very command names and guards these
+    tests search for, so a scan that ran over the commented body would find a
+    guard in a comment and conclude the command was guarded. A comment cannot
+    guard a command.
+
+    Parameters
+    ----------
+    body : str
+        The shell body to split into statements.
+
+    Returns
+    -------
+    tuple[str, ...]
+        One entry per statement, whitespace-collapsed and stripped.
+    """
+    uncommented = "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
+    joined = re.sub(r"\\\n\s*", " ", uncommented)
+    # Continuation folding leaves the joined line's indentation as runs of
+    # spaces, so collapse them: the assertions below are about which guard a
+    # statement carries, not about how it is laid out.
+    collapsed = re.sub(r"[ \t]+", " ", joined)
+    return tuple(line.strip() for line in collapsed.splitlines() if line.strip())
+
+
 def _shell_function(script: str, name: str) -> str:
     """Return the body of the shell function *name* declared in *script*."""
     match = re.search(
@@ -289,6 +362,76 @@ def test_the_ratchet_policy_matches_the_module_defaults(
     )
 
 
+def test_the_ratchet_benchmarks_measure_the_ci_ratchet_workload(
+    workflow_data: Workflow,
+) -> None:
+    """Require the gate to measure the `--ci-ratchet` workload, not a smoke run.
+
+    `run_ratchet_benchmarks` is the whole of what the gate measures, so the
+    workload flag it passes is the gate's definition rather than a detail of
+    it. `--smoke` is the tempting alternative — it exercises the same shape at
+    smaller payloads and finishes sooner — but it measures a different payload
+    than the one the recorded samples were taken at, and the ratchet only
+    compares samples whose profile metadata agrees. Selecting the wrong one
+    would leave every candidate incomparable with the window rather than
+    visibly wrong.
+
+    The whole-body check is what makes this more than a flag-presence test:
+    `--ci-ratchet` and `--smoke` are mutually exclusive, so a body carrying
+    both is not a valid invocation however the flags are spelled.
+    """
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+
+    assert "--ci-ratchet" in body, (
+        f"{RATCHET_BENCHMARKS_FUNCTION!r} must measure the --ci-ratchet "
+        f"workload; found: {body}"
+    )
+    assert "--smoke" not in body, (
+        f"{RATCHET_BENCHMARKS_FUNCTION!r} must not pass --smoke, which selects "
+        "a different payload than the recorded samples were measured at; "
+        f"found: {body}"
+    )
+
+
+def test_the_ratchet_benchmarks_invocation_propagates_failure(
+    workflow_data: Workflow,
+) -> None:
+    """Require each measured command to abort the function when it fails.
+
+    The confirmation path invokes this function as a condition operand, and
+    Bash suspends `errexit` for a function body invoked that way. Without an
+    explicit guard on each command, a failed `make develop` or a failed
+    benchmark would fall through to the next command and the function would
+    return the last command's status — so the confirmation branch would read a
+    stale or missing plan as a measured result rather than as a failure. An
+    explicit `set -e` inside the body does not restore aborting, which is why
+    this pins the guard rather than trusting the shell option.
+    """
+    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+    body = _shell_function(script, RATCHET_BENCHMARKS_FUNCTION)
+
+    statements = _shell_statements(body)
+    for marker in (
+        "make develop MATURIN_DEVELOP_FLAGS",
+        "benchmarks/pipeline_throughput.py",
+        "benchmarks/ci_benchmark_ratchet_profile.py",
+    ):
+        matching = [stmt for stmt in statements if marker in stmt]
+        assert matching, (
+            f"{marker!r} must be invoked by {RATCHET_BENCHMARKS_FUNCTION!r}"
+        )
+        for statement in matching:
+            assert statement.endswith("|| return $?"), (
+                f"the {marker!r} invocation in {RATCHET_BENCHMARKS_FUNCTION!r} "
+                "must guard itself with `|| return $?`, so its failure reaches "
+                "the caller instead of being masked by the next command: "
+                f"{statement}"
+            )
+
+
 def test_the_ratchet_worker_iterations_match_the_scenario_default(
     workflow_data: Workflow,
 ) -> None:
@@ -344,6 +487,16 @@ def test_the_main_sample_is_published_whatever_the_ratchet_decides(
         f"the {step_name!r} step must run after a failed ratchet as well as a "
         "passed one, so its condition needs `!cancelled()`; an interrupted run "
         f"that measured half a sample still publishes nothing. Found: {condition!r}"
+    )
+    assert _top_level_operators(condition, "||") == 0, (
+        f"the {step_name!r} step must require all of its guards, not any of "
+        "them: a top-level disjunction would let publication proceed with no "
+        f"candidate artefacts. Found: {condition!r}"
+    )
+    assert _top_level_operators(condition, "&&") >= 2, (
+        f"the {step_name!r} step must combine its guards conjunctively, so "
+        "that every one of them has to hold for the step to run. "
+        f"Found: {condition!r}"
     )
     assert ARTEFACT_AVAILABLE in condition, (
         f"the {step_name!r} step must still require this run to have produced "
