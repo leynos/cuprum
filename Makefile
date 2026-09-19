@@ -116,6 +116,7 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_rust_splice.py \
   cuprum/unittests/test_rust_errno.py \
   cuprum/unittests/test_rust_errno_windows.py \
+  cuprum/unittests/test_loom_model_conformance.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
   tests/behaviour/test_rust_streams_behaviour.py \
@@ -198,7 +199,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling nixie test test-python test-rust typecheck \
+        markdownlint spelling nixie test test-python test-rust loom typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
@@ -371,6 +372,9 @@ dev-build: dev-fast-check ## Build Rust debug targets through the accelerated ro
 
 dev-test: dev-fast-check ## Test Rust through the accelerated route
 	@$(DEV_FAST_TEST_COMMAND)
+
+loom: build ## Run the full bounded Loom model suite
+	$(UV_RUN_ENV) uv run scripts/run_loom.py --mode full
 
 # Run `make develop` first. Without the extension the guard fails the run with
 # a message naming that command, which is the intended diagnostic.

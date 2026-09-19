@@ -30,7 +30,8 @@ inputs:
       family and its own single writer. `debug` is an unoptimized
       `maturin develop` build, `release` is the same build with `--release`,
       `coverage` is the instrumented `cargo llvm-cov` build, and `lint` is the
-      Cranelift-backed lint build. See docs/ci-cache-ownership.md.
+      Cranelift-backed lint build, and `loom` is the `--cfg loom` model
+      build. See docs/ci-cache-ownership.md.
     required: false
     default: debug
 runs:

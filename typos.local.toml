@@ -40,6 +40,9 @@ ignore = [
   # backticks should still be spell-checked.
   '\bbuild_native_wheel_artifact\b',
   '--artifact-server-path(?:[=\s"`]|$)',
+  # These names are quoted external documentation titles.
+  'Azure\s+Architecture\s+Center\s*\|\s*Microsoft\s+Learn\b',
+  'GitHub\s+Flavored\s+Markdown\b(?:\s\(GFM\))?',
   '`color`',
   '\brust-analyzer\b',
   # `mold` is the fixed external linker name. Typos tokenizes words before

@@ -10,6 +10,9 @@ mod errors;
 mod io_utils;
 #[cfg(all(test, unix))]
 mod lib_tests;
+#[cfg(loom)]
+#[doc(hidden)]
+pub mod loom_support;
 mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;

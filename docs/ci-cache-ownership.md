@@ -70,8 +70,9 @@ against one specific CPython version. Objects built against 3.12 are useless to
 a 3.14 build.
 
 The build shape. An unoptimized `maturin develop` build, the same build with
-`--release`, the Cranelift-backed lint build, and the instrumented
-`cargo llvm-cov` build all produce different objects from identical source.
+`--release`, the Cranelift-backed lint build, the instrumented `cargo llvm-cov`
+build, and the `--cfg loom` model build all produce different objects from
+identical source.
 
 This was measured rather than assumed. Until 2026-09-04 the compiler key named
 neither dimension, so every Ubicloud job read one archive that the instrumented
@@ -104,6 +105,7 @@ to measure warm caches without churning the generation they are measuring.
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`          |
 | Compiler, 3.13 instrumented           | `coverage-main.yml` `coverage-upload` |
 | Compiler, Cranelift lint              | `ci.yml` `lint-test`                  |
+| Compiler, Loom model                  | `loom.yml` `loom`                     |
 
 _Table 2: The single job that publishes each family on a push to `main`._
 

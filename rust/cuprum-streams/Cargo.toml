@@ -91,7 +91,7 @@ result_large_err = "deny"
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(loom)"] }
 
 [lints.rustdoc]
 missing_crate_level_docs = "deny"

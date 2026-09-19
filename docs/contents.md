@@ -25,6 +25,9 @@ open each document.
 - [CI cache ownership](ci-cache-ownership.md) - which job writes each CI cache
   family, why the compiler cache is split by interpreter and build shape, and
   how resource use is sampled on the paid Linux runners.
+- [Native-pump Loom model](design-loom-native-pump-model.md) - the bounded
+  production correspondence, assumptions, and safety claims for native-pump
+  concurrency checks.
 
 ## Design and decisions
 
