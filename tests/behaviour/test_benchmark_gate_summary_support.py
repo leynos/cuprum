@@ -45,6 +45,30 @@ class Detector:
     bench: str
 
 
+class SummaryOutputs(typ.TypedDict):
+    """Step outputs the summary script publishes for downstream steps.
+
+    The script's output contract is fixed: it transports the same three
+    bounded values it writes into the summary table, and the telemetry step
+    reads them back by these names. Declaring them lets a consumer that reads
+    a key the script never writes fail type checking rather than resolve to
+    `None` at run time.
+
+    Attributes
+    ----------
+    event_class : str
+        Bounded event class, `pull_request` or `other`.
+    detector_status : str
+        Bounded detector verdict, `success`, `failure`, or `unknown`.
+    decision : str
+        Bounded benchmark-gate decision.
+    """
+
+    event_class: str
+    detector_status: str
+    decision: str
+
+
 @dc.dataclass(frozen=True, slots=True)
 class Summary:
     """Represent the parsed row emitted by the summary script.
@@ -57,11 +81,14 @@ class Summary:
         Canonical Markdown table emitted by the workflow summary script.
     metric : dict[str, str]
         Bounded labels emitted in the workflow annotation.
+    outputs : SummaryOutputs
+        Step outputs the script published for downstream steps to transport.
     """
 
     fields: dict[str, str]
     table: str
     metric: dict[str, str]
+    outputs: SummaryOutputs
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -83,6 +110,31 @@ class SummaryCase:
     decision: str
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _SummaryScriptExecution:
+    """Bundle the inputs one summary-script execution needs.
+
+    Attributes
+    ----------
+    event : str
+        Event supplied to the workflow summary script.
+    detector : Detector
+        Detector result supplied to the workflow summary script.
+    summary_path : pathlib.Path
+        File the script writes its step summary into.
+    output_path : pathlib.Path
+        File the script appends its step outputs to.
+    workflow_data : tests.helpers.workflow.Workflow
+        Parsed workflow fixture the script is read from.
+    """
+
+    event: str
+    detector: Detector
+    summary_path: pth.Path
+    output_path: pth.Path
+    workflow_data: Workflow
+
+
 def _summary_script(workflow_data: Workflow) -> str:
     """Return the summary step's script, as `ci.yml` declares it."""
     script = script_of(step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP))
@@ -92,20 +144,18 @@ def _summary_script(workflow_data: Workflow) -> str:
 
 def _execute_summary_script(
     *,
-    event: str,
-    detector: Detector,
-    summary_path: pth.Path,
-    workflow_data: Workflow,
+    execution: _SummaryScriptExecution,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the checked-in summary script."""
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - literal vector plus workflow run block; no test input reaches the command line.
-        ["/usr/bin/env", "bash", "-c", _summary_script(workflow_data)],
+        ["/usr/bin/env", "bash", "-c", _summary_script(execution.workflow_data)],
         env={
             "PATH": "/usr/bin:/bin",
-            "EVENT": event,
-            "BENCH": detector.bench,
-            "DETECTOR": detector.outcome,
-            "GITHUB_STEP_SUMMARY": str(summary_path),
+            "EVENT": execution.event,
+            "BENCH": execution.detector.bench,
+            "DETECTOR": execution.detector.outcome,
+            "GITHUB_STEP_SUMMARY": str(execution.summary_path),
+            "GITHUB_OUTPUT": str(execution.output_path),
         },
         capture_output=True,
         text=True,
@@ -117,7 +167,7 @@ def _execute_summary_script(
     return completed
 
 
-def _parse_summary(*, emitted: str, stdout: str) -> Summary:
+def _parse_summary(*, emitted: str, outputs: SummaryOutputs, stdout: str) -> Summary:
     """Parse the summary table and workflow annotation."""
     rows = [
         line
@@ -152,6 +202,7 @@ def _parse_summary(*, emitted: str, stdout: str) -> Summary:
         fields=dict(zip(_FIELD_NAMES, values, strict=True)),
         table="\n".join(rows),
         metric=metric,
+        outputs=outputs,
     )
 
 
@@ -183,12 +234,33 @@ def run_summary_script(
     """
     summary_path = tmp_path / "step-summary.md"
     summary_path.touch()
+    output_path = tmp_path / "step-output.txt"
+    output_path.touch()
     completed = _execute_summary_script(
-        event=event,
-        detector=detector,
-        summary_path=summary_path,
-        workflow_data=workflow_data,
+        execution=_SummaryScriptExecution(
+            event=event,
+            detector=detector,
+            summary_path=summary_path,
+            output_path=output_path,
+            workflow_data=workflow_data,
+        ),
     )
     return _parse_summary(
-        emitted=summary_path.read_text(encoding="utf-8"), stdout=completed.stdout
+        emitted=summary_path.read_text(encoding="utf-8"),
+        outputs=_read_outputs(output_path),
+        stdout=completed.stdout,
     )
+
+
+def _read_outputs(path: pth.Path) -> SummaryOutputs:
+    """Parse the `key=value` lines a step appended to ``GITHUB_OUTPUT``."""
+    # The keys are the script's, not this function's: it parses whatever the
+    # step appended. The behavioural test asserts the parsed mapping equals the
+    # expected bounded values, so a missing or misspelled output fails there
+    # rather than surfacing as a `KeyError` in whichever consumer reads first.
+    pairs = (
+        line.split("=", maxsplit=1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    return typ.cast("SummaryOutputs", dict(pairs))

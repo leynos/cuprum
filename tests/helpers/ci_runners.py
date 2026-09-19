@@ -103,6 +103,7 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "ci.yml": ("lint-test", "changes"),
+    "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
     "release.yml": ("publish",),

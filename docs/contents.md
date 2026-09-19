@@ -25,6 +25,9 @@ open each document.
 - [CI cache ownership](ci-cache-ownership.md) - which job writes each CI cache
   family, why the compiler cache is split by interpreter and build shape, and
   how resource use is sampled on the paid Linux runners.
+- [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) - the
+  benchmark-gate JSONL artefact schema, retention, retrieval, analysis recipe,
+  and fail-open delivery contract.
 
 ## Design and decisions
 
@@ -54,6 +57,12 @@ open each document.
   opt-in executor-hop tracing without extending the pump event channel.
 - [ADR-011: Audited Rust safety boundaries][adr-011] - accepted decision to
   isolate native resource operations from safe stream policy.
+- [ADR-012: Durable benchmark-gate telemetry][adr-012] - accepted decision to
+  retain bounded benchmark-gate observations in GitHub Actions artefacts with
+  fail-open delivery and no external sink or secret.
+- [ADR-013: Actions-runner integration harness][adr-013] - accepted decision to
+  verify the `changes` job boundary with a pytest-driven `act` harness rather
+  than by reading the workflow source.
 
 ## Planning and validation references
 
@@ -82,6 +91,8 @@ open each document.
 [adr-009]: adr-009-enforce-oxford-spelling-in-source.md
 [adr-010]: adr-010-rust-pump-hop-span.md
 [adr-011]: adr-011-audited-rust-boundaries.md
+[adr-012]: adr-012-benchmark-gate-telemetry-sink.md
+[adr-013]: adr-013-actions-runner-integration-harness.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [rust-boundary-verification]: rust-boundary-verification.md

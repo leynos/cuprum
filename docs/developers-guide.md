@@ -15,6 +15,8 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
+- [ADR-012: Durable benchmark-gate telemetry](adr-012-benchmark-gate-telemetry-sink.md)
+- [ADR-013: Actions-runner integration harness](adr-013-actions-runner-integration-harness.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -30,22 +32,23 @@ gains nothing from a metered build slot.
 
 Table 1: GitHub Actions jobs, workflows, and runners
 
-| Job                       | Workflow                 | Runner                |
-| ------------------------- | ------------------------ | --------------------- |
-| `typecheck-test`          | `ci.yml`                 | `ubicloud-standard-2` |
-| `extension-tests`         | `ci.yml`                 | `ubicloud-standard-2` |
-| `coverage`                | `ci.yml`                 | `ubicloud-standard-2` |
-| `benchmark-ratchet`       | `ci.yml`                 | `ubicloud-standard-2` |
-| `build-pure-wheel`        | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `verify-wheel-install`    | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
-| `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
-| `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
-| `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
-| `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
-| `publish`                 | `release.yml`            | `ubuntu-latest`       |
-| `delay_and_comment`       | `delayed-pr-comment.yml` | `ubuntu-latest`       |
-| `build-native-wheels`     | `build-wheels.yml`       | `${{ matrix.os }}`    |
+| Job                       | Workflow                     | Runner                |
+| ------------------------- | ---------------------------- | --------------------- |
+| `typecheck-test`          | `ci.yml`                     | `ubicloud-standard-2` |
+| `extension-tests`         | `ci.yml`                     | `ubicloud-standard-2` |
+| `coverage`                | `ci.yml`                     | `ubicloud-standard-2` |
+| `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` |
+| `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` |
+| `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` |
+| `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` |
+| `lint-test`               | `ci.yml`                     | `ubuntu-latest`       |
+| `changes`                 | `ci.yml`                     | `ubuntu-latest`       |
+| `workflow-harness`        | `benchmark-gate-harness.yml` | `ubuntu-latest`       |
+| `extension-tests-windows` | `ci.yml`                     | `windows-2022`        |
+| `refresh-sha`             | `get-codescene-sha.yml`      | `ubuntu-latest`       |
+| `publish`                 | `release.yml`                | `ubuntu-latest`       |
+| `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       |
+| `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    |
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -3970,6 +3973,21 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
+A following step writes one JSONL observation named
+`benchmark_gate_decisions_total` to a GitHub Actions artefact, carrying the
+three values the decision step already computed. The record keeps `run_id`,
+`run_attempt`, and UTC `recorded_at` as metadata outside the exact three-label
+set. The artefact is requested for 90 days, subject to repository and
+organization retention policy, so maintainers can analyse trends after
+downloading recent runs. [ADR-012](adr-012-benchmark-gate-telemetry-sink.md)
+records the superseding decision and
+[CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
+operational contract: schema, retrieval, analysis, retention, and fail-open
+behaviour. Failed writes and uploads warn without blocking the gate; the
+`!cancelled()` condition keeps detector-failure observations recordable. Local
+`act` runs set `ACT=true` and skip artefact upload, while hosted receipt
+remains a post-push check.
+
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
 only spends benchmark minutes on a diff nobody will merge; a cancelled `main`
@@ -4016,6 +4034,24 @@ the other does not see:
   the opposite verdict, would contain the same words. The script touches only
   `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what makes
   running it outside Actions evidence rather than simulation.
+
+Those suites still stop short of the boundary. None of them executes
+`dorny/paths-filter`, so none can fail when the pinned action's output name,
+its offline behaviour, or an event payload disagrees with what the contract
+tests assume. `tests/integration/test_workflow_integration.py`, over
+`tests/helpers/act_harness.py`, projects `ci.yml` into a temporary repository,
+preserving the complete `changes` job and the `benchmark-ratchet` `needs` and
+`if` boundary. It replaces unrelated prerequisite bodies with success probes
+and the benchmark body with an admission marker, then runs
+`act --job benchmark-ratchet` for relevant, irrelevant, mixed, and empty
+changed-path sets, pull-request and push events, and a failing detector. It
+asserts the filter's `bench` output, the recorded gate decision, and the
+admission marker. [ADR-013](adr-013-actions-runner-integration-harness.md)
+records why the boundary is exercised rather than inferred, and
+[the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
+covers running it by hand. The opt-in job is owned by
+`.github/workflows/benchmark-gate-harness.yml`, runs weekly or by dispatch on
+the GitHub-hosted `ubuntu-latest` runner, and never consumes the paid runner.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern
