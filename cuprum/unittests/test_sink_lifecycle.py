@@ -91,9 +91,12 @@ class _RecordingSink:
 def _recorded_outcome(adapter: _RecordingSink) -> SessionOutcome:
     """Return the outcome recorded by the adapter's most recent session."""
     session = adapter.last_session
-    assert session is not None, "the run must have opened a sink session"
+    assert session is not None, (
+        f"the run must have opened a sink session; the adapter was consulted "
+        f"{adapter.opened} time(s) and returned none"
+    )
     assert session.closed_with is not None, (
-        "every terminal path must close the sink session"
+        "every terminal path must close the sink session, whatever the run's outcome"
     )
     return session.closed_with
 
@@ -107,7 +110,9 @@ def test_run_output_options_sink_defaults_to_none() -> None:
     """RunOutputOptions leaves the sink unset so runs stay unchanged by default."""
     options = RunOutputOptions()
 
-    assert options.sink is None
+    assert options.sink is None, (
+        f"a default RunOutputOptions must leave the sink unset; got {options.sink!r}"
+    )
 
 
 def test_no_sink_keeps_plain_destinations() -> None:
@@ -116,8 +121,10 @@ def test_no_sink_keeps_plain_destinations() -> None:
 
     result = command.run_sync()
 
-    assert result.ok is True
-    assert result.stdout == "plain\n"
+    assert result.ok is True, f"a plain run must succeed; got {result!r}"
+    assert result.stdout == "plain\n", (
+        f"a run without a sink must capture normally; got {result.stdout!r}"
+    )
 
 
 def test_sink_declining_activation_is_a_no_op() -> None:
@@ -127,15 +134,27 @@ def test_sink_declining_activation_is_a_no_op() -> None:
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
 
-    assert result.ok is True
-    assert result.stdout == "declined\n"
-    assert adapter.opened == 1
-    assert adapter.started_with is not None
+    assert result.ok is True, f"a declined sink must not affect the run; got {result!r}"
+    assert result.stdout == "declined\n", (
+        f"a declined sink must leave capture unchanged; got {result.stdout!r}"
+    )
+    assert adapter.opened == 1, (
+        f"a declining adapter is still consulted once; opened={adapter.opened}"
+    )
+    assert adapter.started_with is not None, (
+        "a declining adapter must still receive the session start"
+    )
     # Compare against the command's own argv and the runner's own label
     # derivation so the assertion holds for any interpreter spelling
     # (``python3.12``, ``/usr/bin/python``, …) rather than a fixed name.
-    assert adapter.started_with.argv == command.argv_with_program
-    assert adapter.started_with.label == _run_label(command, None)
+    assert adapter.started_with.argv == command.argv_with_program, (
+        f"the session start must carry the command's argv; "
+        f"got {adapter.started_with.argv!r}"
+    )
+    assert adapter.started_with.label == _run_label(command, None), (
+        f"the session start must carry the derived label; "
+        f"got {adapter.started_with.label!r}"
+    )
 
 
 def test_sink_session_opens_once_and_closes_on_success() -> None:
@@ -145,12 +164,19 @@ def test_sink_session_opens_once_and_closes_on_success() -> None:
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
 
-    assert result.ok is True
-    assert adapter.opened == 1
-    assert adapter.started_with is not None
+    assert result.ok is True, f"the framed run must succeed; got {result!r}"
+    assert adapter.opened == 1, (
+        f"one run must open exactly one sink session; opened={adapter.opened}"
+    )
+    assert adapter.started_with is not None, "a run with a sink must open a session"
     outcome = _recorded_outcome(adapter)
-    assert outcome.outcome == TerminalOutcome.EXIT_ZERO
-    assert outcome.exit_code == 0
+    assert outcome.outcome == TerminalOutcome.EXIT_ZERO, (
+        f"a successful run must close with {TerminalOutcome.EXIT_ZERO}; "
+        f"got {outcome.outcome}"
+    )
+    assert outcome.exit_code == 0, (
+        f"a successful run must report exit code 0; got {outcome.exit_code}"
+    )
 
 
 def test_sink_session_closes_on_nonzero_exit() -> None:
@@ -160,11 +186,18 @@ def test_sink_session_closes_on_nonzero_exit() -> None:
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
 
-    assert result.ok is False
-    assert result.exit_code == 3
+    assert result.ok is False, f"a failing run must not report success; got {result!r}"
+    assert result.exit_code == 3, (
+        f"the run must report the child's exit code 3; got {result.exit_code}"
+    )
     outcome = _recorded_outcome(adapter)
-    assert outcome.outcome == TerminalOutcome.EXIT_NONZERO
-    assert outcome.exit_code == 3
+    assert outcome.outcome == TerminalOutcome.EXIT_NONZERO, (
+        f"a failing run must close with {TerminalOutcome.EXIT_NONZERO}; "
+        f"got {outcome.outcome}"
+    )
+    assert outcome.exit_code == 3, (
+        f"the recorded exit code must be the child's 3; got {outcome.exit_code}"
+    )
 
 
 def test_sink_session_closes_on_timeout() -> None:
@@ -179,8 +212,13 @@ def test_sink_session_closes_on_timeout() -> None:
         )
 
     outcome = _recorded_outcome(adapter)
-    assert outcome.outcome == TerminalOutcome.TIMEOUT
-    assert outcome.exit_code is None
+    assert outcome.outcome == TerminalOutcome.TIMEOUT, (
+        f"a timed-out run must close with {TerminalOutcome.TIMEOUT}; "
+        f"got {outcome.outcome}"
+    )
+    assert outcome.exit_code is None, (
+        f"a timeout must carry no exit code; got {outcome.exit_code}"
+    )
 
 
 def test_sink_session_label_prefers_title() -> None:
@@ -191,9 +229,12 @@ def test_sink_session_label_prefers_title() -> None:
 
     result = command.run_sync(output=RunOutputOptions(sink=adapter))
 
-    assert result.ok is True
-    assert adapter.started_with is not None
-    assert adapter.started_with.label == "Custom title"
+    assert result.ok is True, f"the titled run must succeed; got {result!r}"
+    assert adapter.started_with is not None, "a run with a sink must open a session"
+    assert adapter.started_with.label == "Custom title", (
+        f"an adapter title must override the derived label; "
+        f"got {adapter.started_with.label!r}"
+    )
 
 
 def test_sink_session_label_omits_argv() -> None:
@@ -204,8 +245,10 @@ def test_sink_session_label_omits_argv() -> None:
 
     command.run_sync(output=RunOutputOptions(sink=adapter))
 
-    assert adapter.started_with is not None
-    assert secret not in adapter.started_with.label
+    assert adapter.started_with is not None, "a run with a sink must open a session"
+    assert secret not in adapter.started_with.label, (
+        f"the label must never republish argv; got {adapter.started_with.label!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,12 +264,22 @@ def test_bracket_opens_once_and_closes_once() -> None:
 
     bracket = _SinkBracket.open(adapter, start)
 
-    assert bracket.session is session
-    assert adapter.started_with == start
-    assert adapter.opened == 1
+    assert bracket.session is session, (
+        f"the bracket must own the adapter's session; got {bracket.session!r}"
+    )
+    assert adapter.started_with == start, (
+        f"the adapter must receive the session start it was opened with; "
+        f"got {adapter.started_with!r}"
+    )
+    assert adapter.opened == 1, (
+        f"opening a bracket consults the adapter once; opened={adapter.opened}"
+    )
     outcome = SessionOutcome(TerminalOutcome.EXIT_ZERO, exit_code=0)
     bracket.close(outcome=outcome)
-    assert session.closed_with == outcome
+    assert session.closed_with == outcome, (
+        f"closing must reach the adapter with the given outcome; "
+        f"got {session.closed_with!r}"
+    )
     assert bracket.session is None, "closing must release the session"
 
 
@@ -242,15 +295,24 @@ def test_bracket_ignores_a_later_close() -> None:
     bracket.close(outcome=first)
     bracket.close(outcome=SessionOutcome(TerminalOutcome.TIMEOUT, detail="timeout"))
 
-    assert session.closed_with == first
+    assert session.closed_with == first, (
+        f"a second close must not displace the first outcome; "
+        f"got {session.closed_with!r}, expected {first!r}"
+    )
 
 
 def test_bracket_without_a_sink_is_empty_and_closes_silently() -> None:
     """A bracket opened over no sink owns nothing and closes nothing."""
     bracket = _SinkBracket.open(None, SessionStart(label="project: program", argv=()))
 
-    assert bracket.session is None
+    assert bracket.session is None, (
+        f"a bracket over no sink must be empty; got {bracket.session!r}"
+    )
     bracket.close(outcome=SessionOutcome(TerminalOutcome.ERROR))
+
+    assert bracket.session is None, (
+        f"closing an empty bracket must stay empty; got {bracket.session!r}"
+    )
 
 
 def test_bracket_over_a_declining_adapter_is_empty() -> None:
@@ -259,8 +321,12 @@ def test_bracket_over_a_declining_adapter_is_empty() -> None:
 
     bracket = _SinkBracket.open(adapter, SessionStart(label="l", argv=()))
 
-    assert bracket.session is None
-    assert adapter.opened == 1
+    assert bracket.session is None, (
+        f"a declining adapter must leave the bracket empty; got {bracket.session!r}"
+    )
+    assert adapter.opened == 1, (
+        f"a declining adapter is still consulted once; opened={adapter.opened}"
+    )
 
 
 def test_open_sink_session_returns_the_adapters_session() -> None:
@@ -270,12 +336,16 @@ def test_open_sink_session_returns_the_adapters_session() -> None:
 
     opened = _open_sink_session(adapter, SessionStart(label="l", argv=("p",)))
 
-    assert opened is session
+    assert opened is session, (
+        f"opening must hand back the adapter's own session; got {opened!r}"
+    )
 
 
 def test_open_sink_session_without_a_sink_is_none() -> None:
     """A run with no sink opens nothing to close later."""
-    assert _open_sink_session(None, SessionStart(label="l", argv=())) is None
+    opened = _open_sink_session(None, SessionStart(label="l", argv=()))
+
+    assert opened is None, f"a run with no sink must open nothing; got {opened!r}"
 
 
 def test_close_sink_session_without_a_session_is_a_no_op() -> None:
@@ -312,4 +382,7 @@ def test_outcome_for_error_maps_each_terminal_category(
     expected: SessionOutcome,
 ) -> None:
     """Only the bounded categorical outcomes reach the adapter."""
-    assert _outcome_for_error(error) == expected
+    mapped = _outcome_for_error(error)
+    assert mapped == expected, (
+        f"{type(error).__name__} must map to {expected!r}; got {mapped!r}"
+    )

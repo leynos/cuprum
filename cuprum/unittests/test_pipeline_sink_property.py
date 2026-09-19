@@ -44,8 +44,20 @@ def test_pipeline_result_outcome_reports_the_first_failing_stage(
     )
 
     if first_failure is None:
-        assert outcome.outcome == TerminalOutcome.EXIT_ZERO
-        assert outcome.exit_code == 0
+        assert outcome.outcome == TerminalOutcome.EXIT_ZERO, (
+            f"a pipeline whose every stage exited zero must report "
+            f"{TerminalOutcome.EXIT_ZERO}, not {outcome.outcome}"
+        )
+        assert outcome.exit_code == 0, (
+            f"a pipeline whose every stage exited zero must report exit code 0, "
+            f"not {outcome.exit_code}"
+        )
     else:
-        assert outcome.outcome == TerminalOutcome.EXIT_NONZERO
-        assert outcome.exit_code == first_failure
+        assert outcome.outcome == TerminalOutcome.EXIT_NONZERO, (
+            f"a pipeline with a failing stage must report "
+            f"{TerminalOutcome.EXIT_NONZERO}, not {outcome.outcome}"
+        )
+        assert outcome.exit_code == first_failure, (
+            f"the reported exit code must be the first failing stage's "
+            f"{first_failure}, not {outcome.exit_code}"
+        )

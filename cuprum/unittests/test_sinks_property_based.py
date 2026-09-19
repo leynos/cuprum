@@ -36,15 +36,21 @@ def test_escape_data_keeps_the_value_on_one_line(*, value: str) -> None:
     """Escaped data carries no bare carriage return or newline."""
     escaped = _escape_data(value)
 
-    assert "\n" not in escaped
-    assert "\r" not in escaped
+    assert "\n" not in escaped, f"escaped data must stay on one line; found {escaped!r}"
+    assert "\r" not in escaped, (
+        f"escaped data must carry no bare carriage return; found {escaped!r}"
+    )
     assert len(escaped) >= len(value), "escaping never shrinks a value"
 
 
 @given(value=st.text())
 def test_escape_data_round_trips(*, value: str) -> None:
     """Decoding the escaped form recovers the original data."""
-    assert _unescape_data(_escape_data(value)) == value
+    escaped = _escape_data(value)
+
+    assert _unescape_data(escaped) == value, (
+        f"decoding the escaped form {escaped!r} must recover {value!r}"
+    )
 
 
 @given(value=st.text())
@@ -52,9 +58,15 @@ def test_escape_property_masks_the_property_delimiters(*, value: str) -> None:
     """A property value carries no bare ``:`` or ``,`` and stays single-line."""
     escaped = _escape_property(value)
 
-    assert ":" not in escaped
-    assert "," not in escaped
-    assert "\n" not in escaped
+    assert ":" not in escaped, (
+        f"escaped property data must carry no bare ':' delimiter; found {escaped!r}"
+    )
+    assert "," not in escaped, (
+        f"escaped property data must carry no bare ',' delimiter; found {escaped!r}"
+    )
+    assert "\n" not in escaped, (
+        f"escaped property data must stay on one line; found {escaped!r}"
+    )
     assert escaped == (_escape_data(value).replace(":", "%3A").replace(",", "%2C")), (
         "property escaping is data escaping plus the two delimiters"
     )

@@ -47,11 +47,23 @@ def _assert_framed(value: str, command: sh.SafeCmd) -> None:
     """
     group, lease, child, release, endgroup = value.splitlines()
     token = lease.removeprefix(_LEASE_PREFIX)
-    assert group == f"::group::{' '.join(command.argv_with_program)}"
-    assert lease == f"{_LEASE_PREFIX}{token}", "the lease is opened with its token"
-    assert child == "inside the group", "mirrored output lands inside the framing"
-    assert release == f"::{token}::", "the lease closes on the token alone"
-    assert endgroup == "::endgroup::", "the group closes after the lease release"
+    expected_group = f"::group::{' '.join(command.argv_with_program)}"
+    assert group == expected_group, (
+        f"the group must be titled with the command's argv; "
+        f"got {group!r}, expected {expected_group!r}"
+    )
+    assert lease == f"{_LEASE_PREFIX}{token}", (
+        f"the lease is opened with its token; got {lease!r}"
+    )
+    assert child == "inside the group", (
+        f"mirrored output lands inside the framing; got {child!r}"
+    )
+    assert release == f"::{token}::", (
+        f"the lease closes on the token alone; got {release!r}"
+    )
+    assert endgroup == "::endgroup::", (
+        f"the group closes after the lease release; got {endgroup!r}"
+    )
 
 
 def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
@@ -64,7 +76,7 @@ def test_forced_sink_frames_real_run_and_routes_echoed_output() -> None:
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
 
-    assert result.ok is True
+    assert result.ok is True, f"the framed run must still succeed; got {result!r}"
     assert result.stdout == "inside the group\n", "capture must be unchanged"
     _assert_framed(buffer.getvalue(), command)
 
@@ -83,14 +95,22 @@ def test_child_workflow_commands_stay_inside_the_lease() -> None:
         result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
 
     value = buffer.getvalue()
-    assert result.ok is True
-    assert result.stdout == "::endgroup::\n::error title=child::spoofed\n"
+    assert result.ok is True, f"the framed run must still succeed; got {result!r}"
+    assert result.stdout == "::endgroup::\n::error title=child::spoofed\n", (
+        f"capture must be unchanged by the lease; got {result.stdout!r}"
+    )
     release = f"::{_stop_token(value)}::\n"
     # Every command the child wrote precedes the release, so the runner ignores
     # it; the endgroup the runner acts on is the session's own, written after.
-    assert value.index("::error title=child::spoofed") < value.index(release)
-    assert value.index("::endgroup::\n") < value.index(release)
-    assert value.index(release) < value.rindex("::endgroup::\n")
+    assert value.index("::error title=child::spoofed") < value.index(release), (
+        "the child's spoofed annotation must precede the lease release"
+    )
+    assert value.index("::endgroup::\n") < value.index(release), (
+        "the child's spoofed endgroup must precede the lease release"
+    )
+    assert value.index(release) < value.rindex("::endgroup::\n"), (
+        "the session's own endgroup must follow the lease release"
+    )
 
 
 def test_failing_run_annotates_without_argv() -> None:
@@ -105,13 +125,17 @@ def test_failing_run_annotates_without_argv() -> None:
         result = command.run_sync(output=RunOutputOptions(echo=True, sink=sink))
 
     value = buffer.getvalue()
-    assert result.exit_code == 3
+    assert result.exit_code == 3, f"the failing run must report 3; got {result!r}"
     # The group is titled with argv, so the annotation has to be the one place
     # the arguments do not appear.
-    assert secret in value
-    assert value.count("::error ") == 1
+    assert secret in value, f"argv still titles the group; got {value!r}"
     annotation = value.split("::error ", 1)[1]
-    assert secret not in annotation
+    assert value.count("::error ") == 1, (
+        f"a failure must annotate exactly once; got {value!r}"
+    )
+    assert secret not in annotation, (
+        f"the annotation must not republish argv; got {annotation!r}"
+    )
     assert annotation == (
         f"title={_escape_property(_run_label(command, None))}::exit_nonzero\n"
     ), "the annotation names the program and no arguments"
@@ -135,8 +159,15 @@ def test_forced_sink_frames_pipeline_and_keeps_results() -> None:
         )
 
     value = buffer.getvalue()
-    assert [stage.exit_code for stage in result.stages] == [0, 4]
-    assert result.failure_index == 1
+    codes = [stage.exit_code for stage in result.stages]
+    assert codes == [0, 4], f"both stages must report their own exit code; got {codes}"
+    assert result.failure_index == 1, (
+        f"the failure index must name the failing stage; got {result.failure_index}"
+    )
     assert value.count("::group::") == 1, "one pipeline opens one group"
-    assert value.startswith("::group::pipeline\n")
-    assert value.endswith("::error title=pipeline::exit_nonzero\n")
+    assert value.startswith("::group::pipeline\n"), (
+        f"a pipeline titles its group 'pipeline'; got {value!r}"
+    )
+    assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
+        f"the annotation must report the pipeline's categorical outcome; got {value!r}"
+    )
