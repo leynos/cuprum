@@ -39,7 +39,7 @@ def line_observation_section() -> str:
         "`cuprum/_line_stream.py`",
         "`cuprum/_line_iteration.py`",
         "`cuprum/_line_callbacks.py`",
-        "`cuprum/_subprocess_consumers.py`",
+        "`cuprum/_subprocess_streams.py`",
         "`cuprum/_execution_tracking.py`",
         "`cuprum/_subprocess_wait.py`",
         "`cuprum/_process_lifecycle.py`",

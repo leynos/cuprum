@@ -1,10 +1,10 @@
-"""Normalize output options and execution context for pipeline execution.
+"""Pipeline execution configuration helpers.
 
 ``_PipelineRunConfig`` carries the resolved ``RunOutputOptions``, including
-``on_line``, alongside context-derived stream settings. Its
-``stdout_consumed`` and ``stderr_consumed`` decisions keep a stream readable
-when capture, echo, or line observation needs it. ``stream_config("stdout")``
-and ``stream_config("stderr")`` supply the stream-specific capture, echo,
+``on_line``, alongside context-derived stream settings. Its ``consumes_stdout``
+and ``consumes_stderr`` decisions keep a stream readable when capture, echo,
+line observation, or the idle heartbeat needs it, and the ``stream_config`` and
+``stderr_stream_config`` properties supply the stream-specific capture, echo,
 sink, encoding, and error configuration consumed by pipeline stream tasks.
 """
 
@@ -14,10 +14,14 @@ import dataclasses as dc
 import sys
 import typing as typ
 
+from cuprum._idle_diagnostic import _PIPELINE_IDLE_SUBJECT
+from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
 
 if typ.TYPE_CHECKING:
+    from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._streams import _MirrorCursor
     from cuprum.lines import _LineHookFn
     from cuprum.sh import ExecutionContext, RunOutputOptions
 
@@ -42,50 +46,86 @@ class _PipelineRunConfig:
 
     stderr_sink: typ.IO[str]
     on_line: _LineHookFn | None = None
+    idle: _IdleMonitor | None = None
 
     @property
-    def stdout_capture_or_echo(self) -> bool:
-        """Whether stdout must be consumed for capture or echo."""
-        return self.capture or self.echo_stdout
-
-    @property
-    def stderr_capture_or_echo(self) -> bool:
-        """Whether stderr must be consumed for capture or echo."""
-        return self.capture or self.echo_stderr
-
-    @property
-    def stdout_consumed(self) -> bool:
-        """Whether the final stage's stdout must be read at all.
+    def consumes_stdout(self) -> bool:
+        """Whether the parent must consume the final stage's stdout.
 
         A registered ``on_line`` observes the final stage's stdout too, so it
-        keeps the pipe and its consumer even when capture and echo are both off.
+        keeps the pipe and its consumer even when capture and echo are both
+        off, and the idle heartbeat needs raw chunks for the same reason.
         """
-        return self.stdout_capture_or_echo or self.on_line is not None
+        return (
+            self.capture
+            or self.echo_stdout
+            or self.idle is not None
+            or self.on_line is not None
+        )
 
     @property
-    def stderr_consumed(self) -> bool:
-        """Whether every stage's stderr must be read at all."""
-        return self.stderr_capture_or_echo or self.on_line is not None
+    def consumes_stderr(self) -> bool:
+        """Whether the parent must consume a stage's stderr.
 
-    def stream_config(
-        self,
-        stream: typ.Literal["stdout", "stderr"],
-    ) -> _StreamConfig:
-        """Build the requested pipeline stream's capture and echo settings."""
-        echo_output, sink = (
-            (self.echo_stdout, self.stdout_sink)
-            if stream == "stdout"
-            else (self.echo_stderr, self.stderr_sink)
+        Every stage's stderr is line-observed by the caller's ``on_line``, so
+        the same gates that keep stdout readable apply here.
+        """
+        return (
+            self.capture
+            or self.echo_stderr
+            or self.idle is not None
+            or self.on_line is not None
         )
+
+    @property
+    def stream_config(self) -> _StreamConfig:
+        """Build the stdout stream configuration for the final pipeline stage."""
         return _StreamConfig(
             capture_output=self.capture,
-            echo_output=echo_output,
+            echo_output=self.echo_stdout,
             echo_max_line_bytes=self.max_echo_line_bytes,
-            sink=sink,
+            sink=self.stdout_sink,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
             read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stdout_sink),
         )
+
+    @property
+    def stderr_stream_config(self) -> _StreamConfig:
+        """Build the stderr stream configuration for a pipeline stage."""
+        return _StreamConfig(
+            capture_output=self.capture,
+            echo_output=self.echo_stderr,
+            echo_max_line_bytes=self.max_echo_line_bytes,
+            sink=self.stderr_sink,
+            encoding=self.ctx.encoding,
+            errors=self.ctx.errors,
+            read_size=_current_read_size(),
+            activity=self.idle.note_activity if self.idle is not None else None,
+            mirror=self._echo_mirror(self.stderr_sink),
+        )
+
+    def _echo_mirror(self, sink: typ.IO[str]) -> _MirrorCursor | None:
+        """Return the cursor for an echo whose sink is the keepalive's own.
+
+        The cursor tracks where the keepalive's destination ended up, not which
+        stream wrote there: a caller may point both sinks at one object, and
+        then a newline-less final-stage stdout echo strands the diagnostic
+        exactly as a stderr one would. Resolved sinks are compared, because
+        that is where the bytes land.
+
+        Returns
+        -------
+        _MirrorCursor | None
+            The run's cursor when *sink* is the diagnostic destination, or
+            ``None`` when this echo cannot reach the keepalive.
+        """
+        idle = self.idle
+        if idle is None or sink is not self.stderr_sink:
+            return None
+        return idle.mirror
 
 
 def _prepare_pipeline_config(
@@ -120,4 +160,13 @@ def _prepare_pipeline_config(
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
         on_line=output.on_line,
+        # One aggregate heartbeat for the whole pipeline, labelled for what it
+        # actually observes: the parent-facing output, not the health of every
+        # stage. The clock starts when the first stage starts.
+        idle=_build_idle_monitor(
+            output.idle_after,
+            output.on_idle,
+            _PIPELINE_IDLE_SUBJECT,
+            ctx.stderr_sink,
+        ),
     )

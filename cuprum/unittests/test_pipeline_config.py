@@ -11,17 +11,28 @@ from cuprum._pipeline_config import _PipelineRunConfig
 from cuprum.sh import ExecutionContext
 
 
+def _stdout_config(config: _PipelineRunConfig):
+    """Return the stdout stream configuration, naming the access route."""
+    return config.stream_config
+
+
+def _stderr_config(config: _PipelineRunConfig):
+    """Return the stderr stream configuration, naming the access route."""
+    return config.stderr_stream_config
+
+
 @pytest.mark.parametrize(
-    ("stream", "expected_echo", "sink_name"),
+    ("stream", "expected_echo", "sink_name", "accessor"),
     [
-        pytest.param("stdout", True, "stdout", id="stdout"),
-        pytest.param("stderr", False, "stderr", id="stderr"),
+        pytest.param("stdout", True, "stdout", _stdout_config, id="stdout"),
+        pytest.param("stderr", False, "stderr", _stderr_config, id="stderr"),
     ],
 )
 def test_stream_config_uses_requested_stream_settings(
     stream: typ.Literal["stdout", "stderr"],
     expected_echo: bool,
     sink_name: typ.Literal["stdout", "stderr"],
+    accessor: typ.Callable[[_PipelineRunConfig], object],
 ) -> None:
     """Each stream keeps its own echo route while sharing decode settings."""
     stdout_sink = io.StringIO()
@@ -38,7 +49,7 @@ def test_stream_config_uses_requested_stream_settings(
         stderr_sink=stderr_sink,
     )
 
-    stream_config = config.stream_config(stream)
+    stream_config = accessor(config)
     expected_sink = stdout_sink if sink_name == "stdout" else stderr_sink
 
     assert stream_config.echo_output is expected_echo, (

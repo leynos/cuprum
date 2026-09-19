@@ -376,6 +376,10 @@ and echo semantics and returns a structured `CommandResult`:
 - `output=RunOutputOptions(echo=True)` tees stdout/stderr to the parent process
   while still capturing them when `capture=True`; configured text sinks
   preserve multibyte characters split across subprocess reads.
+- `output=RunOutputOptions(idle_after=30.0)` reports a child that has produced
+  no output on either stream for that many seconds, and keeps reporting for
+  each further interval of silence; see
+  [Idle heartbeat for quiet children](#idle-heartbeat-for-quiet-children).
 - Pass an `ExecutionContext` via the `context` parameter to override execution
   details:
   - `env` overlays key/value pairs on top of the current environment without
@@ -621,6 +625,110 @@ before, and capture continues for a stream that is not echoed.
 The flat `capture` / `echo` keyword arguments on `Pipeline.run` / `run_sync`
 remain accepted for backwards compatibility but emit a `DeprecationWarning`;
 passing them together with `output` raises `ValueError`.
+
+### Idle heartbeat for quiet children
+
+A long build or fetch can go minutes without a byte of output, and a CI log
+that has been blank for minutes reads the same whether the child is working or
+wedged. `RunOutputOptions(idle_after=...)` asks Cuprum to say something when a
+child falls silent: after that many seconds with no output on a monitored
+stream, it reports how long the run has been going and how long it has been
+quiet, and repeats for each further interval of silence. Any output resets the
+interval.
+
+```python
+from cuprum import Program, RunOutputOptions, sh
+
+CARGO = Program("cargo")
+
+cmd = sh.make(CARGO)("build", "--locked")
+result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0))
+```
+
+With no callback the built-in renderer writes one bounded line to the parent's
+stderr — `ExecutionContext.stderr_sink` when configured, otherwise the live
+`sys.stderr`, resolved when the line is due:
+
+```text
+[cuprum] still running cargo (idle 30s, total 4m10s)
+```
+
+The line is at most 512 bytes including its newline, ASCII-safe, and limited to
+a single line whatever the programme name contains. It is never written into
+captured stdout or stderr, into the observers that watch the child's lines, or
+into the activity tracker that decides whether the child is quiet. Any echo
+whose sink *is* the keepalive's destination can share it — the child's own
+stderr does by default, and a caller who points `stdout_sink` and `stderr_sink`
+at the same object adds its stdout — so the renderer starts a fresh line when
+such an echo ended mid-line and otherwise leaves both the captured and the
+mirrored bytes exactly as they were.
+
+A pipeline has one aggregate clock rather than one per stage, because the
+parent only observes its outward-facing output: the final stage's stdout and
+every stage's stderr. Bytes handed from one stage to the next are not the
+parent's business, so a busy producer feeding a slow consumer does not defer
+the report. The aggregate labels itself accordingly:
+
+```text
+[cuprum] pipeline output idle (idle 30s, total 4m10s)
+```
+
+`on_idle` replaces the built-in line rather than joining it. It receives two
+arguments, both in seconds: the total elapsed time for the run, and the time
+since the last observed output. It is called synchronously on the run's own
+event loop, so it must not block; hand long work to another task.
+
+The same requirement applies to the destination itself. The built-in renderer
+writes and flushes `ExecutionContext.stderr_sink` on that loop too, so a sink
+whose `write` or `flush` blocks delays the parent's stream reads, timeout
+handling, and cancellation for as long as it takes to return. A destination
+that is slow — a network log, a lock held by another process — should be
+wrapped so that the write and flush the run performs hand off without blocking:
+either the blocking call runs in a worker thread or an executor, or it is a
+genuinely non-blocking drain such as a queue fed with `put_nowait`. A separate
+asyncio task is not enough on its own because draining that queue still runs on
+the run's own loop and competes with the parent's stream reads. There is
+deliberately no timeout around the write: a synchronous call cannot be
+interrupted from the same loop, so a bound there would change what the sink is
+promised without ever enforcing it.
+
+```python
+from cuprum import Program, RunOutputOptions, sh
+
+
+def note(elapsed_total: float, elapsed_idle: float) -> None:
+    print(f"still waiting after {elapsed_total:.0f}s ({elapsed_idle:.0f}s quiet)")
+
+
+cmd = sh.make(Program("cargo"))("build", "--locked")
+result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0, on_idle=note))
+```
+
+An ordinary exception from the callback is not allowed to damage the run: it
+disables idle reporting for the remainder of that run and logs one sanitized
+`WARNING` on the `cuprum.idle` logger. The child keeps running, the exit status
+is unchanged, and capture and echo are unaffected. `KeyboardInterrupt` and
+`SystemExit` are not absorbed. If the callback should have been asynchronous,
+Cuprum closes the coroutine it returns and reports that once, in the same
+sanitized way. A destination that refuses the built-in line disables the
+channel the same way, rather than failing the run.
+
+Idle reporting is off by default: without `idle_after`, a run creates no timer,
+no watchdog task, and no pipe it was not already reading. Enabling it does not
+change what a run retains. `capture=False, echo=False, idle_after=30.0` drains
+the child's streams in order to watch them but stores nothing, so
+`CommandResult.stdout` and `.stderr` stay `None`.
+
+`idle_after` must be finite and strictly positive; zero, negative values,
+`NaN`, and infinity raise `ValueError`. `on_idle` must be callable and
+synchronous, and supplying it without an interval raises `ValueError`; a
+non-callable or detectably asynchronous callback (including an object with an
+`async def` `__call__`) raises `TypeError`.
+
+The heartbeat reports an absence of observed output, not an absence of
+progress: a quiet child may be compiling, waiting on a lock, or blocked on a
+network read, and Cuprum cannot tell those apart. It never terminates a process
+and never extends a timeout.
 
 If the awaiting task is cancelled while a command is running, Cuprum sends
 `SIGTERM` to the subprocess, waits for a short grace period, and then escalates

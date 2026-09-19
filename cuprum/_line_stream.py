@@ -24,14 +24,17 @@ import dataclasses as dc
 import typing as typ
 from time import perf_counter
 
+from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_callbacks import _chain_line_hooks
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_consumers import _spawn_stream_consumers
 from cuprum._subprocess_execution import (
-    _build_stream_config,
     _spawn_subprocess,
     _SubprocessExecution,
+)
+from cuprum._subprocess_streams import (
+    _build_stream_config,
+    _spawn_stream_consumers,
 )
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_timeout import (
@@ -266,6 +269,11 @@ async def _start_line_stream_run(
     process = await _spawn_subprocess(execution)
     started_at = perf_counter()
     execution = dc.replace(execution, started_at=started_at)
+    if execution.idle is not None:
+        # Armed here, once the child is running, exactly as the streamed
+        # ``run()`` path arms it: the catalogue checks and before hooks that
+        # preceded this spawn are the parent's work, not the child's silence.
+        execution.idle.launch()
     pid = process.pid
     telemetry.pid = pid
     execution.observation.emit("start", _EventDetails(pid=pid))
@@ -285,6 +293,7 @@ async def _start_line_stream_run(
             pid=pid,
         ),
         discard_on_cancel=discard_on_cancel,
+        idle=execution.idle,
     )
     return _LineStreamRun(
         process=process,
@@ -348,6 +357,10 @@ async def _wait_for_line_stream_exit(
             capture=False,
         )
         raise
+    # The child has exited, so silence no longer means anything: stop before
+    # waiting on stream EOF, which a grandchild's inherited pipe can hold open
+    # long after its parent is gone.
+    await _stop_idle_monitor(execution.idle)
     stdout_text, stderr_text = await _drain_after_exit(
         run,
         run.process.pid,

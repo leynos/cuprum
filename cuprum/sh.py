@@ -17,6 +17,8 @@ from pathlib import Path
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._execution_tracking import _ExecutionTracking
+from cuprum._idle_diagnostic import _idle_subject
+from cuprum._idle_heartbeat import _build_idle_monitor, _validate_idle_options
 from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._observability import (
     _base_stage_tags,
@@ -63,7 +65,7 @@ type _EnvMapping = cabc.Mapping[str, str] | None
 type _CwdType = str | Path | None
 
 if typ.TYPE_CHECKING:
-    from cuprum.lines import LineHook
+    from cuprum.lines import LineHook, _LineHookFn
 
 _DEFAULT_CANCEL_GRACE = 0.5
 _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE = 0.5
@@ -252,6 +254,15 @@ class ExecutionContext:
         Text sink for echoing stdout; defaults to the active ``sys.stdout``.
     stderr_sink:
         Text sink for echoing stderr; defaults to the active ``sys.stderr``.
+        When no ``on_idle`` callback is supplied, it also receives the idle
+        heartbeat's keepalive line, written and flushed synchronously on the
+        run's event loop, so its ``write`` and ``flush`` must return promptly:
+        a sink that blocks delays the run's stream reads, timeout handling,
+        and cancellation. Hand a slow destination to a worker thread, an
+        executor, or a genuinely non-blocking drain such as a queue fed with
+        ``put_nowait``. A separate asyncio task on the run's own loop is not
+        enough: draining that queue still competes with the parent's stream
+        reads.
     encoding:
         Character encoding used when decoding subprocess output.
     errors:
@@ -387,6 +398,18 @@ class RunOutputOptions:
         ``capture`` and ``echo``; lines are delivered in arrival order per
         stream. Lines are observed on the Python pathway, so the Rust
         fast-path dispatcher stays out of the way whenever this is set.
+    idle_after : float | None, default=None
+        Seconds of silence, measured across both streams, before the run
+        reports that it is still running. ``None`` disables idle reporting and
+        costs nothing: no watchdog, no timer, no extra pipe. The interval must
+        be finite and strictly positive. Reporting describes the absence of
+        observed output — never a deadlock diagnosis — and can neither
+        terminate the child nor extend its timeout.
+    on_idle : cabc.Callable[[float, float], None] | None, default=None
+        Synchronous ``(elapsed_total, elapsed_idle)`` callback, in seconds,
+        invoked once per idle interval in place of the built-in stderr
+        keepalive. It must not block for long: it runs on the run's own event
+        loop. Requires ``idle_after``.
 
     Examples
     --------
@@ -395,6 +418,8 @@ class RunOutputOptions:
     (True, True)
     >>> RunOutputOptions(capture=True, echo=True, echo_stdout=False).resolved_echo
     (False, True)
+    >>> RunOutputOptions(capture=False, idle_after=30.0).capture
+    False
     """
 
     capture: bool = True
@@ -403,6 +428,8 @@ class RunOutputOptions:
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
     on_line: LineHook | None = None
+    idle_after: float | None = None
+    on_idle: cabc.Callable[[float, float], None] | None = None
 
     def __post_init__(self) -> None:
         """Resolve per-stream echo from the ``echo`` shorthand."""
@@ -415,6 +442,13 @@ class RunOutputOptions:
             self,
             "echo_stderr",
             self.echo if self.echo_stderr is None else self.echo_stderr,
+        )
+        # Stored normalized, so the schedule's arithmetic sees the float the
+        # contract promises rather than whatever coerced to one here.
+        object.__setattr__(
+            self,
+            "idle_after",
+            _validate_idle_options(self.idle_after, self.on_idle),
         )
 
         if self.max_echo_line_bytes is None:
@@ -526,6 +560,53 @@ def _prepare_execution_observation(
         tags=tags,
         pending_tasks=tracking.pending_tasks,
         wall_clock=time.time,
+    )
+
+
+# ruff: ignore[too-many-arguments]  # the six inputs are one run's resolved state, carried together rather than derived
+def _build_subprocess_execution(
+    cmd: SafeCmd,
+    context: ExecutionContext,
+    output: RunOutputOptions,
+    *,
+    timeout: float | None,
+    observation: _StageObservation,
+    stdin_data: bytes | None,
+    on_line: _LineHookFn | None = None,
+) -> _SubprocessExecution:
+    """Bundle everything one command's execution needs, before it spawns.
+
+    The idle monitor is part of the bundle rather than an execution-time
+    argument because its presence is what decides whether the child's stdout
+    and stderr are piped for activity observation. Deferring it would leave
+    the spawn unable to make that choice.
+
+    Returns
+    -------
+    _SubprocessExecution
+        The resolved execution bundle, ready for ``_execute_with_hooks``.
+    """
+    return _SubprocessExecution(
+        cmd=cmd,
+        ctx=context,
+        capture=output.capture,
+        echo_stdout=output.resolved_echo[0],
+        echo_stderr=output.resolved_echo[1],
+        max_echo_line_bytes=output.max_echo_line_bytes,
+        timeout=timeout,
+        observation=observation,
+        stdin_data=stdin_data,
+        on_line=on_line,
+        # Built here, during the parent's own preparation, but armed by the run
+        # itself, once the child is actually running: everything that precedes
+        # the spawn is the parent's work, and must not read as the child's
+        # silence.
+        idle=_build_idle_monitor(
+            output.idle_after,
+            output.on_idle,
+            _idle_subject(str(cmd.program)),
+            context.stderr_sink,
+        ),
     )
 
 
@@ -660,13 +741,10 @@ class SafeCmd:
             hook(self)
         return await _execute_with_hooks(
             self,
-            _SubprocessExecution(
-                cmd=self,
-                ctx=ctx,
-                capture=out.capture,
-                echo_stdout=out.resolved_echo[0],
-                echo_stderr=out.resolved_echo[1],
-                max_echo_line_bytes=out.max_echo_line_bytes,
+            _build_subprocess_execution(
+                self,
+                ctx,
+                out,
                 timeout=effective_timeout,
                 observation=observation,
                 stdin_data=stdin_data,
@@ -730,13 +808,10 @@ class SafeCmd:
 
         return LineStream(
             _iter_line_events(
-                _SubprocessExecution(
-                    cmd=self,
-                    ctx=ctx,
-                    capture=out.capture,
-                    echo_stdout=out.resolved_echo[0],
-                    echo_stderr=out.resolved_echo[1],
-                    max_echo_line_bytes=out.max_echo_line_bytes,
+                _build_subprocess_execution(
+                    self,
+                    ctx,
+                    out,
                     timeout=effective_timeout,
                     observation=observation,
                     stdin_data=stdin_data,

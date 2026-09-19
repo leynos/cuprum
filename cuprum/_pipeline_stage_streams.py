@@ -39,16 +39,17 @@ def _get_stage_stream_fds(
     idx: int,
     last_idx: int,
     *,
-    stdout_consumed: bool,
-    stderr_consumed: bool,
+    consumes_stdout: bool,
+    consumes_stderr: bool,
 ) -> _StageStreamConfig:
     """Select PIPE/DEVNULL fds for stdin, stdout, and stderr by position and mode.
 
     A non-final stage always pipes stdout so its output can relay into the
     next stage's stdin, regardless of capture or echo. The final stage's
     stdout and every stage's stderr follow their own "consumed" gate, which
-    covers capture, echo, and line observation alike: a stage whose stream
-    nothing reads gets ``DEVNULL``, so no pipe is left open without a reader.
+    covers capture, echo, line observation, and the idle heartbeat alike: a
+    stage whose stream nothing reads gets ``DEVNULL``, so no pipe is left open
+    without a reader.
 
     Returns
     -------
@@ -58,10 +59,10 @@ def _get_stage_stream_fds(
     stdin = asyncio.subprocess.DEVNULL if idx == 0 else asyncio.subprocess.PIPE
     stdout = (
         asyncio.subprocess.PIPE
-        if idx != last_idx or stdout_consumed
+        if idx != last_idx or consumes_stdout
         else asyncio.subprocess.DEVNULL
     )
-    stderr = asyncio.subprocess.PIPE if stderr_consumed else asyncio.subprocess.DEVNULL
+    stderr = asyncio.subprocess.PIPE if consumes_stderr else asyncio.subprocess.DEVNULL
     return _StageStreamConfig(stdin=stdin, stdout=stdout, stderr=stderr)
 
 
@@ -114,9 +115,9 @@ def _create_stage_capture_tasks(
         ),
     )
 
-    if config.stderr_consumed:
+    if config.consumes_stderr:
         stderr_config = dc.replace(
-            config.stream_config("stderr"),
+            config.stderr_stream_config,
             stream=EchoStream.STDERR,
         )
         stderr_task = asyncio.create_task(
@@ -143,8 +144,8 @@ def _create_stage_capture_tasks(
         ),
     )
 
-    if config.stdout_consumed:
-        stdout_config = config.stream_config("stdout")
+    if config.consumes_stdout:
+        stdout_config = config.stream_config
         stdout_task = asyncio.create_task(
             _consume_stream(
                 process.stdout,
