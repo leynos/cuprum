@@ -34,6 +34,12 @@ def test_program_newtype_round_trip() -> None:
     assert program == "echo", "Program must preserve wrapped value"
 
 
+def test_catalogue_public_annotations_resolve_program_at_runtime() -> None:
+    """Public catalogue annotations remain available to runtime introspection."""
+    assert typ.get_type_hints(ProjectSettings)["programs"] == tuple[Program, ...]
+    assert typ.get_type_hints(ProgramCatalogue.lookup)["program"] == Program | str
+
+
 def test_default_allowlist_contains_curated_programs() -> None:
     """The default allowlist surfaces curated program constants."""
     assert ECHO in DEFAULT_CATALOGUE.allowlist, "Echo missing from allowlist"

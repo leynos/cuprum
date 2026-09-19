@@ -1573,6 +1573,15 @@ respectively, and are not repeated here.
 
 Runtime (`cuprum/`):
 
+- `cuprum/_catalogue_helpers.py` — pure program coercion and project-name
+  derivation helpers used by `cuprum/catalogue.py`.
+- `cuprum/_catalogue_defaults.py` — immutable built-in project and program
+  metadata consumed by `cuprum/catalogue.py`.
+
+These private modules feed `cuprum/catalogue.py`, which assembles and validates
+the public catalogue APIs. Callers should use those public APIs rather than
+importing the private modules directly.
+
 - `cuprum/_pipeline_wait_records.py` — typed completion-report payloads.
   `_CompletionLogFields` carries shared completion fields; `_CompletionReport`
   carries an action, message, and optional record fields; and

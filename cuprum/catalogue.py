@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
-import typing as typ
 from types import MappingProxyType
 
 from cuprum._catalogue_defaults import (
@@ -27,9 +26,9 @@ from cuprum._catalogue_defaults import (
     TAR,
 )
 from cuprum._catalogue_helpers import coerce_program, derive_project_name
-
-if typ.TYPE_CHECKING:
-    from cuprum.program import Program
+from cuprum.program import (
+    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
+)
 
 
 class UnknownProgramError(LookupError):
@@ -251,6 +250,7 @@ class ProgramCatalogue:
 
         Examples
         --------
+        >>> from cuprum import Program, ProgramCatalogue, ProjectSettings
         >>> settings = ProjectSettings(name="tools", programs=(Program("git"),))
         >>> ProgramCatalogue.from_project(settings).is_allowed("git")
         True
