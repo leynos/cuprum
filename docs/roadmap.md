@@ -488,7 +488,6 @@ consumed-writer invariants.
     close race and assert clean shutdown without late duplicate closure; the
     ownership contract is recorded in the developers' guide and ADR-002.
 
-
 - [x] 8.1.2. Add bounded Loom verification for the native-pump lifecycle.
   - Completion evidence (2026-09-16): the dedicated model target exercises the
     event-loop, executor-worker, and completion-callback ownership hand-off
@@ -499,6 +498,7 @@ consumed-writer invariants.
     borrowed-reader and pump-state seams where available, but does not wait for
     the full unsafe-code extraction. Loom complements Verus/Kani, Miri, and the
     native and Python integration regressions rather than replacing them.
+
 ### 8.2. Restore Python-frame attribution in perf captures
 
 This step removes a tooling gap that weakens the evidence base future phases

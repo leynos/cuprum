@@ -3090,7 +3090,6 @@ read can fail to return, and Loom does not assume an unfair scheduler will run
 an actor. Loom complements the existing Verus/Kani and Miri work and the native
 and Python integration regressions; it does not replace them.
 
-
 Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
 development dependency. Prefer generated payloads and small helper functions
 that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
