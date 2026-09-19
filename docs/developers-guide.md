@@ -857,11 +857,14 @@ the pipeline fail-fast records: a `cuprum_action` of `rust_pump_declined` plus a
 
 Table 1: `cuprum_reason` values and the seam each one reports
 
-| `cuprum_reason`             | Seam that declined                                                 |
-| --------------------------- | ------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport |
-| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming        |
-| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors      |
+| `cuprum_reason`             | Seam that declined                                                        |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | `_extract_stream_fd` found no descriptor on at least one transport        |
+| `reader_unresumable`        | `pause_reading` exists but `resume_reading` does not, so it is not paused |
+| `reader_pause_failed`       | `pause_reading()` raised, so asyncio may still be consuming               |
+| `blocking_mode_unavailable` | `_BlockingModeGuard.engage` could not switch both descriptors             |
+| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be re-opened        |
+| `platform_unsupported`      | the platform cannot safely use synchronous native pipe I/O                |
 
 These are logged at `DEBUG`, deliberately. A fall-back is a per-hop routing
 decision rather than a fault, so promoting it to a warning would make a
@@ -907,18 +910,18 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
 | `cuprum_rust_pump_handoff_total`             | `outcome` |
 
-`RustPumpDeclineReason` bounds the decline label to its four declared values.
-The `outcome` label is also closed: it is exactly `submitted`,
-`blocking_setup_failed`, `executor_submission_rejected`, `native_load_failed`,
-`buffer_validation_failed`, `platform_writer_transfer_failed`,
-`native_io_failed`, `duplicate_writer_failed`, or `reader_preparation_failed`.
-The hand-off counter increments once for each such outcome, including a
-successful submission. `outcome` is the only label on the hand-off counter.
-Descriptor numbers, Windows handle values, errno values, exception types,
-exception messages, and tracebacks are never metric labels. Observer failures
-are logged and do not alter the successful fallback or the caller's
-cancellation. [ADR-008](adr-008-rust-pump-observation-channel.md) records the
-decision.
+`RustPumpDeclineReason` bounds the decline label to its declared values — the
+six in Table 1 above. The `outcome` label is also closed: it is exactly
+`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
+`native_load_failed`, `buffer_validation_failed`,
+`platform_writer_transfer_failed`, `native_io_failed`,
+`duplicate_writer_failed`, or `reader_preparation_failed`. The hand-off counter
+increments once for each such outcome, including a successful submission.
+`outcome` is the only label on the hand-off counter. Descriptor numbers,
+Windows handle values, errno values, exception types, exception messages, and
+tracebacks are never metric labels. Observer failures are logged and do not
+alter the successful fallback or the caller's cancellation.
+[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
 
 ### `_pipeline_wait` completion command/query seam
 
@@ -2480,19 +2483,78 @@ settled, its remaining duplicate is closed, and its mode is restored. This
 prevents cancellation cleanup from racing with native I/O on a descriptor that
 is still in use.
 
-Executor-side failures while creating the duplicate or submitting the executor
-work are re-raised after rollback and recorded at `DEBUG` on the
-`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
-reader or transferring the platform writer are recorded at `DEBUG` on the
+Executor-side failures are handled in two ways, and the split is deliberate.
+Creating the worker duplicates and submitting the executor work happen *before*
+anything is transferred, so a failure there selects the Python fallback: the
+hop is carried by `_pump_stream` exactly as it is when blocking mode is
+unavailable. Both are recorded at `DEBUG` on the `cuprum._pipeline_streams`
+logger. Shim-side failures while preparing the reader or transferring the
+platform writer are likewise recorded at `DEBUG`, but on the
 `cuprum._streams_rs` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
 and reader-preparation failure emits `reader_preparation_failed`. Executor
 rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure selects the Python fallback and emits
-`blocking_setup_failed`. The outcome events are counted by
-`cuprum_rust_pump_handoff_total` as described above.
+Blocking-mode failure emits `blocking_setup_failed`. The outcome events are
+counted by `cuprum_rust_pump_handoff_total` as described above.
+
+Two setup failures still re-raise, and the distinction between them and the
+declines is what the two duplication stages exist to draw.
+
+The first stage, `_open_native_pump_worker_fds`, re-opens each transport's
+descriptor *from its number*: on Linux through `/proc/self/fd/N`, elsewhere
+through `os.dup`. The number was extracted a moment earlier and the re-open is
+therefore a race against asyncio's own close — an EOF'd transport like
+`echo -n hello` exits immediately, so the re-open can hit `ENOENT`. That is a
+*decline*: nothing was transferred, no state outlived the attempt, and the hop
+is perfectly serviceable on the Python pump. Re-raising it left the writer
+transport open, so the downstream stage never saw EOF and the pipeline hung
+until its deadline — an intermittent wedge that only the native fast path could
+produce. The decline records its own `duplicate_fds_unavailable` reason in
+Table 1 above, alongside `blocking_mode_unavailable`.
+
+The second stage, `_duplicate_native_pump_fds`, duplicates descriptors Cuprum
+already owns, so it cannot lose that race: a failure there means descriptor
+exhaustion, which a fallback could not route around and which the caller should
+hear about. It re-raises, as does an executor rejection — the one failure not
+about descriptors at all, where every later hop would be rejected identically
+and a silent fallback would hide a broken executor. Both emit their bounded
+`duplicate_writer_failed` or `executor_submission_rejected` outcome first.
+
+A re-raise with no fallback behind it still has to release the writer
+transport, and `_run_rust_pump` does that on the way out. A hop that declined
+keeps the writer, because the Python pump writes through it; a hop that failed
+fatally has nothing left to write through it, and leaving it open left the
+downstream stage waiting for an EOF that never came. The pipeline then reported
+its deadline rather than the error that caused it — the same wedge as the
+decline fix above, on the paths that must still raise.
+
+### Native pump worker pooling
+
+`_PooledNativePumpExecutor` in `cuprum/_pipeline_native_pump_runtime.py` runs
+submitted pumps on reusable worker threads. It replaced a thread-per-submission
+executor that never reclaimed its threads, so a long-lived process taking many
+hand-offs accumulated one thread per hop ever attempted.
+
+The pool's central invariant is that **`submit` never waits**. It hands the job
+to an idle worker if one is free and starts a fresh worker otherwise, so the
+number of pumps running at once is unbounded, and `_IDLE_NATIVE_PUMP_WORKERS`
+(4) bounds only how many *idle* workers are kept for reuse. A worker that
+finishes above that limit exits instead of parking.
+
+That asymmetry is not an optimization, and it must not be "fixed". A native
+pump cannot finish while its downstream pipe is full, and only a later hop in
+the same pipeline can drain that pipe. A submission that waited for a free
+worker, or that queued behind one, would therefore be waiting on work that
+cannot start until it completes — the deadlock returns, and it returns as a
+hang rather than an error. Bounding the queue is exactly as fatal as bounding
+concurrency here. `test_submission_never_waits_behind_a_busy_worker` in
+`cuprum/unittests/test_pipeline_native_pump_runtime.py` pins this by submitting
+more blocking jobs than the limit allows and asserting every one starts.
+
+Worker threads are daemon threads and are never joined at exit, so a worker
+still blocked in native I/O cannot keep the interpreter from shutting down.
 
 ## Rust splice-loop and drain contract
 

@@ -1926,6 +1926,7 @@ Table 1: reasons an inter-stage hop declines the Rust pump
 | `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, left unpaused        |
 | `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor     |
 | `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                |
+| `duplicate_fds_unavailable` | a transport descriptor was closed before the worker's copy of it could be made              |
 | `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use   |
 
 These sit at `DEBUG`, not `WARNING`: a fall-back is a routing decision rather
@@ -2139,14 +2140,25 @@ unchanged — the counters supplement them rather than replacing them.
 
 ### A pump hand-off failed before submission
 
-If Cuprum cannot prepare either worker-owned descriptor, the hand-off is rolled
-back and the original exception is re-raised without a hand-off outcome. If
-executor submission is rejected, Cuprum emits `executor_submission_rejected`
-and re-raises after rollback. A blocking-mode failure selects the Python
-fallback and emits `blocking_setup_failed`. The `cuprum._pipeline_streams`
-logger records a bounded `DEBUG` diagnostic for these setup failures with
+If Cuprum cannot make the worker-owned descriptors, the hand-off is rolled back
+and the hop falls back to the Python pump. That covers both a descriptor pair
+that could not be re-opened — recorded as `duplicate_writer_failed`, since the
+transport may be closed between extraction and duplication — and descriptors
+that could not be switched to blocking mode, recorded as
+`blocking_setup_failed`. The `cuprum._pipeline_streams` logger records a bounded
+`DEBUG` diagnostic for these setup failures with
 `cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
 when available. Descriptor numbers and exception text are not logged.
+
+Two setup failures still report to the caller instead. If executor submission
+is rejected, Cuprum emits `executor_submission_rejected` and re-raises after
+rollback; every later hop would be rejected the same way, so silently falling
+back would hide a broken executor rather than work around it. If the worker
+descriptors cannot be duplicated once they are already Cuprum's own, that is
+descriptor exhaustion — an error in its own right, and not something a fallback
+can route around. Both close the writer transport before the error propagates,
+so a downstream stage exits and the real failure reaches the caller instead of
+the pipeline waiting out its deadline.
 
 ### Choosing a stream backend
 

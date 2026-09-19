@@ -21,6 +21,30 @@
   overrode the new per-stream resolver with a warning-only initializer, so
   `IOOptions(echo=True)` left both streams silent. It now resolves the
   inherited per-stream fields before emitting the deprecation warning.
+- **Native pump no longer wedges a hop it could not duplicate:** Extracting a
+  transport's descriptor and duplicating it for the Rust worker are separate
+  steps, so a short-lived process whose descriptor asyncio closed in between
+  used to fail the duplication. That failure was re-raised, which left the
+  writer transport open — the downstream stage never saw EOF and the pipeline
+  hung until its deadline. The failure now declines the fast path instead and
+  the hop completes on the Python pump, reported like any other decline with a
+  `duplicate_fds_unavailable` reason and a `duplicate_writer_failed` hand-off
+  outcome. Two failures still report to the caller: an executor rejection, and
+  a failure to duplicate descriptors Cuprum already owns, which means
+  descriptor exhaustion rather than a race. Those now close the writer
+  transport before the error propagates, so a downstream stage exits and the
+  failure reaches the caller instead of the pipeline waiting out its deadline.
+  Intermittent pipeline hangs on `auto` or `rust` backends are what this
+  addresses.
+- **Native pump workers are pooled instead of one thread per hop:** Repeated
+  native hand-offs used to start a thread per submitted pump and never reclaim
+  it, so a long-lived process with many pipelines grew a thread for every hop
+  ever taken. Submitted pumps now run on a small pool that keeps up to four
+  idle workers for reuse and lets the rest exit once their pump settles.
+  Concurrency stays unbounded by design: a native pump cannot finish until a
+  later hop in the same pipeline drains its pipe, so queueing a submission or
+  waiting for a free worker would deadlock the very pipelines the pool exists
+  to serve. Only idle retention is bounded, and `submit` never blocks.
 
 ### Added
 
