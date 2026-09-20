@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import stat
 import typing as typ
 
 import pytest
 
 from scripts import check_boundary_contract as contract
+from scripts.boundary_compile import CompileTargets, compile_arguments
 from scripts.boundary_workspace import copy_workspace
 from scripts.check_boundary_contract import safe_target_roots
 
@@ -21,6 +23,16 @@ from scripts.tests.boundary_harness_support import (
 )
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ExternalSourceLink:
+    """Record one external source link and the original file state."""
+
+    link: Path
+    source: Path
+    contents: bytes
+    mode: int
 
 
 def test_main_keeps_nested_target_sources_and_omits_root_build_output(
@@ -73,9 +85,9 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
 
 def _external_source_links(
     root: Path, crate: Path, tmp_path: Path
-) -> tuple[tuple[Path, Path, str | None], ...]:
+) -> tuple[_ExternalSourceLink, ...]:
     """Create relative and absolute external source-file symlinks."""
-    links = (
+    paths = (
         (
             crate / "tests/relative.rs",
             root / "relative-source.rs",
@@ -83,14 +95,23 @@ def _external_source_links(
         ),
         (crate / "tests/absolute.rs", tmp_path / "absolute-source.rs", None),
     )
-    for _link, source, _target in links:
+    for _link, source, _target in paths:
         source.write_text(SAFE_SOURCE, encoding="utf-8")
+        source.chmod(stat.S_IRUSR)
     try:
-        for link, source, target in links:
+        for link, source, target in paths:
             link.symlink_to(source if target is None else target)
     except OSError as error:
         pytest.skip(f"the platform cannot create the symlink fixture: {error}")
-    return links
+    return tuple(
+        _ExternalSourceLink(
+            link,
+            source,
+            source.read_bytes(),
+            stat.S_IMODE(source.stat().st_mode),
+        )
+        for link, source, target in paths
+    )
 
 
 def _recording_probe_compiler(
@@ -115,12 +136,12 @@ def _recording_probe_compiler(
 def _assert_external_links_are_isolated(
     crate: Path,
     copied_crate: Path,
-    links: tuple[tuple[Path, Path, str | None], ...],
+    links: tuple[_ExternalSourceLink, ...],
     original_targets: tuple[Path, ...],
 ) -> None:
     """Require metadata parity, materialization, and untouched external bytes."""
     copied_links = tuple(
-        copied_crate / link.relative_to(crate) for link, _source, _target in links
+        copied_crate / source_link.link.relative_to(crate) for source_link in links
     )
     assert cargo_target_roots(copied_crate) == tuple(
         copied_crate / path.relative_to(crate) for path in original_targets
@@ -129,9 +150,24 @@ def _assert_external_links_are_isolated(
         "external source-file links must be materialized inside the copied workspace"
     )
     assert all(
-        source.read_text(encoding="utf-8") == SAFE_SOURCE
-        for _link, source, _target in links
-    ), "external source bytes must survive the copied probes"
+        (
+            source_link.source.read_bytes(),
+            stat.S_IMODE(source_link.source.stat().st_mode),
+        )
+        == (source_link.contents, source_link.mode)
+        for source_link in links
+    ), "external source bytes and modes must survive the copied probes"
+
+
+def _remove_copied_dev_dependencies(manifest: Path) -> None:
+    """Omit test-only dependencies unused by the empty external target fixtures."""
+    contents = manifest.read_text(encoding="utf-8")
+    before, header, remainder = contents.partition("[dev-dependencies]\n")
+    dependencies, separator, after = remainder.partition("\n[lints]\n")
+    assert header, "the copied manifest must retain its dev-dependency section"
+    assert separator, "the copied manifest must retain its lint section"
+    assert dependencies, "the copied manifest must record test-only dependencies"
+    manifest.write_text(before + "[lints]\n" + after, encoding="utf-8")
 
 
 def test_main_materializes_external_source_file_symlinks(
@@ -142,8 +178,8 @@ def test_main_materializes_external_source_file_symlinks(
     crate = root / "rust/cuprum-streams"
     links = _external_source_links(root, crate, tmp_path)
     before = cargo_target_roots(crate)
-    assert links[0][0] in before, "Cargo must recognize the relative source-file link"
-    assert links[1][0] in before, "Cargo must recognize the absolute source-file link"
+    assert links[0].link in before, "Cargo must recognize the relative source-file link"
+    assert links[1].link in before, "Cargo must recognize the absolute source-file link"
     observed_sources: list[str] = []
     boundary_compile = contract._compile
     monkeypatch.setattr(contract, "ROOT", root)
@@ -154,12 +190,88 @@ def test_main_materializes_external_source_file_symlinks(
     contract.main()
 
     copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
-    code, output = boundary_compile(copied_crate.parent)
+    _remove_copied_dev_dependencies(copied_crate / "Cargo.toml")
+    code, output = boundary_compile(
+        copied_crate.parent,
+        CompileTargets.integration_tests("relative", "absolute"),
+    )
     assert code == 0, output
     _assert_external_links_are_isolated(crate, copied_crate, links, before)
     assert all(
         any(probe in source for source in observed_sources) for probe in contract.PROBES
     ), "each unsafe probe must reach the isolated copied sources"
+
+
+def test_compile_arguments_preserve_full_production_coverage() -> None:
+    """The production compiler command continues to compile every target."""
+    arguments = compile_arguments()
+
+    assert arguments == (
+        "check",
+        "--package",
+        "cuprum-streams",
+        "--all-targets",
+        "--all-features",
+    ), "the production boundary check must continue to cover every target"
+
+
+def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
+    """The link integration check compiles only its materialized test targets."""
+    targets = CompileTargets.integration_tests("relative", "absolute")
+    arguments = compile_arguments(targets)
+
+    assert arguments[:4] == (
+        "check",
+        "--package",
+        "cuprum-streams",
+        "--all-features",
+    ), "the scoped check must retain its package and feature contract"
+    assert arguments[4:] == (
+        "--test",
+        "relative",
+        "--test",
+        "absolute",
+    ), "the scoped check must compile both materialized test targets"
+    assert "--all-targets" not in arguments, (
+        "the scoped check must not rebuild unrelated package targets"
+    )
+
+
+@pytest.mark.parametrize("name", ["", "--all-targets", "relative test", "../relative"])
+def test_compile_targets_reject_invalid_cargo_names(name: str) -> None:
+    """Test-target selections cannot inject Cargo options or paths."""
+    with pytest.raises(ValueError, match="Cargo target names"):
+        CompileTargets.integration_tests(name)
+
+
+def test_compile_targets_accept_a_direct_valid_tuple() -> None:
+    """Direct construction retains the shared target-name invariant."""
+    targets = CompileTargets(("relative", "absolute"))
+
+    assert targets.names == ("relative", "absolute"), (
+        "direct construction must retain valid target names"
+    )
+
+
+@pytest.mark.parametrize(
+    ("names", "error_type", "expected_error"),
+    [
+        (typ.cast("tuple[str, ...]", ["relative"]), TypeError, "must be a tuple"),
+        ((), ValueError, "must not be empty"),
+        (
+            typ.cast("tuple[str, ...]", ("relative", 1)),
+            ValueError,
+            "must contain strings",
+        ),
+        (("relative test",), ValueError, "valid Cargo target names"),
+    ],
+)
+def test_compile_targets_reject_invalid_direct_construction(
+    names: tuple[str, ...], error_type: type[Exception], expected_error: str
+) -> None:
+    """Direct construction rejects malformed Cargo target collections."""
+    with pytest.raises(error_type, match=expected_error):
+        CompileTargets(names)
 
 
 @pytest.mark.parametrize(

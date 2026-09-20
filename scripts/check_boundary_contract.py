@@ -23,7 +23,8 @@ from pathlib import Path
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from scripts.boundary_compile import CompileTargets
+from scripts.boundary_compile import _compile as _compile_workspace
 from scripts.boundary_workspace import copy_workspace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -314,26 +315,11 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
     return evaluate_safe_target_policy(sources)
 
 
-def _compile(workspace: Path) -> tuple[int, str]:
-    """Compile the copied safe library and all its targets with all features."""
-    cargo_program = Program("cargo")
-    project = ProjectSettings(
-        name="boundary-contract",
-        programs=(cargo_program,),
-        documentation_locations=("docs/rust-boundary-verification.md",),
-        noise_rules=(),
+def _compile(workspace: Path, targets: CompileTargets | None = None) -> tuple[int, str]:
+    """Keep the harness's compiler seam injectable for its probe tests."""
+    return _compile_workspace(
+        workspace, ROOT / "rust/target/boundary-contract", targets
     )
-    cargo = sh.make(cargo_program, catalogue=ProgramCatalogue(projects=(project,)))
-    context = sh.ExecutionContext(
-        cwd=workspace,
-        env={"CARGO_TARGET_DIR": str(ROOT / "rust/target/boundary-contract")},
-        timeout=600,
-    )
-    with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
-        result = cargo(
-            "check", "--package", "cuprum-streams", "--all-targets", "--all-features"
-        ).run_sync(context=context)
-    return result.exit_code, (result.stdout or "") + (result.stderr or "")
 
 
 def main() -> None:
