@@ -22,6 +22,16 @@ The
 is the source of truth for native safety contracts, verifier bounds, trusted
 assumptions, and current proof status.
 
+## Boundary compilation selections
+
+[`scripts/boundary_compile.py`](../scripts/boundary_compile.py) defines named
+test selection only for the disposable copied-workspace regression fixture.
+Production boundary verification calls `_compile` without `CompileTargets`,
+retaining full target and feature coverage. The fixture may select named
+integration-test targets after validation; a target name cannot be empty or
+select Cargo flags. Do not use named selection to narrow production
+verification or other safety evidence.
+
 ## GitHub Actions runners
 
 Repository-owned Linux build and test jobs run on Ubicloud managed runners.
