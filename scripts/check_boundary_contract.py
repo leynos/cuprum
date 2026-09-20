@@ -199,10 +199,10 @@ def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
             continue
         if entry.suffix == ".rs":
             yield entry
-        elif _path_matches(entry, stat.S_ISDIR, "directory"):
-            candidate = entry / "main.rs"
-            if _path_matches(candidate, stat.S_ISREG, "root"):
-                yield candidate
+            continue
+        candidate = entry / "main.rs"
+        if _path_matches(candidate, stat.S_ISREG, "root"):
+            yield candidate
 
 
 def _directory_entries(directory: Path) -> tuple[Path, ...]:
