@@ -412,6 +412,7 @@ strict = true
 
 [tool.skylos.whitelist.documented]
 _check_rust_available = "Re-exported as the public is_rust_available backend probe."
+should_terminate_others = "Documented query half of _PipelineWaitState's command/query split. Production reaches the same predicate through record_completion's return value, and the only direct callers are the contract tests under cuprum/unittests, which the dead-code scan excludes."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "parameter"
