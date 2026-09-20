@@ -73,8 +73,13 @@ TEST_JOBS ?= 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
 DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
-WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+# Whitaker's `--all` selects its lint libraries, rather than Cargo packages.
+# Keep the package boundary explicit and Makefile-owned so every Rust member is
+# checked even when the wrapper's library-selection semantics change.
+override WHITAKER_PACKAGES := cuprum-rust cuprum-streams cuprum-native-io
+WHITAKER_PACKAGE_FLAGS := $(foreach package,$(WHITAKER_PACKAGES),--package $(package))
+override WHITAKER_CARGO_FLAGS := $(WHITAKER_PACKAGE_FLAGS) $(CARGO_FLAGS) --jobs 1
 # Extra flags for the `maturin develop` invocation in the `develop` target.
 # Empty by default: a debug build is what contributors and the extension-tests
 # job want. The benchmark ratchet needs an optimized build, and an optimized
@@ -201,8 +206,8 @@ SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 MDLINT_FILES_FIND = bash -o pipefail -c 'git ls-files -z --cached --others --exclude-standard -- "$$@" | while IFS= read -r -d "" markdown_file; do if [ -f "$$markdown_file" ] && [ ! -L "$$markdown_file" ]; then case "$$markdown_file" in -*) printf "./%s\0" "$$markdown_file" ;; *) printf "%s\0" "$$markdown_file" ;; esac; fi; done' -- $(MARKDOWN_GLOBS)
 MDLINT_FIX_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) --fix < "$$markdown_files"
 MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) < "$$markdown_files"
-.PHONY: help all clean build build-release lint python-lint rust-lint \
-        github-actions-lint \
+.PHONY: help all clean build build-release lint python-lint rust-lint lint-clippy \
+        lint-whitaker github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust loom typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
@@ -293,7 +298,7 @@ test-markdown-format: ## Validate the Markdown formatting Makefile contract
 		python -m pytest scripts/tests/test_markdown_format_makefile.py -c /dev/null \
 		--rootdir=. -p no:cacheprovider
 
-lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
+lint: python-lint .WAIT rust-lint .WAIT github-actions-lint ## Run Python, Rust, and GitHub Actions linters
 
 python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
@@ -301,11 +306,13 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
-rust-lint: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+rust-lint: lint-clippy .WAIT lint-whitaker .WAIT spelling ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+
+lint-clippy: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation and Clippy
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
-	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
+
+lint-whitaker: ## Run Whitaker for every Rust workspace package
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
-	+$(MAKE) spelling
 
 skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
 skylos-allow: export SKYLOS_REASON = $(value REASON)

@@ -381,7 +381,21 @@ verification, MSRV, and Whitaker commands, together with macOS and Windows,
 retain their prescribed fragment-free or separately pinned toolchains. The
 stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
 maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
-job environment (`0.2.7`, the workflow's configured installer version).
+job environment (`0.2.7`, the workflow's configured installer version). The
+Makefile runs `lint-clippy`, `lint-whitaker`, and spelling sequentially;
+`lint-whitaker` passes Cargo `--package` arguments for `cuprum-rust`,
+`cuprum-streams`, and `cuprum-native-io` after Whitaker's `--` separator.
+Whitaker's `--all` chooses lint libraries, not workspace packages.
+
+The local binding intentionally remains fragment-free and fail-closed, but it
+cannot make the suite distribution immutable by itself. The required
+binary-only, checksummed suite resolver is tracked by
+[shared-actions issue 499](https://github.com/leynos/shared-actions/issues/499),
+which depends on Whitaker retaining per-release lint artefacts and provenance
+([issues 403](https://github.com/leynos/whitaker/issues/403) and
+[425](https://github.com/leynos/whitaker/issues/425)). Until those contracts
+land, this gate must remain a draft integration layer rather than a claim of
+reproducible binary-only CI.
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official
