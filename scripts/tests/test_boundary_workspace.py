@@ -25,7 +25,7 @@ from scripts.tests.boundary_harness_support import (
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class ExternalSourceLink:
     """Record one external source link and the original file state."""
 
@@ -204,28 +204,36 @@ def test_main_materializes_external_source_file_symlinks(
 
 def test_compile_arguments_preserve_full_production_coverage() -> None:
     """The production compiler command continues to compile every target."""
-    assert compile_arguments() == (
+    arguments = compile_arguments()
+
+    assert arguments == (
         "check",
         "--package",
         "cuprum-streams",
         "--all-targets",
         "--all-features",
-    )
+    ), "the production boundary check must continue to cover every target"
 
 
 def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
     """The link integration check compiles only its materialized test targets."""
     targets = CompileTargets.integration_tests("relative", "absolute")
+    arguments = compile_arguments(targets)
 
-    assert compile_arguments(targets) == (
+    assert arguments[:4] == (
         "check",
         "--package",
         "cuprum-streams",
         "--all-features",
+    ), "the scoped check must retain its package and feature contract"
+    assert arguments[4:] == (
         "--test",
         "relative",
         "--test",
         "absolute",
+    ), "the scoped check must compile both materialized test targets"
+    assert "--all-targets" not in arguments, (
+        "the scoped check must not rebuild unrelated package targets"
     )
 
 
