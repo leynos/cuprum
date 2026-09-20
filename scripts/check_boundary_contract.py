@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from scripts.boundary_compile import CompileTargets, compile_arguments
 from scripts.boundary_workspace import copy_workspace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -314,7 +315,7 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
     return evaluate_safe_target_policy(sources)
 
 
-def _compile(workspace: Path) -> tuple[int, str]:
+def _compile(workspace: Path, targets: CompileTargets | None = None) -> tuple[int, str]:
     """Compile the copied safe library and all its targets with all features."""
     cargo_program = Program("cargo")
     project = ProjectSettings(
@@ -330,9 +331,7 @@ def _compile(workspace: Path) -> tuple[int, str]:
         timeout=600,
     )
     with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
-        result = cargo(
-            "check", "--package", "cuprum-streams", "--all-targets", "--all-features"
-        ).run_sync(context=context)
+        result = cargo(*compile_arguments(targets)).run_sync(context=context)
     return result.exit_code, (result.stdout or "") + (result.stderr or "")
 
 
