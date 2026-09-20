@@ -20,6 +20,10 @@ from scripts.check_boundary_contract import (
 )
 from scripts.tests.boundary_harness_support import copy_boundary_repository
 
+HIDDEN_AUTOMATIC_TARGETS = (
+    ("src/bin/.scratch.rs", "src/bin/visible.rs"),
+    ("src/bin/.scratch/main.rs", "src/bin/visible/main.rs"),
+)
 AUTO_DISABLED_TARGETS = (
     ("autolib", "src/lib.rs"),
     ("autobins", "src/main.rs"),
@@ -126,6 +130,26 @@ def _append_pathless_target(manifest: Path, target_type: str, name: str | None) 
         manifest.read_text(encoding="utf-8") + f"\n{table}{name_entry}\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize(("hidden", "visible"), HIDDEN_AUTOMATIC_TARGETS)
+def test_hidden_automatic_targets_are_ignored(
+    hidden: str, visible: str, tmp_path: Path
+) -> None:
+    """Cargo ignores hidden automatic targets but retains their visible siblings."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    hidden_path = _write_target(crate, hidden, "//! Hidden automatic root." + chr(10))
+    visible_path = _write_target(crate, visible)
+
+    roots = safe_target_roots(root)
+
+    assert hidden_path not in roots, "Cargo must ignore a hidden automatic target"
+    assert visible_path in roots, "Cargo must retain a visible automatic target"
+    assert roots == _metadata_target_roots(crate), (
+        "the scanner and Cargo metadata must agree about hidden target entries"
+    )
+    check_safe_policy(root)
 
 
 @pytest.mark.parametrize(("switch", "target"), AUTO_DISABLED_TARGETS)

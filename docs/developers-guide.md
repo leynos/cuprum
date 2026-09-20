@@ -3343,10 +3343,12 @@ Run the normal project test gate from the repository root:
 make test
 ```
 
-`make test` runs the Python pytest batches before the crate tests through
-`cargo nextest`, including proptest cases compiled under `#[cfg(test)]`. It
-then runs Cargo doctests separately because Nextest does not execute them. Run
-the complete Rust lint and formatting gates before committing Rust changes:
+`make test` runs the Python pytest batches before the crate tests. The
+`test-rust` target uses `cargo nextest run` when `cargo-nextest` is available
+and otherwise falls back to `cargo test`, including proptest cases compiled
+under `#[cfg(test)]`. It then runs Cargo doctests separately because Nextest
+does not execute them. Run the complete Rust lint and formatting gates before
+committing Rust changes:
 
 ```bash
 make check-fmt
@@ -3375,10 +3377,11 @@ keeps its explicit crate-level prohibition, which the boundary contract checks.
 The
 [ADR-011 addendum](adr-011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records why that source-level contract complements the shared lint tables. The
-Rust 1.85.0 maintenance toolchain provides `rustfmt`, `clippy`, and
-`rust-analyzer`; Linux debug Rustdoc, Clippy, and doctests use the separately
-pinned dev-fast configuration, while MSRV, coverage, release, verification, and
-Whitaker retain their prescribed routes.
+The Rust 1.85.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
+`RUSTFMT_TOOLCHAIN=nightly-2026-05-28` provides `rustfmt`. Linux debug Rustdoc,
+Clippy, and doctests use the separately pinned dev-fast configuration, while
+MSRV, coverage, release, verification, and Whitaker retain their prescribed
+routes.
 
 ### Rustfmt fixture compatibility
 

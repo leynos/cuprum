@@ -195,6 +195,8 @@ def _load_automatic_target_roots(
 def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
     """Yield flat and nested conventional Cargo target roots."""
     for entry in _directory_entries(directory):
+        if entry.name.startswith("."):
+            continue
         if entry.suffix == ".rs":
             yield entry
         elif _path_matches(entry, stat.S_ISDIR, "directory"):
