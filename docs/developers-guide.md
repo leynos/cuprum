@@ -676,24 +676,6 @@ combined boundary in `_pipeline_types`.
   `_WriteOutcome.CLOSED` when the downstream pipe closes early. The caller
   keeps writer ownership and closes it exactly once.
 
-### Direct-child resource accounting
-
-The direct-command path uses `cuprum._wait4_process` on Linux and macOS. Its
-POSIX `Popen` wrapper connects the child pipes to asyncio while keeping one
-owner for the child reap; that owner calls `os.wait4` and returns the usage for
-the specific child. The result builder uses that usage for user CPU time,
-system CPU time, and maximum RSS. Linux `ru_maxrss` values are converted from
-KiB to bytes; macOS values are already bytes. Do not add a second waiter or
-derive RSS by subtracting `RUSAGE_CHILDREN.ru_maxrss` snapshots, because the
-latter is a process-global high-water mark.
-
-Platforms without the wait4 path retain the aggregate `RUSAGE_CHILDREN`
-fallback for CPU deltas and leave maximum RSS unavailable. Windows and
-platforms without child-resource accounting leave all three resource fields
-unavailable. Pipeline stages always leave all resource fields as `None`: their
-children are reaped concurrently, so process-global resource data cannot be
-assigned safely to an individual stage.
-
 `SafeCmd.run()` enforces the allowlist, then collects hooks from the current
 context, emits the `plan` event, runs before-hooks, and delegates subprocess
 execution to `_execute_with_hooks`. Pipeline execution follows the same
@@ -4886,10 +4868,13 @@ session.
 child-resource accounting. It detects whether `resource.getrusage` with
 `RUSAGE_CHILDREN` exists, captures normalized snapshots when it does, and
 returns `None` when the module, API, or snapshot call is unavailable. The
-direct-command path on Linux and macOS instead uses `cuprum._wait4_process`:
-its sole child-reap owner calls `os.wait4` and returns usage for that specific
-child. The result builder uses that usage for user and system CPU time and
-maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
+direct-command path on Linux and macOS instead uses `cuprum._wait4_process`: its
+`Popen`-based wrapper connects the child pipes to asyncio, while its sole
+child-reap owner calls `os.wait4` and returns usage for that specific child.
+The direct path must keep exactly one child reaper: do not add a second waiter,
+because a second reap would take the resource usage away from the owner that
+publishes it. The result builder uses that usage for user and system CPU time
+and maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
 
 The direct wait4 path never derives RSS by subtracting snapshots, because
 `ru_maxrss` is a process-global high-water mark rather than an accumulating
