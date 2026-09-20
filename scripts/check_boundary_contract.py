@@ -200,7 +200,9 @@ def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
         if entry.suffix == ".rs":
             yield entry
         elif _path_matches(entry, stat.S_ISDIR, "directory"):
-            yield entry / "main.rs"
+            candidate = entry / "main.rs"
+            if _path_matches(candidate, stat.S_ISREG, "root"):
+                yield candidate
 
 
 def _directory_entries(directory: Path) -> tuple[Path, ...]:
@@ -214,16 +216,14 @@ def _directory_entries(directory: Path) -> tuple[Path, ...]:
         raise ValueError(msg) from error
 
 
-def _path_matches(
-    path: Path, predicate: cabc.Callable[[int], bool], target: str
-) -> bool:
+def _path_matches(path: Path, check: cabc.Callable[[int], bool], kind: str) -> bool:
     """Inspect one target path with a stat-mode predicate."""
     try:
-        return predicate(path.stat().st_mode)
+        return check(path.stat().st_mode)
     except FileNotFoundError:
         return False
     except OSError as error:
-        msg = f"cannot inspect target {target} {path}: {error}"
+        msg = f"cannot inspect target {kind} {path}: {error}"
         raise ValueError(msg) from error
 
 

@@ -152,6 +152,32 @@ def test_hidden_automatic_targets_are_ignored(
     check_safe_policy(root)
 
 
+def test_visible_support_directory_without_main_is_not_a_target(tmp_path: Path) -> None:
+    """Only a visible nested main.rs is an automatic Cargo target."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    support = crate / "tests/support"
+    support.mkdir(parents=True)
+
+    roots = safe_target_roots(root)
+
+    assert support / "main.rs" not in roots, "support without main.rs is not a target"
+    assert roots == _metadata_target_roots(crate), (
+        "the scanner and Cargo metadata must ignore the support directory"
+    )
+    check_safe_policy(root)
+
+    nested = _write_target(
+        crate, "tests/behaviour/main.rs", "//! Missing safety." + chr(10)
+    )
+
+    assert nested in safe_target_roots(root), (
+        "a visible nested main.rs must remain an automatic target"
+    )
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
+
+
 @pytest.mark.parametrize(("switch", "target"), AUTO_DISABLED_TARGETS)
 def test_disabled_automatic_targets_are_not_checked(
     switch: str, target: str, tmp_path: Path
