@@ -4,10 +4,12 @@
 use std::os::fd::{AsRawFd, IntoRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, IntoRawHandle};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{LockResult, Mutex, MutexGuard},
+};
 
 use rstest::{fixture, rstest};
-use std::sync::{LockResult, Mutex, MutexGuard};
 
 use super::{adopt_writer, borrow, borrow_reader, fd_is_open, pipe, read_once, with_owned_writer};
 

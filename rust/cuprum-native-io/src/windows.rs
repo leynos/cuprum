@@ -1,15 +1,17 @@
 //! Windows borrowed I/O, pipe ownership, and native handle observation.
 
-use std::io::{self, Read, Write};
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::{
+    io::{self, Read, Write},
+    os::windows::io::{AsRawHandle, FromRawHandle},
+};
 
+#[cfg(test)]
+use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, GetHandleInformation};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 
 #[cfg(test)]
 use crate::PlatformFd;
 use crate::{BorrowedStream, OwnedStream};
-#[cfg(test)]
-use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, GetHandleInformation};
 
 /// Create two uniquely owned, non-inheritable anonymous pipe handles.
 ///

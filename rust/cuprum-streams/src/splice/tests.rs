@@ -2,16 +2,20 @@
 //! drain: full transfer between pipes, fallback signalling for
 //! unsupported descriptor types, and broken-pipe draining.
 
-use std::io::{self, Write};
-use std::os::fd::OwnedFd;
+use std::{
+    io::{self, Write},
+    os::fd::OwnedFd,
+};
 
 use proptest::prelude::*;
 use rstest::{fixture, rstest};
 use tempfile::NamedTempFile;
 
 use super::{accumulate_splices, drain_reader, splice_once_with, try_splice_pump};
-use crate::errors::PumpError;
-use crate::test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to};
+use crate::{
+    errors::PumpError,
+    test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to},
+};
 
 /// A connected `pipe(2)` pair: `(read_end, write_end)`.
 type PipePair = (OwnedFd, OwnedFd);

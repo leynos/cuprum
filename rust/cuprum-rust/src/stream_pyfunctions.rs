@@ -1,8 +1,16 @@
 //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
 use super::{
-    BufferSize, PumpError, PyResult, Python, ReaderFd, consume_stream, convert_fd, pump_stream,
-    pyfunction, validate_buffer_size,
+    BufferSize,
+    PumpError,
+    PyResult,
+    Python,
+    ReaderFd,
+    consume_stream,
+    convert_fd,
+    pump_stream,
+    pyfunction,
+    validate_buffer_size,
 };
 
 /// Run a prepared stream operation after validating its buffer size.

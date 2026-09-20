@@ -9,9 +9,7 @@
 pub(crate) struct ValidUpTo(usize);
 
 impl ValidUpTo {
-    pub(crate) const fn value(self) -> usize {
-        self.0
-    }
+    pub(crate) const fn value(self) -> usize { self.0 }
 }
 
 /// Marker indicating whether this is the final chunk of input.
@@ -19,13 +17,9 @@ impl ValidUpTo {
 pub(crate) struct FinalChunk(bool);
 
 impl FinalChunk {
-    pub(crate) const fn new(is_final: bool) -> Self {
-        Self(is_final)
-    }
+    pub(crate) const fn new(is_final: bool) -> Self { Self(is_final) }
 
-    pub(crate) const fn is_final(self) -> bool {
-        self.0
-    }
+    pub(crate) const fn is_final(self) -> bool { self.0 }
 }
 
 /// Decode pending bytes as UTF-8, replacing invalid sequences.
@@ -182,14 +176,14 @@ mod tests {
 
     fn incomplete_tail_strategy() -> impl Strategy<Value = Vec<u8>> {
         prop_oneof![
-            Just(vec![0xC2]),
-            Just(vec![0xDF]),
-            Just(vec![0xE0, 0xA0]),
-            Just(vec![0xE1, 0x80]),
-            Just(vec![0xEF, 0xBF]),
-            Just(vec![0xF0, 0x90, 0x80]),
-            Just(vec![0xF1, 0x80, 0x80]),
-            Just(vec![0xF4, 0x8F, 0xBF]),
+            Just(vec![0xc2]),
+            Just(vec![0xdf]),
+            Just(vec![0xe0, 0xa0]),
+            Just(vec![0xe1, 0x80]),
+            Just(vec![0xef, 0xbf]),
+            Just(vec![0xf0, 0x90, 0x80]),
+            Just(vec![0xf1, 0x80, 0x80]),
+            Just(vec![0xf4, 0x8f, 0xbf]),
         ]
     }
 

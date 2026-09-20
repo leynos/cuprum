@@ -61,13 +61,9 @@ impl BufferSize {
     ///
     /// # Errors
     /// Rejects non-positive sizes and sizes above the allocation cap.
-    pub fn new(size: i64) -> Result<Self, &'static str> {
-        checked_buffer_size(size).map(Self)
-    }
+    pub fn new(size: i64) -> Result<Self, &'static str> { checked_buffer_size(size).map(Self) }
 
-    const fn value(self) -> usize {
-        self.0
-    }
+    const fn value(self) -> usize { self.0 }
 }
 
 /// Pump from a borrowed reader, consuming the uniquely owned writer.
