@@ -132,11 +132,13 @@ def _explicit_target_roots(
 
 def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
     """Normalise a Cargo target table into a sequence of target definitions."""
-    if isinstance(value, dict):
-        return (value,)
-    if isinstance(value, list):
-        return tuple(target for target in value if isinstance(target, dict))
-    return ()
+    match value:
+        case dict() as target:
+            return (target,)
+        case list() as targets:
+            return tuple(target for target in targets if isinstance(target, dict))
+        case _:
+            return ()
 
 
 def _build_script_target_root(
