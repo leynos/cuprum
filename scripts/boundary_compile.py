@@ -10,6 +10,11 @@ import dataclasses
 import re
 import typing as typ
 
+from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
 TARGET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
@@ -116,3 +121,41 @@ def compile_arguments(targets: CompileTargets | None = None) -> tuple[str, ...]:
         argument for name in targets.names for argument in ("--test", name)
     )
     return ("check", "--package", "cuprum-streams", "--all-features", *test_arguments)
+
+
+def _compile(
+    workspace: Path, target_directory: Path, targets: CompileTargets | None = None
+) -> tuple[int, str]:
+    """Compile a copied safe library through the boundary command contract.
+
+    Parameters
+    ----------
+    workspace : Path
+        Isolated Rust workspace containing the copied boundary sources.
+    target_directory : Path
+        Dedicated Cargo target directory for the verification run.
+    targets : CompileTargets | None, optional
+        Named integration tests to compile. ``None`` retains the production
+        ``--all-targets`` command; a selection compiles only its named tests.
+
+    Returns
+    -------
+    tuple[int, str]
+        Cargo's exit code and combined standard output and standard error.
+    """
+    cargo_program = Program("cargo")
+    project = ProjectSettings(
+        name="boundary-contract",
+        programs=(cargo_program,),
+        documentation_locations=("docs/rust-boundary-verification.md",),
+        noise_rules=(),
+    )
+    cargo = sh.make(cargo_program, catalogue=ProgramCatalogue(projects=(project,)))
+    context = sh.ExecutionContext(
+        cwd=workspace,
+        env={"CARGO_TARGET_DIR": str(target_directory)},
+        timeout=600,
+    )
+    with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
+        result = cargo(*compile_arguments(targets)).run_sync(context=context)
+    return result.exit_code, (result.stdout or "") + (result.stderr or "")

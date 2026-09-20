@@ -23,8 +23,8 @@ from pathlib import Path
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
-from scripts.boundary_compile import CompileTargets, compile_arguments
+from scripts.boundary_compile import CompileTargets
+from scripts.boundary_compile import _compile as _compile_workspace
 from scripts.boundary_workspace import copy_workspace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -316,37 +316,10 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
 
 
 def _compile(workspace: Path, targets: CompileTargets | None = None) -> tuple[int, str]:
-    """Compile the copied safe library with the requested verified target coverage.
-
-    Parameters
-    ----------
-    workspace : Path
-        Isolated Rust workspace containing the copied boundary sources.
-    targets : CompileTargets | None, optional
-        Named integration tests to compile. ``None`` preserves the production
-        ``--all-targets`` command; a selection compiles only its named tests.
-
-    Returns
-    -------
-    tuple[int, str]
-        Cargo's exit code and combined standard output and standard error.
-    """
-    cargo_program = Program("cargo")
-    project = ProjectSettings(
-        name="boundary-contract",
-        programs=(cargo_program,),
-        documentation_locations=("docs/rust-boundary-verification.md",),
-        noise_rules=(),
+    """Keep the harness's compiler seam injectable for its probe tests."""
+    return _compile_workspace(
+        workspace, ROOT / "rust/target/boundary-contract", targets
     )
-    cargo = sh.make(cargo_program, catalogue=ProgramCatalogue(projects=(project,)))
-    context = sh.ExecutionContext(
-        cwd=workspace,
-        env={"CARGO_TARGET_DIR": str(ROOT / "rust/target/boundary-contract")},
-        timeout=600,
-    )
-    with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
-        result = cargo(*compile_arguments(targets)).run_sync(context=context)
-    return result.exit_code, (result.stdout or "") + (result.stderr or "")
 
 
 def main() -> None:
