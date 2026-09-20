@@ -61,7 +61,8 @@ RUSTFMT_CARGO ?= $(CARGO) +$(RUSTFMT_TOOLCHAIN)
 WHITAKER ?= whitaker
 BUILD_JOBS ?=
 RUST_FLAGS ?= -D warnings
-RUSTDOC_FLAGS ?= -D warnings
+RUSTDOC_FLAGS ?= --cfg docsrs -D warnings
+DOCTEST_RUSTDOC_FLAGS = $(RUSTDOC_FLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Zunstable-options --display-doctest-warnings --doctest-build-arg=-D --doctest-build-arg=warnings)
 CARGO_FLAGS ?= --all-targets --all-features
 CLIPPY_FLAGS ?= $(CARGO_FLAGS) -- $(RUST_FLAGS)
 DOC_FLAGS ?= --jobs 1
@@ -70,6 +71,7 @@ DOC_FLAGS ?= --jobs 1
 # billed for, and never above it.
 TEST_JOBS ?= 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
+DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
@@ -104,6 +106,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_native_sdist.py \
   scripts/tests/test_boundary_*.py \
+  scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
@@ -361,6 +364,7 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \
 	fi
+	cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTDOCFLAGS="$(DOCTEST_RUSTDOC_FLAGS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(DOCTEST_FLAGS)
 
 msrv-check: ## Verify every Rust target compiles on the published MSRV
 	cd $(RUST_DIR) && $(MSRV_CARGO_COMMAND) check --workspace --all-targets --all-features

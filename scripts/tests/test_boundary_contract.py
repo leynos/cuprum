@@ -7,19 +7,36 @@ every probe is restored — without invoking Cargo.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
 
 from scripts import check_boundary_contract as contract
-from scripts.check_boundary_contract import check_members, check_safe_policy
-from scripts.tests.boundary_harness_support import copy_boundary_repository
+from scripts.check_boundary_contract import (
+    check_member_lint_inheritance,
+    check_members,
+    check_safe_policy,
+    safe_target_roots,
+)
+from scripts.tests.boundary_harness_support import (
+    cargo_target_roots,
+    copy_boundary_repository,
+)
 
 # The one diagnostic string that distinguishes a rejected probe from a compile
 # that failed for some unrelated reason.
 UNSAFE_MARKERS = ("forbid(unsafe_code)", "-F unsafe-code")
 
-TARGETS = ("src/lib.rs", "tests/compile_tests.rs", "tests/future_target.rs")
+TARGETS = ("src/lib.rs", "tests/compile_tests.rs")
+FUTURE_TARGETS = (
+    "src/main.rs",
+    "src/bin/future_target.rs",
+    "build.rs",
+    "examples/future_target.rs",
+    "tests/future_target.rs",
+    "benches/future_target.rs",
+)
 
 
 class _RecordedCompile:
@@ -78,34 +95,124 @@ def test_audited_members_are_accepted() -> None:
     )
 
 
-@pytest.mark.parametrize("replacement", ["deny", "allow"])
-def test_safe_targets_cannot_weaken_unsafe_policy(replacement: str) -> None:
-    """A target-wide deny can be locally relaxed, so only forbid is accepted."""
+def test_all_audited_members_inherit_the_workspace_lint_baseline() -> None:
+    """Every package must use the root tables without a local replacement."""
     root = Path(__file__).resolve().parents[2] / "rust"
-    workspace = (root / "Cargo.toml").read_text(encoding="utf-8")
-    safe = (root / "cuprum-streams/Cargo.toml").read_text(encoding="utf-8")
-    check_safe_policy(workspace, safe)
-    weakened = safe.replace('unsafe_code = "forbid"', f'unsafe_code = "{replacement}"')
-    with pytest.raises(ValueError, match="forbid unsafe in all targets"):
-        check_safe_policy(workspace, weakened)
+    check_member_lint_inheritance(root)
+
+
+@pytest.mark.parametrize(
+    "member", ["cuprum-rust", "cuprum-native-io", "cuprum-streams"]
+)
+def test_member_lint_inheritance_rejects_a_local_override(
+    member: str, tmp_path: Path
+) -> None:
+    """No audited member may opt out of the shared lint baseline."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    manifest = root / member / "Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "[lints]\nworkspace = true", "[lints]\nworkspace = false", 1
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=f"{member} must inherit"):
+        check_member_lint_inheritance(root)
+
+
+def test_safe_target_roots_cover_every_current_automatic_target(tmp_path: Path) -> None:
+    """The target scan includes the library and compile-contract integration test."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    actual = tuple(
+        path.relative_to(root / "cuprum-streams").as_posix()
+        for path in safe_target_roots(root)
+    )
+    assert actual == TARGETS, "the safe-target scanner must cover every Cargo root"
+
+
+@pytest.mark.parametrize("target_type", ["lib", "bin", "example", "test", "bench"])
+def test_safe_target_roots_cover_explicit_cargo_target_tables(
+    target_type: str, tmp_path: Path
+) -> None:
+    """Every explicit Cargo target type remains inside the safe boundary."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    manifest = crate / "Cargo.toml"
+    heading = f"[{target_type}]" if target_type == "lib" else f"[[{target_type}]]"
+    relative_path = f"tools/{target_type}_target.rs"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + f'\n{heading}\npath = "{relative_path}"\n',
+        encoding="utf-8",
+    )
+    target = crate / relative_path
+    target.parent.mkdir()
+    target.write_text(
+        "//! Explicit safe target.\n#![forbid(unsafe_code)]\n",
+        encoding="utf-8",
+    )
+
+    roots = safe_target_roots(root)
+
+    assert target in roots, f"the explicit {target_type} target must be checked"
+
+
+@pytest.mark.parametrize("target", FUTURE_TARGETS)
+def test_new_safe_target_without_an_unsafe_prohibition_is_rejected(
+    target: str, tmp_path: Path
+) -> None:
+    """A future automatic target cannot weaken the safe-crate boundary."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    check_safe_policy(root)
+    future_target = root / "cuprum-streams" / target
+    future_target.parent.mkdir(parents=True, exist_ok=True)
+    future_target.write_text(
+        "//! Deliberately incomplete safety contract.\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
+
+
+def test_configured_build_script_without_an_unsafe_prohibition_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """An explicit build-script path is also an unsafe-policy target root."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    manifest = root / "cuprum-streams/Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "publish = false", 'publish = false\nbuild = "tools/build.rs"'
+        ),
+        encoding="utf-8",
+    )
+    target = root / "cuprum-streams/tools/build.rs"
+    target.parent.mkdir()
+    target.write_text(
+        "//! Deliberately incomplete safety contract.\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
 
 
 def test_main_probes_every_target_with_every_unsafe_form(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The baseline compiles, then each target is probed with all three forms."""
+    """The baseline compiles, then each explicit safe root receives every probe."""
     root, compiler = _drive_contract(tmp_path, monkeypatch)
 
     for probe in contract.PROBES:
         assert sum(probe in text for text in compiler.probes) == len(TARGETS), (
             f"the {probe!r} probe must be compiled against every target"
         )
+    workspace = root / ".cache/boundary-contract/workspace"
     logs = root / "rust/target/boundary-verification"
     assert (logs / "safe-positive.log").read_text(encoding="utf-8") == (
         "finished checking"
     ), "the baseline result must be archived"
     expected = [
-        f"{Path(target).stem}-unsafe-{index}.log"
+        contract._probe_log_name(
+            workspace, workspace / "cuprum-streams" / target, index
+        )
         for target in TARGETS
         for index in range(3)
     ]
@@ -113,6 +220,92 @@ def test_main_probes_every_target_with_every_unsafe_form(
         "safe-positive.log",
         *expected,
     ]), "every probe result must be archived under its target and form"
+
+
+def test_main_preserves_automatic_directory_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The isolated probe workspace retains Cargo's directory-symlink topology."""
+    root = copy_boundary_repository(tmp_path)
+    crate = root / "rust/cuprum-streams"
+    shared = crate / "shared/main.rs"
+    shared.parent.mkdir()
+    shared.write_text("//! Non-target source.\n", encoding="utf-8")
+    try:
+        (crate / "tests/shared").symlink_to("../shared", target_is_directory=True)
+        (crate / "tests/broken").symlink_to("../missing", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"the platform cannot create the symlink fixture: {error}")
+    before = cargo_target_roots(crate)
+    assert {path.relative_to(crate) for path in before} == {
+        Path(path) for path in TARGETS
+    }, "Cargo must omit directory symlink targets before the copy"
+    compiler = _RecordedCompile()
+    monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(contract, "_compile", compiler)
+
+    contract.main()
+
+    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
+    after = cargo_target_roots(copied_crate)
+    assert {path.relative_to(copied_crate) for path in after} == {
+        Path(path) for path in TARGETS
+    }, "Cargo must omit directory symlink targets after the copy"
+    assert all((copied_crate / target).is_file() for target in TARGETS), (
+        "the copied workspace must retain each intended target"
+    )
+    assert (copied_crate / "tests/shared").is_symlink(), (
+        "the copied workspace must preserve valid directory symlinks"
+    )
+    assert (copied_crate / "tests/broken").is_symlink(), (
+        "the copied workspace must preserve broken directory symlinks"
+    )
+    assert len(compiler.probes) == 1 + len(TARGETS) * len(contract.PROBES), (
+        "the copied topology must leave the probe target count unchanged"
+    )
+
+
+def test_same_basename_target_logs_are_unique_and_traceable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Separate Cargo targets retain each unsafe-form result without overwriting."""
+    workspace = tmp_path / "workspace"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    targets = (
+        workspace / "cuprum-streams/examples/client.rs",
+        workspace / "cuprum-streams/tests/client.rs",
+    )
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("#![forbid(unsafe_code)]" + chr(10), encoding="utf-8")
+    monkeypatch.setattr(
+        contract,
+        "_compile",
+        lambda _workspace: (1, "error: forbid(unsafe_code)"),
+    )
+
+    for target in targets:
+        contract._check_target(workspace, target, logs)
+
+    expected = {
+        contract._probe_log_name(workspace, target, index)
+        for target in targets
+        for index in range(len(contract.PROBES))
+    }
+    assert {path.name for path in logs.glob("*.log")} == expected, (
+        "each same-basename target and unsafe form must retain its own log"
+    )
+    assert len(expected) == len(targets) * len(contract.PROBES), (
+        "the expected log names must be distinct for every target and probe"
+    )
+    for target in targets:
+        name = contract._probe_log_name(workspace, target, 0)
+        encoded = name.removeprefix("client-").removesuffix("-unsafe-0.log")
+        padding = "=" * (-len(encoded) % 4)
+        assert base64.urlsafe_b64decode(encoded + padding).decode() == (
+            target.relative_to(workspace).as_posix()
+        ), "the encoded log name must identify its workspace-relative target"
 
 
 def test_every_probed_target_is_restored_afterwards(

@@ -62,6 +62,12 @@ def _routing_lines(output: str) -> list[str]:
     ]
 
 
+def _assert_required_tokens(route: str, tokens: tuple[str, ...], subject: str) -> None:
+    """Require every token that makes a routed command's contract binding."""
+    missing = tuple(token for token in tokens if token not in route)
+    assert not missing, f"{subject} omitted required routing tokens: {missing}"
+
+
 def _assert_fragment_free(route: str) -> None:
     """Reject any selected Linux development acceleration from a protected route."""
     assert "--config" not in route, f"protected route selected Cargo config: {route}"
@@ -198,7 +204,7 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     direct_cargo = [
         line for line in routing.splitlines() if "probe-cargo --config" in line
     ]
-    assert sum(line.count("probe-cargo --config") for line in direct_cargo) == 7, (
+    assert sum(line.count("probe-cargo --config") for line in direct_cargo) == 8, (
         "each standard and explicit debug Cargo invocation must select one fragment"
     )
     assert all(
@@ -209,6 +215,28 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     )
     assert "-Clink-arg=-fuse-ld=mold" in routing, (
         "explicit RUSTFLAGS must retain the Linux linker selection"
+    )
+
+
+def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
+    """Keep doctests covered when nextest owns ordinary Rust tests."""
+    output = _dry_run("test-rust", variables={"DEV_FAST_HOST_IS_LINUX": "yes"})
+    doctest = next(
+        line
+        for line in _routing_lines(output)
+        if "test --workspace --doc --all-features" in line
+    )
+    _assert_required_tokens(
+        doctest,
+        (
+            "probe-cargo --config ../tools/dev-fast/config.toml",
+            'RUSTFLAGS="-D warnings',
+            'RUSTDOCFLAGS="--cfg docsrs -D warnings -Zunstable-options',
+            "--display-doctest-warnings",
+            "--doctest-build-arg=-D --doctest-build-arg=warnings",
+            "-Clink-arg=-fuse-ld=mold",
+        ),
+        "the Linux doctest route",
     )
 
 

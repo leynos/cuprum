@@ -229,7 +229,9 @@ working on the Rust portions of the project:
     RUSTFLAGS="-D warnings" cargo test --all-targets --all-features
     ```
 
-    running the Rust test suite with warnings denied. Use `make fmt`
+    running the Rust test suite with warnings denied. It then runs Cargo
+    doctests separately with all features, because Nextest does not execute
+    doctests. Use `make fmt`
     (`cargo +nightly-2026-05-28 fmt --all`) to apply formatting fixes reported
     by the formatter check alongside the Python and Markdown formatters.
 - The project toolchain stays pinned to Rust `1.85.0` and declares `rustfmt`,

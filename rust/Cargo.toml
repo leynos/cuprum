@@ -15,8 +15,10 @@ allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 blanket_clippy_restriction_lints = "deny"
 cognitive_complexity = "deny"
+disallowed_methods = "deny"
 needless_pass_by_value = "deny"
 implicit_hasher = "deny"
+missing_assert_message = "deny"
 
 # 2. debugging leftovers
 dbg_macro = "deny"
@@ -71,7 +73,15 @@ result_large_err = "deny"
 
 [workspace.lints.rust]
 missing_docs = "deny"
+renamed_and_removed_lints = "deny"
+unknown_lints = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [workspace.lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
 missing_crate_level_docs = "deny"
+private_intra_doc_links = "deny"
+unescaped_backticks = "deny"
