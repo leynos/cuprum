@@ -133,11 +133,13 @@ def test_unreadable_source_fails_closed_with_its_path(
     target = root / "cuprum-streams/src/lib.rs"
     original_read_text = Path.read_text
 
-    def read_text(path: Path, *args: object, **kwargs: object) -> str:
+    def read_text(
+        path: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
         """Refuse only the selected target while retaining real fixture reads."""
         if path == target:
             raise PermissionError
-        return original_read_text(path, *args, **kwargs)
+        return original_read_text(path, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", read_text)
 
