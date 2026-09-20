@@ -247,15 +247,19 @@ def test_same_basename_target_logs_are_unique_and_traceable(
         for target in targets
         for index in range(len(contract.PROBES))
     }
-    assert {path.name for path in logs.glob("*.log")} == expected
-    assert len(expected) == len(targets) * len(contract.PROBES)
+    assert {path.name for path in logs.glob("*.log")} == expected, (
+        "each same-basename target and unsafe form must retain its own log"
+    )
+    assert len(expected) == len(targets) * len(contract.PROBES), (
+        "the expected log names must be distinct for every target and probe"
+    )
     for target in targets:
         name = contract._probe_log_name(workspace, target, 0)
         encoded = name.removeprefix("client-").removesuffix("-unsafe-0.log")
         padding = "=" * (-len(encoded) % 4)
         assert base64.urlsafe_b64decode(encoded + padding).decode() == (
             target.relative_to(workspace).as_posix()
-        )
+        ), "the encoded log name must identify its workspace-relative target"
 
 
 def test_every_probed_target_is_restored_afterwards(

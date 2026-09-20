@@ -101,7 +101,7 @@ def _metadata_target_roots(crate: Path) -> tuple[Path, ...]:
     """Return Cargo's effective source roots for the safe package."""
     cargo = shutil.which("cargo")
     assert cargo is not None, "Cargo is required for the metadata contract"
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo metadata argv runs in the isolated fixture.
         [cargo, "metadata", "--no-deps", "--format-version=1"],
         capture_output=True,
         check=False,
@@ -194,9 +194,13 @@ def test_explicit_target_replaces_its_dormant_automatic_root(
 
     roots = safe_target_roots(root)
 
-    assert custom_path in roots
-    assert dormant_path not in roots
-    assert roots == _metadata_target_roots(crate)
+    assert custom_path in roots, "the explicit target path must remain audited"
+    assert dormant_path not in roots, (
+        "the explicit target must replace its dormant conventional root"
+    )
+    assert roots == _metadata_target_roots(crate), (
+        "the scanner and Cargo metadata must resolve identical target roots"
+    )
     check_safe_policy(root)
 
 
