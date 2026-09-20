@@ -7,6 +7,7 @@ every probe is restored — without invoking Cargo.
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
@@ -200,12 +201,15 @@ def test_main_probes_every_target_with_every_unsafe_form(
         assert sum(probe in text for text in compiler.probes) == len(TARGETS), (
             f"the {probe!r} probe must be compiled against every target"
         )
+    workspace = root / ".cache/boundary-contract/workspace"
     logs = root / "rust/target/boundary-verification"
     assert (logs / "safe-positive.log").read_text(encoding="utf-8") == (
         "finished checking"
     ), "the baseline result must be archived"
     expected = [
-        f"{Path(target).stem}-unsafe-{index}.log"
+        contract._probe_log_name(
+            workspace, workspace / "cuprum-streams" / target, index
+        )
         for target in TARGETS
         for index in range(3)
     ]
@@ -213,6 +217,45 @@ def test_main_probes_every_target_with_every_unsafe_form(
         "safe-positive.log",
         *expected,
     ]), "every probe result must be archived under its target and form"
+
+
+def test_same_basename_target_logs_are_unique_and_traceable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Separate Cargo targets retain each unsafe-form result without overwriting."""
+    workspace = tmp_path / "workspace"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    targets = (
+        workspace / "cuprum-streams/examples/client.rs",
+        workspace / "cuprum-streams/tests/client.rs",
+    )
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("#![forbid(unsafe_code)]" + chr(10), encoding="utf-8")
+    monkeypatch.setattr(
+        contract,
+        "_compile",
+        lambda _workspace: (1, "error: forbid(unsafe_code)"),
+    )
+
+    for target in targets:
+        contract._check_target(workspace, target, logs)
+
+    expected = {
+        contract._probe_log_name(workspace, target, index)
+        for target in targets
+        for index in range(len(contract.PROBES))
+    }
+    assert {path.name for path in logs.glob("*.log")} == expected
+    assert len(expected) == len(targets) * len(contract.PROBES)
+    for target in targets:
+        name = contract._probe_log_name(workspace, target, 0)
+        encoded = name.removeprefix("client-").removesuffix("-unsafe-0.log")
+        padding = "=" * (-len(encoded) % 4)
+        assert base64.urlsafe_b64decode(encoded + padding).decode() == (
+            target.relative_to(workspace).as_posix()
+        )
 
 
 def test_every_probed_target_is_restored_afterwards(

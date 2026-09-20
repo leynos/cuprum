@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo metadata argv.
 from pathlib import Path
 
 import pytest
@@ -35,6 +38,14 @@ EXPLICIT_PROPERTY_TARGETS = (
     "tools/explicit.rs",
     "tools/build.rs",
 )
+OVERRIDING_EXPLICIT_TARGETS = (
+    ("lib", None, "src/lib.rs", "tools/custom_lib.rs"),
+    ("bin", "cuprum-streams", "src/main.rs", "tools/custom_main.rs"),
+    ("bin", "client", "src/bin/client.rs", "tools/custom_client.rs"),
+    ("example", "client", "examples/client.rs", "tools/custom_example.rs"),
+    ("test", "client", "tests/client.rs", "tools/custom_test.rs"),
+    ("bench", "client", "benches/client.rs", "tools/custom_bench.rs"),
+)
 PATHLESS_EXPLICIT_TARGETS = (
     ("lib", None, "src/lib.rs"),
     ("bin", "cuprum-streams", "src/main.rs"),
@@ -66,6 +77,45 @@ def _set_package_field(manifest: Path, field: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _append_explicit_target(
+    manifest: Path, target_type: str, name: str | None, source: str
+) -> None:
+    """Declare one named Cargo target table with a custom source path."""
+    table = "[lib]" if target_type == "lib" else f"[[{target_type}]]"
+    name_entry = "" if name is None else chr(10) + f'name = "{name}"'
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + chr(10)
+        + table
+        + name_entry
+        + chr(10)
+        + f'path = "{source}"'
+        + chr(10),
+        encoding="utf-8",
+    )
+
+
+def _metadata_target_roots(crate: Path) -> tuple[Path, ...]:
+    """Return Cargo's effective source roots for the safe package."""
+    cargo = shutil.which("cargo")
+    assert cargo is not None, "Cargo is required for the metadata contract"
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        [cargo, "metadata", "--no-deps", "--format-version=1"],
+        capture_output=True,
+        check=False,
+        cwd=crate,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    metadata = json.loads(completed.stdout)
+    package = next(
+        package
+        for package in metadata["packages"]
+        if package["name"] == "cuprum-streams"
+    )
+    return tuple(sorted(Path(target["src_path"]) for target in package["targets"]))
 
 
 def _append_pathless_target(manifest: Path, target_type: str, name: str | None) -> None:
@@ -125,6 +175,34 @@ def test_explicit_target_without_unsafe_prohibition_is_rejected(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
         check_safe_policy(root)
+
+
+@pytest.mark.parametrize(
+    ("target_type", "name", "dormant", "custom"), OVERRIDING_EXPLICIT_TARGETS
+)
+def test_explicit_target_replaces_its_dormant_automatic_root(
+    target_type: str,
+    name: str | None,
+    dormant: str,
+    custom: str,
+    tmp_path: Path,
+) -> None:
+    """Cargo metadata and the safe policy must agree on explicit overrides."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    manifest = crate / "Cargo.toml"
+    dormant_path = _write_target(
+        crate, dormant, "//! Dormant automatic root." + chr(10)
+    )
+    custom_path = _write_target(crate, custom)
+    _append_explicit_target(manifest, target_type, name, custom)
+
+    roots = safe_target_roots(root)
+
+    assert custom_path in roots
+    assert dormant_path not in roots
+    assert roots == _metadata_target_roots(crate)
+    check_safe_policy(root)
 
 
 @pytest.mark.parametrize(("target_type", "name", "target"), PATHLESS_EXPLICIT_TARGETS)
