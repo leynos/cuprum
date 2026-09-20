@@ -3344,13 +3344,38 @@ make test
 ```
 
 `make test` runs the Python pytest batches before the crate tests through
-`cargo nextest`, including proptest cases compiled under `#[cfg(test)]`. Run
+`cargo nextest`, including proptest cases compiled under `#[cfg(test)]`. It
+then runs Cargo doctests separately because Nextest does not execute them. Run
 the complete Rust lint and formatting gates before committing Rust changes:
 
 ```bash
 make check-fmt
 make lint
 ```
+
+### Rust lint baseline
+
+`rust/Cargo.toml` is the authoritative shared Rust lint table and every
+workspace member declares `[lints] workspace = true`. `rust/clippy.toml` holds
+the shared thresholds: cognitive complexity 9, four arguments, 70 lines, and
+four nesting levels. New workspace members must inherit these tables rather
+than replicate or weaken them.
+
+The baseline follows Concordat revision
+`cf4333c3f38b55bf3d4d5d2663e2147e2da1cec8` with local extensions for
+`missing_assert_message` and environment-method injection. `std::env` readers
+and mutators are disallowed in favour of injected environment or
+working-directory seams. Fix findings at source; `#[allow]` is not permitted,
+and a reasoned `#[expect]` is reserved for macro-expansion artefacts or genuine
+floating-point arithmetic.
+
+The workspace cannot forbid unsafe code globally: `cuprum-native-io` and
+`cuprum-rust` are the audited syscall and FFI boundaries. `cuprum-streams`
+keeps its explicit crate-level prohibition, which the boundary contract checks.
+The Rust 1.85.0 maintenance toolchain provides `rustfmt`, `clippy`, and
+`rust-analyzer`; Linux debug Rustdoc, Clippy, and doctests use the separately
+pinned dev-fast configuration, while MSRV, coverage, release, verification, and
+Whitaker retain their prescribed routes.
 
 ### Rustfmt fixture compatibility
 
@@ -4068,7 +4093,7 @@ checks the members that result.
 `uv build --sdist` archive must retain:
 
 - the workspace manifests and pins — `rust/Cargo.toml`, `rust/Cargo.lock`,
-  `rust/rust-toolchain.toml`, and `rust/dylint.toml`;
+  `rust/clippy.toml`, `rust/rust-toolchain.toml`, and `rust/dylint.toml`;
 - each crate manifest — `rust/cuprum-rust/Cargo.toml`,
   `rust/cuprum-streams/Cargo.toml`, and `rust/cuprum-native-io/Cargo.toml`;
 - all three crate source trees, including each crate's `src/` and the
@@ -4079,8 +4104,8 @@ sdist carries sources rather than a multi-gigabyte build cache.
 
 Maturin builds its archive from the same workspace, and the
 `[tool.maturin].include` entries carry the two files it would not otherwise
-copy — `rust/rust-toolchain.toml` and `rust/dylint.toml`, both restricted with
-`format = "sdist"` so they never enter a wheel.
+copy — `rust/clippy.toml`, `rust/rust-toolchain.toml`, and `rust/dylint.toml`,
+all restricted with `format = "sdist"` so they never enter a wheel.
 
 `tests/test_native_sdist.py` verifies both frontends, and it is deliberately
 not a unit test: each case builds a genuine archive with `uv build --sdist` or

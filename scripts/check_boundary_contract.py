@@ -3,7 +3,7 @@
 # requires-python = ">=3.13"
 # dependencies = ["cuprum==0.1.0"]
 # ///
-"""Compile deliberate unsafe probes against a copy of the actual safe crate.
+"""Check audited workspace lint inheritance and safe-crate unsafe boundaries.
 
 The workspace copy avoids touching a developer's sources while proving that
 the real library and integration-test targets reject unsafe code. Cargo keeps
@@ -55,27 +55,93 @@ def check_members(manifest: str) -> None:
         raise ValueError(msg)
 
 
-def check_safe_policy(workspace_manifest: str, safe_manifest: str) -> None:
-    """Require workspace lint parity plus an unrelaxable safe-target prohibition.
+def check_member_lint_inheritance(workspace: Path) -> None:
+    """Require each audited package to inherit the workspace lint baseline.
 
     Parameters
     ----------
-    workspace_manifest : str
-        Workspace manifest containing the shared lint policy.
-    safe_manifest : str
-        Safe crate manifest, whose lint policy applies to every Cargo target.
+    workspace : Path
+        Root of the Rust workspace containing audited member manifests.
 
     Raises
     ------
     ValueError
-        If the safe crate weakens or diverges from the workspace policy.
+        If an audited package replaces or weakens the shared policy locally.
     """
-    expected = tomllib.loads(workspace_manifest)["workspace"]["lints"]
-    expected["rust"]["unsafe_code"] = "forbid"
-    actual = tomllib.loads(safe_manifest)["lints"]
-    if actual != expected:
-        msg = "safe crate must retain workspace lints and forbid unsafe in all targets"
+    for member in BOUNDARIES | SAFE_CRATES:
+        manifest_path = workspace / member / "Cargo.toml"
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("lints") != {"workspace": True}:
+            msg = f"{member} must inherit the workspace lint baseline"
+            raise ValueError(msg)
+
+
+def safe_target_roots(workspace: Path) -> tuple[Path, ...]:
+    """Return every automatic and explicitly configured safe-crate target root.
+
+    Cargo auto-discovers crate roots only at these locations. Explicit target
+    tables may select another path, which remains part of the safe boundary.
+    Keeping this scan local and deterministic lets the contract reject a new
+    target before a compiler invocation can hide it behind dependency output.
+
+    Returns
+    -------
+    tuple[Path, ...]
+        Existing automatic and explicitly configured crate-root source paths.
+    """
+    crate = workspace / "cuprum-streams"
+    manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+    automatic = [crate / "src/lib.rs", crate / "src/main.rs", crate / "build.rs"]
+    for directory in ("src/bin", "examples", "tests", "benches"):
+        root = crate / directory
+        automatic.extend(root.glob("*.rs"))
+        automatic.extend(root.glob("*/main.rs"))
+    explicit: list[Path] = []
+    for target_type in ("lib", "bin", "example", "test", "bench"):
+        targets = manifest.get(target_type, [])
+        if isinstance(targets, dict):
+            targets = [targets]
+        explicit.extend(
+            crate / target["path"]
+            for target in targets
+            if isinstance(target, dict) and isinstance(target.get("path"), str)
+        )
+    package = manifest.get("package", {})
+    if isinstance(package, dict) and isinstance(package.get("build"), str):
+        explicit.append(crate / package["build"])
+    return tuple(sorted({path for path in automatic + explicit if path.is_file()}))
+
+
+def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
+    """Require every safe-crate target root to forbid unsafe source code.
+
+    The shared baseline deliberately omits ``unsafe_code = forbid`` because
+    the other audited members implement syscall and FFI boundaries. Every
+    automatic or explicit safe-crate target must therefore state the
+    non-negotiable source-level prohibition itself.
+
+    Returns
+    -------
+    tuple[Path, ...]
+        The checked source roots, for the compiler-probe phase.
+
+    Raises
+    ------
+    ValueError
+        If no source roots exist or any root omits the unsafe prohibition.
+    """
+    targets = safe_target_roots(workspace)
+    if not targets:
+        msg = "safe crate has no discoverable Cargo target roots"
         raise ValueError(msg)
+    for target in targets:
+        source = target.read_text(encoding="utf-8")
+        if "#![forbid(unsafe_code)]" not in source:
+            msg = (
+                f"safe target must forbid unsafe code: {target.relative_to(workspace)}"
+            )
+            raise ValueError(msg)
+    return targets
 
 
 def _compile(workspace: Path) -> tuple[int, str]:
@@ -104,18 +170,12 @@ def main() -> None:
     """Check the allowlist and actual compiler rejection on isolated source copies."""
     manifest = (ROOT / "rust/Cargo.toml").read_text(encoding="utf-8")
     check_members(manifest)
-    check_safe_policy(
-        manifest,
-        (ROOT / "rust/cuprum-streams/Cargo.toml").read_text(encoding="utf-8"),
-    )
+    check_member_lint_inheritance(ROOT / "rust")
+    safe_targets = check_safe_policy(ROOT / "rust")
     workspace = ROOT / ".cache/boundary-contract/workspace"
     if workspace.exists():
         shutil.rmtree(workspace)
     shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
-    future_target = workspace / "cuprum-streams/tests/future_target.rs"
-    future_target.write_text(
-        "//! Probe automatic Cargo target lint inheritance.\n", encoding="utf-8"
-    )
     logs = ROOT / "rust/target/boundary-verification"
     logs.mkdir(parents=True, exist_ok=True)
     code, output = _compile(workspace)
@@ -127,9 +187,8 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(code)
-    targets = ("src/lib.rs", "tests/compile_tests.rs", "tests/future_target.rs")
-    for target in targets:
-        _check_target(workspace, workspace / "cuprum-streams" / target, logs)
+    for target in safe_targets:
+        _check_target(workspace, workspace / target.relative_to(ROOT / "rust"), logs)
 
 
 def _unsafe_was_forbidden(code: int, output: str) -> bool:

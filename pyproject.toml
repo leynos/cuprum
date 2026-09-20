@@ -398,6 +398,7 @@ also_copy = [
     "rust/cuprum-native-io/",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
+    "rust/clippy.toml",
     "rust/dylint.toml",
 ]
 
@@ -497,6 +498,7 @@ source-exclude = ["cuprum/unittests/**"]
 source-include = [
     "rust/Cargo.toml",
     "rust/Cargo.lock",
+    "rust/clippy.toml",
     "rust/rust-toolchain.toml",
     "rust/dylint.toml",
     "rust/cuprum-rust/Cargo.toml",
@@ -516,6 +518,7 @@ module-name = "cuprum._rust_backend_native"
 python-source = "."
 exclude = ["cuprum/unittests/**"]
 include = [
+    { path = "rust/clippy.toml", format = "sdist" },
     { path = "rust/rust-toolchain.toml", format = "sdist" },
     { path = "rust/dylint.toml", format = "sdist" },
 ]

@@ -1,0 +1,20 @@
+# Align with CodeScene's ceiling
+cognitive-complexity-threshold = 9     # default is 25
+too-many-arguments-threshold = 4       # default is 7
+too-many-lines-threshold = 70          # default is 100
+excessive-nesting-threshold = 4        # default is off
+
+allow-expect-in-tests = true
+
+# The signed Netsuke baseline at 924cb215 requires explicit environment
+# injection. The reasons appear in diagnostics, directing callers to the
+# boundary that makes environment access testable.
+disallowed-methods = [
+  { path = "std::env::var", reason = "inject an environment reader" },
+  { path = "std::env::var_os", reason = "inject an environment reader" },
+  { path = "std::env::vars", reason = "inject an environment reader" },
+  { path = "std::env::vars_os", reason = "inject an environment reader" },
+  { path = "std::env::set_var", reason = "use a stub environment in tests" },
+  { path = "std::env::remove_var", reason = "use a stub environment in tests" },
+  { path = "std::env::set_current_dir", reason = "inject a base-directory seam; confine CWD changes to Command::current_dir" },
+]

@@ -117,9 +117,12 @@ focused tests (`/tmp/issue379-reader-validation-before.log` and
 representability and non-negativity; it does not establish resource validity,
 lifetime, or exclusive ownership.
 
-Nine safe-crate unsafe-rejection probes, including a future target without a
-crate-level attribute, are covered by the contract gate. The normal callback
-compile regression passed with the expected `&W` versus `&mut W` diagnostic in
+The contract derives every automatic and explicitly configured Cargo target
+root, requiring each to carry `#![forbid(unsafe_code)]`; its future-target
+negative cases cover binary, build-script, example, integration-test, and
+benchmark roots. The current two safe roots receive six deliberate
+unsafe-rejection probes. The normal callback compile regression passed with the
+expected `&W` versus `&mut W` diagnostic in
 `/tmp/issue379-round25-trybuild-normal.log`; the final fault run passed its
 controls and detected all four mutations in `/tmp/issue379-round27-faults.log`.
 Hosted Windows and macOS runtime execution passed on 2026-09-15: the "Rust
@@ -183,9 +186,8 @@ suppressing its owner drop. This avoids carrying the former extension-wide
 `std::fs` lint exclusion into either extracted crate; `cap-std` and its handle
 adapters are trusted dependencies, not verifier-proved implementations.
 
-The safe crate also declares `unsafe_code = "forbid"` in Cargo's lint table, so
-future automatically discovered test, example, and benchmark targets inherit
-the prohibition. Cargo cannot override an individual workspace-inherited lint;
-the safe manifest therefore carries the workspace lint tables plus this one
-addition. The boundary-contract gate requires exact policy parity, preventing
-that required duplication from weakening other lints or drifting silently.
+Cargo cannot override an individual workspace-inherited lint. The safe crate
+therefore keeps its `#![forbid(unsafe_code)]` source-level prohibition while
+all three members inherit the shared workspace tables. The boundary-contract
+gate checks both the common manifest inheritance and every discovered safe
+target root, including future automatic Cargo targets.

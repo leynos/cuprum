@@ -12,14 +12,27 @@ from pathlib import Path
 import pytest
 
 from scripts import check_boundary_contract as contract
-from scripts.check_boundary_contract import check_members, check_safe_policy
+from scripts.check_boundary_contract import (
+    check_member_lint_inheritance,
+    check_members,
+    check_safe_policy,
+    safe_target_roots,
+)
 from scripts.tests.boundary_harness_support import copy_boundary_repository
 
 # The one diagnostic string that distinguishes a rejected probe from a compile
 # that failed for some unrelated reason.
 UNSAFE_MARKERS = ("forbid(unsafe_code)", "-F unsafe-code")
 
-TARGETS = ("src/lib.rs", "tests/compile_tests.rs", "tests/future_target.rs")
+TARGETS = ("src/lib.rs", "tests/compile_tests.rs")
+FUTURE_TARGETS = (
+    "src/main.rs",
+    "src/bin/future_target.rs",
+    "build.rs",
+    "examples/future_target.rs",
+    "tests/future_target.rs",
+    "benches/future_target.rs",
+)
 
 
 class _RecordedCompile:
@@ -78,22 +91,82 @@ def test_audited_members_are_accepted() -> None:
     )
 
 
-@pytest.mark.parametrize("replacement", ["deny", "allow"])
-def test_safe_targets_cannot_weaken_unsafe_policy(replacement: str) -> None:
-    """A target-wide deny can be locally relaxed, so only forbid is accepted."""
+def test_all_audited_members_inherit_the_workspace_lint_baseline() -> None:
+    """Every package must use the root tables without a local replacement."""
     root = Path(__file__).resolve().parents[2] / "rust"
-    workspace = (root / "Cargo.toml").read_text(encoding="utf-8")
-    safe = (root / "cuprum-streams/Cargo.toml").read_text(encoding="utf-8")
-    check_safe_policy(workspace, safe)
-    weakened = safe.replace('unsafe_code = "forbid"', f'unsafe_code = "{replacement}"')
-    with pytest.raises(ValueError, match="forbid unsafe in all targets"):
-        check_safe_policy(workspace, weakened)
+    check_member_lint_inheritance(root)
+
+
+@pytest.mark.parametrize(
+    "member", ["cuprum-rust", "cuprum-native-io", "cuprum-streams"]
+)
+def test_member_lint_inheritance_rejects_a_local_override(
+    member: str, tmp_path: Path
+) -> None:
+    """No audited member may opt out of the shared lint baseline."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    manifest = root / member / "Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "[lints]\nworkspace = true", "[lints]\nworkspace = false", 1
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=f"{member} must inherit"):
+        check_member_lint_inheritance(root)
+
+
+def test_safe_target_roots_cover_every_current_automatic_target(tmp_path: Path) -> None:
+    """The target scan includes the library and compile-contract integration test."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    actual = tuple(
+        path.relative_to(root / "cuprum-streams").as_posix()
+        for path in safe_target_roots(root)
+    )
+    assert actual == TARGETS, "the safe-target scanner must cover every Cargo root"
+
+
+@pytest.mark.parametrize("target", FUTURE_TARGETS)
+def test_new_safe_target_without_an_unsafe_prohibition_is_rejected(
+    target: str, tmp_path: Path
+) -> None:
+    """A future automatic target cannot weaken the safe-crate boundary."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    check_safe_policy(root)
+    future_target = root / "cuprum-streams" / target
+    future_target.parent.mkdir(parents=True, exist_ok=True)
+    future_target.write_text(
+        "//! Deliberately incomplete safety contract.\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
+
+
+def test_configured_build_script_without_an_unsafe_prohibition_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """An explicit build-script path is also an unsafe-policy target root."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    manifest = root / "cuprum-streams/Cargo.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "publish = false", 'publish = false\nbuild = "tools/build.rs"'
+        ),
+        encoding="utf-8",
+    )
+    target = root / "cuprum-streams/tools/build.rs"
+    target.parent.mkdir()
+    target.write_text(
+        "//! Deliberately incomplete safety contract.\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
 
 
 def test_main_probes_every_target_with_every_unsafe_form(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The baseline compiles, then each target is probed with all three forms."""
+    """The baseline compiles, then each explicit safe root receives every probe."""
     root, compiler = _drive_contract(tmp_path, monkeypatch)
 
     for probe in contract.PROBES:
