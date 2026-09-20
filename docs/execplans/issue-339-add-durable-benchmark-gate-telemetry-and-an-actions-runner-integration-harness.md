@@ -743,3 +743,53 @@ the reviewer was willing to withdraw the request, so that half was closed by
 the reviewer conceding rather than by the branch winning it. The plan's own
 Observability disposition had to be corrected afterwards to match, and its
 replacement records the withdrawal instead of a dispute.
+
+2026-09-20: Rebased the 41-commit series from `861fe2f0` (its exclusive base)
+onto `50ecdf2a`, the current `origin/main` head and therefore the pull
+request's target. Main had gained three commits — the line-level output
+iteration, the native formatter fixture, and the presentation-sink session
+lifecycle. Two paths conflicted, `docs/contents.md` and
+`docs/developers-guide.md`, both at the same root cause: main's new
+`adr-013-opt-in-github-actions-presentation-sink.md` claimed the number the
+branch's telemetry ADR already held. The two ADRs are genuinely different
+decisions — main's is a library presentation sink, the branch's is a CI
+artefact writer — so neither could absorb the other, and main's is landed and
+accepted, which makes its number the one that cannot move.
+
+This is the third renumber on this branch and the second caused by an upstream
+ADR landing first. The replay kept both sides at the conflicts and deferred the
+renumber to a tip commit again, because `ab977364` edits
+`docs/developers-guide.md` and its added lines name the harness ADR by number:
+renumbering mid-replay would have made a later commit conflict against a rename
+it never saw. `f494ac8c` moved the pair 011/012 -> 013/014 for the same reason;
+this generation moves 013/014 -> 014/015, and `ab977364`'s mislabelled-link
+repair replayed unchanged because it is relative to the pre-renumber numbering.
+
+`git range-diff` over the replayed series reports 30 of 41 commits identical
+and exactly two differing, both of them the commits that conflicted. Neither
+difference is a lost change: commit 17 differs only by main's ADR-013 index
+entry appearing beside the branch's two, and commit 33 differs only by the same
+entry plus the branch's still-unrenumbered duplicate definitions, both of which
+the tip commit resolves. All 89 paths main touched and the branch did not are
+byte-identical to `50ecdf2a`, and no path the branch deletes is present.
+
+The renumber is a two-field edit and was verified as one: every
+`[ADR-NNN](adr-MMM-*.md)` pair and every reference-style `[adr-NNN]` definition
+agrees, `contents.md` has no duplicate keys, and every target resolves. The one
+remaining `[ADR-013](adr-014-...)` is inside backticks in the revision note
+above, quoting the historical defect `ab977364` repaired; it is narration
+rather than a link, and is preserved deliberately.
+
+The replay also surfaced a divergence the merge could not see. Main bumped
+`actions/upload-artifact` to v7.0.1, `actions/checkout` to v7.0.1, and
+`actions/setup-python` to v6.3.0 repo-wide in `50ecdf2a`. The steps this branch
+adds did not exist when that bump landed, so the three-way merge updated the
+eight call sites main already owned and left the branch's own on the superseded
+pins: one uploader in `ci.yml` plus the harness workflow's checkout and
+setup-python. A repository-wide scan of every `uses: ...@<sha>` now finds no
+action pinned differently from main. The uploader's old pin was held by
+`test_archive_retention_and_fail_open_contract` as well as the workflow, so the
+workflow and its assertion moved together; that pairing is why the gate stayed
+green while the repository disagreed with itself, which is the lesson — a pin
+asserted against a constant tests internal consistency, not agreement with the
+target branch.
