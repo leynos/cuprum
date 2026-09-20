@@ -40,6 +40,9 @@ ignore = [
   # backticks should still be spell-checked.
   '\bbuild_native_wheel_artifact\b',
   '--artifact-server-path(?:[=\s"`]|$)',
+  # Cargo fixes this command-line flag's US spelling; ordinary prose remains
+  # checked.
+  '--color(?:[=,\s"]|$)',
   '`color`',
   '\brust-analyzer\b',
   # `mold` is the fixed external linker name. Typos tokenizes words before

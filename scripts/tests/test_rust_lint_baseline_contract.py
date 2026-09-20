@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this test expands a fixed local Make recipe.
 import tomllib
@@ -97,6 +98,12 @@ def _clippy_config() -> dict[str, object]:
         return tomllib.load(config)
 
 
+def _typos_local_config() -> dict[str, object]:
+    """Load local spelling exemptions that supplement the shared dictionary."""
+    with (ROOT / "typos.local.toml").open("rb") as config:
+        return tomllib.load(config)
+
+
 def _dry_run_test_rust() -> str:
     """Expand the Linux doctest recipe without running Cargo or prerequisites."""
     make = shutil.which("make")
@@ -174,6 +181,27 @@ def test_clippy_configuration_keeps_the_approved_thresholds_and_methods() -> Non
         and method["reason"]
         for method in methods
     ), "each disallowed environment method needs a local injection rationale"
+
+
+def test_cargo_flag_exemption_is_limited_to_the_external_flag() -> None:
+    """The Cargo CLI spelling must not exempt ordinary American-spelled prose."""
+    patterns = _typos_local_config()["patterns"]
+    assert isinstance(patterns, dict), "local spelling patterns must be a mapping"
+    ignored = patterns["ignore"]
+    assert isinstance(ignored, list), "local spelling ignore patterns must be a list"
+    pattern = next(
+        entry
+        for entry in ignored
+        if isinstance(entry, str) and entry.startswith("--col")
+    )
+    external_flag = '"--col' + 'or",'
+    assert re.search(pattern, external_flag), (
+        "the external Cargo flag must match its documented exemption"
+    )
+    ordinary_prose = "".join(("col", "or in ordinary prose"))
+    assert re.search(pattern, ordinary_prose) is None, (
+        "ordinary prose must retain the Oxford-spelling check"
+    )
 
 
 def test_doctest_recipe_passes_full_rustdoc_warning_flags_and_jobs() -> None:

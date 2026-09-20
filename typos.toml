@@ -37,6 +37,7 @@ extend-ignore-re = [
     "\"mold\\\\t--version\"",
     "--artifact-name(?:[=\\s\"`]|$)",
     "--artifact-server-path(?:[=\\s\"`]|$)",
+    "--color(?:[=,\\s\"]|$)",
     "-fuse-ld=mold",
     "/artifacts(?:[/?#\"`]|$)",
     "Azure\\s+Architecture\\s+Center\\s*\\|\\s*Microsoft\\s+Learn\\b",
