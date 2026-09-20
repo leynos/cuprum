@@ -177,17 +177,12 @@ def test_explicit_target_without_unsafe_prohibition_is_rejected(tmp_path: Path) 
         check_safe_policy(root)
 
 
-@pytest.mark.parametrize(
-    ("target_type", "name", "dormant", "custom"), OVERRIDING_EXPLICIT_TARGETS
-)
+@pytest.mark.parametrize("case", OVERRIDING_EXPLICIT_TARGETS)
 def test_explicit_target_replaces_its_dormant_automatic_root(
-    target_type: str,
-    name: str | None,
-    dormant: str,
-    custom: str,
-    tmp_path: Path,
+    case: tuple[str, str | None, str, str], tmp_path: Path
 ) -> None:
     """Cargo metadata and the safe policy must agree on explicit overrides."""
+    target_type, name, dormant, custom = case
     root = copy_boundary_repository(tmp_path) / "rust"
     crate = root / "cuprum-streams"
     manifest = crate / "Cargo.toml"
