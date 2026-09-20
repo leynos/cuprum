@@ -131,7 +131,7 @@ def _explicit_target_roots(
 
 
 def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
-    """Normalise a Cargo target table into a sequence of target definitions."""
+    """Normalize a Cargo target table into a sequence of target definitions."""
     match value:
         case dict() as target:
             return (target,)
