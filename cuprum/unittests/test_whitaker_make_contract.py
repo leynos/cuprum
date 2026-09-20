@@ -106,6 +106,20 @@ def test_rust_lint_runs_clippy_whitaker_and_spelling_in_order() -> None:
     )
 
 
+def test_lint_target_runs_the_leaf_hierarchy_without_wait_markers() -> None:
+    """The hosted Make route serializes leaves without GNU Make 4.4 syntax."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    output = _dry_run(target="lint")
+
+    assert ".WAIT" not in makefile, "the binding must support the hosted Make"
+    assert output.index("python-lint") < output.index("probe-whitaker --all --"), (
+        "Python lint must complete before the Whitaker leaf starts"
+    )
+    assert output.index("probe-whitaker --all --") < output.index(
+        "yamllint --strict --config-file"
+    ), "GitHub Actions lint must run after the Rust leaves"
+
+
 def test_whitaker_failure_propagates_through_make(tmp_path: Path) -> None:
     """A failing suite executable must fail the leaf target unchanged by a guard."""
     failing_whitaker = tmp_path / "failing-whitaker"

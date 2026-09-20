@@ -141,6 +141,10 @@ LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 endif
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
+# Recursive lint leaves preserve every caller-supplied Makefile. This keeps
+# contract-test overrides and injected variables available to each leaf without
+# depending on GNU Make 4.4-only prerequisite ordering syntax.
+RECURSIVE_MAKE = $(MAKE) $(foreach makefile,$(MAKEFILE_LIST),-f $(makefile))
 RUFF_ENV = RAYON_NUM_THREADS=1
 # Pin Ruff so `make` invokes the same version as the `ruff==` dev dependency
 # in pyproject.toml and the RUFF_VERSION env in .github/workflows/ci.yml.
@@ -298,7 +302,10 @@ test-markdown-format: ## Validate the Markdown formatting Makefile contract
 		python -m pytest scripts/tests/test_markdown_format_makefile.py -c /dev/null \
 		--rootdir=. -p no:cacheprovider
 
-lint: python-lint .WAIT rust-lint .WAIT github-actions-lint ## Run Python, Rust, and GitHub Actions linters
+lint: ## Run Python, Rust, and GitHub Actions linters
+	+$(RECURSIVE_MAKE) python-lint
+	+$(RECURSIVE_MAKE) rust-lint
+	+$(RECURSIVE_MAKE) github-actions-lint
 
 python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
@@ -306,7 +313,10 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
-rust-lint: lint-clippy .WAIT lint-whitaker .WAIT spelling ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+rust-lint: ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+	+$(RECURSIVE_MAKE) lint-clippy
+	+$(RECURSIVE_MAKE) lint-whitaker
+	+$(RECURSIVE_MAKE) spelling
 
 lint-clippy: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation and Clippy
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)

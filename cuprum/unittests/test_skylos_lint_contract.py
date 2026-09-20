@@ -112,12 +112,11 @@ _SKYLOS_WHITELIST_TOKENS: typ.Final = (
     "$${SKYLOS_REASON}",
 )
 _SKYLOS_WHITELIST_LOCK_TOKENS: typ.Final = (".skylos-whitelist.lock",)
-_LINT_PREREQUISITES: typ.Final = (
-    "python-lint",
-    ".WAIT",
-    "rust-lint",
-    ".WAIT",
-    "github-actions-lint",
+_LINT_PREREQUISITES: typ.Final = ()
+_LINT_ORCHESTRATION: typ.Final = (
+    ("+$(RECURSIVE_MAKE)", "python-lint"),
+    ("+$(RECURSIVE_MAKE)", "rust-lint"),
+    ("+$(RECURSIVE_MAKE)", "github-actions-lint"),
 )
 _DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({"_check_rust_available"})
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
@@ -307,7 +306,10 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
         subject="lint target prerequisites",
     )
     assert lint_prerequisites == _LINT_PREREQUISITES, (
-        "Skylos lint delegation contract must retain the Python lint target"
+        "portable lint orchestration must not rely on concurrent prerequisites"
+    )
+    assert _recipe_tokens("lint") == _LINT_ORCHESTRATION, (
+        "Skylos lint delegation contract must invoke every leaf in sequence"
     )
     skylos_commands = [
         command

@@ -300,6 +300,26 @@ def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
     )
 
 
+def test_portable_lint_orchestration_preserves_leaf_order() -> None:
+    """The aggregate lint gates avoid GNU Make 4.4-only prerequisite markers."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    output = _dry_run("lint")
+
+    assert ".WAIT" not in makefile, "hosted Make must not require GNU Make 4.4"
+    assert "RECURSIVE_MAKE = $(MAKE) $(foreach makefile,$(MAKEFILE_LIST)" in makefile, (
+        "recursive lint leaves must preserve caller-supplied Makefiles"
+    )
+    python_lint = output.index("python-lint")
+    clippy = output.index("probe-cargo --config ../tools/dev-fast/config.toml clippy")
+    whitaker = output.index("whitaker --all --")
+    spelling = output.index("typos-config-builder gate --repository . --scope all")
+    workflow_lint = output.index("yamllint --strict --config-file")
+
+    assert python_lint < clippy < whitaker < spelling < workflow_lint, (
+        "lint must serialize Python, Rust leaves, and GitHub Actions validation"
+    )
+
+
 def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:
     """The accelerated lint compiler cannot replace published-MSRV verification."""
     output = _dry_run("msrv-check")
