@@ -3372,7 +3372,10 @@ floating-point arithmetic.
 The workspace cannot forbid unsafe code globally: `cuprum-native-io` and
 `cuprum-rust` are the audited syscall and FFI boundaries. `cuprum-streams`
 keeps its explicit crate-level prohibition, which the boundary contract checks.
-The Rust 1.85.0 maintenance toolchain provides `rustfmt`, `clippy`, and
+The
+[ADR-011 addendum](adr-011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
+records why that source-level contract complements the shared lint tables. The
+Rust 1.85.0 maintenance toolchain provides `rustfmt`, `clippy`, and
 `rust-analyzer`; Linux debug Rustdoc, Clippy, and doctests use the separately
 pinned dev-fast configuration, while MSRV, coverage, release, verification, and
 Whitaker retain their prescribed routes.
@@ -4103,7 +4106,7 @@ Cargo build output is excluded: `target` never appears in an archive, so an
 sdist carries sources rather than a multi-gigabyte build cache.
 
 Maturin builds its archive from the same workspace, and the
-`[tool.maturin].include` entries carry the two files it would not otherwise
+`[tool.maturin].include` entries carry the three files it would not otherwise
 copy — `rust/clippy.toml`, `rust/rust-toolchain.toml`, and `rust/dylint.toml`,
 all restricted with `format = "sdist"` so they never enter a wheel.
 

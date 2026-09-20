@@ -62,6 +62,12 @@ def _routing_lines(output: str) -> list[str]:
     ]
 
 
+def _assert_required_tokens(route: str, tokens: tuple[str, ...], subject: str) -> None:
+    """Require every token that makes a routed command's contract binding."""
+    missing = tuple(token for token in tokens if token not in route)
+    assert not missing, f"{subject} omitted required routing tokens: {missing}"
+
+
 def _assert_fragment_free(route: str) -> None:
     """Reject any selected Linux development acceleration from a protected route."""
     assert "--config" not in route, f"protected route selected Cargo config: {route}"
@@ -220,12 +226,17 @@ def test_rust_doctests_are_a_separate_debug_routed_gate() -> None:
         for line in _routing_lines(output)
         if "test --workspace --doc --all-features" in line
     )
-    assert "probe-cargo --config ../tools/dev-fast/config.toml" in doctest, (
-        "doctests must use the explicit Linux debug configuration"
-    )
-    assert 'RUSTFLAGS="-D warnings' in doctest, "doctests must deny warnings"
-    assert "-Clink-arg=-fuse-ld=mold" in doctest, (
-        "doctests must retain the selected linker"
+    _assert_required_tokens(
+        doctest,
+        (
+            "probe-cargo --config ../tools/dev-fast/config.toml",
+            'RUSTFLAGS="-D warnings',
+            'RUSTDOCFLAGS="--cfg docsrs -D warnings -Zunstable-options',
+            "--display-doctest-warnings",
+            "--doctest-build-arg=-D --doctest-build-arg=warnings",
+            "-Clink-arg=-fuse-ld=mold",
+        ),
+        "the Linux doctest route",
     )
 
 

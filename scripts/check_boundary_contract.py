@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import shutil
+import stat
 import sys
 import tomllib
 import typing as typ
@@ -33,8 +34,16 @@ PROBES = (
     "pub unsafe fn unsafe_probe() {}",
     "unsafe trait Probe {} unsafe impl Probe for () {}",
 )
-AUTOMATIC_TARGET_ROOTS = ("src/lib.rs", "src/main.rs", "build.rs")
-AUTOMATIC_TARGET_DIRECTORIES = ("src/bin", "examples", "tests", "benches")
+AUTOMATIC_TARGET_ROOTS = (
+    ("autolib", "src/lib.rs"),
+    ("autobins", "src/main.rs"),
+)
+AUTOMATIC_TARGET_DIRECTORIES = (
+    ("autobins", "src/bin"),
+    ("autoexamples", "examples"),
+    ("autotests", "tests"),
+    ("autobenches", "benches"),
+)
 EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
 
 
@@ -46,12 +55,19 @@ def check_members(manifest: str) -> None:
     manifest : str
         Workspace manifest text.
 
-    Raises
-    ------
-    ValueError
-        If workspace membership differs from the audited set.
     """
-    members = tomllib.loads(manifest)["workspace"]["members"]
+    _check_members_manifest(tomllib.loads(manifest))
+
+
+def _check_members_manifest(manifest: cabc.Mapping[str, object]) -> None:
+    """Evaluate the loaded workspace membership without filesystem access."""
+    workspace = manifest.get("workspace")
+    members = workspace.get("members") if isinstance(workspace, dict) else None
+    if not isinstance(members, list) or not all(
+        isinstance(member, str) for member in members
+    ):
+        msg = "workspace membership differs from the audited boundary inventory"
+        raise ValueError(msg)
     if set(members) != BOUNDARIES | SAFE_CRATES or len(members) != len(
         BOUNDARIES | SAFE_CRATES
     ):
@@ -74,7 +90,7 @@ def check_member_lint_inheritance(workspace: Path) -> None:
     """
     for member in BOUNDARIES | SAFE_CRATES:
         manifest_path = workspace / member / "Cargo.toml"
-        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = _load_toml(manifest_path)
         if manifest.get("lints") != {"workspace": True}:
             msg = f"{member} must inherit the workspace lint baseline"
             raise ValueError(msg)
@@ -93,29 +109,137 @@ def safe_target_roots(workspace: Path) -> tuple[Path, ...]:
     tuple[Path, ...]
         Existing automatic and explicitly configured crate-root source paths.
     """
+    crate, manifest = _load_safe_manifest(workspace)
+    package = _package_table(manifest)
+    automatic = _load_automatic_target_roots(crate, package)
+    explicit = _explicit_target_roots(crate, manifest, package)
+    return discover_safe_target_roots(automatic, explicit)
+
+
+def discover_safe_target_roots(
+    automatic: cabc.Iterable[Path], explicit: cabc.Iterable[Path]
+) -> tuple[Path, ...]:
+    """Deduplicate loaded automatic and declared explicit Cargo target roots."""
+    return tuple(sorted(set(itertools.chain(automatic, explicit))))
+
+
+def evaluate_safe_target_policy(sources: cabc.Mapping[Path, str]) -> tuple[Path, ...]:
+    """Require every loaded safe target source to forbid unsafe code."""
+    if not sources:
+        msg = "safe crate has no discoverable Cargo target roots"
+        raise ValueError(msg)
+    for target, source in sources.items():
+        if "#![forbid(unsafe_code)]" not in source:
+            msg = f"safe target must forbid unsafe code: {target}"
+            raise ValueError(msg)
+    return tuple(sources)
+
+
+def _load_safe_manifest(workspace: Path) -> tuple[Path, cabc.Mapping[str, object]]:
+    """Load the safe crate manifest before evaluating its target policy."""
     crate = workspace / "cuprum-streams"
-    manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+    return crate, _load_toml(crate / "Cargo.toml")
+
+
+def _load_toml(path: Path) -> cabc.Mapping[str, object]:
+    """Read and parse one manifest while retaining the affected path on failure."""
+    text = _read_text(path)
+    try:
+        manifest = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        msg = f"cannot parse TOML manifest {path}: {error}"
+        raise ValueError(msg) from error
+    return manifest
+
+
+def _read_text(path: Path) -> str:
+    """Read UTF-8 text, failing closed when the source cannot be inspected."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        msg = f"cannot read {path}: {error}"
+        raise ValueError(msg) from error
+
+
+def _load_automatic_target_roots(
+    crate: Path, package: cabc.Mapping[str, object]
+) -> tuple[Path, ...]:
+    """Load the existing Cargo auto-target roots selected by package switches."""
+    direct = (
+        crate / path
+        for switch, path in AUTOMATIC_TARGET_ROOTS
+        if _automatic_target_is_enabled(package, switch)
+    )
+    directories = (
+        crate / directory
+        for switch, directory in AUTOMATIC_TARGET_DIRECTORIES
+        if _automatic_target_is_enabled(package, switch)
+    )
     candidates = itertools.chain(
-        _automatic_target_roots(crate), _explicit_target_roots(crate, manifest)
-    )
-    return tuple(sorted({path for path in candidates if path.is_file()}))
-
-
-def _automatic_target_roots(crate: Path) -> cabc.Iterator[Path]:
-    """Yield roots Cargo discovers from the safe crate's conventional layout."""
-    directory_roots = (crate / directory for directory in AUTOMATIC_TARGET_DIRECTORIES)
-    return itertools.chain(
-        (crate / path for path in AUTOMATIC_TARGET_ROOTS),
-        *(root.glob("*.rs") for root in directory_roots),
-        *(
-            (crate / directory).glob("*/main.rs")
-            for directory in AUTOMATIC_TARGET_DIRECTORIES
+        direct,
+        itertools.chain.from_iterable(
+            _load_directory_target_roots(path) for path in directories
         ),
+        _load_default_build_script_root(crate, package),
     )
+    return tuple(path for path in candidates if _is_regular_file(path))
+
+
+def _automatic_target_is_enabled(
+    package: cabc.Mapping[str, object], switch: str
+) -> bool:
+    """Return whether Cargo's default-enabled automatic target switch is active."""
+    return package.get(switch) is not False
+
+
+def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
+    """Load Cargo's flat and one-level-nested conventional target roots."""
+    for entry in _directory_entries(directory):
+        if entry.suffix == ".rs":
+            yield entry
+        if _is_directory(entry):
+            yield entry / "main.rs"
+
+
+def _directory_entries(directory: Path) -> tuple[Path, ...]:
+    """List one optional automatic-target directory without masking I/O errors."""
+    try:
+        return tuple(directory.iterdir())
+    except FileNotFoundError:
+        return ()
+    except NotADirectoryError:
+        return ()
+    except OSError as error:
+        msg = f"cannot inspect automatic target directory {directory}: {error}"
+        raise ValueError(msg) from error
+
+
+def _is_regular_file(path: Path) -> bool:
+    """Check a candidate root while treating inspection failures as contract errors."""
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        msg = f"cannot inspect target root {path}: {error}"
+        raise ValueError(msg) from error
+
+
+def _is_directory(path: Path) -> bool:
+    """Check a nested target directory without masking an access failure."""
+    try:
+        return stat.S_ISDIR(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        msg = f"cannot inspect target directory {path}: {error}"
+        raise ValueError(msg) from error
 
 
 def _explicit_target_roots(
-    crate: Path, manifest: cabc.Mapping[str, object]
+    crate: Path,
+    manifest: cabc.Mapping[str, object],
+    package: cabc.Mapping[str, object],
 ) -> cabc.Iterator[Path]:
     """Yield crate roots declared through Cargo target or build-script fields."""
     target_definitions = itertools.chain.from_iterable(
@@ -127,7 +251,9 @@ def _explicit_target_roots(
         for target in target_definitions
         if isinstance((path := target.get("path")), str)
     )
-    return itertools.chain(target_paths, _build_script_target_root(crate, manifest))
+    return itertools.chain(
+        target_paths, _configured_build_script_target_root(crate, package)
+    )
 
 
 def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
@@ -141,13 +267,23 @@ def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
             return ()
 
 
-def _build_script_target_root(
-    crate: Path, manifest: cabc.Mapping[str, object]
-) -> tuple[Path, ...]:
-    """Return the package's explicitly configured build-script root, if any."""
+def _package_table(manifest: cabc.Mapping[str, object]) -> cabc.Mapping[str, object]:
+    """Return the package table or an empty table for malformed optional input."""
     package = manifest.get("package")
-    if not isinstance(package, dict):
-        return ()
+    return package if isinstance(package, dict) else {}
+
+
+def _load_default_build_script_root(
+    crate: Path, package: cabc.Mapping[str, object]
+) -> tuple[Path, ...]:
+    """Return Cargo's default build script unless the manifest disables it."""
+    return (crate / "build.rs",) if package.get("build", True) is True else ()
+
+
+def _configured_build_script_target_root(
+    crate: Path, package: cabc.Mapping[str, object]
+) -> tuple[Path, ...]:
+    """Return a non-default package build-script target, if one is declared."""
     build_script = package.get("build")
     return (crate / build_script,) if isinstance(build_script, str) else ()
 
@@ -165,23 +301,10 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
     tuple[Path, ...]
         The checked source roots, for the compiler-probe phase.
 
-    Raises
-    ------
-    ValueError
-        If no source roots exist or any root omits the unsafe prohibition.
     """
     targets = safe_target_roots(workspace)
-    if not targets:
-        msg = "safe crate has no discoverable Cargo target roots"
-        raise ValueError(msg)
-    for target in targets:
-        source = target.read_text(encoding="utf-8")
-        if "#![forbid(unsafe_code)]" not in source:
-            msg = (
-                f"safe target must forbid unsafe code: {target.relative_to(workspace)}"
-            )
-            raise ValueError(msg)
-    return targets
+    sources = {target: _read_text(target) for target in targets}
+    return evaluate_safe_target_policy(sources)
 
 
 def _compile(workspace: Path) -> tuple[int, str]:
@@ -208,8 +331,7 @@ def _compile(workspace: Path) -> tuple[int, str]:
 
 def main() -> None:
     """Check the allowlist and actual compiler rejection on isolated source copies."""
-    manifest = (ROOT / "rust/Cargo.toml").read_text(encoding="utf-8")
-    check_members(manifest)
+    _check_members_manifest(_load_toml(ROOT / "rust/Cargo.toml"))
     check_member_lint_inheritance(ROOT / "rust")
     safe_targets = check_safe_policy(ROOT / "rust")
     workspace = ROOT / ".cache/boundary-contract/workspace"

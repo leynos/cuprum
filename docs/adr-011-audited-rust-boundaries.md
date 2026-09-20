@@ -191,3 +191,22 @@ therefore keeps its `#![forbid(unsafe_code)]` source-level prohibition while
 all three members inherit the shared workspace tables. The boundary-contract
 gate checks both the common manifest inheritance and every discovered safe
 target root, including future automatic Cargo targets.
+
+## Addendum (2026-09-20): Lint baseline and target discovery
+
+The workspace now owns the common Rust, Clippy, and Rustdoc lint baseline in
+`rust/Cargo.toml`; every member inherits it. `rust/clippy.toml` records the
+reviewed complexity thresholds and the environment-access injection policy. The
+approved unsafe boundary remains deliberately narrower: the syscall and FFI
+crates cannot use a workspace-wide `unsafe_code` prohibition, while every
+effective `cuprum-streams` target root must declare `#![forbid(unsafe_code)]`.
+
+The contract implementation evolved from a fixed target list to loading the
+safe crate's manifest and effective Cargo roots. It honours `autolib`,
+`autobins`, `autoexamples`, `autotests`, `autobenches`, and `build = false`,
+while retaining explicit `lib`, `bin`, `example`, `test`, `bench`, and custom
+build-script paths. Filesystem access, UTF-8 decoding, and TOML parsing fail
+closed with the affected path; pure discovery and policy evaluation remain
+separately testable. The Linux debug doctest gate uses the pinned dev-fast
+nightly rustdoc route to display and deny doctest-body warnings. Stable Rust
+1.85.0 remains the published MSRV and retains its separate verification route.
