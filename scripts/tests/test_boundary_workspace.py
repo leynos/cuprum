@@ -12,6 +12,7 @@ from scripts.boundary_workspace import copy_workspace
 from scripts.check_boundary_contract import safe_target_roots
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
 from scripts.tests.boundary_harness_support import (
@@ -70,12 +71,10 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
     )
 
 
-def test_main_materializes_external_source_file_symlinks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """External source links become copied files before the unsafe probes run."""
-    root = copy_boundary_repository(tmp_path)
-    crate = root / "rust/cuprum-streams"
+def _external_source_links(
+    root: Path, crate: Path, tmp_path: Path
+) -> tuple[tuple[Path, Path, str | None], ...]:
+    """Create relative and absolute external source-file symlinks."""
     links = (
         (
             crate / "tests/relative.rs",
@@ -91,10 +90,13 @@ def test_main_materializes_external_source_file_symlinks(
             link.symlink_to(source if target is None else target)
     except OSError as error:
         pytest.skip(f"the platform cannot create the symlink fixture: {error}")
-    before = cargo_target_roots(crate)
-    assert links[0][0] in before, "Cargo must recognize the relative source-file link"
-    assert links[1][0] in before, "Cargo must recognize the absolute source-file link"
-    observed_sources: list[str] = []
+    return links
+
+
+def _recording_probe_compiler(
+    observed_sources: list[str],
+) -> cabc.Callable[[Path], tuple[int, str]]:
+    """Return a compiler seam that rejects probes in the copied source tree."""
 
     def compile_workspace(workspace: Path) -> tuple[int, str]:
         """Reject only the probes applied to the isolated copied sources."""
@@ -107,20 +109,21 @@ def test_main_materializes_external_source_file_symlinks(
             return 1, "error: forbid(unsafe_code)"
         return 0, "checked"
 
-    boundary_compile = contract._compile
-    monkeypatch.setattr(contract, "ROOT", root)
-    monkeypatch.setattr(contract, "_compile", compile_workspace)
+    return compile_workspace
 
-    contract.main()
 
-    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
-    code, output = boundary_compile(copied_crate.parent)
-    assert code == 0, output
+def _assert_external_links_are_isolated(
+    crate: Path,
+    copied_crate: Path,
+    links: tuple[tuple[Path, Path, str | None], ...],
+    original_targets: tuple[Path, ...],
+) -> None:
+    """Require metadata parity, materialization, and untouched external bytes."""
     copied_links = tuple(
         copied_crate / link.relative_to(crate) for link, _source, _target in links
     )
     assert cargo_target_roots(copied_crate) == tuple(
-        copied_crate / path.relative_to(crate) for path in before
+        copied_crate / path.relative_to(crate) for path in original_targets
     ), "Cargo metadata must retain the copied source-file targets"
     assert all(path.is_file() and not path.is_symlink() for path in copied_links), (
         "external source-file links must be materialized inside the copied workspace"
@@ -129,6 +132,31 @@ def test_main_materializes_external_source_file_symlinks(
         source.read_text(encoding="utf-8") == SAFE_SOURCE
         for _link, source, _target in links
     ), "external source bytes must survive the copied probes"
+
+
+def test_main_materializes_external_source_file_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """External source links become copied files before the unsafe probes run."""
+    root = copy_boundary_repository(tmp_path)
+    crate = root / "rust/cuprum-streams"
+    links = _external_source_links(root, crate, tmp_path)
+    before = cargo_target_roots(crate)
+    assert links[0][0] in before, "Cargo must recognize the relative source-file link"
+    assert links[1][0] in before, "Cargo must recognize the absolute source-file link"
+    observed_sources: list[str] = []
+    boundary_compile = contract._compile
+    monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(
+        contract, "_compile", _recording_probe_compiler(observed_sources)
+    )
+
+    contract.main()
+
+    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
+    code, output = boundary_compile(copied_crate.parent)
+    assert code == 0, output
+    _assert_external_links_are_isolated(crate, copied_crate, links, before)
     assert all(
         any(probe in source for source in observed_sources) for probe in contract.PROBES
     ), "each unsafe probe must reach the isolated copied sources"
