@@ -16,7 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, _rusage, _subprocess_execution, _wait4_process, sh
+from cuprum import (
+    ECHO,
+    _command_internals,
+    _rusage,
+    _subprocess_execution,
+    _wait4_process,
+    sh,
+)
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -182,7 +189,11 @@ def test_records_start_times_before_subprocess_spawn(
         return 0, 13.0
 
     monkeypatch.setattr(_subprocess_execution.time, "perf_counter", monotonic_clock)
-    monkeypatch.setattr(sh.time, "time", wall_clock)
+    # The observation builder installs ``time.time`` as the stage's
+    # ``wall_clock`` callable, so the injected wall clock must be patched where
+    # that attribute is read from — not in ``sh``, which no longer imports
+    # ``time`` now that observation construction lives in ``_command_internals``.
+    monkeypatch.setattr(_command_internals.time, "time", wall_clock)
     monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
     monkeypatch.setattr(
         _subprocess_execution,

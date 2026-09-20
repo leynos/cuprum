@@ -135,6 +135,24 @@ def _sample_run_start(observation: _StageObservation) -> _DirectRunStart:
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _DirectCompletion:
+    """The settled facts of a direct run, once its streams have reconciled.
+
+    ``stdout_text``, ``stderr_text``, and ``relay_diagnostics`` stay ``None``
+    on the direct path, which captures nothing; the stream path overwrites all
+    three. Returning them as one record keeps the waiting and the result
+    assembly in separate helpers, so neither accumulates enough locals to trip
+    the repository's ``too-many-locals`` ceiling.
+    """
+
+    exit_code: int
+    exited_at: float
+    stdout_text: str | None
+    stderr_text: str | None
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
+
+
 async def _spawn_subprocess(
     execution: _SubprocessExecution,
 ) -> asyncio.subprocess.Process:
@@ -218,25 +236,14 @@ def _relay_fallbacks_for_result(
     return relay_diagnostics[0].snapshot() + relay_diagnostics[1].snapshot()
 
 
-async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
-    """Execute a subprocess and return the command result."""
-    # All three pre-spawn readings are taken here, before the spawn await, so
-    # a run's recorded duration includes the time its spawn blocked and the
-    # rusage bracket spans the child's whole life. ``started_at`` is the
-    # monotonic reference the duration and every line stamp are measured
-    # against; ``wall_clock_started_at`` is the separate wall-clock instant the
-    # result reports to callers.
-    run_start = _sample_run_start(execution.observation)
-    started_at = run_start.monotonic_started_at
-    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
-    # consumers read ``started_at`` off it when stamping each ``LineEvent``.
-    # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
-    # uptime rather than seconds since this command started. Stamping the
-    # bundle reads no clock, so it does not disturb the sampling order above.
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
-    pid = process.pid
-    execution.observation.emit("start", _EventDetails(pid=pid))
+async def _await_direct_completion(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    *,
+    pid: int | None,
+    started_at: float,
+) -> _DirectCompletion:
+    """Wait for the child to settle and report how it ended as one record."""
     # The direct path captures nothing; the stream path overwrites these values.
     stdout_text: str | None = None
     stderr_text: str | None = None
@@ -276,14 +283,49 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
         # entirely; repeats are no-ops.
         await _shielded_cleanup(_stop_idle_monitor(execution.idle))
 
+    return _DirectCompletion(
+        exit_code=exit_code,
+        exited_at=exited_at,
+        stdout_text=stdout_text,
+        stderr_text=stderr_text,
+        relay_diagnostics=relay_diagnostics,
+    )
+
+
+async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
+    """Execute a subprocess and return the command result."""
+    # All three pre-spawn readings are taken here, before the spawn await, so
+    # a run's recorded duration includes the time its spawn blocked and the
+    # rusage bracket spans the child's whole life. ``started_at`` is the
+    # monotonic reference the duration and every line stamp are measured
+    # against; ``wall_clock_started_at`` is the separate wall-clock instant the
+    # result reports to callers.
+    run_start = _sample_run_start(execution.observation)
+    started_at = run_start.monotonic_started_at
+    # Rebuilt, not mutated: the bundle is a frozen dataclass, and the stream
+    # consumers read ``started_at`` off it when stamping each ``LineEvent``.
+    # Left at its ``0.0`` default, every ``at`` would be the machine's monotonic
+    # uptime rather than seconds since this command started. Stamping the
+    # bundle reads no clock, so it does not disturb the sampling order above.
+    execution = dc.replace(execution, started_at=started_at)
+    process = await _spawn_subprocess(execution)
+    pid = process.pid
+    execution.observation.emit("start", _EventDetails(pid=pid))
+    completion = await _await_direct_completion(
+        process,
+        execution,
+        pid=pid,
+        started_at=started_at,
+    )
+
     rusage = _wait4_process.resource_usage_for(process, run_start.rusage_before)
     _emit_exit_event(
         execution.observation,
         _ExitEventDetails(
             pid=pid,
-            exit_code=exit_code,
+            exit_code=completion.exit_code,
             started_at=started_at,
-            exited_at=exited_at,
+            exited_at=completion.exited_at,
             # The same measurement the returned result carries, so a consumer
             # reading the event stream sees the figures the caller sees rather
             # than having to correlate an event with a result object.
@@ -293,20 +335,21 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     return _sh_module().CommandResult(
         program=execution.cmd.program,
         argv=execution.cmd.argv,
-        exit_code=exit_code,
+        exit_code=completion.exit_code,
         pid=process.pid if process.pid is not None else -1,
-        stdout=stdout_text,
-        stderr=stderr_text,
+        stdout=completion.stdout_text,
+        stderr=completion.stderr_text,
         started_at=run_start.wall_clock_started_at,
-        duration=max(0.0, exited_at - started_at),
+        duration=max(0.0, completion.exited_at - started_at),
         max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
         user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
         system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
-        relay_fallbacks=_relay_fallbacks_for_result(relay_diagnostics),
+        relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
     )
 
 
 __all__ = [
+    "_DirectCompletion",
     "_DirectRunStart",
     "_StreamConsumerSpawnContext",
     "_SubprocessExecution",
