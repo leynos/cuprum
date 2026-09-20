@@ -873,3 +873,102 @@ of this file will re-trigger the finding.
 `make check-fmt` also failed on the pre-rebase head because `mdtablefix` wanted
 to reflow the two files the previous trim committed. Both are formatted now,
 and the Makefile's `fmt` target confirms the required flag is `--in-place`.
+
+A tenth replay re-trimmed the guide under skylos's cap after further growth on
+main, leaving the branch at `a11406ff` on the same target `df0b4f6c` with the
+same exclusive boundary `50ecdf2a`. `make test` then failed, and the failure
+was ring-fenced before it was touched, because it is inherited rather than
+branch-owned and the distinction changes who should fix it.
+
+`scripts/tests/test_boundary_workspace.py::test_main_materializes_external_source_file_symlinks`
+timed out against the suite-wide `timeout = 30` in `pyproject.toml`. The test
+was added by main's #448, and every input it depends on — `scripts/`, `rust/`,
+`tools/`, `pyproject.toml`, and the Makefile's
+`CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)"` env line — is byte-identical to
+the target. The branch owns no production `cuprum/` change here, so the failure
+cannot have originated in this branch.
+
+It is a budget defect, not a flake, and the numbers show why. The test is the
+only one in its file that reaches the real `_compile`; `main()` and
+`_check_target` both resolve through a monkeypatched seam, so exactly one
+`cargo check --package cuprum-streams --all-targets --all-features` runs. The
+Makefile forces that build serial (`PYTEST_CARGO_BUILD_JOBS ?= 1`), and it
+measured 220s cold and 240s warm, against a 40s parallel run and a 30s
+suite-wide bound. A deliberately isolated rerun failed at 30.13s with load
+2.48, which rules out host contention. Main's own CI passes the batch in 21.85s
+because a hosted runner restores a warm Cargo/sccache state that this
+development host does not have, so the defect is latent on CI and reproducible
+locally.
+
+The remedy is a `@pytest.mark.timeout(900)` on that test, matching the
+repository's existing idiom at `tests/test_native_sdist.py:51` and
+`tests/integration/test_workflow_integration.py:269`. The bound deliberately
+sits above `check_boundary_contract._compile`'s own `timeout=600` so a genuine
+compile failure still surfaces its diagnostic rather than being replaced by a
+timeout, and the marker is load-bearing: the warm isolated run still took
+49.46s against the 30s default.
+
+A second, unrelated failure of the same test was seen at main's `2905217f` —
+`trybuild@1.0.121 requires rustc 1.88` against the pinned 1.85.0 toolchain. It
+is not this defect: `2905217f` is not an ancestor of main, and the failure mode
+and duration are both different. `rust/Cargo.lock` is byte-identical between
+this branch and `df0b4f6c` at blob `4f631489`, so the pins agree and nothing
+there needs changing.
+
+An eleventh replay moved the branch to `dd7dd50b` on target `7606b063`, whose
+single new commit is main's own #451 "Stabilize boundary workspace link test".
+That landed while the tenth-rebase validation was running, and it fixes the
+same test by a different and better route: it narrows the probe compile to the
+two materialized integration-test targets and drops the copied dev-dependencies
+the empty fixture never uses, instead of relaxing the bound. Its own guide
+addition, a "Boundary compilation selections" section, adds 1,758 bytes to
+`docs/developers-guide.md`.
+
+The replay was conflict-free — the exclusive boundary stayed `50ecdf2a` and the
+series replayed as 47 commits with no merges. `git range-diff` reports 46
+commits identical and only `ca23aaac` changed, which is correct: main rewrote
+the file that commit edits, so its hunk context moved from the old test body to
+main's new `_remove_copied_dev_dependencies` helper. The semantic audit's
+target-only-path check confirms byte identity for both paths main added,
+`scripts/boundary_compile.py` and `scripts/check_boundary_contract.py`.
+
+Main's narrowing does not, however, retire the timeout bound on this host. Even
+restricted to `--test relative --test absolute`, the compile measured 181s cold
+and 98s warm under the Makefile's forced serial build — still more than three
+times the suite-wide `timeout = 30`. The marker therefore stays, and the
+comment above it was corrected to describe the post-#451 command and the new
+measurements rather than the `--all-targets` build it no longer runs.
+`scripts/boundary_compile.py:157` keeps `timeout=600`, so 900s still sits above
+the library's own budget and a genuine compile failure still surfaces its
+diagnostic.
+
+Main's guide growth also re-triggered skylos's per-file cap: the merged guide
+measured 300,433 bytes, 433 over. The tenth replay's remedy was re-applied to
+this branch's own additions rather than to inherited text — the telemetry
+paragraph and the act section both restated material their own owning documents
+already carry (ADR-014's decision, `docs/ci-benchmark-gate-telemetry.md`'s
+schema, ADR-015's paths-filter gap, and the local validation guide's
+prerequisites and pins), so both were cut down to pointers at those owners. The
+guide now measures 299,928 bytes, 72 under the cap, with the ADR index entries,
+the `workflow-harness` table row, and both `should_terminate_others` mentions
+intact. `make lint` was re-run on the trimmed tree and passed, which re-proves
+the cap in the direction that matters.
+
+The twelfth validation pass found one more mechanical gap than the previous
+passes did, in this plan's own prose. `make check-fmt` reported ten lines that
+`mdtablefix` would reformat, all of them in the tenth- and eleventh-replay
+records appended above. The cause is mundane: handwritten prose in this file
+was wrapped by eye rather than by the tool, and two paragraphs had drifted past
+the 80-column wrap the rest of the file keeps. The remedy is the tool's own
+reflow — a pure rewrapping with no byte-size change (58,963 bytes before and
+after) and no semantic difference, confirmed by collapsing all whitespace runs
+on both sides and comparing. Nothing outside this document reads it: no test,
+script, or workflow references this plan's content, so the reflow cannot affect
+behaviour. The change was folded into the same commit that raised the probe
+timeout, since `make check-fmt` refuses the tree without it.
+
+Worth recording for whoever continues this work: this is the second time this
+plan's own prose has tripped a formatting gate after a sub-agent or a hand edit
+touched it, and both times the correct fix was to run the formatter rather than
+to hand-tune the lines. Treat an `mdtablefix` finding in this file as
+mechanical, verify it is whitespace-only, and apply it.

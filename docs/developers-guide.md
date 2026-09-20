@@ -4314,10 +4314,9 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
-A following step persists one durable observation per non-cancelled execution,
-so the gate is analysable across runs rather than only per run.
-[ADR-014](adr-014-benchmark-gate-telemetry-sink.md) records that decision;
-[CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the contract.
+Each non-cancelled run also persists a durable observation, per
+[ADR-014](adr-014-benchmark-gate-telemetry-sink.md); the
+[telemetry contract](ci-benchmark-gate-telemetry.md) owns its schema.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
@@ -4366,22 +4365,16 @@ the other does not see:
   `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what makes
   running it outside Actions evidence rather than simulation.
 
-Those suites still stop short of the boundary: none executes
-`dorny/paths-filter`, so none can fail when the pinned action's output name,
-its offline behaviour, or an event payload disagrees with what the contract
-tests assume. `tests/integration/test_workflow_integration.py`, over
-`tests/helpers/act_harness.py`, closes that gap by running the real `changes`
-job under `act`. [ADR-015](adr-015-actions-runner-integration-harness.md) owns
-the harness design and scenario set.
-
 ### Running the scenarios locally
 
-`make test-act` runs them here; `.github/workflows/benchmark-gate-harness.yml`
-runs the same target on a GitHub-hosted runner — never the paid one. The
-target's own Makefile comment and
-[the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
-own the opt-in contract: why `ACT_SCENARIO_TARGETS` stays out of
-`PYTEST_TARGETS`, the runtime it needs, the pins, and the refusal to skip.
+`make test-act` runs the harness scenarios; `make test` does not, since they
+need `act` 0.2.89 and a Docker or rootless Podman runtime. The target refuses
+to skip when CI demands them, and
+`.github/workflows/benchmark-gate-harness.yml` runs it weekly on GitHub-hosted
+`ubuntu-latest`, never the paid one.
+[ADR-015](adr-015-actions-runner-integration-harness.md) owns the design; the
+[local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
+owns the contract and pins.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern
