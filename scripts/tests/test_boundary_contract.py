@@ -126,6 +126,33 @@ def test_safe_target_roots_cover_every_current_automatic_target(tmp_path: Path) 
     assert actual == TARGETS, "the safe-target scanner must cover every Cargo root"
 
 
+@pytest.mark.parametrize("target_type", ["lib", "bin", "example", "test", "bench"])
+def test_safe_target_roots_cover_explicit_cargo_target_tables(
+    target_type: str, tmp_path: Path
+) -> None:
+    """Every explicit Cargo target type remains inside the safe boundary."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    manifest = crate / "Cargo.toml"
+    heading = f"[{target_type}]" if target_type == "lib" else f"[[{target_type}]]"
+    relative_path = f"tools/{target_type}_target.rs"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + f'\n{heading}\npath = "{relative_path}"\n',
+        encoding="utf-8",
+    )
+    target = crate / relative_path
+    target.parent.mkdir()
+    target.write_text(
+        "//! Explicit safe target.\n#![forbid(unsafe_code)]\n",
+        encoding="utf-8",
+    )
+
+    roots = safe_target_roots(root)
+
+    assert target in roots, f"the explicit {target_type} target must be checked"
+
+
 @pytest.mark.parametrize("target", FUTURE_TARGETS)
 def test_new_safe_target_without_an_unsafe_prohibition_is_rejected(
     target: str, tmp_path: Path

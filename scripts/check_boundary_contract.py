@@ -13,6 +13,7 @@ its shared package cache. Only build output uses a separate target directory.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import shutil
 import sys
 import tomllib
@@ -32,6 +33,9 @@ PROBES = (
     "pub unsafe fn unsafe_probe() {}",
     "unsafe trait Probe {} unsafe impl Probe for () {}",
 )
+AUTOMATIC_TARGET_ROOTS = ("src/lib.rs", "src/main.rs", "build.rs")
+AUTOMATIC_TARGET_DIRECTORIES = ("src/bin", "examples", "tests", "benches")
+EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
 
 
 def check_members(manifest: str) -> None:
@@ -91,25 +95,59 @@ def safe_target_roots(workspace: Path) -> tuple[Path, ...]:
     """
     crate = workspace / "cuprum-streams"
     manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
-    automatic = [crate / "src/lib.rs", crate / "src/main.rs", crate / "build.rs"]
-    for directory in ("src/bin", "examples", "tests", "benches"):
-        root = crate / directory
-        automatic.extend(root.glob("*.rs"))
-        automatic.extend(root.glob("*/main.rs"))
-    explicit: list[Path] = []
-    for target_type in ("lib", "bin", "example", "test", "bench"):
-        targets = manifest.get(target_type, [])
-        if isinstance(targets, dict):
-            targets = [targets]
-        explicit.extend(
-            crate / target["path"]
-            for target in targets
-            if isinstance(target, dict) and isinstance(target.get("path"), str)
-        )
-    package = manifest.get("package", {})
-    if isinstance(package, dict) and isinstance(package.get("build"), str):
-        explicit.append(crate / package["build"])
-    return tuple(sorted({path for path in automatic + explicit if path.is_file()}))
+    candidates = itertools.chain(
+        _automatic_target_roots(crate), _explicit_target_roots(crate, manifest)
+    )
+    return tuple(sorted({path for path in candidates if path.is_file()}))
+
+
+def _automatic_target_roots(crate: Path) -> cabc.Iterator[Path]:
+    """Yield roots Cargo discovers from the safe crate's conventional layout."""
+    directory_roots = (crate / directory for directory in AUTOMATIC_TARGET_DIRECTORIES)
+    return itertools.chain(
+        (crate / path for path in AUTOMATIC_TARGET_ROOTS),
+        *(root.glob("*.rs") for root in directory_roots),
+        *(
+            (crate / directory).glob("*/main.rs")
+            for directory in AUTOMATIC_TARGET_DIRECTORIES
+        ),
+    )
+
+
+def _explicit_target_roots(
+    crate: Path, manifest: cabc.Mapping[str, object]
+) -> cabc.Iterator[Path]:
+    """Yield crate roots declared through Cargo target or build-script fields."""
+    target_definitions = itertools.chain.from_iterable(
+        _target_definitions(manifest.get(target_type))
+        for target_type in EXPLICIT_TARGET_TYPES
+    )
+    target_paths = (
+        crate / path
+        for target in target_definitions
+        if isinstance((path := target.get("path")), str)
+    )
+    return itertools.chain(target_paths, _build_script_target_root(crate, manifest))
+
+
+def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
+    """Normalise a Cargo target table into a sequence of target definitions."""
+    if isinstance(value, dict):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(target for target in value if isinstance(target, dict))
+    return ()
+
+
+def _build_script_target_root(
+    crate: Path, manifest: cabc.Mapping[str, object]
+) -> tuple[Path, ...]:
+    """Return the package's explicitly configured build-script root, if any."""
+    package = manifest.get("package")
+    if not isinstance(package, dict):
+        return ()
+    build_script = package.get("build")
+    return (crate / build_script,) if isinstance(build_script, str) else ()
 
 
 def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
