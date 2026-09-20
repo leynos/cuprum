@@ -2188,13 +2188,12 @@ runner drift and small-sample outliers. Dry-run plans record
 older baseline artefacts whose profile metadata does not match the current
 benchmark shape.
 
-The CI job measures the `--ci-ratchet` workload, not the throughput sweep.
 `benchmarks/ci_benchmark_ratchet_profile.py` owns the measured-run count as
-`_CI_RATCHET_RUNS`, passed to hyperfine as `--runs`; the discarded warm-up is a
+`_CI_RATCHET_RUNS`, passed to hyperfine as `--runs`. The discarded warm-up is a
 separate `--warmup 1` literal in the same invocation, so `_CI_RATCHET_RUNS`
-does not govern it. Both counts are protocol rather than tuning: the ratchet
-compares only samples whose profile metadata agrees, so changing either one
-invalidates the existing baseline rather than merely shifting it.
+does not govern it. Both are protocol rather than tuning: the ratchet compares
+only samples whose profile metadata agrees, so changing either invalidates the
+existing baseline rather than merely shifting it.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -2211,21 +2210,16 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 
 ### Benchmark workload identity (`benchmarks/benchmark_workload.py`)
 
-`WORKLOAD_PLAN_KEY` names the plan field recording which workload produced a
-plan, and `WorkloadName` is the literal type of the three identifiers.
-`PipelineBenchmarkConfig.workload` carries the selection into the runner. A
-plan that omits the field predates it, and `read_workload` reads those as
-`throughput-sweep`, the only workload then available. The module docstring
-records why the workload cannot be inferred from scenario names, and
-`WorkloadProtocol` which plan shapes validation rejects; the users' guide owns
-the CLI flags.
+`WORKLOAD_PLAN_KEY` names the plan field recording the producing workload. The
+module docstring owns why it cannot be inferred from scenario names,
+`read_workload` owns the pre-field default, and the users' guide owns the CLI
+flags.
 
 Add a workload by extending `WORKLOADS`, the `WorkloadName` literal, and the
-report's description table together. The report's lookup is keyed by
-`WorkloadName`, which stops a misspelt key from reaching a render, but no type
-checker enforces that a literal-keyed dict covers every member — so
-`test_every_workload_the_runner_produces_can_be_described` is what holds the
-two collections together.
+report's description table together. `benchmarks/comparison_report.py` states
+why the keyed lookup cannot be total at the type level, and
+`test_every_workload_the_runner_produces_can_be_described` holds the two
+collections together.
 
 ### The baseline the ratchet compares against
 
