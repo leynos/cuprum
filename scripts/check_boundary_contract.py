@@ -199,6 +199,8 @@ def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
             continue
         if _is_mode(entry, stat.S_ISLNK, follow=False):
             continue
+        if not _is_mode(entry, stat.S_ISDIR):
+            continue
         candidate = entry / "main.rs"
         if _is_mode(candidate, stat.S_ISREG):
             yield candidate

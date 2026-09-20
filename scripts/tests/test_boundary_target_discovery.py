@@ -134,6 +134,8 @@ def test_visible_support_directory_without_main_is_not_a_target(
     root = copy_boundary_repository(tmp_path) / "rust"
     crate = root / "cuprum-streams"
     (crate / "tests/support").mkdir(parents=True)
+    support_file = crate / "tests/README.md"
+    support_file.write_text("test support", encoding="utf-8")
     _write_target(crate, "shared/main.rs")
     try:
         (crate / "tests/shared").symlink_to("../shared", target_is_directory=True)
@@ -144,6 +146,7 @@ def test_visible_support_directory_without_main_is_not_a_target(
     assert crate / "tests/support/main.rs" not in roots, (
         "support/main.rs is not a target"
     )
+    assert support_file not in roots, "an ordinary support file is not a target"
     assert crate / "tests/shared/main.rs" not in roots, (
         "directory symlink is not a target"
     )
