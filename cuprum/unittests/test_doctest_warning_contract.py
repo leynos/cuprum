@@ -46,6 +46,8 @@ def _run_doctests(
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv and pinned toolchain.
         [
             cargo,
+            "--color",
+            "never",
             "test",
             "--doc",
             "--manifest-path",
@@ -94,6 +96,9 @@ def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
     assert corrected_route.returncode != 0, (
         "the corrected Rustdoc route must reject a doctest warning:\n"
         f"{corrected_diagnostics}"
+    )
+    assert "\x1b" not in corrected_diagnostics, (
+        "the synthetic Cargo route must disable colour for deterministic diagnostics"
     )
     assert "error: use of deprecated function" in corrected_diagnostics, (
         "the corrected route must fail on the doctest warning rather than setup"

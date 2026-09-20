@@ -45,17 +45,16 @@ AUTOMATIC_TARGET_DIRECTORIES = (
     ("autobenches", "benches"),
 )
 EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
+INFERRED_TARGET_DIRECTORIES = {
+    "bin": "src/bin",
+    "example": "examples",
+    "test": "tests",
+    "bench": "benches",
+}
 
 
 def check_members(manifest: str) -> None:
-    """Require an explicit review before the approved crate set can grow.
-
-    Parameters
-    ----------
-    manifest : str
-        Workspace manifest text.
-
-    """
+    """Require review before the approved crate set can grow."""
     _check_members_manifest(tomllib.loads(manifest))
 
 
@@ -242,18 +241,44 @@ def _explicit_target_roots(
     package: cabc.Mapping[str, object],
 ) -> cabc.Iterator[Path]:
     """Yield crate roots declared through Cargo target or build-script fields."""
-    target_definitions = itertools.chain.from_iterable(
-        _target_definitions(manifest.get(target_type))
+    target_roots = itertools.chain.from_iterable(
+        (
+            (crate / path,)
+            if isinstance((path := target.get("path")), str)
+            else _inferred_target_roots(crate, target_type, target, package)
+        )
         for target_type in EXPLICIT_TARGET_TYPES
-    )
-    target_paths = (
-        crate / path
-        for target in target_definitions
-        if isinstance((path := target.get("path")), str)
+        for target in _target_definitions(manifest.get(target_type))
     )
     return itertools.chain(
-        target_paths, _configured_build_script_target_root(crate, package)
+        target_roots, _configured_build_script_target_root(crate, package)
     )
+
+
+def _inferred_target_roots(
+    crate: Path,
+    target_type: str,
+    target: cabc.Mapping[str, object],
+    package: cabc.Mapping[str, object],
+) -> tuple[Path, ...]:
+    """Return existing conventional paths Cargo may infer for a target table."""
+    match target_type:
+        case "lib":
+            candidates = (crate / "src/lib.rs",)
+        case "bin" | "example" | "test" | "bench":
+            name = target.get("name")
+            if not isinstance(name, str):
+                return ()
+            directory = INFERRED_TARGET_DIRECTORIES[target_type]
+            candidates = (
+                crate / directory / f"{name}.rs",
+                crate / directory / name / "main.rs",
+            )
+            if target_type == "bin" and name == package.get("name"):
+                candidates = (crate / "src/main.rs", *candidates)
+        case _:
+            return ()
+    return tuple(path for path in candidates if _is_regular_file(path))
 
 
 def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:
@@ -289,19 +314,7 @@ def _configured_build_script_target_root(
 
 
 def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
-    """Require every safe-crate target root to forbid unsafe source code.
-
-    The shared baseline deliberately omits ``unsafe_code = forbid`` because
-    the other audited members implement syscall and FFI boundaries. Every
-    automatic or explicit safe-crate target must therefore state the
-    non-negotiable source-level prohibition itself.
-
-    Returns
-    -------
-    tuple[Path, ...]
-        The checked source roots, for the compiler-probe phase.
-
-    """
+    """Require every effective safe target root to forbid unsafe source code."""
     targets = safe_target_roots(workspace)
     sources = {target: _read_text(target) for target in targets}
     return evaluate_safe_target_policy(sources)

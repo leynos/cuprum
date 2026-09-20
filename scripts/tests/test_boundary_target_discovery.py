@@ -35,6 +35,18 @@ EXPLICIT_PROPERTY_TARGETS = (
     "tools/explicit.rs",
     "tools/build.rs",
 )
+PATHLESS_EXPLICIT_TARGETS = (
+    ("lib", None, "src/lib.rs"),
+    ("bin", "cuprum-streams", "src/main.rs"),
+    ("bin", "flat", "src/bin/flat.rs"),
+    ("bin", "nested", "src/bin/nested/main.rs"),
+    ("example", "flat", "examples/flat.rs"),
+    ("example", "nested", "examples/nested/main.rs"),
+    ("test", "flat", "tests/flat.rs"),
+    ("test", "nested", "tests/nested/main.rs"),
+    ("bench", "flat", "benches/flat.rs"),
+    ("bench", "nested", "benches/nested/main.rs"),
+)
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
 
 
@@ -52,6 +64,16 @@ def _set_package_field(manifest: Path, field: str) -> None:
         manifest.read_text(encoding="utf-8").replace(
             "publish = false", f"publish = false\n{field}", 1
         ),
+        encoding="utf-8",
+    )
+
+
+def _append_pathless_target(manifest: Path, target_type: str, name: str | None) -> None:
+    """Declare a target table whose source path Cargo must infer."""
+    table = "[lib]" if target_type == "lib" else f"[[{target_type}]]"
+    name_entry = "" if name is None else f'\nname = "{name}"'
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + f"\n{table}{name_entry}\n",
         encoding="utf-8",
     )
 
@@ -101,6 +123,34 @@ def test_explicit_target_without_unsafe_prohibition_is_rejected(tmp_path: Path) 
     )
     _write_target(crate, "tools/probe.rs", "//! Missing safety attribute.\n")
 
+    with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
+        check_safe_policy(root)
+
+
+@pytest.mark.parametrize(("target_type", "name", "target"), PATHLESS_EXPLICIT_TARGETS)
+def test_pathless_explicit_target_is_discovered_and_checked(
+    target_type: str, name: str | None, target: str, tmp_path: Path
+) -> None:
+    """Cargo-inferred source paths must remain inside the safe-target contract."""
+    root = copy_boundary_repository(tmp_path) / "rust"
+    crate = root / "cuprum-streams"
+    manifest = crate / "Cargo.toml"
+    _set_package_field(
+        manifest,
+        "\n".join((
+            "autolib = false",
+            "autobins = false",
+            "autoexamples = false",
+            "autotests = false",
+            "autobenches = false",
+        )),
+    )
+    _append_pathless_target(manifest, target_type, name)
+    target_path = _write_target(crate, target, "//! Missing safety attribute.\n")
+
+    assert target_path in safe_target_roots(root), (
+        "the pathless Cargo target table must discover its inferred source"
+    )
     with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
         check_safe_policy(root)
 

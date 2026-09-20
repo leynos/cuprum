@@ -106,6 +106,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_native_sdist.py \
   scripts/tests/test_boundary_*.py \
+  scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py
