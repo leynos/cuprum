@@ -14,9 +14,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo me
 from pathlib import Path
 
 from scripts import check_boundary_contract
-
-# Build output is the only part of the workspace a harness must never copy.
-IGNORED = shutil.ignore_patterns("target")
+from scripts.boundary_workspace import copy_source_tree
 
 
 def copy_boundary_repository(tmp_path: Path) -> Path:
@@ -27,9 +25,7 @@ def copy_boundary_repository(tmp_path: Path) -> Path:
     Path
         Temporary root laid out like the repository, minus any build output.
     """
-    shutil.copytree(
-        check_boundary_contract.ROOT / "rust", tmp_path / "rust", ignore=IGNORED
-    )
+    copy_source_tree(check_boundary_contract.ROOT / "rust", tmp_path / "rust")
     shutil.copytree(check_boundary_contract.ROOT / "tools", tmp_path / "tools")
     return tmp_path
 

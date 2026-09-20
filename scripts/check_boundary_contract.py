@@ -5,9 +5,7 @@
 # ///
 """Check audited workspace lint inheritance and safe-crate unsafe boundaries.
 
-The workspace copy avoids touching a developer's sources while proving that
-the real library and integration-test targets reject unsafe code. Cargo keeps
-its shared package cache. Only build output uses a separate target directory.
+The isolated copy preserves Cargo target topology and leaves source untouched.
 """
 
 from __future__ import annotations
@@ -26,6 +24,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from scripts.boundary_workspace import copy_workspace
 
 ROOT = Path(__file__).resolve().parent.parent
 BOUNDARIES = frozenset({"cuprum-rust", "cuprum-native-io"})
@@ -43,7 +42,6 @@ AUTOMATIC_TARGET_DIRECTORIES = (
     ("autobenches", "benches"),
 )
 EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
-IGNORE_BUILD_OUTPUT = shutil.ignore_patterns("target")
 
 
 def check_members(manifest: str) -> None:
@@ -344,7 +342,7 @@ def main() -> None:
     workspace = ROOT / ".cache/boundary-contract/workspace"
     if workspace.exists():
         shutil.rmtree(workspace)
-    shutil.copytree(ROOT / "rust", workspace, ignore=IGNORE_BUILD_OUTPUT, symlinks=True)
+    copy_workspace(ROOT / "rust", workspace, safe_targets)
     logs = ROOT / "rust/target/boundary-verification"
     logs.mkdir(parents=True, exist_ok=True)
     code, output = _compile(workspace)
@@ -368,13 +366,13 @@ def _unsafe_was_forbidden(code: int, output: str) -> bool:
 
 @contextlib.contextmanager
 def _probe_appended(path: Path, probe: str) -> cabc.Iterator[None]:
-    """Temporarily append a probe to a source file, then restore it."""
-    original = path.read_text(encoding="utf-8")
-    path.write_text(original + "\n" + probe + "\n", encoding="utf-8")
+    """Temporarily append a byte-preserving probe, then restore the source."""
+    original = path.read_bytes()
     try:
+        path.write_bytes(original + b"\n" + probe.encode() + b"\n")
         yield
     finally:
-        path.write_text(original, encoding="utf-8")
+        path.write_bytes(original)
 
 
 def _probe_log_name(workspace: Path, path: Path, index: int) -> str:
