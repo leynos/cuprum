@@ -114,7 +114,9 @@ _SKYLOS_WHITELIST_TOKENS: typ.Final = (
 _SKYLOS_WHITELIST_LOCK_TOKENS: typ.Final = (".skylos-whitelist.lock",)
 _LINT_PREREQUISITES: typ.Final = (
     "python-lint",
+    ".WAIT",
     "rust-lint",
+    ".WAIT",
     "github-actions-lint",
 )
 _DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({"_check_rust_available"})
