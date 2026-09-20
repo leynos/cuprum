@@ -6,11 +6,13 @@ import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - this test executes a fixed pinned Cargo command.
 import sys
-from pathlib import Path
+import typing as typ
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
 DEV_FAST_TOOLCHAIN = "nightly-2026-08-23"
 DOCTEST_RUSTDOC_FLAGS = (
     "--cfg docsrs -D warnings -Zunstable-options --display-doctest-warnings "
@@ -27,31 +29,23 @@ pub struct WarningFixture;
 """
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="dev-fast doctests are Linux-only")
-def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
-    """The nightly rustdoc path exposes and denies a doctest-body warning."""
-    crate = tmp_path / "warning-doctest"
-    source = crate / "src/lib.rs"
-    source.parent.mkdir(parents=True)
-    (crate / "Cargo.toml").write_text(
-        '[package]\nname = "warning-doctest"\nversion = "0.1.0"\nedition = "2024"\n',
-        encoding="utf-8",
-    )
-    source.write_text(WARNING_DOCTEST, encoding="utf-8")
-    cargo = shutil.which("cargo")
-    assert cargo is not None, "the doctest contract requires Cargo on PATH"
-    environment = {
-        **os.environ,
-        "CARGO_TARGET_DIR": str(ROOT / "rust/target/doctest-warning-contract"),
-        "RUSTDOCFLAGS": DOCTEST_RUSTDOC_FLAGS,
-        "RUSTFLAGS": "-D warnings -Clink-arg=-fuse-ld=mold",
+def _run_doctests(
+    crate: Path, cargo: str, rustdoc_flags: str | None
+) -> subprocess.CompletedProcess[str]:
+    """Run the pinned nightly with the standard backend and stated Rustdoc flags."""
+    environment: dict[str, str] = dict(os.environ)
+    environment.update({
+        "CARGO_TARGET_DIR": str(crate / "target"),
+        "RUSTFLAGS": "-D warnings",
         "RUSTUP_TOOLCHAIN": DEV_FAST_TOOLCHAIN,
-    }
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv and checked-in fragment.
+    })
+    if rustdoc_flags is not None:
+        environment["RUSTDOCFLAGS"] = rustdoc_flags
+    else:
+        environment.pop("RUSTDOCFLAGS", None)
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv and pinned toolchain.
         [
             cargo,
-            "--config",
-            str(ROOT / "tools/dev-fast/config.toml"),
             "test",
             "--doc",
             "--manifest-path",
@@ -64,10 +58,46 @@ def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
         text=True,
     )
 
-    assert completed.returncode != 0, "a doctest warning must fail the routed gate"
-    assert "use of deprecated function" in completed.stdout, (
-        "the failure must come from the doctest warning rather than setup"
+
+def _diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
+    """Return every Cargo diagnostic stream for setup and failure assertions."""
+    return completed.stdout + completed.stderr
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="the production doctest warning route is Linux-only"
+)
+def test_pinned_doctest_route_rejects_a_warning(tmp_path: Path) -> None:
+    """Only the corrected nightly Rustdoc route rejects a doctest warning."""
+    crate = tmp_path / "warning-doctest"
+    source = crate / "src/lib.rs"
+    source.parent.mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        '[package]\nname = "warning-doctest"\nversion = "0.1.0"\nedition = "2024"\n',
+        encoding="utf-8",
     )
-    assert "-D deprecated" in completed.stdout, (
+    source.write_text(WARNING_DOCTEST, encoding="utf-8")
+    cargo = shutil.which("cargo")
+    assert cargo is not None, "the doctest contract requires Cargo on PATH"
+    former_route = _run_doctests(crate, cargo, rustdoc_flags=None)
+    former_diagnostics = _diagnostics(former_route)
+    assert former_route.returncode == 0, (
+        "the former RUSTFLAGS-only route must pass the warning-bearing doctest:\n"
+        f"{former_diagnostics}"
+    )
+    assert "test result: ok" in former_diagnostics, (
+        "the former route must execute the doctest rather than only build setup"
+    )
+
+    corrected_route = _run_doctests(crate, cargo, DOCTEST_RUSTDOC_FLAGS)
+    corrected_diagnostics = _diagnostics(corrected_route)
+    assert corrected_route.returncode != 0, (
+        "the corrected Rustdoc route must reject a doctest warning:\n"
+        f"{corrected_diagnostics}"
+    )
+    assert "error: use of deprecated function" in corrected_diagnostics, (
+        "the corrected route must fail on the doctest warning rather than setup"
+    )
+    assert "-D deprecated" in corrected_diagnostics, (
         "rustdoc must deny the displayed doctest warning"
     )
