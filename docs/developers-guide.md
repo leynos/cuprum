@@ -2188,20 +2188,13 @@ runner drift and small-sample outliers. Dry-run plans record
 older baseline artefacts whose profile metadata does not match the current
 benchmark shape.
 
-The CI job measures the `--ci-ratchet` workload, not the throughput sweep: one
-64 MiB payload in four scenarios — two per backend, one per callback mode —
-rather than the sweep's three payload tiers. The workload's plan carries four
-scenarios per backend, but `benchmarks/ci_benchmark_ratchet_profile.py` keeps
-only the two-stage ones, so the three-stage variants are filtered out before
-hyperfine runs. Each worker process batches five pipeline runs
-(`--worker-iterations 5`) and each command is measured twenty times after one
-discarded warm-up. The two counts are independent, and both are protocol rather
-than tuning: the ratchet compares only samples whose profile metadata agrees,
-so changing either one invalidates the existing baseline rather than merely
-shifting it. `benchmarks/ci_benchmark_ratchet_profile.py` owns the run count as
-`_CI_RATCHET_RUNS` and passes it as `--runs`; the single warm-up is a separate
-`--warmup 1` literal in the same invocation, so `_CI_RATCHET_RUNS` does not
-govern it.
+The CI job measures the `--ci-ratchet` workload, not the throughput sweep.
+`benchmarks/ci_benchmark_ratchet_profile.py` owns the measured-run count as
+`_CI_RATCHET_RUNS`, passed to hyperfine as `--runs`; the discarded warm-up is a
+separate `--warmup 1` literal in the same invocation, so `_CI_RATCHET_RUNS`
+does not govern it. Both counts are protocol rather than tuning: the ratchet
+compares only samples whose profile metadata agrees, so changing either one
+invalidates the existing baseline rather than merely shifting it.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -2218,46 +2211,21 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 
 ### Benchmark workload identity (`benchmarks/benchmark_workload.py`)
 
-The runner exposes three workloads that differ only in the scenario matrix they
-select: `throughput-sweep` (the default three payload tiers), `smoke` (the same
-matrix shape at reduced payloads, for fast validation), and `ci-ratchet` (the
-single 64 MiB payload the ratchet measures). `WORKLOAD_PLAN_KEY` names the plan
-field that records which one produced a plan, and `WorkloadName` is the literal
-type of the three identifiers. `PipelineBenchmarkConfig.workload` carries the
-selection into the runner, and the `--smoke` and `--ci-ratchet` CLI flags
-select the latter two.
+`WORKLOAD_PLAN_KEY` names the plan field recording which workload produced a
+plan, and `WorkloadName` is the literal type of the three identifiers.
+`PipelineBenchmarkConfig.workload` carries the selection into the runner. A
+plan that omits the field predates it, and `read_workload` reads those as
+`throughput-sweep`, the only workload then available. The module docstring
+records why the workload cannot be inferred from scenario names, and
+`WorkloadProtocol` which plan shapes validation rejects; the users' guide owns
+the CLI flags.
 
-The field exists because the workload cannot be recovered from the plan's
-scenarios alone. A smoke matrix and the CI ratchet both carry per-backend
-scenarios, so a summary that inferred the workload from scenario names could
-name the wrong one and misdescribe the measurement. A plan that omits the field
-was written before the runner recorded it, and `read_workload` reads those as
-`throughput-sweep`, the only workload then available, so older artefacts stay
-readable.
-
-`WorkloadProtocol` is the frozen value object a plan is parsed back into: the
-validated workload, the optional `benchmark_profile_version` and
-`worker_iterations`, and the distinct ascending payload sizes of its scenarios.
-`read_workload_protocol` builds it from a plan payload and validates every
-field on construction — an unknown workload, a blank profile version, a
-non-positive iteration count, or a payload list that is not the ascending
-distinct form a plan reads back as all raise rather than producing a value that
-describes a measurement no run could have made. Validating at construction is
-what makes the renderer total: a formatter that accepts a `WorkloadProtocol`
-cannot be handed a protocol describing nothing.
-
-Parsing and rendering are separate concerns with separate reasons to change.
-This module owns the identifiers and the value object; the prose that renders
-them lives with the report that writes it, in
-`benchmarks/comparison_report.py`. A wording change there therefore cannot
-reach the data a plan recorded. Add a workload by extending `WORKLOADS`, the
-`WorkloadName` literal, and the report's description table together. The
-report's lookup is keyed by `WorkloadName`, which stops a misspelt key from
-reaching a render, but no type checker enforces that a literal-keyed dict
-covers every member — so
+Add a workload by extending `WORKLOADS`, the `WorkloadName` literal, and the
+report's description table together. The report's lookup is keyed by
+`WorkloadName`, which stops a misspelt key from reaching a render, but no type
+checker enforces that a literal-keyed dict covers every member — so
 `test_every_workload_the_runner_produces_can_be_described` is what holds the
-two collections together, and it fails when a workload is added to one and not
-the other.
+two collections together.
 
 ### The baseline the ratchet compares against
 

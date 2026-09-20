@@ -13,8 +13,8 @@ open each document.
   runtime, pipeline, and Rust backend behaviour.
 - [0.2.0 migration guide][migration-020] - upgrade guidance for the optional
   aggregate Python stream-operation observation API, the opt-in idle heartbeat
-  for quiet children, the opt-in presentation sink, and the benchmark
-  ratchet's measurement protocol.
+  for quiet children, the opt-in presentation sink, and the benchmark ratchet's
+  measurement protocol.
 - [Developers' guide](developers-guide.md) - maintainer workflows for profiling,
   linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and
