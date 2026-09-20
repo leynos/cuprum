@@ -88,6 +88,30 @@ COLD_BUILD_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
 #: watchdog itself carries.
 OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
 
+#: The per-test allowance the default profile must grant. Asserted by value
+#: rather than merely as the largest of several, because the ordering
+#: assertions only compare tiers with each other: a profile narrowed to
+#: ``period = "1s"`` with ``terminate-after = 1`` satisfies every one of them
+#: while killing healthy tests, which is the failure this tier exists to
+#: prevent. The issue's first clause is an absolute claim -- large enough
+#: that no healthy test reaches it -- so only an absolute assertion can hold
+#: it.
+#:
+#: 300 s is five 60 s periods. The largest healthy test measured here is
+#: ``compile_tests`` at 124.884 s warm, which falls under the profile like
+#: everything else that does work rather than compiling.
+EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
+
+#: The whole-run budget the default profile must declare, as a duration in
+#: seconds. Pinned for the same reason as the allowance above: the
+#: containment assertion is satisfied by any pair that merely orders
+#: correctly, so ``global-timeout = "2s"`` would pass it while bounding the
+#: run below a single test's allowance.
+#:
+#: 1200 s is twenty minutes, and sits above the compile-test tier's 600 s so
+#: a single slow ``trybuild`` binary cannot exhaust the whole suite.
+EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
+
 #: How far a ceiling must sit above the sum it contains, rather than
 #: merely reaching it. A ceiling equal to that sum cancels the job at
 #: the moment the watchdog would have reported the overrun, and the

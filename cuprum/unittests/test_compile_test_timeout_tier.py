@@ -44,6 +44,17 @@ from tests.helpers.docs import repo_root
 #: was written for fell back to the allowance that killed one of them.
 COMPILE_TEST_FILTER: typ.Final[str] = "binary(compile_tests)"
 
+#: The allowance that override must grant, in seconds.
+#:
+#: Pinned by value rather than only asserted to exceed the profile,
+#: because exceeding the profile is not the requirement -- exceeding a
+#: cold build is. An override set to the profile's 300 s plus one second
+#: satisfies every relation this module checks while still terminating a
+#: healthy compile: the largest figure measured for these tests is
+#: 277.049 s, which a 301 s tier does not clear with the margin the gate
+#: runs actually need. The tier is ten 60 s periods.
+EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
+
 COMPILE_TEST_SOURCES: typ.Final[tuple[str, ...]] = (
     "rust/cuprum-rust/tests/compile_tests.rs",
     "rust/cuprum-streams/tests/compile_tests.rs",
@@ -95,6 +106,14 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
         f"the `trybuild` tests need widened: the gate run of 2026-09-19 "
         f"terminated `compile_time_ui` at 300 s against 277 s measured for the "
         f"same test on an unloaded machine, so a healthy test reaches it"
+    )
+    assert widest == EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS, (
+        f"the override carrying filter {COMPILE_TEST_FILTER!r} grants {widest} "
+        f"s, not the {EXPECTED_COMPILE_TEST_ALLOWANCE_SECONDS} s sized for it. "
+        f"Exceeding the profile is not the requirement; exceeding the cold "
+        f"build is. The largest figure measured for these tests is 277.049 s, "
+        f"and an override set just above the profile's 300 s would still leave "
+        f"a healthy compile terminating"
     )
     missing = [
         source

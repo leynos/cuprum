@@ -47,9 +47,12 @@ from cuprum.unittests._coverage_timeout_lane_support import (
 )
 from cuprum.unittests._timeout_lane_support import (
     COLD_BUILD_ALLOWANCE_SECONDS,
+    EXPECTED_GLOBAL_TIMEOUT_SECONDS,
+    EXPECTED_PER_TEST_ALLOWANCE_SECONDS,
     EXPECTED_WATCHDOG_SECONDS,
     NEXTEST_CONFIG,
     WATCHDOG_VARIABLE,
+    _allowance_of,
     _default_nextest_profile,
     _slow_timeout_of,
     global_timeout_seconds,
@@ -182,7 +185,20 @@ def test_the_nextest_config_sits_where_nextest_looks_for_it() -> None:
 
 
 def test_the_nextest_tiers_are_explicitly_set() -> None:
-    """The default profile declares both inner timeout tiers in full."""
+    """The default profile declares both inner timeout tiers in full.
+
+    Every other assertion in this module compares the tiers with each
+    other, and a comparison is satisfied by any pair that orders
+    correctly. Narrowing the profile to ``period = "1s"`` with
+    ``terminate-after = 1`` keeps ``global-timeout`` the larger of the two
+    while killing healthy tests, which is the outcome the per-test tier
+    exists to prevent, and a ``global-timeout`` of two seconds bounds the
+    whole run below a single test's allowance. The issue's contract states
+    the per-test allowance as a bound rather than a measurement -- large
+    enough that no healthy test reaches it -- so the values are pinned
+    here, and the ordering assertions below are what the pinned values are
+    then held to.
+    """
     profile = _default_nextest_profile()
     slow_timeout = _slow_timeout_of(profile)
     for key in ("period", "terminate-after"):
@@ -191,6 +207,21 @@ def test_the_nextest_tiers_are_explicitly_set() -> None:
         )
     assert "global-timeout" in profile, (
         f"{NEXTEST_CONFIG} must set [profile.default].global-timeout"
+    )
+    allowance = _allowance_of(slow_timeout)
+    assert allowance == EXPECTED_PER_TEST_ALLOWANCE_SECONDS, (
+        f"{NEXTEST_CONFIG}'s per-test allowance is {allowance} s, not the "
+        f"{EXPECTED_PER_TEST_ALLOWANCE_SECONDS} s this repository sizes for; "
+        f"the ordering assertions are satisfied by any pair that merely orders "
+        f"correctly, so a profile narrowed towards the largest healthy test "
+        f"would still pass them while terminating tests that are working"
+    )
+    whole_run = global_timeout_seconds()
+    assert whole_run == EXPECTED_GLOBAL_TIMEOUT_SECONDS, (
+        f"{NEXTEST_CONFIG}'s global-timeout is {whole_run} s, not the "
+        f"{EXPECTED_GLOBAL_TIMEOUT_SECONDS} s this repository sizes for; a "
+        f"value below a single test's allowance would pass the containment "
+        f"assertion while bounding the run shorter than the tests it runs"
     )
 
 
