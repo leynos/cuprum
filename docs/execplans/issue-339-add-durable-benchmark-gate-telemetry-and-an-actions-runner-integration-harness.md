@@ -2,7 +2,7 @@
 
 Status: IMPLEMENTED; hosted receipts verified for the commits their runs name
 and for no other commit, all local gates green on the rebased candidate, most
-recently rebased onto `861fe2f0`
+recently rebased onto `934c7666`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -793,3 +793,41 @@ workflow and its assertion moved together; that pairing is why the gate stayed
 green while the repository disagreed with itself, which is the lesson — a pin
 asserted against a constant tests internal consistency, not agreement with the
 target branch.
+
+2026-09-20: Rebased the 44-commit series from `50ecdf2a` (its exclusive base)
+onto `934c7666`, the current `origin/main` head, when main landed "Format Rust
+sources with nightly profile (#408)". The earlier note in this plan gave the
+boundary as `861fe2f0` and the series as 41 commits; both were wrong, and the
+record is corrected here. `861fe2f0` is an ancestor of `origin/main`, and the
+three commits that had appeared to be branch-owned — `361887e6`, `50ecdf2a`,
+`fdfcebc3` — are main's own first-parent chain, so including them replayed
+inherited work. The boundary that excludes them is the merge-base `50ecdf2a`,
+which yields 44 commits and no merges, and each of those 44 is absent from main.
+
+The replay was conflict-free: `git range-diff` reports all 44 commits
+identical, with none dropped and no subject changed. The two paths both sides
+touch, `Makefile` and `docs/developers-guide.md`, carry disjoint hunks — main's
+edits land in the `fmt` and `check-fmt` recipes and the toolchain paragraph,
+the branch's in `PYTEST_TARGETS`, `test-act` and its recipe, and the harness
+section — so the three-way merge needed no resolution. `check-fmt` now routes
+its Rust leg through main's `RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28` via
+`RUSTFMT_CARGO`, which the branch's earlier conflict resolutions had preserved
+in place rather than re-pinned.
+
+`make lint` then failed on the rebased head with `SKY-U001 unused function:
+_PipelineWaitState.should_terminate_others`, a symbol this branch never touched
+and whose blob at `_pipeline_wait.py` is identical to main's. The cause is
+environmental rather than a regression here: skylos's `_read_public_docs()`
+skips any doc file larger than 300,000 bytes, so a symbol whose only rescuing
+reference is in `docs/developers-guide.md` stops being credited as documented
+once that file crosses the cap. The guide measured 299,543 bytes at
+`3b09b190`, where lint passed, and 300,245 at the rebased head, where it did
+not; shrinking the file while leaving the symbol's mentions untouched cleared
+the finding, which establishes the mechanism. The honest fix was to remove the
+restatement the branch had added rather than whitelist anything: the guide now
+defers to `docs/ci-benchmark-gate-telemetry.md` for retention and fail-open
+behaviour, to `docs/local-validation-of-github-actions-with-act-and-pytest.md`
+for the pinned image digest, and states the harness workflow's schedule once
+rather than twice. It sits at 299,659 bytes, 341 under the cap, with both
+`should_terminate_others` mentions — including the class-qualified rescue form —
+intact.

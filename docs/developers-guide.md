@@ -4316,18 +4316,15 @@ assert "no performance-relevant changes", which is a claim nothing measured.
 
 A following step writes one JSONL observation named
 `benchmark_gate_decisions_total` to a GitHub Actions artefact, carrying the
-three values the decision step already computed. The record keeps `run_id`,
-`run_attempt`, and UTC `recorded_at` as metadata outside the exact three-label
-set. The artefact is requested for 90 days, subject to repository and
-organization retention policy, so maintainers can analyse trends after
-downloading recent runs. [ADR-014](adr-014-benchmark-gate-telemetry-sink.md)
+three values the decision step already computed, with `run_id`, `run_attempt`,
+and UTC `recorded_at` as metadata outside the exact three-label set.
+[ADR-014](adr-014-benchmark-gate-telemetry-sink.md)
 records the superseding decision and
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
 operational contract: schema, retrieval, analysis, retention, and fail-open
-behaviour. Failed writes and uploads warn without blocking the gate; the
-`!cancelled()` condition keeps detector-failure observations recordable. Local
-`act` runs set `ACT=true` and skip artefact upload, while hosted receipt
-remains a post-push check.
+behaviour. Failed writes and uploads warn without blocking the gate, and
+`ACT=true` local runs skip the upload, so hosted receipt remains a post-push
+check.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
@@ -4388,33 +4385,26 @@ and the benchmark body with an admission marker, then runs
 changed-path sets, pull-request and push events, and a failing detector. It
 asserts the filter's `bench` output, the recorded gate decision, and the
 admission marker. [ADR-015](adr-015-actions-runner-integration-harness.md)
-records why the boundary is exercised rather than inferred, and
-[the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
-covers running it by hand. The opt-in job is owned by
-`.github/workflows/benchmark-gate-harness.yml`, runs weekly or by dispatch on
-the GitHub-hosted `ubuntu-latest` runner, and never consumes the paid runner.
+records why the boundary is exercised rather than inferred.
 
 ### Running the scenarios locally
 
-`make test-act` runs the opt-in scenario suite. The target sets
+`make test-act` runs the opt-in scenario suite, owned by
+`.github/workflows/benchmark-gate-harness.yml`: the same target weekly or by
+dispatch on the GitHub-hosted `ubuntu-latest` runner, so the boundary is
+exercised without ever consuming the paid runner. The target sets
 `CUPRUM_REQUIRE_ACT=1`, which turns a missing runtime from a skip into a
 failure, so a job that provides a runtime cannot report success for having
 skipped every scenario. Running it by hand needs `act` and a container runtime
 — Docker or Podman — whose socket `act` can reach, because each scenario starts
 a real container. The pinned tooling is `act` 0.2.89 and one immutable runner
-image, which every projected job is bound to:
-
-```bash
-image='catthehacker/ubuntu:act-latest@sha256:c58e2b364da03b0c804c7d660f2ecbedf2f221a382b9baa0b344b0144780ff43'
-```
-
-The local validation guide covers the prerequisites and the checksum-verified
-install; the scenario targets themselves stay out of `make test`, because
-`ACT_SCENARIO_TARGETS` is deliberately absent from `PYTEST_TARGETS`, the glob
-list `make test` uses. Each scenario costs 15-27s warm plus image warm-up, and
-`make test` cannot require a container runtime. The hosted entry point is
-`.github/workflows/benchmark-gate-harness.yml`, which runs the same target
-weekly or by dispatch.
+image; [the local validation
+guide](local-validation-of-github-actions-with-act-and-pytest.md) covers the
+prerequisites, the checksum-verified install, and the digest. The scenario
+targets stay out of `make test`, because `ACT_SCENARIO_TARGETS` is
+deliberately absent from `PYTEST_TARGETS`, the glob list `make test` uses:
+each scenario costs 15-27s warm plus image warm-up, and `make test` cannot
+require a container runtime.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern
