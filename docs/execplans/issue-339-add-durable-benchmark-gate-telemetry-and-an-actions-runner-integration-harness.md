@@ -2,7 +2,7 @@
 
 Status: IMPLEMENTED; hosted receipts verified for the commits their runs name
 and for no other commit, all local gates green on the rebased candidate, most
-recently rebased onto `934c7666`
+recently rebased onto `df0b4f6c`
 
 This living ExecPlan records the implementation of issue #339. The maintainer's
 2026-09-17 instruction supersedes the original Grafana deployment requirement:
@@ -814,20 +814,62 @@ its Rust leg through main's `RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28` via
 `RUSTFMT_CARGO`, which the branch's earlier conflict resolutions had preserved
 in place rather than re-pinned.
 
-`make lint` then failed on the rebased head with `SKY-U001 unused function:
-_PipelineWaitState.should_terminate_others`, a symbol this branch never touched
-and whose blob at `_pipeline_wait.py` is identical to main's. The cause is
-environmental rather than a regression here: skylos's `_read_public_docs()`
-skips any doc file larger than 300,000 bytes, so a symbol whose only rescuing
-reference is in `docs/developers-guide.md` stops being credited as documented
-once that file crosses the cap. The guide measured 299,543 bytes at
-`3b09b190`, where lint passed, and 300,245 at the rebased head, where it did
-not; shrinking the file while leaving the symbol's mentions untouched cleared
-the finding, which establishes the mechanism. The honest fix was to remove the
-restatement the branch had added rather than whitelist anything: the guide now
-defers to `docs/ci-benchmark-gate-telemetry.md` for retention and fail-open
-behaviour, to `docs/local-validation-of-github-actions-with-act-and-pytest.md`
-for the pinned image digest, and states the harness workflow's schedule once
-rather than twice. It sits at 299,659 bytes, 341 under the cap, with both
-`should_terminate_others` mentions — including the class-qualified rescue form —
-intact.
+`make lint` then failed on the rebased head with
+`SKY-U001 unused function: _PipelineWaitState.should_terminate_others`, a
+symbol this branch never touched and whose blob at `_pipeline_wait.py` is
+identical to main's. The cause is environmental rather than a regression here:
+skylos's `_read_public_docs()` skips any doc file larger than 300,000 bytes, so
+a symbol whose only rescuing reference is in `docs/developers-guide.md` stops
+being credited as documented once that file crosses the cap. The guide measured
+299,543 bytes at `3b09b190`, where lint passed, and 300,245 at the rebased
+head, where it did not; shrinking the file while leaving the symbol's mentions
+untouched cleared the finding, which establishes the mechanism. The honest fix
+was to remove the restatement the branch had added rather than whitelist
+anything: the guide now defers to `docs/ci-benchmark-gate-telemetry.md` for
+retention and fail-open behaviour, to
+`docs/local-validation-of-github-actions-with-act-and-pytest.md` for the pinned
+image digest, and states the harness workflow's schedule once rather than
+twice. It sits at 299,659 bytes, 341 under the cap, with both
+`should_terminate_others` mentions — including the class-qualified rescue form
+— intact.
+
+A ninth replay moved the branch to `cc04166e` on target `df0b4f6c`
+(`Enforce the Rust lint baseline (#448)`), again with no conflicts: the
+exclusive boundary stayed the merge-base `50ecdf2a` and all 45 commits replayed
+identically except commit 3, where `Makefile`'s `PYTEST_TARGETS` correctly
+combined main's new `test_boundary_*.py` and
+`test_rust_lint_baseline_contract.py` entries with this branch's
+`$(ACT_PARSER_TARGETS)`. `git range-diff` reported 44 of 45 commits unchanged
+and that one as a combination rather than a loss.
+
+Main's #448 had meanwhile added 1,758 bytes of its own prose to
+`docs/developers-guide.md`, taking it to 298,350 and leaving only 1,650 bytes
+under skylos's per-file cap. The rebased guide therefore measured 301,417 —
+1,417 over — so `SKY-U001` returned. The remedy was again to cut restatement,
+and the search for it is worth recording because the obvious scan finds
+nothing: an exact-match pass over every paragraph and long sentence in the
+guide reported zero duplicates within the file, and a cross-file pass against
+every readable doc found only 116 bytes of verbatim overlap, all of it main's
+inherited content. The duplication that did exist was *paraphrased*, and the
+owning files were the ones the branch's own additions pointed at:
+`docs/local-validation-of-github-actions-with-act-and-pytest.md` already
+documents `make test-act`, the refusal to skip, the `make test` exclusion, and
+the hosted weekly dispatch, and `Makefile:368-378` owns the same opt-in
+contract as a comment. The guide's "Running the scenarios locally" section now
+routes readers to those owners instead of restating them, the telemetry
+paragraph defers to `docs/ci-benchmark-gate-telemetry.md`, and the harness
+paragraph defers to ADR-015. The guide sits at 299,910 bytes, 90 under the cap.
+
+That margin is much thinner than the 341 bytes of the previous generation, so
+the cap was re-proved in both directions on this tree rather than assumed: with
+the guide at 301,417 the pinned detector reports the finding, and at 299,910 it
+exits 0. A simulation of `_read_public_docs()` confirms the mechanism can bite
+in two independent ways — the real guide is skipped by the per-file cap when it
+exceeds 300,000, and the cumulative 2,000,000-byte cap stops the scan outright
+partway through this worktree's docs. The guide is enumerated before that break
+fires, so the per-file cap is the binding constraint here; any further growth
+of this file will re-trigger the finding.
+
+`make check-fmt` also failed on the pre-rebase head because `mdtablefix` wanted
+to reflow the two files the previous trim committed. Both are formatted now,
+and the Makefile's `fmt` target confirms the required flag is `--in-place`.

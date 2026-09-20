@@ -4314,17 +4314,10 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
-A following step writes one JSONL observation named
-`benchmark_gate_decisions_total` to a GitHub Actions artefact, carrying the
-three values the decision step already computed, with `run_id`, `run_attempt`,
-and UTC `recorded_at` as metadata outside the exact three-label set.
-[ADR-014](adr-014-benchmark-gate-telemetry-sink.md)
-records the superseding decision and
-[CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the
-operational contract: schema, retrieval, analysis, retention, and fail-open
-behaviour. Failed writes and uploads warn without blocking the gate, and
-`ACT=true` local runs skip the upload, so hosted receipt remains a post-push
-check.
+A following step persists one durable observation per non-cancelled execution,
+so the gate is analysable across runs rather than only per run.
+[ADR-014](adr-014-benchmark-gate-telemetry-sink.md) records that decision;
+[CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) is the contract.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
@@ -4373,38 +4366,22 @@ the other does not see:
   `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what makes
   running it outside Actions evidence rather than simulation.
 
-Those suites still stop short of the boundary. None of them executes
+Those suites still stop short of the boundary: none executes
 `dorny/paths-filter`, so none can fail when the pinned action's output name,
 its offline behaviour, or an event payload disagrees with what the contract
 tests assume. `tests/integration/test_workflow_integration.py`, over
-`tests/helpers/act_harness.py`, projects `ci.yml` into a temporary repository,
-preserving the complete `changes` job and the `benchmark-ratchet` `needs` and
-`if` boundary. It replaces unrelated prerequisite bodies with success probes
-and the benchmark body with an admission marker, then runs
-`act --job benchmark-ratchet` for relevant, irrelevant, mixed, and empty
-changed-path sets, pull-request and push events, and a failing detector. It
-asserts the filter's `bench` output, the recorded gate decision, and the
-admission marker. [ADR-015](adr-015-actions-runner-integration-harness.md)
-records why the boundary is exercised rather than inferred.
+`tests/helpers/act_harness.py`, closes that gap by running the real `changes`
+job under `act`. [ADR-015](adr-015-actions-runner-integration-harness.md) owns
+the harness design and scenario set.
 
 ### Running the scenarios locally
 
-`make test-act` runs the opt-in scenario suite, owned by
-`.github/workflows/benchmark-gate-harness.yml`: the same target weekly or by
-dispatch on the GitHub-hosted `ubuntu-latest` runner, so the boundary is
-exercised without ever consuming the paid runner. The target sets
-`CUPRUM_REQUIRE_ACT=1`, which turns a missing runtime from a skip into a
-failure, so a job that provides a runtime cannot report success for having
-skipped every scenario. Running it by hand needs `act` and a container runtime
-— Docker or Podman — whose socket `act` can reach, because each scenario starts
-a real container. The pinned tooling is `act` 0.2.89 and one immutable runner
-image; [the local validation
-guide](local-validation-of-github-actions-with-act-and-pytest.md) covers the
-prerequisites, the checksum-verified install, and the digest. The scenario
-targets stay out of `make test`, because `ACT_SCENARIO_TARGETS` is
-deliberately absent from `PYTEST_TARGETS`, the glob list `make test` uses:
-each scenario costs 15-27s warm plus image warm-up, and `make test` cannot
-require a container runtime.
+`make test-act` runs them here; `.github/workflows/benchmark-gate-harness.yml`
+runs the same target on a GitHub-hosted runner — never the paid one. The
+target's own Makefile comment and
+[the local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
+own the opt-in contract: why `ACT_SCENARIO_TARGETS` stays out of
+`PYTEST_TARGETS`, the runtime it needs, the pins, and the refusal to skip.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern
