@@ -187,9 +187,7 @@ def _load_automatic_target_roots(
         ),
         (crate / "build.rs",) if package.get("build", True) is True else (),
     )
-    return tuple(
-        path for path in candidates if _path_matches(path, stat.S_ISREG, "root")
-    )
+    return tuple(path for path in candidates if _is_mode(path, stat.S_ISREG))
 
 
 def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
@@ -197,11 +195,13 @@ def _load_directory_target_roots(directory: Path) -> cabc.Iterator[Path]:
     for entry in _directory_entries(directory):
         if entry.name.startswith("."):
             continue
-        if entry.suffix == ".rs":
+        if entry.suffix == ".rs" and _is_mode(entry, stat.S_ISREG):
             yield entry
             continue
+        if _is_mode(entry, stat.S_ISLNK, follow=False):
+            continue
         candidate = entry / "main.rs"
-        if _path_matches(candidate, stat.S_ISREG, "root"):
+        if _is_mode(candidate, stat.S_ISREG):
             yield candidate
 
 
@@ -216,14 +216,16 @@ def _directory_entries(directory: Path) -> tuple[Path, ...]:
         raise ValueError(msg) from error
 
 
-def _path_matches(path: Path, check: cabc.Callable[[int], bool], kind: str) -> bool:
+def _is_mode(
+    path: Path, check: cabc.Callable[[int], bool], *, follow: bool = True
+) -> bool:
     """Inspect one target path with a stat-mode predicate."""
     try:
-        return check(path.stat().st_mode)
+        return check(path.stat(follow_symlinks=follow).st_mode)
     except FileNotFoundError:
         return False
     except OSError as error:
-        msg = f"cannot inspect target {kind} {path}: {error}"
+        msg = f"cannot inspect target path {path}: {error}"
         raise ValueError(msg) from error
 
 
@@ -290,9 +292,7 @@ def _inferred_target_roots(
                 candidates = (crate / "src/main.rs", *candidates)
         case _:
             return ()
-    return tuple(
-        path for path in candidates if _path_matches(path, stat.S_ISREG, "root")
-    )
+    return tuple(path for path in candidates if _is_mode(path, stat.S_ISREG))
 
 
 def _target_definitions(value: object) -> tuple[cabc.Mapping[str, object], ...]:

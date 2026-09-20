@@ -33,15 +33,8 @@ AUTO_DISABLED_TARGETS = (
     ("autotests", "tests/integration.rs"),
     ("autobenches", "benches/benchmark.rs"),
 )
-AUTOMATIC_PROPERTY_TARGETS = (
-    "src/lib.rs",
-    "src/bin/nested/main.rs",
-)
-EXPLICIT_PROPERTY_TARGETS = (
-    "src/lib.rs",
-    "tools/explicit.rs",
-    "tools/build.rs",
-)
+AUTOMATIC_PROPERTY_TARGETS = ("src/lib.rs", "src/bin/nested/main.rs")
+EXPLICIT_PROPERTY_TARGETS = ("src/lib.rs", "tools/explicit.rs", "tools/build.rs")
 OVERRIDING_EXPLICIT_TARGETS = (
     ("lib", None, "src/lib.rs", "tools/custom_lib.rs"),
     ("bin", "cuprum-streams", "src/main.rs", "tools/custom_main.rs"),
@@ -89,14 +82,9 @@ def _append_explicit_target(
     """Declare one named Cargo target table with a custom source path."""
     table = "[lib]" if target_type == "lib" else f"[[{target_type}]]"
     name_entry = "" if name is None else chr(10) + f'name = "{name}"'
+    content = manifest.read_text(encoding="utf-8")
     manifest.write_text(
-        manifest.read_text(encoding="utf-8")
-        + chr(10)
-        + table
-        + name_entry
-        + chr(10)
-        + f'path = "{source}"'
-        + chr(10),
+        f'{content}{chr(10)}{table}{name_entry}{chr(10)}path = "{source}"{chr(10)}',
         encoding="utf-8",
     )
 
@@ -141,7 +129,6 @@ def test_hidden_automatic_targets_are_ignored(
     crate = root / "cuprum-streams"
     hidden_path = _write_target(crate, hidden, "//! Hidden automatic root." + chr(10))
     visible_path = _write_target(crate, visible)
-
     roots = safe_target_roots(root)
 
     assert hidden_path not in roots, "Cargo must ignore a hidden automatic target"
@@ -152,28 +139,42 @@ def test_hidden_automatic_targets_are_ignored(
     check_safe_policy(root)
 
 
-def test_visible_support_directory_without_main_is_not_a_target(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "nested_target",
+    [
+        "src/bin/behaviour.rs/main.rs",
+        "examples/behaviour.rs/main.rs",
+        "tests/behaviour.rs/main.rs",
+        "benches/behaviour.rs/main.rs",
+    ],
+)
+def test_visible_support_directory_without_main_is_not_a_target(
+    nested_target: str, tmp_path: Path
+) -> None:
     """Only a visible nested main.rs is an automatic Cargo target."""
     root = copy_boundary_repository(tmp_path) / "rust"
     crate = root / "cuprum-streams"
-    support = crate / "tests/support"
-    support.mkdir(parents=True)
-
+    (crate / "tests/support").mkdir(parents=True)
+    _write_target(crate, "shared/main.rs")
+    try:
+        (crate / "tests/shared").symlink_to("../shared", target_is_directory=True)
+        (crate / "tests/shared.rs").symlink_to("../shared/main.rs")
+    except OSError as error:
+        pytest.skip(f"the platform cannot create the symlink fixture: {error}")
     roots = safe_target_roots(root)
-
-    assert support / "main.rs" not in roots, "support without main.rs is not a target"
-    assert roots == _metadata_target_roots(crate), (
-        "the scanner and Cargo metadata must ignore the support directory"
+    assert crate / "tests/support/main.rs" not in roots, (
+        "support/main.rs is not a target"
     )
+    assert crate / "tests/shared/main.rs" not in roots, (
+        "directory symlink is not a target"
+    )
+    assert crate / "tests/shared.rs" in roots, (
+        "a direct source symlink must retain Cargo's target behaviour"
+    )
+    assert roots == _metadata_target_roots(crate), "scanner must match Cargo metadata"
     check_safe_policy(root)
-
-    nested = _write_target(
-        crate, "tests/behaviour/main.rs", "//! Missing safety." + chr(10)
-    )
-
-    assert nested in safe_target_roots(root), (
-        "a visible nested main.rs must remain an automatic target"
-    )
+    nested = _write_target(crate, nested_target, "//! Missing." + chr(10))
+    assert nested in safe_target_roots(root), "nested main.rs remains a target"
     with pytest.raises(ValueError, match="safe target must forbid unsafe code"):
         check_safe_policy(root)
 
