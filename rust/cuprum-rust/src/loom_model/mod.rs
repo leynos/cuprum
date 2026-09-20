@@ -7,12 +7,23 @@
 
 mod sync;
 
-use cuprum_native_io::loom_support::borrowed_reader_close_count as native_borrowed_reader_close_count;
+use cuprum_native_io::loom_support::{PumpExit, pump_close_counts};
 use cuprum_streams::loom_support::{
-    drive_downstream_close, drive_failed_pump, drive_successful_pump,
+    drive_downstream_close,
+    drive_failed_pump,
+    drive_successful_pump,
 };
 use sync::{
-    Arc, AtomicBool, AtomicUsize, Cell, Condvar, JoinHandle, Mutex, MutexGuard, Ordering, thread,
+    Arc,
+    AtomicBool,
+    AtomicUsize,
+    Cell,
+    Condvar,
+    JoinHandle,
+    Mutex,
+    MutexGuard,
+    Ordering,
+    thread,
 };
 
 /// Error returned when the bounded model cannot preserve its own invariants.
@@ -70,14 +81,17 @@ pub enum TerminalState {
 enum DescriptorOwner {
     Callback,
     NativeWorker,
+    Unallocated,
     Closed,
 }
 
 /// Snapshot asserted by an external Loom harness after all actors join.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleSnapshot {
-    /// Number of times the duplicate writer was closed.
-    pub writer_closes: usize,
+    /// Number of times the callback-owned state writer was closed.
+    pub callback_writer_closes: usize,
+    /// Number of times the native worker writer was closed.
+    pub native_writer_closes: usize,
     /// Number of times the borrowed reader was closed.
     pub reader_closes: usize,
     /// Whether cancellation reached the event-loop actor.
@@ -109,8 +123,15 @@ impl DescriptorRecord {
         }
     }
 
+    fn native_unallocated() -> Self {
+        Self {
+            owner: Cell::new(DescriptorOwner::Unallocated),
+            closes: 0,
+        }
+    }
+
     fn hand_to_worker(&self) {
-        assert_eq!(self.owner.get(), DescriptorOwner::Callback);
+        assert_eq!(self.owner.get(), DescriptorOwner::Unallocated);
         self.owner.set(DescriptorOwner::NativeWorker);
     }
 
@@ -119,6 +140,16 @@ impl DescriptorRecord {
             self.owner.set(DescriptorOwner::Closed);
             self.closes = self.closes.saturating_add(1);
         }
+        if inject_double_close {
+            self.closes = self.closes.saturating_add(1);
+        }
+    }
+
+    fn close_from_native_pump(&mut self, close_count: usize, inject_double_close: bool) {
+        assert_eq!(self.owner.get(), DescriptorOwner::NativeWorker);
+        assert_eq!(close_count, 1, "the native pump must close its writer once");
+        self.owner.set(DescriptorOwner::Closed);
+        self.closes = close_count;
         if inject_double_close {
             self.closes = self.closes.saturating_add(1);
         }
@@ -135,7 +166,8 @@ struct Lifecycle {
     completion_notified: bool,
     released_while_worker_active: bool,
     observer_saw_completion: bool,
-    writer: DescriptorRecord,
+    callback_writer: DescriptorRecord,
+    native_writer: DescriptorRecord,
 }
 
 impl Lifecycle {
@@ -150,7 +182,8 @@ impl Lifecycle {
             completion_notified: false,
             released_while_worker_active: false,
             observer_saw_completion: false,
-            writer: DescriptorRecord::callback_owned(),
+            callback_writer: DescriptorRecord::callback_owned(),
+            native_writer: DescriptorRecord::native_unallocated(),
         }
     }
 }
@@ -166,25 +199,19 @@ pub struct NativePumpModel {
 }
 
 impl NativePumpModel {
-    /// Create a model with one callback-owned writer duplicate.
+    /// Create a model with separate callback and native-worker writer records.
     #[must_use]
-    pub fn new() -> Arc<Self> {
-        Self::with_defects(false, false)
-    }
+    pub fn new() -> Arc<Self> { Self::with_defects(false, false) }
 
     /// Create an explicitly selected defective model for non-vacuity evidence.
     #[cfg(feature = "loom-defect-fixture")]
     #[must_use]
-    pub fn with_double_close_defect() -> Arc<Self> {
-        Self::with_defects(true, false)
-    }
+    pub fn with_double_close_defect() -> Arc<Self> { Self::with_defects(true, false) }
 
     /// Create a model that releases a descriptor while its worker is active.
     #[cfg(feature = "loom-defect-fixture")]
     #[must_use]
-    pub fn with_early_release_defect() -> Arc<Self> {
-        Self::with_defects(false, true)
-    }
+    pub fn with_early_release_defect() -> Arc<Self> { Self::with_defects(false, true) }
 
     fn with_defects(inject_double_close: bool, inject_early_release: bool) -> Arc<Self> {
         Arc::new(Self {
@@ -201,6 +228,7 @@ impl NativePumpModel {
     #[cfg(feature = "loom-defect-fixture")]
     pub fn release_while_worker_active(&self) -> Result<(), ModelError> {
         let mut lifecycle = self.lock_lifecycle()?;
+        lifecycle.native_writer.hand_to_worker();
         lifecycle.worker_active = true;
         self.complete_locked(&mut lifecycle);
         Ok(())
@@ -221,7 +249,7 @@ impl NativePumpModel {
             if model.was_cancelled.load(Ordering::Acquire) {
                 return Ok(None);
             }
-            lifecycle.writer.hand_to_worker();
+            lifecycle.native_writer.hand_to_worker();
             lifecycle.worker_active = true;
             lifecycle.terminal = TerminalState::Submitted;
         }
@@ -258,7 +286,8 @@ impl NativePumpModel {
     pub fn snapshot(&self) -> Result<LifecycleSnapshot, ModelError> {
         let lifecycle = self.lock_lifecycle()?;
         Ok(LifecycleSnapshot {
-            writer_closes: lifecycle.writer.closes,
+            callback_writer_closes: lifecycle.callback_writer.closes,
+            native_writer_closes: lifecycle.native_writer.closes,
             reader_closes: lifecycle.reader_closes,
             was_cancelled: self.was_cancelled.load(Ordering::Acquire),
             cleanup_count: self.cleanup_count.load(Ordering::Acquire),
@@ -272,11 +301,14 @@ impl NativePumpModel {
 
     fn run_worker(&self, native: NativeOutcome) -> Result<(), ModelError> {
         drive_production_pump_machine(native);
-        let reader_closes = native_borrowed_reader_close_count();
+        let ownership = pump_close_counts(pump_exit(native));
         {
             let mut lifecycle = self.lock_lifecycle()?;
+            lifecycle
+                .native_writer
+                .close_from_native_pump(ownership.writer_closes, self.inject_double_close);
             lifecycle.worker_active = false;
-            lifecycle.reader_closes = reader_closes;
+            lifecycle.reader_closes = ownership.reader_closes;
             lifecycle.terminal = TerminalState::WorkerFinished(native);
             self.notify_completion_locked(&mut lifecycle);
         }
@@ -303,7 +335,7 @@ impl NativePumpModel {
             }
             lifecycle.released_while_worker_active = true;
         }
-        lifecycle.writer.close_once(self.inject_double_close);
+        lifecycle.callback_writer.close_once(false);
         lifecycle.blocking_restored = true;
         lifecycle.reader_resumed = true;
         lifecycle.cleanup_completed = true;
@@ -328,5 +360,12 @@ fn drive_production_pump_machine(native: NativeOutcome) {
         NativeOutcome::Succeeded => drive_successful_pump(),
         NativeOutcome::DownstreamClosed => drive_downstream_close(),
         NativeOutcome::Failed => drive_failed_pump(),
+    }
+}
+
+fn pump_exit(native: NativeOutcome) -> PumpExit {
+    match native {
+        NativeOutcome::Succeeded | NativeOutcome::DownstreamClosed => PumpExit::Succeeded,
+        NativeOutcome::Failed => PumpExit::Failed,
     }
 }

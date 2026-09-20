@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import dataclasses as dc
 import importlib
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests replace the fixed driver command.
 import typing as typ
 from pathlib import Path
 
 import pytest
+
+from cuprum.sh import CommandResult, SafeCmd
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -48,11 +49,66 @@ class _LoomRunResult(typ.Protocol):
     executed_tests: int
 
 
+class _CommandFailure(typ.Protocol):
+    """The diagnostic attributes attached to a failed external command."""
+
+    command: list[str]
+    diagnostic: str
+
+
+class _OutputFailure(typ.Protocol):
+    """The raw output retained when Cargo output cannot be parsed."""
+
+    output: str
+
+
+class _CountMismatch(typ.Protocol):
+    """The parsed counts retained for a mismatched Cargo execution."""
+
+    discovered: int
+    executed: int
+
+
+class _UnsupportedMode(typ.Protocol):
+    """The mode retained when a caller bypasses the CLI choices."""
+
+    mode: str
+
+
+class _LoomRunErrorFactory(typ.Protocol):
+    """Factory surface used to assert retained exception diagnostics."""
+
+    @classmethod
+    def command_failed(cls, command: list[str], diagnostic: str) -> _CommandFailure:
+        """Build a command failure with its input diagnostics."""
+
+    @classmethod
+    def discovery_unreadable(cls, output: str) -> _OutputFailure:
+        """Build a discovery parsing failure retaining raw output."""
+
+    @classmethod
+    def execution_unreadable(cls, output: str) -> _OutputFailure:
+        """Build an execution parsing failure retaining raw output."""
+
+    @classmethod
+    def test_count_mismatch(cls, discovered: int, executed: int) -> _CountMismatch:
+        """Build a mismatch retaining both parsed counts."""
+
+
+class _LoomModeErrorFactory(typ.Protocol):
+    """Factory surface used to assert retained unsupported modes."""
+
+    @classmethod
+    def unsupported(cls, mode: str) -> _UnsupportedMode:
+        """Build an unsupported-mode error retaining its input."""
+
+
 class LoomDriver(typ.Protocol):
     """Typed surface imported from the standalone Loom driver."""
 
     LoomBounds: type[_LoomBounds]
     LoomRunError: type[Exception]
+    LoomModeError: type[Exception]
 
     def run_loom(
         self, *, mode: str, bounds: _LoomBounds | None = None
@@ -70,23 +126,21 @@ def loom_driver_fixture(monkeypatch: pytest.MonkeyPatch) -> LoomDriver:
     return typ.cast("LoomDriver", importlib.import_module("run_loom"))
 
 
-def _completed(command: list[str], output: str) -> subprocess.CompletedProcess[str]:
-    """Build a successful text subprocess result for ``command``."""
-    return subprocess.CompletedProcess(command, 0, output, "")
+def _completed(command: SafeCmd, output: str) -> CommandResult:
+    """Build a successful Cuprum result for ``command``."""
+    return CommandResult(command.program, command.argv, 0, -1, output, "")
 
 
 def _cargo_run_with_results(
     discovery_output: str, execution_output: str
-) -> cabc.Callable[..., subprocess.CompletedProcess[str]]:
+) -> cabc.Callable[..., CommandResult]:
     """Build a fixed Cargo discovery, execution, and version-result runner."""
 
-    def fake_run(
-        command: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_run(command: SafeCmd, **_kwargs: object) -> CommandResult:
         """Return the configured Cargo or tool-version result."""
-        if "--list" in command:
+        if "--list" in command.argv:
             return _completed(command, discovery_output)
-        if command[:2] == ["cargo", "test"]:
+        if "test" in command.argv:
             return _completed(command, execution_output)
         return _completed(command, "version\n")
 
@@ -100,19 +154,17 @@ def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
     """The driver discovers and executes the dedicated cfg(loom) target."""
     commands: list[list[str]] = []
 
-    def fake_run(
-        command: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_run(command: SafeCmd, **kwargs: object) -> CommandResult:
         """Record calls and return deterministic Cargo and version output."""
-        commands.append(command)
-        environment = kwargs["env"]
+        commands.append(list(command.argv_with_program))
+        environment = kwargs["environment"]
         assert isinstance(environment, dict), "the driver must pass a complete env"
-        if command[:2] == ["cargo", "test"] and "--list" in command:
+        if "test" in command.argv and "--list" in command.argv:
             assert environment["RUSTFLAGS"] == "--cfg loom -D warnings", (
                 "the Loom cfg must reach Cargo"
             )
             return _completed(command, "one: test\ntwo: test\n2 tests, 0 benchmarks\n")
-        if command[:2] == ["cargo", "test"]:
+        if "test" in command.argv:
             return _completed(
                 command,
                 (
@@ -122,17 +174,18 @@ def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
             )
         return _completed(command, "version\n")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(loom_driver, "_run", fake_run)
 
     result = loom_driver.run_loom(mode="smoke")
 
-    loom_commands = [
-        command for command in commands if command[:2] == ["cargo", "test"]
-    ]
+    loom_commands = [command for command in commands if "test" in command]
     assert len(loom_commands) == 2, "the driver must discover then execute"
     assert all(
         "--test" in command and "loom" in command for command in loom_commands
     ), "both Cargo invocations must select the dedicated Loom target"
+    assert all("+1.85.0" in command for command in loom_commands), (
+        "both Cargo invocations must select the pinned Rust toolchain"
+    )
     assert result.discovered_tests == 2, "discovery count must be retained"
     assert result.executed_tests == 2, "execution count must be retained"
 
@@ -171,8 +224,8 @@ def test_run_loom_rejects_invalid_execution_count(
 ) -> None:
     """A vacuous or mismatched Cargo execution is a driver failure."""
     monkeypatch.setattr(
-        subprocess,
-        "run",
+        loom_driver,
+        "_run",
         _cargo_run_with_results(case.discovery_output, case.execution_output),
     )
 
@@ -186,18 +239,38 @@ def test_run_loom_reports_cargo_failure_details(
 ) -> None:
     """Counterexamples and bound exhaustion remain visible in the failure."""
 
-    def fake_run(
-        command: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        """Raise the native failure Cargo would provide."""
-        raise subprocess.CalledProcessError(
-            101, command, stderr="model exceeded branches"
+    def fake_run(command: SafeCmd, **_kwargs: object) -> CommandResult:
+        """Return the native failure Cargo would provide."""
+        return CommandResult(
+            command.program, command.argv, 101, -1, "", "model exceeded branches"
         )
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(SafeCmd, "run_sync", fake_run)
 
     with pytest.raises(loom_driver.LoomRunError, match="model exceeded branches"):
         loom_driver.run_loom(mode="smoke")
+
+
+def test_error_factories_retain_their_typed_inputs(loom_driver: LoomDriver) -> None:
+    """Rendered driver errors also expose their source values to callers."""
+    run_errors = typ.cast("type[_LoomRunErrorFactory]", loom_driver.LoomRunError)
+    command = ["cargo", "+1.85.0", "test"]
+    command_failure = run_errors.command_failed(command, "branch limit")
+    discovery_failure = run_errors.discovery_unreadable("not Cargo output")
+    execution_failure = run_errors.execution_unreadable("not test output")
+    mismatch = run_errors.test_count_mismatch(3, 2)
+    mode_errors = typ.cast("type[_LoomModeErrorFactory]", loom_driver.LoomModeError)
+    unsupported = mode_errors.unsupported("unexpected")
+
+    assert command_failure.command == command, "command failure must retain argv"
+    assert command_failure.diagnostic == "branch limit", "must retain diagnostic"
+    assert discovery_failure.output == "not Cargo output", (
+        "must retain discovery output"
+    )
+    assert execution_failure.output == "not test output", "must retain execution output"
+    assert mismatch.discovered == 3, "must retain discovered test count"
+    assert mismatch.executed == 2, "must retain executed test count"
+    assert unsupported.mode == "unexpected", "must retain unsupported mode"
 
 
 @pytest.mark.parametrize(

@@ -88,12 +88,16 @@ per-interpreter split becomes pure overhead.
 
 ## One writer per family
 
-A family is written by exactly one job, and only on a push to `main`. Pull
-requests restore and never save: a pull-request branch cannot publish a
-generation anyone should trust, and the attempt produces only
-`Unable to reserve cache` noise and wasted upload time. A `workflow_dispatch`
-run is likewise a reader, which is what makes repeated dispatches a usable way
-to measure warm caches without churning the generation they are measuring.
+A family is written by exactly one job. For every family except the Loom model
+compiler family, that writer runs only on a push to `main`. Pull requests
+restore and never save: a pull-request branch cannot publish a generation
+anyone should trust, and the attempt produces only `Unable to reserve cache`
+noise and wasted upload time. A `workflow_dispatch` run is likewise a reader,
+which is what makes repeated dispatches a usable way to measure warm caches
+without churning the generation they are measuring. The Loom model compiler
+family is the exception: `loom.yml` saves it only during scheduled runs on
+`refs/heads/main`. Its manual dispatches and pull-request smoke runs restore
+the family without saving it.
 
 | Family                                | Writer                                |
 | ------------------------------------- | ------------------------------------- |
@@ -107,7 +111,8 @@ to measure warm caches without churning the generation they are measuring.
 | Compiler, Cranelift lint              | `ci.yml` `lint-test`                  |
 | Compiler, Loom model                  | `loom.yml` `loom`                     |
 
-_Table 2: The single job that publishes each family on a push to `main`._
+_Table 2: The single job that publishes each family under the writer trigger
+described above._
 
 The interpreter matrix has one leg, 3.13, that only typechecks, because the
 coverage job already runs that interpreter's suite. It compiles nothing, so it

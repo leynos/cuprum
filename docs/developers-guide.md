@@ -219,8 +219,9 @@ measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
 own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
 `coverage-upload` writes the instrumented one, and `lint-test` writes the
-GitHub-hosted lint family. The daily `loom` job writes its separate model
-family, while `loom-smoke` restores it on pull requests.
+GitHub-hosted lint family. The scheduled `loom.yml` job writes its separate
+model family only on `refs/heads/main`, while manual dispatches and
+`loom-smoke` restore it without saving.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged
@@ -265,8 +266,8 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)         | 3.13   | **the only run**, instrumented | full collection        | absent    |
 | `typecheck-test` 3.12, 3.14, 3.15a | each   | none                           | `make test-python`     | absent    |
 | `typecheck-test` 3.13              | 3.13   | none                           | none, coverage runs it | absent    |
-| `extension-tests`                  | 3.13   | none                           | 12 gated modules       | **built** |
-| `extension-tests-windows`          | 3.13   | none                           | 12 gated modules       | **built** |
+| `extension-tests`                  | 3.13   | none                           | 13 gated modules       | **built** |
+| `extension-tests-windows`          | 3.13   | none                           | 13 gated modules       | **built** |
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under

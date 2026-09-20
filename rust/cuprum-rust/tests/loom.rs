@@ -3,7 +3,10 @@
 #![cfg(loom)]
 
 use _rust_backend_native::loom_model::{
-    LifecycleSnapshot, NativeOutcome, NativePumpModel, SubmissionOutcome,
+    LifecycleSnapshot,
+    NativeOutcome,
+    NativePumpModel,
+    SubmissionOutcome,
 };
 
 fn model(action: impl Fn() + Send + Sync + 'static) {
@@ -20,10 +23,14 @@ fn model(action: impl Fn() + Send + Sync + 'static) {
     builder.check(action);
 }
 
-fn assert_safe_terminal(snapshot: LifecycleSnapshot) {
+fn assert_safe_terminal(snapshot: LifecycleSnapshot, native_writer_closes: usize) {
     assert_eq!(
-        snapshot.writer_closes, 1,
-        "the duplicate writer closes once"
+        snapshot.callback_writer_closes, 1,
+        "the callback-owned state writer closes once"
+    );
+    assert_eq!(
+        snapshot.native_writer_closes, native_writer_closes,
+        "the native worker writer closes once after a successful hand-off"
     );
     assert_eq!(
         snapshot.reader_closes, 0,
@@ -78,10 +85,14 @@ fn model_submission_and_cleanup(
             .join()
             .expect("observer actor must finish")
             .expect("observer actor must preserve lifecycle state");
+        let expected_native_writer_closes = usize::from(
+            matches!(submission, SubmissionOutcome::Submitted) && !cancel_before_submission,
+        );
         assert_safe_terminal(
             state
                 .snapshot()
                 .expect("snapshot must observe the settled lifecycle"),
+            expected_native_writer_closes,
         );
     });
 }
@@ -156,7 +167,7 @@ fn cancellation_before_submission_remains_released() {
             snapshot.terminal,
             _rust_backend_native::loom_model::TerminalState::Released
         );
-        assert_safe_terminal(snapshot);
+        assert_safe_terminal(snapshot, 0);
 
         let failed_submission =
             NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed)
@@ -207,24 +218,33 @@ fn downstream_close_remains_terminal_under_competing_observers() {
             state
                 .snapshot()
                 .expect("snapshot must observe the settled lifecycle"),
+            1,
         );
     });
 }
 
 #[cfg(feature = "loom-defect-fixture")]
 #[test]
-#[should_panic(expected = "the duplicate writer closes once")]
+#[should_panic(expected = "the native worker writer closes once")]
 fn deliberate_double_close_fixture_is_detected() {
     model(|| {
         let state = NativePumpModel::with_double_close_defect();
         let worker =
-            NativePumpModel::submit(&state, SubmissionOutcome::Failed, NativeOutcome::Failed)
-                .expect("failed submission must preserve lifecycle state");
-        assert!(worker.is_none());
+            NativePumpModel::submit(&state, SubmissionOutcome::Submitted, NativeOutcome::Failed)
+                .expect("submission must preserve lifecycle state")
+                .expect("submitted work must start a worker");
+        worker
+            .join()
+            .expect("worker actor must finish")
+            .expect("worker actor must preserve lifecycle state");
+        state
+            .observe_completion()
+            .expect("observer actor must preserve lifecycle state");
         assert_safe_terminal(
             state
                 .snapshot()
                 .expect("snapshot must observe the settled lifecycle"),
+            1,
         );
     });
 }
@@ -238,10 +258,12 @@ fn deliberate_early_release_fixture_is_detected() {
         state
             .release_while_worker_active()
             .expect("the deliberate defect must preserve model state");
-        assert_safe_terminal(
-            state
-                .snapshot()
-                .expect("snapshot must observe the deliberate defect"),
+        let snapshot = state
+            .snapshot()
+            .expect("snapshot must observe the deliberate defect");
+        assert!(
+            !snapshot.released_while_worker_active,
+            "cleanup cannot release a descriptor while native work may use it"
         );
     });
 }
@@ -275,10 +297,13 @@ fn cancellation_and_submission_share_the_handoff_linearization_point() {
         state
             .observe_completion()
             .expect("observer actor must preserve lifecycle state");
-        assert_safe_terminal(
-            state
-                .snapshot()
-                .expect("snapshot must observe the settled lifecycle"),
+        let snapshot = state
+            .snapshot()
+            .expect("snapshot must observe the settled lifecycle");
+        assert_eq!(snapshot.callback_writer_closes, 1);
+        assert!(
+            snapshot.native_writer_closes <= 1,
+            "submission races can close the native writer at most once"
         );
     });
 }

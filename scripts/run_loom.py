@@ -1,25 +1,63 @@
 #!/usr/bin/env -S uv run python
 # /// script
 # requires-python = ">=3.13"
-# dependencies = []
+# dependencies = ["cyclopts>=2.9", "cuprum==0.1.0"]
 # ///
 """Run Cuprum's bounded Loom models and emit an auditable summary."""
 
 from __future__ import annotations
 
-import argparse
 import dataclasses as dc
 import enum
 import os
 import re
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - this driver runs a fixed Cargo command.
 import time
 import typing as typ
 from pathlib import Path
 
+import cyclopts
+from cyclopts import Parameter
+
+from cuprum import (
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    scoped,
+    sh,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import contextlib
+
+    from cuprum.sh import CommandResult, SafeCmd
+
+try:
+    from cuprum.context import ScopeConfig
+except ImportError:  # Cuprum 0.1.0 exposes the older keyword scope API.
+    ScopeConfig = None
+
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOOM_MANIFEST = Path("rust/cuprum-rust/Cargo.toml")
 LOOM_TARGET = "loom"
+RUST_TOOLCHAIN = "1.85.0"
+CARGO_PROGRAM = Program("cargo")
+GIT_PROGRAM = Program("git")
+RUSTC_PROGRAM = Program("rustc")
+CATALOGUE = ProgramCatalogue(
+    projects=(
+        ProjectSettings(
+            name="loom-driver",
+            programs=(CARGO_PROGRAM, GIT_PROGRAM, RUSTC_PROGRAM),
+            documentation_locations=("docs/developers-guide.md",),
+            noise_rules=(),
+        ),
+    )
+)
+cargo = sh.make(CARGO_PROGRAM, catalogue=CATALOGUE)
+git = sh.make(GIT_PROGRAM, catalogue=CATALOGUE)
+rustc = sh.make(RUSTC_PROGRAM, catalogue=CATALOGUE)
 _DISCOVERY_RE = re.compile(r"^(?P<count>\d+) tests?, \d+ benchmarks$", re.MULTILINE)
 _EXECUTION_RE = re.compile(
     r"test result: (?:ok|FAILED)\. (?P<passed>\d+) passed; (?P<failed>\d+) failed;"
@@ -79,13 +117,13 @@ class LoomRunResult:
 
 @dc.dataclass(frozen=True, slots=True)
 class LoomCliOptions:
-    """Typed command-line options at the argparse boundary."""
+    """Typed command-line options at the Cyclopts boundary."""
 
     mode: LoomMode
-    summary: Path | None
-    max_preemptions: int | None
-    max_branches: int | None
-    max_threads: int | None
+    summary: Path | None = None
+    max_preemptions: int | None = None
+    max_branches: int | None = None
+    max_threads: int | None = None
 
 
 class LoomError(Exception):
@@ -95,23 +133,36 @@ class LoomError(Exception):
 class LoomRunError(LoomError, RuntimeError):
     """Report a failed, incomplete, or vacuous Loom model execution."""
 
+    command: list[str]
+    diagnostic: str
+    output: str
+    discovered: int
+    executed: int
+
     @classmethod
     def command_failed(cls, command: list[str], diagnostic: str) -> LoomRunError:
         """Build the error for Cargo's model failure or exploration exhaustion."""
         message = f"Loom command failed ({' '.join(command)}):\n{diagnostic}"
-        return cls(message)
+        error = cls(message)
+        error.command = command
+        error.diagnostic = diagnostic
+        return error
 
     @classmethod
     def discovery_unreadable(cls, output: str) -> LoomRunError:
         """Build the error for an unparsable test-discovery result."""
         message = f"Could not determine Loom test discovery from:\n{output}"
-        return cls(message)
+        error = cls(message)
+        error.output = output
+        return error
 
     @classmethod
     def execution_unreadable(cls, output: str) -> LoomRunError:
         """Build the error for an unparsable test-execution result."""
         message = f"Could not determine Loom test execution from:\n{output}"
-        return cls(message)
+        error = cls(message)
+        error.output = output
+        return error
 
     @classmethod
     def test_count_mismatch(cls, discovered: int, executed: int) -> LoomRunError:
@@ -119,7 +170,10 @@ class LoomRunError(LoomError, RuntimeError):
         message = (
             f"Loom discovery found {discovered} tests but execution ran {executed}"
         )
-        return cls(message)
+        error = cls(message)
+        error.discovered = discovered
+        error.executed = executed
+        return error
 
     @classmethod
     def invalid_bound_override(cls) -> LoomRunError:
@@ -146,11 +200,15 @@ class LoomRunError(LoomError, RuntimeError):
 class LoomModeError(LoomError, ValueError):
     """Report an unsupported Loom execution mode."""
 
+    mode: str
+
     @classmethod
     def unsupported(cls, mode: str) -> LoomModeError:
         """Build the error for a caller bypassing command-line mode choices."""
         message = f"unsupported Loom mode: {mode}"
-        return cls(message)
+        error = cls(message)
+        error.mode = mode
+        return error
 
 
 def _bounds_for_mode(mode: LoomMode) -> LoomBounds:
@@ -187,10 +245,10 @@ def _validate_bounds(bounds: LoomBounds) -> LoomBounds:
     return bounds
 
 
-def _cargo_command(*tail: str) -> list[str]:
+def _cargo_command(*tail: str) -> SafeCmd:
     """Build the fixed Cargo command line for the dedicated Loom target."""
-    return [
-        "cargo",
+    return cargo(
+        f"+{RUST_TOOLCHAIN}",
         "test",
         "--manifest-path",
         str(LOOM_MANIFEST),
@@ -198,34 +256,38 @@ def _cargo_command(*tail: str) -> list[str]:
         LOOM_TARGET,
         "--release",
         *tail,
-    ]
+    )
 
 
-def _run(
-    command: list[str], *, environment: dict[str, str]
-) -> subprocess.CompletedProcess[str]:
+def _catalogue_scope() -> contextlib.AbstractContextManager[object]:
+    """Return a catalogue scope across Cuprum's supported scope APIs."""
+    if ScopeConfig is None:
+        legacy_scoped = typ.cast(
+            "cabc.Callable[..., contextlib.AbstractContextManager[object]]", scoped
+        )
+        return legacy_scoped(allowlist=CATALOGUE.allowlist)
+    return scoped(ScopeConfig(allowlist=CATALOGUE.allowlist))
+
+
+def _run(command: SafeCmd, *, environment: dict[str, str]) -> CommandResult:
     """Run one fixed tool command while retaining its diagnostic output."""
-    try:
-        return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - command is assembled exclusively by this driver.
-            command,
-            cwd=REPOSITORY_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=environment,
-        )
-    except subprocess.CalledProcessError as error:
-        diagnostic = (
-            "\n".join(output for output in (error.stdout, error.stderr) if output)
-            or "no process output"
-        )
-        raise LoomRunError.command_failed(command, diagnostic) from error
+    context = ExecutionContext(cwd=REPOSITORY_ROOT, env=environment)
+    with _catalogue_scope():
+        result = command.run_sync(context=context)
+    if result.ok:
+        return result
+    diagnostic = "\n".join(
+        output for output in (result.stdout, result.stderr) if output
+    )
+    if not diagnostic:
+        diagnostic = "no process output"
+    raise LoomRunError.command_failed(list(command.argv_with_program), diagnostic)
 
 
-def _tool_output(command: list[str]) -> str:
+def _tool_output(command: SafeCmd) -> str:
     """Return one version or commit string without accepting command failure."""
     result = _run(command, environment=dict(os.environ))
-    return result.stdout.strip()
+    return (result.stdout or "").strip()
 
 
 def _count_discovered(output: str) -> int:
@@ -259,17 +321,17 @@ def run_loom(
     environment = _environment(selected_bounds)
     started_at = time.monotonic()
     discovery = _run(_cargo_command("--", "--list"), environment=environment)
-    discovered = _count_discovered(discovery.stdout)
+    discovered = _count_discovered(discovery.stdout or "")
     execution = _run(_cargo_command(), environment=environment)
-    executed = _count_executed(execution.stdout)
+    executed = _count_executed(execution.stdout or "")
     if executed != discovered:
         raise LoomRunError.test_count_mismatch(discovered, executed)
     return LoomRunResult(
         mode=selected_mode,
         bounds=selected_bounds,
-        commit=_tool_output(["git", "rev-parse", "HEAD"]),
-        cargo_version=_tool_output(["cargo", "--version"]),
-        rustc_version=_tool_output(["rustc", "--version"]),
+        commit=_tool_output(git("rev-parse", "HEAD")),
+        cargo_version=_tool_output(cargo(f"+{RUST_TOOLCHAIN}", "--version")),
+        rustc_version=_tool_output(rustc(f"+{RUST_TOOLCHAIN}", "--version")),
         discovered_tests=discovered,
         executed_tests=executed,
         elapsed_seconds=time.monotonic() - started_at,
@@ -277,21 +339,20 @@ def run_loom(
 
 
 def _parse_arguments() -> LoomCliOptions:
-    """Parse the intentionally small mode-and-summary command interface."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=tuple(LoomMode), required=True)
-    parser.add_argument("--summary", type=Path)
-    parser.add_argument("--max-preemptions", type=int)
-    parser.add_argument("--max-branches", type=int)
-    parser.add_argument("--max-threads", type=int)
-    arguments = parser.parse_args()
-    return LoomCliOptions(
-        mode=LoomMode(typ.cast("str", arguments.mode)),
-        summary=typ.cast("Path | None", arguments.summary),
-        max_preemptions=typ.cast("int | None", arguments.max_preemptions),
-        max_branches=typ.cast("int | None", arguments.max_branches),
-        max_threads=typ.cast("int | None", arguments.max_threads),
-    )
+    """Parse the mode-and-summary interface through Cyclopts."""
+    app = cyclopts.App(config=cyclopts.config.Env("INPUT_", command=False))
+
+    @app.default
+    def parse(
+        options: typ.Annotated[LoomCliOptions, Parameter(name="*")],
+    ) -> LoomCliOptions:
+        """Convert CLI values into driver options."""
+        return options
+
+    arguments = app(result_action="return_value")
+    if arguments is None:
+        raise SystemExit(0)
+    return typ.cast("LoomCliOptions", arguments)
 
 
 def _selected_bounds(arguments: LoomCliOptions) -> LoomBounds | None:
