@@ -48,7 +48,7 @@ def test_archive_retention_and_fail_open_contract(workflow_data: Workflow) -> No
     """Archive one log per attempt without changing benchmark admission."""
     archive = step_named(workflow_data, CHANGES_JOB, UPLOAD_STEP)
     assert archive.get("uses") == (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     ), "reuse the repository's pinned artefact uploader"
     assert archive.get("continue-on-error") is True, "upload failure must fail open"
     condition = str(archive.get("if", ""))
