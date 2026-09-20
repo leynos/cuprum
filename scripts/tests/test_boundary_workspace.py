@@ -26,7 +26,7 @@ SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class ExternalSourceLink:
+class _ExternalSourceLink:
     """Record one external source link and the original file state."""
 
     link: Path
@@ -85,7 +85,7 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
 
 def _external_source_links(
     root: Path, crate: Path, tmp_path: Path
-) -> tuple[ExternalSourceLink, ...]:
+) -> tuple[_ExternalSourceLink, ...]:
     """Create relative and absolute external source-file symlinks."""
     paths = (
         (
@@ -104,7 +104,7 @@ def _external_source_links(
     except OSError as error:
         pytest.skip(f"the platform cannot create the symlink fixture: {error}")
     return tuple(
-        ExternalSourceLink(
+        _ExternalSourceLink(
             link,
             source,
             source.read_bytes(),
@@ -136,7 +136,7 @@ def _recording_probe_compiler(
 def _assert_external_links_are_isolated(
     crate: Path,
     copied_crate: Path,
-    links: tuple[ExternalSourceLink, ...],
+    links: tuple[_ExternalSourceLink, ...],
     original_targets: tuple[Path, ...],
 ) -> None:
     """Require metadata parity, materialization, and untouched external bytes."""
@@ -242,6 +242,36 @@ def test_compile_targets_reject_invalid_cargo_names(name: str) -> None:
     """Test-target selections cannot inject Cargo options or paths."""
     with pytest.raises(ValueError, match="Cargo target names"):
         CompileTargets.integration_tests(name)
+
+
+def test_compile_targets_accept_a_direct_valid_tuple() -> None:
+    """Direct construction retains the shared target-name invariant."""
+    targets = CompileTargets(("relative", "absolute"))
+
+    assert targets.names == ("relative", "absolute"), (
+        "direct construction must retain valid target names"
+    )
+
+
+@pytest.mark.parametrize(
+    ("names", "error_type", "expected_error"),
+    [
+        (typ.cast("tuple[str, ...]", ["relative"]), TypeError, "must be a tuple"),
+        ((), ValueError, "must not be empty"),
+        (
+            typ.cast("tuple[str, ...]", ("relative", 1)),
+            ValueError,
+            "must contain strings",
+        ),
+        (("relative test",), ValueError, "valid Cargo target names"),
+    ],
+)
+def test_compile_targets_reject_invalid_direct_construction(
+    names: tuple[str, ...], error_type: type[Exception], expected_error: str
+) -> None:
+    """Direct construction rejects malformed Cargo target collections."""
+    with pytest.raises(error_type, match=expected_error):
+        CompileTargets(names)
 
 
 @pytest.mark.parametrize(

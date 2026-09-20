@@ -316,7 +316,21 @@ def check_safe_policy(workspace: Path) -> tuple[Path, ...]:
 
 
 def _compile(workspace: Path, targets: CompileTargets | None = None) -> tuple[int, str]:
-    """Compile the copied safe library and all its targets with all features."""
+    """Compile the copied safe library with the requested verified target coverage.
+
+    Parameters
+    ----------
+    workspace : Path
+        Isolated Rust workspace containing the copied boundary sources.
+    targets : CompileTargets | None, optional
+        Named integration tests to compile. ``None`` preserves the production
+        ``--all-targets`` command; a selection compiles only its named tests.
+
+    Returns
+    -------
+    tuple[int, str]
+        Cargo's exit code and combined standard output and standard error.
+    """
     cargo_program = Program("cargo")
     project = ProjectSettings(
         name="boundary-contract",
