@@ -11,7 +11,7 @@ harness preserves the real `changes` job and the `benchmark-ratchet` admission
 boundary from `.github/workflows/ci.yml`, while replacing unrelated
 prerequisite jobs and the benchmark body with probes. To run that, or to read
 the contract it enforces, start with
-[ADR-014](adr-014-actions-runner-integration-harness.md) and:
+[ADR-015](adr-015-actions-runner-integration-harness.md) and:
 
 ```bash
 make test-act   # runs the opt-in scenarios; refuses to skip in CI

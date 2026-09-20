@@ -76,19 +76,19 @@ matrix. JSON webhook templates live under `tests/fixtures/events/`.
 `.github/workflows/benchmark-gate-harness.yml` runs the harness weekly or
 through an opted-in manual dispatch. Its schedule is separate from CI so it
 cannot start paid build jobs. CLI and runner-image pins are documented in
-ADR-014.
+ADR-015.
 
 `tests/helpers/benchmark_gate_telemetry.py` executes the workflow log writer.
 The two `tests/test_ci_benchmark_gate_telemetry*.py` modules check declarations
 and persisted bytes. Operational guidance lives in
-`docs/ci-benchmark-gate-telemetry.md`; ADR-013 records the storage decision.
+`docs/ci-benchmark-gate-telemetry.md`; ADR-014 records the storage decision.
 
 ## Conformance basis
 
 The upstream requirement is issue #339, following PR #289, as amended by the
 maintainer's explicit 2026-09-17 no-Grafana/no-new-application instruction.
 There is no separate terms-of-reference or technical-design document for this
-work. The architecture decisions are ADR-013 for persistent logs and ADR-014
+work. The architecture decisions are ADR-014 for persistent logs and ADR-015
 for the Actions compatibility harness. Repository `AGENTS.md`, documentation
 style, and scripting standards govern implementation and verification.
 
@@ -222,7 +222,7 @@ Both persistence and upload are fail-open and produce visible diagnostics.
 The local harness executes the writer and checks its structured record output.
 It skips the hosted upload under `ACT=true`, avoiding another local artefact
 service. Actual storage receipt is checked separately on GitHub. This
-deliberate boundary is recorded in ADR-014 and the operational guide.
+deliberate boundary is recorded in ADR-015 and the operational guide.
 
 ## Risks
 
@@ -313,7 +313,7 @@ M0 is the completed salvage and parser repair. M1 is the completed runtime
 harness and its review fixes. Reverting their atomic commits restores their
 previous states without rewriting shared history.
 
-M2 replaces the transport and its obsolete tests together, updates ADR-013,
+M2 replaces the transport and its obsolete tests together, updates ADR-014,
 retention and analysis guidance, and exercises the record through the harness.
 Run the following gates sequentially from the repository root, capturing each
 command through `tee` with `set -o pipefail`:
@@ -413,10 +413,10 @@ dispositions, read against the head `ab977364` rather than the assessed commit:
   keys.
 - **Linked Issues, warning — open, awaiting a maintainer decision.** The
   external sink that #339's original text required is absent by design: the
-  maintainer's 2026-09-17 instruction superseded it, and ADR-013 records that
+  maintainer's 2026-09-17 instruction superseded it, and ADR-014 records that
   the repository provisions no external service, credential, or new
   application. This plan must not claim the row is satisfied, and reversing
-  ADR-013 is not the branch author's decision.
+  ADR-014 is not the branch author's decision.
 - **Developer Documentation, warning — addressed.**
   `docs/developers-guide.md` gained a "Running the scenarios locally" section in
   `d5fa932a`.
@@ -435,7 +435,7 @@ dispositions, read against the head `ab977364` rather than the assessed commit:
   "I withdraw the request for an external tracing mechanism." The annotation
   must not be described as distributed tracing, since Actions annotations
   provide neither trace-context propagation nor spans; CodeRabbit called it the
-  appropriate bounded workflow-level observation mechanism for the ADR-013
+  appropriate bounded workflow-level observation mechanism for the ADR-014
   storage-only architecture.
 
 The earlier **Unit Architecture, error** disposition is discharged: the row now

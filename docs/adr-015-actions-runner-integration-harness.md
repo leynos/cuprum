@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 014: Actions-runner integration harness
+# Architectural decision record (ADR) 015: Actions-runner integration harness
 
 ______________________________________________________________________
 

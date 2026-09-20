@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 013: Durable benchmark-gate telemetry
+# Architectural decision record (ADR) 014: Durable benchmark-gate telemetry
 
 ______________________________________________________________________
 
