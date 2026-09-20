@@ -19,7 +19,10 @@ from scripts.check_boundary_contract import (
     check_safe_policy,
     safe_target_roots,
 )
-from scripts.tests.boundary_harness_support import copy_boundary_repository
+from scripts.tests.boundary_harness_support import (
+    cargo_target_roots,
+    copy_boundary_repository,
+)
 
 # The one diagnostic string that distinguishes a rejected probe from a compile
 # that failed for some unrelated reason.
@@ -217,6 +220,49 @@ def test_main_probes_every_target_with_every_unsafe_form(
         "safe-positive.log",
         *expected,
     ]), "every probe result must be archived under its target and form"
+
+
+def test_main_preserves_automatic_directory_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The isolated probe workspace retains Cargo's directory-symlink topology."""
+    root = copy_boundary_repository(tmp_path)
+    crate = root / "rust/cuprum-streams"
+    shared = crate / "shared/main.rs"
+    shared.parent.mkdir()
+    shared.write_text("//! Non-target source.\n", encoding="utf-8")
+    try:
+        (crate / "tests/shared").symlink_to("../shared", target_is_directory=True)
+        (crate / "tests/broken").symlink_to("../missing", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"the platform cannot create the symlink fixture: {error}")
+    before = cargo_target_roots(crate)
+    assert {path.relative_to(crate) for path in before} == {
+        Path(path) for path in TARGETS
+    }, "Cargo must omit directory symlink targets before the copy"
+    compiler = _RecordedCompile()
+    monkeypatch.setattr(contract, "ROOT", root)
+    monkeypatch.setattr(contract, "_compile", compiler)
+
+    contract.main()
+
+    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
+    after = cargo_target_roots(copied_crate)
+    assert {path.relative_to(copied_crate) for path in after} == {
+        Path(path) for path in TARGETS
+    }, "Cargo must omit directory symlink targets after the copy"
+    assert all((copied_crate / target).is_file() for target in TARGETS), (
+        "the copied workspace must retain each intended target"
+    )
+    assert (copied_crate / "tests/shared").is_symlink(), (
+        "the copied workspace must preserve valid directory symlinks"
+    )
+    assert (copied_crate / "tests/broken").is_symlink(), (
+        "the copied workspace must preserve broken directory symlinks"
+    )
+    assert len(compiler.probes) == 1 + len(TARGETS) * len(contract.PROBES), (
+        "the copied topology must leave the probe target count unchanged"
+    )
 
 
 def test_same_basename_target_logs_are_unique_and_traceable(

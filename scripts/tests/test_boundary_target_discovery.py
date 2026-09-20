@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo metadata argv.
 from pathlib import Path
 
 import pytest
@@ -18,7 +15,10 @@ from scripts.check_boundary_contract import (
     evaluate_safe_target_policy,
     safe_target_roots,
 )
-from scripts.tests.boundary_harness_support import copy_boundary_repository
+from scripts.tests.boundary_harness_support import (
+    cargo_target_roots,
+    copy_boundary_repository,
+)
 
 HIDDEN_AUTOMATIC_TARGETS = (
     ("src/bin/.scratch.rs", "src/bin/visible.rs"),
@@ -89,27 +89,6 @@ def _append_explicit_target(
     )
 
 
-def _metadata_target_roots(crate: Path) -> tuple[Path, ...]:
-    """Return Cargo's effective source roots for the safe package."""
-    cargo = shutil.which("cargo")
-    assert cargo is not None, "Cargo is required for the metadata contract"
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo metadata argv runs in the isolated fixture.
-        [cargo, "metadata", "--no-deps", "--format-version=1"],
-        capture_output=True,
-        check=False,
-        cwd=crate,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
-    metadata = json.loads(completed.stdout)
-    package = next(
-        package
-        for package in metadata["packages"]
-        if package["name"] == "cuprum-streams"
-    )
-    return tuple(sorted(Path(target["src_path"]) for target in package["targets"]))
-
-
 def _append_pathless_target(manifest: Path, target_type: str, name: str | None) -> None:
     """Declare a target table whose source path Cargo must infer."""
     table = "[lib]" if target_type == "lib" else f"[[{target_type}]]"
@@ -133,7 +112,7 @@ def test_hidden_automatic_targets_are_ignored(
 
     assert hidden_path not in roots, "Cargo must ignore a hidden automatic target"
     assert visible_path in roots, "Cargo must retain a visible automatic target"
-    assert roots == _metadata_target_roots(crate), (
+    assert roots == cargo_target_roots(crate), (
         "the scanner and Cargo metadata must agree about hidden target entries"
     )
     check_safe_policy(root)
@@ -171,7 +150,7 @@ def test_visible_support_directory_without_main_is_not_a_target(
     assert crate / "tests/shared.rs" in roots, (
         "a direct source symlink must retain Cargo's target behaviour"
     )
-    assert roots == _metadata_target_roots(crate), "scanner must match Cargo metadata"
+    assert roots == cargo_target_roots(crate), "scanner must match Cargo metadata"
     check_safe_policy(root)
     nested = _write_target(crate, nested_target, "//! Missing." + chr(10))
     assert nested in safe_target_roots(root), "nested main.rs remains a target"
@@ -249,7 +228,7 @@ def test_explicit_target_replaces_its_dormant_automatic_root(
     assert dormant_path not in roots, (
         "the explicit target must replace its dormant conventional root"
     )
-    assert roots == _metadata_target_roots(crate), (
+    assert roots == cargo_target_roots(crate), (
         "the scanner and Cargo metadata must resolve identical target roots"
     )
     check_safe_policy(root)

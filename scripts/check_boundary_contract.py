@@ -43,6 +43,7 @@ AUTOMATIC_TARGET_DIRECTORIES = (
     ("autobenches", "benches"),
 )
 EXPLICIT_TARGET_TYPES = ("lib", "bin", "example", "test", "bench")
+IGNORE_BUILD_OUTPUT = shutil.ignore_patterns("target")
 
 
 def check_members(manifest: str) -> None:
@@ -343,7 +344,7 @@ def main() -> None:
     workspace = ROOT / ".cache/boundary-contract/workspace"
     if workspace.exists():
         shutil.rmtree(workspace)
-    shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
+    shutil.copytree(ROOT / "rust", workspace, ignore=IGNORE_BUILD_OUTPUT, symlinks=True)
     logs = ROOT / "rust/target/boundary-verification"
     logs.mkdir(parents=True, exist_ok=True)
     code, output = _compile(workspace)
