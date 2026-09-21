@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import math
+import types
 import typing as typ
 
 from cuprum.stream_events import (
@@ -82,8 +84,14 @@ class StreamTelemetrySnapshot:
         Measurements summed over every observed group.
     """
 
-    groups: dict[tuple[StreamOperation, StreamOperationOutcome], StreamTelemetryGroup]
+    groups: cabc.Mapping[
+        tuple[StreamOperation, StreamOperationOutcome], StreamTelemetryGroup
+    ]
     totals: StreamTelemetryGroup
+
+    def __post_init__(self) -> None:
+        """Defensively freeze the group mapping captured by this snapshot."""
+        object.__setattr__(self, "groups", types.MappingProxyType(dict(self.groups)))
 
     def as_dict(self) -> StreamTelemetryPayload:
         """Return groups keyed by the stable closed enum string values."""
@@ -217,14 +225,25 @@ def _group_from_dict(value: object) -> StreamTelemetryGroup | None:
 
 def _integer_from_value(value: object) -> int | None:
     """Return a serialized aggregate integer while excluding booleans."""
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    match value:
+        case bool():
+            return None
+        case int() if value >= 0:
+            return value
+        case _:
+            return None
 
 
 def _duration_from_value(value: object) -> float | None:
     """Return a serialized duration as a float while excluding booleans."""
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    return float(value)
+    match value:
+        case bool():
+            return None
+        case (int() | float()) as numeric_duration:
+            duration = float(numeric_duration)
+            return duration if math.isfinite(duration) and duration >= 0.0 else None
+        case _:
+            return None
 
 
 def _totals(groups: cabc.Iterable[StreamTelemetryGroup]) -> StreamTelemetryGroup:

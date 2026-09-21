@@ -147,6 +147,12 @@ The telemetry observes only pure-Python drain and pipeline-transfer paths.
 Consequently, `pipeline_transfer` may be absent when the Rust backend handles a
 pipeline hop.
 
+Read-size sweeps additionally write `read-size-sweep.json`. Its additive
+`stream_telemetry_summary` key combines the `stream_telemetry` groups from all
+samples, using the same closed operation and outcome structure and the same
+`bytes_consumed`, `read_operations`, `operation_count`, and `duration_seconds`
+fields.
+
 Optional `py-spy` runs write `pyspy.raw`.
 
 ## Interpretation
