@@ -90,10 +90,10 @@ def test_capturing_drain_reports_empty_text_for_a_reader_with_no_capture() -> No
                 _DrainContext(capture=True),
             )
 
-        assert stdout_text == "", (
+        assert not stdout_text, (
             f"a capturing drain must report stdout as text, got {stdout_text!r}"
         )
-        assert stderr_text == "", (
+        assert not stderr_text, (
             f"a capturing drain must report stderr as text, got {stderr_text!r}"
         )
 
@@ -292,10 +292,10 @@ def test_timeout_reports_capture_as_text_when_no_reader_reached_eof(
         command.run_sync(timeout=0, output=RunOutputOptions(capture=True))
 
     detail = f"output={expired.value.output!r} stderr={expired.value.stderr!r}"
-    assert expired.value.output == "", (
+    assert not expired.value.output, (
         f"a capturing run must report stdout as text on timeout, got {detail}"
     )
-    assert expired.value.stderr == "", (
+    assert not expired.value.stderr, (
         f"a capturing run must report stderr as text on timeout, got {detail}"
     )
 

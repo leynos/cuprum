@@ -108,7 +108,7 @@ def test_parse_backend_value_maps_exactly_or_rejects(raw: str) -> None:
     """
     normalized = raw.strip().lower()
     valid = {member.value for member in StreamBackend}
-    if normalized == "":
+    if not normalized:
         # Empty/whitespace resolves to AUTO.
         assert _parse_backend_value(raw) is StreamBackend.AUTO
     elif normalized in valid:

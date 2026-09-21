@@ -271,7 +271,7 @@ class TestTimeoutWaiterProperties:
             process = _ExitedProcess(returncode=code)
             with pytest.raises(TimeoutError):
                 await _wait(process, _execution(configured, grace))
-            assert process.calls == [], (
+            assert not process.calls, (
                 "an already-exited process needs no teardown, and the fast path "
                 f"must not await its wait() either, got calls={process.calls!r}"
             )

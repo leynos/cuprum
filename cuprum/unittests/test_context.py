@@ -119,8 +119,8 @@ def test_is_allowed_returns_false_for_disallowed_program() -> None:
 def test_empty_hooks_by_default() -> None:
     """Context has empty hooks by default."""
     ctx = CuprumContext()
-    assert ctx.before_hooks == ()
-    assert ctx.after_hooks == ()
+    assert not ctx.before_hooks
+    assert not ctx.after_hooks
 
 
 def test_context_with_hooks() -> None:

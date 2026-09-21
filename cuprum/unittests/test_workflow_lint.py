@@ -294,13 +294,19 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+    invocations = invocation_log.read_text(encoding="utf-8").splitlines()
+    assert any("pylint" in invocation for invocation in invocations), (
+        "the aggregate lint target must retain its Pylint contract"
+    )
+    workflow_invocations = [
         "uv\trun\twhich\truff",
         "mold\t--version",
         "rustup\tcomponent\tlist\t--installed\t--toolchain\tnightly-2026-08-23",
         f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
         "actionlint\t-config-file\t.github/actionlint.yaml",
     ]
+    positions = [invocations.index(invocation) for invocation in workflow_invocations]
+    assert positions == sorted(positions)
 
 
 def test_the_workflow_lint_target_rejects_a_missing_linter(tmp_path: pth.Path) -> None:

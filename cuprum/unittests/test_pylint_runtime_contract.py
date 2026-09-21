@@ -168,7 +168,8 @@ def test_classic_astroid_inspects_pypy_builtin_descriptors() -> None:
             "assert getattr(builtins.anext, '__text_signature__', None) is None; "
             "assert getattr(list, '__class_getitem__'); "
             "assert module.locals['anext'][0].name == 'anext'; "
-            "assert module.locals['list'][0].lookup('__class_getitem__')[0].name == 'list'; "
+            "assert module.locals['list'][0].lookup('__class_getitem__')[0].name "
+            "== 'list'; "
             "print('descriptor inspection succeeded')"
         ),
     )
@@ -182,7 +183,8 @@ def test_df12_environment_is_cpython_314_and_not_loaded_by_classic() -> None:
     classic = _run_classic(
         "python",
         "-c",
-        f"import importlib.util; assert importlib.util.find_spec('{_DF12_PLUGIN}') is None",
+        "import importlib.util; "
+        f"assert importlib.util.find_spec('{_DF12_PLUGIN}') is None",
     )
     df12 = _run_df12(
         "python",
@@ -212,8 +214,10 @@ def test_df12_diagnostic_and_make_failure_propagate(tmp_path: pathlib.Path) -> N
         "--load-plugins=df12_python_lints",
         "--enable=C9102",
     )
-    make = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile target.
-        ["make", "--no-print-directory", "PYLINT=false", "pylint-classic"],
+    make_executable = shutil.which("make")
+    assert make_executable is not None, "make is required to verify failure propagation"
+    make = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed local Makefile target.
+        [make_executable, "--no-print-directory", "PYLINT=false", "pylint-classic"],
         check=False,
         cwd=repo_root(),
         capture_output=True,

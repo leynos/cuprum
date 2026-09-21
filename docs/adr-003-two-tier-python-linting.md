@@ -118,8 +118,9 @@ The canonical policy lives in `pyproject.toml`:
 - CPython 3.14 must be resolvable by `uv` for the df12 checks.
 - Pylint is intentionally focused; messages outside the selected set remain out
   of scope unless the policy is updated deliberately.
-- Some existing large modules need narrow suppressions for `too-many-lines`
-  until they are split by separate design work.
+- The non-package test roots run with `too-many-lines` disabled until their
+  pre-existing overlong modules are split by separate design work; production
+  and benchmark modules carry no such exemption.
 
 ## Consequences
 
@@ -279,18 +280,22 @@ from the CPython 3.14 DF12 pass.
 
 The retired `pylint-pypy-shim` is absent. Pylint's `syntax-error` diagnostic is
 explicitly enabled despite the focused `disable = ["all"]` configuration, so a
-run that parses nothing can no longer report a clean 10.00/10. The classic
+run that parses nothing can no longer report a clean 10.00/10. The 2026-09-25
+amendment above records the same gap while describing `syntax-error` as
+disabled; that described the state it was written against, where the fix was
+the newer interpreter alone. This addendum additionally enables the diagnostic,
+so a future parse failure is reported rather than skipped silently. The classic
 target lists `cuprum/unittests`, `tests/behaviour`, `tests/features`, and
 `scripts/tests` directly because Pylint does not recurse into those
 non-package directories from their broad roots. Python 3.12 remains Cuprum's
 source baseline; CPython 3.14 is only the execution interpreter for DF12 and
 Ambrleaks, including any tooling that requires newer syntax.
 
-Pylint's published Astroid range excludes Astroid 4.3.1, so the latter upgrade
-remains deferred pending a released compatible Pylint version. The integration
-contract exercises PEP 695 parsing, syntax failures, enabled diagnostics, real
-PyPy descriptor inspection, DF12 isolation, and failure propagation without
-changing the project virtual environment.
+Pylint 4.0.9's published Astroid range excludes Astroid 4.3.1, so the latter
+upgrade remains deferred pending a released compatible Pylint version. The
+integration contract exercises PEP 695 parsing, syntax failures, enabled
+diagnostics, real PyPy descriptor inspection, DF12 isolation, and failure
+propagation without changing the project virtual environment.
 
 The `leynos/pylint-pypy-shim` retirement described in the amendment above and
 this verified-runtime work landed independently: the amendment removed the shim
@@ -300,3 +305,21 @@ catalogue-dependent invocation for the classic pass, because `uv`'s `--python
 pypy` resolves to whichever PyPy release the catalogue currently prefers, and
 the pass must fail loudly rather than silently lint under an older interpreter.
 `PYLINT_VERSION` is shared by both tiers and is not duplicated.
+
+The 400-line limit applies without exemption to production and benchmark
+modules. Six modules that would otherwise have needed local `too-many-lines`
+suppressions were split into packages instead, so the limit is enforced by
+structure rather than by comment. The classic pass runs the non-package test
+roots separately with only `too-many-lines` disabled: 34 existing unit-test
+modules exceed the limit and will be split in follow-up work. All other
+selected classic diagnostics remain blocking in those modules, so the exception
+does not hide parse or analysis failures.
+
+The classic pass owns complete Python source coverage. DF12 retains its
+established package-root target discovery and continues to run only its
+configured house-policy messages on CPython 3.14; it does not replace classic
+coverage of the directly targeted non-package roots.
+
+Ambrleaks also runs with an isolated CPython 3.14 environment, so neither
+Pylint pass nor snapshot scanning recreates Cuprum's project virtual
+environment.

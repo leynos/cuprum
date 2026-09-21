@@ -91,7 +91,7 @@ def test_captures_output_and_exit_code(
     assert result.exit_code == 0
     assert result.ok is True
     assert result.stdout == "hello"
-    assert result.stderr == ""
+    assert not result.stderr
     assert result.started_at > 0, "every command result must record a wall-clock start"
     assert result.duration >= 0, "every command result must report a duration"
     if sys.platform == "win32":
