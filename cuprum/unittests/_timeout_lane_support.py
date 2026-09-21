@@ -133,12 +133,26 @@ SlowTimeout = typ.TypedDict(
 ``period`` and ``terminate-after`` together set a test's termination budget;
 ``grace-period`` supplies the termination allowance for the outer watchdog.
 """
+NextestOverride = typ.TypedDict(
+    "NextestOverride",
+    {
+        "filter": object,
+        "slow-timeout": SlowTimeout,
+    },
+    total=False,
+)
+"""A ``[[profile.default.overrides]]`` table read by the contract.
+
+``filter`` is declared because it is what carries an allowance to particular
+binaries: a caller reads it to check the widened tier reaches the tests it was
+written for, and a ``NextestProfile`` without it does not admit the lookup.
+"""
 NextestProfile = typ.TypedDict(
     "NextestProfile",
     {
         "slow-timeout": SlowTimeout,
         "global-timeout": object,
-        "overrides": list[dict[str, object]],
+        "overrides": list[NextestOverride],
     },
     total=False,
 )
@@ -257,7 +271,7 @@ def _allowance_of(slow_timeout: SlowTimeout) -> int:
     return _duration_seconds(period) * int(str(terminate_after))
 
 
-def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestProfile]:
+def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestOverride]:
     """Return the profile's overrides that declare a ``slow-timeout``.
 
     Parameters
@@ -267,7 +281,7 @@ def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestProfile]:
 
     Returns
     -------
-    list[NextestProfile]
+    list[NextestOverride]
         One entry per override that sets ``slow-timeout``, whole rather than
         reduced to the timeout, so a caller can also read the ``filter``
         granting that allowance to particular tests. An allowance and a
@@ -280,13 +294,13 @@ def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestProfile]:
     assert isinstance(overrides, list), (
         f"{NEXTEST_CONFIG} must declare profile overrides as an array of tables"
     )
-    declared: list[NextestProfile] = []
+    declared: list[NextestOverride] = []
     for override in overrides:
         assert isinstance(override, dict), (
             f"{NEXTEST_CONFIG} must declare each profile override as a table"
         )
         if "slow-timeout" in override:
-            declared.append(typ.cast("NextestProfile", override))
+            declared.append(typ.cast("NextestOverride", override))
     return declared
 
 

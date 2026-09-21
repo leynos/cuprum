@@ -205,6 +205,36 @@ decision record for the `interrogate` gate. The `skylos-allow` target uses an
 ignored lock file and `flock` to serialize its read-modify-write update, so
 concurrent false-positive recordings remain intact.
 
+## Addendum — 2026-09-21: Skylos documentation liveness has a size ceiling
+
+Skylos treats documentation as a liveness signal: a public method escapes
+`SKY-U001` when its class-qualified name — `_Owner.method` — appears in a
+`.md`, `.rst`, or `.txt` file under the scanned root. That signal has two
+ceilings, both silent, and neither configurable in the pinned release:
+
+- A document larger than 300000 bytes is skipped entirely, without a warning.
+- Reading stops once the accumulated document total passes 2000000 bytes.
+
+Both are engineering boundaries in Skylos rather than decisions taken here, so
+this addendum records them as constraints the repository works within rather
+than as policy it chose.
+
+The practical consequence is that adding prose to a document near the per-file
+ceiling can withdraw liveness credit from symbols that document has named for a
+long time. `docs/developers-guide.md` sits within a few kilobytes of it, so the
+coverage timeout material this branch needed to record lives in
+[Coverage timeout tiers](coverage-timeout-tiers.md) instead: a guide that is
+skipped documents nothing, and the content is a CI-configuration topic that
+sits naturally beside [CI cache ownership](ci-cache-ownership.md).
+
+A `SKY-U001` reported after a docs-only change is therefore a question about
+the symbol, not a finding to silence. Check whether the symbol still has a
+runtime caller. If it does, the caller is what needs repairing — a documented
+symbol whose caller a refactor orphaned is a real defect that the ceiling has
+merely exposed. If it does not, the symbol is dead and the answer is to remove
+it. Record a false positive through `make skylos-allow` only once that check
+has been made and its outcome is worth naming.
+
 ## Amendment (2026-09-25): the pylint-pypy-shim is retired
 
 CI's `uv` (0.12.19) now resolves `--python pypy` to PyPy 3.12 directly. Pylint
