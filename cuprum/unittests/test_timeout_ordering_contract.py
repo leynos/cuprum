@@ -21,8 +21,8 @@ assertion can make about the shape it reads, so the shapes below declare
 the keys these tests reach for. Their values stay ``object``, because
 they come from files this suite does not control.
 
-See "Test timeouts: the tiers this repository sets" in
-``docs/developers-guide.md``, and the canonical wording in
+See the coverage timeout tiers in
+``docs/coverage-timeout-tiers.md``, and the canonical wording in
 `leynos/shared-actions`' `generate-coverage` README.
 """
 

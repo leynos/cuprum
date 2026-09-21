@@ -22,8 +22,8 @@ declares a grace period has replaced whatever the profile declared, and
 neither value can be inferred from the other. That is why the table below
 carries rows where the wider grace period is on either side.
 
-See "Test timeouts: the tiers this repository sets" in
-``docs/developers-guide.md``.
+See the coverage timeout tiers in
+``docs/coverage-timeout-tiers.md``.
 """
 
 from __future__ import annotations

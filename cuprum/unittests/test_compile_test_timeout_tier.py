@@ -15,13 +15,17 @@ the filter that carries it to the binaries that need it: an override whose
 filter matches nothing is inert, and an inert override still reads as
 present to every assertion that only checks the value is there.
 
-See "Test timeouts: the tiers this repository sets" in
-``docs/developers-guide.md``.
+See the coverage timeout tiers in
+``docs/coverage-timeout-tiers.md``.
 """
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo argv, pinned manifest.
 import typing as typ
+from pathlib import Path
 
 from cuprum.unittests._timeout_lane_support import (
     NEXTEST_CONFIG,
@@ -44,6 +48,16 @@ from tests.helpers.docs import repo_root
 #: was written for fell back to the allowance that killed one of them.
 COMPILE_TEST_FILTER: typ.Final[str] = "binary(compile_tests)"
 
+#: The Cargo binary name the filter selects, and the manifest that
+#: resolves it. `binary()` matches a *target name*, not a source path, so
+#: a file existing at the pinned path does not show the filter reaches it:
+#: a rename in the crate manifest would move the target name while leaving
+#: the file where it was.
+COMPILE_TEST_TARGET_NAME: typ.Final[str] = "compile_tests"
+
+#: The workspace manifest whose targets the resolution reads.
+WORKSPACE_MANIFEST: typ.Final[Path] = Path("rust") / "Cargo.toml"
+
 #: The allowance that override must grant, in seconds.
 #:
 #: Pinned by value rather than only asserted to exceed the profile,
@@ -59,6 +73,71 @@ COMPILE_TEST_SOURCES: typ.Final[tuple[str, ...]] = (
     "rust/cuprum-rust/tests/compile_tests.rs",
     "rust/cuprum-streams/tests/compile_tests.rs",
 )
+
+
+def _resolved_test_targets() -> dict[str, set[str]]:
+    """Return Cargo's test-target names, keyed by source path.
+
+    Returns
+    -------
+    dict[str, set[str]]
+        One entry per test source in the workspace, mapping the source
+        path — relative to the repository root, POSIX-separated — to the
+        set of target names Cargo builds from it.
+
+    Requires `cargo` on PATH, and Cargo to resolve the manifest; the
+    assertion and the `check=True` below state both failures in full.
+
+    A set per source rather than a single name, because one source can
+    carry more than one target: a `[[test]]` table may name a target while
+    pointing at a path Cargo still autodiscovers under its file stem, and
+    Cargo then builds both. A caller that kept one name per path would be
+    handed whichever of the two Cargo happened to list last.
+
+    Resolves through Cargo rather than reading the manifests, because the
+    target name is what `binary()` selects and Cargo is what defines it: a
+    `[[test]]` table may set `name` and `path` independently, and Cargo
+    derives a name from the file stem when they are absent. Reading the
+    toml would reimplement that derivation and could disagree with it.
+    `--no-deps` keeps this offline and registry-free, so it resolves the
+    same way on a host that has never fetched a dependency.
+    """
+    cargo = shutil.which("cargo")
+    assert cargo is not None, (
+        "the compile-test tier is carried by a nextest `binary()` filter, so "
+        "resolving what that filter selects needs Cargo on PATH"
+    )
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Cargo argv, no shell needed.
+        [
+            cargo,
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+            str(repo_root() / WORKSPACE_MANIFEST),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    metadata = typ.cast("dict[str, object]", json.loads(completed.stdout))
+    packages = metadata.get("packages")
+    assert isinstance(packages, list), (
+        "`cargo metadata` must report the workspace packages"
+    )
+    resolved: dict[str, set[str]] = {}
+    for package in packages:
+        assert isinstance(package, dict), (
+            "`cargo metadata` must report each package as an object"
+        )
+        for target in package.get("targets", []):
+            if target.get("kind") != ["test"]:
+                continue
+            source = Path(target["src_path"])
+            key = source.relative_to(repo_root()).as_posix()
+            resolved.setdefault(key, set()).add(str(target["name"]))
+    return resolved
 
 
 def test_the_trybuild_tests_carry_their_own_allowance() -> None:
@@ -81,8 +160,10 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     carry the expected filter, and to exceed the profile's allowance.
 
     Proved by mutation: removing the override, reducing its multiplier to
-    the profile's, and changing its filter away from `compile_tests` each
-    fail this test.
+    the profile's, changing its filter away from `compile_tests`, and
+    renaming a target in its crate manifest each fail this test. The last
+    is the one the file-existence check cannot see, which is why the
+    sources are resolved through Cargo instead.
     """
     profile = _default_nextest_profile()
     base = _allowance_of(_slow_timeout_of(profile))
@@ -125,4 +206,21 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
         f"but {missing} no longer exist; a filter matching nothing leaves the "
         f"override inert while it still reads as present, and the tests it was "
         f"written for fall back to the allowance that killed one of them"
+    )
+    # Existing is not the same as selected. `binary()` matches a target
+    # *name*, so the sources are resolved through Cargo and each must be a
+    # source that builds a test target named `compile_tests`; a rename in a
+    # crate manifest would leave the files in place and the filter matching
+    # nothing. A source resolving to no name at all is refused for the same
+    # reason, naming the source rather than reporting the mismatch as a
+    # rename.
+    targets = _resolved_test_targets()
+    resolving = {source: targets.get(source) for source in COMPILE_TEST_SOURCES}
+    expected = {source: {COMPILE_TEST_TARGET_NAME} for source in COMPILE_TEST_SOURCES}
+    assert resolving == expected, (
+        f"{COMPILE_TEST_FILTER!r} selects a test target named "
+        f"{COMPILE_TEST_TARGET_NAME!r}, but Cargo resolves the pinned sources "
+        f"to {resolving}; a target renamed away from that leaves the override "
+        f"inert while it still reads as present, and the tests it was written "
+        f"for fall back to the allowance that killed one of them"
     )
