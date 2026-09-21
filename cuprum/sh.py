@@ -180,13 +180,17 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
-    started_at: float = 0.0
-    duration: float = 0.0
-    max_rss_bytes: int | None = None
-    user_cpu_seconds: float | None = None
-    system_cpu_seconds: float | None = None
-    # Appended last so every existing six-argument positional construction keeps
-    # binding stdout and stderr; ``test_public_api`` pins this slot.
+    # ``kw_only`` so the seventh positional slot stays ``relay_fallbacks``,
+    # which main established and ``test_public_api`` pins. Without it the
+    # measurements would take positional slots ahead of it and a
+    # seven-argument call would silently bind a relay tuple into
+    # ``started_at``. Declared after ``stderr`` so the measurements read
+    # beside the other captured-output fields in the generated signature.
+    started_at: float = dc.field(default=0.0, kw_only=True)
+    duration: float = dc.field(default=0.0, kw_only=True)
+    max_rss_bytes: int | None = dc.field(default=None, kw_only=True)
+    user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
+    system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
 
     @property

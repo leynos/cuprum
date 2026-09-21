@@ -22,14 +22,17 @@ from cuprum import (
     _rusage,
     _subprocess_execution,
     _wait4_process,
+    observe,
     sh,
 )
+from cuprum.events import ResourceUsageMode
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
@@ -152,6 +155,47 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
     )
     assert result.system_cpu_seconds == pytest.approx(5.5), (
         "direct execution must publish the measured system CPU delta"
+    )
+
+
+@_wait4_only
+def test_exit_event_reports_the_same_resource_usage_as_the_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A direct command's exit event carries the same measurement as its result."""
+    allocation_bytes = 8 * 1024 * 1024
+    command = python_builder(
+        "-c",
+        (
+            f"allocation = bytearray({allocation_bytes}); "
+            "allocation[::4096] = b'x' * len(allocation[::4096]); "
+            "print('resource-probe')"
+        ),
+    )
+    events: list[ExecEvent] = []
+
+    with observe(events.append):
+        result = command.run_sync()
+
+    exits = [event for event in events if event.phase == "exit"]
+    assert len(exits) == 1, f"one direct command emits one exit event, got {exits!r}"
+    event = exits[0]
+    result_user_cpu = result.user_cpu_seconds
+    result_system_cpu = result.system_cpu_seconds
+    assert event.resource_usage_mode == ResourceUsageMode.WAIT4_CHILD, (
+        "a direct command's exit event must name the wait4 producer mode"
+    )
+    assert event.max_rss_bytes is not None, "wait4 must publish direct-child RSS"
+    assert event.max_rss_bytes == result.max_rss_bytes, (
+        "the exit event must carry the RSS the result reports"
+    )
+    assert result_user_cpu is not None, "wait4 must expose child user CPU"
+    assert event.user_cpu_seconds == pytest.approx(result_user_cpu), (
+        "the exit event must carry the user CPU the result reports"
+    )
+    assert result_system_cpu is not None, "wait4 must expose child system CPU"
+    assert event.system_cpu_seconds == pytest.approx(result_system_cpu), (
+        "the exit event must carry the system CPU the result reports"
     )
 
 

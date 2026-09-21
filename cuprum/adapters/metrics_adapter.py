@@ -222,21 +222,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 
 
 def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
-    """Return the resource-measurement ops for a terminal ``exit`` event.
-
-    Each figure yields a histogram only where it was actually measured, so an
-    unmeasured platform contributes no samples rather than a stream of zeros
-    that would drag every percentile toward it. The accounting-mode counter is
-    emitted whenever a mode is recorded, which includes the ``unavailable``
-    case: that it is worth counting at all is the one signal a bare absence of
-    resource samples cannot carry.
-
-    Returns
-    -------
-    tuple[_MetricOp, ...]
-        The counter plus one histogram per figure that was measured, or an
-        empty tuple when the event recorded no mode.
-    """
+    """Return the resource-measurement ops for a terminal ``exit`` event."""
     operations: list[_MetricOp] = []
     mode = event.resource_usage_mode
     if mode is None:
@@ -245,9 +231,15 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     # must reach the collector as the plain string that appears in the series
     # an operator filters on rather than as the member's ``repr``.
     labels = {"resource_usage_mode": str(mode)}
+    # The counter is emitted whenever a mode is recorded, the ``unavailable``
+    # case included: that it is worth counting at all is the one signal a bare
+    # absence of resource samples cannot carry.
     operations.append(
         _CounterOp("cuprum_resource_usage_measurements_total", 1.0, labels)
     )
+    # Each figure yields a histogram only where it was actually measured, so an
+    # unmeasured platform contributes no samples rather than a stream of zeros
+    # that would drag every percentile toward it.
     if event.max_rss_bytes is not None:
         operations.append(
             _HistogramOp(

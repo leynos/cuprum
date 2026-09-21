@@ -107,11 +107,14 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
     Attributes include ``cuprum.program``, ``cuprum.argv``, ``cuprum.pid``,
     ``cuprum.cwd``, ``cuprum.exit_code``, ``cuprum.duration_s``,
     ``cuprum.project``, ``cuprum.pipeline_stage_index``, and
-    ``cuprum.pipeline_stages``. A terminal ``exit`` event that measured its
-    child's resource usage also carries ``cuprum.max_rss_bytes``,
-    ``cuprum.user_cpu_seconds``, ``cuprum.system_cpu_seconds``, and
-    ``cuprum.resource_usage_mode``; each is absent rather than null when it
-    does not apply.
+    ``cuprum.pipeline_stages``. Every terminal ``exit`` event also carries
+    ``cuprum.resource_usage_mode``, naming how its child's resource figures
+    were obtained — ``wait4_child``, ``aggregate_cpu_delta``, or
+    ``unavailable``. A terminal ``exit`` event that measured its child's
+    resource usage additionally carries ``cuprum.max_rss_bytes``,
+    ``cuprum.user_cpu_seconds``, and ``cuprum.system_cpu_seconds``; those
+    three figures alone are absent rather than null when no measurement
+    applies.
 
     Parameters
     ----------

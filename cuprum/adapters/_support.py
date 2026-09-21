@@ -55,26 +55,21 @@ def _event_common_fields(
 
 
 def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
-    """Return the optional fields the projection carries through unchanged.
-
-    Each is omitted when ``None`` like every other optional field. The
-    terminal resource measurements are projected here alongside the lifecycle
-    fields, so a consumer reads the figures and the mode that names their
-    source from one record and can never mistake one for the other's
-    explanation. The mode itself is not here: it is a ``StrEnum`` and so is
-    rendered by :func:`_event_common_fields` rather than passed through.
-
-    Returns
-    -------
-    tuple[tuple[str, object], ...]
-        Field names paired with their raw values, in emission order.
-    """
+    """Return the optional fields the projection carries through unchanged."""
+    # Each is omitted when ``None``, like every other optional field: the
+    # caller applies the same check it applies to the rest of the projection.
+    # The mode itself is not here at all: it is a ``StrEnum``, so
+    # ``_event_common_fields`` renders it rather than passing it through.
     return (
         ("exit_code", event.exit_code),
         ("duration_s", event.duration_s),
         ("stage_index", event.stage_index),
         ("stage_count", event.stage_count),
         ("line", event.line),
+        # The terminal resource measurements sit alongside the lifecycle
+        # fields on purpose: a consumer reads the figures and the mode that
+        # names their source from one record, so it can never mistake one for
+        # the other's explanation.
         ("max_rss_bytes", event.max_rss_bytes),
         ("user_cpu_seconds", event.user_cpu_seconds),
         ("system_cpu_seconds", event.system_cpu_seconds),

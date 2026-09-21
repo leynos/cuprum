@@ -65,29 +65,13 @@ DEFAULT_REPORT_PATH = {"cobertura": "coverage.xml", "lcov": "lcov.info"}
 
 
 def _declared(inputs: dict[str, object], key: str, where: str) -> str:
-    """Return one ``with`` input of a step, as a non-empty string.
-
-    Every contract below reads a value the step is expected to declare rather
-    than one it inherits: both actions default these inputs, so a lane that
-    stops declaring one keeps working until someone changes the other side, and
-    the contract would stop noticing. Requiring the declaration is what keeps
-    the pair explicit.
-
-    Parameters
-    ----------
-    inputs : dict[str, object]
-        The ``with`` mapping of the step under test.
-    key : str
-        Input name to read.
-    where : str
-        ``workflow:job`` label, for the failure message.
-
-    Returns
-    -------
-    str
-        The declared value.
-    """
+    """Return one ``with`` input of a step, as a non-empty string."""
+    # Every contract below reads a value the step is expected to declare rather
+    # than one it inherits: both actions default these inputs, so a lane that
+    # stops declaring one keeps working until someone changes the other side,
+    # and the contract would stop noticing.
     declared = inputs.get(key)
+    # Requiring the declaration is what keeps the pair explicit.
     assert isinstance(declared, str), (
         f"{where} must declare {key}, found {declared!r}; a defaulted value is "
         f"invisible to the other side of this contract"
@@ -97,44 +81,24 @@ def _declared(inputs: dict[str, object], key: str, where: str) -> str:
 
 
 def _generated(workflow_name: str, job_name: str, key: str) -> str:
-    """Return one declared input of the job's generate-coverage step.
-
-    Parameters
-    ----------
-    workflow_name : str
-        File name of the workflow under ``.github/workflows``.
-    job_name : str
-        Job the generate-coverage step is expected in.
-    key : str
-        Input name to read from that step.
-
-    Returns
-    -------
-    str
-        The declared value.
-    """
+    """Return one declared input of the job's generate-coverage step."""
+    # A thin composition of ``single_step_using`` and ``_declared``; the
+    # ``where`` label is what makes a failure message name the offending step.
     where = f"{workflow_name}:{job_name}"
     step = single_step_using(workflow_name, job_name, uses=GENERATE_COVERAGE)
     return _declared(step_inputs(step, f"{where} must declare inputs"), key, where)
 
 
 def _consumed_path(workflow_name: str, job_name: str) -> str | None:
-    """Return the report path a job's CodeScene step reads, if it declares one.
-
-    ``None`` means the step left ``path`` unset or at its sentinel, which is not
-    the same as asking for a name of the caller's choosing: the action then
-    resolves one of its own, and that name is what the file must be called. The
-    caller resolves both to a concrete name before comparing.
-
-    Returns
-    -------
-    str | None
-        The declared path, or ``None`` when the step leaves it to the action.
-    """
+    """Return the report path a job's CodeScene step reads, if it declares one."""
     where = f"{workflow_name}:{job_name} CodeScene step"
     step = single_step_using(workflow_name, job_name, uses=CODESCENE_ACTION)
     inputs = step_inputs(step, f"{where} must declare inputs")
     declared = inputs.get("path")
+    # ``None`` means the step left ``path`` unset or at its sentinel, which is
+    # not the same as letting the caller choose: the action then resolves a
+    # name of its own, and that name is what the file must be called. The
+    # caller resolves both to a concrete name before comparing.
     if declared is None or declared == "__auto__":
         return None
     return _declared(inputs, "path", where)

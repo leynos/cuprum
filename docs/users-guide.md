@@ -1495,8 +1495,10 @@ The hook attaches selected `cuprum_*` prefixed extra fields to log records:
   are not emitted by this structured logging adapter.
 - `cuprum_max_rss_bytes` / `cuprum_user_cpu_seconds` /
   `cuprum_system_cpu_seconds` / `cuprum_resource_usage_mode`: Terminal child
-  resource figures and the mode naming their source (for `exit` events that
-  attempted a measurement)
+  resource figures and the mode naming their source. The mode is carried on
+  every terminal `exit` event — `wait4_child`, `aggregate_cpu_delta`, or
+  `unavailable` — while the three figures are present only where a source
+  produced them
 
 When registered, `structured_logging_hook()` emits `pipeline_fail_fast` at
 `LogLevels.fail_fast_level`, which defaults to `logging.WARNING`. This default
@@ -1668,8 +1670,10 @@ The hook creates spans with these attributes:
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,
   `cuprum.system_cpu_seconds`, `cuprum.resource_usage_mode`: Terminal child
-  resource figures and the mode naming their source, set on span end; each is
-  absent rather than null when it does not apply
+  resource figures and the mode naming their source, set on span end. The mode
+  is carried on every terminal `exit` event — `wait4_child`,
+  `aggregate_cpu_delta`, or `unavailable` — while the three figures alone are
+  absent rather than null when no measurement applies
 
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).

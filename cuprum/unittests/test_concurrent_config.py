@@ -96,8 +96,8 @@ class TestConcurrentResult:
         # All success
         result_ok = ConcurrentResult(
             results=(
-                CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),
-                CommandResult(Program("echo"), (), 0, 2, "out", "", 0.0, 0.0),
+                CommandResult(Program("echo"), (), 0, 1, "out", ""),
+                CommandResult(Program("echo"), (), 0, 2, "out", ""),
             ),
             failures=(),
         )
@@ -106,8 +106,8 @@ class TestConcurrentResult:
         # One failure
         result_fail = ConcurrentResult(
             results=(
-                CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),
-                CommandResult(Program("echo"), (), 1, 2, "out", "", 0.0, 0.0),
+                CommandResult(Program("echo"), (), 0, 1, "out", ""),
+                CommandResult(Program("echo"), (), 1, 2, "out", ""),
             ),
             failures=(1,),
         )
@@ -116,9 +116,9 @@ class TestConcurrentResult:
     @staticmethod
     def test_concurrent_result_first_failure_property() -> None:
         """ConcurrentResult.first_failure returns the first failed result."""
-        result1 = CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0)
-        result2 = CommandResult(Program("echo"), (), 1, 2, "out", "", 0.0, 0.0)
-        result3 = CommandResult(Program("echo"), (), 2, 3, "out", "", 0.0, 0.0)
+        result1 = CommandResult(Program("echo"), (), 0, 1, "out", "")
+        result2 = CommandResult(Program("echo"), (), 1, 2, "out", "")
+        result3 = CommandResult(Program("echo"), (), 2, 3, "out", "")
 
         concurrent_result = ConcurrentResult(
             results=(result1, result2, result3),
@@ -139,9 +139,9 @@ class TestConcurrentResult:
     def test_collect_all_submission_indices_are_identity() -> None:
         """In collect-all mode submission indices match result positions."""
         results = (
-            CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),
-            CommandResult(Program("echo"), (), 1, 2, "out", "", 0.0, 0.0),
-            CommandResult(Program("echo"), (), 0, 3, "out", "", 0.0, 0.0),
+            CommandResult(Program("echo"), (), 0, 1, "out", ""),
+            CommandResult(Program("echo"), (), 1, 2, "out", ""),
+            CommandResult(Program("echo"), (), 0, 3, "out", ""),
         )
         concurrent_result = ConcurrentResult(results=results, failures=(1,))
 
@@ -158,7 +158,7 @@ class TestConcurrentResult:
         """A compacted fail-fast failure maps back to its submission position."""
         # The first command (submission index 0) was cancelled, so only the second
         # (submission index 1), which failed, is present in ``results``.
-        failed = CommandResult(Program("echo"), (), 99, 2, None, None, 0.0, 0.0)
+        failed = CommandResult(Program("echo"), (), 99, 2, None, None)
         concurrent_result = ConcurrentResult(
             results=(failed,),
             failures=(0,),
@@ -178,8 +178,8 @@ class TestConcurrentResult:
     def test_mismatched_submission_indices_length_is_rejected() -> None:
         """A supplied submission_indices must match the results length."""
         results = (
-            CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),
-            CommandResult(Program("echo"), (), 1, 2, "out", "", 0.0, 0.0),
+            CommandResult(Program("echo"), (), 0, 1, "out", ""),
+            CommandResult(Program("echo"), (), 1, 2, "out", ""),
         )
         # Two results but only one submission index: fail fast during
         # construction rather than defer to an IndexError from
@@ -190,7 +190,7 @@ class TestConcurrentResult:
     @staticmethod
     def test_explicit_empty_submission_indices_with_results_is_rejected() -> None:
         """An explicit empty submission_indices differs from omitting it."""
-        results = (CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),)
+        results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
         # Omitting submission_indices (None) backfills the identity sequence...
         assert ConcurrentResult(results=results, failures=()).submission_indices == (
             0,
@@ -212,7 +212,7 @@ class TestConcurrentResult:
     )
     def test_non_int_failure_index_is_rejected(failure: int, type_name: str) -> None:
         """A non-integer failure index is rejected before range/ordering checks."""
-        results = (CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),)
+        results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
         with pytest.raises(
             TypeError, match=f"failures index must be an int, got {type_name}"
         ):
@@ -237,7 +237,7 @@ class TestConcurrentResult:
     ) -> None:
         """Any failure index at or beyond the results length raises ValueError."""
         results = tuple(
-            CommandResult(Program("echo"), (), 0, pid, "out", "", 0.0, 0.0)
+            CommandResult(Program("echo"), (), 0, pid, "out", "")
             for pid in range(1, result_count + 1)
         )
         with pytest.raises(
@@ -261,8 +261,8 @@ class TestConcurrentResult:
     ) -> None:
         """Failure and submission indices must be ascending and unique."""
         results = (
-            CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),
-            CommandResult(Program("echo"), (), 1, 2, "out", "", 0.0, 0.0),
+            CommandResult(Program("echo"), (), 0, 1, "out", ""),
+            CommandResult(Program("echo"), (), 1, 2, "out", ""),
         )
 
         def construct_result() -> ConcurrentResult:
@@ -277,7 +277,7 @@ class TestConcurrentResult:
     @staticmethod
     def test_submission_index_beyond_results_length_is_allowed() -> None:
         """Fail-fast compaction leaves survivors whose submission index is larger."""
-        results = (CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),)
+        results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
         # The first two commands were cancelled, so the sole survivor keeps its
         # original submission position even though ``results`` has length 1.
         concurrent_result = ConcurrentResult(results=results, submission_indices=(2,))
@@ -308,6 +308,6 @@ class TestConcurrentResult:
         match: str,
     ) -> None:
         """Submission indices must be non-negative, exact ints."""
-        results = (CommandResult(Program("echo"), (), 0, 1, "out", "", 0.0, 0.0),)
+        results = (CommandResult(Program("echo"), (), 0, 1, "out", ""),)
         with pytest.raises(expected, match=match):
             ConcurrentResult(results=results, submission_indices=submission_indices)
