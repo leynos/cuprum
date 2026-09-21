@@ -1,23 +1,23 @@
 # Coverage timeout tiers
 
 A timeout that fires on a healthy run is worse than no timeout: it turns a
-slow machine into a red build, and the fix that suggests itself -- raise the
-number -- is the one that hides a real hang. These lanes therefore carry four
+slow machine into a red build, and the fix that suggests itself — raise the
+number — is the one that hides a real hang. These lanes therefore carry four
 tiers rather than one, each sized to contain the tier inside it, and each
 asserted by value so a tier cannot drift back towards a default that no longer
 fits. This document records what each tier bounds and why it holds the value it
 does.
 
-The coverage lanes contain four timeout tiers in this order: per-test allowance
-< global-timeout < cargo watchdog < job ceiling. The first two live in
-`rust/.config/nextest.toml`; the third is the shared coverage action's cargo
-watchdog; and the fourth is GitHub Actions' job timer. The contract in
-`cuprum/unittests/test_timeout_ordering_contract.py` pins the first three
-relationships, the compile-test tier has a contract of its own in
-`cuprum/unittests/test_compile_test_timeout_tier.py`, and the termination
-allowance is pinned by `cuprum/unittests/test_termination_allowance.py`.
+The tiers are ordered per-test allowance < global-timeout < cargo watchdog <
+job ceiling. The first two live in `rust/.config/nextest.toml`; the third is
+the shared coverage action's cargo watchdog; and the fourth is GitHub Actions'
+job timer. The contract in `cuprum/unittests/test_timeout_ordering_contract.py`
+pins the first three relationships, the compile-test tier has a contract of its
+own in `cuprum/unittests/test_compile_test_timeout_tier.py`, and the
+termination allowance is pinned by
+`cuprum/unittests/test_termination_allowance.py`.
 
-Table 3: Coverage timeout tiers
+_Table 1: Coverage timeout tiers._
 
 | Tier               | Configuration key or environment variable             | Value  | Scope                                        |
 | ------------------ | ----------------------------------------------------- | ------ | -------------------------------------------- |

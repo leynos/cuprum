@@ -1,5 +1,5 @@
-# Per-test allowance < global-timeout < cargo watchdog; see the developers'
-# guide's "Test timeouts: the tiers this repository sets" section for rationale.
+# Per-test allowance < global-timeout < cargo watchdog; see
+# docs/coverage-timeout-tiers.md for the tiers and their rationale.
 #
 # This file lives beside the Cargo workspace manifest rather than at the
 # repository root because nextest resolves .config/nextest.toml from the
