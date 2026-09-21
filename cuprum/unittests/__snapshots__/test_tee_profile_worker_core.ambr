@@ -16,6 +16,24 @@
     'stages': 1,
     'status': 'ok',
     'stdout_line_count': 1,
+    'stream_telemetry': dict({
+      'groups': dict({
+        'stream_drain': dict({
+          'eof': dict({
+            'bytes_consumed': 9,
+            'duration_seconds': '<redacted>',
+            'operation_count': 2,
+            'read_operations': 3,
+          }),
+        }),
+      }),
+      'totals': dict({
+        'bytes_consumed': 9,
+        'duration_seconds': '<redacted>',
+        'operation_count': 2,
+        'read_operations': 3,
+      }),
+    }),
     'wall_time_seconds': '<redacted>',
     'with_line_callbacks': True,
   })

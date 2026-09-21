@@ -133,6 +133,20 @@ fields:
 - `lock_wait_seconds`: total time spent waiting for backend selection lock;
 - `reentrant_rejection_count`: count of rejected nested selector activations.
 
+It also includes `stream_telemetry`, an aggregate of opt-in completed
+pure-Python stream operations. Its `groups` mapping is keyed first by the
+closed operation (`stream_drain` or `pipeline_transfer`) and then by the closed
+outcome. Every group, and the `totals` aggregate, contains:
+
+- `bytes_consumed`: total bytes returned by readers;
+- `read_operations`: completed reader calls, including EOF reads;
+- `operation_count`: completed drain or transfer operations; and
+- `duration_seconds`: sum of monotonic operation durations.
+
+The telemetry observes only pure-Python drain and pipeline-transfer paths.
+Consequently, `pipeline_transfer` may be absent when the Rust backend handles a
+pipeline hop.
+
 Optional `py-spy` runs write `pyspy.raw`.
 
 ## Interpretation
