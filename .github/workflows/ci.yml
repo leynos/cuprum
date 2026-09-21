@@ -1179,7 +1179,12 @@ jobs:
       # then skips for a reason that has nothing to do with the diff, and a
       # summary that stops being written precisely when the gate misbehaves
       # records the runs that needed no explanation.
+      #
+      # The three bounded values are published as step outputs so the
+      # telemetry step below transports them rather than recomputing the
+      # decision. One computation cannot disagree with itself.
       - name: Record the benchmark gate decision
+        id: gate
         if: ${{ !cancelled() }}
         env:
           EVENT: ${{ github.event_name }}
@@ -1217,6 +1222,96 @@ jobs:
           notice+=" detector_status=${detector_status}"
           notice+=" decision=${decision}"
           printf '%s\n' "${notice}"
+          {
+            printf 'event_class=%s\n' "${event_class}"
+            printf 'detector_status=%s\n' "${detector_status}"
+            printf 'decision=%s\n' "${decision}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # Keep analysable records in the existing Actions artefact service.
+      # Labels reuse the gate outputs; per-run metadata never becomes a label.
+      # The runner's preinstalled Python standard library avoids an installer
+      # or dependency sync in this cheap job (Python 3.11+ is sufficient).
+      - name: Persist the benchmark gate decision
+        id: gate-log
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          EVENT_CLASS: ${{ steps.gate.outputs.event_class }}
+          DETECTOR_STATUS: ${{ steps.gate.outputs.detector_status }}
+          DECISION: ${{ steps.gate.outputs.decision }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import datetime as dt
+          from pathlib import Path
+
+          def persist_decision():
+              """Write one bounded record without making logging gate CI."""
+              vocabularies = {
+                  "event_class": {"pull_request", "other"},
+                  "detector_status": {"success", "failure", "unknown"},
+                  "decision": {"run", "skip", "skip-detector-failed"},
+              }
+              labels = {name: os.environ.get(name.upper(), "") for name in vocabularies}
+              identity = {
+                  "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                  "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              }
+              if any(labels[name] not in allowed for name, allowed in vocabularies.items()) or not all(
+                  value.isascii() and value.isdecimal() for value in identity.values()
+              ):
+                  print("::warning title=benchmark-gate-log::Invalid record fields; log omitted.")
+                  return
+              record = {
+                  "schema_version": 1,
+                  "metric": "benchmark_gate_decisions_total",
+                  "value": 1,
+                  "labels": labels,
+                  **identity,
+                  "recorded_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+              }
+              encoded = json.dumps(record, separators=(",", ":"))
+              try:
+                  directory = Path(os.environ["RUNNER_TEMP"]) / "benchmark-gate"
+                  directory.mkdir(parents=True, exist_ok=True)
+                  (directory / "decisions.jsonl").write_text(encoded + "\n", encoding="utf-8")
+                  with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                      output.write("written=true\nrecord=" + encoded + "\n")
+              except OSError:
+                  print("::warning title=benchmark-gate-log::Could not persist the decision log.")
+
+          persist_decision()
+          PYTHON
+
+      # act verifies the record and admission without starting another local
+      # service. Hosted Actions verifies the storage boundary after upload.
+      - name: Upload the benchmark gate log
+        id: gate-log-upload
+        if: ${{ !cancelled() && env.ACT != 'true' && steps.gate-log.outputs.written == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: benchmark-gate-decision-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/benchmark-gate/decisions.jsonl
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Warn when the benchmark gate log is unavailable
+        if: ${{ !cancelled() && steps.gate-log-upload.outcome == 'failure' }}
+        run: |
+          echo '::warning title=benchmark-gate-log::Decision log upload failed; benchmark admission is unchanged.'
+
+      # The guard above keys on the *upload*, which is skipped when the writer
+      # never advertised a record. A writer that failed for any unexpected
+      # reason therefore skipped the upload and skipped this warning with it,
+      # and the telemetry outage was invisible. Keying on the writer's own
+      # outcome closes that gap; admission stays fail-open either way.
+      - name: Warn when the benchmark gate record could not be written
+        if: ${{ !cancelled() && steps.gate-log.outcome == 'failure' }}
+        run: |
+          echo '::warning title=benchmark-gate-log::Decision log write failed; benchmark admission is unchanged.'
 
   loom-smoke:
     name: Loom model smoke test
@@ -1702,6 +1797,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: benchmark-ratchet
+          retention-days: 90
           path: |
             ${{ runner.temp }}/benchmark-ratchet/**/*.json
             ${{ runner.temp }}/benchmark-ratchet/**/*.md

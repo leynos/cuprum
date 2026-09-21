@@ -1,0 +1,974 @@
+# Persist benchmark-gate decisions and verify Actions-runner admission
+
+Status: IMPLEMENTED; hosted receipts verified for the commits their runs name
+and for no other commit, all local gates green on the rebased candidate, most
+recently rebased onto `df0b4f6c`
+
+This living ExecPlan records the implementation of issue #339. The maintainer's
+2026-09-17 instruction supersedes the original Grafana deployment requirement:
+keep persistent benchmark data that can be analysed and visualized, without
+provisioning Grafana or installing another application. Earlier implementations
+and their evidence remain available in Git history.
+
+## Purpose / big picture
+
+A maintainer should be able to download structured benchmark-gate decisions
+across CI runs, count decisions by stable categories, and visualize those
+counts without operating a telemetry service. The decision log complements the
+existing benchmark measurement reports. It records whether the gate permits the
+benchmark; other failed quality prerequisites can still prevent benchmark
+execution.
+
+The same change supplies a supported local Actions compatibility test. Running
+`make test-act` must execute the real path detector, its output propagation,
+the recorded decision, and the production benchmark admission condition for
+pull requests and pushes. It must distinguish an irrelevant diff from a failed
+path detector.
+
+## Constraints
+
+- Do not provision Grafana, manage a telemetry credential, introduce an external
+  service, or install a new analysis application. Use existing GitHub Actions
+  artefact storage and Python's standard library for analysis.
+- The labels are exactly `event_class`, `detector_status`, and `decision`.
+  Their closed vocabularies are `{pull_request, other}`,
+  `{success, failure, unknown}`, and `{run, skip, skip-detector-failed}`.
+  Paths, commands, secrets, run IDs, and timestamps must never become labels.
+- The decision step remains the single source of truth. Persistence validates
+  and transports its outputs, without recomputing admission from event data.
+- Log writes and uploads fail open. Detector failure must still produce a
+  decision record unless the workflow was cancelled or persistence failed.
+- Preserve the real `changes` job and the benchmark job's `needs` and `if`
+  declarations in the harness. Substitute only expensive prerequisite and
+  benchmark bodies with probes; use GitHub-hosted runner mappings.
+- Run commit gates sequentially, capture logs under `/tmp`, and commit only
+  validated changes. Request CodeRabbit after deterministic gates; resolve
+  verified findings before the next milestone. Do not kill other agents' jobs.
+
+## Tolerances (exception triggers)
+
+The user has authorized continuation, the logging replacement, commits, push,
+and a pull request; its readiness for review was set at the user's direction.
+Routine fixes within this scope do not require renewed approval. Stop if the
+implementation cannot be salvaged, the disk fills, or completing this design
+would require a new service or application. Report a denied external operation
+precisely; do not retry it without authorization.
+
+Do not claim hosted receipt from a local test or a successful upload
+declaration. If hosted verification cannot run, document that gap explicitly in
+this plan and the pull request rather than marking delivery complete.
+
+## Context and orientation
+
+`.github/workflows/ci.yml` owns `changes` and `benchmark-ratchet`. The former
+uses pinned `dorny/paths-filter`, exports `bench`, and records bounded gate
+outputs. The latter depends on quality jobs and `changes`, and permits healthy
+non-PR events or relevant PRs. A failed `changes` job prevents admission.
+
+`tests/helpers/workflow.py` provides validated YAML accessors.
+`tests/helpers/act_workflow.py` projects the production workflow into a
+temporary Git repository, retaining the detector and admission boundary.
+`tests/helpers/act_harness.py` creates real changed-path histories and invokes
+`act`; `act_runtime.py` probes the runtime and `act_stream.py` reads structured
+logs. `tests/integration/test_workflow_integration.py` owns the scenario
+matrix. JSON webhook templates live under `tests/fixtures/events/`.
+
+`.github/workflows/benchmark-gate-harness.yml` runs the harness weekly or
+through an opted-in manual dispatch. Its schedule is separate from CI so it
+cannot start paid build jobs. CLI and runner-image pins are documented in
+ADR-015.
+
+`tests/helpers/benchmark_gate_telemetry.py` executes the workflow log writer.
+The two `tests/test_ci_benchmark_gate_telemetry*.py` modules check declarations
+and persisted bytes. Operational guidance lives in
+`docs/ci-benchmark-gate-telemetry.md`; ADR-014 records the storage decision.
+
+## Conformance basis
+
+The upstream requirement is issue #339, following PR #289, as amended by the
+maintainer's explicit 2026-09-17 no-Grafana/no-new-application instruction.
+There is no separate terms-of-reference or technical-design document for this
+work. The architecture decisions are ADR-014 for persistent logs and ADR-015
+for the Actions compatibility harness. Repository `AGENTS.md`, documentation
+style, and scripting standards govern implementation and verification.
+
+The original external-sink requirement is superseded, not silently deferred.
+The requirement for bounded decisions maps to milestone M2 and its schema
+tests; the runtime-boundary requirement maps to M1 and the `act` scenarios;
+persistent receipt and publication map to M3 and a downloaded hosted artefact.
+
+## Progress
+
+- [x] 2026-09-17: Established that the existing implementation was salvageable.
+  Repaired shell-token and workflow-contract checks in `d254d808` and
+  `081150ab`, with failing controls before fixes and all gates afterwards.
+- [x] 2026-09-17: Hardened the then-proposed telemetry labels in `8c9f8662`.
+  CodeRabbit against `d254d808` completed with zero findings. That transport is
+  now superseded by the maintainer's storage-only direction.
+- [x] 2026-09-17: Added real downstream admission tests, both event classes,
+  immutable image pinning, and a dedicated scheduled workflow in `11ea4cba`.
+  All repository gates and eleven `act` checks passed.
+- [x] 2026-09-17: Resolved four distinct CodeRabbit typing concerns (six
+      reports)
+  in `736a86a0`, reusing validated readers and deep-copying event payloads.
+  Malformed-workflow controls failed against the old helper and passed after
+  repair; all code gates and eleven runtime checks passed afterwards.
+- [x] 2026-09-17: Recorded the required failure before replacing the publisher:
+  the secret-free persistence contract failed because no log step existed.
+- [x] 2026-09-17: Implemented JSON Lines persistence and a 90-day Actions
+  artefact upload; 31 focused schema, bounds, and storage-failure tests passed.
+- [x] 2026-09-17: Relevant and irrelevant PR scenarios passed with the new
+  runtime record assertions. The documented CSV/SVG recipe passed valid,
+  duplicate, empty-input, and invalid-label smoke checks.
+- [x] 2026-09-17: Validated the full runtime matrix and every applicable gate.
+  Eleven harness checks passed with no skips, including ten container runs.
+- [x] 2026-09-17: Completed the full-branch CodeRabbit review. Replaced a
+  substring contract assertion with the shared shell parser in `2c1c4e57`; four
+  negative controls failed before the fix and passed afterwards. Added the
+  requested NumPy parameter documentation in `bbe408f0`. All code gates passed
+  for both repairs; the final review returned zero findings.
+- [x] 2026-09-17: Pushed the requested branch and updated existing draft PR
+      #418,
+  including `Closes #339`, the issue suffix in its title, and the final session
+  reference.
+- [x] 2026-09-17: Downloaded a decision artefact from the published candidate
+  and verified its schema, labels, run association, and approximately 90-day
+  retention using GitHub's artefact metadata.
+- [x] 2026-09-17: Recorded terminal hosted CI outcomes: `changes` and
+  `benchmark-ratchet` passed. CodeScene coverage parsing and a rustup TLS
+  connection failed independently of the implemented boundary. Final-head
+  results are tracked in draft PR #418.
+- [x] 2026-09-18: Re-rebased onto `83cd8df2` after review feedback. All 21
+  commits replayed as identical patches; the semantic audit confirmed every
+  branch-only path byte-identical and every target-only path inherited
+  unmodified.
+- [x] 2026-09-18: Repaired the two CodeScene argument-count diagnostics in the
+  summary-support and telemetry-execution tests, then re-ran the repository
+  gates for the rebased candidate.
+- [x] 2026-09-18: Confirmed the rebased candidate's hosted run `35337586749`
+  passed all 17 jobs, re-validated its downloaded decision and measurement
+  artefacts, corrected PR #418's stale "unresolved failure" claim, and marked
+  it ready for review at the user's direction.
+- [x] 2026-09-18: Rebasing onto the advanced `origin/main` head `b63a0f21`,
+  which brought five new commits (the idle heartbeat in `#359`, Dependabot
+  alignment `#304`, mutation-testing workflow-contract docs `#209`, Skylos
+  dead-code detection `#307`, and a §13.2 design-doc alignment `#248`). Exactly
+  one of 24 replays conflicted: `.PHONY` in the `Makefile`, where main's
+  `makeutil`/`skylos-allow` reflow met the branch's `test-act`. Resolved as a
+  union, preserving both sides' targets; the other 23 replays applied cleanly.
+- [x] 2026-09-18: Force-pushed the rebased series with lease, re-flowed the
+  plan prose that `make check-fmt` rejected, re-ran all four gates green at
+  `2a671157`, updated PR #418's body for the new base and head, and validated
+  the resulting hosted run `35394569533`, whose decision and measurement
+  artefacts were downloaded and checked. Committing that record produced
+  `b61c5d3d`, whose own hosted run `35396687688` passed every job as well.
+- [x] 2026-09-19: Rebased the 32-commit series onto the advanced `origin/main`
+  head `f48cf8d4`, resolving the ADR-011 number collision in the two index
+  documents and renumbering the branch's ADRs to 012 and 013 in a separate
+  commit after the replay. The semantic audit found no corruption, and the
+  edited `contents.md` was checked mechanically for duplicate definitions and
+  unresolved `[adr-NNN]` keys.
+- [x] 2026-09-19: Rebased the 36-commit series onto the advanced `origin/main`
+  head `cb59f204`, resolving a second ADR number collision and renumbering the
+  branch's ADRs to 013 and 014. A replay error that had fused the DOC201 repair
+  into the renumber commit was found by `range-diff` and repaired by
+  re-splitting the two commits.
+- [x] 2026-09-19: Cleared the four Pylint convention findings the rebased head
+  carried — two module-length cap breaches and two `use-implicit-booleaness`
+  comparisons — by splitting the over-cap modules along their existing seams
+  rather than suppressing the messages, and re-ran the four commit gates.
+
+## Surprises & discoveries
+
+The original harness only ran `changes`; an assertion requiring the downstream
+admission marker failed even for a relevant PR. The corrected harness executes
+the dependency graph while preserving the actual admission expression.
+
+The original weekly schedule belonged to the main CI workflow, so it would
+start paid jobs as well as the harness. A dedicated single-job workflow removes
+that unrelated scheduled work. The original runner tag was mutable; a verified
+multi-platform image digest now fixes the image content.
+
+An empty GitHub token makes the pinned detector use its local Git fallback.
+This tests real path filtering and Actions output propagation, but not the
+hosted PR REST API or permission model. The harness is deliberately a
+compatibility test rather than proof of identical hosted behaviour.
+
+Repository secret and variable listing returned HTTP 403 during the abandoned
+Grafana design. No resource was provisioned and no receipt was verified. Those
+operations are unnecessary under the maintainer's revised requirement and must
+not be retried as part of the storage-only implementation.
+
+## Decision log
+
+On 2026-09-17 the maintainer explicitly rejected Grafana provisioning and new
+applications. M2 therefore replaces the external publisher with structured
+records in existing Actions artefacts. The offered retention choices received
+no answer before implementation continued; the announced default is a requested
+90-day artefact window, subject to repository limits and deletion. Downloaded
+copies can be retained longer without changing CI infrastructure.
+
+Each `decisions.jsonl` file contains one versioned record with metric name
+`benchmark_gate_decisions_total`, value `1`, exactly three bounded labels, and
+separate run ID, attempt, and UTC time metadata. Summing record values counts
+observations; there is no claim that isolated value-one samples constitute a
+shared cumulative counter. Deduplicate downloaded records by run ID and attempt.
+
+Use the runner's preinstalled Python standard library to serialize the log.
+This small inline workflow operation needs no package installer or project-code
+execution. The existing pinned `actions/upload-artifact` action archives it.
+Both persistence and upload are fail-open and produce visible diagnostics.
+
+The local harness executes the writer and checks its structured record output.
+It skips the hosted upload under `ACT=true`, avoiding another local artefact
+service. Actual storage receipt is checked separately on GitHub. This
+deliberate boundary is recorded in ADR-015 and the operational guide.
+
+## Risks
+
+GitHub artefacts are retained storage, not an indefinite archive. The requested
+90 days can be shortened by repository policy, deletion, or expiration. Missing
+records must not be interpreted as zero decisions. Maintainers needing a longer
+history must download records before expiration.
+
+The gate can admit a benchmark whose other prerequisites later fail. Analysis
+must distinguish gate decisions from actual benchmark executions and join the
+existing measurement reports where execution results matter.
+
+`act` and its container image differ from GitHub-hosted runners. Pin versions,
+run the weekly compatibility workflow after merge, and retain a separate hosted
+receipt check. Action and image downloads can still need network access even
+though the detector uses local Git history.
+
+The pre-rebase candidate passed `changes` and `benchmark-ratchet`, but the
+broader run was not wholly green: CodeScene rejected coverage XML with
+`No matching field found: close for class java.io.InputStreamReader`, and the
+Linux x86 wheel installer failed with `curl(35)` and `SSL_ERROR_SYSCALL` while
+connecting to `sh.rustup.rs:443`. Neither check was weakened. Both failures are
+now accounted for rather than merely re-observed: main's PR #411 (`2070a41b`)
+retired the pull-request CodeScene check and moved that upload to
+`coverage-main.yml`, so the rebased head no longer runs the failing step, and
+its hosted run `35337586749` passed all 17 jobs. The residual risk is external
+service behaviour, not a suppressed check: a default-branch CodeScene change or
+a rustup/registry outage can still fail unrelated jobs without touching this
+boundary.
+
+The second rebase onto `b63a0f21` inherited main's new `makeutil` prerequisite
+on `make test` and `make test-python`. That is an added external binary
+requirement for local and CI runs of those targets, and it is now installed in
+both `ci.yml` jobs that need it. The harness workflow's `make test-act` does
+not depend on `makeutil`, so the opt-in scenario lane is unaffected.
+Installation of `makeutil` remains a failure mode for `make test` that the
+branch neither introduces nor can remove.
+
+The third rebase onto `f48cf8d4` inherited main's audited Rust safety boundaries
+(`33bff5db`), which claimed ADR-011 while the branch's telemetry ADR held the
+same number. The branch's ADRs are now 012 and 013; see the progress log for
+why the renumber was deferred to a commit after the replay. That rebase also
+brought main's boundary-verifier toolchain, whose Kani and Verus targets are
+opt-in and are not part of the default gates. They are not run here for the
+same reason `test-act` is not: they need pinned binaries and a container or
+prover runtime beyond the four required gates.
+
+## Verification plan
+
+V1: Labels remain exactly the three approved names and finite vocabularies. The
+execution tests run the real writer for all 18 allowed combinations and reject
+empty, path-shaped, and quote/newline inputs for every label. They inspect the
+actual JSON file, its schema, and its step-output copy. These checks are not
+vacuous: ordinary valid records must be written, while injected values produce
+no record and are not echoed into diagnostics.
+
+V2: Persistence cannot change admission. Contract tests pin `!cancelled()`,
+`continue-on-error`, the upload failure warning, and reuse of canonical
+outputs. A deliberately blocked output directory exercises an actual write
+failure and must produce a warning with exit status zero. Hosted uploader
+behaviour is a third-party interface assumption; the final downloaded artefact
+verifies the configured successful storage boundary, not every service outage
+mode.
+
+V3: Detector output reaches the actual admission condition. Eight healthy
+scenarios cover relevant, irrelevant, mixed, and empty changed-path sets for
+PRs and pushes; two more force the pinned detector to fail with an invalid
+input. The tests check `bench`, bounded outputs, summary cells, the JSON
+record, and the downstream marker. The old changes-only harness failed the
+marker control. Malformed shape controls independently reject invalid workflow
+dependencies and steps. The prerequisite probes intentionally assume successful
+quality jobs; this isolates the benchmark-gate decision from unrelated build
+failures.
+
+V4: The supported harness stays isolated from paid CI scheduling. Static tests
+pin its sole job, separate weekly trigger, immutable runner digest, checksum-
+verified `act` installation, and refusal to silently skip when CI lacks a
+runtime.
+
+No Rust production logic or new formal lemma is introduced. Exhaustive finite
+label combinations, negative controls, real container execution, and hosted
+receipt provide proportionate evidence. Third-party runtime internals are not
+claimed to be formally verified.
+
+## Milestones and concrete steps
+
+M0 is the completed salvage and parser repair. M1 is the completed runtime
+harness and its review fixes. Reverting their atomic commits restores their
+previous states without rewriting shared history.
+
+M2 replaces the transport and its obsolete tests together, updates ADR-014,
+retention and analysis guidance, and exercises the record through the harness.
+Run the following gates sequentially from the repository root, capturing each
+command through `tee` with `set -o pipefail`:
+
+```bash
+make fmt
+make check-fmt
+make lint
+make typecheck
+make test
+make markdownlint
+make nixie
+make test-act
+```
+
+All must exit zero. The integration target currently runs eleven checks and
+must report no runtime skips. Only after deterministic success request
+`coderabbit review --agent` against the full branch. Verify each finding
+against the live candidate, fix valid concerns, and repeat applicable gates. If
+the review service rate-limits, use the user-requested foreground `vsleep`
+interval of a random 45–90 minutes before retrying.
+
+M3 publishes the already named branch, retaining its matching origin upstream,
+and updates the existing PR rather than opening a duplicate. The PR title must
+include `(#339)` and its summary must contain `Closes #339`. Its final
+`## References` section must link the session at
+<https://lody.ai/leynos/sessions/103f642f-34a2-46a6-b03c-f280276fdbc9>.
+
+Inspect the hosted `changes` result for that exact pushed SHA. Download its
+`benchmark-gate-decision-*` artefact using the operational guide and compare
+the record identity, schema, and labels with the run. Record this evidence
+before claiming persistence is operational. The new dedicated dispatch workflow
+may only become available after merge to the default branch; local `act`
+execution is separate evidence and must not be described as a hosted harness
+run.
+
+## Artefacts and evidence
+
+Logs under `/tmp` are local evidence and may disappear; commit identifiers and
+PR records provide the durable review history. Useful logs from this session:
+
+- `/tmp/issue339-review-telemetry.log`: zero findings for the earlier repair.
+- `/tmp/issue339-admission-red.log`: old harness lacks downstream admission.
+- `/tmp/issue339-harness-test-act.log`: eleven scenarios passed.
+- `/tmp/issue339-review-harness.log`: six reports covering four typing issues.
+- `/tmp/issue339-harness-shapes-red.log` and
+  `/tmp/issue339-harness-shapes-green.log`: malformed-input controls.
+- `/tmp/issue339-harness-types-*.log`: repaired harness gates and eleven runtime
+  checks passed.
+- `/tmp/issue339-log-red.log` and `/tmp/issue339-log-green.log`: missing
+  persistence control and 31 passing log tests.
+- `/tmp/issue339-log-*.log`: passing full repository, documentation, and runtime
+  gates for the persistent-log milestone.
+- `/tmp/issue339-command-red.log`: four false-positive command controls failed
+  before the contract repair; `/tmp/issue339-command-focused.log`: 27 passed
+  afterwards.
+- `/tmp/issue339-command-*.log` and `/tmp/issue339-docstring-*.log`: passing
+  code gates for the final review repairs.
+- `/tmp/issue339-review-command-final.log`: zero-finding review after repair.
+- [Hosted CI run 35248836322](https://github.com/leynos/cuprum/actions/runs/35248836322)
+  ran published commit `bbe408f011d4a4c08d7c0e9f4ff3bf83c2b817a8`.
+  [Decision artefact 10508771038](https://github.com/leynos/cuprum/actions/runs/35248836322/artifacts/10508771038)
+  contains exactly one schema-version-1 record with labels
+  `event_class=pull_request`, `detector_status=success`, and `decision=run`.
+  Its run ID is `35248836322` and attempt is `1`. The downloaded bytes and
+  separately retrieved API metadata are in
+  `/tmp/issue339-hosted-receipt.ATRFG9/`. GitHub reports expiry at
+  `2026-12-16T16:48:18Z`, approximately 90 days after creation.
+- The same run's successful benchmark job uploaded
+  [measurement artefact 10509590666](https://github.com/leynos/cuprum/actions/runs/35248836322/artifacts/10509590666)
+  with the same expiry. Its fifteen downloaded JSON files parsed successfully,
+  and its Markdown comparison summary was present.
+- `/tmp/issue339-hosted-final.json` records the terminal run result;
+  `/tmp/issue339-hosted-coverage-job.log` and
+  `/tmp/issue339-hosted-wheel-job.log` contain the two external failures above.
+
+## Pre-merge check dispositions
+
+CodeRabbit's pre-merge table assesses the commit of its last formal review, not
+the branch head. That is a property of the tool, and it will recur here: the
+current table cites `4256e18d`, a fourth-generation head. The branch has since
+been rebased onto `861fe2f0`, and generation 4's commit series is a strict
+prefix of generation 5's, so a row about a file the branch added after
+`4256e18d` describes a tree that no longer exists.
+
+A reconciliation comment on PR #418 (id 5745299944) records the current
+dispositions, read against the head `ab977364` rather than the assessed commit:
+
+- **Testing (Overall), error — addressed.** Both remedies landed in
+  `d5fa932a`, after the assessed commit.
+  `tests/test_ci_act_harness_contract.py` asserts that the recipe invokes
+  `$(ACT_SCENARIO_TARGETS)`, sets `CUPRUM_REQUIRE_ACT=1`, keeps
+  `ACT_SCENARIO_TARGETS` out of `PYTEST_TARGETS`, and includes
+  `ACT_PARSER_TARGETS` in it.
+  `tests/test_ci_benchmark_gate_telemetry_execution.py` drives empty, padded,
+  non-ASCII-decimal, and ASCII-non-decimal identities through both identity
+  keys.
+- **Linked Issues, warning — open, awaiting a maintainer decision.** The
+  external sink that #339's original text required is absent by design: the
+  maintainer's 2026-09-17 instruction superseded it, and ADR-014 records that
+  the repository provisions no external service, credential, or new
+  application. This plan must not claim the row is satisfied, and reversing
+  ADR-014 is not the branch author's decision.
+- **Developer Documentation, warning — addressed.**
+  `docs/developers-guide.md` gained a "Running the scenarios locally" section in
+  `d5fa932a`.
+- **Testing (Property / Proof), warning — addressed.** Two Hypothesis modules,
+  `tests/test_ci_act_stream_properties.py` and
+  `tests/test_ci_workflow_shell_properties.py`, landed in `d5fa932a` and
+  `8ead4495`, keeping the example-based tests beside them.
+- **Observability, warning — addressed.** The writer-outcome warning
+  (`steps.gate-log.outcome == 'failure'`) exists in `.github/workflows/ci.yml`
+  and is pinned by `tests/test_ci_benchmark_gate_telemetry.py`, which also
+  confirms the writer guard is distinct from the upload guard. The workflow
+  emits a bounded `::notice title=benchmark-gate-decision::` annotation carrying
+  `event_class`, `detector_status`, and `decision`. CodeRabbit, replying on PR
+  #418 at 2026-09-19T21:07:31Z (comment id 5745306375), marked the row
+  ADDRESSED for the revised design and withdrew its external tracing request:
+  "I withdraw the request for an external tracing mechanism." The annotation
+  must not be described as distributed tracing, since Actions annotations
+  provide neither trace-context propagation nor spans; CodeRabbit called it the
+  appropriate bounded workflow-level observation mechanism for the ADR-014
+  storage-only architecture.
+
+The earlier **Unit Architecture, error** disposition is discharged: the row now
+appears in the walkthrough's PASSED list, so it is recorded here as closed
+rather than carried forward as open.
+
+## Outcomes & retrospective
+
+The existing implementation was salvaged. The runtime harness and persistent
+logging are implemented, validated, reviewed, and published in PR #418, which
+is open for review rather than a draft. GitHub accepted the new decision log,
+and its downloaded contents and retention metadata satisfy the revised
+persistence contract. No external service or telemetry credential was
+introduced. The documented standard-library analysis recipe produces CSV and
+SVG without another application.
+
+The local harness proves compatibility for the specified event and changed-path
+matrix; the hosted receipt proves the configured upload boundary. The hosted
+benchmark also ran successfully and retained its measurements. This does not
+establish exact runtime parity or success for unrelated hosted CI jobs; the
+pre-rebase CodeScene parser and installer TLS failures are recorded above, and
+the head reached by the first rebase, `67539822`, passed all 17 jobs in run
+`35337586749`. That receipt predates the second rebase onto `b63a0f21`. No
+hosted run names the replay's own head, `3051257e`, so no receipt is claimed
+for that commit; the receipt covering the rebased series belongs to a commit
+its run does name:
+[run 35394569533](https://github.com/leynos/cuprum/actions/runs/35394569533)
+completed **successfully** for `2a671157`, with every job passing. Its
+[decision artefact](https://github.com/leynos/cuprum/actions/runs/35394569533/artifacts/10566788571)
+was downloaded and validated against the schema, the three bounded labels
+(`event_class=pull_request`, `detector_status=success`, `decision=run`),
+`value=1`, and a `run_id` matching the producing run, and its
+[measurement artefact](https://github.com/leynos/cuprum/actions/runs/35394569533/artifacts/10567253937)
+holds eleven valid JSON files plus the comparison summary, whose ratchet
+decision is `passed` with no regressions against a five-sample compatible
+history. Both request 90-day retention. The `changes` job's
+`Persist the benchmark gate decision` and `Upload the benchmark gate log` steps
+both succeeded, and the warn step was correctly skipped.
+
+Every hosted receipt in this plan is bound to the commit its run names, not to
+whatever head the branch carries when the plan is read: recording a receipt
+necessarily adds commits, and the head moves on. Later runs repeat the same
+checks for their own heads; run `35396687688`, for example, passed all jobs for
+`b61c5d3d` and retained both artefacts, and every push to this branch starts a
+fresh run in the same way. Read the head from the run, never from the plan.
+
+## Revision note
+
+2026-09-17: Replaced the obsolete, externally provisioned sink plan with the
+maintainer-authorized storage-only design. Preserved the implementation and
+review history in concise form, updated all acceptance evidence and remaining
+work, and separated local runtime proof from hosted artefact receipt.
+
+2026-09-17: Added successful full-gate and final-review evidence, verified
+hosted decision and measurement downloads, and recorded terminal external CI
+failures without weakening their checks.
+
+2026-09-18: Rebased the 21-commit series from `a97d0a8b` (its exclusive base)
+onto `83cd8df2`, the current `origin/main` head. Main had advanced by two
+commits: the pull-request coverage change in `2070a41b` and a pyright bump in
+`83cd8df2`. Every replay applied as an identical patch, so no conflict
+resolution was needed and no branch-only path changed. Main's `ci.yml` coverage
+rewrite, its `job_env` helper, and its pyright `uv.lock` revision are inherited
+unchanged; the branch owns no `uv.lock` delta, so no lockfile rebuild was
+required. Verified with `git range-diff`, a byte-identity check over all 39
+branch-only paths, and the target-only-path check from the semantic audit.
+
+2026-09-18: Repaired two CodeScene "Excess Number of Function Arguments"
+diagnostics by replacing parameter bundles with values that already represent
+the data. `_execute_summary_script` now takes one `_SummaryScriptExecution`
+dataclass instead of five keyword arguments, and the closed-label matrix test
+takes one `Verdict` per parametrized case instead of three stacked
+parametrizations. `SummaryCase` was deliberately left unchanged: it models
+expected results rather than execution inputs. The subprocess command,
+environment, output files, return-code assertion, the 18-case matrix, and its
+deterministic ordering are all unchanged.
+
+2026-09-18: Corrected current-state claims that the rebase had invalidated. The
+published pull-request description still reported the pre-rebase CI failures as
+unresolved; it now records run `35337586749` succeeding for `67539822` with all
+17 jobs passing, explains that main's PR #411 retired the pull-request
+CodeScene check into `coverage-main.yml`, and reports the rebased head's
+re-validated decision and measurement artefacts (requesting 90-day retention).
+The plan's Risks, Outcomes, and M3 sections were updated to match: the PR is
+open for review rather than a draft, and the earlier failures are retained as
+history rather than as an open blocker. Historical entries that describe what
+was true on 2026-09-17 are deliberately left unchanged.
+
+2026-09-18: Rebased the 24-commit series from `83cd8df2` (its exclusive base)
+onto `b63a0f21`, the advanced `origin/main` head. Main had gained five commits,
+including Skylos dead-code detection (`6a9b2de4`) and the idle heartbeat for
+quiet children (`b63a0f21`). A `git merge-tree` preview taken before any
+mutation showed exactly one conflicted file: the branch's `test-act` addition to
+`.PHONY` and main's `makeutil`/`skylos-allow` reflow collided in the same
+target list, while the branch's other `Makefile` hunks and all four other
+overlapping paths (`ci.yml`, `contents.md`, `developers-guide.md`, and
+`test_workflow_lint.py`) merged without conflict. The resolution keeps the
+union of both sides' targets, so main's `makeutil` and `skylos-allow` and the
+branch's `test-act` are all present; `makeutil parse Makefile` reports
+`status: complete` with no diagnostics, and the contract assertions in
+`test_ci_test_coverage_overlap.py` and `test_skylos_lint_contract.py` hold. The
+branch owns no `uv.lock` or `pyproject.toml` delta, so both files match the
+target byte-for-byte and `uv lock --check` passes without a rebuild. The
+semantic audit after the replay found no unexplained deletions and no new
+repeated blocks: the only repeated-line count changes in `ci.yml` are the
+branch's own persistence steps matching counts already present at the
+pre-rebase head.
+
+2026-09-18: Published the second rebase and closed its evidence loop. Two
+doc-only commits followed the replay: an mdtablefix re-flow of this plan, whose
+token stream is identical before and after, and a two-line correction that
+stops calling the post-rebase head "current" once later commits landed on top.
+All four gates then passed at `2a671157`. The force push used
+`--force-with-lease` bound to the recorded remote head `1de3e659`, so the
+update could not silently overwrite a concurrent push. Hosted run `35394569533`
+followed and passed every job, which is the first receipt covering the rebased
+series; its decision artefact carries the expected three labels and its
+measurement artefact shows a ratchet pass with no regressions. The PR body was
+updated in the same pass: the previous text still cited the rebase onto
+`83cd8df2`, and its two branch-relative anchors had drifted (`ci.yml` `#L1089`
+to `#L1113`, and the harness-boundary negative control from `#L88` to `#L98`).
+
+2026-09-19: Rebased the 32-commit series from `b63a0f21` (its exclusive base)
+onto `f48cf8d4`, the advanced `origin/main` head. Main had gained two commits:
+the audited Rust safety boundaries in `33bff5db` and the const-lint repair in
+`f48cf8d4`. A `git merge-tree --write-tree` preview taken before any mutation
+showed exactly two conflicted paths, both documentation indexes: main's
+`adr-011-audited-rust-boundaries.md` and the branch's own ADR-011 collided on
+the same number, and both index documents order ADR entries by that number.
+
+The collision is a genuine content conflict, not a formatting one. Main's ADR
+was accepted on 2026-09-08 and landed in `33bff5db`; the branch's telemetry ADR
+was written on 2026-09-17 against the same sequence. Main landed first, so it
+owns 011 and the branch's ADRs renumber to 012 and 013. The resolution keeps
+both sides' entries in each index and defers the renumber to one commit of its
+own after the replay: eight later commits edit the ADR files by path, so
+renaming them mid-replay would have forced rename detection through every one
+of them. Renumbering the index entries at the same time as the deferred rename
+would also have left the indexes pointing at filenames that did not exist yet,
+and a duplicate `[adr-011]` link definition resolves silently to the last one,
+which would have sent the "Audited Rust safety boundaries" entry to the
+telemetry ADR.
+
+The renumber commit updates both headings, both filenames, and all nine
+reference sites together — the two index documents, the telemetry and local
+validation guides, this plan, and four test-side pointers. `contents.md` has no
+duplicate definitions and every `[adr-NNN]` key resolves to a file that exists,
+checked mechanically rather than by reading.
+
+`git range-diff` over the replay shows 30 of 32 commits applying as identical
+patches. The two that differ are exactly the two whose ADR-index hunks the
+renumber touched, and their range-diff hunks show only the numbering and the
+superseding telemetry wording that `d6c4662e` already introduced. The semantic
+audit found no corruption: all 77 target-only paths are byte-identical to
+`f48cf8d4`, every file with a deletion hunk is one the branch itself modifies,
+and all 18 changed Python modules parse with no duplicated definitions. The
+branch owns no `uv.lock`, `pyproject.toml`, or Rust manifest delta, so no
+lockfile rebuild was required and both match the target byte-for-byte.
+
+2026-09-19: Rebased the 36-commit series from `f48cf8d4` (its exclusive base)
+onto `cb59f204`, the advanced `origin/main` head. Main had gained two commits,
+which moved the ADR collision rather than removing it: `3885c5ac` exposed
+per-command echo fallback diagnostics, and `cb59f204` added
+`adr-012-linux-dev-fast-routing.md`. Main therefore owns both 011 and 012 and
+the branch's two ADRs renumber to 013 and 014. `git merge-tree` predicted two
+conflicted paths, `Makefile` and `docs/contents.md`, and the replay produced
+exactly those. The `Makefile` conflict was adjacency rather than disagreement:
+main retargeted `test-rust`'s prerequisite while the branch inserts a new
+`test-act` target immediately above that line, so the resolution keeps main's
+prerequisite and the branch's target.
+
+The renumber commit is replayed unchanged, so its own hunks collide with the
+new collision and are resolved once more in the same way the previous
+generation resolved them: keep both sides at the conflict, defer the renumber
+to the commit that already exists for it, and re-derive its numbering there.
+Collapsing the two collisions into the earlier conflict would have spread the
+renumber across every commit that edits the ADR files by path.
+
+`git range-diff` showed one commit missing from the replayed series, `785485f1`
+(the DOC201 docstring repair). Its content was not lost: an earlier
+conflict-stop resolution had used `git commit --amend`, which amended the
+*replayed* `785485f1` rather than the renumber commit, fusing two logically
+distinct commits into one whose message described only half of its content. The
+fix re-split them — recreate the DOC201 commit on top of `91caabb1`, then
+replay the three descendants — and strip the `cherry picked from` provenance
+lines that `git cherry-pick -x` appended, since they named pre-rebase commits
+that no longer exist in this series. The repaired head is tree-identical to the
+fused one, so no content changed; only the history's accuracy did. The lesson
+is that `git commit --amend` during a rebase conflict stop amends whatever HEAD
+currently is, which is the *previous replayed commit*, never the commit being
+currently applied.
+
+The semantic audit then found no corruption: all 75 target-only paths are
+byte-identical to `cb59f204`, no file is deleted against the target, and
+`git diff --check` is clean. All fourteen ADR files 001-014 exist with no
+duplicate number, and every `[adr-NNN]` link definition in `contents.md` and
+every relative ADR link across `docs/` resolves to a file that exists.
+
+2026-09-19: Cleared the four Pylint convention findings that the rebased head
+carried. Two were module-length cap breaches —
+`tests/test_ci_act_stream_properties.py` at 514 lines and
+`tests/helpers/act_harness.py` at 407, against a 400-line `max-module-lines` —
+and both were fixed by splitting along seams the modules already documented
+rather than by suppressing the message or trimming prose.
+
+The split follows the harness's own "one seam each" design. `act_harness.py`
+loses its event model to a new `tests/helpers/act_event.py` (312 and 119
+lines): the four sibling modules already partition scenario, runtime, stream
+reading, and workflow projection, and the event payload is the fifth such
+concern — it is the part that has to match GitHub's format.
+`test_ci_act_stream_properties.py` loses the shell-analyser half to a new
+`tests/test_ci_workflow_shell_properties.py` (323 and 220 lines), because the
+module held two unrelated subjects, each already with its own example-based
+companion (`test_act_stream_parsing.py` and
+`test_ci_workflow_shell_tokens.py`). Both splits re-export through the original
+module, so `from tests.helpers.act_harness import Event` keeps working and the
+developer-guide and ADD-014 excerpts that name it stay accurate.
+
+Worth recording, because it explains why the gate reported only these two files
+while other modules exceed 400 lines: the Pylint gate runs under PyPy 3.11, and
+`cuprum/sh.py` (983 lines) opens with a PEP 695 `type X = ...` alias that PyPy
+3.11 cannot parse. `pylint-pypy-shim` skips a file it cannot parse, so that
+module is never checked for length at all. The two flagged modules were the
+only ones the gate could actually read that were over the cap — the other long
+modules under `cuprum/unittests/` also report C0302 when Pylint is pointed at
+them directly, but no directory-level gate invocation reaches them. The cap is
+therefore real for any file the gate can parse, and splitting (not suppression)
+is the fix that holds.
+
+The other two findings were `C1804` at `tests/test_ci_act_harness_contract.py`
+lines 322 and 332, where `harness_skip_reason() == ""` and `!= ""` were
+replaced by `not harness_skip_reason()` and `harness_skip_reason()`. The
+surrounding assertions are unaffected: the empty string is the function's "no
+reason to skip" value, so the truthiness reading is the same contract stated
+without a redundant comparison.
+
+After the repair `pylint-pypy benchmarks conftest.py cuprum scripts tests`
+exits 0 with no findings and a 10.00/10 rating, and the focused suites for
+every touched module pass 118 tests.
+
+2026-09-19: Rebased the 38-commit series from `cb59f204` (its exclusive base)
+onto `861fe2f0`, the current `origin/main` head and therefore the pull
+request's target. Main had gained one commit,
+`Add project catalogue constructor (roadmap 3.2.4) (#374) (#404)`, which added
+two private catalogue modules, a snapshot entry, and nine lines of
+`docs/developers-guide.md`. That document was the only path both sides touched,
+so the replay carried exactly one overlapping file and no conflict stop: all 38
+commits replayed as identical patches under `git range-diff`.
+
+Because the series is patch-identical, the decisive audit is preservation
+rather than reconstruction. Every one of the 45 branch-touched paths is
+byte-identical to its pre-rebase blob except the overlapping document, all 623
+paths the branch does not touch are byte-identical to `861fe2f0`, and every
+path the branch deletes is still absent. The single differing path differs by
+exactly the target's addition with zero deletions, inserted at the intended
+anchor, and `git diff --check` is clean. No merge attribute selected a driver
+anywhere in the change surface, so the built-in merge ran throughout and no
+semantic reconstruction was possible.
+
+The renumber commit that the previous two rebases had to repair produced a
+third-class defect this time, and it is worth naming because the first two
+generations found different ones. Renumbering `012` to `014` in
+`docs/developers-guide.md` bumped the visible label and the link target for the
+telemetry reference, but for the harness reference it bumped only the label,
+leaving `[ADR-013](adr-014-actions-runner-integration-harness.md)` — a link
+whose text promises ADR-013 and whose target is ADR-014. A sweep of every
+`[ADR-NNN](adr-MMM-*.md)` label/target pair and every reference-style
+`[adr-NNN]` definition across `docs/` and `README.md` now reports no mismatch
+and no link to a missing file. The lesson is that a renumber is a two-field
+edit — number and target — and reviewing it as one field is how this survives
+three generations of replay.
+
+2026-09-19: Diagnosed the branch's CodeRabbit pre-merge table as a stale
+artefact, not a merely outdated one. The live walkthrough comment on PR #418
+(id 5715261306) carries its assessed commit in its own metadata:
+`change_assessment_commit:"4256e18dfcbf4edf1b779460d4458461883db65c"`, so the
+table assessed generation 4's head, not the current head `ab977364`. Generation
+4's commit-subject series is a strict prefix of generation 5's, so `4256e18d`
+is not an ancestor of the current head, and several rows demand files added
+later by `d5fa932a` and `8ead4495`.
+
+All five rows were reconciled against `ab977364`, not the assessed commit, with
+the dispositions recorded in a reconciliation comment (id 5745299944) and in
+`## Pre-merge check dispositions`. The three inline findings were verified
+against the current tree and already satisfied: the `EventName` StrEnum and
+`match`-based payload dispatch in `tests/helpers/act_event.py` (`8ead4495`),
+and the `DOCKER_HOST` precedence in `tests/helpers/act_runtime.py`, each
+confirmed by CodeRabbit's own replies. The lesson is that a walkthrough
+`updated_at` refresh is not re-evaluation: read the assessed commit from the
+walkthrough's own metadata before actioning any row, because acting on an
+unread table means repairing a tree that no longer exists.
+
+2026-09-20: CodeRabbit re-evaluated the pre-merge table against `ab977364`,
+rather than the assessed commit, in its reply of 2026-09-19T21:07:31Z (comment
+id 5745306375), and disposed of all five rows. Testing (Overall), Developer
+Documentation, Testing (Property / Proof), and Observability were ADDRESSED.
+Linked Issues was NOT SATISFIED only against the superseded original
+external-sink requirement, and was explicitly not classified as an
+implementation omission in this PR. CodeRabbit also withdrew its request for an
+external tracing mechanism and asked that the `benchmark-gate-decision`
+annotation not be described as distributed tracing.
+
+The lesson is that the branch had argued the tracing half as a *dispute* while
+the reviewer was willing to withdraw the request, so that half was closed by
+the reviewer conceding rather than by the branch winning it. The plan's own
+Observability disposition had to be corrected afterwards to match, and its
+replacement records the withdrawal instead of a dispute.
+
+2026-09-20: Rebased the 41-commit series from `861fe2f0` (its exclusive base)
+onto `50ecdf2a`, the current `origin/main` head and therefore the pull
+request's target. Main had gained three commits — the line-level output
+iteration, the native formatter fixture, and the presentation-sink session
+lifecycle. Two paths conflicted, `docs/contents.md` and
+`docs/developers-guide.md`, both at the same root cause: main's new
+`adr-013-opt-in-github-actions-presentation-sink.md` claimed the number the
+branch's telemetry ADR already held. The two ADRs are genuinely different
+decisions — main's is a library presentation sink, the branch's is a CI
+artefact writer — so neither could absorb the other, and main's is landed and
+accepted, which makes its number the one that cannot move.
+
+This is the third renumber on this branch and the second caused by an upstream
+ADR landing first. The replay kept both sides at the conflicts and deferred the
+renumber to a tip commit again, because `ab977364` edits
+`docs/developers-guide.md` and its added lines name the harness ADR by number:
+renumbering mid-replay would have made a later commit conflict against a rename
+it never saw. `f494ac8c` moved the pair 011/012 -> 013/014 for the same reason;
+this generation moves 013/014 -> 014/015, and `ab977364`'s mislabelled-link
+repair replayed unchanged because it is relative to the pre-renumber numbering.
+
+`git range-diff` over the replayed series reports 30 of 41 commits identical
+and exactly two differing, both of them the commits that conflicted. Neither
+difference is a lost change: commit 17 differs only by main's ADR-013 index
+entry appearing beside the branch's two, and commit 33 differs only by the same
+entry plus the branch's still-unrenumbered duplicate definitions, both of which
+the tip commit resolves. All 89 paths main touched and the branch did not are
+byte-identical to `50ecdf2a`, and no path the branch deletes is present.
+
+The renumber is a two-field edit and was verified as one: every
+`[ADR-NNN](adr-MMM-*.md)` pair and every reference-style `[adr-NNN]` definition
+agrees, `contents.md` has no duplicate keys, and every target resolves. The one
+remaining `[ADR-013](adr-014-...)` is inside backticks in the revision note
+above, quoting the historical defect `ab977364` repaired; it is narration
+rather than a link, and is preserved deliberately.
+
+The replay also surfaced a divergence the merge could not see. Main bumped
+`actions/upload-artifact` to v7.0.1, `actions/checkout` to v7.0.1, and
+`actions/setup-python` to v6.3.0 repo-wide in `50ecdf2a`. The steps this branch
+adds did not exist when that bump landed, so the three-way merge updated the
+eight call sites main already owned and left the branch's own on the superseded
+pins: one uploader in `ci.yml` plus the harness workflow's checkout and
+setup-python. A repository-wide scan of every `uses: ...@<sha>` now finds no
+action pinned differently from main. The uploader's old pin was held by
+`test_archive_retention_and_fail_open_contract` as well as the workflow, so the
+workflow and its assertion moved together; that pairing is why the gate stayed
+green while the repository disagreed with itself, which is the lesson — a pin
+asserted against a constant tests internal consistency, not agreement with the
+target branch.
+
+2026-09-20: Rebased the 44-commit series from `50ecdf2a` (its exclusive base)
+onto `934c7666`, the current `origin/main` head, when main landed "Format Rust
+sources with nightly profile (#408)". The earlier note in this plan gave the
+boundary as `861fe2f0` and the series as 41 commits; both were wrong, and the
+record is corrected here. `861fe2f0` is an ancestor of `origin/main`, and the
+three commits that had appeared to be branch-owned — `361887e6`, `50ecdf2a`,
+`fdfcebc3` — are main's own first-parent chain, so including them replayed
+inherited work. The boundary that excludes them is the merge-base `50ecdf2a`,
+which yields 44 commits and no merges, and each of those 44 is absent from main.
+
+The replay was conflict-free: `git range-diff` reports all 44 commits
+identical, with none dropped and no subject changed. The two paths both sides
+touch, `Makefile` and `docs/developers-guide.md`, carry disjoint hunks — main's
+edits land in the `fmt` and `check-fmt` recipes and the toolchain paragraph,
+the branch's in `PYTEST_TARGETS`, `test-act` and its recipe, and the harness
+section — so the three-way merge needed no resolution. `check-fmt` now routes
+its Rust leg through main's `RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28` via
+`RUSTFMT_CARGO`, which the branch's earlier conflict resolutions had preserved
+in place rather than re-pinned.
+
+`make lint` then failed on the rebased head with
+`SKY-U001 unused function: _PipelineWaitState.should_terminate_others`, a
+symbol this branch never touched and whose blob at `_pipeline_wait.py` is
+identical to main's. The cause is environmental rather than a regression here:
+skylos's `_read_public_docs()` skips any doc file larger than 300,000 bytes, so
+a symbol whose only rescuing reference is in `docs/developers-guide.md` stops
+being credited as documented once that file crosses the cap. The guide measured
+299,543 bytes at `3b09b190`, where lint passed, and 300,245 at the rebased
+head, where it did not; shrinking the file while leaving the symbol's mentions
+untouched cleared the finding, which establishes the mechanism. The honest fix
+was to remove the restatement the branch had added rather than whitelist
+anything: the guide now defers to `docs/ci-benchmark-gate-telemetry.md` for
+retention and fail-open behaviour, to
+`docs/local-validation-of-github-actions-with-act-and-pytest.md` for the pinned
+image digest, and states the harness workflow's schedule once rather than
+twice. It sits at 299,659 bytes, 341 under the cap, with both
+`should_terminate_others` mentions — including the class-qualified rescue form
+— intact.
+
+A ninth replay moved the branch to `cc04166e` on target `df0b4f6c`
+(`Enforce the Rust lint baseline (#448)`), again with no conflicts: the
+exclusive boundary stayed the merge-base `50ecdf2a` and all 45 commits replayed
+identically except commit 3, where `Makefile`'s `PYTEST_TARGETS` correctly
+combined main's new `test_boundary_*.py` and
+`test_rust_lint_baseline_contract.py` entries with this branch's
+`$(ACT_PARSER_TARGETS)`. `git range-diff` reported 44 of 45 commits unchanged
+and that one as a combination rather than a loss.
+
+Main's #448 had meanwhile added 1,758 bytes of its own prose to
+`docs/developers-guide.md`, taking it to 298,350 and leaving only 1,650 bytes
+under skylos's per-file cap. The rebased guide therefore measured 301,417 —
+1,417 over — so `SKY-U001` returned. The remedy was again to cut restatement,
+and the search for it is worth recording because the obvious scan finds
+nothing: an exact-match pass over every paragraph and long sentence in the
+guide reported zero duplicates within the file, and a cross-file pass against
+every readable doc found only 116 bytes of verbatim overlap, all of it main's
+inherited content. The duplication that did exist was *paraphrased*, and the
+owning files were the ones the branch's own additions pointed at:
+`docs/local-validation-of-github-actions-with-act-and-pytest.md` already
+documents `make test-act`, the refusal to skip, the `make test` exclusion, and
+the hosted weekly dispatch, and `Makefile:368-378` owns the same opt-in
+contract as a comment. The guide's "Running the scenarios locally" section now
+routes readers to those owners instead of restating them, the telemetry
+paragraph defers to `docs/ci-benchmark-gate-telemetry.md`, and the harness
+paragraph defers to ADR-015. The guide sits at 299,910 bytes, 90 under the cap.
+
+That margin is much thinner than the 341 bytes of the previous generation, so
+the cap was re-proved in both directions on this tree rather than assumed: with
+the guide at 301,417 the pinned detector reports the finding, and at 299,910 it
+exits 0. A simulation of `_read_public_docs()` confirms the mechanism can bite
+in two independent ways — the real guide is skipped by the per-file cap when it
+exceeds 300,000, and the cumulative 2,000,000-byte cap stops the scan outright
+partway through this worktree's docs. The guide is enumerated before that break
+fires, so the per-file cap is the binding constraint here; any further growth
+of this file will re-trigger the finding.
+
+`make check-fmt` also failed on the pre-rebase head because `mdtablefix` wanted
+to reflow the two files the previous trim committed. Both are formatted now,
+and the Makefile's `fmt` target confirms the required flag is `--in-place`.
+
+A tenth replay re-trimmed the guide under skylos's cap after further growth on
+main, leaving the branch at `a11406ff` on the same target `df0b4f6c` with the
+same exclusive boundary `50ecdf2a`. `make test` then failed, and the failure
+was ring-fenced before it was touched, because it is inherited rather than
+branch-owned and the distinction changes who should fix it.
+
+`scripts/tests/test_boundary_workspace.py::test_main_materializes_external_source_file_symlinks`
+timed out against the suite-wide `timeout = 30` in `pyproject.toml`. The test
+was added by main's #448, and every input it depends on — `scripts/`, `rust/`,
+`tools/`, `pyproject.toml`, and the Makefile's
+`CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)"` env line — is byte-identical to
+the target. The branch owns no production `cuprum/` change here, so the failure
+cannot have originated in this branch.
+
+It is a budget defect, not a flake, and the numbers show why. The test is the
+only one in its file that reaches the real `_compile`; `main()` and
+`_check_target` both resolve through a monkeypatched seam, so exactly one
+`cargo check --package cuprum-streams --all-targets --all-features` runs. The
+Makefile forces that build serial (`PYTEST_CARGO_BUILD_JOBS ?= 1`), and it
+measured 220s cold and 240s warm, against a 40s parallel run and a 30s
+suite-wide bound. A deliberately isolated rerun failed at 30.13s with load
+2.48, which rules out host contention. Main's own CI passes the batch in 21.85s
+because a hosted runner restores a warm Cargo/sccache state that this
+development host does not have, so the defect is latent on CI and reproducible
+locally.
+
+The remedy is a `@pytest.mark.timeout(900)` on that test, matching the
+repository's existing idiom at `tests/test_native_sdist.py:51` and
+`tests/integration/test_workflow_integration.py:269`. The bound deliberately
+sits above `check_boundary_contract._compile`'s own `timeout=600` so a genuine
+compile failure still surfaces its diagnostic rather than being replaced by a
+timeout, and the marker is load-bearing: the warm isolated run still took
+49.46s against the 30s default.
+
+A second, unrelated failure of the same test was seen at main's `2905217f` —
+`trybuild@1.0.121 requires rustc 1.88` against the pinned 1.85.0 toolchain. It
+is not this defect: `2905217f` is not an ancestor of main, and the failure mode
+and duration are both different. `rust/Cargo.lock` is byte-identical between
+this branch and `df0b4f6c` at blob `4f631489`, so the pins agree and nothing
+there needs changing.
+
+An eleventh replay moved the branch to `dd7dd50b` on target `7606b063`, whose
+single new commit is main's own #451 "Stabilize boundary workspace link test".
+That landed while the tenth-rebase validation was running, and it fixes the
+same test by a different and better route: it narrows the probe compile to the
+two materialized integration-test targets and drops the copied dev-dependencies
+the empty fixture never uses, instead of relaxing the bound. Its own guide
+addition, a "Boundary compilation selections" section, adds 1,758 bytes to
+`docs/developers-guide.md`.
+
+The replay was conflict-free — the exclusive boundary stayed `50ecdf2a` and the
+series replayed as 47 commits with no merges. `git range-diff` reports 46
+commits identical and only `ca23aaac` changed, which is correct: main rewrote
+the file that commit edits, so its hunk context moved from the old test body to
+main's new `_remove_copied_dev_dependencies` helper. The semantic audit's
+target-only-path check confirms byte identity for both paths main added,
+`scripts/boundary_compile.py` and `scripts/check_boundary_contract.py`.
+
+Main's narrowing does not, however, retire the timeout bound on this host. Even
+restricted to `--test relative --test absolute`, the compile measured 181s cold
+and 98s warm under the Makefile's forced serial build — still more than three
+times the suite-wide `timeout = 30`. The marker therefore stays, and the
+comment above it was corrected to describe the post-#451 command and the new
+measurements rather than the `--all-targets` build it no longer runs.
+`scripts/boundary_compile.py:157` keeps `timeout=600`, so 900s still sits above
+the library's own budget and a genuine compile failure still surfaces its
+diagnostic.
+
+Main's guide growth also re-triggered skylos's per-file cap: the merged guide
+measured 300,433 bytes, 433 over. The tenth replay's remedy was re-applied to
+this branch's own additions rather than to inherited text — the telemetry
+paragraph and the act section both restated material their own owning documents
+already carry (ADR-014's decision, `docs/ci-benchmark-gate-telemetry.md`'s
+schema, ADR-015's paths-filter gap, and the local validation guide's
+prerequisites and pins), so both were cut down to pointers at those owners. The
+guide now measures 299,928 bytes, 72 under the cap, with the ADR index entries,
+the `workflow-harness` table row, and both `should_terminate_others` mentions
+intact. `make lint` was re-run on the trimmed tree and passed, which re-proves
+the cap in the direction that matters.
+
+The twelfth validation pass found one more mechanical gap than the previous
+passes did, in this plan's own prose. `make check-fmt` reported ten lines that
+`mdtablefix` would reformat, all of them in the tenth- and eleventh-replay
+records appended above. The cause is mundane: handwritten prose in this file
+was wrapped by eye rather than by the tool, and two paragraphs had drifted past
+the 80-column wrap the rest of the file keeps. The remedy is the tool's own
+reflow — a pure rewrapping with no byte-size change (58,963 bytes before and
+after) and no semantic difference, confirmed by collapsing all whitespace runs
+on both sides and comparing. Nothing outside this document reads it: no test,
+script, or workflow references this plan's content, so the reflow cannot affect
+behaviour. The change was folded into the same commit that raised the probe
+timeout, since `make check-fmt` refuses the tree without it.
+
+Worth recording for whoever continues this work: this is the second time this
+plan's own prose has tripped a formatting gate after a sub-agent or a hand edit
+touched it, and both times the correct fix was to run the formatter rather than
+to hand-tune the lines. Treat an `mdtablefix` finding in this file as
+mechanical, verify it is whitespace-only, and apply it.

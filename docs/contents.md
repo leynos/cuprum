@@ -28,6 +28,9 @@ open each document.
 - [Native-pump Loom model](design-loom-native-pump-model.md) - the bounded
   production correspondence, assumptions, and safety claims for native-pump
   concurrency checks.
+- [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) - the
+  benchmark-gate JSONL artefact schema, retention, retrieval, analysis recipe,
+  and fail-open delivery contract.
 
 ## Design and decisions
 
@@ -62,6 +65,12 @@ open each document.
 - [ADR-013: Opt-in GitHub Actions presentation sink][adr-013] - accepted
   decision to frame runs in Actions log groups and annotate failures through an
   opt-in presentation sink.
+- [ADR-014: Durable benchmark-gate telemetry][adr-014] - accepted decision to
+  retain bounded benchmark-gate observations in GitHub Actions artefacts with
+  fail-open delivery and no external sink or secret.
+- [ADR-015: Actions-runner integration harness][adr-015] - accepted decision to
+  verify the `changes` job boundary with a pytest-driven `act` harness rather
+  than by reading the workflow source.
 
 ## Planning and validation references
 
@@ -92,6 +101,8 @@ open each document.
 [adr-011]: adr-011-audited-rust-boundaries.md
 [adr-012]: adr-012-linux-dev-fast-routing.md
 [adr-013]: adr-013-opt-in-github-actions-presentation-sink.md
+[adr-014]: adr-014-benchmark-gate-telemetry-sink.md
+[adr-015]: adr-015-actions-runner-integration-harness.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: migration-0.2.0.md
 [rust-boundary-verification]: rust-boundary-verification.md

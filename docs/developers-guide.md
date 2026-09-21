@@ -16,6 +16,8 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
 - [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
 - [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
+- [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
+- [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -41,24 +43,25 @@ gains nothing from a metered build slot.
 
 Table 1: GitHub Actions jobs, workflows, and runners
 
-| Job                       | Workflow                 | Runner                |
-| ------------------------- | ------------------------ | --------------------- |
-| `typecheck-test`          | `ci.yml`                 | `ubicloud-standard-2` |
-| `extension-tests`         | `ci.yml`                 | `ubicloud-standard-2` |
-| `coverage`                | `ci.yml`                 | `ubicloud-standard-2` |
-| `benchmark-ratchet`       | `ci.yml`                 | `ubicloud-standard-2` |
-| `build-pure-wheel`        | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `verify-wheel-install`    | `build-wheels.yml`       | `ubicloud-standard-2` |
-| `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
-| `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
-| `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
-| `loom-smoke`              | `ci.yml`                 | `ubuntu-latest`       |
-| `loom`                    | `loom.yml`               | `ubuntu-latest`       |
-| `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
-| `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
-| `publish`                 | `release.yml`            | `ubuntu-latest`       |
-| `delay_and_comment`       | `delayed-pr-comment.yml` | `ubuntu-latest`       |
-| `build-native-wheels`     | `build-wheels.yml`       | `${{ matrix.os }}`    |
+| Job                       | Workflow                     | Runner                |
+| ------------------------- | ---------------------------- | --------------------- |
+| `typecheck-test`          | `ci.yml`                     | `ubicloud-standard-2` |
+| `extension-tests`         | `ci.yml`                     | `ubicloud-standard-2` |
+| `coverage`                | `ci.yml`                     | `ubicloud-standard-2` |
+| `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` |
+| `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` |
+| `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` |
+| `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` |
+| `lint-test`               | `ci.yml`                     | `ubuntu-latest`       |
+| `changes`                 | `ci.yml`                     | `ubuntu-latest`       |
+| `workflow-harness`        | `benchmark-gate-harness.yml` | `ubuntu-latest`       |
+| `loom-smoke`              | `ci.yml`                     | `ubuntu-latest`       |
+| `loom`                    | `loom.yml`                   | `ubuntu-latest`       |
+| `extension-tests-windows` | `ci.yml`                     | `windows-2022`        |
+| `refresh-sha`             | `get-codescene-sha.yml`      | `ubuntu-latest`       |
+| `publish`                 | `release.yml`                | `ubuntu-latest`       |
+| `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       |
+| `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    |
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -4311,6 +4314,10 @@ only the runs that needed no explanation. When the detector did not produce a
 verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
+Each non-cancelled run also persists a durable observation, per
+[ADR-014](adr-014-benchmark-gate-telemetry-sink.md); the
+[telemetry contract](ci-benchmark-gate-telemetry.md) owns its schema.
+
 The workflow declares `concurrency: ci-${{ github.ref }}` with
 `cancel-in-progress` true only for pull requests. A superseded pull-request run
 only spends benchmark minutes on a diff nobody will merge; a cancelled `main`
@@ -4357,6 +4364,17 @@ the other does not see:
   the opposite verdict, would contain the same words. The script touches only
   `$GITHUB_STEP_SUMMARY` and its own environment variables, which is what makes
   running it outside Actions evidence rather than simulation.
+
+### Running the scenarios locally
+
+`make test-act` runs the harness scenarios; `make test` does not, since they
+need `act` 0.2.89 and a Docker or rootless Podman runtime. The target refuses
+to skip when CI demands them, and
+`.github/workflows/benchmark-gate-harness.yml` runs it weekly on GitHub-hosted
+`ubuntu-latest`, never the paid one.
+[ADR-015](adr-015-actions-runner-integration-harness.md) owns the design; the
+[local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
+owns the contract and pins.
 
 The path model handles the two pattern forms the filter is allowed to use — a
 literal path, and a `dir/**` prefix — and a companion test fails if a pattern

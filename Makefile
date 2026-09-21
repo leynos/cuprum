@@ -102,6 +102,13 @@ TEST_CARGO_BUILD_JOBS ?= 1
 # Keep pytest serial by default: each batch may compile or reuse Rust artefacts,
 # and parallel batches contend on the Cargo build cache with little benefit.
 PYTEST_WORKERS ?= 0
+# The parser half of the workflow integration harness. Deliberately separate
+# from ACT_SCENARIO_TARGETS: this half is pure string handling over recorded
+# `act` output, so it runs in the default suite on every machine. Only the
+# scenarios need a container runtime and a few minutes.
+ACT_PARSER_TARGETS ?= tests/integration/test_act_stream_parsing.py
+# The scenario half, run by `test-act` rather than by `test-python`.
+ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_native_sdist.py \
@@ -109,7 +116,8 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
-  tests/behaviour/test_[s-z]*.py
+  tests/behaviour/test_[s-z]*.py \
+  $(ACT_PARSER_TARGETS)
 # The modules gated on the compiled extension. Deliberately not the whole
 # suite: with the extension installed, test_pipeline.py trips the descriptor
 # close race in issue #124 and aborts the interpreter. One definition here,
@@ -204,7 +212,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
 .PHONY: help all clean build build-release lint python-lint rust-lint \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling nixie test test-python test-rust loom typecheck \
+        markdownlint spelling nixie test test-python test-rust loom test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
@@ -357,6 +365,20 @@ test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
+
+# The scenario half of the harness: it runs the real `changes` job under `act`
+# against a throwaway repository, one scenario at a time. It is opt-in because
+# each scenario costs 15-27s warm plus image warm-up, and because it needs a
+# container runtime that `make test` must not require. The scenarios carry
+# their own `@pytest.mark.timeout`, so the suite-wide `timeout = 30` in
+# pyproject.toml is not what keeps them out of `make test`: what does is that
+# `ACT_SCENARIO_TARGETS` is absent from `PYTEST_TARGETS`. CI runs
+# `make test-python`, so collecting them there would put a container-bound
+# scenario on a job that has no runtime. `CUPRUM_REQUIRE_ACT=1` turns a missing
+# runtime into a failure, so a job that provides one cannot report success for
+# having skipped every scenario.
+test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, requiring a container runtime
+	CUPRUM_REQUIRE_ACT=1 $(PYTEST) -v $(ACT_SCENARIO_TARGETS)
 
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
