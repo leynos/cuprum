@@ -76,7 +76,10 @@ DISALLOWED_METHODS = {
     "std::env::set_current_dir",
 }
 EXPECTED_PEDANTIC = {"level": "warn", "priority": -1}
-EXPECTED_UNEXPECTED_CFGS = {"level": "warn", "check-cfg": ["cfg(kani)"]}
+EXPECTED_UNEXPECTED_CFGS = {
+    "level": "warn",
+    "check-cfg": ["cfg(kani)", "cfg(loom)"],
+}
 EXPECTED_CLIPPY_OPTIONS = {
     "cognitive-complexity-threshold": 9,
     "too-many-arguments-threshold": 4,
@@ -153,7 +156,7 @@ def test_workspace_declares_every_required_rust_lint_at_the_expected_level() -> 
         "the audited syscall and FFI boundaries preclude a workspace-wide unsafe ban"
     )
     assert rust["unexpected_cfgs"] == EXPECTED_UNEXPECTED_CFGS, (
-        "the Kani conditional compilation contract must remain reachable"
+        "the Kani and Loom conditional compilation contracts must remain reachable"
     )
 
 

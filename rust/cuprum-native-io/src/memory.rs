@@ -18,7 +18,7 @@ pub fn with_owned_writer<R, W, T>(reader: &R, writer: W, operation: impl FnOnce(
 ///
 /// Only the Windows read/write adapter reconstructs an owner for this helper;
 /// it never exposes the owner to external callbacks that could move it out.
-#[cfg(any(windows, test, kani))]
+#[cfg(any(windows, test, kani, loom))]
 pub(crate) fn with_retained_owner<T, R>(value: T, operation: impl FnOnce(&mut T) -> R) -> R {
     let mut retained = core::mem::ManuallyDrop::new(value);
     operation(&mut retained)

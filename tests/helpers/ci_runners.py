@@ -102,9 +102,10 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 #: only, and a job that sleeps, calls an API, or publishes an artefact someone
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "ci.yml": ("lint-test", "changes"),
+    "ci.yml": ("lint-test", "changes", "loom-smoke"),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "get-codescene-sha.yml": ("refresh-sha",),
+    "loom.yml": ("loom",),
     "release.yml": ("publish",),
     # Issue379 requires verifier schedules on GitHub-hosted Linux.
     "rust-boundaries.yml": ("verus", "extended"),
@@ -122,8 +123,10 @@ CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "extension-tests",
         "coverage",
         "benchmark-ratchet",
+        "loom-smoke",
     ),
     "coverage-main.yml": ("coverage-upload",),
+    "loom.yml": ("loom",),
 }
 #: Jobs whose dependency installation runs through Make. `Makefile` pins
 #: `UV_CACHE_DIR=.uv-cache` and `UV_TOOL_DIR=.uv-tools`, so uv's standard
@@ -146,6 +149,7 @@ SCCACHE_JOBS: typ.Final = (
     ("ci.yml", "coverage"),
     ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
+    ("loom.yml", "loom"),
 )
 #: Steps in the interpreter matrix that must follow the Python suite, because
 #: without it the job compiles nothing and the wrapper would report zero
@@ -182,6 +186,7 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
         ("ci.yml", "lint-test"),
         ("ci.yml", "typecheck-test"),
         ("coverage-main.yml", "coverage-upload"),
+        ("loom.yml", "loom"),
     ),
     "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
 }
@@ -239,6 +244,10 @@ CACHE_FAMILY_WRITERS: typ.Final[
         "coverage-main.yml",
         "coverage-upload",
     ),
+    ("SCCACHE_CACHE_KEY", "github-hosted", ("3.13", "loom")): (
+        "loom.yml",
+        "loom",
+    ),
 }
 #: Keys naming the run rather than the content they hold. A compiler cache
 #: depends on the source that was compiled, which no lockfile hash captures, so
@@ -248,4 +257,4 @@ ROLLING_KEYS: typ.Final = ("SCCACHE_CACHE_KEY",)
 #: Workflow-level values that render the tool cache key. A job restoring an
 #: archive another workflow wrote can only hit while these agree.
 SHARED_KEY_INPUTS: typ.Final = ("CACHE_GENERATION", "UBUNTU_RELEASE")
-KEY_SHARING_WORKFLOWS: typ.Final = ("ci.yml", "coverage-main.yml")
+KEY_SHARING_WORKFLOWS: typ.Final = ("ci.yml", "coverage-main.yml", "loom.yml")

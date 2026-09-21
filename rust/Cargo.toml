@@ -75,7 +75,7 @@ result_large_err = "deny"
 missing_docs = "deny"
 renamed_and_removed_lints = "deny"
 unknown_lints = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(loom)"] }
 
 [workspace.lints.rustdoc]
 bare_urls = "deny"

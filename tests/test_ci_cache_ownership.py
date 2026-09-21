@@ -51,9 +51,18 @@ SAVE_GUARD_CLAUSES = (
     "github.event_name == 'push'",
     "github.ref == 'refs/heads/main'",
 )
+SAVE_EVENT_GUARDS = {"loom.yml": "github.event_name == 'schedule'"}
+DEFAULT_SAVE_EVENT_GUARD = "github.event_name == 'push'"
+BRANCH_GUARD_CLAUSE = "github.ref == 'refs/heads/main'"
 #: The additional clause a content-addressed key carries, so a run that already
 #: hit does not re-upload what it just downloaded.
 MISS_GUARD_CLAUSE = "outputs.cache-hit != 'true'"
+
+
+def _save_guard_clauses(workflow_name: str) -> list[str]:
+    """Return the event and branch guards required to save one cache family."""
+    event_guard = SAVE_EVENT_GUARDS.get(workflow_name, DEFAULT_SAVE_EVENT_GUARD)
+    return [event_guard, BRANCH_GUARD_CLAUSE]
 
 
 def _key_of(step: Step, message: str) -> str:
@@ -206,7 +215,7 @@ def test_saves_happen_only_on_trunk_and_only_after_a_miss() -> None:
             )
             collapsed = " ".join(condition.split())
             message = f"{workflow_name}:{job_name} save must declare inputs"
-            required = list(SAVE_GUARD_CLAUSES)
+            required = _save_guard_clauses(workflow_name)
             if _key_name(_key_of(step, message)) not in ROLLING_KEYS:
                 required.append(MISS_GUARD_CLAUSE)
             missing = [clause for clause in required if clause not in collapsed]

@@ -52,6 +52,8 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `coverage-upload`         | `coverage-main.yml`      | `ubicloud-standard-2` |
 | `lint-test`               | `ci.yml`                 | `ubuntu-latest`       |
 | `changes`                 | `ci.yml`                 | `ubuntu-latest`       |
+| `loom-smoke`              | `ci.yml`                 | `ubuntu-latest`       |
+| `loom`                    | `loom.yml`               | `ubuntu-latest`       |
 | `extension-tests-windows` | `ci.yml`                 | `windows-2022`        |
 | `refresh-sha`             | `get-codescene-sha.yml`  | `ubuntu-latest`       |
 | `publish`                 | `release.yml`            | `ubuntu-latest`       |
@@ -149,13 +151,14 @@ No job in this repository archives `target`, `rust/target`, or
 oversight, and a contract test enforces it.
 
 sccache is the single owner of compiler output for every build shape. The
-repository produces three: the objects the lint gate builds through its
+repository produces five: the objects the lint gate builds through its
 alternative code generator and linker, the ordinary debug objects the test
-gates build, and the `-C instrument-coverage` objects the coverage gate builds.
-sccache hashes the compiler flags into its cache key, so all three coexist in
-one store without colliding; run 33677926269 recorded zero non-cacheable
-compilations with the cranelift-built Whitaker lints, and Whitaker's
-instrumented coverage build reports the same.
+gates build, the release objects the benchmark gate builds, the
+`-C instrument-coverage` objects the coverage gate builds, and the `--cfg loom`
+objects the model checks build. sccache hashes the compiler flags into its
+cache key, so all five coexist in one store without colliding; run 33677926269
+recorded zero non-cacheable compilations with the cranelift-built Whitaker
+lints, and Whitaker's instrumented coverage build reports the same.
 
 A `target` tree, by contrast, is invalidated by any source change, so its
 archive is rewritten far more often than the registry it would sit beside and
@@ -216,7 +219,9 @@ measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
 own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
 `coverage-upload` writes the instrumented one, and `lint-test` writes the
-GitHub-hosted lint family.
+GitHub-hosted lint family. The scheduled `loom.yml` job writes its separate
+model family only on `refs/heads/main`, while manual dispatches and
+`loom-smoke` restore it without saving.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged
@@ -261,8 +266,8 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)         | 3.13   | **the only run**, instrumented | full collection        | absent    |
 | `typecheck-test` 3.12, 3.14, 3.15a | each   | none                           | `make test-python`     | absent    |
 | `typecheck-test` 3.13              | 3.13   | none                           | none, coverage runs it | absent    |
-| `extension-tests`                  | 3.13   | none                           | 12 gated modules       | **built** |
-| `extension-tests-windows`          | 3.13   | none                           | 12 gated modules       | **built** |
+| `extension-tests`                  | 3.13   | none                           | 13 gated modules       | **built** |
+| `extension-tests-windows`          | 3.13   | none                           | 13 gated modules       | **built** |
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
@@ -3111,6 +3116,59 @@ Rust-level tests for safe stream policy live with `cuprum-streams` under
 decoder, parsing, state-machine, and adapter logic where Python integration
 tests would only cover a few examples.
 
+### Loom native-pump lifecycle models
+
+The native-pump hand-off crosses the Python event loop, an executor worker, and
+a completion callback. The bounded model in `rust/cuprum-rust/tests/loom.rs`
+represents those actors explicitly and maps each resource and transition to
+production code in [Native-pump Loom model](design-loom-native-pump-model.md).
+It uses Loom's replacement mutex, atomics, cell, and thread primitives for the
+modelled state, then reuses the production `pump_machine::advance` transition
+function and the `with_borrowed_reader` `ManuallyDrop` ownership model. It does
+not introduce concurrency primitives into the synchronous production
+splice/read-write loop.
+
+Run the full bounded set locally with:
+
+```bash
+make loom
+```
+
+The driver first lists the dedicated `--test loom` target, then executes it with
+`RUSTFLAGS="--cfg loom -D warnings"`. It rejects a zero discovered or executed
+count, so a dependency-only or `--no-run` check cannot look healthy. The
+regular smoke lane uses at most two pre-emptions, 300 branches, and four
+threads; `.github/workflows/loom.yml` uses three pre-emptions, 2,000 branches,
+and four threads. The full lane runs every day at 17:15 UTC and on manual
+dispatch. To reproduce a bounded counterexample, pass all three explicit
+overrides, such as:
+
+```bash
+uv run scripts/run_loom.py --mode full --max-preemptions 3 --max-branches 2000 --max-threads 4
+```
+
+UTC is deliberate: the slot does not preserve a Europe/London wall-clock time
+through daylight-saving transitions.
+
+Loom's compiler cache uses the `loom` build shape and its own sccache family.
+The full schedule is the sole writer; pull-request smoke runs restore that
+family. A full run writes `loom-summary.md` to the Actions summary with the
+commit, Rust tool versions, selected mode, actual test count, bounds, and
+elapsed time. On a failure, retain the command output and reproduce with the
+same `LOOM_MAX_PREEMPTIONS`, `LOOM_MAX_BRANCHES`, and `LOOM_MAX_THREADS`; Loom
+also supports `LOOM_CHECKPOINT_FILE`, `LOOM_LOG=trace`, and `LOOM_LOCATION=1`
+to isolate a counterexample. Triage the failed workflow in the normal CI
+failure path; it deliberately creates no duplicate issues.
+
+The claim is limited. These are safety checks over bounded interleavings of the
+modelled ownership state: one closer owns the duplicate writer, the reader
+stays borrowed, and cleanup cannot release resources while the worker is
+active. They do not verify kernel I/O, asyncio, the GIL, uninstrumented Rust,
+or third-party internals. They also do not prove liveness: an actual blocking
+read can fail to return, and Loom does not assume an unfair scheduler will run
+an actor. Loom complements the existing Verus/Kani and Miri work and the native
+and Python integration regressions; it does not replace them.
+
 Property tests use [proptest](https://docs.rs/proptest/latest/proptest/) as a
 development dependency. Prefer generated payloads and small helper functions
 that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
@@ -3330,6 +3388,7 @@ Table 1: modules gated on the compiled extension
 | `test_rust_errno.py`                               | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
 | `test_rust_errno_windows.py`                       | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
 | `test_backend.py`                                  | the extension-dependent backend-selection cases                                                                                                                      |
+| `test_loom_model_conformance.py`                   | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
 | `test_extension_requirement_guard.py`              | the fail-loud guard itself                                                                                                                                           |
 | `tests/behaviour/test_rust_streams_behaviour.py`   | the consumer-facing pump and consume scenarios                                                                                                                       |
 | `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module                                                                                                               |
