@@ -1,4 +1,4 @@
-# Debugging plan: stabilise native pipeline hand-off
+# Debugging plan: stabilize native pipeline hand-off
 
 - Generated: 2026-09-21.
 - Issue: [#425](https://github.com/leynos/cuprum/issues/425).
@@ -55,7 +55,7 @@ separate 400-attempt probe, eight hangs occurred at load averages 2.89–3.26 on
 six cores; the slowest healthy attempt took 0.018 seconds. The observed state
 therefore supports a missed close, not host starvation.
 
-`fd_delta` and `thread_delta` are external telemetry that characterise a
+`fd_delta` and `thread_delta` are external telemetry that characterize a
 failure. They are not repository metrics and do not determine the verdict.
 
 ## Related work
