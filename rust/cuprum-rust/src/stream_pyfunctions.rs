@@ -61,9 +61,18 @@ pub(super) fn rust_pump_stream(
         let writer = unsafe { cuprum_native_io::adopt_writer(writer_raw) };
         Ok(move |reader: ReaderFd, validated_buffer_size| {
             // SAFETY: Python keeps the paused reader transport alive until
-            // the worker and cleanup finish, including cancellation.
+            // the worker and cleanup finish, including cancellation. On
+            // Windows, the hand-off also establishes synchronous I/O; the
+            // Python pipeline rejects Proactor overlapped handles.
             let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
-            pump_stream(&source, writer, validated_buffer_size)
+            #[cfg(unix)]
+            {
+                pump_stream(&source, writer, validated_buffer_size)
+            }
+            #[cfg(windows)]
+            {
+                pump_stream(source, writer, validated_buffer_size)
+            }
         })
     })
 }
@@ -94,8 +103,16 @@ pub(super) fn rust_consume_stream(
         Ok(|reader: ReaderFd, size| {
             // SAFETY: the Python consume caller retains its reader throughout
             // this synchronous native call, including the GIL-free interval.
+            // Windows calls additionally establish non-overlapped I/O.
             let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
-            consume_stream(&source, size)
+            #[cfg(unix)]
+            {
+                consume_stream(&source, size)
+            }
+            #[cfg(windows)]
+            {
+                consume_stream(source, size)
+            }
         })
     })
 }
