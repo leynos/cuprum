@@ -65,7 +65,7 @@ def main() -> int:
     cluster_dir = project_root / "infra" / "clusters" / "dev"
     context = ExecutionContext(cwd=cluster_dir.as_posix())
 
-    with scoped(allowlist=CATALOGUE.allowlist):
+    with scoped(catalogue=CATALOGUE):
         result = tofu("plan").run_sync(context=context)
     if not result.ok:
         print(result.stderr.rstrip())
@@ -145,7 +145,7 @@ def main(
 
     build_dir.mkdir(parents=True, exist_ok=True)
     context = ExecutionContext(cwd=build_dir.as_posix())
-    with scoped(allowlist=CATALOGUE.allowlist):
+    with scoped(catalogue=CATALOGUE):
         result = tofu("plan").run_sync(context=context)
     if not result.ok:
         raise SystemExit(result.exit_code)
@@ -228,7 +228,7 @@ each program.
 ```python
 from cuprum import scoped
 
-with scoped(allowlist=CATALOGUE.allowlist):
+with scoped(catalogue=CATALOGUE):
     result = git("--no-pager", "log", "-1", "--pretty=%H").run_sync()
 
 if not result.ok:
@@ -273,7 +273,7 @@ if not result.ok:
 ```python
 from cuprum import scoped
 
-with scoped(allowlist=CATALOGUE.allowlist):
+with scoped(catalogue=CATALOGUE):
     pipeline_result = (git("--no-pager", "log", "--oneline") | grep("fix")).run_sync()
 
 if pipeline_result.failure is not None:
@@ -385,7 +385,7 @@ def main(
 
     if not dry_run:
         context = ExecutionContext(cwd=project_root.as_posix())
-        with scoped(allowlist=CATALOGUE.allowlist):
+        with scoped(catalogue=CATALOGUE):
             result = git("tag", f"v{version}").run_sync(
                 context=context,
                 output=RunOutputOptions(echo=True),

@@ -268,7 +268,7 @@ def _catalogue_scope() -> contextlib.AbstractContextManager[object]:
             "cabc.Callable[..., contextlib.AbstractContextManager[object]]", scoped
         )
         return legacy_scoped(allowlist=CATALOGUE.allowlist)
-    return scoped(ScopeConfig(allowlist=CATALOGUE.allowlist))
+    return scoped(catalogue=CATALOGUE)
 
 
 def _run(command: SafeCmd, *, environment: dict[str, str]) -> CommandResult:

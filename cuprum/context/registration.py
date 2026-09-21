@@ -11,6 +11,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum.context.env_overlay import _coerce_env_overlay
+from cuprum.context.scoped import scoped
 from cuprum.context.state import _reset_context, _set_context, current_context
 
 if typ.TYPE_CHECKING:
@@ -21,59 +22,9 @@ if typ.TYPE_CHECKING:
         AfterHook,
         BeforeHook,
         CuprumContext,
-        ScopeConfig,
     )
     from cuprum.events import ExecHook
     from cuprum.program import Program
-
-
-class _ScopedContext:
-    """Context manager for entering a scoped execution context."""
-
-    __slots__ = ("_ctx", "_token")
-
-    def __init__(self, config: ScopeConfig) -> None:
-        """Narrow the current context with ``config`` for later entry."""
-        parent = current_context()
-        self._ctx = parent.narrow(config)
-        self._token: Token[CuprumContext] | None = None
-
-    def __enter__(self) -> CuprumContext:
-        """Activate the scoped context and return it."""
-        self._token = _set_context(self._ctx)
-        return self._ctx
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Restore the previous context on scope exit."""
-        if self._token is not None:
-            _reset_context(self._token)
-
-
-def scoped(config: ScopeConfig) -> _ScopedContext:
-    """Create a scoped context manager for narrowed execution.
-
-    Parameters
-    ----------
-    config:
-        Scope configuration describing allowlist and hook updates.
-
-    Returns
-    -------
-    _ScopedContext
-        A context manager that narrows the current context.
-
-    Example
-    -------
-    >>> with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
-    ...     assert ctx.is_allowed(ECHO)
-
-    """
-    return _ScopedContext(config)
 
 
 class _TokenRegistration:

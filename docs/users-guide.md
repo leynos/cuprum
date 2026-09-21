@@ -259,7 +259,6 @@ from cuprum import (
     Program,
     ProgramCatalogue,
     ProjectSettings,
-    ScopeConfig,
     scoped,
     sh,
 )
@@ -281,7 +280,7 @@ pipeline = echo("-n", "hello") | python(
     "import sys; sys.stdout.write(sys.stdin.read().upper())",
 )
 
-with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+with scoped(catalogue=catalogue):
     result = pipeline.run_sync()
 
 print(result.stdout)  # "HELLO"
@@ -1006,9 +1005,9 @@ Cuprum provides `CuprumContext` to scope allowlists and execution hooks.
 Contexts are backed by a `ContextVar`, which provides automatic isolation
 across threads and async tasks.
 
-**Upgrade note (v0.2.0):** `scoped()` now accepts a single `ScopeConfig`
-argument instead of keyword parameters. Use
-`with scoped(ScopeConfig(allowlist=...))`.
+**Upgrade note (v0.2.0):** `scoped()` accepts a `ScopeConfig` argument instead
+of direct keyword parameters. To scope a command to a `ProgramCatalogue`, use
+`with scoped(catalogue=catalogue)`.
 
 See the [0.2.0 migration guide](migration-0.2.0.md) for the optional aggregate
 Python stream-operation observation API.
@@ -1032,10 +1031,11 @@ permits no programs.
 ### Scoped contexts
 
 Use `scoped(ScopeConfig(allowlist=...))` to establish a narrowed execution
-context within a code block:
+context within a code block. When the allowlist is exactly a
+`ProgramCatalogue`'s curated programs, use `scoped(catalogue=...)` instead:
 
 ```python
-from cuprum import ECHO, LS, ScopeConfig, scoped
+from cuprum import ECHO, LS, ProgramCatalogue, ScopeConfig, scoped
 
 # Start with a base allowlist
 with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as ctx:
@@ -1046,6 +1046,11 @@ with scoped(ScopeConfig(allowlist=frozenset([ECHO, LS]))) as ctx:
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner:
         assert inner.is_allowed(ECHO)  # True
         assert inner.is_allowed(LS)  # False (narrowed out)
+
+# Derive the allowlist from one catalogue.
+catalogue = ProgramCatalogue.from_programs(ECHO, LS)
+with scoped(catalogue=catalogue) as ctx:
+    assert ctx.allowlist == catalogue.allowlist
 ```
 
 Key properties of `scoped(ScopeConfig())`:
@@ -1766,7 +1771,6 @@ from cuprum import (
     Program,
     ProgramCatalogue,
     ProjectSettings,
-    ScopeConfig,
     observe_pump_span,
     scoped,
     sh,
@@ -1789,7 +1793,7 @@ pipeline = echo("-n", "hello") | python(
 )
 
 tracer = InMemoryTracer()
-with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+with scoped(catalogue=catalogue):
     with observe_pump_span(tracer):
         pipeline.run_sync()
 
