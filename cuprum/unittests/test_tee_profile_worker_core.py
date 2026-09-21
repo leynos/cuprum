@@ -28,11 +28,8 @@ def _assert_positive_stream_telemetry(
     """Assert observed telemetry uses only the closed vocabulary and totals."""
     telemetry = result["stream_telemetry"]
     groups = telemetry["groups"]
-    assert expected_operations <= {
-        StreamOperation(operation) for operation in groups
-    }, f"expected telemetry groups {expected_operations}, got {groups}"
-    assert set(groups) <= {operation.value for operation in StreamOperation}, (
-        f"telemetry must use only closed operation labels, got {groups}"
+    assert set(groups) == {operation.value for operation in expected_operations}, (
+        f"expected telemetry groups {expected_operations}, got {groups}"
     )
     for expected_operation in expected_operations:
         assert groups.get(expected_operation.value), (
