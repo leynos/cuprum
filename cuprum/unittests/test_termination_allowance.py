@@ -145,4 +145,9 @@ def test_the_widest_configured_grace_period_is_the_allowance(
     path.write_text(_config(*clauses), encoding="utf-8")
     monkeypatch.setattr(support, "nextest_config_path", lambda: path)
 
-    assert support.termination_allowance_seconds() == expected
+    allowance = support.termination_allowance_seconds()
+    assert allowance == expected, (
+        f"the reader reported {allowance} s for a configuration declaring "
+        f"the profile clause {clauses[0]!r} and the override clause "
+        f"{clauses[1]!r}, not the {expected} s those clauses justify"
+    )
