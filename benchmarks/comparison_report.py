@@ -217,13 +217,28 @@ def load_ratchet_report(path: pth.Path) -> RatchetStatus:
     return _ratchet_passed_status(report)
 
 
+def _render_size(size: int) -> str:
+    """Return *size* as a whole MiB count, or a whole KiB count below 1 MiB.
+
+    The unit is chosen per size rather than once for the whole payload list:
+    the throughput sweep's smallest tier is 1 KB, so scaling every size to MiB
+    would render that tier as ``0`` and misdescribe the payload the ratios
+    beneath it were measured at.
+    """
+    mib = 1024 * 1024
+    if size >= mib:
+        return f"{size / mib:.0f} MiB"
+    return f"{size / 1024:.0f} KiB"
+
+
 def describe_protocol(protocol: WorkloadProtocol) -> str:
     """Return a one-line summary of a workload and the protocol it recorded.
 
     Only the metadata the plan actually carried is named. A plan that omits a
     field is summarized without it rather than with a default, because a
     default here would state a measurement protocol as fact when nothing
-    recorded it.
+    recorded it. Each payload size is rendered in the unit that keeps it
+    legible, so a tier below 1 MiB is not rounded away to nothing.
 
     Parameters
     ----------
@@ -245,19 +260,17 @@ def describe_protocol(protocol: WorkloadProtocol) -> str:
     ...         payload_bytes=(1024,),
     ...     )
     ... )
-    'the ci-ratchet workload, payload 0 MiB, 5 worker iterations'
+    'the ci-ratchet workload, payload 1 KiB, 5 worker iterations'
     """
     parts = [f"the {protocol.workload} workload"]
     if protocol.profile_version is not None:
         parts.append(f"profile {protocol.profile_version}")
     if protocol.payload_bytes:
-        sizes = "/".join(
-            f"{size / (1024 * 1024):.0f}" for size in protocol.payload_bytes
-        )
+        sizes = "/".join(_render_size(size) for size in protocol.payload_bytes)
         parts.append(
-            f"payload {sizes} MiB"
+            f"payload {sizes}"
             if len(protocol.payload_bytes) == 1
-            else f"payloads {sizes} MiB"
+            else f"payloads {sizes}"
         )
     if protocol.worker_iterations is not None:
         parts.append(f"{protocol.worker_iterations} worker iterations")

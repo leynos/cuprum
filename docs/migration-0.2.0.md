@@ -228,8 +228,8 @@ means, so a runner-to-runner swing in that fixed cost could move the ratio past
 the threshold on its own — the false positive reported against
 [PR #158](https://github.com/leynos/cuprum/pull/158).
 
-If you reproduce the ratchet locally, or compare against recorded history, note
-what changed:
+A local ratchet reproduction, or a comparison against recorded history, turns
+on what changed:
 
 - `BENCHMARK_PROFILE_VERSION` is now `pipeline-worker-release-ratio-v5`. The
   payload and iteration changes are sampling-protocol changes, so the version

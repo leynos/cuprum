@@ -657,13 +657,23 @@ def _sweep_protocol(
             id="nothing-recorded",
         ),
         pytest.param(
+            _sweep_protocol(payload_bytes=(1024,)),
+            "the throughput-sweep workload, payload 1 KiB",
+            id="one-sub-mib-payload",
+        ),
+        pytest.param(
+            _sweep_protocol(payload_bytes=(64 * 1024, 1024 * 1024)),
+            "the throughput-sweep workload, payloads 64 KiB/1 MiB",
+            id="mixed-units",
+        ),
+        pytest.param(
             _sweep_protocol(payload_bytes=(1024 * 1024,)),
             "the throughput-sweep workload, payload 1 MiB",
             id="one-payload",
         ),
         pytest.param(
             _sweep_protocol(payload_bytes=(1024 * 1024, 4 * 1024 * 1024)),
-            "the throughput-sweep workload, payloads 1/4 MiB",
+            "the throughput-sweep workload, payloads 1 MiB/4 MiB",
             id="several-payloads",
         ),
         pytest.param(
@@ -707,5 +717,12 @@ def test_protocol_description_names_the_recorded_measurement(
     difference. The full ordering is asserted rather than the fields'
     presence, because a reordered sentence makes a different claim about what
     was and was not varied.
+
+    The sub-MiB and mixed-unit rows guard the rendering of the sizes
+    themselves: the default sweep plans a 1 KB tier, and scaling every size to
+    MiB rounded that tier to "0", which states a payload the plan did not
+    measure. Choosing the unit per size keeps a small tier legible and lets one
+    line carry both units. Both rows assert the exact text, so a formatter that
+    silently reverted to a single shared unit fails here.
     """
     assert describe_protocol(protocol) == expected
