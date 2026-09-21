@@ -395,22 +395,10 @@ test-markdown-format: ## Validate the Markdown formatting Makefile contract
 lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
 
 $(PYPY312_PYTHON):
-	@set -eu; \
-	if test "$(shell uname -s)" != Linux || test "$(shell uname -m)" != x86_64; then \
-		printf '%s\n' 'PyPy 8.0.0 Python 3.12 linting is supported only on Linux x86_64' >&2; \
-		exit 1; \
-	fi; \
-	mkdir -p "$(dir $(PYPY312_ROOT))"; \
-	if test ! -f "$(PYPY312_ARCHIVE_PATH)"; then \
-		curl --fail --location --show-error --output "$(PYPY312_ARCHIVE_PATH)" "$(PYPY312_URL)"; \
-	fi; \
-	printf '%s  %s\n' "$(PYPY312_SHA256)" "$(PYPY312_ARCHIVE_PATH)" | sha256sum --check --; \
-	if test -d "$(PYPY312_ROOT)"; then \
-		test -x "$(PYPY312_PYTHON)" || { printf '%s\n' 'PyPy extraction is incomplete; remove .pypy and retry' >&2; exit 1; }; \
-	else \
-		tar -xzf "$(PYPY312_ARCHIVE_PATH)" -C "$(dir $(PYPY312_ROOT))"; \
-	fi; \
-	test -x "$(PYPY312_PYTHON)"
+	PYPY312_URL="$(PYPY312_URL)" PYPY312_SHA256="$(PYPY312_SHA256)" \
+		PYPY312_ARCHIVE_PATH="$(PYPY312_ARCHIVE_PATH)" PYPY312_ROOT="$(PYPY312_ROOT)" \
+		PYPY312_PYTHON="$(PYPY312_PYTHON)" $(UV_RUN_ENV) \
+		uv run --no-project --python 3.13 -m scripts.install_pypy312
 
 pypy312: $(PYPY312_PYTHON) ## Install the checksum-verified PyPy 8.0.0 Python 3.12 linter
 

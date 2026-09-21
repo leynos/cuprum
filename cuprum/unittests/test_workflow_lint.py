@@ -279,8 +279,13 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     )
     overrides = tmp_path / "lint-target-overrides.mk"
     overrides.write_text(
-        ".PHONY: python-lint lint-clippy lint-whitaker spelling\n"
-        "python-lint:\n\t@:\n"
+        # Stubbing a target suppresses its recipe but not its prerequisites, so
+        # the merged lint graph needs a stub for each heavy target it reaches.
+        # dev-fast-check and the Pylint verification targets stay real: they are
+        # the cheap probes whose invocations are asserted below, and stubbing a
+        # parent does not spare them.
+        ".PHONY: python-lint rust-lint lint-clippy lint-whitaker spelling\n"
+        "python-lint:\n\t@:\nrust-lint:\n\t@:\n"
         "lint-clippy:\n\t@:\n"
         "lint-whitaker:\n\t@:\n"
         "spelling:\n\t@:\n",
