@@ -15,6 +15,8 @@ import os
 import threading
 import typing as typ
 
+import pytest
+
 from cuprum.unittests._rust_stream_test_support import _safe_close
 from tests.helpers.stream_pipes import (
     _pipe_pair,
@@ -25,6 +27,12 @@ from tests.helpers.stream_pipes import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
 
 
 class TestSpliceOptimization:

@@ -180,7 +180,9 @@ precondition from known `CreatePipe` resources or from the audited unsafe
 query that can recover this creation-time mode from a bare handle, so the
 unsafe caller must establish it explicitly. Python's Proactor fallback remains
 in place for its overlapped subprocess handles until a separately designed
-overlapped-I/O adapter exists.
+overlapped-I/O adapter exists. The PyO3 raw-handle helpers reject Windows calls
+because their safe Python inputs cannot establish the capability; they consume
+an explicitly transferred writer without attempting synchronous I/O.
 
 [#80]: https://github.com/leynos/cuprum/issues/80
 [#81]: https://github.com/leynos/cuprum/issues/81

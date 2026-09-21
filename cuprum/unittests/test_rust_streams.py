@@ -63,6 +63,11 @@ _DECODE_BUFFER_SIZES = st.one_of(
     st.integers(min_value=9, max_value=1 << 16),
 )
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
+
 
 @pytest.mark.parametrize(
     ("test_id", "payload", "buffer_size"),
