@@ -52,7 +52,14 @@ class Verdict:
     decision: str
 
     def as_inputs(self) -> dict[str, str]:
-        """Return the verdict as the log step's environment inputs."""
+        """Return the verdict as the log step's environment inputs.
+
+        Returns
+        -------
+        dict[str, str]
+            Environment-variable names mapped to this verdict's field values,
+            in the order the log step consumes them.
+        """
         return dict(
             zip(
                 VALUE_INPUTS,
@@ -62,7 +69,14 @@ class Verdict:
         )
 
     def as_labels(self) -> dict[str, str]:
-        """Return the three fields under their stored label names."""
+        """Return the three fields under their stored label names.
+
+        Returns
+        -------
+        dict[str, str]
+            Stored label names mapped to this verdict's field values, ready to
+            be written as the record's closed label set.
+        """
         return dict(
             zip(
                 LABEL_NAMES,
@@ -123,7 +137,24 @@ def log_script(workflow_data: Workflow) -> str:
 
 
 def log_env(workflow_data: Workflow) -> dict[str, object]:
-    """Return the log writer's validated environment mapping."""
+    """Return the log writer's validated environment mapping.
+
+    Parameters
+    ----------
+    workflow_data : tests.helpers.workflow.Workflow
+        Parsed CI workflow under test.
+
+    Returns
+    -------
+    dict[str, object]
+        The log step's declared environment, which must supply the gate output
+        inputs the writer reads.
+
+    Raises
+    ------
+    AssertionError
+        If the log step declares no environment mapping.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by mapping()
     return mapping(
         step_named(workflow_data, CHANGES_JOB, LOG_STEP).get("env"),
         "the decision log step must declare its gate output inputs",

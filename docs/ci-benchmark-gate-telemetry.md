@@ -121,6 +121,7 @@ python - <<'PY'
 from collections import Counter
 from pathlib import Path
 import csv
+import datetime as dt
 import html
 import json
 
@@ -171,6 +172,15 @@ for path in sorted(Path("logs").rglob("*.jsonl")):
         recorded_at = record.get("recorded_at")
         if not isinstance(recorded_at, str) or not recorded_at.endswith("Z"):
             raise ValueError(f"{path}:{line_number}: recorded_at must be UTC")
+        # The suffix check alone accepts `not-a-timeZ`, so the value is parsed
+        # before use. `fromisoformat` in Python 3.11 and later reads the `Z`
+        # suffix directly; the `+00:00` rewrite keeps the recipe working on the
+        # older interpreters a reader may still be running.
+        try:
+            dt.datetime.fromisoformat(f"{recorded_at[:-1]}+00:00")
+        except ValueError as error:
+            message = f"{path}:{line_number}: recorded_at must be UTC"
+            raise ValueError(message) from error
         identity = (record.get("run_id"), record.get("run_attempt"))
         if not all(
             isinstance(value, str) and value.isascii() and value.isdecimal()
