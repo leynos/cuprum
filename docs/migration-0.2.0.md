@@ -40,6 +40,28 @@ available, `from_project()` removes the repeated
 `ProgramCatalogue(projects=(settings,))` wrapper; existing catalogue
 construction remains compatible.
 
+## `CommandResult` execution measurements
+
+`CommandResult` now exposes `started_at` as a wall-clock timestamp and
+`duration` as elapsed monotonic seconds. The fields default to `0.0`, so code
+that constructs a result with the existing six positional arguments remains
+compatible. Results returned by command execution include measured values.
+
+On Linux and macOS, a direct command's sole child-reap owner uses `wait4` to
+obtain that child's user CPU time, system CPU time, and maximum RSS. Linux
+`ru_maxrss` is converted from KiB to bytes; macOS reports bytes directly. RSS
+is not calculated by subtracting process-global `RUSAGE_CHILDREN` snapshots. On
+platforms without the child-specific wait interface, CPU fields may use the
+aggregate POSIX fallback and are approximate when commands run concurrently;
+maximum RSS is unavailable. Windows and platforms without child-resource
+accounting return `None` for all three resource fields. Pipeline stages also
+return `None` for all resource fields because concurrent child reaping cannot
+attribute usage safely to an individual stage.
+
+Consumers that serialize or display these optional fields should preserve
+`None` as unavailable and should treat `user_cpu_seconds` and
+`system_cpu_seconds` as approximate when the aggregate fallback is in use.
+
 ## Aggregate Python stream-operation observation
 
 Cuprum 0.2.0 adds an opt-in observation channel for completed operations in the

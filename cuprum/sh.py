@@ -140,6 +140,31 @@ class CommandResult:
         Captured standard output, or ``None`` when capture was disabled.
     stderr:
         Captured standard error, or ``None`` when capture was disabled.
+    started_at:
+        Wall-clock timestamp at which process execution started.
+    duration:
+        Monotonic process duration in seconds.
+    max_rss_bytes:
+        Peak resident set size of the executed child in bytes. Direct commands
+        on Linux and macOS report this from the platform ``wait4`` call, which
+        attributes the figure to that one child; Linux reports KiB and macOS
+        bytes, both normalized to bytes here. It is never derived from the
+        process-global ``RUSAGE_CHILDREN`` high-water mark, which cannot be
+        attributed safely to one command. ``None`` on Windows, on platforms
+        without the child-specific interface, and for every pipeline stage,
+        whose concurrently reaped children cannot be separated.
+    user_cpu_seconds:
+        User CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
+    system_cpu_seconds:
+        System CPU time consumed by the executed child in seconds. Direct
+        commands on Linux and macOS report this from ``wait4``; elsewhere the
+        aggregate ``RUSAGE_CHILDREN`` fallback may supply it, and those deltas
+        are approximate under ``run_concurrent``. ``None`` on Windows, on
+        platforms without child resource accounting, and for pipeline stages.
     relay_fallbacks:
         Handled echo-disablement records from this command's own streams, one
         per affected drain in stdout-then-stderr order. The ordering does not
@@ -155,6 +180,17 @@ class CommandResult:
     pid: int
     stdout: str | None
     stderr: str | None
+    # ``kw_only`` so the seventh positional slot stays ``relay_fallbacks``,
+    # which main established and ``test_public_api`` pins. Without it the
+    # measurements would take positional slots ahead of it and a
+    # seven-argument call would silently bind a relay tuple into
+    # ``started_at``. Declared after ``stderr`` so the measurements read
+    # beside the other captured-output fields in the generated signature.
+    started_at: float = dc.field(default=0.0, kw_only=True)
+    duration: float = dc.field(default=0.0, kw_only=True)
+    max_rss_bytes: int | None = dc.field(default=None, kw_only=True)
+    user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
+    system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
 
     @property

@@ -150,6 +150,12 @@ def structured_logging_hook(
       stage and the pipeline width (for pipeline_fail_fast events)
     - ``cuprum_eof_grace_s`` / ``cuprum_pending_readers``: Fixed grace duration
       and pending-reader count (for capture_eof_grace_expired events)
+    - ``cuprum_max_rss_bytes`` / ``cuprum_user_cpu_seconds`` /
+      ``cuprum_system_cpu_seconds`` / ``cuprum_resource_usage_mode``: Child
+      resource measurements and the mode naming their source. The mode is
+      carried on every terminal exit event — ``wait4_child``,
+      ``aggregate_cpu_delta``, or ``unavailable`` — while the three figures
+      are present only where a source produced them
 
     The adapter projects selected execution fields into log extras; it does
     not emit the full tags mapping.

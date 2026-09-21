@@ -188,6 +188,10 @@ class _CounterOp:
 
     name: str
     value: float
+    #: Extra labels merged over the event's common ones. Only the resource
+    #: operations set this: the accounting mode is meaningful for the resource
+    #: metrics and would be an ``unknown``-valued column on every other one.
+    labels: cabc.Mapping[str, str] = dc.field(default_factory=dict)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -196,6 +200,8 @@ class _HistogramOp:
 
     name: str
     value: float
+    #: Extra labels, as on :class:`_CounterOp`.
+    labels: cabc.Mapping[str, str] = dc.field(default_factory=dict)
 
 
 type _MetricOp = _CounterOp | _HistogramOp
@@ -215,8 +221,54 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
 })
 
 
+def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return the resource-measurement ops for a terminal ``exit`` event."""
+    operations: list[_MetricOp] = []
+    mode = event.resource_usage_mode
+    if mode is None:
+        return ()
+    # Rendered, not passed through: the mode is a ``StrEnum``, and the label
+    # must reach the collector as the plain string that appears in the series
+    # an operator filters on rather than as the member's ``repr``.
+    labels = {"resource_usage_mode": str(mode)}
+    # The counter is emitted whenever a mode is recorded, the ``unavailable``
+    # case included: that it is worth counting at all is the one signal a bare
+    # absence of resource samples cannot carry.
+    operations.append(
+        _CounterOp("cuprum_resource_usage_measurements_total", 1.0, labels)
+    )
+    # Each figure yields a histogram only where it was actually measured, so an
+    # unmeasured platform contributes no samples rather than a stream of zeros
+    # that would drag every percentile toward it.
+    if event.max_rss_bytes is not None:
+        operations.append(
+            _HistogramOp(
+                "cuprum_child_max_rss_bytes",
+                float(event.max_rss_bytes),
+                labels,
+            )
+        )
+    if event.user_cpu_seconds is not None:
+        operations.append(
+            _HistogramOp(
+                "cuprum_child_user_cpu_seconds",
+                event.user_cpu_seconds,
+                labels,
+            )
+        )
+    if event.system_cpu_seconds is not None:
+        operations.append(
+            _HistogramOp(
+                "cuprum_child_system_cpu_seconds",
+                event.system_cpu_seconds,
+                labels,
+            )
+        )
+    return tuple(operations)
+
+
 def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
-    """Return the failure counter and duration histogram ops for an exit event."""
+    """Return the failure, duration, and resource ops for an exit event."""
     operations: list[_MetricOp] = []
     # A failure counter is produced only for a known non-zero exit code, and
     # a duration observation only when a duration was measured; a clean exit
@@ -225,7 +277,7 @@ def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
         operations.append(_CounterOp("cuprum_failures_total", 1.0))
     if event.duration_s is not None:
         operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
-    return tuple(operations)
+    return (*operations, *_resource_operations(event))
 
 
 def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
@@ -274,8 +326,20 @@ class MetricsHook:
       expiries with readers still pending
     - ``cuprum_pipeline_fail_fast_total``: Counter of pipelines terminated
       early after their first non-final stage failure
+    - ``cuprum_resource_usage_measurements_total``: Counter of terminal events
+      that reported how their child's resource figures were obtained
+    - ``cuprum_child_max_rss_bytes``: Histogram of per-child maximum RSS, from
+      the attributable ``wait4`` path only
+    - ``cuprum_child_user_cpu_seconds``: Histogram of child user CPU time
+    - ``cuprum_child_system_cpu_seconds``: Histogram of child system CPU time
 
-    All metrics include ``program`` and ``project`` labels.
+    All metrics include ``program`` and ``project`` labels. The three resource
+    histograms and their counter additionally carry a low-cardinality
+    ``resource_usage_mode`` label naming their source — ``wait4_child``,
+    ``aggregate_cpu_delta``, or ``unavailable`` — so a run that measures
+    nothing is distinguishable from one that measured a small value. The
+    histograms are observed only where the figure was actually measured; the
+    counter is emitted for every recorded mode, including ``unavailable``.
 
     Parameters
     ----------
@@ -318,18 +382,22 @@ class MetricsHook:
 
         Notes
         -----
-        An ``exit`` event can yield two operations — a failure counter and a
-        duration observation — applied as two independent collector calls, in
-        that order. There is no atomicity across them, and none is attempted:
-        the collector wraps an arbitrary backend (``prometheus_client``,
-        statsd, OpenTelemetry), and this adapter cannot make two writes to such
-        a backend transactional. Buffering them to apply together would only
-        move the problem, while delaying when metrics appear.
+        An ``exit`` event can yield up to six operations, applied as
+        independent collector calls in a fixed order: the failure counter (only
+        for a known non-zero exit code), then the duration observation (only
+        when a duration was measured), then the resource counter, and finally
+        the resource histograms — maximum RSS, user CPU, and system CPU, each
+        only where that figure was measured. There is no atomicity across them,
+        and none is attempted: the collector wraps an arbitrary backend
+        (``prometheus_client``, statsd, OpenTelemetry), and this adapter cannot
+        make multiple writes to such a backend transactional. Buffering them to
+        apply together would only move the problem, while delaying when metrics
+        appear.
 
-        So if the collector raises on the second call, the first stays applied:
-        a failure can be recorded without its duration. That is accepted rather
-        than hidden. The exception then leaves this hook and is not swallowed:
-        :func:`cuprum._observability._emit_exec_event` logs
+        So if the collector raises part-way through, the earlier calls stay
+        applied: a failure can be recorded without its duration. That is
+        accepted rather than hidden. The exception then leaves this hook and is
+        not swallowed: :func:`cuprum._observability._emit_exec_event` logs
         ``observe_hook_failed`` and re-raises, so a raising collector fails the
         user's command. A collector that must not do that has to swallow its
         own errors.
@@ -356,11 +424,15 @@ class MetricsHook:
         labels: cabc.Mapping[str, str],
     ) -> None:
         """Apply one metric operation to the collector with the event labels."""
+        # ``labels`` is the same mapping for every operation of one event, so
+        # the per-operation extras are merged into a copy rather than mutating
+        # it; the resource operations carry the accounting mode, all others
+        # carry none.
         match operation:
-            case _CounterOp(name=name, value=value):
-                self._collector.inc_counter(name, value, labels)
-            case _HistogramOp(name=name, value=value):
-                self._collector.observe_histogram(name, value, labels)
+            case _CounterOp(name=name, value=value, labels=extra):
+                self._collector.inc_counter(name, value, {**labels, **extra})
+            case _HistogramOp(name=name, value=value, labels=extra):
+                self._collector.observe_histogram(name, value, {**labels, **extra})
 
     @staticmethod
     def _extract_labels(event: ExecEvent) -> dict[str, str]:

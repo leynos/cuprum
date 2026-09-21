@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import typing as typ
 
 import pytest
 from hypothesis import given, settings
@@ -19,6 +20,9 @@ from cuprum import (
 )
 from cuprum.sh import Pipeline, PipelineResult, RunOutputOptions, SafeCmd
 from tests.helpers.catalogue import python_catalogue
+
+if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
 
 # A nested pair describes how the leaves are bracketed; a leaf is its index.
 type _AssociationTree = int | tuple[_AssociationTree, _AssociationTree]
@@ -166,6 +170,52 @@ def test_pipeline_run_streams_stdout_between_stages(stream_backend: str) -> None
     assert result.stages[1].exit_code == 0
     assert result.stages[0].pid > 0
     assert result.stages[1].pid > 0
+    for stage in result.stages:
+        assert stage.started_at > 0, "every stage must record its wall-clock start"
+        assert stage.duration >= 0, "every stage must record a non-negative duration"
+        assert stage.max_rss_bytes is None, "pipeline stages cannot own child RSS"
+        assert stage.user_cpu_seconds is None, "pipeline stages cannot own child CPU"
+        assert stage.system_cpu_seconds is None, "pipeline stages cannot own child CPU"
+
+
+def test_pipeline_stage_exit_events_name_their_resource_mode() -> None:
+    """A stage's terminal event says ``unavailable`` rather than saying nothing.
+
+    ``ExecEvent.resource_usage_mode`` is what separates a platform that cannot
+    measure from a deployment whose samples went missing, so it is owed on every
+    terminal event — including a stage's, which can never measure because its
+    children are reaped concurrently and no per-child interface can attribute
+    usage to one. The timeout path's counterpart lives in
+    ``test_pipeline_timeout_telemetry``.
+    """
+    events: list[ExecEvent] = []
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    pipeline = python("-c", "print('a')") | python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+
+    with (
+        scoped(ScopeConfig(allowlist=frozenset([python_program]))),
+        sh.observe(events.append),
+    ):
+        result = pipeline.run_sync()
+
+    exits = [ev for ev in events if ev.phase == "exit"]
+    assert len(exits) == len(result.stages), (
+        "every stage must report exactly one terminal event, got "
+        f"{[(ev.phase, ev.pid) for ev in events]}"
+    )
+    for ev in exits:
+        assert ev.resource_usage_mode == "unavailable", (
+            "a stage must name its measurement source rather than leaving the "
+            f"mode unset, got {ev.resource_usage_mode!r}"
+        )
+        figures = (ev.max_rss_bytes, ev.user_cpu_seconds, ev.system_cpu_seconds)
+        assert figures == (None, None, None), (
+            f"an unmeasured stage must not report figures as zero, got {figures!r}"
+        )
 
 
 def test_pipeline_propagates_cancelled_pipe_task(
@@ -289,7 +339,19 @@ def test_pipeline_run_sync_failure_semantics(
     assert len(result.stages) == len(stage_codes)
 
     for idx, expected_code in enumerate(stage_codes):
-        exit_code = result.stages[idx].exit_code
+        stage = result.stages[idx]
+        exit_code = stage.exit_code
+        assert stage.started_at > 0, f"stage {idx} must retain its wall-clock start"
+        assert stage.duration >= 0, f"stage {idx} must retain a non-negative duration"
+        assert stage.max_rss_bytes is None, (
+            f"stage {idx} must not claim aggregate child RSS"
+        )
+        assert stage.user_cpu_seconds is None, (
+            f"stage {idx} must not claim aggregate child user CPU"
+        )
+        assert stage.system_cpu_seconds is None, (
+            f"stage {idx} must not claim aggregate child system CPU"
+        )
         if expect_failure_index is not None and idx < expect_failure_index:
             assert exit_code in {expected_code, -15}, (
                 "an upstream stage must either complete before fail-fast or be "

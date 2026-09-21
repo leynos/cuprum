@@ -75,6 +75,22 @@
   `ProjectSettings.documentation_locations` and `noise_rules` now default to
   empty tuples, so a project that needs neither can omit them
   ([#396](https://github.com/leynos/cuprum/issues/396)).
+- **Command execution measurements:** `CommandResult` now includes the
+  wall-clock `started_at` timestamp and monotonic `duration`, plus child user,
+  system CPU-time, and maximum RSS fields where the platform can attribute
+  usage to the reaped child. Linux and macOS direct commands use child-specific
+  `wait4` results; Linux RSS is normalized from KiB to bytes and macOS RSS is
+  already in bytes. Platforms without that interface retain aggregate CPU-only
+  accounting and leave `max_rss_bytes` as `None`; Windows and pipeline stages
+  leave all three resource fields as `None`. Existing six-argument positional
+  construction remains valid, with timing fields defaulting to `0.0`. The
+  terminal `exit` event also carries these figures, plus a
+  `resource_usage_mode` naming their source; the logging and tracing adapters
+  project them as extras and span attributes. The metrics adapter adds
+  `cuprum_resource_usage_measurements_total` and the three
+  `cuprum_child_max_rss_bytes`, `cuprum_child_user_cpu_seconds`, and
+  `cuprum_child_system_cpu_seconds` histograms, each carrying a
+  `resource_usage_mode` label.
 - **Idle heartbeat for quiet children:** `RunOutputOptions` accepts
   `idle_after` and `on_idle`, so a run that produces no output for a given
   number of seconds says so instead of leaving a blank CI log to be

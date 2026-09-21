@@ -351,6 +351,7 @@ async def _spawn_and_drive_pipeline(
             stderr_tasks,
             stdout_task,
             started_at,
+            wall_clock_started_at,
             relay_diagnostics_by_stage,
         ) = await _spawn_pipeline_processes(
             parts,
@@ -364,6 +365,7 @@ async def _spawn_and_drive_pipeline(
             relay_diagnostics_by_stage=tuple(relay_diagnostics_by_stage),
             stages=_StageWaitContext(
                 started_at=tuple(started_at),
+                wall_clock_started_at=tuple(wall_clock_started_at),
                 observations=observations,
             ),
             idle=config.idle,

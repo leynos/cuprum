@@ -41,17 +41,39 @@ def _event_common_fields(
     if event.pid is not None:
         yield name("pid"), event.pid
     if event.cwd is not None:
+        # A ``Path``, rendered rather than passed through.
         yield name("cwd"), str(event.cwd)
-    if event.exit_code is not None:
-        yield name("exit_code"), event.exit_code
-    if event.duration_s is not None:
-        yield name("duration_s"), event.duration_s
-    if event.stage_index is not None:
-        yield name("stage_index"), event.stage_index
-    if event.stage_count is not None:
-        yield name("stage_count"), event.stage_count
-    if event.line is not None:
-        yield name("line"), event.line
+    if event.resource_usage_mode is not None:
+        # A ``StrEnum``, rendered for the same reason: ``str`` yields the
+        # member's value, and every transport this projection feeds — the log
+        # extras, the span attributes, and the metric label — must carry the
+        # plain string operators key on, not the member's ``repr``.
+        yield name("resource_usage_mode"), str(event.resource_usage_mode)
+    for field, value in _verbatim_fields(event):
+        if value is not None:
+            yield name(field), value
+
+
+def _verbatim_fields(event: ExecEvent) -> tuple[tuple[str, object], ...]:
+    """Return the optional fields the projection carries through unchanged."""
+    # Each is omitted when ``None``, like every other optional field: the
+    # caller applies the same check it applies to the rest of the projection.
+    # The mode itself is not here at all: it is a ``StrEnum``, so
+    # ``_event_common_fields`` renders it rather than passing it through.
+    return (
+        ("exit_code", event.exit_code),
+        ("duration_s", event.duration_s),
+        ("stage_index", event.stage_index),
+        ("stage_count", event.stage_count),
+        ("line", event.line),
+        # The terminal resource measurements sit alongside the lifecycle
+        # fields on purpose: a consumer reads the figures and the mode that
+        # names their source from one record, so it can never mistake one for
+        # the other's explanation.
+        ("max_rss_bytes", event.max_rss_bytes),
+        ("user_cpu_seconds", event.user_cpu_seconds),
+        ("system_cpu_seconds", event.system_cpu_seconds),
+    )
 
 
 def _prefixed(prefix: str) -> cabc.Callable[[str], str]:

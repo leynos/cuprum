@@ -89,6 +89,31 @@ def test_public_catalogue_behaviour_via_reexports() -> None:
     )
 
 
+def test_command_result_exposes_execution_measurements() -> None:
+    """``CommandResult`` keeps exit semantics while exposing measurements."""
+    fields = {field.name for field in dc.fields(c.CommandResult)}
+
+    assert {
+        "started_at",
+        "duration",
+        "max_rss_bytes",
+        "user_cpu_seconds",
+        "system_cpu_seconds",
+    } <= fields
+    legacy_result = c.CommandResult(c.ECHO, (), 0, 1, "", "")
+    assert legacy_result.started_at == pytest.approx(0.0)
+    assert legacy_result.duration == pytest.approx(0.0)
+    assert legacy_result.ok is True
+    assert (
+        c.CommandResult(c.ECHO, (), 0, 1, "", "", started_at=0.0, duration=0.0).ok
+        is True
+    ), "supplying the measurements by keyword must still report success"
+    assert (
+        c.CommandResult(c.ECHO, (), 1, 1, "", "", started_at=0.0, duration=0.0).ok
+        is False
+    ), "supplying the measurements by keyword must not mask a failing exit code"
+
+
 def test_exec_id_keeps_its_positional_slot() -> None:
     """``exec_id`` must stay the first optional field after ``error_type``.
 
@@ -141,14 +166,31 @@ def test_relay_fallback_is_exported_from_its_definition_site() -> None:
 
 
 def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
-    """``relay_fallbacks`` must stay the last, defaulted CommandResult field.
+    """``relay_fallbacks`` must stay the seventh positional CommandResult field.
 
-    ``CommandResult`` is a public, non-``kw_only`` dataclass with six
-    pre-existing positional fields. Appending ``relay_fallbacks`` after
-    ``stderr`` keeps every existing six-argument positional construction
-    valid; inserting a field earlier would silently rebind those calls.
+    ``CommandResult`` is a public, non-``kw_only`` dataclass whose first seven
+    fields are positional. Keeping ``relay_fallbacks`` seventh preserves the
+    positional contract main established; the later measurement fields are
+    keyword-only, so they cannot take a positional slot ahead of it. Inserting a
+    positional field earlier silently rebinds a seven-argument construction --
+    the relay tuple lands on the new field and ``relay_fallbacks`` falls back to
+    ``()`` -- with no runtime error, because Python does not check argument
+    types. This test pins that ordering and the keyword-only measurements.
     """
     fields = [f.name for f in dc.fields(c.CommandResult)]
+    # ``kw_only`` moves a field out of the generated ``__init__``'s positional
+    # order, not out of ``dc.fields()``, so the call contract is read off the
+    # positional projection rather than the declaration index.
+    positional = [f.name for f in dc.fields(c.CommandResult) if not f.kw_only]
+    assert positional[6] == "relay_fallbacks", (
+        "relay_fallbacks must be the seventh positional slot so existing "
+        "seven-argument callers keep binding it; the measurement fields are "
+        f"keyword-only and must never take a slot, got positional={positional}"
+    )
+    assert positional[-1] == "relay_fallbacks", (
+        "relay_fallbacks must be the last positional field, so the generated "
+        f"signature keeps it trailing, got positional={positional}"
+    )
     assert fields[-1] == "relay_fallbacks", (
         "relay_fallbacks must stay last so existing positional callers keep "
         f"binding stdout and stderr, got {fields}"
@@ -161,11 +203,49 @@ def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
         "out",  # stdout
         "err",  # stderr
     )
-    assert result.stdout == "out"
-    assert result.stderr == "err"
+    assert result.stdout == "out", (
+        f"stdout must bind positionally, got {result.stdout!r}"
+    )
+    assert result.stderr == "err", (
+        f"stderr must bind positionally, got {result.stderr!r}"
+    )
     assert result.relay_fallbacks == (), (
         f"the defaulted diagnostics must be empty, got {result.relay_fallbacks!r}"
     )
+
+    sentinel = c.RelayFallback(
+        stream=c.EchoStream.STDOUT,
+        error_category=c.EchoErrorCategory.UNICODE_ENCODE,
+    )
+    relayed = c.CommandResult(c.ECHO, (), 0, 1, "out", "err", (sentinel,))
+    assert relayed.relay_fallbacks == (sentinel,), (
+        "a seventh positional argument must bind relay_fallbacks, got "
+        f"{relayed.relay_fallbacks!r}"
+    )
+    assert relayed.started_at == pytest.approx(0.0), (
+        "the measurements must not be reachable positionally, got "
+        f"started_at={relayed.started_at!r}"
+    )
+
+    # The measurements are keyword-only, so they can never take an eighth
+    # positional slot and silently absorb a call with too many arguments. The
+    # arity is asserted at runtime on purpose: if a later change drops
+    # ``kw_only``, the eighth argument would bind ``started_at`` with no error,
+    # and this is the assertion that catches it. The call is unpacked and its
+    # static rejection suppressed for the same reason -- a type checker refuses
+    # the call before it can be made, which is exactly the failure under test.
+    over_long: tuple[object, ...] = (
+        c.ECHO,
+        (),
+        0,
+        1,
+        "out",
+        "err",
+        (sentinel,),
+        0.0,
+    )
+    with pytest.raises(TypeError):
+        c.CommandResult(*over_long)  # ty: ignore[too-many-positional-arguments] - the over-arity call is the assertion
 
 
 def test_command_result_type_hints_resolve_at_runtime() -> None:

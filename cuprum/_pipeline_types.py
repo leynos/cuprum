@@ -15,7 +15,13 @@ import types
 import typing as typ
 
 from cuprum._observability import _emit_exec_event, _ExecEventEmissionError
-from cuprum.events import ExecEvent, ExecPhase, TimeoutMode, new_exec_id
+from cuprum.events import (
+    ExecEvent,
+    ExecPhase,
+    ResourceUsageMode,
+    TimeoutMode,
+    new_exec_id,
+)
 
 
 class _ExecutionInvariantError(RuntimeError):
@@ -28,7 +34,10 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._idle_heartbeat import _IdleMonitor
-    from cuprum._pipeline_wait import _PipelineWaitResult
+
+    # ``_PipelineWaitResult`` is defined here, not imported: ``_pipeline_wait``
+    # imports this module, so taking the record back from it would close a
+    # cycle. The other direction is the reason the record lives here.
     from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.echo_events import RelayFallback
@@ -78,6 +87,10 @@ class _EventDetails:
     stage_count: int | None = None
     eof_grace_s: float | None = None
     pending_readers: int | None = None
+    max_rss_bytes: int | None = None
+    user_cpu_seconds: float | None = None
+    system_cpu_seconds: float | None = None
+    resource_usage_mode: ResourceUsageMode | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -128,6 +141,10 @@ class _StageObservation:
             stage_count=details.stage_count,
             eof_grace_s=details.eof_grace_s,
             pending_readers=details.pending_readers,
+            max_rss_bytes=details.max_rss_bytes,
+            user_cpu_seconds=details.user_cpu_seconds,
+            system_cpu_seconds=details.system_cpu_seconds,
+            resource_usage_mode=details.resource_usage_mode,
         )
         self._emit_event(event)
 
@@ -159,6 +176,13 @@ class _StageObservation:
             stage_count=details.stage_count,
             eof_grace_s=None,
             pending_readers=None,
+            # The resource fields belong to the failing stage's own ``exit``
+            # event, which follows this decision; a decision about a teardown
+            # measures nothing, so they stay unset rather than being copied.
+            max_rss_bytes=None,
+            user_cpu_seconds=None,
+            system_cpu_seconds=None,
+            resource_usage_mode=None,
         )
         self._emit_event(event)
 
@@ -181,6 +205,17 @@ class _StageObservation:
             self.pending_tasks.extend(exc.scheduled_tasks)
             raise exc.error from exc
         self.pending_tasks.extend(scheduled_tasks)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _PipelineWaitResult:
+    """Exit codes and timing captured once a pipeline finishes waiting."""
+
+    exit_codes: tuple[int, ...]
+    failure_index: int | None
+    started_at: tuple[float, ...]
+    ended_at: tuple[float | None, ...]
+    wall_clock_started_at: tuple[float, ...]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -208,13 +243,16 @@ class _StageWaitContext:
     rather than aliasing it, which is what stops its live bookkeeping writing
     back through this supposedly frozen record.
 
-    ``started_at`` is what stage durations are measured from. ``observations``
-    provides the wait path with the hook set and stage execution token for the
-    fail-fast report. It remains optional so transition tests and the symbolic
-    model can construct a context without observability state.
+    ``started_at`` is the monotonic time stage durations are measured from;
+    ``wall_clock_started_at`` is the corresponding public result timestamp.
+    ``observations`` provides the wait path with the hook set and stage
+    execution token for the fail-fast report. It remains optional so transition
+    tests and the symbolic model can construct a context without observability
+    state.
     """
 
     started_at: tuple[float, ...]
+    wall_clock_started_at: tuple[float, ...] = ()
     observations: tuple[_StageObservation, ...] = ()
 
 

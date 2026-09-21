@@ -63,6 +63,7 @@ class _SpawnedPipelineStages:
     stderr_tasks: list[asyncio.Task[str | None] | None] = dc.field(default_factory=list)
     stdout_task: asyncio.Task[str | None] | None = None
     started_at: list[float] = dc.field(default_factory=list)
+    wall_clock_started_at: list[float] = dc.field(default_factory=list)
     relay_diagnostics_by_stage: list[
         tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
     ] = dc.field(default_factory=list)
@@ -81,6 +82,12 @@ async def _spawn_pipeline_stages(
 
     last_idx = len(observations) - 1
     for idx, observation in enumerate(observations):
+        # Both clocks are sampled before the spawn await, so a stage's
+        # recorded duration includes the time its spawn blocked, matching
+        # the direct-command boundary. Sampling after the await would
+        # exclude the spawn-await latency instead.
+        resources.started_at.append(time.perf_counter())
+        resources.wall_clock_started_at.append(observation.wall_clock())
         stream_fds = _get_stage_stream_fds(
             idx,
             last_idx,
@@ -96,7 +103,6 @@ async def _spawn_pipeline_stages(
             cwd=_cwd_arg(config.ctx.cwd),
         )
         resources.processes.append(process)
-        resources.started_at.append(time.perf_counter())
         observation.emit("start", _EventDetails(pid=process.pid))
         if idx == 0 and config.idle is not None:
             # The aggregate clock starts with the first stage actually
@@ -153,6 +159,7 @@ async def _spawn_pipeline_processes(
     list[asyncio.Task[str | None] | None],
     asyncio.Task[str | None] | None,
     list[float],
+    list[float],
     list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]],
 ]:
     """Start subprocesses and wire up their capture tasks."""
@@ -179,5 +186,6 @@ async def _spawn_pipeline_processes(
         resources.stderr_tasks,
         resources.stdout_task,
         resources.started_at,
+        resources.wall_clock_started_at,
         resources.relay_diagnostics_by_stage,
     )

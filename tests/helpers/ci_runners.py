@@ -28,6 +28,8 @@ from tests.helpers.ci_workflows import (
     jobs,
     restore_steps,
     save_steps,
+    single_step_position_using,
+    single_step_using,
     step_inputs,
     steps,
     workflow_document,
@@ -45,8 +47,9 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",
     "ROOT", "WORKFLOW_DIR", "cache_paths", "cache_steps", "expand", "job",
-    "job_env", "jobs", "restore_steps", "save_steps", "step_inputs", "steps",
-    "workflow_document", "workflow_env", "workflow_sources",
+    "job_env", "jobs", "restore_steps", "save_steps",
+    "single_step_position_using", "single_step_using", "step_inputs",
+    "steps", "workflow_document", "workflow_env", "workflow_sources",
 )
 # fmt: on
 

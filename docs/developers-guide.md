@@ -768,9 +768,11 @@ contrast, formatting an unrecognized phase generically.
 
 Applying the operations is deliberately non-atomic, and that is a contract
 collectors rely on rather than an implementation detail. An `exit` event yields
-up to two operations — the failure counter, then the duration observation —
-applied as separate collector calls in that order, so a collector that raises
-on the second leaves the first applied. The exception propagates out of the
+up to six operations — the failure counter, then the duration observation, then
+the resource counter, and finally up to three resource histograms (maximum RSS,
+user CPU, and system CPU, each only where that figure was measured) — applied
+as separate collector calls in that order, so a collector that raises part-way
+through leaves the earlier calls applied. The exception propagates out of the
 hook and is not swallowed: `_emit_exec_event` logs `observe_hook_failed` and
 wraps the error in `_ExecEventEmissionError` so already-scheduled observe tasks
 survive cleanup, then `_StageObservation.emit` unwraps it and re-raises the
@@ -4876,6 +4878,46 @@ the bounded `SessionOutcome` set (`_outcome_for_result`, `_outcome_for_error`).
 `_pipeline_result_outcome`, which reports the first failing stage's exit code;
 the command-versus-pipeline split there is the shape of the run, not of the
 session.
+
+### CommandResult timing and child-resource accounting
+
+`cuprum/_rusage.py` is the optional platform boundary for aggregate
+child-resource accounting. It detects whether `resource.getrusage` with
+`RUSAGE_CHILDREN` exists, captures normalized snapshots when it does, and
+returns `None` when the module, API, or snapshot call is unavailable. The
+direct-command path on Linux and macOS instead uses `cuprum._wait4_process`: its
+`Popen`-based wrapper connects the child pipes to asyncio, while its sole
+child-reap owner calls `os.wait4` and returns usage for that specific child.
+The direct path must keep exactly one child reaper: do not add a second waiter,
+because a second reap would take the resource usage away from the owner that
+publishes it. The result builder uses that usage for user and system CPU time
+and maximum RSS, converting Linux KiB to bytes and preserving macOS bytes.
+
+The direct wait4 path never derives RSS by subtracting snapshots, because
+`ru_maxrss` is a process-global high-water mark rather than an accumulating
+counter. Platforms without that path retain aggregate `RUSAGE_CHILDREN` CPU
+deltas, which are approximate under concurrent execution, and leave
+`max_rss_bytes` as `None`. Windows and platforms without child-resource
+accounting leave all three resource fields as `None`. Pipeline stages also
+leave them as `None`: concurrently reaped children cannot be attributed safely
+to individual stages.
+
+The terminal `exit` event reports the same measurement the returned
+`CommandResult` carries, along with a `resource_usage_mode` naming how it was
+obtained, so a consumer reading the event stream need not correlate an event
+with a result object. That classifier lives beside the producers it
+distinguishes, in `cuprum/_rusage.py::resource_usage_mode_for`. The timeout
+path deliberately reports `unavailable`, because it signals the child rather
+than reaping it.
+
+The execution boundary supplies the wall-clock callable used for
+`CommandResult.started_at`; direct commands and pipeline stages read it
+immediately before their respective spawn awaits. The monotonic start reading
+is taken at the same boundary and is paired with the exit reading to compute a
+non-negative `duration`. This keeps spawn-await latency inside the measured
+interval and leaves the clocks replaceable in tests. The public dataclass gives
+both timing fields a `0.0` default so legacy six-argument positional
+construction remains valid; normal execution always supplies measurements.
 
 The subprocess wait path uses caller-owned deadlines: `asyncio.timeout()` was
 adopted in place of `asyncio.wait_for()`, so the deadline is applied by the

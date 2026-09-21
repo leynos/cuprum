@@ -18,6 +18,7 @@ import typing as typ
 
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails
+from cuprum.events import ResourceUsageMode
 
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import (
@@ -26,6 +27,15 @@ if typ.TYPE_CHECKING:
         _StageObservation,
     )
     from cuprum.sh import CommandResult, SafeCmd
+
+# Every pipeline stage's terminal event reports this. Both exits below are
+# terminal events that attempted no measurement, and a stage can never attempt
+# one: its children are reaped concurrently, so no per-child interface can
+# attribute usage to it. Saying so explicitly is what keeps the contract on
+# ``ExecEvent.resource_usage_mode`` — set on every terminal event, ``None`` on
+# every other phase — true for stages as well as for direct commands, whose
+# returned ``CommandResult`` likewise leaves all three figures ``None``.
+_STAGE_RESOURCE_MODE: typ.Final = ResourceUsageMode.UNAVAILABLE
 
 
 def _emit_timeout_exit_events(
@@ -70,6 +80,7 @@ def _emit_timeout_exit_events(
                         process.returncode if process.returncode is not None else -1
                     ),
                     duration_s=max(0.0, ended_at - spawn.stages.started_at[idx]),
+                    resource_usage_mode=_STAGE_RESOURCE_MODE,
                 ),
             )
 
@@ -98,6 +109,7 @@ def _build_pipeline_stage_results(
                 pid=process.pid,
                 exit_code=inputs.wait_result.exit_codes[idx],
                 duration_s=duration_s,
+                resource_usage_mode=_STAGE_RESOURCE_MODE,
             ),
         )
         stage_results.append(
@@ -108,6 +120,11 @@ def _build_pipeline_stage_results(
                 pid=process.pid if process.pid is not None else -1,
                 stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
                 stderr=inputs.stderr_by_stage[idx],
+                started_at=inputs.wait_result.wall_clock_started_at[idx],
+                duration=0.0 if duration_s is None else duration_s,
+                max_rss_bytes=None,
+                user_cpu_seconds=None,
+                system_cpu_seconds=None,
                 relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
             ),
         )

@@ -10,20 +10,37 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import typing as typ
 from pathlib import Path
 
 import pytest
 
-from cuprum import ECHO, sh
+from cuprum import (
+    ECHO,
+    _command_internals,
+    _rusage,
+    _subprocess_execution,
+    _wait4_process,
+    observe,
+    sh,
+)
+from cuprum.events import ResourceUsageMode
 from cuprum.sh import CommandResult, ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
+
+
+_wait4_only = pytest.mark.skipif(
+    not (sys.platform.startswith("linux") or sys.platform == "darwin"),
+    reason="asserts direct-child wait4 resource accounting",
+)
 
 
 def _execute_async(cmd: SafeCmd, kwargs: _RunKwargs) -> CommandResult:
@@ -75,6 +92,194 @@ def test_captures_output_and_exit_code(
     assert result.ok is True
     assert result.stdout == "hello"
     assert result.stderr == ""
+    assert result.started_at > 0, "every command result must record a wall-clock start"
+    assert result.duration >= 0, "every command result must report a duration"
+    if sys.platform == "win32":
+        assert result.max_rss_bytes is None, "Windows must not report child RSS"
+        assert result.user_cpu_seconds is None, "Windows must not report child CPU"
+        assert result.system_cpu_seconds is None, "Windows must not report child CPU"
+
+
+@_wait4_only
+def test_records_direct_child_resource_usage(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """An isolated allocating child reports its own peak RSS and CPU usage."""
+    allocation_bytes = 8 * 1024 * 1024
+    command = python_builder(
+        "-c",
+        (
+            f"allocation = bytearray({allocation_bytes}); "
+            "allocation[::4096] = b'x' * len(allocation[::4096]); "
+            "print('resource-probe')"
+        ),
+    )
+
+    result = command.run_sync()
+
+    assert result.max_rss_bytes is not None, "wait4 must expose direct-child RSS"
+    assert result.max_rss_bytes >= allocation_bytes, (
+        "direct-child RSS must include the touched allocation"
+    )
+    assert result.user_cpu_seconds is not None, "wait4 must expose child user CPU"
+    assert result.user_cpu_seconds > 0, "allocating child must consume user CPU"
+    assert result.system_cpu_seconds is not None, "wait4 must expose child system CPU"
+    assert result.system_cpu_seconds >= 0, "child system CPU must be non-negative"
+
+
+def test_publishes_cpu_deltas_from_direct_execution_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct execution publishes the CPU deltas from its rusage boundaries.
+
+    The exit event must agree with the result on the same fallback: the CPU
+    figures are carried, RSS stays unset, and the mode names the aggregate
+    producer rather than the attributable one.
+    """
+    snapshots = [
+        _rusage._ChildRusageSnapshot(0, 1.25, 2.5),
+        _rusage._ChildRusageSnapshot(0, 4.75, 8.0),
+    ]
+
+    def capture_snapshot() -> _rusage._ChildRusageSnapshot:
+        """Return the next controlled accounting boundary."""
+        return snapshots.pop(0)
+
+    monkeypatch.setattr(_wait4_process, "capture_child_rusage", capture_snapshot)
+    monkeypatch.setattr(
+        _wait4_process,
+        "wait4_resource_measurement_available",
+        lambda: False,
+    )
+
+    events: list[ExecEvent] = []
+    with observe(events.append):
+        result = sh.make(ECHO)("resource-probe").run_sync()
+
+    assert result.max_rss_bytes is None, "aggregate RSS cannot identify one child"
+    assert result.user_cpu_seconds == pytest.approx(3.5), (
+        "direct execution must publish the measured user CPU delta"
+    )
+    assert result.system_cpu_seconds == pytest.approx(5.5), (
+        "direct execution must publish the measured system CPU delta"
+    )
+
+    exits = [event for event in events if event.phase == "exit"]
+    assert len(exits) == 1, f"one direct command emits one exit event, got {exits!r}"
+    event = exits[0]
+    assert event.resource_usage_mode == ResourceUsageMode.AGGREGATE_CPU_DELTA, (
+        "the CPU-delta fallback must name the aggregate producer, so a "
+        "consumer can tell an unattributable CPU-only figure from a measured "
+        "child"
+    )
+    assert event.max_rss_bytes is None, (
+        "the aggregate path must not publish an RSS figure on the event either"
+    )
+    assert event.user_cpu_seconds == pytest.approx(3.5), (
+        "the exit event must carry the user CPU delta the result reports"
+    )
+    assert event.system_cpu_seconds == pytest.approx(5.5), (
+        "the exit event must carry the system CPU delta the result reports"
+    )
+
+
+@_wait4_only
+def test_exit_event_reports_the_same_resource_usage_as_the_result(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A direct command's exit event carries the same measurement as its result."""
+    allocation_bytes = 8 * 1024 * 1024
+    command = python_builder(
+        "-c",
+        (
+            f"allocation = bytearray({allocation_bytes}); "
+            "allocation[::4096] = b'x' * len(allocation[::4096]); "
+            "print('resource-probe')"
+        ),
+    )
+    events: list[ExecEvent] = []
+
+    with observe(events.append):
+        result = command.run_sync()
+
+    exits = [event for event in events if event.phase == "exit"]
+    assert len(exits) == 1, f"one direct command emits one exit event, got {exits!r}"
+    event = exits[0]
+    result_user_cpu = result.user_cpu_seconds
+    result_system_cpu = result.system_cpu_seconds
+    assert event.resource_usage_mode == ResourceUsageMode.WAIT4_CHILD, (
+        "a direct command's exit event must name the wait4 producer mode"
+    )
+    assert event.max_rss_bytes is not None, "wait4 must publish direct-child RSS"
+    assert event.max_rss_bytes == result.max_rss_bytes, (
+        "the exit event must carry the RSS the result reports"
+    )
+    assert result_user_cpu is not None, "wait4 must expose child user CPU"
+    assert event.user_cpu_seconds == pytest.approx(result_user_cpu), (
+        "the exit event must carry the user CPU the result reports"
+    )
+    assert result_system_cpu is not None, "wait4 must expose child system CPU"
+    assert event.system_cpu_seconds == pytest.approx(result_system_cpu), (
+        "the exit event must carry the system CPU the result reports"
+    )
+
+
+def test_records_start_times_before_subprocess_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct execution samples both clocks before awaiting subprocess spawn."""
+    events: list[str] = []
+
+    def monotonic_clock() -> float:
+        """Record the monotonic start-time sample."""
+        events.append("monotonic")
+        return 10.0
+
+    def wall_clock() -> float:
+        """Record the wall-clock start-time sample."""
+        events.append("wall")
+        return 20.0
+
+    async def fake_spawn(_: object) -> object:
+        """Assert that both start-time samples precede spawning."""
+        events.append("spawn")
+        assert events == ["monotonic", "wall", "spawn"], (
+            "direct start clocks must be sampled before subprocess spawn"
+        )
+        await asyncio.sleep(0)
+        return type("Process", (), {"pid": 123})()
+
+    async def fake_run_without_streams(
+        _: object,
+        __: object,
+    ) -> tuple[int, float]:
+        """Return a deterministic successful completion."""
+        await asyncio.sleep(0)
+        return 0, 13.0
+
+    monkeypatch.setattr(_subprocess_execution.time, "perf_counter", monotonic_clock)
+    # The observation builder installs ``time.time`` as the stage's
+    # ``wall_clock`` callable, so the injected wall clock must be patched where
+    # that attribute is read from — not in ``sh``, which no longer imports
+    # ``time`` now that observation construction lives in ``_command_internals``.
+    monkeypatch.setattr(_command_internals.time, "time", wall_clock)
+    monkeypatch.setattr(_subprocess_execution, "_spawn_subprocess", fake_spawn)
+    monkeypatch.setattr(
+        _subprocess_execution,
+        "_run_subprocess_without_streams",
+        fake_run_without_streams,
+    )
+
+    result = asyncio.run(
+        sh.make(ECHO)("quiet").run(output=sh.RunOutputOptions(capture=False)),
+    )
+
+    assert result.started_at == pytest.approx(20.0), (
+        "direct result must retain the injected wall-clock start"
+    )
+    assert result.duration == pytest.approx(3.0), (
+        "direct result duration must use the injected monotonic timestamps"
+    )
 
 
 def test_applies_env_overrides(
