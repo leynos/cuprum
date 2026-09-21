@@ -20,6 +20,8 @@ import typing as typ
 
 import pytest
 
+from cuprum import _streams_rs
+
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
@@ -49,9 +51,13 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
     """The raw writer transfer is consumed while the unsupported call fails."""
     reader_fd, reader_writer_fd = os.pipe()
     writer_reader_fd, writer_fd = os.pipe()
+    reader_handle = _streams_rs._convert_fd_for_platform(reader_fd)
+    writer_handle = _streams_rs._duplicate_windows_handle(
+        _streams_rs._convert_fd_for_platform(writer_fd)
+    )
     try:
         with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
-            rust_streams.rust_pump_stream(reader_fd, writer_fd)
+            rust_streams.rust_pump_stream(reader_handle, writer_handle)
     finally:
         for fd in (reader_fd, reader_writer_fd, writer_reader_fd, writer_fd):
             with contextlib.suppress(OSError):
