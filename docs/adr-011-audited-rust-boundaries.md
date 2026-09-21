@@ -172,6 +172,16 @@ does not prove actual operating-system close or real panic unwind. Existing
 verification context in issues [#80], [#81], [#84], [#89], [#125], and [#233]
 remains in force. Scheduled Loom interleaving work is a separate deliverable.
 
+On Windows, this decision additionally distinguishes a live borrowed handle
+from one valid for the synchronous native adapter. `SynchronousBorrowedStream`
+and `SynchronousOwnedStream` carry the non-overlapped `ReadFile`/`WriteFile`
+precondition from known `CreatePipe` resources or from the audited unsafe
+`borrow_reader` and `adopt_writer` hand-offs. Win32 does not document a runtime
+query that can recover this creation-time mode from a bare handle, so the
+unsafe caller must establish it explicitly. Python's Proactor fallback remains
+in place for its overlapped subprocess handles until a separately designed
+overlapped-I/O adapter exists.
+
 [#80]: https://github.com/leynos/cuprum/issues/80
 [#81]: https://github.com/leynos/cuprum/issues/81
 [#84]: https://github.com/leynos/cuprum/issues/84
@@ -181,10 +191,11 @@ remains in force. Scheduled Loom interleaving work is a separate deliverable.
 
 The safe crate's descriptor fixtures use `cap_std::fs::File` constructed from
 owned descriptors. The Windows native adapter uses the same capability file
-wrapper for borrowed-handle I/O, with the production retention kernel
-suppressing its owner drop. This avoids carrying the former extension-wide
-`std::fs` lint exclusion into either extracted crate; `cap-std` and its handle
-adapters are trusted dependencies, not verifier-proved implementations.
+wrapper for `SynchronousBorrowedStream` I/O, with the production retention
+kernel suppressing its owner drop. This avoids carrying the former
+extension-wide `std::fs` lint exclusion into either extracted crate; `cap-std`
+and its handle adapters are trusted dependencies, not verifier-proved
+implementations.
 
 Cargo cannot override an individual workspace-inherited lint. The safe crate
 therefore keeps its `#![forbid(unsafe_code)]` source-level prohibition while

@@ -22,7 +22,10 @@ mod test_support;
 mod tracing_capture;
 mod utf8;
 
+#[cfg(unix)]
 use cuprum_native_io::{AsStream, OwnedStream};
+#[cfg(windows)]
+use cuprum_native_io::{SynchronousBorrowedStream, SynchronousOwnedStream};
 pub use errors::PumpError;
 use io_utils::{classify_write, operation_span, read_stream};
 use pump_machine::{Flow, PumpState, advance};
@@ -76,6 +79,7 @@ impl BufferSize {
 ///
 /// # Errors
 /// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(unix)]
 pub fn pump_stream(
     reader: &impl AsStream,
     writer: OwnedStream,
@@ -86,10 +90,29 @@ pub fn pump_stream(
     })
 }
 
+/// Pump from a synchronous Windows reader, consuming the synchronous writer.
+///
+/// The writer drops on success, error, and unwind. The reader's owner must
+/// outlive this borrow and remains responsible for closing it.
+///
+/// # Errors
+/// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(windows)]
+pub fn pump_stream(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousOwnedStream,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    cuprum_native_io::with_owned_writer(&reader, writer, |source, sink| {
+        pump_stream_files(*source, sink.as_synchronous_borrowed(), buffer_size)
+    })
+}
+
 /// Decode a borrowed stream as UTF-8 with replacement semantics.
 ///
 /// # Errors
 /// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(unix)]
 pub fn consume_stream(
     reader: &impl AsStream,
     buffer_size: BufferSize,
@@ -97,6 +120,19 @@ pub fn consume_stream(
     consume_stream_files(reader, buffer_size)
 }
 
+/// Decode a synchronous Windows stream as UTF-8 with replacement semantics.
+///
+/// # Errors
+/// Returns a semantic I/O, buffer-range, or accounting failure.
+#[cfg(windows)]
+pub fn consume_stream(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    consume_stream_files(reader, buffer_size)
+}
+
+#[cfg(unix)]
 fn pump_stream_files(
     reader: &impl AsStream,
     writer: &impl AsStream,
@@ -112,10 +148,20 @@ fn pump_stream_files(
     pump_stream_files_readwrite(reader, writer, buffer_size)
 }
 
+#[cfg(windows)]
+fn pump_stream_files(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    pump_stream_files_readwrite(reader, writer, buffer_size)
+}
+
 /// Read/write loop fallback for pumping bytes between file descriptors.
 ///
 /// This is used when splice is not available (non-Linux) or when the file
 /// descriptors do not support splice (regular files, some sockets).
+#[cfg(unix)]
 fn pump_stream_files_readwrite(
     reader: &impl AsStream,
     writer: &impl AsStream,
@@ -170,6 +216,51 @@ fn pump_stream_files_readwrite(
     Ok(total_written)
 }
 
+#[cfg(windows)]
+fn pump_stream_files_readwrite(
+    reader: SynchronousBorrowedStream<'_>,
+    writer: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
+    // Operation span (see `operation_span`) so the native I/O events inherit
+    // the operation name, `buffer_size`, and `total_bytes` context.
+    let span = operation_span("pump_stream_readwrite", buffer_size.value());
+    let _guard = span.enter();
+    io_utils::reset_retry_counters();
+
+    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
+    let mut state = PumpState::start();
+
+    loop {
+        let read_len = read_stream(reader, &mut buffer)?;
+        let writer_was_open = state.writer_open();
+        let flow = advance(&mut state, read_len, || {
+            let chunk = buffer
+                .get(..read_len)
+                .ok_or(PumpError::BufferRangeExceeded)?;
+            classify_write(writer, chunk)
+        })?;
+
+        if writer_was_open && !state.writer_open() {
+            tracing::debug!(
+                bytes_transferred = state.total_written(),
+                "broken pipe; draining reader"
+            );
+        }
+
+        if flow == Flow::Stop {
+            break;
+        }
+    }
+
+    let total_written = state.total_written();
+    span.record("total_bytes", total_written);
+    span.record("read_retries", io_utils::read_retry_count());
+    span.record("write_retries", io_utils::write_retry_count());
+    Ok(total_written)
+}
+
+#[cfg(unix)]
 fn consume_stream_files(
     reader: &impl AsStream,
     buffer_size: BufferSize,
@@ -198,6 +289,46 @@ fn consume_stream_files(
         }
         let read_bytes = u64::try_from(read_len).map_err(|_| {
             tracing::error!(platform, "read length conversion overflowed");
+            PumpError::LengthOverflow
+        })?;
+        total_read = total_read.saturating_add(read_bytes);
+        let chunk = buffer
+            .get(..read_len)
+            .ok_or(PumpError::BufferRangeExceeded)?;
+        pending.extend_from_slice(chunk);
+        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
+    }
+
+    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
+
+    span.record("total_bytes", total_read);
+    span.record("read_retries", io_utils::read_retry_count());
+    Ok(output)
+}
+
+#[cfg(windows)]
+fn consume_stream_files(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    // Operation span (see `operation_span`) so the read seam's fatal-I/O
+    // events inherit this operation's context.
+    let span = operation_span("consume_stream", buffer_size.value());
+    let _guard = span.enter();
+    io_utils::reset_retry_counters();
+
+    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut output = String::new();
+    let mut total_read = 0_u64;
+
+    loop {
+        let read_len = read_stream(reader, &mut buffer)?;
+        if read_len == 0 {
+            break;
+        }
+        let read_bytes = u64::try_from(read_len).map_err(|_| {
+            tracing::error!(platform = "windows", "read length conversion overflowed");
             PumpError::LengthOverflow
         })?;
         total_read = total_read.saturating_add(read_bytes);
