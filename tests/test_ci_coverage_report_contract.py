@@ -43,14 +43,15 @@ PULL_REQUEST_LANE = ("ci.yml", "coverage")
 #: rather than of one workflow.
 COVERAGE_LANES = (PULL_REQUEST_LANE, PUBLISH_LANE)
 
-#: The CodeScene action's complete pinned `uses:` value, revision included. The
-#: pin is matched exactly: an action moved to another revision is a different
-#: action as far as this contract is concerned, and a prefix match would let a
-#: re-pinned or differently owned step satisfy it.
-CODESCENE_ACTION = (
-    "leynos/shared-actions/.github/actions/upload-codescene-coverage"
-    "@c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
-)
+#: The CodeScene action's `uses:` prefix. The revision is deliberately not part
+#: of this locator: the revision is not what these four contracts are about, and
+#: a locator that carries one goes stale the moment a pin moves on the trunk.
+#: The suite then fails from a pull request that never touched the workflow, as
+#: it did when the uploader moved to `a5765019`. The revision is asserted by
+#: `tests/test_ci_codescene_boundary.py`, which the pin-moving commit updates in
+#: the same change, so a re-pin still fails closed rather than quietly
+#: re-pointing these contracts at a different action.
+CODESCENE_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-coverage@"
 
 #: The formats the pinned CodeScene action accepts. Its `Validate inputs` step
 #: rejects anything else before the CLI is installed, so a format outside this
@@ -92,7 +93,9 @@ def _generated(workflow_name: str, job_name: str, key: str) -> str:
 def _consumed_path(workflow_name: str, job_name: str) -> str | None:
     """Return the report path a job's CodeScene step reads, if it declares one."""
     where = f"{workflow_name}:{job_name} CodeScene step"
-    step = single_step_using(workflow_name, job_name, uses=CODESCENE_ACTION)
+    step = single_step_using(
+        workflow_name, job_name, uses=CODESCENE_ACTION, prefix=True
+    )
     inputs = step_inputs(step, f"{where} must declare inputs")
     declared = inputs.get("path")
     # ``None`` means the step left ``path`` unset or at its sentinel, which is
@@ -144,7 +147,7 @@ class TestCoverageReportContract:
             workflow_name, job_name, uses=GENERATE_COVERAGE
         )
         consumed_at = single_step_position_using(
-            workflow_name, job_name, uses=CODESCENE_ACTION
+            workflow_name, job_name, uses=CODESCENE_ACTION, prefix=True
         )
 
         assert generated_at < consumed_at, (
