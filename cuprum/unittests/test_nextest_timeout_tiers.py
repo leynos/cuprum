@@ -28,11 +28,13 @@ from __future__ import annotations
 
 from cuprum.unittests._timeout_lane_support import (
     EXPECTED_GLOBAL_TIMEOUT_SECONDS,
+    EXPECTED_NEXTEST_MIN_VERSION,
     EXPECTED_PER_TEST_ALLOWANCE_SECONDS,
     NEXTEST_CONFIG,
     _allowance_of,
     _default_nextest_profile,
     _slow_timeout_of,
+    declared_minimum_nextest_version,
     global_timeout_seconds,
     largest_per_test_allowance_seconds,
     nextest_config_path,
@@ -122,4 +124,30 @@ def test_the_nextest_slow_timeout_terminates_hung_tests() -> None:
         f"{NEXTEST_CONFIG} must set "
         "[profile.default].slow-timeout.terminate-after so a hung test is "
         "killed rather than reported slow indefinitely"
+    )
+
+
+def test_the_nextest_config_declares_the_version_that_understands_it() -> None:
+    """The floor is what stops an older release discarding a tier silently.
+
+    Every other assertion in this module reads the configuration file rather
+    than the run, so on a release predating ``global-timeout`` they all pass
+    while the whole-run budget is a key nextest warns about and ignores. The
+    declaration turns that into a refusal to start, and it is the only
+    assertion here whose subject is the tool rather than the file.
+
+    The floor is asserted by value against the constant, which the Makefile
+    duplicates as ``NEXTEST_MIN_VERSION``; a test in
+    ``test_toolchain_pins`` compares the two, so raising one alone fails.
+
+    Proved by mutation: removing the declaration fails the reader's guard,
+    and raising the declared version above the installed one makes
+    `cargo nextest list` exit 92 rather than run.
+    """
+    declared = declared_minimum_nextest_version()
+    assert declared == EXPECTED_NEXTEST_MIN_VERSION, (
+        f"{NEXTEST_CONFIG} declares nextest-version={declared!r}, not the "
+        f"{EXPECTED_NEXTEST_MIN_VERSION!r} this repository sizes for; a floor "
+        f"below the release that first understood global-timeout would let "
+        f"that tier be discarded while every other assertion here passed"
     )

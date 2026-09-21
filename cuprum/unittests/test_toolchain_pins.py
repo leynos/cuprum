@@ -30,6 +30,10 @@ import typing as typ
 import pytest
 import yaml
 
+from cuprum.unittests._timeout_lane_support import (
+    EXPECTED_NEXTEST_MIN_VERSION,
+    declared_minimum_nextest_version,
+)
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -370,3 +374,26 @@ def test_df12_python_lints_refs_use_the_controlled_release_tag() -> None:
             f"{site} selects df12-python-lints at {ref!r}, not the controlled "
             "v0.3.0 release tag"
         )
+
+
+def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
+    """Both sites must state the floor the coverage lane depends on.
+
+    There is no workflow-level third site, unlike Ruff and ty: the coverage
+    action installs its own nextest from a checksummed archive. The
+    configuration's declaration is enforced by any nextest from 0.9.55; the
+    Makefile's check covers the older releases, which ignore the declaration
+    as an unrecognised key and would otherwise discard the whole-run budget
+    silently while every other assertion still passed.
+    """
+    root = repo_root()
+    floor = "NEXTEST_MIN_VERSION"
+    sites = {
+        "Makefile": _read_makefile_pin(root, floor),
+        "rust/.config/nextest.toml": declared_minimum_nextest_version(),
+    }
+    assert set(sites.values()) == {EXPECTED_NEXTEST_MIN_VERSION}, (
+        f"the nextest floor is {sites!r}, not everywhere "
+        f"{EXPECTED_NEXTEST_MIN_VERSION!r}; a site left behind certifies a "
+        "floor the others no longer enforce"
+    )

@@ -36,6 +36,17 @@ as one already supplied and skips writing its own fallback, so the run proceeds
 on nextest's built-in defaults — a 60 s slow warning that never terminates the
 test, and no whole-run budget at all.
 
+The file therefore opens with `nextest-version = "0.9.100"`, the release that
+first understood `global-timeout`. Nextest warns about a configuration key it
+does not recognise and keeps going, so on anything older the whole-run budget
+is not rejected but simply dropped, and the suite still passes: the same
+inert-tier failure as a misplaced file, reached from the other direction. The
+declaration is honoured from 0.9.55 onwards; releases older than that ignore it
+as an unknown key too, so the `Makefile` checks the installed version before
+running nextest and refuses anything below the floor. Both sites are pinned by
+`test_the_nextest_floor_agrees_between_the_config_and_the_makefile` in
+`cuprum/unittests/test_toolchain_pins.py`.
+
 The 300 s per-test allowance is `period = "60s"` multiplied by
 `terminate-after = 5`, so nextest kills a hung test after it has reported the
 test as slow. That period also sets when a test is reported slow, and the worst

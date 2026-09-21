@@ -63,6 +63,19 @@ EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 #: a single slow ``trybuild`` binary cannot exhaust the whole suite.
 EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
 
+#: The oldest nextest that can read every key this configuration sets.
+#:
+#: ``global-timeout`` was added in 0.9.100. Nextest warns about configuration
+#: keys it does not recognise and carries on, so an older release drops the
+#: whole-run budget silently: the run keeps working, the tier is simply
+#: absent, and every assertion here still passes because they read the file
+#: rather than the run. That is the same class of failure as a config in the
+#: wrong directory, which is why the floor is asserted rather than assumed.
+#:
+#: The constant is duplicated in the ``Makefile``'s ``NEXTEST_MIN_VERSION``
+#: and compared against the file here, so the two cannot drift.
+EXPECTED_NEXTEST_MIN_VERSION: typ.Final[str] = "0.9.100"
+
 
 SlowTimeout = typ.TypedDict(
     "SlowTimeout",
@@ -120,16 +133,23 @@ class NextestProfiles(typ.TypedDict, total=False):
     default: NextestProfile
 
 
-class NextestConfig(typ.TypedDict, total=False):
-    """The parsed nextest configuration fields read by the contract.
+NextestConfig = typ.TypedDict(
+    "NextestConfig",
+    {
+        # Hyphenated, so the functional form is the only one that can express
+        # it: a class body parses this key as an annotation's illegal target.
+        # Read through `.get` below rather than an attribute.
+        "nextest-version": object,
+        "profile": NextestProfiles,
+    },
+    total=False,
+)
+"""The parsed nextest configuration fields read by the contract.
 
-    Attributes
-    ----------
-    profile : NextestProfiles
-        Named profiles, including the required ``default`` profile.
-    """
-
-    profile: NextestProfiles
+``nextest-version`` is the floor the configuration declares, consulted before
+any tier is read; ``profile`` carries the named profiles, including the
+required ``default`` profile.
+"""
 
 
 def nextest_config_path() -> Path:
@@ -290,6 +310,30 @@ def largest_per_test_allowance_seconds() -> int:
     declared = [_slow_timeout_of(profile)]
     declared.extend(_slow_timeout_of(override) for override in overrides)
     return max(_allowance_of(slow_timeout) for slow_timeout in declared)
+
+
+def declared_minimum_nextest_version() -> str:
+    """Return the nextest version this configuration declares it needs.
+
+    Returns
+    -------
+    str
+        The ``nextest-version`` the configuration file states, as written.
+
+    Nextest refuses to start below a declared requirement, so this is the
+    one setting that protects the tiers below it. Without it a release that
+    predates ``global-timeout`` parses the file, warns about the key it does
+    not know, and runs the suite with no whole-run budget while every
+    assertion here still passes. A missing declaration fails the caller's
+    contract assertion rather than being read as an unconstrained floor.
+    """
+    declared = _nextest_config().get("nextest-version")
+    assert declared is not None, (
+        f"{NEXTEST_CONFIG} must declare nextest-version; without it a release "
+        f"that predates an option in this file drops that option silently and "
+        f"the run it was meant to bound proceeds unbounded"
+    )
+    return str(declared)
 
 
 def global_timeout_seconds() -> int:
