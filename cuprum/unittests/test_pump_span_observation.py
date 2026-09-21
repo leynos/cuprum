@@ -97,7 +97,7 @@ class TestPumpSpanObservation:
         """The unregistered channel returns an empty carrier immediately."""
         spans = _open_pump_hop_spans({"cuprum.operation": "rust_pump"})
 
-        assert spans.spans == (), "an unregistered channel must not open a span"
+        assert not spans.spans, "an unregistered channel must not open a span"
 
     def test_failing_tracer_is_reported_and_other_tracers_continue(
         self,

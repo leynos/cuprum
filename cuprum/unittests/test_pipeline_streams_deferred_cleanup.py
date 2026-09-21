@@ -157,7 +157,7 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
             guard=guard,
         )
         assert state.was_deferred, "grace expiry must mark cleanup as deferred"
-        assert events == [], "worker-owned descriptors must not restore early"
+        assert not events, "worker-owned descriptors must not restore early"
         assert len(native_fds) == 1, "the worker must receive both native FDs"
         native_reader_fd, native_writer_fd = native_fds[0]
         os.fstat(native_reader_fd)

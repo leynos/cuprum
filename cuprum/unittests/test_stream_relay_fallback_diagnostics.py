@@ -150,8 +150,8 @@ def test_binary_buffer_sink_receives_original_bytes() -> None:
     assert b"".join(sink.buffer.raw) == b"".join(chunks), (
         "the binary fast path must forward the original child bytes unchanged"
     )
-    assert sink.text_writes == [], "no text write may be attempted"
-    assert relay_diagnostics.snapshot() == ()
+    assert not sink.text_writes, "no text write may be attempted"
+    assert not relay_diagnostics.snapshot()
 
 
 def test_text_only_failure_records_once_across_all_surfaces(

@@ -99,7 +99,7 @@ def test_captures_stderr_only(
 
     assert result.exit_code == 0
     assert result.ok is True
-    assert result.stdout == ""
+    assert not result.stdout
     assert result.stderr is not None
     assert result.stderr.strip() == "err"
 
@@ -122,10 +122,10 @@ def test_captures_and_echoes_stderr(
 
     assert result.exit_code == 0
     assert result.ok is True
-    assert result.stdout == ""
+    assert not result.stdout
     assert result.stderr is not None
     assert result.stderr.strip() == "err"
-    assert captured.out == ""
+    assert not captured.out
     assert captured.err.strip() == "err"
 
 
@@ -158,7 +158,7 @@ def test_bounded_stderr_echo_keeps_complete_capture(
 
     expected_echo = "x" * 25 + "… [truncated 55 bytes]\n"
     assert result.ok is True, "the stderr-writing command must succeed"
-    assert result.stdout == "", "the command must not capture stdout"
+    assert not result.stdout, "the command must not capture stdout"
     assert result.stderr == payload, "capture must retain the complete stderr line"
     assert stderr_sink.getvalue() == expected_echo, (
         "stderr echo must retain the exact bounded prefix, marker, and newline"
@@ -205,9 +205,7 @@ def test_captures_stdout_silently(
 
     captured = capsys.readouterr()
 
-    assert captured.out == "", (
-        "a non-echoed stream must not write to the parent's stdout"
-    )
+    assert not captured.out, "a non-echoed stream must not write to the parent's stdout"
     assert result.stdout == "doc", (
         "a non-echoed stream must still be captured in full on the result"
     )
@@ -287,11 +285,11 @@ def test_stderr_echo_is_unaffected_by_stdout_setting(
     )
     captured = capsys.readouterr()
 
-    assert captured.out == ""
-    assert captured.err == "", "injected sinks must keep both streams off capsys"
+    assert not captured.out
+    assert not captured.err, "injected sinks must keep both streams off capsys"
     assert result.stdout == "out\n"
     assert result.stderr == "err\n"
-    assert stdout_sink.getvalue() == "", (
+    assert not stdout_sink.getvalue(), (
         "the muted stdout stream must write nothing to its selected sink"
     )
     assert stderr_sink.getvalue() == "err\n", (
@@ -350,8 +348,8 @@ class TestEchoOnly:
         captured = capsys.readouterr()
 
         assert_capture_disabled(result)
-        assert captured.out == "", "injected sinks must keep stdout off capsys"
-        assert captured.err == "", "injected sinks must keep stderr off capsys"
+        assert not captured.out, "injected sinks must keep stdout off capsys"
+        assert not captured.err, "injected sinks must keep stderr off capsys"
         assert stdout_sink.getvalue() == ("out\n" if echo_stdout else ""), (
             f"stdout echo must follow echo_stdout={echo_stdout}"
         )
@@ -392,8 +390,8 @@ def test_echoes_to_custom_sinks(
     assert result.stderr.strip() == "err"
     assert stdout_sink.getvalue().strip() == "out"
     assert stderr_sink.getvalue().strip() == "err"
-    assert captured.out == ""
-    assert captured.err == ""
+    assert not captured.out
+    assert not captured.err
 
 
 def test_decodes_with_configured_encoding(
@@ -420,7 +418,7 @@ def test_decodes_with_configured_encoding(
     assert result.exit_code == 0
     assert result.ok is True
     assert result.stdout == "\u2013"
-    assert result.stderr == ""
+    assert not result.stderr
 
 
 class _Cp1252TextOnlySink:
@@ -513,7 +511,7 @@ def test_buffered_sink_receives_exact_bytes_despite_narrow_text_encoding(
         "buffered sinks must receive original bytes without transliteration for "
         f"received={sink.buffer.getvalue()!r}"
     )
-    assert sink.writes == [], (
+    assert not sink.writes, (
         "text write must not be used when a binary buffer exists for "
         f"writes={sink.writes!r}"
     )

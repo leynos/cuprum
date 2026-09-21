@@ -636,10 +636,10 @@ def test_lines_empty_output_completes_and_publishes_result(
         f"a silent child must exit cleanly, got exit_code={result.exit_code!r}"
     )
     assert result.ok is True, f"a silent child must succeed, got {result!r}"
-    assert result.stdout == "", (
+    assert not result.stdout, (
         f"a silent child must capture no stdout, got {result.stdout!r}"
     )
-    assert result.stderr == "", (
+    assert not result.stderr, (
         f"a silent child must capture no stderr, got {result.stderr!r}"
     )
 

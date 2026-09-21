@@ -329,7 +329,7 @@ sys.stdout.write(data.upper())""",
 
         tracer.reset()
 
-        assert tracer.spans == [], "test_inmemory_tracer_reset should clear spans"
+        assert not tracer.spans, "test_inmemory_tracer_reset should clear spans"
 
     def test_concurrent_tracer_reset_leaves_valid_empty_state(
         self,

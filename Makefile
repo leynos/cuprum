@@ -265,8 +265,10 @@ DF12_PYLINT = $(DF12_PYLINT_ENV) $(UV_RUN_ENV) uv tool run \
   --with 'astroid==$(ASTROID_VERSION)' --with '$(DF12_PYTHON_LINTS)' \
   python -m pylint --jobs=1 \
   --disable=all --load-plugins=df12_python_lints \
-  --enable=$(DF12_PYLINT_MESSAGES)
-AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
+  --enable=syntax-error,$(DF12_PYLINT_MESSAGES)
+# Snapshot leak scanning is a CPython 3.14 tool pass. Keep it out of the
+# project virtual environment so linting never changes the application venv.
+AMBRLEAKS = $(UV_RUN_ENV) uv run --isolated --python $(DF12_PYTHON) ambrleaks
 SKYLOS_VERSION = 4.33.2
 # Skylos parses source using its own Python AST, so Python 3.14 prevents
 # phantom dead-code findings from syntax older tool runtimes cannot parse.
@@ -428,11 +430,12 @@ pylint-integration: verify-classic-pylint verify-df12-pylint ## Exercise both is
 		DF12_PYTHON="$(DF12_PYTHON)" DF12_PYTHON_LINTS="$(DF12_PYTHON_LINTS)" $(PYTEST) cuprum/unittests/test_pylint_runtime_contract.py
 
 pylint-classic: verify-classic-pylint ## Run the baseline Pylint pass under PyPy 8.0.0 / Python 3.12
-	$(PYLINT) $(PYLINT_TARGETS)
+	$(PYLINT) $(PYLINT_STRICT_TARGETS)
+	$(PYLINT) --disable=too-many-lines $(PYLINT_TEST_TARGETS)
 
 python-lint: ruff uv pylint-integration pylint-classic verify-df12-pylint ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
 	$(RUFF) check && $(INTERROGATE)
-	$(DF12_PYLINT) $(PYLINT_TARGETS)
+	$(DF12_PYLINT) $(DF12_PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 

@@ -23,7 +23,7 @@ def test_each_handoff_outcome_maps_to_one_fixed_metric(
     assert collector.counters == [
         (RUST_PUMP_HANDOFF_TOTAL, 1.0, {"outcome": outcome})
     ], f"{outcome.value!r} must map to exactly one hand-off metric"
-    assert collector.histograms == [], "hand-off outcomes must not create histograms"
+    assert not collector.histograms, "hand-off outcomes must not create histograms"
 
 
 def test_handoff_labels_are_limited_to_the_closed_outcome_vocabulary() -> None:
@@ -62,6 +62,6 @@ def test_invalid_handoff_outcome_emits_no_metric() -> None:
 
     PumpMetricsHook(collector)(malformed)
 
-    assert collector.counters == [], (
+    assert not collector.counters, (
         "an invalid outcome must not emit a submitted or arbitrary hand-off metric"
     )

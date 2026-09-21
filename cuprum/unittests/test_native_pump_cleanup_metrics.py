@@ -40,7 +40,7 @@ def test_expired_and_deferred_cleanup_metrics_stay_unlabelled() -> None:
         (RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL, 1.0, {}),
         (RUST_PUMP_CLEANUP_DEFERRED_TOTAL, 1.0, {}),
     ], f"new cleanup outcomes must be unlabelled counters, found {collector.counters}"
-    assert collector.histograms == [], (
+    assert not collector.histograms, (
         "grace expiry and deferred completion must not create a new histogram, "
         f"found {collector.histograms}"
     )

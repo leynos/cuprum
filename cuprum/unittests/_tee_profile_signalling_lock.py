@@ -19,11 +19,11 @@ class _RLockLike(typ.Protocol):
 
     def acquire(self, *, blocking: bool = True, timeout: float = -1) -> bool:
         """Acquire the lock, optionally blocking up to ``timeout`` seconds."""
-        ...
+        pass
 
     def release(self) -> None:
         """Release the lock."""
-        ...
+        pass
 
 
 class _SignallingRLock:

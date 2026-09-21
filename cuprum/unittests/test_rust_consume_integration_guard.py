@@ -166,7 +166,7 @@ def test_rust_consume_stream_not_referenced_in_production() -> None:
                 f"(scanning for {exc.symbol!r}; {cause_context})"
             )
 
-    assert scan_errors == [], (
+    assert not scan_errors, (
         "could not inspect one or more production modules; "
         f"fix the underlying read/parse errors: {scan_errors}"
     )

@@ -73,7 +73,7 @@ def test_safe_path_matches_classification(raw: str, *, allow_relative: bool) -> 
         assert str(exc_info.value) == rejection.value
 
 
-@given(raw=_FUZZ_TEXT.filter(lambda s: s != "" and "\x00" in s))
+@given(raw=_FUZZ_TEXT.filter(lambda s: bool(s) and "\x00" in s))
 def test_nul_bytes_are_rejected_as_nul(raw: str) -> None:
     """Any non-empty string containing a NUL classifies as ``NUL``."""
     assert classify_path_string(raw, allow_relative=True) is PathRejection.NUL

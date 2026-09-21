@@ -126,7 +126,7 @@ def test_declined_paths_open_no_executor_hop_span(
     with observe_pump_span(tracer):
         trigger(monkeypatch)
 
-    assert tracer.spans == [], f"declined path must not open a span: {tracer.spans}"
+    assert not tracer.spans, f"declined path must not open a span: {tracer.spans}"
 
 
 def test_unregistered_executor_hop_does_not_open_spans(

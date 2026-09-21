@@ -29,7 +29,7 @@ def test_complete_python_line_boundary_is_emitted_without_its_separator(
     lines, remainder = _split_complete_lines(f"line{boundary}")
 
     assert lines == ["line"], f"{boundary!r} must complete and strip one line"
-    assert remainder == "", f"{boundary!r} must leave no completed remainder"
+    assert not remainder, f"{boundary!r} must leave no completed remainder"
     assert _strip_line_ending(f"line{boundary}") == "line", (
         f"{boundary!r} must be stripped from an emitted line"
     )

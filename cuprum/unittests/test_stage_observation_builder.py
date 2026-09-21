@@ -49,7 +49,7 @@ _ENV_KEYS = st.text(
     alphabet="ABCDEFGH",
     min_size=1,
     max_size=3,
-).map("CUPRUM_TEST_{}".format)
+).map(lambda item: f"CUPRUM_TEST_{item}")
 _ENV_OVERLAYS = st.none() | st.dictionaries(_ENV_KEYS, st.text(max_size=5), max_size=4)
 _TAG_VALUES = st.text(max_size=5) | st.integers(min_value=0, max_value=9)
 _PIPELINE_STAGE_TAG_KEYS = frozenset(
