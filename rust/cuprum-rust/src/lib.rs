@@ -5,8 +5,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use cuprum_native_io::PlatformFd;
-use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
+use cuprum_streams::BufferSize;
+#[cfg(unix)]
+use cuprum_streams::{PumpError, consume_stream, pump_stream};
+#[cfg(windows)]
+use pyo3::exceptions::PyOSError;
 use pyo3::{exceptions::PyValueError, prelude::*};
+#[cfg(unix)]
 mod errors;
 #[cfg(test)]
 mod fd_tests;
@@ -15,6 +20,7 @@ mod fd_tests;
 pub mod loom_model;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(unix)]
 struct ReaderFd(PlatformFd);
 
 fn validate_buffer_size(size: i64) -> PyResult<BufferSize> {

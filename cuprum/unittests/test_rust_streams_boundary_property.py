@@ -59,6 +59,11 @@ _buffer_validation_before_descriptor = pytest.mark.skipif(
     reason="Windows resolves the descriptor before Rust validates buffer_size",
 )
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+)
+
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
     max_examples=50,
