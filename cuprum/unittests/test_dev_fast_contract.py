@@ -305,9 +305,23 @@ def test_portable_lint_orchestration_preserves_leaf_order() -> None:
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
     output = _dry_run("lint")
 
-    assert ".WAIT" not in makefile, "hosted Make must not require GNU Make 4.4"
-    assert "RECURSIVE_MAKE = $(MAKE) $(foreach makefile,$(MAKEFILE_LIST)" in makefile, (
-        "recursive lint leaves must preserve caller-supplied Makefiles"
+    # Strip comments before looking for `.WAIT`: the Makefile describes the
+    # marker in prose precisely to record why it is not used, and a raw text
+    # search would match that explanation instead of any real prerequisite.
+    directives = "\n".join(
+        line for line in makefile.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert ".WAIT" not in directives, "hosted Make must not require GNU Make 4.4"
+    # `.NOTPARALLEL` with prerequisites is itself GNU Make 4.4-only, so the
+    # ordering cannot rest on it alone. Make 4.3 ignores the prerequisites and
+    # serializes the whole run instead, which preserves the order either way.
+    assert ".NOTPARALLEL: lint rust-lint" in directives, (
+        "both lint aggregates must be serialized, present on GNU Make 4.3 and 4.4"
+    )
+    assert "RECURSIVE_MAKE" not in makefile, (
+        "lint leaves must run in one Make process so caller `-f` files are "
+        "honoured without forwarding a `MAKEFILE_LIST` that cannot distinguish "
+        "`-f` inputs from included files"
     )
     python_lint = output.index("python-lint")
     clippy = output.index("probe-cargo --config ../tools/dev-fast/config.toml clippy")
