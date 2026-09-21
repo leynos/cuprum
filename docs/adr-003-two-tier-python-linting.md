@@ -208,9 +208,9 @@ concurrent false-positive recordings remain intact.
 ## Addendum — 2026-09-21: Skylos documentation liveness has a size ceiling
 
 Skylos treats documentation as a liveness signal: a public method escapes
-`SKY-U001` when its class-qualified name — `_Owner.method` — appears in a
-`.md`, `.rst`, or `.txt` file under the scanned root. That signal has two
-ceilings, both silent, and neither configurable in the pinned release:
+`SKY-U001` when its class-qualified name — `_Owner.method` — appears in a `.md`,
+`.rst`, or `.txt` file under the scanned root. That signal has two ceilings,
+both silent, and neither configurable in the pinned release:
 
 - A document larger than 300000 bytes is skipped entirely, without a warning.
 - Reading stops once the accumulated document total passes 2000000 bytes.

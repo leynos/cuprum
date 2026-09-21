@@ -1,12 +1,11 @@
 # Coverage timeout tiers
 
-A timeout that fires on a healthy run is worse than no timeout: it turns a
-slow machine into a red build, and the fix that suggests itself — raise the
-number — is the one that hides a real hang. These lanes therefore carry four
-tiers rather than one, each sized to contain the tier inside it, and each
-asserted by value so a tier cannot drift back towards a default that no longer
-fits. This document records what each tier bounds and why it holds the value it
-does.
+A timeout that fires on a healthy run is worse than no timeout: it turns a slow
+machine into a red build, and the fix that suggests itself — raise the number —
+is the one that hides a real hang. These lanes therefore carry four tiers
+rather than one, each sized to contain the tier inside it, and each asserted by
+value so a tier cannot drift back towards a default that no longer fits. This
+document records what each tier bounds and why it holds the value it does.
 
 The tiers are ordered per-test allowance < global-timeout < cargo watchdog <
 job ceiling. The first two live in `rust/.config/nextest.toml`; the third is

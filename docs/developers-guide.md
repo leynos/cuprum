@@ -591,9 +591,10 @@ declaring `runs-on` twice could carry a paid label in the discarded half while
 every placement contract read the other. New workflow readers use it too.
 
 The coverage lanes also carry four nested timeout tiers, and the whole suite
-runs under the outermost of them. [Coverage timeout tiers](coverage-timeout-tiers.md)
-records each tier, the value it holds, and why the compile-driven `trybuild`
-tests need one of their own.
+runs under the outermost of them.
+[Coverage timeout tiers](coverage-timeout-tiers.md) records each tier, the
+value it holds, and why the compile-driven `trybuild` tests need one of their
+own.
 
 ### Concurrency
 
@@ -4331,9 +4332,9 @@ an alternate lock path. Never use a broad or unreasoned exception.
 Documentation is a liveness signal, and it has a silent size ceiling. A
 `SKY-U001` that appears after a docs-only change may mean the documentation
 crossed that ceiling rather than that the symbol died; check whether the symbol
-still has a runtime caller before silencing it. [ADR-003: Two-tier Python
-linting](adr-003-two-tier-python-linting.md) records the ceilings and what to
-do about them.
+still has a runtime caller before silencing it.
+[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) records
+the ceilings and what to do about them.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is

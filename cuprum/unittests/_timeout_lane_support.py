@@ -215,11 +215,30 @@ def _default_nextest_profile() -> NextestProfile:
     return default
 
 
-def _slow_timeout_of(profile: NextestProfile) -> SlowTimeout:
-    """Return a profile's explicit slow-timeout configuration."""
-    slow_timeout = profile.get("slow-timeout")
+def _slow_timeout_of(declaring: NextestProfile | NextestOverride) -> SlowTimeout:
+    """Return an explicit slow-timeout configuration.
+
+    Parameters
+    ----------
+    declaring : NextestProfile | NextestOverride
+        The profile, or one of its overrides, whose ``slow-timeout`` is read.
+        Both declare the table, and an override's replaces the profile's for
+        the tests its filter matches rather than merging into it, so one
+        reader serves both and neither table can be read as supplying what
+        the other left out.
+
+    Returns
+    -------
+    SlowTimeout
+        The ``slow-timeout`` mapping that table declares.
+
+    A table that declares no ``slow-timeout`` fails the caller's contract
+    assertion rather than being read as a tier of zero.
+    """
+    slow_timeout = declaring.get("slow-timeout")
     assert isinstance(slow_timeout, dict), (
-        f"{NEXTEST_CONFIG} must set [profile.default].slow-timeout"
+        f"{NEXTEST_CONFIG} must declare slow-timeout as a table, in "
+        f"[profile.default] or in an override that widens a tier"
     )
     return slow_timeout
 
@@ -300,7 +319,7 @@ def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestOverride]:
             f"{NEXTEST_CONFIG} must declare each profile override as a table"
         )
         if "slow-timeout" in override:
-            declared.append(typ.cast("NextestOverride", override))
+            declared.append(override)
     return declared
 
 
