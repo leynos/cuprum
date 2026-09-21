@@ -15,6 +15,7 @@ from cuprum._pipeline_internals import _EventDetails
 from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig, current_context, scoped
+from cuprum.events import ResourceUsageMode
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext, RunOutputOptions
 
@@ -484,6 +485,25 @@ def test_observe_emits_timeout_event_on_immediate_expiry() -> None:
     )
     assert timeout_event.pid is not None, (
         "the timeout event must carry the pid of the timed-out subprocess"
+    )
+
+    # The timeout path signals the child rather than reaping it, so nothing
+    # attributed a measurement to it. The exit event must still name its mode,
+    # and must leave the three figures unset rather than reporting a zero or a
+    # sibling's usage. This is the producer-side counterpart to the tracing
+    # adapter's projection test, which feeds the mode by hand.
+    exit_event = next(ev for ev in events if ev.phase == "exit")
+    assert exit_event.resource_usage_mode == ResourceUsageMode.UNAVAILABLE, (
+        "a signalled child has no attributable measurement, so the exit event "
+        f"must report mode 'unavailable', got {exit_event.resource_usage_mode!r}"
+    )
+    unmeasured = {
+        "max_rss_bytes": exit_event.max_rss_bytes,
+        "user_cpu_seconds": exit_event.user_cpu_seconds,
+        "system_cpu_seconds": exit_event.system_cpu_seconds,
+    }
+    assert all(value is None for value in unmeasured.values()), (
+        f"no figure was measured, so all three must stay None, got {unmeasured!r}"
     )
 
 

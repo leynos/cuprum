@@ -130,7 +130,12 @@ def test_records_direct_child_resource_usage(
 def test_publishes_cpu_deltas_from_direct_execution_snapshots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Direct execution publishes the CPU deltas from its rusage boundaries."""
+    """Direct execution publishes the CPU deltas from its rusage boundaries.
+
+    The exit event must agree with the result on the same fallback: the CPU
+    figures are carried, RSS stays unset, and the mode names the aggregate
+    producer rather than the attributable one.
+    """
     snapshots = [
         _rusage._ChildRusageSnapshot(0, 1.25, 2.5),
         _rusage._ChildRusageSnapshot(0, 4.75, 8.0),
@@ -147,7 +152,9 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
         lambda: False,
     )
 
-    result = sh.make(ECHO)("resource-probe").run_sync()
+    events: list[ExecEvent] = []
+    with observe(events.append):
+        result = sh.make(ECHO)("resource-probe").run_sync()
 
     assert result.max_rss_bytes is None, "aggregate RSS cannot identify one child"
     assert result.user_cpu_seconds == pytest.approx(3.5), (
@@ -155,6 +162,24 @@ def test_publishes_cpu_deltas_from_direct_execution_snapshots(
     )
     assert result.system_cpu_seconds == pytest.approx(5.5), (
         "direct execution must publish the measured system CPU delta"
+    )
+
+    exits = [event for event in events if event.phase == "exit"]
+    assert len(exits) == 1, f"one direct command emits one exit event, got {exits!r}"
+    event = exits[0]
+    assert event.resource_usage_mode == ResourceUsageMode.AGGREGATE_CPU_DELTA, (
+        "the CPU-delta fallback must name the aggregate producer, so a "
+        "consumer can tell an unattributable CPU-only figure from a measured "
+        "child"
+    )
+    assert event.max_rss_bytes is None, (
+        "the aggregate path must not publish an RSS figure on the event either"
+    )
+    assert event.user_cpu_seconds == pytest.approx(3.5), (
+        "the exit event must carry the user CPU delta the result reports"
+    )
+    assert event.system_cpu_seconds == pytest.approx(5.5), (
+        "the exit event must carry the system CPU delta the result reports"
     )
 
 
