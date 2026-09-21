@@ -140,6 +140,46 @@ def _resolved_test_targets() -> dict[str, set[str]]:
     return resolved
 
 
+def _assert_filter_selects_the_pinned_sources() -> None:
+    """Assert the override's sources exist and build the named target.
+
+    An override whose filter matches nothing is inert: it stays in place and
+    still reads as present to every assertion that only checks the value is
+    there, while the tests it was written for fall back to the allowance that
+    killed one of them. Two things can leave it matching nothing, and the
+    first check cannot see the second.
+
+    Existing is not the same as selected. `binary()` matches a target
+    *name*, so the sources are resolved through Cargo and each must be a
+    source that builds a test target named `compile_tests`; a rename in a
+    crate manifest would leave the files in place and the filter matching
+    nothing. A source resolving to no name at all is refused for the same
+    reason, naming the source rather than reporting the mismatch as a
+    rename.
+    """
+    missing = [
+        source
+        for source in COMPILE_TEST_SOURCES
+        if not (repo_root() / source).is_file()
+    ]
+    assert not missing, (
+        f"{COMPILE_TEST_FILTER!r} selects a binary built from these sources, "
+        f"but {missing} no longer exist; a filter matching nothing leaves the "
+        f"override inert while it still reads as present, and the tests it was "
+        f"written for fall back to the allowance that killed one of them"
+    )
+    targets = _resolved_test_targets()
+    resolving = {source: targets.get(source) for source in COMPILE_TEST_SOURCES}
+    expected = {source: {COMPILE_TEST_TARGET_NAME} for source in COMPILE_TEST_SOURCES}
+    assert resolving == expected, (
+        f"{COMPILE_TEST_FILTER!r} selects a test target named "
+        f"{COMPILE_TEST_TARGET_NAME!r}, but Cargo resolves the pinned sources "
+        f"to {resolving}; a target renamed away from that leaves the override "
+        f"inert while it still reads as present, and the tests it was written "
+        f"for fall back to the allowance that killed one of them"
+    )
+
+
 def test_the_trybuild_tests_carry_their_own_allowance() -> None:
     """The compile-driven tests need more than the profile's allowance.
 
@@ -196,31 +236,4 @@ def test_the_trybuild_tests_carry_their_own_allowance() -> None:
         f"and an override set just above the profile's 300 s would still leave "
         f"a healthy compile terminating"
     )
-    missing = [
-        source
-        for source in COMPILE_TEST_SOURCES
-        if not (repo_root() / source).is_file()
-    ]
-    assert not missing, (
-        f"{COMPILE_TEST_FILTER!r} selects a binary built from these sources, "
-        f"but {missing} no longer exist; a filter matching nothing leaves the "
-        f"override inert while it still reads as present, and the tests it was "
-        f"written for fall back to the allowance that killed one of them"
-    )
-    # Existing is not the same as selected. `binary()` matches a target
-    # *name*, so the sources are resolved through Cargo and each must be a
-    # source that builds a test target named `compile_tests`; a rename in a
-    # crate manifest would leave the files in place and the filter matching
-    # nothing. A source resolving to no name at all is refused for the same
-    # reason, naming the source rather than reporting the mismatch as a
-    # rename.
-    targets = _resolved_test_targets()
-    resolving = {source: targets.get(source) for source in COMPILE_TEST_SOURCES}
-    expected = {source: {COMPILE_TEST_TARGET_NAME} for source in COMPILE_TEST_SOURCES}
-    assert resolving == expected, (
-        f"{COMPILE_TEST_FILTER!r} selects a test target named "
-        f"{COMPILE_TEST_TARGET_NAME!r}, but Cargo resolves the pinned sources "
-        f"to {resolving}; a target renamed away from that leaves the override "
-        f"inert while it still reads as present, and the tests it was written "
-        f"for fall back to the allowance that killed one of them"
-    )
+    _assert_filter_selects_the_pinned_sources()
