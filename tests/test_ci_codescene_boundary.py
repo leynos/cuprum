@@ -93,8 +93,13 @@ DEPRECATED_INPUT = "installer-checksum"
 DEPRECATED_VARIABLE = "CODESCENE_CLI_SHA256"
 
 #: The `workflow_dispatch` that hashed the installer script and wrote the
-#: variable back through the API. Nothing reads what it wrote.
-REFRESH_WORKFLOW = "get-codescene-sha.yml"
+#: variable back through the API, named without an extension. Nothing reads
+#: what it wrote, and the clause below keeps it from returning under either
+#: GitHub extension.
+REFRESH_WORKFLOW_STEM = "get-codescene-sha"
+
+#: The extensions GitHub accepts for a workflow document.
+WORKFLOW_EXTENSIONS = (".yml", ".yaml")
 
 
 def _checkout(workflow_name: str, job_name: str) -> Step:
@@ -270,19 +275,23 @@ def test_every_codescene_action_reference_is_pinned_to_the_approved_revision() -
     compliance: deleting the upload step would otherwise satisfy this contract
     rather than fail it, and this repository is expected to publish coverage
     from main.
+
+    Every match is retained as its own ``(workflow, revision)`` pair rather
+    than collapsed into a mapping keyed by workflow. A mapping keeps only the
+    last match per file, so one workflow holding a stale reference followed by
+    an approved one would satisfy a contract whose whole claim is "every
+    reference".
     """
-    references = {
-        name: match.group(1)
+    references = [
+        (name, match.group(1))
         for name, source in _sources().items()
         for match in CODESCENE_ACTION_REFERENCE.finditer(source)
-    }
+    ]
     assert references, (
         "no CodeScene action reference was found, so the pin assertion would "
         "pass vacuously; main is expected to publish coverage"
     )
-    wrong = {
-        name: pin for name, pin in references.items() if pin != CODESCENE_ACTION_PIN
-    }
+    wrong = [(name, pin) for name, pin in references if pin != CODESCENE_ACTION_PIN]
     assert not wrong, (
         f"every CodeScene action reference must be pinned to "
         f"{CODESCENE_ACTION_PIN}; found {wrong}"
@@ -295,10 +304,20 @@ def test_the_checksum_refresh_workflow_is_absent() -> None:
     Asserted against the filesystem rather than the parsed workflows, because
     a workflow that exists but is never triggered still appears in no step
     list, and its absence is the property that matters.
+
+    Both extensions are checked. A real refresh workflow written as ``.yaml``
+    would also fail the variable contract above, because it names the
+    variable, but this clause must not lean on that: a placeholder of that
+    name which references nothing is exactly the shape this clause exists to
+    catch, and under one extension only it would have passed.
     """
-    refresh = WORKFLOW_DIR / REFRESH_WORKFLOW
-    assert not refresh.exists(), (
-        f"{REFRESH_WORKFLOW} refreshed {DEPRECATED_VARIABLE}, which no "
-        "workflow reads any more; delete it rather than leaving a dispatch "
-        "that maintains an unread repository variable"
+    present = [
+        f"{REFRESH_WORKFLOW_STEM}{extension}"
+        for extension in WORKFLOW_EXTENSIONS
+        if (WORKFLOW_DIR / f"{REFRESH_WORKFLOW_STEM}{extension}").exists()
+    ]
+    assert not present, (
+        f"{present} refreshed {DEPRECATED_VARIABLE}, which no workflow reads "
+        "any more; delete it rather than leaving a dispatch that maintains an "
+        "unread repository variable"
     )
