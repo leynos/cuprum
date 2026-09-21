@@ -98,6 +98,11 @@ extend-ignore-re = [
     "types: \\[opened, reopened, synchronize, labeled, ready_for_review\\]",
     "unsupported mold architecture",
     "upstream mold binaries",
+    "\\bASTROID_VERSION\\b",
+    "\\bAstroid\\b",
+    "\\b_ASTROID\\b",
+    "\\bastroid\\b",
+    "\\btest_classic_astroid_[a-z0-9_]+\\b",
 ]
 
 [type.markdown]

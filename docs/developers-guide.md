@@ -4380,7 +4380,7 @@ docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
 *presence* at 100 per cent across every Python scope: `benchmarks`,
 `conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks run
-third under PyPy 3.12, which uv resolves directly for `--python pypy`; no
+third under the checksum-verified PyPy 8.0.0 Python 3.12 binary, so no
 parser-patching shim is required. The pinned `df12-python-lints` plugin runs
 fourth under CPython 3.14, and `ambrleaks` scans Syrupy snapshots fifth under
 the same interpreter.
@@ -4401,9 +4401,15 @@ The short version is:
   handling, subprocess safety, and selected readability checks.
 - Pylint runs under PyPy so that the third tier is isolated from the project
   virtual environment and matches the lint approach used by `leynos/episodic`.
-- `$(PYLINT)` pins Pylint itself with
-  `--from 'pylint==$(PYLINT_VERSION)'`, currently 4.0.9, which runs on PyPy
-  3.12 without the former `pylint-pypy-shim` patch.
+- `$(PYLINT)` uses vanilla `python -m pylint --jobs=1` in an isolated PyPy
+  tool environment seeded from the checksum-verified binary above. It pins
+  Pylint with `--from 'pylint==$(PYLINT_VERSION)'` and Astroid with
+  `--with 'astroid==$(ASTROID_VERSION)'`, currently 4.0.9 and 4.0.4, and
+  verifies PyPy 8.0.0, Python 3.12, and both package versions before
+  analysing source. One worker is used deliberately, so the pass is
+  reproducible and its resource use stays bounded on shared builders.
+- `$(DF12_PYLINT)` keeps its own `PYLINTHOME` under CPython 3.14, so the two
+  Pylint passes never share cache state.
 - `$(DF12_PYLINT)` enables every message shipped by
   `df12-python-lints` v0.3.0 under CPython 3.14 while retaining Cuprum's
   `py-version = "3.12"` semantic baseline.
@@ -4470,8 +4476,9 @@ make lint
 1. `$(RUFF) check`
 2. `$(INTERROGATE)` — `$(UV_RUN_ENV) uv run interrogate --fail-under 100`
    `benchmarks conftest.py cuprum scripts tests`
-3. The PyPy-backed Pylint command stored in `$(PYLINT)`, with
-   `$(PYLINT_TARGETS)` appended.
+3. The PyPy-backed vanilla Pylint command stored in `$(PYLINT)`, run twice
+   over `$(PYLINT_TARGETS)`: once over `$(PYLINT_STRICT_TARGETS)` and once
+   over `$(PYLINT_TEST_TARGETS)`, where only `too-many-lines` is disabled.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
    the same targets.
 5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
@@ -4659,10 +4666,17 @@ Table: Lint-related Makefile variables and their defaults.
 | `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                   | Pinned ty command used by `typecheck`.                                                                                      |
 | `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files interrogated for docstring coverage.                                                                  |
 | `INTERROGATE`               | Derived command                                                             | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
-| `PYLINT_PYTHON`             | `pypy`                                                                      | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
-| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files passed to the PyPy-backed Pylint tier.                                                                |
+| `PYPY312_VERSION`           | `8.0.0`                                                                     | PyPy release whose Linux x86_64 archive seeds the classic Pylint tier.                                                      |
+| `PYPY312_SHA256`            | Pinned digest                                                               | SHA-256 the downloaded PyPy archive must match before extraction.                                                           |
+| `PYPY312_PYTHON`            | `$(abspath .pypy/pypy3.12-v8.0.0-linux64/bin/pypy3.12)`                     | Explicit interpreter path handed to `uv tool run` for the classic tier.                                                     |
+| `PYLINT_PYTHON`             | `$(PYPY312_PYTHON)`                                                         | Python interpreter requested by `uv tool run` for the classic Pylint tier.                                                  |
+| `PYLINT_TARGETS`            | Broad roots plus the non-package test directories                           | Directories and files passed to the PyPy-backed Pylint tiers.                                                               |
+| `PYLINT_TEST_TARGETS`       | `cuprum/unittests scripts/tests tests/behaviour tests/features`             | Test roots analysed with only `too-many-lines` disabled.                                                                   |
+| `PYLINT_STRICT_TARGETS`     | `$(PYLINT_TARGETS)` minus `$(PYLINT_TEST_TARGETS)`                          | Targets held to the full classic diagnostic set, including the line cap.                                                    |
 | `PYLINT_VERSION`            | `4.0.9`                                                                     | Pylint package version supplied to `uv tool run` through `--from`.                                                          |
-| `PYLINT_CACHE`              | `.cache/pylint`                                                             | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `ASTROID_VERSION`           | `4.0.4`                                                                     | Astroid package version pinned between the classic and DF12 Pylint passes.                                                  |
+| `PYLINT_CACHE`              | `.cache/pylint/pypy312`                                                     | Worktree-local cache for the classic PyPy Pylint pass.                                                                      |
+| `DF12_PYLINT_CACHE`         | `.cache/pylint/cpython314`                                                  | Worktree-local cache for the DF12 CPython Pylint pass, kept separate.                                                       |
 | `PYLINT`                    | Derived command                                                             | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
 | `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                    | Controlled release tag selected for DF12 lint tooling.                                                                      |
 | `DF12_PYTHON`               | `3.14`                                                                      | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
@@ -4687,8 +4701,11 @@ single module with the configured second tier:
 PYLINT_TARGETS=cuprum/sh make lint
 ```
 
-Do not change `PYLINT_VERSION` casually. A new Pylint release can change lint
-behaviour without any repository change, so treat it like any other toolchain
+Do not change the PyPy, Pylint, or Astroid pins casually. Their runtime
+identities are part of the lint contract, `verify-classic-pylint` and
+`verify-df12-pylint` assert them before each pass, and `make pylint-integration`
+exercises the assertions. A new Pylint release can change lint behaviour
+without any repository change, so treat the whole trio like any other toolchain
 update. Update the `df12-python-lints` development dependency and
 `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
 select the same controlled release tag. When adopting a new release, update
@@ -4705,7 +4722,8 @@ a separate house style. The imported policy consists of:
 - Test-file exceptions for assertion-heavy tests and pytest method conventions.
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
-- A PyPy-backed Pylint invocation, pinned to a specific Pylint release.
+- A PyPy-backed vanilla Pylint invocation in an isolated tool environment,
+  pinned to specific PyPy, Pylint, and Astroid releases.
 - Every `df12-python-lints` v0.3.0 message, including `R9112`, executed under
   CPython 3.14.
 - `ambrleaks` coverage for unit, script, and behavioural Syrupy snapshots.

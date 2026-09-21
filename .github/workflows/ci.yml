@@ -41,6 +41,8 @@ concurrency:
 env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
+  PYLINT_VERSION: '4.0.8'
+  ASTROID_VERSION: '4.0.4'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
   # the job is actually billed for. Raising the label means raising this too.
@@ -80,6 +82,8 @@ jobs:
       UV_TOOL_DIR: ${{ github.workspace }}/.uv-tools
       UV_TOOL_BIN_DIR: ${{ github.workspace }}/.uv-bin
       YAMLLINT_VERSION: '1.38.0'
+      PYPY312_VERSION: '8.0.0'
+      PYPY312_SHA256: 'a1b4851459c2b3dffccab71cb08989534fab0839deddd34f0e6bf18add256fd7'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -160,7 +164,17 @@ jobs:
             .uv-cache
             .uv-tools
             .uv-bin
-          key: yamllint-${{ runner.os }}-${{ runner.arch }}-${{ env.YAMLLINT_VERSION }}
+          key: >-
+            python-lint-tools-${{ runner.os }}-${{ runner.arch }}-
+            ${{ env.YAMLLINT_VERSION }}-${{ env.PYLINT_VERSION }}-${{ env.ASTROID_VERSION }}
+
+      - name: Cache PyPy 3.12 lint runtime
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: .pypy
+          key: >-
+            pypy312-${{ runner.os }}-${{ runner.arch }}-${{ env.PYPY312_VERSION }}-
+            ${{ env.PYPY312_SHA256 }}
 
       - name: Install yamllint
         run: |

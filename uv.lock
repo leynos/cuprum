@@ -99,6 +99,7 @@ source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "astroid" },
     { name = "crosshair-tool" },
     { name = "cyclopts" },
     { name = "df12-python-lints" },
@@ -107,6 +108,7 @@ dev = [
     { name = "interrogate" },
     { name = "maturin" },
     { name = "packaging" },
+    { name = "pylint" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-bdd" },
@@ -123,6 +125,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "astroid", specifier = "==4.0.4" },
     { name = "crosshair-tool" },
     { name = "cyclopts", specifier = ">=4.0" },
     { name = "df12-python-lints", git = "https://github.com/leynos/df12-python-lints.git?rev=v0.3.0" },
@@ -131,6 +134,7 @@ dev = [
     { name = "interrogate" },
     { name = "maturin", specifier = "==1.15.0" },
     { name = "packaging", specifier = ">=25.0,<26.0" },
+    { name = "pylint", specifier = "==4.0.9" },
     { name = "pyright" },
     { name = "pytest", specifier = "<9.1" },
     { name = "pytest-bdd" },

@@ -209,16 +209,47 @@ PYTEST = $(UV_RUN_ENV) uv run pytest
 # pyproject.toml; none is configured today.
 INTERROGATE_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 INTERROGATE = $(UV_RUN_ENV) uv run interrogate --fail-under 100 $(INTERROGATE_TARGETS)
-PYLINT_PYTHON ?= pypy
-PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests
+# PyPy 8.0.0's Python 3.12 build is beta quality. uv's catalogue does not yet
+# expose it, so obtain the official Linux x86_64 binary and verify its checksum
+# before using its explicit executable path. The lint pass itself validates the
+# interpreter identity, so a caller override cannot silently select PyPy 3.11.
+PYPY312_VERSION ?= 8.0.0
+PYPY312_PYTHON_VERSION ?= 3.12
+PYPY312_ARCHIVE ?= pypy3.12-v8.0.0-linux64.tar.gz
+PYPY312_URL ?= https://downloads.python.org/pypy/$(PYPY312_ARCHIVE)
+PYPY312_SHA256 ?= a1b4851459c2b3dffccab71cb08989534fab0839deddd34f0e6bf18add256fd7
+PYPY312_ROOT ?= .pypy/pypy3.12-v8.0.0-linux64
+PYPY312_ARCHIVE_PATH ?= .pypy/$(PYPY312_ARCHIVE)
+PYPY312_PYTHON ?= $(abspath $(PYPY312_ROOT)/bin/pypy3.12)
+PYLINT_PYTHON ?= $(PYPY312_PYTHON)
+# Include non-package test directories directly: Pylint's recursive walk only
+# descends from a package directory, so the broad roots alone skip them.
+PYLINT_TARGETS ?= benchmarks conftest.py cuprum cuprum/unittests scripts \
+  scripts/tests tests tests/behaviour tests/features
+# The 400-line module limit remains enforced for production and benchmark
+# sources. The in-package test suite has 28 pre-existing larger modules, so
+# analyse it in a separate invocation with only that one test-only exception.
+PYLINT_TEST_TARGETS ?= cuprum/unittests scripts/tests tests/behaviour tests/features
+PYLINT_STRICT_TARGETS = $(filter-out $(PYLINT_TEST_TARGETS),$(PYLINT_TARGETS))
+# DF12 retains the established package-root discovery scope. The classic pass
+# owns complete source coverage, including the non-package test roots above;
+# the DF12 plugin remains a focused, separately versioned policy pass.
+DF12_PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 # Pin pylint: a new release would otherwise change lint behaviour without any
 # repository change (same skew class as ruff above). Pylint 4.0.9 runs on PyPy
 # without the former pylint-pypy-shim patch.
 PYLINT_VERSION ?= 4.0.9
-PYLINT_CACHE ?= .cache/pylint
+# Pylint 4.0.9 declares Astroid <=4.1.dev0. Astroid 4.3.1 is therefore a
+# future upgrade once Pylint publishes a compatible release; pin the newest
+# supported stack deliberately rather than forcing incompatible metadata.
+ASTROID_VERSION ?= 4.0.4
+PYLINT_CACHE ?= .cache/pylint/pypy312
+DF12_PYLINT_CACHE ?= .cache/pylint/cpython314
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
+DF12_PYLINT_ENV = PYLINTHOME=$(DF12_PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
-  --from 'pylint==$(PYLINT_VERSION)' pylint
+  --from 'pylint==$(PYLINT_VERSION)' --with 'astroid==$(ASTROID_VERSION)' \
+  python -m pylint --jobs=1
 TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.2
 TYPOS_CONFIG_BUILDER = $(UV_RUN_ENV) uv tool run --python 3.14 --from \
   "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
@@ -229,9 +260,10 @@ DF12_PYTHON_LINTS_REF ?= v0.3.0
 DF12_PYTHON_LINTS = git+https://github.com/leynos/df12-python-lints.git@$(DF12_PYTHON_LINTS_REF)
 DF12_PYTHON ?= 3.14
 DF12_PYLINT_MESSAGES = R9101,C9102,R9103,R9104,C9105,C9106,C9107,R9108,R9109,R9110,R9111,C9112,R9112
-DF12_PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv run --isolated \
-  --python $(DF12_PYTHON) --with 'pylint==$(PYLINT_VERSION)' \
-  --with '$(DF12_PYTHON_LINTS)' pylint \
+DF12_PYLINT = $(DF12_PYLINT_ENV) $(UV_RUN_ENV) uv tool run \
+  --python $(DF12_PYTHON) --from 'pylint==$(PYLINT_VERSION)' \
+  --with 'astroid==$(ASTROID_VERSION)' --with '$(DF12_PYTHON_LINTS)' \
+  python -m pylint --jobs=1 \
   --disable=all --load-plugins=df12_python_lints \
   --enable=$(DF12_PYLINT_MESSAGES)
 AMBRLEAKS = $(UV_RUN_ENV) uv run --python $(DF12_PYTHON) ambrleaks
@@ -249,8 +281,10 @@ SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 MDLINT_FILES_FIND = bash -o pipefail -c 'git ls-files -z --cached --others --exclude-standard -- "$$@" | while IFS= read -r -d "" markdown_file; do if [ -f "$$markdown_file" ] && [ ! -L "$$markdown_file" ]; then case "$$markdown_file" in -*) printf "./%s\0" "$$markdown_file" ;; *) printf "%s\0" "$$markdown_file" ;; esac; fi; done' -- $(MARKDOWN_GLOBS)
 MDLINT_FIX_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) --fix < "$$markdown_files"
 MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) < "$$markdown_files"
-.PHONY: help all clean build build-release lint python-lint rust-lint lint-clippy \
-        lint-whitaker github-actions-lint \
+.PHONY: help all clean build build-release lint python-lint pylint-classic \
+        pylint-integration pypy312 verify-classic-pylint verify-df12-pylint \
+        rust-lint lint-clippy lint-whitaker \
+        github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust loom test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
@@ -358,8 +392,46 @@ test-markdown-format: ## Validate the Markdown formatting Makefile contract
 
 lint: python-lint rust-lint github-actions-lint ## Run Python, Rust, and GitHub Actions linters
 
-python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
-	$(RUFF) check && $(INTERROGATE) && $(PYLINT) $(PYLINT_TARGETS)
+$(PYPY312_PYTHON):
+	@set -eu; \
+	if test "$(shell uname -s)" != Linux || test "$(shell uname -m)" != x86_64; then \
+		printf '%s\n' 'PyPy 8.0.0 Python 3.12 linting is supported only on Linux x86_64' >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(dir $(PYPY312_ROOT))"; \
+	if test ! -f "$(PYPY312_ARCHIVE_PATH)"; then \
+		curl --fail --location --show-error --output "$(PYPY312_ARCHIVE_PATH)" "$(PYPY312_URL)"; \
+	fi; \
+	printf '%s  %s\n' "$(PYPY312_SHA256)" "$(PYPY312_ARCHIVE_PATH)" | sha256sum --check --; \
+	if test -d "$(PYPY312_ROOT)"; then \
+		test -x "$(PYPY312_PYTHON)" || { printf '%s\n' 'PyPy extraction is incomplete; remove .pypy and retry' >&2; exit 1; }; \
+	else \
+		tar -xzf "$(PYPY312_ARCHIVE_PATH)" -C "$(dir $(PYPY312_ROOT))"; \
+	fi; \
+	test -x "$(PYPY312_PYTHON)"
+
+pypy312: $(PYPY312_PYTHON) ## Install the checksum-verified PyPy 8.0.0 Python 3.12 linter
+
+verify-classic-pylint: ## Verify the exact PyPy and Pylint environment before linting
+	@if test "$(PYLINT_PYTHON)" = "$(PYPY312_PYTHON)"; then $(MAKE) --no-print-directory pypy312; fi
+	$(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
+		--from 'pylint==$(PYLINT_VERSION)' --with 'astroid==$(ASTROID_VERSION)' \
+		python -c 'import astroid, pylint, sys; expected = ("pypy", (3, 12), (8, 0, 0)); actual = (sys.implementation.name, sys.version_info[:2], sys.pypy_version_info[:3]); assert actual == expected, f"classic pylint requires {expected}, got {actual}"; print(f"classic pylint: {sys.version}; pylint {pylint.__version__}; astroid {astroid.__version__}")'
+
+verify-df12-pylint: ## Verify the CPython 3.14 DF12 environment before linting
+	$(DF12_PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(DF12_PYTHON) \
+		--from 'pylint==$(PYLINT_VERSION)' --with 'astroid==$(ASTROID_VERSION)' \
+		--with '$(DF12_PYTHON_LINTS)' python -c 'import astroid, pylint, sys; expected = ("cpython", (3, 14)); actual = (sys.implementation.name, sys.version_info[:2]); assert actual == expected, f"DF12 pylint requires {expected}, got {actual}"; print(f"DF12 pylint: {sys.version}; pylint {pylint.__version__}; astroid {astroid.__version__}")'
+
+pylint-integration: verify-classic-pylint verify-df12-pylint ## Exercise both isolated Pylint environments
+	PYLINT_PYTHON="$(PYLINT_PYTHON)" PYLINT_VERSION="$(PYLINT_VERSION)" ASTROID_VERSION="$(ASTROID_VERSION)" \
+		DF12_PYTHON="$(DF12_PYTHON)" DF12_PYTHON_LINTS="$(DF12_PYTHON_LINTS)" $(PYTEST) cuprum/unittests/test_pylint_runtime_contract.py
+
+pylint-classic: verify-classic-pylint ## Run the baseline Pylint pass under PyPy 8.0.0 / Python 3.12
+	$(PYLINT) $(PYLINT_TARGETS)
+
+python-lint: ruff uv pylint-integration pylint-classic verify-df12-pylint ## Run Ruff, interrogate, pylint, df12-python-lints, and ambrleaks
+	$(RUFF) check && $(INTERROGATE)
 	$(DF12_PYLINT) $(PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify

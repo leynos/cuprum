@@ -89,6 +89,12 @@ ignore = [
   'upstream mold binaries',
   'downloaded mold',
   '\btools/mold/',
+  # Astroid is Pylint's external package name and its conventional pin name.
+  '\bAstroid\b',
+  '\bastroid\b',
+  '\bASTROID_VERSION\b',
+  '\b_ASTROID\b',
+  '\btest_classic_astroid_[a-z0-9_]+\b',
 ]
 
 # ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
