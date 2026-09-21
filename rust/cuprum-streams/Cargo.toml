@@ -19,7 +19,7 @@ libc = "0.2.186"
 cap-std = "4.0.2"
 insta = { version = "1.48.0", default-features = false }
 proptest = "1.11.0"
-rstest = "0.26.1"
+rstest = "0.27.0"
 tempfile = "3.27.0"
 trybuild = { version = "1.0.116", features = ["diff"] }
 
