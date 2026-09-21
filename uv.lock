@@ -123,7 +123,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "crosshair-tool" },
-    { name = "cyclopts", specifier = ">=2.9" },
+    { name = "cyclopts", specifier = ">=4.0" },
     { name = "df12-python-lints", git = "https://github.com/leynos/df12-python-lints.git?rev=v0.3.0" },
     { name = "hypothesis", specifier = ">=6.163.0,<7.0" },
     { name = "hypothesis-crosshair" },

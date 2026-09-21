@@ -15,7 +15,7 @@ fn model(action: impl Fn() + Send + Sync + 'static) {
         .parse::<usize>()
         .expect("LOOM_MAX_THREADS must be an unsigned integer");
     assert!(
-        (1..loom::MAX_THREADS).contains(&max_threads),
+        (1..=loom::MAX_THREADS).contains(&max_threads),
         "LOOM_MAX_THREADS must be between one and Loom's maximum"
     );
     let mut builder = loom::model::Builder::new();
@@ -288,6 +288,7 @@ fn cancellation_and_submission_share_the_handoff_linearization_point() {
             .join()
             .expect("submission actor must finish")
             .expect("submission actor must preserve lifecycle state");
+        let expected_native_writer_closes = usize::from(worker.is_some());
         if let Some(worker) = worker {
             worker
                 .join()
@@ -300,10 +301,6 @@ fn cancellation_and_submission_share_the_handoff_linearization_point() {
         let snapshot = state
             .snapshot()
             .expect("snapshot must observe the settled lifecycle");
-        assert_eq!(snapshot.callback_writer_closes, 1);
-        assert!(
-            snapshot.native_writer_closes <= 1,
-            "submission races can close the native writer at most once"
-        );
+        assert_safe_terminal(snapshot, expected_native_writer_closes);
     });
 }

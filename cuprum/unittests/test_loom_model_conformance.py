@@ -41,4 +41,6 @@ def test_cancelled_pump_trace_matches_the_loom_transition_mapping(
     assert len(tracer.spans) == 1, "one native-pump lifecycle creates one hop span"
     span = tracer.spans[0]
     assert span.ended is True, "the terminal span must close"
-    assert span.attributes["cuprum.outcome"] is PumpHopOutcome.CANCELLED
+    assert span.attributes["cuprum.outcome"] == PumpHopOutcome.CANCELLED, (
+        "the cancelled hop must record the cancelled outcome"
+    )

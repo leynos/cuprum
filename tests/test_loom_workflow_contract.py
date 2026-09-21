@@ -86,6 +86,22 @@ def test_schedule_dispatch_permissions_and_concurrency_are_fixed() -> None:
     )
 
 
+def test_scheduled_main_run_is_the_only_loom_cache_writer() -> None:
+    """The bounded full lane publishes its cache only after scheduled main runs."""
+    job = _loom_job(_load())
+    steps = job.get("steps")
+    assert isinstance(steps, list), "the Loom job must declare steps"
+    cache_saves = [
+        _string_mapping(step, "a Loom workflow step")
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "Save the compiler cache"
+    ]
+    assert len(cache_saves) == 1, "the Loom compiler cache must have one writer"
+    assert cache_saves[0].get("if") == (
+        "github.event_name == 'schedule' && github.ref == 'refs/heads/main'"
+    ), "only scheduled main runs may publish the trusted Loom compiler cache"
+
+
 def test_execution_step_runs_the_driver_and_driver_executes_loom() -> None:
     """A green compile-only, wrong-target, or zero-model lane is rejected."""
     steps = _run_steps(_loom_job(_load()))

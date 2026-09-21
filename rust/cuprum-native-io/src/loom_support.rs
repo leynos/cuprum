@@ -40,10 +40,21 @@ pub fn pump_close_counts(pump_exit: PumpExit) -> PumpCloseCounts {
         PumpExit::Failed => ExitMode::Error,
     };
     let outcome = model_pump_stream(ModelFd::new(&reader_log), ModelFd::new(&writer_log), exit);
-    assert_eq!(outcome.is_ok(), matches!(pump_exit, PumpExit::Succeeded));
+    assert_eq!(
+        outcome.is_ok(),
+        matches!(pump_exit, PumpExit::Succeeded),
+        "the retained-owner model must match the selected native outcome"
+    );
     let consume_log = CloseLog::new();
-    assert!(model_consume_stream(ModelFd::new(&consume_log), ExitMode::Normal).is_ok());
-    assert_eq!(consume_log.closes(), 0);
+    assert!(
+        model_consume_stream(ModelFd::new(&consume_log), ExitMode::Normal).is_ok(),
+        "the borrowed-reader consume path must complete"
+    );
+    assert_eq!(
+        consume_log.closes(),
+        0,
+        "the borrowed consume reader stays open"
+    );
 
     PumpCloseCounts {
         reader_closes: close_count(reader_log),
@@ -51,9 +62,4 @@ pub fn pump_close_counts(pump_exit: PumpExit) -> PumpCloseCounts {
     }
 }
 
-fn close_count(log: CloseLog) -> usize {
-    match usize::try_from(log.closes()) {
-        Ok(closes) => closes,
-        Err(_) => unreachable!("u32 close count must fit into usize"),
-    }
-}
+fn close_count(log: CloseLog) -> usize { usize::try_from(log.closes()).unwrap_or(usize::MAX) }

@@ -3141,9 +3141,12 @@ regular smoke lane uses at most two pre-emptions, 300 branches, and four
 threads; `.github/workflows/loom.yml` uses three pre-emptions, 2,000 branches,
 and four threads. The full lane runs every day at 17:15 UTC and on manual
 dispatch. To reproduce a bounded counterexample, pass all three explicit
-overrides, such as
-`uv run scripts/run_loom.py --mode full --max-preemptions 3
---max-branches 2000 --max-threads 4`.
+overrides, such as:
+
+```bash
+uv run scripts/run_loom.py --mode full --max-preemptions 3 --max-branches 2000 --max-threads 4
+```
+
 UTC is deliberate: the slot does not preserve a Europe/London wall-clock time
 through daylight-saving transitions.
 
@@ -3385,6 +3388,7 @@ Table 1: modules gated on the compiled extension
 | `test_rust_errno.py`                               | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
 | `test_rust_errno_windows.py`                       | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
 | `test_backend.py`                                  | the extension-dependent backend-selection cases                                                                                                                      |
+| `test_loom_model_conformance.py`                   | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
 | `test_extension_requirement_guard.py`              | the fail-loud guard itself                                                                                                                                           |
 | `tests/behaviour/test_rust_streams_behaviour.py`   | the consumer-facing pump and consume scenarios                                                                                                                       |
 | `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module                                                                                                               |

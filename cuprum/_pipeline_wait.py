@@ -296,7 +296,7 @@ async def _process_completed_task(
     ended_at = perf_counter()
 
     had_failure = state.failure_index is not None
-    request_termination = state.record_completion(idx, exit_code, ended_at=ended_at)
+    state.record_completion(idx, exit_code, ended_at=ended_at)
     latched_first_failure = not had_failure and state.failure_index == idx
 
     # The query says whether this completion *is* the trigger; the wait tasks
@@ -304,7 +304,7 @@ async def _process_completed_task(
     # order can reach an upstream failure after every sibling has exited, and
     # announcing a teardown of nothing would report a termination that never
     # happened and count a fail-fast the operator cannot act on.
-    terminate_others = request_termination and _has_stages_to_terminate(
+    terminate_others = state.should_terminate_others(idx) and _has_stages_to_terminate(
         idx,
         state.wait_tasks,
     )

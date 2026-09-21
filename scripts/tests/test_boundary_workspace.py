@@ -170,6 +170,8 @@ def _remove_copied_dev_dependencies(manifest: Path) -> None:
     manifest.write_text(before + "[lints]\n" + after, encoding="utf-8")
 
 
+# The real isolated Cargo check can wait for the shared package-cache lock.
+@pytest.mark.timeout(120)
 def test_main_materializes_external_source_file_symlinks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

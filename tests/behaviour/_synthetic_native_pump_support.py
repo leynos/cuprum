@@ -24,7 +24,18 @@ if typ.TYPE_CHECKING:
 def force_synthetic_native_pump_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> cabc.Iterator[None]:
-    """Route a test-owned pipe pair through the otherwise unsupported native path."""
+    """Route a test-owned pipe pair through the otherwise unsupported native path.
+
+    Parameters
+    ----------
+    monkeypatch
+        Pytest patch manager used to scope synthetic platform and dispatch hooks.
+
+    Yields
+    ------
+    None
+        The active synthetic native-pump path.
+    """
     reader_pipe_fd, writer_pipe_fd = os.pipe()
     extracted_fds: list[int] = []
 

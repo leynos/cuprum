@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run python
 # /// script
 # requires-python = ">=3.13"
-# dependencies = ["cyclopts>=2.9", "cuprum==0.1.0"]
+# dependencies = ["cyclopts>=4.0", "cuprum==0.1.0"]
 # ///
 """Run Cuprum's bounded Loom models and emit an auditable summary."""
 
@@ -35,7 +35,9 @@ if typ.TYPE_CHECKING:
 
 try:
     from cuprum.context import ScopeConfig
-except ImportError:  # Cuprum 0.1.0 exposes the older keyword scope API.
+except ImportError as error:  # Cuprum 0.1.0 exposes the older keyword scope API.
+    if error.name != "cuprum.context":
+        raise
     ScopeConfig = None
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent

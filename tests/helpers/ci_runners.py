@@ -149,6 +149,7 @@ SCCACHE_JOBS: typ.Final = (
     ("ci.yml", "coverage"),
     ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
+    ("loom.yml", "loom"),
 )
 #: Steps in the interpreter matrix that must follow the Python suite, because
 #: without it the job compiles nothing and the wrapper would report zero

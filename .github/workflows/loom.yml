@@ -26,7 +26,7 @@ jobs:
       contents: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -94,6 +94,9 @@ jobs:
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
 
+      - name: Reset compiler-cache counters
+        run: sccache --zero-stats
+
       - name: Run full Loom models
         run: uv run scripts/run_loom.py --mode full --summary loom-summary.md
 
@@ -106,6 +109,20 @@ jobs:
             printf '### Loom model summary\n\nThe Loom driver did not start.\n' \
               >> "${GITHUB_STEP_SUMMARY}"
           fi
+
+      - name: Record compiler-cache effectiveness
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee sccache-stats.txt
+          sccache --show-stats --stats-format json > sccache-stats.json
+          fence='```'
+          {
+            printf '### sccache\n\n%stext\n' "${fence}"
+            cat sccache-stats.txt
+            printf '%s\n' "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Save the compiler cache
         if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
