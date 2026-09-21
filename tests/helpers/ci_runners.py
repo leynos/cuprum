@@ -105,7 +105,6 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "ci.yml": ("lint-test", "changes", "loom-smoke"),
     "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
-    "get-codescene-sha.yml": ("refresh-sha",),
     "loom.yml": ("loom",),
     "release.yml": ("publish",),
     # Issue379 requires verifier schedules on GitHub-hosted Linux.

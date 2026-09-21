@@ -58,7 +58,6 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `loom-smoke`              | `ci.yml`                     | `ubuntu-latest`       |
 | `loom`                    | `loom.yml`                   | `ubuntu-latest`       |
 | `extension-tests-windows` | `ci.yml`                     | `windows-2022`        |
-| `refresh-sha`             | `get-codescene-sha.yml`      | `ubuntu-latest`       |
 | `publish`                 | `release.yml`                | `ubuntu-latest`       |
 | `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       |
 | `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    |

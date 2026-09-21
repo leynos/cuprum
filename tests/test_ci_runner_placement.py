@@ -49,6 +49,12 @@ NEXTEST_INSTALL_HOST = "get.nexte.st"
 #: Steps invoking a shared action are exempt: the coverage action installs
 #: nextest on purpose, and that is the only sanctioned place.
 SHARED_ACTION_PREFIX = "leynos/shared-actions/"
+#: A `vars.*` reference in a workflow. actionlint checks such a reference
+#: against `config-variables`, so the declared list and the references read
+#: back from the workflows have to agree in both directions: an undeclared
+#: name is a lint error, and a declared name nothing reads is a stale
+#: allowance that would let a deleted variable's typo pass.
+CONFIGURATION_VARIABLE = re.compile(r"vars\.([A-Za-z_][A-Za-z0-9_]*)")
 #: Make variables that carry the runner's vCPU count into the test command.
 #: Only the pytest one remains here: the Rust suite moved to the coverage job,
 #: which bounds itself through `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`.
@@ -159,12 +165,18 @@ def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
         "actionlint must list every self-hosted label the workflows use and no "
         f"others; declared {declared}, used {sorted(used)}"
     )
-    # Compared as a set: the config registers names for lint to resolve, and
-    # actionlint does not care what order they appear in. Sorting still fails
-    # on a duplicate, so the membership check loses nothing.
-    assert sorted(config["config-variables"]) == ["CODESCENE_CLI_SHA256"], (
+    # Compared as sorted lists: the config registers names for lint to
+    # resolve, and actionlint does not care what order they appear in. Sorting
+    # still fails on a duplicate, so the comparison loses nothing.
+    read = {
+        match.group(1)
+        for _, source in workflow_sources()
+        for match in CONFIGURATION_VARIABLE.finditer(source)
+    }
+    assert sorted(config["config-variables"]) == sorted(read), (
         "list only the configuration variables the workflows read, so a typo "
-        f"in a vars.* reference fails lint; got {config['config-variables']}"
+        f"in a vars.* reference fails lint; declared "
+        f"{config['config-variables']}, read {sorted(read)}"
     )
 
 
