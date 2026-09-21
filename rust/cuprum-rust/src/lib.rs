@@ -5,7 +5,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use cuprum_native_io::PlatformFd;
-use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
+use cuprum_streams::{BufferSize, PumpError};
+#[cfg(unix)]
+use cuprum_streams::{consume_stream, pump_stream};
+#[cfg(windows)]
+use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use thiserror::Error;
 mod errors;
@@ -20,6 +24,7 @@ mod stream_error_behaviour;
 mod stream_error_tests;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(unix)]
 struct ReaderFd(PlatformFd);
 
 /// Classify a failure at the native stream boundary.
@@ -71,6 +76,18 @@ pub const fn is_available() -> bool { true }
     clippy::too_many_arguments,
     reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
 )]
+#[cfg(unix)]
+mod stream_pyfunctions;
+
+#[expect(
+    clippy::allow_attributes,
+    reason = "PyO3 emits the argument-count lint only in some build configurations"
+)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
+)]
+#[cfg(windows)]
 mod stream_pyfunctions;
 
 use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};

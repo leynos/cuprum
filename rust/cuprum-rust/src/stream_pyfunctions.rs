@@ -1,20 +1,25 @@
 //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
+#[cfg(windows)]
+use std::os::windows::io::{FromRawHandle, RawHandle};
+
+#[cfg(windows)]
+use cuprum_native_io::OwnedStream;
+#[cfg(unix)]
 use super::{
     BufferSize,
-    PlatformFd,
     PumpError,
     PyErr,
-    PyResult,
-    Python,
     ReaderFd,
     RustStreamError,
     consume_stream,
     convert_fd,
     pump_stream,
-    pyfunction,
     validate_buffer_size,
 };
+#[cfg(windows)]
+use super::{PyOSError, convert_fd, validate_buffer_size};
+use super::{PlatformFd, PyResult, Python, pyfunction};
 
 /// Run a prepared stream operation after validating its buffer size.
 ///
@@ -27,6 +32,7 @@ use super::{
 /// has been reacquired. The detached operation itself keeps its `PumpError`
 /// result: it outlives the argument checks and has no business knowing about
 /// them, so only its error is classified on the way out.
+#[cfg(unix)]
 fn run_stream_operation<T, Operation>(
     py: Python<'_>,
     reader_fd: i64,
@@ -47,6 +53,22 @@ where
     result.map_err(PyErr::from)
 }
 
+#[cfg(windows)]
+fn raw_windows_handle_error<T>() -> PyResult<T> {
+    Err(PyOSError::new_err(
+        "native stream operations do not accept raw Windows handles; use the Python fallback",
+    ))
+}
+
+#[cfg(windows)]
+fn reject_transferred_windows_writer<T>(writer: PlatformFd) -> PyResult<T> {
+    // SAFETY: this PyO3 entry point accepts an ownership transfer for its
+    // writer argument. Rejecting unsupported raw Windows I/O still consumes
+    // that transfer, but never asserts the synchronous-I/O capability.
+    drop(unsafe { OwnedStream::from_raw_handle(writer as RawHandle) });
+    raw_windows_handle_error()
+}
+
 /// Pump bytes between file descriptors outside the GIL.
 ///
 /// # Parameters
@@ -65,6 +87,14 @@ pub(super) fn rust_pump_stream(
     writer_fd: i64,
     buffer_size: i64,
 ) -> PyResult<u64> {
+    #[cfg(windows)]
+    {
+        let _ = py;
+        validate_buffer_size(buffer_size)?;
+        convert_fd(reader_fd)?;
+        return reject_transferred_windows_writer(convert_fd(writer_fd)?);
+    }
+    #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {
         let writer_raw: PlatformFd = convert_fd(writer_fd)?;
         // SAFETY: `_streams_rs` transfers its duplicate exactly once.
@@ -74,17 +104,9 @@ pub(super) fn rust_pump_stream(
         Ok(move |reader: ReaderFd, validated_buffer_size| {
             // SAFETY: Python keeps the paused reader transport alive until
             // the worker and cleanup finish, including cancellation. On
-            // Windows, the hand-off also establishes synchronous I/O; the
-            // Python pipeline rejects Proactor overlapped handles.
+            // Unix, the borrow only lasts for this synchronous operation.
             let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
-            #[cfg(unix)]
-            {
-                pump_stream(&source, writer, validated_buffer_size)
-            }
-            #[cfg(windows)]
-            {
-                pump_stream(source, writer, validated_buffer_size)
-            }
+            pump_stream(&source, writer, validated_buffer_size)
         })
     })
 }
@@ -111,20 +133,20 @@ pub(super) fn rust_consume_stream(
     reader_fd: i64,
     buffer_size: i64,
 ) -> PyResult<String> {
+    #[cfg(windows)]
+    {
+        let _ = py;
+        validate_buffer_size(buffer_size)?;
+        convert_fd(reader_fd)?;
+        return raw_windows_handle_error();
+    }
+    #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {
         Ok(|reader: ReaderFd, size| {
             // SAFETY: the Python consume caller retains its reader throughout
             // this synchronous native call, including the GIL-free interval.
-            // Windows calls additionally establish non-overlapped I/O.
             let source = unsafe { cuprum_native_io::borrow_reader(reader.0) };
-            #[cfg(unix)]
-            {
-                consume_stream(&source, size)
-            }
-            #[cfg(windows)]
-            {
-                consume_stream(source, size)
-            }
+            consume_stream(&source, size)
         })
     })
 }
