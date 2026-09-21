@@ -19,6 +19,10 @@ approved executables. Each command carries metadata about its project, so
 downstream tooling knows how to filter noise from logs or where to find
 documentation.
 
+When declaring a catalogue project, wrap each executable name in
+`Program(...)`, such as `Program("git")`. `Program` is a `NewType`, so `ty`
+rejects a bare string even though the runtime represents it as a string.
+
 Cuprum is async-first but provides synchronous wrappers for scripts that don't
 need the full async machinery. Whether you're building deployment helpers, CI
 glue, or maintenance scripts, we want "Python instead of Bash" to feel like an
