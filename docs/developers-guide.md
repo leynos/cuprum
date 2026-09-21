@@ -4430,21 +4430,21 @@ list. Updates are serialized with `flock` using the ignored
 `.skylos-whitelist.lock` file by default; override `SKYLOS_WHITELIST_LOCK` for
 an alternate lock path. Never use a broad or unreasoned exception.
 
-Documentation is a liveness signal too, and it has a size ceiling. Skylos
+Documentation is a liveness signal, and it has a silent size ceiling. Skylos
 credits a public method whose class-qualified name — `_Owner.method` — appears
 in a `.md`, `.rst`, or `.txt` file under the scanned root. It skips any doc
-file larger than 300000 bytes, silently, and stops reading docs once their
-cumulative size passes 2000000 bytes. Neither ceiling is configurable in the
-pinned release. `docs/developers-guide.md` sits close to the per-file ceiling,
-so a routine prose addition can push it over and withdraw the credit for
+file larger than 300000 bytes without saying so, and stops reading docs once
+their cumulative size passes 2000000 bytes. Neither ceiling is configurable in
+the pinned release, and `docs/developers-guide.md` sits close to the per-file
+one, so a routine prose addition can push it over and withdraw credit from
 symbols it has documented for a long time.
 
-An unexplained `SKY-U001` for a documented symbol is therefore more likely to
-mean the guide crossed that line than that the symbol died. Confirm which
-before acting. Prefer the named exception above, which does not depend on any
-file being read; qualifying the mention in a smaller document works only while
-that document is reached inside the cumulative budget. Never delete the
-documentation that was keeping the symbol live.
+A `SKY-U001` that appears after a docs-only change is therefore more likely to
+mean the guide crossed that line than that the symbol died. Read it as a prompt
+to check the symbol rather than as a finding to silence. If it still has a
+runtime caller, the caller is what needs repairing — a documented symbol whose
+caller was orphaned by a refactor is a real defect that the ceiling has merely
+exposed. If it has none, it is dead, and the answer is to remove it.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is

@@ -96,10 +96,7 @@ _LINT_PREREQUISITES: typ.Final = ("python-lint", "rust-lint", "github-actions-li
 # serializes them. Running the leaves in the same Make process is what keeps a
 # caller's `-f` override file effective without forwarding `MAKEFILE_LIST`,
 # which cannot distinguish `-f` inputs from files pulled in by `include`.
-_DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({
-    "_check_rust_available",
-    "should_terminate_others",
-})
+_DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({"_check_rust_available"})
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
