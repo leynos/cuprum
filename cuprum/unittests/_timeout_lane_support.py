@@ -66,7 +66,7 @@ EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
 #: The oldest nextest that can read every key this configuration sets.
 #:
 #: ``global-timeout`` was added in 0.9.100. Nextest warns about configuration
-#: keys it does not recognise and carries on, so an older release drops the
+#: keys it does not recognize and carries on, so an older release drops the
 #: whole-run budget silently: the run keeps working, the tier is simply
 #: absent, and every assertion here still passes because they read the file
 #: rather than the run. That is the same class of failure as a config in the

@@ -38,7 +38,7 @@ test, and no whole-run budget at all.
 
 The file therefore opens with `nextest-version = "0.9.100"`, the release that
 first understood `global-timeout`. Nextest warns about a configuration key it
-does not recognise and keeps going, so on anything older the whole-run budget
+does not recognize and keeps going, so on anything older the whole-run budget
 is not rejected but simply dropped, and the suite still passes: the same
 inert-tier failure as a misplaced file, reached from the other direction. The
 declaration is honoured from 0.9.55 onwards; releases older than that ignore it

@@ -6,7 +6,7 @@
 # workspace root and searches no parent directory.
 #
 # The floor is the release that first understood `global-timeout`. Nextest
-# warns about configuration keys it does not recognise and keeps going, so
+# warns about configuration keys it does not recognize and keeps going, so
 # an older release would drop the whole-run budget silently while every
 # assertion still passed -- the failure this file exists to prevent. A
 # declared floor turns that into a refusal to start. It is enforced by any

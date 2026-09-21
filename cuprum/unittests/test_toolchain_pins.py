@@ -383,7 +383,7 @@ def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
     action installs its own nextest from a checksummed archive. The
     configuration's declaration is enforced by any nextest from 0.9.55; the
     Makefile's check covers the older releases, which ignore the declaration
-    as an unrecognised key and would otherwise discard the whole-run budget
+    as an unrecognized key and would otherwise discard the whole-run budget
     silently while every other assertion still passed.
     """
     root = repo_root()

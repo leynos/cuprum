@@ -73,7 +73,7 @@ TEST_JOBS ?= 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
 # The oldest nextest that understands `global-timeout`, the whole-run budget
 # `rust/.config/nextest.toml` declares. Nextest warns about keys it does not
-# recognise and keeps going, so an older release drops that tier silently
+# recognize and keeps going, so an older release drops that tier silently
 # while the suite still passes; rust/.config/nextest.toml declares the same
 # floor for any nextest from 0.9.55, and this check covers the older releases
 # that ignore the declaration too.
@@ -83,7 +83,7 @@ NEXTEST_MIN_VERSION ?= 0.9.100
 # not portable, and MSYS sort has no version ordering at all. The version is
 # the first dotted-numeric field, matched by shape rather than by position:
 # `cargo-nextest 0.9.133 (65e806bd5 2026-04-14)` puts it in $2, and a build
-# that omits the parenthesised parts would shift any fixed position.
+# that omits the parenthesized parts would shift any fixed position.
 NEXTEST_VERSION_OK = awk -v min="$(NEXTEST_MIN_VERSION)" 'NR == 1 { for (i = 1; i <= NF; i++) if ($$i ~ /^[0-9]+([.][0-9]+)+$$/) { split($$i, found, "."); split(min, floor, "."); for (j = 1; j <= 3; j++) { if (found[j] + 0 > floor[j] + 0) exit 0; if (found[j] + 0 < floor[j] + 0) exit 1 } exit 0 } exit 1 }'
 NEXTEST_FLOOR_MESSAGE = printf 'cargo-nextest %s or newer is required: rust/.config/nextest.toml declares a global-timeout that earlier releases ignore without failing\n' "$(NEXTEST_MIN_VERSION)" >&2; exit 1
 DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
