@@ -104,82 +104,85 @@ def _consumed_path(workflow_name: str, job_name: str) -> str | None:
     return _declared(inputs, "path", where)
 
 
-def test_the_publish_lane_uploads_the_report_its_own_job_generates() -> None:
-    """The generated path and the uploaded path must name the same file.
+class TestCoverageReportContract:
+    """The four ways the coverage generator and its consumer can drift apart."""
 
-    The two actions are independent: the generator writes wherever
-    ``output-path`` says and the uploader reads wherever ``path`` says, and both
-    default to the same name by coincidence rather than by construction. The
-    upload step runs last, held there by the ordering contract below, so a
-    mismatch fails after the whole instrumented suite has run.
-    """
-    workflow_name, job_name = PUBLISH_LANE
-    generated = _generated(workflow_name, job_name, "output-path")
-    consumed = _consumed_path(workflow_name, job_name)
+    def test_the_publish_lane_uploads_the_report_its_own_job_generates(self) -> None:
+        """The generated path and the uploaded path must name the same file.
 
-    if consumed is None:
-        consumed = DEFAULT_REPORT_PATH[_generated(workflow_name, job_name, "format")]
-    assert generated == consumed, (
-        f"{workflow_name}:{job_name} generates {generated!r} but uploads "
-        f"{consumed!r}; the CodeScene step would fail on a missing file"
-    )
+        The two actions are independent: the generator writes wherever
+        ``output-path`` says and the uploader reads wherever ``path`` says, and
+        both default to the same name by coincidence rather than by
+        construction. The upload step runs last, held there by the ordering
+        contract below, so a mismatch fails after the whole instrumented suite
+        has run.
+        """
+        workflow_name, job_name = PUBLISH_LANE
+        generated = _generated(workflow_name, job_name, "output-path")
+        consumed = _consumed_path(workflow_name, job_name)
 
-
-def test_the_generator_runs_before_the_step_that_reads_its_file() -> None:
-    """The upload must come after the generation it depends on.
-
-    A job's steps run in file order, so this is the whole of the sequencing the
-    pair gets: move the upload above the generator and it reads last run's
-    report, or none at all, while every input still matches and the contracts
-    above stay green. CI would catch it only on main, after the merge that
-    broke it, and only when the token is present.
-    """
-    workflow_name, job_name = PUBLISH_LANE
-    generated_at = single_step_position_using(
-        workflow_name, job_name, uses=GENERATE_COVERAGE
-    )
-    consumed_at = single_step_position_using(
-        workflow_name, job_name, uses=CODESCENE_ACTION
-    )
-
-    assert generated_at < consumed_at, (
-        f"{workflow_name}:{job_name} uploads at step {consumed_at} but generates "
-        f"at step {generated_at}; the upload would read a report that does not "
-        f"exist yet"
-    )
-
-
-def test_both_coverage_lanes_generate_the_same_format() -> None:
-    """The two lanes must write comparable reports from the same test suite.
-
-    They run the same suite with the same flags, so a format that differed
-    between them would mean the baseline main stores and the report a pull
-    request ratchets against were produced by different tooling. The ratchet
-    compares the numbers, not the shapes, so the drift would surface only as an
-    unexplained coverage change.
-    """
-    formats = {
-        f"{workflow_name}:{job_name}": _generated(workflow_name, job_name, "format")
-        for workflow_name, job_name in COVERAGE_LANES
-    }
-
-    assert len(set(formats.values())) == 1, (
-        f"coverage lanes must generate one format, found {formats!r}"
-    )
-
-
-def test_the_generated_format_is_one_the_consumer_accepts() -> None:
-    """Each lane must declare a format the pinned CodeScene action parses.
-
-    The action's validate step hard-fails on anything outside its accepted set,
-    which would make this an obvious failure — except that a format the action
-    accepts is still not necessarily a format its CLI parses. Pinning the
-    accepted set here means a change to the declaration has to confront the
-    consumer's contract rather than only the workflow's.
-    """
-    for workflow_name, job_name in COVERAGE_LANES:
-        declared = _generated(workflow_name, job_name, "format")
-        assert declared in ACCEPTED_FORMATS, (
-            f"{workflow_name}:{job_name} declares format {declared!r}; the "
-            f"pinned CodeScene action accepts {sorted(ACCEPTED_FORMATS)}"
+        if consumed is None:
+            consumed = DEFAULT_REPORT_PATH[
+                _generated(workflow_name, job_name, "format")
+            ]
+        assert generated == consumed, (
+            f"{workflow_name}:{job_name} generates {generated!r} but uploads "
+            f"{consumed!r}; the CodeScene step would fail on a missing file"
         )
+
+    def test_the_generator_runs_before_the_step_that_reads_its_file(self) -> None:
+        """The upload must come after the generation it depends on.
+
+        A job's steps run in file order, so this is the whole of the sequencing
+        the pair gets: move the upload above the generator and it reads last
+        run's report, or none at all, while every input still matches and the
+        contracts above stay green. CI would catch it only on main, after the
+        merge that broke it, and only when the token is present.
+        """
+        workflow_name, job_name = PUBLISH_LANE
+        generated_at = single_step_position_using(
+            workflow_name, job_name, uses=GENERATE_COVERAGE
+        )
+        consumed_at = single_step_position_using(
+            workflow_name, job_name, uses=CODESCENE_ACTION
+        )
+
+        assert generated_at < consumed_at, (
+            f"{workflow_name}:{job_name} uploads at step {consumed_at} but "
+            f"generates at step {generated_at}; the upload would read a report "
+            f"that does not exist yet"
+        )
+
+    def test_both_coverage_lanes_generate_the_same_format(self) -> None:
+        """The two lanes must write comparable reports from the same test suite.
+
+        They run the same suite with the same flags, so a format that differed
+        between them would mean the baseline main stores and the report a pull
+        request ratchets against were produced by different tooling. The ratchet
+        compares the numbers, not the shapes, so the drift would surface only as
+        an unexplained coverage change.
+        """
+        formats = {
+            f"{workflow_name}:{job_name}": _generated(workflow_name, job_name, "format")
+            for workflow_name, job_name in COVERAGE_LANES
+        }
+
+        assert len(set(formats.values())) == 1, (
+            f"coverage lanes must generate one format, found {formats!r}"
+        )
+
+    def test_the_generated_format_is_one_the_consumer_accepts(self) -> None:
+        """Each lane must declare a format the pinned CodeScene action parses.
+
+        The action's validate step hard-fails on anything outside its accepted
+        set, which would make this an obvious failure — except that a format the
+        action accepts is still not necessarily a format its CLI parses. Pinning
+        the accepted set here means a change to the declaration has to confront
+        the consumer's contract rather than only the workflow's.
+        """
+        for workflow_name, job_name in COVERAGE_LANES:
+            declared = _generated(workflow_name, job_name, "format")
+            assert declared in ACCEPTED_FORMATS, (
+                f"{workflow_name}:{job_name} declares format {declared!r}; the "
+                f"pinned CodeScene action accepts {sorted(ACCEPTED_FORMATS)}"
+            )
