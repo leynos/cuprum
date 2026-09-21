@@ -2,10 +2,15 @@
 
 Separated from ``test_timeout_ordering_contract`` so the configuration
 reading and the assertions stay legible apart, and so neither module
-outgrows the 400-line limit ``AGENTS.md`` sets. The workflow-side readers
-live in ``cuprum.unittests._coverage_timeout_lane_support``, which this
-module does not import: nextest's tiers and GitHub's are read from
-different files and only the contract brings the two together.
+outgrows the 400-line limit ``AGENTS.md`` sets.
+
+This module reads ``rust/.config/nextest.toml`` and nothing else: the
+tiers nextest itself enforces. The workflow-side material -- the
+watchdog, the job ceiling and the readers for them -- belongs to
+``cuprum.unittests._coverage_timeout_lane_support``, which this module
+does not import and which does not import it. Only the contract brings
+the two halves together, because it is the only place a nextest tier is
+compared against the cargo watchdog outside it.
 """
 
 from __future__ import annotations
@@ -17,14 +22,6 @@ import typing as typ
 from pathlib import Path
 
 from tests.helpers.docs import repo_root
-
-#: The workflows carrying a coverage lane. Both are read, so a lane that
-#: gained a budget in one and lost it in the other cannot pass by being
-#: half right.
-COVERAGE_WORKFLOWS: typ.Final[tuple[str, ...]] = (
-    ".github/workflows/ci.yml",
-    ".github/workflows/coverage-main.yml",
-)
 
 #: The Cargo workspace that nextest reads its repository configuration
 #: for, as a path below the repository root. Cuprum keeps no root
@@ -41,52 +38,6 @@ CARGO_WORKSPACE_DIR: typ.Final[Path] = Path("rust")
 #: so the workspace segment is spelled once, and relative to the repository
 #: root like every other path the contract reads.
 NEXTEST_CONFIG: typ.Final[Path] = CARGO_WORKSPACE_DIR / ".config" / "nextest.toml"
-
-#: The environment variable the shared coverage action reads for its
-#: wall-clock cap on one `cargo` invocation.
-WATCHDOG_VARIABLE: typ.Final[str] = "RUN_RUST_CARGO_WAIT_TIMEOUT"
-
-#: The action whose steps run under that watchdog.
-COVERAGE_ACTION: typ.Final[str] = (
-    "leynos/shared-actions/.github/actions/generate-coverage"
-)
-
-#: The budget those lanes must carry. Asserted by value rather than
-#: merely as present, because the value equals nothing memorable and a
-#: silent drift back towards the action's default would be invisible.
-#:
-#: Sized from run history rather than guessed. The coverage step has
-#: never exceeded 418 s, on run 34071469378, read across roughly fifty
-#: successful runs of both workflows; the trunk lane's worst was 322 s on
-#: run 34062626757. None of those was a genuinely cold compile.
-#: rstest-bdd's cold run took about four times its warm one, which would
-#: put this repository at the old 1,800 s default's shoulder, so the
-#: budget is six times the worst seen and a cold first run on a branch
-#: finishes inside it.
-EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
-
-#: What a cold instrumented compile may add before the run reaches a test.
-#:
-#: An allowance, not a measurement: no coverage run here can be proved
-#: cold. These lanes archive no `target`, so sccache carries compiler
-#: output and a branch's first run compiles everything it cannot serve.
-#: Adopted from the estate's own cold run rather than cuprum's warm one.
-#: `generate-coverage`'s README records Netsuke's first trunk run after
-#: the same change finishing 2,790 tests at about 512 s and being killed
-#: at 600 during report generation. That suite is some twenty-five times
-#: the 112 tests measured here, so 600 s is conservative; cuprum's whole
-#: warm Rust invocation was 83 s on run 35391248951.
-COLD_BUILD_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
-
-#: Everything in a coverage job that is not the `cargo` invocation the
-#: watchdog bounds. The job timer covers it; the watchdog does not.
-#:
-#: Measured per lane from the worst of several runs rather than one: 43 s
-#: on run 34071469378 for the pull-request lane and 51 s on run
-#: 34067223641 for the trunk lane, across twelve successful runs of each.
-#: Five minutes is six times the worse of those, matching the margin the
-#: watchdog itself carries.
-OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
 
 #: The per-test allowance the default profile must grant. Asserted by value
 #: rather than merely as the largest of several, because the ordering
@@ -111,12 +62,6 @@ EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 #: 1200 s is twenty minutes, and sits above the compile-test tier's 600 s so
 #: a single slow ``trybuild`` binary cannot exhaust the whole suite.
 EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
-
-#: How far a ceiling must sit above the sum it contains, rather than
-#: merely reaching it. A ceiling equal to that sum cancels the job at
-#: the moment the watchdog would have reported the overrun, and the
-#: report is the only thing that makes an overrun actionable.
-CEILING_MARGIN_SECONDS: typ.Final[int] = 15 * 60
 
 
 SlowTimeout = typ.TypedDict(
@@ -218,22 +163,22 @@ def _default_nextest_profile() -> NextestProfile:
 def _slow_timeout_of(declaring: NextestProfile | NextestOverride) -> SlowTimeout:
     """Return an explicit slow-timeout configuration.
 
+    One reader serves the profile and its overrides, because an override's
+    table replaces the profile's for the tests its filter matches rather
+    than merging into it; reading them separately would let one be reported
+    as supplying what the other replaced.
+
     Parameters
     ----------
     declaring : NextestProfile | NextestOverride
-        The profile, or one of its overrides, whose ``slow-timeout`` is read.
-        Both declare the table, and an override's replaces the profile's for
-        the tests its filter matches rather than merging into it, so one
-        reader serves both and neither table can be read as supplying what
-        the other left out.
+        The profile, or one of its overrides, whose table is read.
 
     Returns
     -------
     SlowTimeout
-        The ``slow-timeout`` mapping that table declares.
-
-    A table that declares no ``slow-timeout`` fails the caller's contract
-    assertion rather than being read as a tier of zero.
+        The ``slow-timeout`` mapping that table declares; a table declaring
+        none fails the caller's contract assertion rather than being read as
+        a tier of zero.
     """
     slow_timeout = declaring.get("slow-timeout")
     assert isinstance(slow_timeout, dict), (

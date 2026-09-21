@@ -34,9 +34,12 @@ import pytest
 
 from cuprum.unittests._coverage_timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
+    COLD_BUILD_ALLOWANCE_SECONDS,
     COVERAGE_ACTION,
     COVERAGE_WORKFLOWS,
+    EXPECTED_WATCHDOG_SECONDS,
     OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
+    WATCHDOG_VARIABLE,
     CoverageLane,
     Workflow,
     _cargo_manifest_of,
@@ -46,12 +49,9 @@ from cuprum.unittests._coverage_timeout_lane_support import (
     required_ceiling,
 )
 from cuprum.unittests._timeout_lane_support import (
-    COLD_BUILD_ALLOWANCE_SECONDS,
     EXPECTED_GLOBAL_TIMEOUT_SECONDS,
     EXPECTED_PER_TEST_ALLOWANCE_SECONDS,
-    EXPECTED_WATCHDOG_SECONDS,
     NEXTEST_CONFIG,
-    WATCHDOG_VARIABLE,
     _allowance_of,
     _default_nextest_profile,
     _slow_timeout_of,

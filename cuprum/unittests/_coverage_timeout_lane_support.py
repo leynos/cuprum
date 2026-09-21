@@ -5,10 +5,12 @@ watchdogs, job ceiling, conditions, and manifest inputs without obscuring its
 assertions with YAML traversal. Call :func:`_lanes` for the live lanes or
 :func:`lanes_in` with a synthetic workflow to exercise the reader.
 
-This module owns the workflow shapes and the readers that walk them; the
-nextest tiers live in ``cuprum.unittests._timeout_lane_support``. The two
-halves read different files, and only the contract brings them together, so
-this module depends on that one for the shared constants and not the reverse.
+This module owns the workflow shapes, the readers that walk them, and the
+budgets those workflows declare; the nextest tiers live in
+``cuprum.unittests._timeout_lane_support``. The two halves read different
+files and neither imports the other: only the contract brings them
+together, and it is the only place where a watchdog is compared with the
+run it bounds.
 """
 
 from __future__ import annotations
@@ -18,17 +20,70 @@ import typing as typ
 
 import yaml
 
-from cuprum.unittests._timeout_lane_support import (
-    CEILING_MARGIN_SECONDS,
-    COVERAGE_ACTION,
-    COVERAGE_WORKFLOWS,
-    OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS,
-    WATCHDOG_VARIABLE,
-)
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+#: The workflows carrying a coverage lane. Both are read, so a lane that
+#: gained a budget in one and lost it in the other cannot pass by being
+#: half right.
+COVERAGE_WORKFLOWS: typ.Final[tuple[str, ...]] = (
+    ".github/workflows/ci.yml",
+    ".github/workflows/coverage-main.yml",
+)
+
+#: The environment variable the shared coverage action reads for its
+#: wall-clock cap on one `cargo` invocation.
+WATCHDOG_VARIABLE: typ.Final[str] = "RUN_RUST_CARGO_WAIT_TIMEOUT"
+
+#: The action whose steps run under that watchdog.
+COVERAGE_ACTION: typ.Final[str] = (
+    "leynos/shared-actions/.github/actions/generate-coverage"
+)
+
+#: The budget those lanes must carry. Asserted by value rather than
+#: merely as present, because the value equals nothing memorable and a
+#: silent drift back towards the action's default would be invisible.
+#:
+#: Sized from run history rather than guessed. The coverage step has
+#: never exceeded 418 s, on run 34071469378, read across roughly fifty
+#: successful runs of both workflows; the trunk lane's worst was 322 s on
+#: run 34062626757. None of those was a genuinely cold compile.
+#: rstest-bdd's cold run took about four times its warm one, which would
+#: put this repository at the old 1,800 s default's shoulder, so the
+#: budget is six times the worst seen and a cold first run on a branch
+#: finishes inside it.
+EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
+
+#: What a cold instrumented compile may add before the run reaches a test.
+#:
+#: An allowance, not a measurement: no coverage run here can be proved
+#: cold. These lanes archive no `target`, so sccache carries compiler
+#: output and a branch's first run compiles everything it cannot serve.
+#: Adopted from the estate's own cold run rather than cuprum's warm one.
+#: `generate-coverage`'s README records Netsuke's first trunk run after
+#: the same change finishing 2,790 tests at about 512 s and being killed
+#: at 600 during report generation. That suite is some twenty-five times
+#: the 112 tests measured here, so 600 s is conservative; cuprum's whole
+#: warm Rust invocation was 83 s on run 35391248951.
+COLD_BUILD_ALLOWANCE_SECONDS: typ.Final[int] = 10 * 60
+
+#: Everything in a coverage job that is not the `cargo` invocation the
+#: watchdog bounds. The job timer covers it; the watchdog does not.
+#:
+#: Measured per lane from the worst of several runs rather than one: 43 s
+#: on run 34071469378 for the pull-request lane and 51 s on run
+#: 34067223641 for the trunk lane, across twelve successful runs of each.
+#: Five minutes is six times the worse of those, matching the margin the
+#: watchdog itself carries.
+OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
+
+#: How far a ceiling must sit above the sum it contains, rather than
+#: merely reaching it. A ceiling equal to that sum cancels the job at
+#: the moment the watchdog would have reported the overrun, and the
+#: report is the only thing that makes an overrun actionable.
+CEILING_MARGIN_SECONDS: typ.Final[int] = 15 * 60
 
 
 def required_ceiling(budgets: cabc.Sequence[int]) -> int:
