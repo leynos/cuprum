@@ -266,3 +266,37 @@ above now describe the direct PyPy invocation: the remaining toolchain pin is
 
 [ADR-004: Interrogate docstring-coverage gate]:
   adr-004-interrogate-docstring-gate.md
+
+## Addendum (2026-09-26): a verified PyPy runtime for the classic pass
+
+The classic Pylint pass runs vanilla Pylint on PyPy 8.0.0's Python 3.12.14
+binary. PyPy 3.12 is beta quality. `uv` does not yet catalogue that build, so
+the Makefile downloads the pinned official Linux x86_64 archive, verifies its
+SHA-256 digest, and passes its explicit executable path to an isolated
+`uv tool run` environment. The pass verifies its interpreter and package
+identities before Pylint runs, uses one worker, and stores state separately
+from the CPython 3.14 DF12 pass.
+
+The retired `pylint-pypy-shim` is absent. Pylint's `syntax-error` diagnostic is
+explicitly enabled despite the focused `disable = ["all"]` configuration, so a
+run that parses nothing can no longer report a clean 10.00/10. The classic
+target lists `cuprum/unittests`, `tests/behaviour`, `tests/features`, and
+`scripts/tests` directly because Pylint does not recurse into those
+non-package directories from their broad roots. Python 3.12 remains Cuprum's
+source baseline; CPython 3.14 is only the execution interpreter for DF12 and
+Ambrleaks, including any tooling that requires newer syntax.
+
+Pylint's published Astroid range excludes Astroid 4.3.1, so the latter upgrade
+remains deferred pending a released compatible Pylint version. The integration
+contract exercises PEP 695 parsing, syntax failures, enabled diagnostics, real
+PyPy descriptor inspection, DF12 isolation, and failure propagation without
+changing the project virtual environment.
+
+The `leynos/pylint-pypy-shim` retirement described in the amendment above and
+this verified-runtime work landed independently: the amendment removed the shim
+by moving to a `uv`-catalogued PyPy, while this addendum pins the runtime
+explicitly. Both are retained here. The explicit pin supersedes the
+catalogue-dependent invocation for the classic pass, because `uv`'s `--python
+pypy` resolves to whichever PyPy release the catalogue currently prefers, and
+the pass must fail loudly rather than silently lint under an older interpreter.
+`PYLINT_VERSION` is shared by both tiers and is not duplicated.
