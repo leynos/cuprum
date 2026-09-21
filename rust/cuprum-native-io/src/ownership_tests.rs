@@ -244,12 +244,10 @@ fn synchronous_borrow_survives(
         descriptor_is_open(reader_raw),
         "borrowing must not close the caller's reader"
     );
-    if !should_panic {
-        assert!(
-            !descriptor_is_open(writer_raw),
-            "the synchronous writer must close when its owner drops"
-        );
-    }
+    assert!(
+        !descriptor_is_open(writer_raw),
+        "the synchronous writer must close when its owner drops, including during unwind"
+    );
     drop(reader);
     assert!(
         !descriptor_is_open(reader_raw),
