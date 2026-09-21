@@ -56,9 +56,7 @@ pub fn borrow(stream: &impl AsStream) -> BorrowedStream<'_> {
 /// # Safety
 /// `raw` must denote a valid open resource owned exclusively by the caller.
 /// The caller relinquishes ownership and must never close or reuse it after
-/// this call. Range validation alone does not establish these obligations. On
-/// Windows, `raw` must additionally support synchronous, non-overlapped I/O:
-/// it must not have been opened with `FILE_FLAG_OVERLAPPED`.
+/// this call. Range validation alone does not establish these obligations.
 #[must_use]
 #[cfg(unix)]
 pub unsafe fn adopt_writer(raw: PlatformFd) -> OwnedStream {
