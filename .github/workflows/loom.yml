@@ -74,17 +74,17 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: false
 
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@45bef492e355d6b586bce00d2249a4038a2a7363
         with:
           toolchain: '1.85.0'
           cache-provider: external
