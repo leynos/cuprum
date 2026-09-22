@@ -101,7 +101,15 @@ def _resolve_env_policy(
     -------
     tuple[EnvOverlay | None, EnvMode]
         The immutable composed overlay and its effective render mode.
+
+    Raises
+    ------
+    TypeError
+        If either policy mode is not an :class:`EnvMode`.
     """
+    if not isinstance(parent_mode, EnvMode) or not isinstance(child_mode, EnvMode):
+        msg = "environment modes must be EnvMode values"
+        raise TypeError(msg)
     if child_mode is EnvMode.REPLACE:
         return merge_env_overlays(None, child_overlay), EnvMode.REPLACE
     return merge_env_overlays(parent_overlay, child_overlay), parent_mode

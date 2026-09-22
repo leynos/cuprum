@@ -94,6 +94,22 @@ def test_env_overlay_is_visible_to_subprocess(
     assert os.environ.get(var) is None, "overlays must not leak into os.environ"
 
 
+def test_env_mode_keyword_keeps_legacy_environment_variable(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A string ``mode`` keyword remains an environment variable."""
+    _, execute = execution_strategy
+    cmd = python_builder("-c", _print_var("mode"))
+
+    with env(mode="production"):
+        result = execute(cmd, {})
+
+    assert result.stdout == "production\n", (
+        "a non-EnvMode mode keyword must remain an environment variable"
+    )
+
+
 def test_env_overlay_does_not_snapshot_os_environ(
     python_builder: cabc.Callable[..., SafeCmd],
     monkeypatch: pytest.MonkeyPatch,

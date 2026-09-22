@@ -278,7 +278,9 @@ def env(
         overlay entries. Useful when the variable name is not a valid Python
         identifier.
     mode:
-        Policy contributed by this scope. ``OVERLAY`` remains the default.
+        When an :class:`EnvMode`, the policy contributed by this scope.
+        ``OVERLAY`` remains the default; another value creates the environment
+        variable named ``mode`` for compatibility.
     kwvars:
         Keyword pairs naming environment variables or ``UNSET`` markers.
         Identifier-safe variable names are typically expressed this way.
@@ -297,27 +299,23 @@ def env(
     ...     # *live* os.environ, including GIT_AUTHOR_NAME.
     ...     pass
 
-    Raises
-    ------
-    TypeError
-        If ``mode`` is supplied but is not an :class:`EnvMode`.
-
     Notes
     -----
     ``env`` is bound to the :class:`~contextvars.Context` in which it is
     created. Detach it in that same logical context (thread or task) to avoid
     ``ValueError`` from :meth:`~contextvars.ContextVar.reset`.
     """
-    raw_mode = kwvars.pop("mode", EnvMode.OVERLAY)
-    if not isinstance(raw_mode, EnvMode):
-        msg = "env mode must be an EnvMode value"
-        raise TypeError(msg)
+    raw_mode = kwvars.get("mode")
+    mode = EnvMode.OVERLAY
+    if isinstance(raw_mode, EnvMode):
+        mode = raw_mode
+        del kwvars["mode"]
 
     merged: dict[str, EnvOverlayValue] = {}
     for overlay in overlays:
         merged.update(overlay)
     merged.update(typ.cast("cabc.Mapping[str, EnvOverlayValue]", kwvars))
-    return EnvRegistration(merged, raw_mode)
+    return EnvRegistration(merged, mode)
 
 
 def observe(hook: ExecHook) -> HookRegistration:
