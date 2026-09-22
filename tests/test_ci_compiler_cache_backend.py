@@ -24,6 +24,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.ci_runners import (
+    CACHE_RESTORE,
     CREDENTIALS_ACTION,
     CREDENTIALS_STEP,
     GHA_BACKEND_JOBS,
@@ -260,6 +261,11 @@ def test_a_directory_backend_lane_restores_the_directory_it_writes(
 ) -> None:
     """`SCCACHE_DIR` without a restore is an empty cache on every run.
 
+    Restore steps only. A job that saves the directory and never restores it
+    writes a generation it cannot read, which is the shape this rule first
+    failed to catch: matching any step that named the path let a lane's own
+    save satisfy the rule after its restore had been deleted.
+
     The save side is held by `test_each_cache_family_has_exactly_one_writer`:
     every rendered family in the manifest names the one job that publishes it,
     so a restore whose family has no writer fails there.
@@ -267,7 +273,8 @@ def test_a_directory_backend_lane_restores_the_directory_it_writes(
     restores = [
         step
         for step in steps(workflow_name, job_name)
-        if "~/.cache/sccache" in str((step.get("with") or {}).get("path", ""))
+        if step.get("uses") == CACHE_RESTORE
+        and "~/.cache/sccache" in str((step.get("with") or {}).get("path", ""))
     ]
     assert restores, (
         f"{workflow_name}:{job_name} points sccache at ~/.cache/sccache but no "
