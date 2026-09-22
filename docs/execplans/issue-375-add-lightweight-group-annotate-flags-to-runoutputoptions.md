@@ -22,8 +22,8 @@ RunOutputOptions(echo=True, sink=GitHubActionsSink())
 
 That imports a second name, knows which adapter belongs to which CI vendor, and
 requires the caller to reason about a protocol they do not otherwise use. Issue
-[#375](https://github.com/leynos/cuprum/issues/375) asks for two zero-ceremony
-booleans on `RunOutputOptions` instead:
+[#375](https://github.com/leynos/cuprum/issues/375)
+asks for two zero-ceremony booleans on `RunOutputOptions` instead:
 
 ```python
 RunOutputOptions(echo=True, group=True, annotate_failure=True)
@@ -71,15 +71,15 @@ escalation, not a workaround.
   add a second framing path.
 - **Annotation hygiene is preserved verbatim.** The `::error::` title is the
   bounded derived label, never argv; the message is the categorical `detail`
-  (`timeout`) or the `TerminalOutcome` value. Exception text and argument values
-  never reach an annotation.
+  (`timeout`) or the `TerminalOutcome` value. Exception text and argument
+  values never reach an annotation.
 - **Existing public behaviour of `GitHubActionsSink` is unchanged.** The new
   adapter toggles default to the current behaviour, so the existing snapshot
   (`cuprum/unittests/__snapshots__/test_sinks_github_actions.ambr`) and every
   exact-string assertion in `cuprum/unittests/test_sinks_github_actions.py`
   must pass unmodified.
-- **Python 3.12 baseline.** `pyproject.toml` sets `[tool.pylint.main]
-  py-version = "3.12"`; do not introduce 3.13-only syntax.
+- **Python 3.12 baseline.** `pyproject.toml` sets
+  `[tool.pylint.main] py-version = "3.12"`; do not introduce 3.13-only syntax.
 - **Environment: en-GB-oxendict spelling** in code identifiers, comments,
   docstrings, and prose, except where an external interface dictates otherwise
   (`GITHUB_ACTIONS`, `::group::` and friends are that interface).
@@ -108,15 +108,15 @@ processes.
 
 - Risk: `RunOutputOptions.__post_init__` synthesizing a sink makes a *frozen
   dataclass* mutate itself, and `object.__setattr__` is already the established
-  idiom in that method for `echo_stdout`/`echo_stderr`/`idle_after`.
-  Severity: low. Likelihood: low. Mitigation: follow the existing idiom, and
-  assert the synthesized value in a construction test.
+  idiom in that method for `echo_stdout`/`echo_stderr`/`idle_after`. Severity:
+  low. Likelihood: low. Mitigation: follow the existing idiom, and assert the
+  synthesized value in a construction test.
 - Risk: the synthesized `GitHubActionsSink` is a *new* object created per
-  `RunOutputOptions` construction, so `RunOutputOptions(...) ==
-  RunOutputOptions(...)` with flags set but no sink compares two `dataclass`
-  fields holding two distinct sink objects. `GitHubActionsSink` defines no
-  `__eq__`, so identity comparison makes those two options unequal.
-  Severity: medium. Likelihood: high (the property test in
+  `RunOutputOptions` construction, so
+  `RunOutputOptions(…) == RunOutputOptions(…)` with flags set but no sink
+  compares two `dataclass` fields holding two distinct sink objects.
+  `GitHubActionsSink` defines no `__eq__`, so identity comparison makes those
+  two options unequal. Severity: medium. Likelihood: high (the property test in
   `test_pipeline_output_options.py` compares resolved options for equality).
   Mitigation: the comparison only bites when a test *constructs* options twice
   and compares them; the existing property test compares
@@ -149,9 +149,13 @@ processes.
   the Lody session title.
 - [x] (2026-09-22) Phase 1 read-only confirmation pass complete. See
   `Surprises & discoveries` for the three corrections it produced.
-- [ ] Phase 2: adapter toggles. Add `emit_group`/`emit_annotation` to
-  `GitHubActionsSink` and `GitHubActionsSession`.
+- [x] (2026-09-22) Phase 2 complete: adapter toggles committed as `9e055db2`.
+  `GitHubActionsSession` takes its title and both toggles as one `_Annotation`
+  value; `GitHubActionsSink` takes `group=`/`annotate=` keywords and stores
+  them as the `emit_group`/`emit_annotation` attributes.
 - [ ] Phase 3: `RunOutputOptions.group`/`annotate_failure` plus sink synthesis.
+  Implementation and tests written; green on the focused suites. Blocked on the
+  ruff/pylint gate repair described in `Surprises & discoveries`.
 - [ ] Phase 4: tests, users' guide, CHANGELOG, ADR-013 amendment.
 - [ ] Gates: `make check-fmt`, `make lint`, `make typecheck`, `make test` via
   `scrutineer`, then CodeRabbit.
@@ -161,82 +165,139 @@ processes.
 
 - Observation: the ticket's proposal section cites **ADR-010**, but ADR-010 is
   "Rust pump hop span". The presentation sink is **ADR-013**
-  (`docs/adr-013-opt-in-github-actions-presentation-sink.md`).
-  Evidence: `ls docs/adr-010*` resolves to
-  `docs/adr-010-rust-pump-hop-span.md`; the sink decision is titled
-  "ADR 013: Opt-in GitHub Actions presentation sink".
+  (`docs/adr-013-opt-in-github-actions-presentation-sink.md`). Evidence:
+  `ls docs/adr-010*` resolves to `docs/adr-010-rust-pump-hop-span.md`; the sink
+  decision is titled "ADR 013: Opt-in GitHub Actions presentation sink".
   Impact: all new prose must cite ADR-013, and the ADR to amend is 013. The
   ticket's own coding plan already carries this correction.
 
 - Observation: **pipelines open exactly one session for the whole pipeline**,
   not one per stage. `_prepare_pipeline_config` calls `_SinkBracket.open` once
-  with `SessionStart(label="pipeline", argv=())`.
-  Evidence: `cuprum/_pipeline_config.py:196-199`; the existing assertion
+  with `SessionStart(label="pipeline", argv=())`. Evidence:
+  `cuprum/_pipeline_config.py:196-199`; the existing assertion
   `value.count("::group::") == 1` in
-  `cuprum/unittests/test_sinks_end_to_end.py:224`.
-  Impact: the ticket's acceptance criterion "Pipeline runs emit one group per
-  command, matching the sink adapter" cannot mean one group per *stage*. The
-  only reading consistent with the adapter it says it matches is: each
-  *command* run (whether reached as `SafeCmd.run` or as a pipeline stage)
-  produces at most one group, and a `Pipeline` emits **one group for the whole
-  pipeline**. This plan implements that reading and names the test
-  `test_flags_frame_pipeline_as_single_group`.
+  `cuprum/unittests/test_sinks_end_to_end.py:224`. Impact: the ticket's
+  acceptance criterion "Pipeline runs emit one group per command, matching the
+  sink adapter" cannot mean one group per *stage*. The only reading consistent
+  with the adapter it says it matches is: each *command* run (whether reached as
+  `SafeCmd.run` or as a pipeline stage) produces at most one group, and a
+  `Pipeline` emits **one group for the whole pipeline**. This plan implements
+  that reading and names the test `test_flags_frame_pipeline_as_single_group`.
 
 - Observation: `RunOutputOptions` accepts **positional** construction, and a
-  test pins the positional order of `capture`/`echo`.
-  Evidence: `cuprum/unittests/test_idle_heartbeat.py:126` constructs
-  `RunOutputOptions(False, True)`.
-  Impact: append `group` and `annotate_failure` *after* `sink` so the existing
-  positional prefix is undisturbed. Note the fields are not keyword-only, so
-  a hypothetical `RunOutputOptions(..., ...)` with nine positional arguments
-  would shift — no caller in the tree does that, and the appended position is
-  the least disruptive choice.
+  test pins the positional order of `capture`/`echo`. Evidence:
+  `cuprum/unittests/test_idle_heartbeat.py:126` constructs
+  `RunOutputOptions(False, True)`. Impact: append `group` and
+  `annotate_failure` *after* `sink` so the existing positional prefix is
+  undisturbed. Note the fields are not keyword-only, so a hypothetical
+  `RunOutputOptions(..., ...)` with nine positional arguments would shift — no
+  caller in the tree does that, and the appended position is the least
+  disruptive choice.
+
+- Observation: **adding two keyword parameters to each of the sink's two
+  constructors breaches `PLR0913`** (`max-args = 4`, `pyproject.toml:216`). The
+  gate message is
+  `too-many-arguments: Too many arguments in function definition (5 > 4)`.
+  Evidence: `make python-lint` on the first Phase 2 draft; `max-args` is 4 for
+  ruff and 5 for the separate df12 pylint pass, so ruff is the binding limit.
+  Impact: both constructors needed a shape that fits four arguments. The tuple
+  of `(label, emit_group, emit_annotation)` — all of which describe one
+  annotation decision and always travel together — moves as a single frozen
+  `_Annotation` value, which is a genuinely better grouping than a lint dodge.
+  The sink's own `group`/`annotate` keywords still make five, which is
+  keyword-only throughout and carries a documented
+  `# ruff: ignore[too-many-arguments]`: the rule exists to catch a caller
+  confusing positional argument order, and an argument after `*` has no
+  position to confuse. Proven live both ways — the rule id is only accepted if
+  `ruff check` reports it once the comment is removed, and the check was run in
+  both states (1 finding without, 0 with).
+
+- Observation: **`github_actions.py` was at 345 lines against a 400-line
+  `max-module-lines` cap** (`pyproject.toml:226`), so the Phase 2 additions
+  breached `C0302` at 428/400. Evidence: the real gate, `make python-lint`,
+  printed
+  `cuprum/sinks/github_actions.py:1:0: C0302: Too many lines in module
+  (428/400)`
+  and exited 16. A plain `uv run pylint` does *not* reproduce the gate
+  exactly, because the gate runs pylint under the PyPy shim; the module was
+  still parsed here (it is 3.12-compatible), so the finding was real rather
+  than one of the shim's silent skips. Impact: net +45 lines was inside the
+  55-line headroom but the extracted helpers spent it. Three helpers written
+  for the arity fix became unnecessary once `_Annotation` carried the flags,
+  and were inlined back to main's shape; two docstrings were trimmed to their
+  one-line form. The module lands at 390 lines with a 10-line margin. **Lesson
+  for the next phase: check `max-module-lines` before adding to a near-cap
+  module, not after.**
+
+- Observation: `raise ValueError` for the non-`bool` flag check trips ruff's
+  `type-check-without-type-error`, which requires `TypeError` for an invalid
+  *type*. Evidence: `make python-lint` on the first Phase 3 draft reported
+  `type-check-without-type-error: Prefer TypeError exception for invalid type`
+  at `cuprum/sh.py:439`. Impact: both the option-level check and the
+  adapter-level check raise `TypeError`. The two tests that asserted
+  `ValueError` were updated in the same change.
 
 ## Decision log
 
 - Decision: reuse `GitHubActionsSink` and the existing `RunOutputOptions.sink`
   field; do **not** build a new framing module and do **not** touch the run
-  paths.
-  Rationale: the sink lifecycle already brackets every run path exactly once
-  and already closes on every terminal path, cancellation-safely. Synthesizing
-  the adapter from the flags means the flags inherit all of that for free, and
-  keeps `::group::` out of the execution layer — which is exactly the concern
-  ADR-013's Option B rejection names.
-  Date/Author: 2026-09-22, agent.
+  paths. Rationale: the sink lifecycle already brackets every run path exactly
+  once and already closes on every terminal path, cancellation-safely.
+  Synthesizing the adapter from the flags means the flags inherit all of that
+  for free, and keeps `::group::` out of the execution layer — which is exactly
+  the concern ADR-013's Option B rejection names. Date/Author: 2026-09-22,
+  agent.
 
 - Decision: **an explicit `sink` wins and the flags are ignored.** No
-  `ValueError`.
-  Rationale: the ticket offers either reading. Ignoring is the composable one:
-  a caller who has both a shared `RunOutputOptions` carrying `group=True` and
-  an explicit sink for one call gets the sink they explicitly passed, with no
-  exception to catch at the call site. It also cannot break existing callers,
-  whereas raising turns a previously valid construction into an error.
-  Documented in the field docstring, the users' guide, and the CHANGELOG.
-  Date/Author: 2026-09-22, agent.
+  `ValueError`. Rationale: the ticket offers either reading. Ignoring is the
+  composable one: a caller who has both a shared `RunOutputOptions` carrying
+  `group=True` and an explicit sink for one call gets the sink they explicitly
+  passed, with no exception to catch at the call site. It also cannot break
+  existing callers, whereas raising turns a previously valid construction into
+  an error. Documented in the field docstring, the users' guide, and the
+  CHANGELOG. Date/Author: 2026-09-22, agent.
 
 - Decision: name the adapter toggles `emit_group` and `emit_annotation`, not
-  `group`/`annotate`.
-  Rationale: `group` on the adapter collides conceptually with the group
-  *label* the adapter already derives, and `annotate_failure` as an adapter
-  parameter would over-specify (the adapter only ever annotates failures). The
-  adapter names describe what the adapter writes; the option names describe
-  what the caller wants.
-  Date/Author: 2026-09-22, agent.
+  `group`/`annotate`. Rationale: `group` on the adapter collides conceptually
+  with the group *label* the adapter already derives, and `annotate_failure` as
+  an adapter parameter would over-specify (the adapter only ever annotates
+  failures). The adapter names describe what the adapter writes; the option
+  names describe what the caller wants. Date/Author: 2026-09-22, agent.
+
+- Decision: the sink's **constructor** keywords are `group=`/`annotate=`, while
+  its stored **attributes** stay `emit_group`/`emit_annotation`. Rationale:
+  this supersedes the wording above on the constructor only. The synthesis in
+  `sh.py` is the sink's principal programmatic caller, and naming its keywords
+  after the `RunOutputOptions` fields it copies means the copy reads
+  `group=self.group` rather than crossing two vocabularies in one expression.
+  The attribute names are what the session and the framing code read, where the
+  `emit_*` vocabulary describes what is written and reads better; they are also
+  what `test_pipeline_output_options.py` asserts on. Date/Author: 2026-09-22,
+  agent.
+
+- Decision: validate the toggles in **both** places — `RunOutputOptions` and
+  the adapter constructor. Rationale: each is usable without the other. A
+  caller may pass `GitHubActionsSink(group=1)` directly, and the flags may be
+  set on an options object whose sink is later overridden per call. One check
+  at either site would leave the other entry point accepting a merely truthy
+  value. Date/Author: 2026-09-22, agent.
 
 - Decision: the synthesized sink carries no `force` and no `title`.
   Rationale: `force` would frame runs outside GitHub Actions, contradicting
-  ADR-013's activation section and making the flag surprising. Omitting
-  `title` keeps the group titled with argv and the annotation titled with the
-  bounded label, preserving the split the adapter already enforces.
-  Date/Author: 2026-09-22, agent.
+  ADR-013's activation section and making the flag surprising. Omitting `title`
+  keeps the group titled with argv and the annotation titled with the bounded
+  label, preserving the split the adapter already enforces. Date/Author:
+  2026-09-22, agent.
 
 - Decision: validate `group`/`annotate_failure` as strict `bool` and raise
-  `ValueError` otherwise.
-  Rationale: follows the `max_echo_line_bytes` precedent already in
-  `__post_init__` (`isinstance(x, int) and not isinstance(x, bool)`). A
-  truthy non-bool (for example `1`) would otherwise silently frame, and the
-  flags gate output behaviour.
-  Date/Author: 2026-09-22, agent.
+  `TypeError` otherwise. Rationale: follows the `max_echo_line_bytes` precedent
+  already in `__post_init__`
+  (`isinstance(x, int) and not isinstance(x, bool)`). A truthy non-bool (for
+  example `1`) would otherwise silently frame, and the flags gate output
+  behaviour. The exception *class* is `TypeError` rather than the `ValueError`
+  this entry originally recorded, because the gate is unambiguous that an
+  invalid type raises `TypeError`; see the `type-check-without-type-error`
+  discovery above. Date/Author: 2026-09-22, agent.
 
 ## Conformance basis
 
@@ -272,8 +333,8 @@ ISSUE-375-aggregation -> EP-M1 -> cuprum/sh.py::_resolve_pipeline_output
 ISSUE-375-unchanged-defaults -> ADR-013-non-goals -> EP-M4 -> cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged
 ```
 
-No Terms of Reference or technical design document governs this change; the
-ADR is the highest applicable authority.
+No Terms of Reference or technical design document governs this change; the ADR
+is the highest applicable authority.
 
 ## Verification plan
 
@@ -285,9 +346,9 @@ formal proof obligation arises. Recorded explicitly per the "if the change
 introduces no non-trivial invariant or lemma" clause.
 
 **V1 — Defaults are inert.** Statement: for any `RunOutputOptions` with
-`group=False` and `annotate_failure=False`, `__post_init__` leaves
-`self.sink` as `None`, and a run using it writes no framing byte. Method:
-named example test plus the pre-existing suite. Artefact:
+`group=False` and `annotate_failure=False`, `__post_init__` leaves `self.sink`
+as `None`, and a run using it writes no framing byte. Method: named example
+test plus the pre-existing suite. Artefact:
 `cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged`.
 Evidence: the test asserts `output.sink is None` and that the captured
 parent-facing bytes contain none of `::group::`, `::stop-commands::`,
@@ -315,15 +376,15 @@ suppresses every `::error::` line while leaving the framing intact. Method:
 finite parameter table over the four toggle combinations for the framing
 assertions, plus named example tests for the cross-cases. Artefacts:
 `cuprum/unittests/test_sinks_github_actions.py::test_emit_group_false_suppresses_group_framing`
-and `::test_emit_annotation_false_suppresses_error`. Evidence: `group=False,
-annotation=True` yields a buffer with one `::error` and zero `::group::`;
-`group=True, annotation=False` yields a buffer with one `::group::`, one lease,
-one endgroup, and zero `::error` on `EXIT_NONZERO`, `TIMEOUT`, `CANCELLED`, and
-`ERROR`. Non-vacuity: the pre-existing
+and `::test_emit_annotation_false_suppresses_error`. Evidence:
+`group=False, annotation=True` yields a buffer with one `::error` and zero
+`::group::`; `group=True, annotation=False` yields a buffer with one
+`::group::`, one lease, one endgroup, and zero `::error` on `EXIT_NONZERO`,
+`TIMEOUT`, `CANCELLED`, and `ERROR`. Non-vacuity: the pre-existing
 `test_nonzero_close_emits_error_annotation` exercises both toggles at their
 defaults against the same helper, so an implementation that suppressed the
-annotation unconditionally would fail it. Discharge: all pass, and the
-snapshot is unchanged.
+annotation unconditionally would fail it. Discharge: all pass, and the snapshot
+is unchanged.
 
 **V4 — Framing order and injection shielding are preserved through the flag
 path.** Statement: for a real subprocess run driven by `group=True`, the lease
@@ -345,7 +406,7 @@ its title and a categorical message, and never argv. Method: end-to-end example
 test with a distinctive argument value. Artefact:
 `cuprum/unittests/test_sinks_end_to_end.py::test_flags_annotation_omits_argv`.
 Evidence: the argument appears in the `::group::` title and does not appear
-after `::error `. Non-vacuity: the test asserts the value *is* present in the
+after `::error`. Non-vacuity: the test asserts the value *is* present in the
 buffer, so a run that framed nothing cannot pass it. Discharge: passes.
 
 **V6 — Outcome matrix.** Statement: a non-zero exit annotates `exit_nonzero`
@@ -374,11 +435,12 @@ produce the expected annotation by accident. Discharge: passes.
 Method: existing fixture-driven parameterization in
 `cuprum/unittests/test_pipeline_output_options.py` already runs the pipeline
 tests over both `run()` and `run_sync()`; the command-side end-to-end tests are
-parametrized over both call styles. Artefacts: the `pipeline_execution_strategy`
-fixture, and a parametrized command runner in the end-to-end module. Evidence:
-the same assertion body passes for all four. Non-vacuity: each parameterization
-row executes a distinct real code path (`asyncio.run` versus the awaited
-coroutine), so a green row cannot stand in for a red one. Discharge: all pass.
+parametrized over both call styles. Artefacts: the
+`pipeline_execution_strategy` fixture, and a parametrized command runner in the
+end-to-end module. Evidence: the same assertion body passes for all four.
+Non-vacuity: each parameterization row executes a distinct real code path
+(`asyncio.run` versus the awaited coroutine), so a green row cannot stand in
+for a red one. Discharge: all pass.
 
 **Axioms relied on (not verified here, treated as documented interfaces):**
 that the GitHub Actions runner parses workflow commands from the parent's
@@ -389,10 +451,9 @@ ADR-013 and its existing tests; this change does not extend the reliance.
 **Negative control.** The intended mutation is "synthesize a
 `GitHubActionsSink` unconditionally in `__post_init__`". V1 must fail for the
 inert-default reason under that mutation. This was exercised as part of Phase 3
-development by running
-`test_flags_leave_default_output_unchanged` before adding the
-`sink is None` guard path, and it failed on the assertion that no framing byte
-was written.
+development by running `test_flags_leave_default_output_unchanged` before
+adding the `sink is None` guard path, and it failed on the assertion that no
+framing byte was written.
 
 ## Context and orientation
 
@@ -413,8 +474,8 @@ exit code, and an optional categorical detail).
 `cuprum/sinks/github_actions.py` implements the protocol for GitHub Actions. It
 writes, in order: `::group::<program args>`, a `::stop-commands::<token>` lease
 with a cryptographically random token, then (through `session.log`) the run's
-echoed output, then at close `::<token>::` to release the lease, `::endgroup::`,
-and — for any outcome other than `exit_zero` — one
+echoed output, then at close `::<token>::` to release the lease,
+`::endgroup::`, and — for any outcome other than `exit_zero` — one
 `::error title=<bounded label>::<categorical detail>` annotation. Activation is
 read per run from `GITHUB_ACTIONS`, and only the exact value `true` activates
 it, unless the sink was constructed with `force=True`.
@@ -422,10 +483,9 @@ it, unless the sink was constructed with `force=True`.
 The lifecycle that brackets every run lives in `cuprum/_sink_lifecycle.py`:
 `_SinkBracket.open(sink, start)` wraps `sink.open_session(start)`, and
 `bracket.close(outcome=...)` is a take-once finalizer. `SafeCmd.run` opens one
-bracket per command
-(`cuprum/_command_internals.py:282`) with `_command_session_start(cmd)`;
-`Pipeline.run` opens one bracket for the whole pipeline
-(`cuprum/_pipeline_config.py:196`) with
+bracket per command (`cuprum/_command_internals.py:282`) with
+`_command_session_start(cmd)`; `Pipeline.run` opens one bracket for the whole
+pipeline (`cuprum/_pipeline_config.py:196`) with
 `SessionStart(label="pipeline", argv=())`. Both read `output.sink` — the only
 two reads of that field in the production tree.
 
@@ -483,8 +543,7 @@ In `cuprum/sh.py`:
    stderr only; that they are inert unless `GITHUB_ACTIONS == "true"` (or the
    caller passes `sink=` explicitly); that an explicit `sink` takes precedence
    and makes the flags no-ops; and that a pipeline emits one group for the
-   whole pipeline. Add a doctest-style example to the existing `Examples`
-   block.
+   whole pipeline. Add a doctest-style example to the existing `Examples` block.
 4. In `__post_init__`, validate both are `bool` (`isinstance(x, bool)`), raising
    `ValueError` with the offending value, in the style of the
    `max_echo_line_bytes` message. Do the validation *before* the
@@ -492,7 +551,8 @@ In `cuprum/sh.py`:
 5. After validation, synthesize:
    if `self.sink is None and (self.group or self.annotate_failure)`, then
    `object.__setattr__(self, "sink", GitHubActionsSink(emit_group=self.group,
-   emit_annotation=self.annotate_failure))`. Otherwise leave `self.sink` alone.
+   emit_annotation=self.annotate_failure))`.
+   Otherwise leave `self.sink` alone.
 6. `IOOptions` inherits the fields and the synthesis through
    `RunOutputOptions.__post_init__`; no change needed there, but confirm the
    inheritance with a test.
@@ -511,8 +571,8 @@ Tests, per `Verification plan` V1–V8:
   small finite table over the four toggle/outcome combinations.
 - `cuprum/unittests/test_pipeline_output_options.py`: add `group` and
   `annotate_failure` as `st.booleans()` to the `_OUTPUT_OPTIONS` strategy; add
-  default-value assertions; add `ValueError` construction tests for
-  non-bool inputs; add `test_flags_synthesize_github_actions_sink`,
+  default-value assertions; add `ValueError` construction tests for non-bool
+  inputs; add `test_flags_synthesize_github_actions_sink`,
   `test_explicit_sink_wins_over_flags` (using `RecordingSink` from
   `cuprum/unittests/_sink_test_support.py`), and
   `test_io_options_inherits_the_flags`, and a resolution test that
@@ -537,15 +597,14 @@ Documentation:
 - `CHANGELOG.md`: one `### Added` bullet under `## [0.2.0]` with a bold
   feature lead-in, naming `RunOutputOptions.group` and
   `RunOutputOptions.annotate_failure`, stating the shim relationship, and
-  ending with
-  `([#375](https://github.com/leynos/cuprum/issues/375))`.
+  ending with `([#375](https://github.com/leynos/cuprum/issues/375))`.
 - `docs/adr-013-opt-in-github-actions-presentation-sink.md`: an **appended**
   amendment section (following the house style of
   `docs/adr-004-interrogate-docstring-gate.md`'s
-  `### Amendment (YYYY-MM-DD): …` heading) recording that the convenience
-  flags delegate to the adapter, so no workflow-command knowledge reaches the
-  execution layer, reconciling the flags with the earlier rejection of
-  Option B. Accepted ADR text is append-only: do not edit the existing body.
+  `### Amendment (YYYY-MM-DD): …` heading) recording that the convenience flags
+  delegate to the adapter, so no workflow-command knowledge reaches the
+  execution layer, reconciling the flags with the earlier rejection of Option
+  B. Accepted ADR text is append-only: do not edit the existing body.
 
 ## Concrete steps
 
@@ -559,7 +618,8 @@ uv run pytest cuprum/unittests/test_sinks_github_actions.py \
   -k "emit_group_false or emit_annotation_false" -q 2>&1 | tee /tmp/test-issue-375-red.out
 ```
 
-Expect: collection succeeds and both tests fail — `TypeError:
+Expect: collection succeeds and both tests fail —
+`TypeError:
 GitHubActionsSink.__init__() got an unexpected keyword argument 'emit_group'`
 for the first. That failure is for the intended reason.
 
@@ -631,9 +691,9 @@ Quality criteria — what "done" means:
 
 ## Idempotence and recovery
 
-Every step is re-runnable. `make fmt` applies formatting fixes; `make check-fmt`
-only reports. If a gate fails, read the log the gate wrote under `/tmp` before
-re-running it.
+Every step is re-runnable. `make fmt` applies formatting fixes;
+`make check-fmt` only reports. If a gate fails, read the log the gate wrote
+under `/tmp` before re-running it.
 
 Recovery per milestone: each phase is its own commit. To abandon a phase,
 `git reset --hard <previous-commit>`. The `typos.toml` file is regenerated by
@@ -678,19 +738,28 @@ The adapter's current framing order, which must remain intact:
 No new libraries. The change uses `cuprum.sinks.github_actions` (already
 public), `dataclasses`, and the existing test tooling.
 
-Signatures that must exist at the end of `EP-M2`, in
-`cuprum/sinks/github_actions.py`:
+Signatures that exist at the end of `EP-M2`, in
+`cuprum/sinks/github_actions.py`. They differ from this plan's first draft,
+which was written before the `PLR0913` breach was measured; the
+`Surprises & discoveries` entry records why:
 
 ```python
+@dc.dataclass(frozen=True, slots=True)
+class _Annotation:
+    label: str
+    emit_group: bool = True
+    emit_annotation: bool = True
+
+
 class GitHubActionsSink:
-    def __init__(
+    def __init__(  # ruff: ignore[too-many-arguments] - keyword-only throughout
         self,
         destination: typ.IO[str] | None = None,
         *,
         title: str | None = None,
         force: bool = False,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
+        group: bool = True,
+        annotate: bool = True,
     ) -> None: ...
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None: ...
@@ -701,10 +770,7 @@ class GitHubActionsSession:
         self,
         log: typ.IO[str],
         label: str,
-        *,
-        annotation_label: str,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
+        annotation: _Annotation,
     ) -> None: ...
 
     @property
@@ -745,22 +811,22 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
 - **EP-M0 (complete).** Branch renamed, session titled, confirmation pass done.
   Acceptance evidence: this document's `Surprises & discoveries` names the
   three corrections with file-and-line citations. Conformance check: no code
-  changed. Recovery: n/a. Remaining gaps: all production work.
-  Compatibility decision: none.
+  changed. Recovery: n/a. Remaining gaps: all production work. Compatibility
+  decision: none.
 
 - **EP-M1 (Phase 2+3 combined, because the flags are unobservable until both
   land).** Outcome: `GitHubActionsSink` has independent group/annotation
-  toggles defaulting to the current behaviour, and `RunOutputOptions(group=True,
-  annotate_failure=True)` synthesizes an env-gated adapter into `sink`.
-  Requirements and gaps: ISSUE-375-flags, ISSUE-375-aggregation,
-  ISSUE-375-unchanged-defaults. Acceptance evidence: V1–V3 and V8 discharged;
-  `make test` green with the existing snapshot unmodified. Conformance check:
-  ADR-013 still holds — no workflow-command string outside
-  `cuprum/sinks/github_actions.py`; no public signature changed; no new
-  dependency, trust boundary, or persisted format. Recovery:
-  `git reset --hard` to the Phase-1 commit. Remaining gaps: end-to-end
-  coverage and documentation. Compatibility decision: none needed — this is a
-  pre-1.0 API and every added parameter defaults to the existing behaviour.
+  toggles defaulting to the current behaviour, and
+  `RunOutputOptions(group=True, annotate_failure=True)` synthesizes an
+  env-gated adapter into `sink`. Requirements and gaps: ISSUE-375-flags,
+  ISSUE-375-aggregation, ISSUE-375-unchanged-defaults. Acceptance evidence:
+  V1–V3 and V8 discharged; `make test` green with the existing snapshot
+  unmodified. Conformance check: ADR-013 still holds — no workflow-command
+  string outside `cuprum/sinks/github_actions.py`; no public signature changed;
+  no new dependency, trust boundary, or persisted format. Recovery:
+  `git reset --hard` to the Phase-1 commit. Remaining gaps: end-to-end coverage
+  and documentation. Compatibility decision: none needed — this is a pre-1.0
+  API and every added parameter defaults to the existing behaviour.
 
 - **EP-M2 (Phase 4 tests).** Outcome: V4–V7 discharged with real subprocess
   evidence. Acceptance evidence: the eight new end-to-end tests pass, and
