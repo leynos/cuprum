@@ -7,7 +7,7 @@ import typing as typ
 
 import pytest
 
-from cuprum.context import EnvMode, env
+from cuprum.context import CuprumContext, EnvMode, env
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -83,3 +83,20 @@ def test_replace_policy_reaches_every_pipeline_stage(
     assert dict(os.environ) == parent_snapshot, (
         "pipeline execution must not mutate os.environ"
     )
+
+
+def test_execution_context_keeps_existing_positional_slots() -> None:
+    """Adding an environment mode leaves legacy positional calls intact."""
+    context = ExecutionContext(None, "legacy-cwd")
+
+    assert context.cwd == "legacy-cwd"
+    assert context.env_mode is EnvMode.OVERLAY
+
+
+def test_cuprum_context_keeps_restriction_marker_positional_slot() -> None:
+    """The internal restriction marker retains its established field position."""
+    is_restricted = True
+    context = CuprumContext(frozenset(), (), (), (), None, None, is_restricted)
+
+    assert context._allowlist_is_restricted is True
+    assert context.env_mode is EnvMode.OVERLAY
