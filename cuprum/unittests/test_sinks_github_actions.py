@@ -148,8 +148,8 @@ def _open_gha_session(
     sink = GitHubActionsSink(
         typ.cast("typ.IO[str]", buffer),
         force=force,
-        emit_group=emit_group,
-        emit_annotation=emit_annotation,
+        group=emit_group,
+        annotate=emit_annotation,
     )
     session = sink.open_session(SessionStart(label="project: program", argv=argv))
     assert session is not None, "a forced sink must return an active session"
@@ -499,8 +499,7 @@ def test_emit_group_false_keeps_the_log_destination() -> None:
     session.log.write("framed output\n")
 
     assert buffer.getvalue() == "framed output\n", (
-        f"log routing must be unaffected by the group toggle; "
-        f"got {buffer.getvalue()!r}"
+        f"log routing must be unaffected by the group toggle; got {buffer.getvalue()!r}"
     )
 
 
@@ -569,3 +568,17 @@ def test_toggles_compose_independently(
     assert ("::error " in value) is emit_annotation, (
         f"the annotation presence must follow its own toggle; got {value!r}"
     )
+
+
+@pytest.mark.parametrize("toggle", ["group", "annotate"])
+@pytest.mark.parametrize("invalid", [1, 0, "yes", None, 1.0])
+def test_sink_rejects_non_bool_toggles(toggle: str, invalid: object) -> None:
+    """A non-``bool`` toggle is rejected where the sink is constructed.
+
+    The toggles gate workflow commands, so a merely truthy value would frame a
+    run on the strength of something the caller never documented as a flag.
+    ``1`` is the interesting case and is checked alongside values that are
+    falsy or not remotely boolean-shaped.
+    """
+    with pytest.raises(TypeError, match=f"{toggle} must be a bool"):
+        GitHubActionsSink(**{toggle: invalid})  # type: ignore[arg-type]
