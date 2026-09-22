@@ -39,6 +39,15 @@ def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, ob
     return types.MappingProxyType(merged)
 
 
+def _without_env_mode_tag(
+    tags: cabc.Mapping[str, object] | None,
+) -> cabc.Mapping[str, object] | None:
+    """Return caller tags without the reserved environment-mode key."""
+    if tags is None or "env_mode" not in tags:
+        return tags
+    return {key: value for key, value in tags.items() if key != "env_mode"}
+
+
 def _resolve_env_overlay(
     extra: EnvOverlay | None,
     env_mode: EnvMode = EnvMode.OVERLAY,

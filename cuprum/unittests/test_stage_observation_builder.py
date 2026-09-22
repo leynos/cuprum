@@ -63,7 +63,6 @@ _TAGS = st.none() | st.dictionaries(
             "project",
             "capture",
             "echo",
-            "env_mode",
             *sorted(_PIPELINE_STAGE_TAG_KEYS),
         ),
     ),
@@ -122,6 +121,22 @@ def test_replace_env_policy_is_tagged_for_observers() -> None:
 
     assert tags["env_mode"] is EnvMode.REPLACE, (
         "replacement-mode observations must expose the replacement tag"
+    )
+
+
+def test_caller_tags_cannot_spoof_the_environment_mode() -> None:
+    """Only replacement policies may publish the reserved mode tag."""
+    command = sh.make(ECHO)("observed")
+    context = ExecutionContext(tags={"env_mode": EnvMode.REPLACE})
+
+    single = _single_command_tags(command, context, capture=True, echo=False)
+    pipeline = _pipeline_tags((command, command), context, capture=True, echo=False)
+
+    assert "env_mode" not in single, (
+        "an overlay command must not publish a caller-supplied replacement tag"
+    )
+    assert all("env_mode" not in tags for tags in pipeline), (
+        "overlay pipeline stages must not publish caller-supplied replacement tags"
     )
 
 
@@ -204,8 +219,7 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
     assert single == {
         **_base_stage_tags(cmd, capture=capture, echo_stdout=echo, echo_stderr=echo),
         **(ctx_tags or {}),
-        "env_mode": EnvMode.OVERLAY,
-    }, "single-command tags should preserve the effective environment mode"
+    }, "single-command tags should merge caller tags over the base schema"
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
     shared_single = {
         key: value
