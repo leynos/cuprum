@@ -16,7 +16,9 @@ import typing as typ
 import pytest
 
 from cuprum.context import (
+    UNSET,
     CuprumContext,
+    EnvMode,
     EnvRegistration,
     ScopeConfig,
     current_context,
@@ -238,6 +240,44 @@ def test_resolve_env_layers_apply_left_to_right(
 
     assert merged is not None
     assert merged[var] == "second"
+
+
+def test_replace_and_unset_policies_do_not_change_the_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Replacement omits parents, preserves empties, and honours ``UNSET``."""
+    from cuprum._process_lifecycle import _merge_env
+    from cuprum.sh import ExecutionContext
+
+    _, execute = execution_strategy
+    parent_var = "CUPRUM_TEST_REPLACE_PARENT"
+    empty_var = "CUPRUM_TEST_REPLACE_EMPTY"
+    monkeypatch.setenv(parent_var, "parent-value")
+    parent_snapshot = dict(os.environ)
+    assert _merge_env({}, EnvMode.REPLACE) == {}, "empty replacement must be empty"
+
+    replacement = python_builder(
+        "-c",
+        f"import os;print(os.environ.get({parent_var!r}, '<missing>'));"
+        f"print(repr(os.environ.get({empty_var!r})))",
+    )
+    replaced = execute(
+        replacement,
+        {"context": ExecutionContext(env={empty_var: ""}, env_mode=EnvMode.REPLACE)},
+    )
+    assert replaced.stdout == "<missing>\n''\n", (
+        "replacement must distinguish an omitted parent variable from an empty value"
+    )
+
+    deletion = python_builder("-c", _print_var(parent_var))
+    with env({parent_var: UNSET}):
+        deleted = execute(deletion, {})
+    assert deleted.stdout == "<missing>\n", "UNSET must remove an inherited value"
+    assert dict(os.environ) == parent_snapshot, (
+        "environment policies must not mutate os.environ"
+    )
 
 
 def test_scoped_env_overlay_visible_to_subprocess(

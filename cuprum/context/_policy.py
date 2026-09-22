@@ -17,6 +17,8 @@ from __future__ import annotations
 import math
 import typing as typ
 
+from cuprum.context.env_overlay import EnvMode, EnvOverlay, merge_env_overlays
+
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
 
@@ -81,3 +83,25 @@ def _resolve_narrowed_timeout(
     if config is None:
         return parent
     return config
+
+
+def _resolve_env_policy(
+    parent_overlay: EnvOverlay | None,
+    parent_mode: EnvMode,
+    child_overlay: EnvOverlay | None,
+    child_mode: EnvMode,
+) -> tuple[EnvOverlay | None, EnvMode]:
+    """Compose parent and child environment policies without rendering them.
+
+    A replacement child establishes a fresh environment boundary, discarding
+    every parent overlay. Overlay and inherit children retain the inherited
+    render mode while their keys take precedence over the parent mapping.
+
+    Returns
+    -------
+    tuple[EnvOverlay | None, EnvMode]
+        The immutable composed overlay and its effective render mode.
+    """
+    if child_mode is EnvMode.REPLACE:
+        return merge_env_overlays(None, child_overlay), EnvMode.REPLACE
+    return merge_env_overlays(parent_overlay, child_overlay), parent_mode

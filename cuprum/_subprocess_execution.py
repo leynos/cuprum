@@ -173,7 +173,7 @@ async def _spawn_subprocess(
                 else asyncio.subprocess.DEVNULL
             ),
             stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
-            env=_merge_env(execution.ctx.env),
+            env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
             cwd=_cwd_arg(execution.ctx.cwd),
         )
     )

@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import typing as typ
 
-from cuprum.context.env_overlay import _coerce_env_overlay
+from cuprum.context.env_overlay import (
+    EnvMode,
+    EnvOverlay,
+    EnvOverlayValue,
+    _coerce_env_overlay,
+)
 from cuprum.context.scoped import scoped
 from cuprum.context.state import _reset_context, _set_context, current_context
 
@@ -242,21 +247,21 @@ class EnvRegistration(_TokenRegistration):
 
     __slots__ = ("_overlay",)
 
-    def __init__(self, overlay: cabc.Mapping[str, str]) -> None:
+    def __init__(self, overlay: EnvOverlay, mode: EnvMode) -> None:
         """Layer ``overlay`` onto the current context's env overlay."""
         super().__init__()
         self._overlay = _coerce_env_overlay(overlay)
-        self._install(current_context().with_env_overlay(self._overlay))
+        self._install(current_context().with_env_overlay(self._overlay, mode))
 
     @property
-    def overlay(self) -> cabc.Mapping[str, str] | None:
+    def overlay(self) -> EnvOverlay | None:
         """The immutable overlay this registration applied."""
         return self._overlay
 
 
 def env(
-    *overlays: cabc.Mapping[str, str],
-    **kwvars: str,
+    *overlays: cabc.Mapping[str, EnvOverlayValue],
+    **kwvars: EnvOverlayValue | EnvMode,
 ) -> EnvRegistration:
     """Overlay environment variables on top of the live :func:`os.environ`.
 
@@ -269,12 +274,14 @@ def env(
     Parameters
     ----------
     overlays:
-        Zero or more ``Mapping[str, str]`` instances supplying overlay
-        entries. Useful when the variable name is not a valid Python
+        Zero or more ``Mapping[str, str | UnsetType]`` instances supplying
+        overlay entries. Useful when the variable name is not a valid Python
         identifier.
+    mode:
+        Policy contributed by this scope. ``OVERLAY`` remains the default.
     kwvars:
-        Keyword pairs naming environment variables. Identifier-safe variable
-        names are typically expressed this way.
+        Keyword pairs naming environment variables or ``UNSET`` markers.
+        Identifier-safe variable names are typically expressed this way.
 
     Returns
     -------
@@ -290,19 +297,27 @@ def env(
     ...     # *live* os.environ, including GIT_AUTHOR_NAME.
     ...     pass
 
+    Raises
+    ------
+    TypeError
+        If ``mode`` is supplied but is not an :class:`EnvMode`.
+
     Notes
     -----
-    Identical to other registration helpers, ``env`` is bound to the
-    :class:`~contextvars.Context` in which it is created; detach in the same
-    logical context (thread or task) to avoid ``ValueError`` from
-    :meth:`~contextvars.ContextVar.reset`.
+    ``env`` is bound to the :class:`~contextvars.Context` in which it is
+    created. Detach it in that same logical context (thread or task) to avoid
+    ``ValueError`` from :meth:`~contextvars.ContextVar.reset`.
     """
-    merged: dict[str, str] = {}
+    raw_mode = kwvars.pop("mode", EnvMode.OVERLAY)
+    if not isinstance(raw_mode, EnvMode):
+        msg = "env mode must be an EnvMode value"
+        raise TypeError(msg)
+
+    merged: dict[str, EnvOverlayValue] = {}
     for overlay in overlays:
         merged.update(overlay)
-    if kwvars:
-        merged.update(kwvars)
-    return EnvRegistration(merged)
+    merged.update(typ.cast("cabc.Mapping[str, EnvOverlayValue]", kwvars))
+    return EnvRegistration(merged, raw_mode)
 
 
 def observe(hook: ExecHook) -> HookRegistration:

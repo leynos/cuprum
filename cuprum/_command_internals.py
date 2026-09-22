@@ -62,7 +62,7 @@ from cuprum._subprocess_execution import (
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
-from cuprum.context import current_context
+from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import (
@@ -113,7 +113,7 @@ def _prepare_execution_observation(
 ) -> _StageObservation:
     """Prepare the observation context for command execution."""
     cwd = Path(context.cwd) if context.cwd is not None else None
-    env_overlay = _resolve_env_overlay(context.env)
+    env_overlay, env_mode = _resolve_env_overlay(context.env, context.env_mode)
     tags = _merge_tags(
         _base_stage_tags(
             cmd,
@@ -122,6 +122,7 @@ def _prepare_execution_observation(
             echo_stderr=output.resolved_echo[1],
         ),
         context.tags,
+        {"env_mode": env_mode} if env_mode is EnvMode.REPLACE else None,
     )
     return _StageObservation(
         cmd=cmd,

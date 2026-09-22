@@ -9,8 +9,10 @@ import typing as typ
 
 from cuprum.catalogue import ECHO, LS
 from cuprum.context import (
+    EnvMode,
     ScopeConfig,
     current_context,
+    env,
     scoped,
 )
 
@@ -73,4 +75,37 @@ def test_context_is_isolated_per_async_task() -> None:
     )
     assert results["task2"] is False, (
         "task 2 must retain its LS-only allowlist in its isolated context"
+    )
+
+
+def test_environment_policies_are_isolated_per_async_task() -> None:
+    """Concurrent tasks retain only their own environment policy."""
+    first = "CUPRUM_TEST_ASYNC_ENV_FIRST"
+    second = "CUPRUM_TEST_ASYNC_ENV_SECOND"
+
+    async def task_worker(name: str, value: str) -> dict[str, object]:
+        """Return the policy visible after an intentional scheduling yield."""
+        with env({name: value}, mode=EnvMode.REPLACE):
+            await asyncio.sleep(0.01)
+            context = current_context()
+            return {
+                "mode": context.env_mode,
+                "overlay": dict(context.env_overlay or {}),
+            }
+
+    async def run_tasks() -> tuple[dict[str, object], dict[str, object]]:
+        """Run two overlapping environment-policy scopes."""
+        return await asyncio.gather(
+            task_worker(first, "one"),
+            task_worker(second, "two"),
+        )
+
+    first_result, second_result = asyncio.run(run_tasks())
+    results = {"first": first_result, "second": second_result}
+
+    assert results["first"] == {"mode": EnvMode.REPLACE, "overlay": {first: "one"}}, (
+        "the first task must not observe the second task's replacement policy"
+    )
+    assert results["second"] == {"mode": EnvMode.REPLACE, "overlay": {second: "two"}}, (
+        "the second task must not observe the first task's replacement policy"
     )

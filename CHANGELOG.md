@@ -73,6 +73,14 @@
 
 ### Added
 
+- **`EnvMode`:** Select inherited, additive-overlay, or replacement child
+  environments without mutating process-global state
+  ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`UNSET`:** Explicitly remove an inherited variable while composing a child
+  environment ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`env_mode` fields:** `ScopeConfig`, `CuprumContext`, and
+  `ExecutionContext` now carry the selected environment policy
+  ([#434](https://github.com/leynos/cuprum/issues/434)).
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper

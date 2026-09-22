@@ -29,7 +29,9 @@ import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
-from cuprum.context import current_context, resolve_env
+from cuprum.context import current_context
+from cuprum.context._policy import _resolve_env_policy
+from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -126,13 +128,22 @@ async def _cleanup_pipeline_on_error(
 
 
 def _merge_env(
-    extra: cabc.Mapping[str, str] | None,
+    extra: EnvOverlay | None,
+    env_mode: EnvMode = EnvMode.OVERLAY,
     *,
     include_context_overlay: bool = True,
 ) -> dict[str, str] | None:
-    """Overlay environment variables on the live :func:`os.environ`."""
-    overlay = current_context().env_overlay if include_context_overlay else None
-    return resolve_env(overlay, extra)
+    """Render the ambient and per-call environment policies for a child."""
+    context = current_context()
+    parent_overlay = context.env_overlay if include_context_overlay else None
+    parent_mode = context.env_mode if include_context_overlay else EnvMode.OVERLAY
+    overlay, mode = _resolve_env_policy(
+        parent_overlay,
+        parent_mode,
+        extra,
+        env_mode,
+    )
+    return render_env(overlay, mode)
 
 
 async def _terminate_process_via_wait_task(

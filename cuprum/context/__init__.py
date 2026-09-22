@@ -61,7 +61,13 @@ from cuprum.context.core import (
     ForbiddenProgramError,
     ScopeConfig,
 )
-from cuprum.context.env_overlay import merge_env_overlays, resolve_env
+from cuprum.context.env_overlay import (
+    UNSET,
+    EnvMode,
+    UnsetType,
+    merge_env_overlays,
+    resolve_env,
+)
 from cuprum.context.registration import (
     AllowRegistration,
     EnvRegistration,
@@ -76,15 +82,18 @@ from cuprum.context.scoped import scoped
 from cuprum.context.state import current_context, get_context
 
 __all__ = [
+    "UNSET",
     "AfterHook",
     "AllowRegistration",
     "BeforeHook",
     "ContextError",
     "CuprumContext",
+    "EnvMode",
     "EnvRegistration",
     "ForbiddenProgramError",
     "HookRegistration",
     "ScopeConfig",
+    "UnsetType",
     "after",
     "allow",
     "before",

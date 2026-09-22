@@ -592,6 +592,60 @@ with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
         raise AssertionError("the scope should forbid the interpreter")
 ```
 
+### Choose how a child environment is composed
+
+`EnvMode.OVERLAY` is the default environment policy. It resolves values against
+the live `os.environ` when a subprocess is spawned, rather than against an
+import-time or scope-entry snapshot. Variables added after a scope starts (the
+common `monkeypatch.setenv` case under pytest) remain visible to its children.
+
+`EnvMode.INHERIT` adds values while retaining the mode selected by an outer
+scope. `EnvMode.REPLACE` starts from an empty environment, applies only its
+mapping, and discards every outer overlay. Use the `UNSET` singleton as a value
+to remove a variable from an overlaid child environment.
+
+<!-- tested-example: env-modes -->
+
+```python
+import os
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.context import EnvMode, UNSET, env
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="env-modes")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+show = "-c", "import os; print(os.getenv('CUPRUM_DEMO'), os.getenv('CUPRUM_KEEP'))"
+
+os.environ["CUPRUM_KEEP"] = "kept"
+with env({"CUPRUM_DEMO": "overlaid"}, CUPRUM_DEMO="won"):
+    assert python(*show).run_sync().stdout == "won kept\n"
+with env({"CUPRUM_KEEP": UNSET}):
+    assert python(*show).run_sync().stdout == "None None\n"
+with env({"CUPRUM_DEMO": "only"}, mode=EnvMode.REPLACE):
+    assert python(*show).run_sync().stdout == "only None\n"
+```
+
+The last case shows a replacement policy discarding the inherited
+`CUPRUM_KEEP`, while `os.environ` itself is never mutated.
+
+Precedence, from lowest to highest, is:
+
+1. The current process's `os.environ`, read at spawn time.
+2. Ambient scoped overlays, with inner values winning. A nested `REPLACE`
+   discards every outer overlay and the live parent environment.
+3. The per-call `ExecutionContext.env` mapping. Its values win overall; a
+   per-call `REPLACE` also discards the ambient policy.
+
+`env()` accepts both positional mappings and keyword arguments, mirroring
+`dict(...)`, including `UNSET` values. The function returns an
+`EnvRegistration` handle which can be used as a context manager or detached
+manually. `ExecutionContext.cwd` remains a per-call setting, independent of
+`env_mode`. On POSIX, executable lookup uses the child environment's `PATH` and
+the supplied `cwd`; a replacement policy that omits `PATH` can therefore make a
+bare executable name fail to resolve. Prefer an absolute programme path when
+using a deliberately minimal replacement environment.
+
 ### Run code around every command
 
 `before(hook)` receives each command before it starts, and `after(hook)`
