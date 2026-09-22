@@ -40,6 +40,7 @@ if typ.TYPE_CHECKING:
     # cycle. The other direction is the reason the record lives here.
     from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
+    from cuprum.context.env_overlay import EnvOverlay
     from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
@@ -101,7 +102,7 @@ class _StageObservation:
     hooks: _ExecutionHooks
     tags: cabc.Mapping[str, object]
     cwd: Path | None
-    env_overlay: cabc.Mapping[str, str] | None
+    env_overlay: EnvOverlay | None
     pending_tasks: list[asyncio.Task[None]]
     wall_clock: cabc.Callable[[], float]
     # Minted once per stage observation so every lifecycle event this object

@@ -16,6 +16,7 @@ import uuid
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum.context.env_overlay import EnvOverlay
     from cuprum.program import Program
 
 # ``plan`` … ``stdin_error`` describe one command's own lifecycle.
@@ -251,7 +252,7 @@ class ExecEvent:
     program: Program
     argv: tuple[str, ...]
     cwd: Path | None
-    env: cabc.Mapping[str, str] | None
+    env: EnvOverlay | None
     pid: int | None
     timestamp: float
     line: str | None
