@@ -25,6 +25,16 @@ Feature: CI runner selection by event
     When a commit is pushed to the default branch
     Then every reviewed lane selects the Ubicloud runner
 
+  Scenario: a push does not schedule the pull-request-only lane
+    Given the continuous integration workflow
+    When a commit is pushed to the default branch
+    Then the pull-request-only lane is absent
+
+  Scenario: a pull request does schedule the pull-request-only lane
+    Given the continuous integration workflow
+    When a pull request is opened from a branch of this repository
+    Then the pull-request-only lane is present
+
   Scenario: a tag push reaches the wheel jobs on the paid runner
     Given the release workflow
     When a tag is pushed

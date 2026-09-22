@@ -48,6 +48,14 @@ PLATFORM_LABELS: typ.Final = frozenset({
     "ubuntu-latest",
     "windows-2022",
 })
+#: The fewest reviewed lanes any event asserting that step schedules. Named
+#: rather than derived: a derivation from the same schedule the assertion
+#: reads would move with the defect it is meant to catch.
+MINIMUM_REVIEWED_LANES: typ.Final = 4
+#: The lane whose own guard admits one event only. Its presence and absence
+#: are what make the event evaluation falsifiable: every other assertion here
+#: reads a label, and a wrongly scheduled job declares the right one.
+PULL_REQUEST_ONLY_LANE: typ.Final = ("ci.yml", "coverage")
 EVENTS: typ.Final = {
     "fork": FORK_PULL_REQUEST,
     "owned": OWNED_PULL_REQUEST,
@@ -129,17 +137,29 @@ def _scheduled(selection: dict[str, object]) -> list[Scheduled]:
 
 @then("every reviewed lane selects the Ubicloud runner")
 def _reviewed_lanes_are_paid(selection: dict[str, object]) -> None:
-    """Assert each reviewed lane took the Ubicloud arm."""
+    """Assert each reviewed lane took the Ubicloud arm.
+
+    The `continue` below is a vacuity hole on its own: a schedule containing no
+    reviewed lane at all would take it every time, check nothing, and read
+    exactly like a pass. The checked count closes it.
+    """
     resolved = {
         (item.workflow, item.job): item.labels for item in _scheduled(selection)
     }
+    checked = 0
     for workflow_name, job_name in expand(UBICLOUD_JOBS):
         if (workflow_name, job_name) not in resolved:
             continue
+        checked += 1
         assert resolved[workflow_name, job_name] == (UBICLOUD_LABEL,), (
             f"{workflow_name}:{job_name} must select {UBICLOUD_LABEL} on this "
             f"event, got {resolved[workflow_name, job_name]}"
         )
+    assert checked >= MINIMUM_REVIEWED_LANES, (
+        f"this event scheduled only {checked} reviewed lanes, fewer than the "
+        f"{MINIMUM_REVIEWED_LANES} every event asserting this step places; the "
+        "loop above would have checked nothing and still passed"
+    )
 
 
 @then("the wheel jobs reached through the called workflow select it too")
@@ -189,6 +209,33 @@ def _fork_lanes_fall_back(selection: dict[str, object]) -> None:
         )
 
 
+@then("the pull-request-only lane is absent")
+def _pull_request_lane_absent(selection: dict[str, object]) -> None:
+    """Assert a push does not schedule the lane its own guard excludes.
+
+    `ci.yml:coverage` declares `github.event_name == 'pull_request'`, so GitHub
+    skips it on a push. A schedule that listed it anyway would report the push
+    event placing a job the push event never runs, and every placement
+    assertion over that schedule would still pass, because the label it
+    declares is correct. Only its absence discriminates.
+    """
+    scheduled = {(item.workflow, item.job) for item in _scheduled(selection)}
+    assert PULL_REQUEST_ONLY_LANE not in scheduled, (
+        f"{PULL_REQUEST_ONLY_LANE} is guarded on the pull_request event, so a "
+        "push must not schedule it"
+    )
+
+
+@then("the pull-request-only lane is present")
+def _pull_request_lane_present(selection: dict[str, object]) -> None:
+    """Prove the exclusion narrow: the event it is written for still runs it."""
+    scheduled = {(item.workflow, item.job) for item in _scheduled(selection)}
+    assert PULL_REQUEST_ONLY_LANE in scheduled, (
+        f"{PULL_REQUEST_ONLY_LANE} must run on a pull request; excluding it "
+        "here would make the absence assertion above hold for the wrong reason"
+    )
+
+
 @then("the native wheel matrix keeps its platform runners")
 def _native_matrix_is_hosted(selection: dict[str, object]) -> None:
     """Assert the native matrix kept exactly its platform runners."""
@@ -232,6 +279,16 @@ def test_a_fork_pull_request_is_schedulable() -> None:
 @scenario(FEATURE, "a push to the default branch takes the owned arm")
 def test_a_push_takes_the_owned_arm() -> None:
     """With no pull-request payload the fork field is absent, so falsy."""
+
+
+@scenario(FEATURE, "a push does not schedule the pull-request-only lane")
+def test_a_push_skips_the_pull_request_only_lane() -> None:
+    """A job's own event guard is honoured by the schedule."""
+
+
+@scenario(FEATURE, "a pull request does schedule the pull-request-only lane")
+def test_a_pull_request_runs_the_pull_request_only_lane() -> None:
+    """The same guard admits the event it is written for."""
 
 
 @scenario(FEATURE, "a tag push reaches the wheel jobs on the paid runner")

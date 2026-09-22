@@ -16,6 +16,8 @@ fork's pull request can be scheduled at all.
 
 from __future__ import annotations
 
+import pathlib as pth
+import re
 import typing as typ
 
 from tests.helpers.ci_placement import declares_steps, placement
@@ -25,14 +27,83 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 #: A pull request opened from a fork of this repository.
-FORK_PULL_REQUEST: typ.Final = {"event_name": "pull_request", "fork": True}
+FORK_PULL_REQUEST: typ.Final = {
+    "event_name": "pull_request",
+    "fork": True,
+    "ref": "refs/pull/1/merge",
+}
 #: A pull request opened from a branch of this repository.
-OWNED_PULL_REQUEST: typ.Final = {"event_name": "pull_request", "fork": False}
+OWNED_PULL_REQUEST: typ.Final = {
+    "event_name": "pull_request",
+    "fork": False,
+    "ref": "refs/pull/1/merge",
+}
 #: A push to the default branch. There is no pull-request payload, so the fork
 #: field is absent, which GitHub evaluates as falsy.
-PUSH_TO_MAIN: typ.Final = {"event_name": "push", "fork": None}
+PUSH_TO_MAIN: typ.Final = {
+    "event_name": "push",
+    "fork": None,
+    "ref": "refs/heads/main",
+}
 #: A tag push, which is what reaches `release.yml`.
-TAG_PUSH: typ.Final = {"event_name": "push", "fork": None}
+TAG_PUSH: typ.Final = {"event_name": "push", "fork": None, "ref": "refs/tags/v1.2.3"}
+
+#: A comparison this evaluator can decide: one context property this module
+#: models, against a quoted literal.
+_COMPARISON = re.compile(
+    r"\A\s*github\.(?P<field>event_name|ref)\s*(?P<operator>==|!=)\s*"
+    r"'(?P<literal>[^']*)'\s*\Z"
+)
+#: Everything else in a condition is a run-time value this harness does not
+#: model: `needs.*` outcomes, `inputs.*`, `github.actor`. Treating them as true
+#: keeps the schedule a superset of what runs, which is the safe direction for
+#: a placement assertion: it never claims a job is absent when it runs.
+_UNKNOWN: typ.Final = True
+
+
+def _decide(term: str, event: cabc.Mapping[str, object]) -> bool:
+    """Evaluate one `&&`-joined term against the event."""
+    match = _COMPARISON.match(term)
+    if match is None:
+        return _UNKNOWN
+    actual = event.get(match.group("field"))
+    equal = actual == match.group("literal")
+    return equal if match.group("operator") == "==" else not equal
+
+
+def runs_on_event(condition: object, event: cabc.Mapping[str, object]) -> bool:
+    """Report whether a job's own ``if:`` admits this event.
+
+    GitHub skips `ci.yml:coverage` on a push, because it declares
+    `github.event_name == 'pull_request'`. A schedule that listed it anyway
+    would say the push event places a job the push event never runs.
+
+    Only `github.event_name` and `github.ref` comparisons are decided. Every
+    other term is left to :data:`_UNKNOWN`, including any term a parenthesized
+    expression splits into, since none of those match the comparison pattern
+    either. An explicit parenthesis check stood here until a mutation showed it
+    could not change an outcome: the unknown-term path already covers it, and
+    an unreachable guard is worse than none because it reads as protection.
+
+    This harness models the event, not `needs` outcomes or dispatch inputs, so
+    a schedule that is a superset of what runs never claims a job is absent
+    when it is present.
+
+    Returns
+    -------
+    bool
+        Whether the event admits the job.
+    """
+    if not isinstance(condition, str):
+        return True
+    text = " ".join(condition.split())
+    expression = re.fullmatch(r"\$\{\{(?P<body>.*)\}\}", text, re.DOTALL)
+    if expression is not None:
+        text = " ".join(expression.group("body").split())
+    return any(
+        all(_decide(term, event) for term in alternative.split("&&"))
+        for alternative in text.split("||")
+    )
 
 
 class Scheduled(typ.NamedTuple):
@@ -97,6 +168,9 @@ def schedule(workflow_name: str, event: cabc.Mapping[str, object]) -> list[Sched
     """
     scheduled: list[Scheduled] = []
     for job_name in jobs(workflow_name):
+        declared = job(workflow_name, job_name)
+        if not runs_on_event(declared.get("if"), event):
+            continue
         if declares_steps(workflow_name, job_name):
             scheduled.append(
                 Scheduled(
@@ -104,10 +178,13 @@ def schedule(workflow_name: str, event: cabc.Mapping[str, object]) -> list[Sched
                 )
             )
             continue
-        called = job(workflow_name, job_name).get("uses")
+        called = declared.get("uses")
         if not isinstance(called, str) or not called.startswith("./.github/workflows/"):
             # A caller of a workflow outside this repository declares no runner
             # this harness can resolve, and its callee is not ours to model.
             continue
-        scheduled.extend(schedule(called.rsplit("/", 1)[-1], event))
+        # `PurePosixPath` rather than `rsplit`: a workflow reference is a POSIX
+        # path and the separator is part of its grammar, not a character to
+        # split on.
+        scheduled.extend(schedule(pth.PurePosixPath(called).name, event))
     return scheduled
