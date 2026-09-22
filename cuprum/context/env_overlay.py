@@ -158,7 +158,7 @@ def resolve_env(
 
     Parameters
     ----------
-    *layers : collections.abc.Mapping[str, str] | None
+    *layers : collections.abc.Mapping[str, str | UnsetType] | None
         Overlay layers applied left-to-right over a live copy of
         ``os.environ``; later values win. ``None`` and empty layers are
         skipped.
