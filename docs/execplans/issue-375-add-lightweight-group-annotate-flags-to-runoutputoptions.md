@@ -153,10 +153,13 @@ processes.
   `GitHubActionsSession` takes its title and both toggles as one `_Annotation`
   value; `GitHubActionsSink` takes `group=`/`annotate=` keywords and stores
   them as the `emit_group`/`emit_annotation` attributes.
-- [ ] Phase 3: `RunOutputOptions.group`/`annotate_failure` plus sink synthesis.
-  Implementation and tests written; green on the focused suites. Blocked on the
-  ruff/pylint gate repair described in `Surprises & discoveries`.
-- [ ] Phase 4: tests, users' guide, CHANGELOG, ADR-013 amendment.
+- [x] (2026-09-22) Phase 3 complete: `RunOutputOptions.group`/`annotate_failure`
+  plus sink synthesis committed as `33f72288`. Gate repair recorded in
+  `aa32be63`; the stale call sites it left behind repaired as `77532cf2`.
+- [x] (2026-09-22) Phase 4 complete. Eight end-to-end tests driving the flags
+  through real subprocess runs (`ae36fa03`); users' guide subsection, CHANGELOG
+  entry, ADR-013 amendment, and this plan (`f67282c2`). `make markdownlint` and
+  its `spelling` tier pass, exit 0.
 - [ ] Gates: `make check-fmt`, `make lint`, `make typecheck`, `make test` via
   `scrutineer`, then CodeRabbit.
 - [ ] Push and open the draft pull request.
