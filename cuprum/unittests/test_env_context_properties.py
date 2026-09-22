@@ -199,3 +199,21 @@ def test_resolve_env_policy_composes_modes_and_unset_markers(
     assert dict(overlay or {}) == expected, (
         "overlay composition must retain UNSET markers until render time"
     )
+
+
+@pytest.mark.parametrize(
+    ("parent_mode", "child_mode"),
+    [(None, EnvMode.OVERLAY), (EnvMode.OVERLAY, "replace")],
+)
+def test_resolve_env_policy_rejects_invalid_modes(
+    parent_mode: object,
+    child_mode: object,
+) -> None:
+    """Only typed ``EnvMode`` values may control environment rendering."""
+    with pytest.raises(TypeError, match="environment modes must be EnvMode values"):
+        _resolve_env_policy(
+            None,
+            typ.cast("EnvMode", parent_mode),
+            None,
+            typ.cast("EnvMode", child_mode),
+        )
