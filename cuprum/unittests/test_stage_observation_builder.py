@@ -63,6 +63,7 @@ _TAGS = st.none() | st.dictionaries(
             "project",
             "capture",
             "echo",
+            "env_mode",
             *sorted(_PIPELINE_STAGE_TAG_KEYS),
         ),
     ),
@@ -203,7 +204,8 @@ def test_single_and_pipeline_tags_agree_on_shared_keys(
     assert single == {
         **_base_stage_tags(cmd, capture=capture, echo_stdout=echo, echo_stderr=echo),
         **(ctx_tags or {}),
-    }, "single-command tags should merge caller tags over the base schema"
+        "env_mode": EnvMode.OVERLAY,
+    }, "single-command tags should preserve the effective environment mode"
     stage_tags = _pipeline_tags((cmd, cmd), context, capture=capture, echo=echo)
     shared_single = {
         key: value
