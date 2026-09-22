@@ -27,8 +27,15 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum.context import UNSET, EnvMode, UnsetType, merge_env_overlays, resolve_env
+from cuprum.context import (
+    UNSET,
+    EnvMode,
+    UnsetType,
+    merge_env_overlays,
+    resolve_env,
+)
 from cuprum.context._policy import _resolve_env_policy
+from cuprum.context.env_overlay import render_env
 
 # Hypothesis strategy: env-var-style names ("[A-Z_][A-Z0-9_]*") with a small
 # alphabet of values. Keeping the namespace bounded lets layers actually
@@ -217,3 +224,10 @@ def test_resolve_env_policy_rejects_invalid_modes(
             None,
             typ.cast("EnvMode", child_mode),
         )
+
+
+@pytest.mark.parametrize("invalid_mode", [None, "replace"])
+def test_render_env_rejects_invalid_modes(invalid_mode: object) -> None:
+    """Rendering accepts only typed ``EnvMode`` policy values."""
+    with pytest.raises(TypeError, match="environment mode must be an EnvMode value"):
+        render_env(None, typ.cast("EnvMode", invalid_mode))

@@ -123,7 +123,15 @@ def render_env(
     -------
     dict[str, str] | None
         The environment mapping to pass to the child, or ``None`` to inherit.
+
+    Raises
+    ------
+    TypeError
+        If ``mode`` is not an :class:`EnvMode`.
     """
+    if not isinstance(mode, EnvMode):
+        msg = "environment mode must be an EnvMode value"
+        raise TypeError(msg)
     if mode is not EnvMode.REPLACE and not overlay:
         return None
 
