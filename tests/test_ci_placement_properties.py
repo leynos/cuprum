@@ -14,6 +14,7 @@ later.
 
 from __future__ import annotations
 
+import contextlib
 import typing as typ
 from unittest import mock
 
@@ -21,11 +22,11 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from tests.helpers import ci_job_rules as rules
 from tests.helpers import ci_placement as reader
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import contextlib
 
     from tests.helpers.workflow_types import Job
 
@@ -73,8 +74,8 @@ def declaring(
     Returns
     -------
     contextlib.AbstractContextManager[object]
-        A context manager that installs the declaration and restores the real
-        reader on exit, including when the block raises.
+        A context manager that installs the declaration in both reader modules
+        and restores them on exit, including when the block raises.
     """
 
     def _declared(workflow_name: str, job_name: str) -> Job:
@@ -82,7 +83,13 @@ def declaring(
         del workflow_name, job_name
         return typ.cast("Job", declared)
 
-    return mock.patch.object(reader, "job", _declared)
+    stack = contextlib.ExitStack()
+    # Both modules import `job` into their own namespace, so patching one would
+    # leave the other reading the repository's real workflows and the property
+    # would assert nothing.
+    for module in (reader, rules):
+        stack.enter_context(mock.patch.object(module, "job", _declared))
+    return stack
 
 
 @SETTINGS
@@ -227,8 +234,8 @@ def test_every_property_in_a_composite_expression_is_read(
     arguments = ", ".join(paths)
     template = "-".join(f"{{{index}}}" for index in range(len(paths)))
     value = f"a ${{{{ format('{template}', {arguments}) }}}} b"
-    assert reader.references(value) == frozenset(paths), (
-        f"{value!r} read {sorted(reader.references(value))}"
+    assert rules.references(value) == frozenset(paths), (
+        f"{value!r} read {sorted(rules.references(value))}"
     )
 
 
@@ -282,6 +289,6 @@ def test_a_real_guard_is_never_reported_as_dead(
     if wrapped:
         text = f"${{{{ {text} }}}}"
     with declaring({"runs-on": "ubuntu-latest", "steps": [], "if": text}):
-        assert not reader.never_runs("w.yml", "j"), (
+        assert not rules.never_runs("w.yml", "j"), (
             f"{text!r} names no falsy literal, so the job can run"
         )

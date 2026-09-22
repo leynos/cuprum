@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers import ci_job_rules as rules
 from tests.helpers import ci_placement as reader
 
 OWNED = "ubicloud-standard-2"
@@ -22,20 +23,28 @@ HOSTED = "ubuntu-latest"
 #: claim that `all_jobs` sees the whole estate is asserted rather than merely
 #: true: a file the reader skipped would otherwise be invisible.
 ESTATE_WORKFLOWS = frozenset({
+    "benchmark-gate-harness.yml",
     "build-wheels.yml",
     "ci.yml",
     "coverage-main.yml",
     "delayed-pr-comment.yml",
     "dependabot-automerge.yml",
-    "get-codescene-sha.yml",
+    "loom.yml",
     "mutation-testing.yml",
     "release.yml",
+    "rust-boundaries.yml",
 })
 
 
 def _declare(monkeypatch: pytest.MonkeyPatch, declared: dict[str, object]) -> None:
-    """Make the reader see one synthetic job declaration."""
+    """Make both readers see one synthetic job declaration.
+
+    The shape reader and the job rules each import `job` into their own
+    namespace, so patching one would leave the other reading the repository's
+    real workflows and the test would silently assert nothing.
+    """
     monkeypatch.setattr(reader, "job", lambda *_: declared)
+    monkeypatch.setattr(rules, "job", lambda *_: declared)
 
 
 @pytest.mark.parametrize(
@@ -58,7 +67,7 @@ def test_a_constant_false_guard_is_reported(
 ) -> None:
     """Catch a lane that satisfies every declaration rule and runs nothing."""
     _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "if": condition})
-    assert reader.never_runs("w.yml", "j"), (
+    assert rules.never_runs("w.yml", "j"), (
         f"{condition!r} can never be true, so the job gates nothing"
     )
 
@@ -89,7 +98,7 @@ def test_a_real_guard_is_not_reported_as_never_running(
     contract with a false positive gates nothing (femtologging #480).
     """
     _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "if": condition})
-    assert not reader.never_runs("w.yml", "j"), (
+    assert not rules.never_runs("w.yml", "j"), (
         f"{condition!r} is a legitimate guard and must not be refused"
     )
 
@@ -160,8 +169,8 @@ def test_references_are_read_from_any_declaration(
     value: object, expected: frozenset[str]
 ) -> None:
     """Read every reference, so a name and a runner can be compared."""
-    assert reader.references(value) == expected, (
-        f"{value!r} reads {sorted(reader.references(value))}"
+    assert rules.references(value) == expected, (
+        f"{value!r} reads {sorted(rules.references(value))}"
     )
 
 
@@ -200,3 +209,38 @@ def test_the_frozen_hosted_set_holds_no_paid_label() -> None:
         not label.startswith(("ubicloud-", "namespace-", "buildjet-", "warpbuild-"))
         for label in reader.FROZEN_HOSTED_LABELS
     ), "a paid provider's label must never be frozen out of the registry question"
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        pytest.param(True, "integer timeout-minutes", id="yaml-true"),
+        pytest.param(False, "integer timeout-minutes", id="yaml-false"),
+        pytest.param("45", "integer timeout-minutes", id="string"),
+        pytest.param(45.0, "integer timeout-minutes", id="float"),
+        pytest.param(None, "integer timeout-minutes", id="absent"),
+        pytest.param(0, "positive timeout-minutes", id="zero"),
+        pytest.param(-5, "positive timeout-minutes", id="negative"),
+    ],
+)
+def test_an_unusable_ceiling_is_refused(
+    monkeypatch: pytest.MonkeyPatch, declared: object, expected: str
+) -> None:
+    """Refuse the ceilings that bound nothing.
+
+    Driven directly rather than over this repository's workflows, which all
+    declare sensible values. Parametrized over correct sources the rule passes
+    whether or not it discriminates, and a mutation from `type(...) is int`
+    back to `isinstance` survived until this test existed: `True` is an `int`
+    to Python, so `timeout-minutes: true` would have satisfied the contract
+    while bounding the job at one minute.
+    """
+    _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "timeout-minutes": declared})
+    with pytest.raises(AssertionError, match=expected):
+        rules.ceiling("w.yml", "j")
+
+
+def test_a_usable_ceiling_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prove the rule narrow: an ordinary positive integer must pass."""
+    _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "timeout-minutes": 45})
+    assert rules.ceiling("w.yml", "j") == 45, "a positive integer is a valid ceiling"

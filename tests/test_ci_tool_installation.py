@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 import typing as typ
 
+import pytest
+
 from tests.helpers.ci_placement import declares_steps
 from tests.helpers.ci_runners import (
     GENERATE_COVERAGE,
@@ -145,4 +147,32 @@ def test_markdown_lint_runs_through_the_pinned_action() -> None:
     assert isinstance(script, str), "ci.yml:Install CLI tools must run a script"
     assert "markdownlint-cli2" not in script, (
         "ci.yml:Install CLI tools must not install markdownlint-cli2 from npm"
+    )
+
+
+@pytest.mark.parametrize(
+    ("uses", "reported"),
+    [
+        pytest.param(GENERATE_COVERAGE, False, id="the-sanctioned-action"),
+        pytest.param(
+            "leynos/shared-actions/.github/actions/setup-rust@" + "0" * 40,
+            True,
+            id="a-sibling-shared-action",
+        ),
+        pytest.param("actions/checkout@" + "0" * 40, True, id="a-third-party-action"),
+    ],
+)
+def test_only_the_coverage_action_may_ask_for_nextest(
+    uses: str, *, reported: bool
+) -> None:
+    """Restrict the exemption to the one action that installs nextest on purpose.
+
+    Driven directly because no workflow here gives a sibling action a nextest
+    input, so a contract read over the real files passes whether the exemption
+    is exact or spans the whole namespace. Widening it back to a prefix
+    survived every test until this one existed.
+    """
+    step = typ.cast("Step", {"uses": uses, "with": {"tool": "cargo-nextest@0.9.0"}})
+    assert _installs_nextest_by_input(step) is reported, (
+        f"{uses} must {'be' if reported else 'not be'} reported as installing nextest"
     )

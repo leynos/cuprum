@@ -13,15 +13,14 @@ from __future__ import annotations
 
 import typing as typ
 
+from tests.helpers.ci_job_rules import ceiling, never_runs, references
 from tests.helpers.ci_placement import (
     FORK_FIELD,
     FROZEN_HOSTED_LABELS,
     Placement,
     all_jobs,
     declares_steps,
-    never_runs,
     placement,
-    references,
 )
 from tests.helpers.ci_workflows import (
     CACHE_ACTION_PIN,
@@ -55,14 +54,37 @@ if typ.TYPE_CHECKING:
 # workflows are meant to contain, `ci_workflows` reads what they do contain.
 # fmt: off
 __all__ = (
-    "CACHE_ACTION_PIN", "CACHE_PLAIN", "CACHE_RESTORE", "CACHE_SAVE",
-    "FORK_FIELD", "FROZEN_HOSTED_LABELS", "ROOT", "WORKFLOW_DIR",
-    "Placement", "RUNNER_NAMED_JOBS", "all_jobs", "cache_paths",
-    "cache_steps", "ceiling",
-    "declares_steps", "expand", "job", "job_env", "jobs", "never_runs",
-    "placement", "references", "restore_steps", "save_steps",
-    "single_step_position_using", "single_step_using", "step_inputs",
-    "steps", "workflow_document", "workflow_env", "workflow_sources",
+    "CACHE_ACTION_PIN",
+    "CACHE_PLAIN",
+    "CACHE_RESTORE",
+    "CACHE_SAVE",
+    "FORK_FIELD",
+    "FROZEN_HOSTED_LABELS",
+    "ROOT",
+    "RUNNER_NAMED_JOBS",
+    "WORKFLOW_DIR",
+    "Placement",
+    "all_jobs",
+    "cache_paths",
+    "cache_steps",
+    "ceiling",
+    "declares_steps",
+    "expand",
+    "job",
+    "job_env",
+    "jobs",
+    "never_runs",
+    "placement",
+    "references",
+    "restore_steps",
+    "save_steps",
+    "single_step_position_using",
+    "single_step_using",
+    "step_inputs",
+    "steps",
+    "workflow_document",
+    "workflow_env",
+    "workflow_sources",
 )
 # fmt: on
 

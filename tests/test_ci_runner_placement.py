@@ -30,6 +30,7 @@ from tests.helpers.ci_runners import (
     WINDOWS_HOSTED_JOBS,
     WINDOWS_LABEL,
     all_jobs,
+    ceiling,
     declares_steps,
     expand,
     job,
@@ -149,19 +150,11 @@ def test_every_job_running_steps_declares_a_ceiling(
     label is an expression, "an Ubicloud lane" is a property of the event, so a
     rule keyed on the label stops applying on exactly the arm that hangs.
     """
-    timeout = job(workflow_name, job_name).get("timeout-minutes")
-    # `isinstance(True, int)` is true, so an `isinstance` check also accepts
-    # `timeout-minutes: true`, and it accepts `0` and negative values besides.
-    # GitHub requires a positive integer. No upper bound is asserted: 360 is
-    # the GitHub-hosted execution limit, not a repository-wide job ceiling.
-    assert type(timeout) is int, (
-        f"{workflow_name}:{job_name} must declare an integer timeout-minutes, "
-        f"got {timeout!r}; note YAML's `true` is an int to `isinstance`"
-    )
-    assert timeout > 0, (
-        f"{workflow_name}:{job_name} must declare a positive timeout-minutes, "
-        f"got {timeout!r}"
-    )
+    # The rule lives in `ceiling`, which `tests/test_ci_placement_guards.py`
+    # drives directly over the values this repository does not happen to
+    # declare. No upper bound: 360 is the GitHub-hosted execution limit, not a
+    # repository-wide job ceiling.
+    ceiling(workflow_name, job_name)
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), CALLER_CASES)
