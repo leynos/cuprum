@@ -19,6 +19,21 @@ entry = DEFAULT_CATALOGUE.lookup(ECHO)
 print(entry.project.noise_rules)
 ```
 
+### Declaring programs
+
+`ProjectSettings.programs` requires `Program` values. Although `Program` is
+represented as a string at runtime, `ty` treats its `NewType` as distinct from
+`str`; wrap each executable name with `Program(...)`:
+
+```python
+from cuprum import Program, ProjectSettings
+
+project = ProjectSettings(
+    name="repository-tools",
+    programs=(Program("git"), Program("cargo")),
+)
+```
+
 ### Adding project-specific programs
 
 Use `ProjectSettings` and `ProgramCatalogue` to extend or replace the default
