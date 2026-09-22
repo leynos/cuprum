@@ -89,8 +89,10 @@ def test_execution_context_keeps_existing_positional_slots() -> None:
     """Adding an environment mode leaves legacy positional calls intact."""
     context = ExecutionContext(None, "legacy-cwd")
 
-    assert context.cwd == "legacy-cwd"
-    assert context.env_mode is EnvMode.OVERLAY
+    assert context.cwd == "legacy-cwd", "cwd must retain its positional slot"
+    assert context.env_mode is EnvMode.OVERLAY, (
+        "new positional calls must retain the default overlay mode"
+    )
 
 
 def test_cuprum_context_keeps_restriction_marker_positional_slot() -> None:
@@ -98,5 +100,9 @@ def test_cuprum_context_keeps_restriction_marker_positional_slot() -> None:
     is_restricted = True
     context = CuprumContext(frozenset(), (), (), (), None, None, is_restricted)
 
-    assert context._allowlist_is_restricted is True
-    assert context.env_mode is EnvMode.OVERLAY
+    assert context._allowlist_is_restricted is True, (
+        "the legacy positional argument must remain the restriction marker"
+    )
+    assert context.env_mode is EnvMode.OVERLAY, (
+        "the new environment mode must retain its default value"
+    )

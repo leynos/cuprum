@@ -194,7 +194,9 @@ def test_resolve_env_policy_composes_modes_and_unset_markers(
     """Composition preserves markers and grants replacement its fresh boundary."""
     overlay, mode = _resolve_env_policy(parent, parent_mode, child, child_mode)
     if child_mode is EnvMode.REPLACE:
-        assert mode is EnvMode.REPLACE
+        assert mode is EnvMode.REPLACE, (
+            "a replacement child must select replacement rendering"
+        )
         assert dict(overlay or {}) == dict(child or {}), (
             "a nested replacement must discard its parent overlay"
         )

@@ -119,7 +119,9 @@ def test_replace_env_policy_is_tagged_for_observers() -> None:
         echo=False,
     )
 
-    assert tags["env_mode"] is EnvMode.REPLACE
+    assert tags["env_mode"] is EnvMode.REPLACE, (
+        "replacement-mode observations must expose the replacement tag"
+    )
 
 
 def _single_command_tags(
