@@ -409,9 +409,15 @@ gap and silently fell back to a source build
 of each publish only the newest commit's lint archives remain, so a `<sha>`
 names an immutable artefact but not a permanently addressable one.
 
-The local binding is fragment-free, and it is fail-closed about scope: a
-caller-supplied `WHITAKER_PACKAGES` cannot narrow the audited package set. It
-cannot by itself guarantee, however, that the gate consumed a prebuilt,
+The local binding is fragment-free, and it is fail-closed about scope. The
+package list, the `--package` flags derived from it, and the final
+`WHITAKER_CARGO_FLAGS` the recipe expands are all `override`n, so no
+caller-supplied variable can narrow the audited package set or replace the flag
+list wholesale. The Makefile's list is checked against the workspace itself:
+`cuprum/unittests/test_whitaker_make_contract.py` reads the members from
+`rust/Cargo.toml` rather than repeating their names, so adding a member without
+extending the list fails the contract instead of silently skipping it. The
+binding cannot by itself guarantee, however, that the gate consumed a prebuilt,
 commit-addressed suite. Three upstream contracts are outstanding, and none
 argues against the rolling model.
 [Whitaker issue 403](https://github.com/leynos/whitaker/issues/403) covers the

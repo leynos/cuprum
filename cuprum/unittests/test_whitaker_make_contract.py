@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - controlled Make argv.
 import sys
+import tomllib
 import typing as typ
 
 import pytest
@@ -17,7 +18,52 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
-_PACKAGES = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
+# The Clippy leaf's own arguments are the same on every host; the Cargo route in
+# front of them is not. `RUST_DEBUG_CARGO` prepends the dev-fast toolchain and
+# its `--config` fragment only on Linux, so anchoring an order assertion on that
+# fragment raises ValueError wherever the suite runs on macOS or Windows.
+_CLIPPY_LEAF = " clippy --all-targets"
+
+
+def _workspace_packages() -> tuple[str, ...]:
+    """Return the Rust workspace members from the Cargo manifest itself.
+
+    Reading `rust/Cargo.toml` instead of repeating its names here is what makes
+    the every-package promise checkable. A member added to the manifest changes
+    this tuple, so the Makefile's own list can no longer drift out of step with
+    the workspace while a duplicated literal keeps the contract tests passing.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The workspace member names, in manifest order.
+    """
+    manifest = tomllib.loads(
+        (repo_root() / "rust" / "Cargo.toml").read_text(encoding="utf-8")
+    )
+    workspace = manifest["workspace"]
+    assert isinstance(workspace, dict), "rust/Cargo.toml must declare a workspace"
+    members = workspace["members"]
+    assert isinstance(members, list), "the workspace must declare its members"
+    assert all(isinstance(member, str) for member in members), (
+        "every workspace member must be a package name"
+    )
+    return tuple(members)
+
+
+def _expected_cargo_arguments() -> list[str]:
+    """Return the Cargo arguments every audited Whitaker binding must forward."""
+    return [
+        *[
+            argument
+            for package in _workspace_packages()
+            for argument in ("--package", package)
+        ],
+        "--all-targets",
+        "--all-features",
+        "--jobs",
+        "1",
+    ]
 
 
 def _make_executable() -> str:
@@ -69,13 +115,10 @@ def test_whitaker_target_covers_the_exact_workspace_packages() -> None:
     assert wrapper.endswith("probe-whitaker --all"), (
         "Whitaker must load the full lint suite before forwarding Cargo flags"
     )
-    assert cargo_arguments.split() == [
-        *[argument for package in _PACKAGES for argument in ("--package", package)],
-        "--all-targets",
-        "--all-features",
-        "--jobs",
-        "1",
-    ], "the binding must enumerate every Rust workspace package exactly once"
+    assert cargo_arguments.split() == _expected_cargo_arguments(), (
+        "the binding must enumerate every Rust workspace package exactly once, "
+        "matching the members rust/Cargo.toml declares"
+    )
 
 
 def test_whitaker_package_scope_cannot_be_caller_overridden() -> None:
@@ -83,9 +126,9 @@ def test_whitaker_package_scope_cannot_be_caller_overridden() -> None:
     command = _whitaker_command(_dry_run(variables={"WHITAKER_PACKAGES": "other"}))
 
     assert "--package other" not in command, "caller scope must not reach Whitaker"
-    assert all(f"--package {package}" in command for package in _PACKAGES), (
-        "every audited package must remain in the binding"
-    )
+    assert all(
+        f"--package {package}" in command for package in _workspace_packages()
+    ), "every audited package must remain in the binding"
 
 
 def test_whitaker_target_is_direct_and_fragment_free() -> None:
@@ -117,13 +160,9 @@ def test_caller_cargo_flags_cannot_reach_whitaker() -> None:
     )
 
     assert "--config" not in command, "caller Cargo flags must not reach Whitaker"
-    assert command.split(" -- ", 1)[1].split() == [
-        *[argument for package in _PACKAGES for argument in ("--package", package)],
-        "--all-targets",
-        "--all-features",
-        "--jobs",
-        "1",
-    ], "the audited flag list must be the whole of what Whitaker receives"
+    assert command.split(" -- ", 1)[1].split() == _expected_cargo_arguments(), (
+        "the audited flag list must be the whole of what Whitaker receives"
+    )
 
 
 def test_caller_package_flags_cannot_displace_audited_packages() -> None:
@@ -140,15 +179,44 @@ def test_caller_package_flags_cannot_displace_audited_packages() -> None:
     assert "--package evil" not in command, (
         "caller-derived package flags must not displace audited packages"
     )
-    assert all(f"--package {package}" in command for package in _PACKAGES), (
+    assert command.split(" -- ", 1)[1].split() == _expected_cargo_arguments(), (
         "every audited package must survive a caller-supplied flag override"
+    )
+
+
+def test_caller_cargo_flag_variable_cannot_reach_whitaker() -> None:
+    """`WHITAKER_CARGO_FLAGS` itself is Makefile-owned, not merely its inputs.
+
+    The list and the flags derived from it are both `override`n, but the final
+    variable the recipe actually expands is a separate name. Without an
+    `override` there too, a caller could replace the whole audited flag list in
+    one word and never touch either protected intermediate.
+    """
+    command = _whitaker_command(
+        _dry_run(
+            variables={
+                "WHITAKER_CARGO_FLAGS": (
+                    "--package evil --config ../tools/dev-fast/config.toml"
+                )
+            }
+        )
+    )
+
+    assert "--package evil" not in command, (
+        "a caller must not replace the audited Whitaker flag list wholesale"
+    )
+    assert "--config" not in command, (
+        "a replacement flag list must not smuggle in the development fragment"
+    )
+    assert command.split(" -- ", 1)[1].split() == _expected_cargo_arguments(), (
+        "the Makefile must own the final Whitaker flag variable end to end"
     )
 
 
 def test_rust_lint_runs_clippy_whitaker_and_spelling_in_order() -> None:
     """The aggregate Rust gate preserves the intended sequential leaf order."""
     output = _dry_run(target="rust-lint")
-    clippy = output.index("probe-cargo --config ../tools/dev-fast/config.toml clippy")
+    clippy = output.index(_CLIPPY_LEAF)
     whitaker = output.index("probe-whitaker --all --")
     spelling = output.index("typos-config-builder gate --repository . --scope all")
 
