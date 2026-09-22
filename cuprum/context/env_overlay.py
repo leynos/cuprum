@@ -109,6 +109,19 @@ def merge_env_overlays(
     return MappingProxyType(merged)
 
 
+def _render_env_base(
+    overlay: EnvOverlay | None,
+    mode: EnvMode,
+) -> dict[str, str] | None:
+    """Return the rendered environment base for a validated policy."""
+    if not isinstance(mode, EnvMode):
+        msg = "environment mode must be an EnvMode value"
+        raise TypeError(msg)
+    if mode is not EnvMode.REPLACE and not overlay:
+        return None
+    return {} if mode is EnvMode.REPLACE else os.environ.copy()
+
+
 def render_env(
     overlay: EnvOverlay | None,
     mode: EnvMode = EnvMode.OVERLAY,
@@ -123,19 +136,10 @@ def render_env(
     -------
     dict[str, str] | None
         The environment mapping to pass to the child, or ``None`` to inherit.
-
-    Raises
-    ------
-    TypeError
-        If ``mode`` is not an :class:`EnvMode`.
     """
-    if not isinstance(mode, EnvMode):
-        msg = "environment mode must be an EnvMode value"
-        raise TypeError(msg)
-    if mode is not EnvMode.REPLACE and not overlay:
+    rendered = _render_env_base(overlay, mode)
+    if rendered is None:
         return None
-
-    rendered = {} if mode is EnvMode.REPLACE else os.environ.copy()
     if overlay is None:
         return rendered
 
