@@ -44,6 +44,7 @@ from cuprum._observability import (
     _merge_tags,
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
+    _without_env_mode_tag,
 )
 from cuprum._pipeline_internals import _collect_hooks
 from cuprum._pipeline_types import (
@@ -62,7 +63,7 @@ from cuprum._subprocess_execution import (
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
-from cuprum.context import current_context
+from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import (
@@ -121,8 +122,8 @@ def _prepare_execution_observation(
             echo_stdout=output.resolved_echo[0],
             echo_stderr=output.resolved_echo[1],
         ),
-        context.tags,
-        {"env_mode": env_mode},
+        _without_env_mode_tag(context.tags),
+        {"env_mode": env_mode} if env_mode is EnvMode.REPLACE else None,
     )
     return _StageObservation(
         cmd=cmd,
