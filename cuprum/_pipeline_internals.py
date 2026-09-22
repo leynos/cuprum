@@ -57,7 +57,7 @@ from cuprum._pipeline_types import (
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
-from cuprum.context import EnvMode, current_context
+from cuprum.context import current_context
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -121,7 +121,7 @@ def _build_pipeline_observations(
                     "pipeline_stages": len(parts),
                 },
                 config.ctx.tags,
-                {"env_mode": env_mode} if env_mode is EnvMode.REPLACE else None,
+                {"env_mode": env_mode},
             ),
             cwd=cwd,
             env_overlay=env_overlay,
