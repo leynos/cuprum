@@ -199,3 +199,39 @@ not an environment-triggered default.
 - The protocol is an additional public surface to keep stable.
 - The stop-commands lease hides genuine workflow commands a child emits while
   framed, which may surprise callers migrating scripts that relied on them.
+
+### Amendment (2026-09-22): `group` and `annotate_failure` as a spelling of Option C
+
+Issue #375 asked for two convenience flags on `RunOutputOptions`, which is
+Option B's surface. The decision stands, and the flags ship: the question this
+amendment answers is why they are not the Option B this ADR rejected.
+
+Option B was rejected because it *teaches the execution layer about workflow
+commands* — it "spreads Actions-specific formatting across every terminal path
+of the runner and pipeline implementations." The flags as implemented do not do
+that. They are a constructor for the Option C adapter: `__post_init__` builds a
+`GitHubActionsSink` with the matching toggles and stores it in the existing
+`sink` field, so every run path continues to see an opaque `OutputSink` and
+`::group::` appears nowhere outside `cuprum/sinks/github_actions.py`. An
+explicit `sink=` wins and makes the flags no-ops, so the flags can never
+displace a caller's own adapter.
+
+That is the distinction worth recording. Option B was a *placement* objection —
+where the vendor's log format lives — not an interface objection to two
+booleans existing. The flags add no code to the runner or pipeline, no branch
+to a terminal path, and no second place a presentation change must touch; they
+inherit the session lifecycle, the injection shield, and the annotation hygiene
+that the adapter already enforces. Had they been implemented as the rejection
+reads, by writing workflow commands from the run paths directly, that rejection
+would have applied unchanged.
+
+Two consequences the option text did not anticipate are settled here rather
+than left to be rediscovered. First, the toggles are validated as `bool` and a
+non-`bool` raises `TypeError`: they gate workflow commands, so a merely truthy
+value would frame a run on the strength of something the caller never
+documented as a flag. Second, the two flags are independent, so
+`annotate_failure=True` alone yields an annotation with no group. That is a
+supported configuration rather than a degenerate one — a run summary entry
+without collapsible logs — and the stop-commands lease is suppressed with the
+group, because a lease with no group would silence workflow-command
+interpretation for the rest of the step and display nothing for it.

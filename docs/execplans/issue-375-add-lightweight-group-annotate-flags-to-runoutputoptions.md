@@ -237,6 +237,27 @@ processes.
   adapter-level check raise `TypeError`. The two tests that asserted
   `ValueError` were updated in the same change.
 
+- Observation: **commit `977065cf` renamed the sink's keywords to
+  `group=`/`annotate=` but left `_open_gha_session`'s call passing `emit_group=`
+  /`emit_annotation=`**, so that revision of the branch has a test file that
+  cannot construct the object it tests — a `TypeError` on every use of the
+  helper, i.e. roughly a third of the adapter suite. The next session found it
+  only because the working tree still held the correction, unstaged, while the
+  ExecPlan recorded Phase 2 as green. Impact: repaired in `77532cf2`, a
+  dedicated commit rather than an amend to `977065cf`. Interactive rebase is
+  unavailable in this environment, so the choice was between a non-interactive
+  history rewrite and an honest follow-up; the follow-up is preferable because
+  the branch is a review artefact whose value is partly that the correction is
+  visible beside the mistake. The helper's own parameters keep the `emit_*`
+  spelling the tests' assertions read, and map to the sink's `group`/`annotate`
+  keywords at the single construction site, so the two vocabularies meet in one
+  place. **Lesson: a rename decided in review is not finished until every call
+  site is updated in the same commit — and a gate run whose output was never
+  matched against the commit it validated is not evidence about that commit.**
+  The tolerance that should have caught it is `Tolerances`' gate-at-each-
+  commit requirement; the failure mode was running the gates after the
+  *amendment* commit and crediting them to the *earlier* one.
+
 ## Decision log
 
 - Decision: reuse `GitHubActionsSink` and the existing `RunOutputOptions.sink`
@@ -392,7 +413,7 @@ opens after the group command and releases before the endgroup, and child
 output that prints workflow commands cannot close the group early. Method:
 end-to-end example test against a real interpreter, following the existing
 index-ordering idiom. Artefact:
-`cuprum/unittests/test_sinks_end_to_end.py::test_flags_stop_commands_neutralise_child_output`.
+`cuprum/unittests/test_sinks_end_to_end.py::test_flags_stop_commands_neutralize_child_output`.
 Evidence: index assertions place the child's spoofed `::endgroup::` and
 `::error` before the lease release and the session's own endgroup after it.
 Non-vacuity: `test_child_workflow_commands_stay_inside_the_lease` already
@@ -544,14 +565,15 @@ In `cuprum/sh.py`:
    caller passes `sink=` explicitly); that an explicit `sink` takes precedence
    and makes the flags no-ops; and that a pipeline emits one group for the
    whole pipeline. Add a doctest-style example to the existing `Examples` block.
-4. In `__post_init__`, validate both are `bool` (`isinstance(x, bool)`), raising
-   `ValueError` with the offending value, in the style of the
-   `max_echo_line_bytes` message. Do the validation *before* the
+4. In `__post_init__`, validate both are `bool` (`isinstance(x, bool)`, in a
+   helper `_validate_convenience_flags` rather than inline), raising
+   `TypeError` with the offending value. See the `Decision log` for why the
+   drafted `ValueError` became `TypeError`. Do the validation *before* the
    `max_echo_line_bytes` early return so it always runs.
-5. After validation, synthesize:
+5. After validation, synthesize in a helper `_synthesize_sink_from_flags`:
    if `self.sink is None and (self.group or self.annotate_failure)`, then
-   `object.__setattr__(self, "sink", GitHubActionsSink(emit_group=self.group,
-   emit_annotation=self.annotate_failure))`.
+   `object.__setattr__(self, "sink", GitHubActionsSink(group=self.group,
+   annotate=self.annotate_failure))`.
    Otherwise leave `self.sink` alone.
 6. `IOOptions` inherits the fields and the synthesis through
    `RunOutputOptions.__post_init__`; no change needed there, but confirm the

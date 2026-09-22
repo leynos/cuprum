@@ -730,6 +730,45 @@ By default the title is the joined program arguments for single commands and
 its `open_session`) leaves the run unchanged; see `cuprum.sinks.base` for the
 adapter protocol for custom presentation sinks.
 
+### Group and annotate flags
+
+Two flags on `RunOutputOptions` are the shorthand for the common case:
+
+```python
+result = cmd.run_sync(
+    output=RunOutputOptions(echo=True, group=True, annotate_failure=True),
+)
+```
+
+`group=True` frames the run in a collapsible log group; `annotate_failure=True`
+turns a failed run into an `::error::` annotation. They construct a
+`GitHubActionsSink` behind the scenes and store it as the run's sink, so
+everything the section above says about the adapter — the destination, the
+stop-commands lease, the annotation contract — applies unchanged.
+`RunOutputOptions(sink=GitHubActionsSink(force=True, title="..."))` remains the
+way to reach anything the flags do not cover.
+
+The two flags are independent. `group=True` alone frames without annotating;
+`annotate_failure=True` alone annotates without framing, for a run-summary
+entry with uncollapsed logs. With `group=False` there is no group for a
+stop-commands lease to shield, so none is taken.
+
+An explicit `sink=` takes precedence and makes both flags no-ops. That is what
+makes the flags safe to add to options a caller already passes around: a shared
+`RunOutputOptions` carrying `group=True` will not override a sink chosen at the
+call site.
+
+Like the adapter they construct, the flags are inactive unless the parent
+process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no
+`force`. A run with the flags set but no runner environment behaves exactly as
+if they were absent. This is deliberate: the flags encode "frame this when it
+runs in CI", not "frame this unconditionally". To get the framing locally,
+construct the sink yourself with `force=True` as shown above.
+
+The flags are validated: passing anything but a `bool` for either raises
+`TypeError`, rather than accepting a truthy value that was never a documented
+flag.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using

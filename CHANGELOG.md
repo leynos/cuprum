@@ -283,6 +283,23 @@
   `"non_positive_immediate"`), and `ExecEvent.timeout_mode` is now annotated
   with it instead of a bare `str`
   ([#271](https://github.com/leynos/cuprum/pull/271)).
+- **`RunOutputOptions.group` and `RunOutputOptions.annotate_failure`:** Two
+  opt-in flags that frame a run on GitHub Actions with no sink to construct.
+  `group=True` frames the run in a collapsible log group with its stop-commands
+  lease; `annotate_failure=True` turns a failed run into an `::error::`
+  annotation. They are a zero-ceremony spelling of `GitHubActionsSink`, which
+  they construct and store as the run's sink, so the execution layer stays
+  unaware of workflow commands and `RunOutputOptions(sink=...)` still wins
+  where a caller wants the adapter directly. The flags are independent —
+  annotation without framing is supported, and a suppressed group takes its
+  lease with it — and inherit the adapter's environment gate, so they are inert
+  unless `GITHUB_ACTIONS == "true"`. A non-`bool` value raises `TypeError`.
+  Both flags default to `False`, so unflagged runs are unchanged
+  ([#375](https://github.com/leynos/cuprum/issues/375)).
+- **`GitHubActionsSink` framing toggles:** The adapter's constructor takes
+  `group=` and `annotate=` to switch the two halves of its frame off
+  independently, matching the flag vocabulary above
+  ([#375](https://github.com/leynos/cuprum/issues/375)).
 
 ### Breaking changes
 
