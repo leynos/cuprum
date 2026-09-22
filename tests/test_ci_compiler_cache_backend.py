@@ -40,6 +40,8 @@ from tests.helpers.ci_runners import (
 if typ.TYPE_CHECKING:  # pragma: no cover - typing only
     import collections.abc as cabc
 
+    from tests.helpers.workflow_types import Step
+
 #: Every Rust lane that is not on the Actions backend, and therefore owns a
 #: cache directory. Derived rather than listed, so a lane cannot be moved
 #: between the two arms without one of these rules noticing.
@@ -48,7 +50,7 @@ LOCAL_BACKEND_JOBS: typ.Final = tuple(
 )
 
 
-def _setup_step(workflow_name: str, job_name: str) -> dict[str, typ.Any]:
+def _setup_step(workflow_name: str, job_name: str) -> Step:
     """Return the one step that installs and configures sccache in a job."""
     matches = [
         step
@@ -73,11 +75,30 @@ def _declared_backend(workflow_name: str, job_name: str) -> str:
         returns `gha` and `lint-test` returns `local`.
     """
     step = _setup_step(workflow_name, job_name)
-    inputs = step.get("with") or {}
-    return str(inputs.get("backend", "local"))
+    declared = step.get("with")
+    if not isinstance(declared, dict):
+        return "local"
+    return str(declared.get("backend", "local"))
 
 
-def _step_index(job_steps: cabc.Sequence[dict[str, typ.Any]], name: str) -> int:
+def _declared_path(step: Step) -> str:
+    """Return the `path` input a step declares, or an empty string.
+
+    Returns
+    -------
+    str
+        The newline-delimited `path` value, or `""` for a step that declares
+        no `with` mapping or no path within it. Written rather than reusing
+        `cache_paths`, because that helper fails a step with no paths, and
+        here a step with none is the ordinary case being looked past.
+    """
+    declared = step.get("with")
+    if not isinstance(declared, dict):
+        return ""
+    return str(declared.get("path", ""))
+
+
+def _step_index(job_steps: cabc.Sequence[Step], name: str) -> int:
     """Return the position of the uniquely named step, or fail saying so."""
     matches = [
         index
@@ -247,9 +268,7 @@ def test_an_actions_backend_lane_archives_no_cache_directory(
 ) -> None:
     """An archive nothing reads is paid upload time on every run."""
     for step in steps(workflow_name, job_name):
-        with_inputs = step.get("with") or {}
-        path = str(with_inputs.get("path", ""))
-        assert "~/.cache/sccache" not in path, (
+        assert "~/.cache/sccache" not in _declared_path(step), (
             f"{workflow_name}:{job_name} binds the Actions cache service but "
             f"still archives ~/.cache/sccache in {step.get('name')!r}"
         )
@@ -274,7 +293,7 @@ def test_a_directory_backend_lane_restores_the_directory_it_writes(
         step
         for step in steps(workflow_name, job_name)
         if step.get("uses") == CACHE_RESTORE
-        and "~/.cache/sccache" in str((step.get("with") or {}).get("path", ""))
+        and "~/.cache/sccache" in _declared_path(step)
     ]
     assert restores, (
         f"{workflow_name}:{job_name} points sccache at ~/.cache/sccache but no "
