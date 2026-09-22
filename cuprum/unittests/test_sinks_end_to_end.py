@@ -439,7 +439,7 @@ def test_flags_leave_default_output_unchanged(
     )
 
 
-def test_flags_stop_commands_neutralise_child_output(
+def test_flags_stop_commands_neutralize_child_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
