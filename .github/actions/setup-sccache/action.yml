@@ -1,14 +1,38 @@
 name: Set up sccache
 description: >-
-  Install the pinned Linux sccache binary and point it at a local cache
-  directory that the calling workflow owns.
+  Install the pinned Linux sccache binary and point it at exactly one store.
 
-  The GitHub Actions backend is deliberately not used. Ubicloud console
-  listings on 2026-09-03 showed sccache's GHA traffic landing in GitHub's cache
-  rather than Ubicloud's, where it competes with the Windows and macOS lanes
-  for GitHub's per-repository quota. A directory the caller caches goes to the
-  same store as every other archive and is visible in the same listing.
+  `local` is the default and the original arrangement: a cache directory the
+  calling workflow archives, which goes to the same store as every other
+  archive and is visible in the same listing. It is what a GitHub-hosted lane
+  must use here, because that lane's Actions cache really is GitHub's and would
+  compete with the Windows and macOS lanes for the per-repository quota.
+
+  `gha` is for an Ubicloud lane that has already run
+  `export-ubicloud-cache-credentials`. On such a runner `ACTIONS_CACHE_URL`
+  names Ubicloud's own proxy on the private network, so the Actions backend
+  reaches Ubicloud's store rather than GitHub's. Ubicloud console listings on
+  2026-09-03 showed the opposite, GHA traffic landing in GitHub's cache; that
+  was the v2 defect, not the backend. sccache prefers GitHub's v2 results
+  service whenever `ACTIONS_CACHE_SERVICE_V2` is set, and that address resolves
+  past the proxy. Clearing it is what the credentials action does, and it is
+  why calling this action with `backend: gha` without that step ahead of it
+  sends the objects to GitHub after all.
+
+  The two backends are never combined. sccache prefers whichever it finds
+  configured first, so a job that exported both would report a plausible hit
+  rate for a store nobody owns.
 inputs:
+  backend:
+    description: >-
+      Store to bind: `local` for a caller-archived directory, `gha` for the
+      Actions cache service. On an Ubicloud runner `gha` is that runner's cache
+      proxy, and the caller must have run
+      `export-ubicloud-cache-credentials` first; a server started without those
+      credentials falls back to local disk for the whole job and reports a
+      plausible hit rate for nothing.
+    required: false
+    default: local
   version:
     description: sccache release version
     required: false
@@ -39,12 +63,20 @@ runs:
         SCCACHE_SHA256: ${{ inputs.sha256 }}
         SCCACHE_BINARY_SHA256: ${{ inputs.binary-sha256 }}
         SCCACHE_LOCAL_CACHE_SIZE: ${{ inputs.cache-size }}
+        SCCACHE_BACKEND: ${{ inputs.backend }}
       run: |
         set -euo pipefail
         if [ "${RUNNER_OS}" != "Linux" ] || [ "${RUNNER_ARCH}" != "X64" ]; then
           echo "This action supports only Linux x86_64 runners" >&2
           exit 1
         fi
+        case "${SCCACHE_BACKEND}" in
+          local|gha) ;;
+          *)
+            echo "::error title=setup-sccache::backend must be 'local' or 'gha', not '${SCCACHE_BACKEND}'" >&2
+            exit 1
+            ;;
+        esac
         install_dir="${HOME}/.local/bin"
         binary="${install_dir}/sccache"
         mkdir -p "${install_dir}" "${HOME}/.cache/sccache"
@@ -95,8 +127,28 @@ runs:
         "${binary}" --version | grep --fixed-strings -- "${SCCACHE_VERSION}"
         echo "${install_dir}" >> "${GITHUB_PATH}"
         echo "RUSTC_WRAPPER=${binary}" >> "${GITHUB_ENV}"
-        {
-          echo "SCCACHE_DIR=${HOME}/.cache/sccache"
-          echo "SCCACHE_CACHE_SIZE=${SCCACHE_LOCAL_CACHE_SIZE}"
-        } >> "${GITHUB_ENV}"
+        if [ "${SCCACHE_BACKEND}" = gha ]; then
+          # No directory, and deliberately no `SCCACHE_DIR`: sccache prefers
+          # whichever backend it finds configured first, so exporting the
+          # directory here would bind it and the hit rate would describe a
+          # store nothing archives.
+          #
+          # An empty cache URL means the credentials step did not run, or ran
+          # on a runner that has no proxy. Failing here is the point: the
+          # alternative is a green job that compiled everything and cached it
+          # to a directory that dies with the runner.
+          if [ -z "${ACTIONS_CACHE_URL:-}" ] || \
+             [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
+            echo "::error title=setup-sccache::backend 'gha' needs ACTIONS_CACHE_URL and ACTIONS_RUNTIME_TOKEN; run export-ubicloud-cache-credentials before this step" >&2
+            exit 1
+          fi
+          echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+          echo "sccache will use the Actions cache service at the address this runner advertises."
+        else
+          {
+            echo "SCCACHE_DIR=${HOME}/.cache/sccache"
+            echo "SCCACHE_CACHE_SIZE=${SCCACHE_LOCAL_CACHE_SIZE}"
+          } >> "${GITHUB_ENV}"
+          echo "sccache will use ${HOME}/.cache/sccache capped at ${SCCACHE_LOCAL_CACHE_SIZE}."
+        fi
 

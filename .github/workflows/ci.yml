@@ -981,6 +981,9 @@ jobs:
 
       # Pull requests only, so this job never saves: it reads the generation
       # that the `main` writers published and publishes nothing of its own.
+      # The compiler cache is not one of those generations. It runs against
+      # Ubicloud's cache proxy, which is not branch restricted, so this lane
+      # both reads and writes it directly and warms the next pull request.
       - name: Restore the Cargo registry
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -1005,14 +1008,6 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      - name: Restore the compiler cache
-        id: sccache-dir
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: ${{ env.SCCACHE_CACHE_KEY }}
-          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
-
       # Record the rendered key beside its result, so a reviewer can explain
       # any miss from the run summary alone rather than by re-deriving the
       # key from the workflow source.
@@ -1022,7 +1017,6 @@ jobs:
         env:
           CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
           TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
-          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
           set -euo pipefail
           {
@@ -1032,12 +1026,30 @@ jobs:
               "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
-            printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export the Ubicloud cache credentials
+        # The runner hands `ACTIONS_CACHE_URL` and `ACTIONS_RUNTIME_TOKEN` to
+        # action steps, and this republishes them through `GITHUB_ENV` with the
+        # v2 cache-service flag cleared, because Ubicloud's proxy serves v1. It
+        # must precede "Set up sccache" and everything after it: sccache binds
+        # its backend once, when its server starts, and a server started
+        # without these falls back to local disk for the whole job.
+        # Split across two lines because the pinned reference is 126
+        # characters and yamllint caps workflow lines at 120. A `\` at the
+        # end of a double-quoted YAML scalar elides the break and the next
+        # line's indentation, so the value is the single reference it
+        # reads as, not two joined by a space.
+        uses: "leynos/shared-actions/.github/actions/\
+          export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
+        with:
+          # Ubicloud's own cache proxy, reached through the credentials the
+          # step above published. Not branch restricted, so this lane both
+          # reads and writes it and a pull request warms the next one.
+          backend: gha
 
       # Immediately after the wrapper exists, so nothing between setup and
       # the build can compile outside the measured window. `lint-test` built

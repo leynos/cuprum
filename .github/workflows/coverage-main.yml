@@ -109,27 +109,20 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      # This job runs the same coverage action as ci.yml's `coverage`, so it
-      # compiles the workspace under instrumentation and needs the same
-      # wrapper. It is also the sole writer of the family it reads: no job in
-      # ci.yml saves an instrumented archive, and ci.yml's own `coverage` job
-      # is pull-request-only and therefore never publishes. The save step at
-      # the end of this job is that writer.
-      - name: Restore the compiler cache
-        id: sccache-dir
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: ${{ env.SCCACHE_CACHE_KEY }}
-          restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
-
+      # There is no compiler-cache archive to restore here. This lane and
+      # ci.yml's `coverage` both run sccache against Ubicloud's cache proxy,
+      # which is not branch restricted, so each run reads and writes the store
+      # directly and neither needs an `actions/cache` generation of its own.
+      # The `compiler-shape: coverage` input above still renders
+      # `SCCACHE_CACHE_KEY`; nothing in this lane reads it. Restoring the
+      # backend would mean restoring that key's restore and save steps
+      # together, which `test_ci_compiler_cache` requires.
       - name: Record cache observations
         if: always()
         shell: bash
         env:
           CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
           TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
-          SCCACHE_CACHE_HIT: ${{ steps.sccache-dir.outputs.cache-hit }}
         run: |
           set -euo pipefail
           {
@@ -139,12 +132,30 @@ jobs:
               "${CARGO_CACHE_KEY}" "${CARGO_CACHE_HIT:-false}"
             printf '| tools | %s | %s |\n' \
               "${TOOL_CACHE_KEY}" "${TOOL_CACHE_HIT:-false}"
-            printf '| sccache | %s | %s |\n' \
-              "${SCCACHE_CACHE_KEY}" "${SCCACHE_CACHE_HIT:-false}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export the Ubicloud cache credentials
+        # The runner hands `ACTIONS_CACHE_URL` and `ACTIONS_RUNTIME_TOKEN` to
+        # action steps, and this republishes them through `GITHUB_ENV` with the
+        # v2 cache-service flag cleared, because Ubicloud's proxy serves v1. It
+        # must precede "Set up sccache" and everything after it: sccache binds
+        # its backend once, when its server starts, and a server started
+        # without these falls back to local disk for the whole job.
+        # Split across two lines because the pinned reference is 126
+        # characters and yamllint caps workflow lines at 120. A `\` at the
+        # end of a double-quoted YAML scalar elides the break and the next
+        # line's indentation, so the value is the single reference it
+        # reads as, not two joined by a space.
+        uses: "leynos/shared-actions/.github/actions/\
+          export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
+        with:
+          # Ubicloud's own cache proxy, reached through the credentials the
+          # step above published. Not branch restricted, so this lane both
+          # reads and writes it and a pull request warms the next one.
+          backend: gha
 
       # Immediately after the wrapper exists, so nothing between setup and
       # the build can compile outside the measured window. `lint-test` built
@@ -321,13 +332,6 @@ jobs:
             echo "No instrumented build tree found to discard"
           fi
           df -h .
-
-      - name: Save the compiler cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: ~/.cache/sccache
-          key: ${{ env.SCCACHE_CACHE_KEY }}
 
       # Last, and unconditional, so a job that failed on disk still reports the
       # high-water mark that explains why.

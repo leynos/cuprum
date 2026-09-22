@@ -123,15 +123,25 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
     )
 
 
-def test_sccache_uses_a_caller_owned_directory_not_the_github_backend() -> None:
-    """Send compiler objects to the store the workflow can list, not GitHub's."""
+def test_sccache_still_offers_a_capped_caller_owned_directory() -> None:
+    """Keep the directory backend usable, and keep its cap.
+
+    This rule once forbade `SCCACHE_GHA_ENABLED` outright, on the ground that
+    the Actions backend writes to GitHub's cache rather than Ubicloud's, where
+    it competes with the Windows and macOS lanes for the per-repository quota.
+    That is still true of a GitHub-hosted lane, which is why `local` is the
+    action's default and why `lint-test` and `loom` keep it. It was never true
+    of an Ubicloud lane that exports the proxy credentials first, where the
+    Actions cache service is Ubicloud's own proxy;
+    `test_ci_compiler_cache_backend` holds that distinction and the ordering
+    it depends on.
+
+    What survives unchanged is the directory arm itself. Its archive grows with
+    every new compilation unit until the cap trims it, and the cap holds two
+    build shapes, the lint and test objects and the instrumented ones, so a
+    one-shape cap would evict each shape in turn.
+    """
     text = SCCACHE_ACTION_SOURCE.read_text(encoding="utf-8")
-    assert "SCCACHE_GHA_ENABLED" not in text, (
-        "the GitHub Actions backend writes to GitHub's cache rather than "
-        "Ubicloud's, where it competes with the Windows and macOS lanes"
-    )
-    # A capped directory, sized for two build shapes: the lint and test
-    # objects, and the coverage-instrumented objects.
     required = ("SCCACHE_DIR=", "SCCACHE_CACHE_SIZE=", "default: 4G")
     missing = [fragment for fragment in required if fragment not in text]
     assert not missing, (

@@ -101,6 +101,22 @@ WINDOWS_LABEL = "windows-2022"
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 CACHE_KEYS_ACTION_FILE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
 SCCACHE_ACTION = "./.github/actions/setup-sccache"
+SCCACHE_ACTION_FILE = ROOT / ".github" / "actions" / "setup-sccache" / "action.yml"
+#: The shared action that republishes Ubicloud's cache-proxy credentials
+#: through `GITHUB_ENV`. A `run:` step never sees `ACTIONS_CACHE_URL`, so
+#: without this an sccache server binds local disk for the whole job.
+CREDENTIALS_ACTION = (
+    "leynos/shared-actions/.github/actions/export-ubicloud-cache-credentials"
+)
+CREDENTIALS_STEP = "Export the Ubicloud cache credentials"
+#: Jobs that bind sccache to the Actions cache service rather than to a
+#: directory this repository archives. On Ubicloud that service is Ubicloud's
+#: own proxy, which is not branch restricted, so these lanes read and write one
+#: store and no job publishes a generation for them.
+GHA_BACKEND_JOBS: typ.Final = (
+    ("ci.yml", "coverage"),
+    ("coverage-main.yml", "coverage-upload"),
+)
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
     "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
@@ -266,12 +282,15 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
     # each compile shape is its own family. See CACHE_FAMILY_WRITERS: this
     # mapping only says which jobs hold a save step, not which archive each
     # one publishes.
+    # `coverage-main.yml:coverage-upload` is deliberately absent, as is
+    # ci.yml's `coverage`. Both run sccache against Ubicloud's cache proxy,
+    # which is not branch restricted, so each run reads and writes the store
+    # directly and there is no archive generation for a job to publish.
     "SCCACHE_CACHE_KEY": (
         ("ci.yml", "benchmark-ratchet"),
         ("ci.yml", "extension-tests"),
         ("ci.yml", "lint-test"),
         ("ci.yml", "typecheck-test"),
-        ("coverage-main.yml", "coverage-upload"),
         ("loom.yml", "loom"),
     ),
     "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
@@ -324,10 +343,6 @@ CACHE_FAMILY_WRITERS: typ.Final[
     ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "release")): (
         "ci.yml",
         "benchmark-ratchet",
-    ),
-    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "coverage")): (
-        "coverage-main.yml",
-        "coverage-upload",
     ),
     ("SCCACHE_CACHE_KEY", "github-hosted", ("3.13", "loom")): (
         "loom.yml",
