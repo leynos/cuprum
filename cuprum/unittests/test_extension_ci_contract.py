@@ -32,6 +32,7 @@ SHARED_ACTIONS_REFERENCE = re.compile(
 VALID_COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"
 EXPECTED_SHARED_ACTIONS_TARGETS = {
     "ci.yml": {
+        ".github/actions/export-ubicloud-cache-credentials",
         ".github/actions/generate-coverage",
         ".github/actions/install-mdtablefix",
         ".github/actions/install-nixie",
@@ -39,6 +40,7 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
         ".github/actions/setup-rust",
     },
     "coverage-main.yml": {
+        ".github/actions/export-ubicloud-cache-credentials",
         ".github/actions/generate-coverage",
         ".github/actions/install-mdtablefix",
         ".github/actions/setup-rust",
