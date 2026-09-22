@@ -247,7 +247,7 @@ class EnvRegistration(_TokenRegistration):
 
     __slots__ = ("_overlay",)
 
-    def __init__(self, overlay: EnvOverlay, mode: EnvMode) -> None:
+    def __init__(self, overlay: EnvOverlay, mode: EnvMode = EnvMode.OVERLAY) -> None:
         """Layer ``overlay`` onto the current context's env overlay."""
         super().__init__()
         self._overlay = _coerce_env_overlay(overlay)

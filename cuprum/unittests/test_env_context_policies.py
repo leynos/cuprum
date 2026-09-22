@@ -7,7 +7,13 @@ import typing as typ
 
 import pytest
 
-from cuprum.context import CuprumContext, EnvMode, env
+from cuprum.context import (
+    CuprumContext,
+    EnvMode,
+    EnvRegistration,
+    current_context,
+    env,
+)
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
@@ -105,4 +111,25 @@ def test_cuprum_context_keeps_restriction_marker_positional_slot() -> None:
     )
     assert context.env_mode is EnvMode.OVERLAY, (
         "the new environment mode must retain its default value"
+    )
+
+
+def test_env_registration_keeps_legacy_overlay_default() -> None:
+    """Direct registration construction retains the overlay policy default."""
+    original = current_context()
+    registration = EnvRegistration({"CUPRUM_TEST_DIRECT_REGISTRATION": "value"})
+
+    try:
+        context = current_context()
+        assert context.env_mode is EnvMode.OVERLAY, (
+            "direct registration must retain the overlay policy default"
+        )
+        assert context.env_overlay == {"CUPRUM_TEST_DIRECT_REGISTRATION": "value"}, (
+            "direct registration must install its supplied overlay"
+        )
+    finally:
+        registration.detach()
+
+    assert current_context() is original, (
+        "detaching a direct registration must restore the original context"
     )
