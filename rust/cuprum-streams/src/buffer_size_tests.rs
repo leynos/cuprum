@@ -57,6 +57,8 @@ fn rejects_values_above_the_cap() {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// `checked_buffer_size` matches the reference contract across the full
     /// `i64` domain, returning the same value or the same stable message.
     #[test]

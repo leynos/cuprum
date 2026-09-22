@@ -145,6 +145,8 @@ fn debug_filter_captures_successful_write_event() {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// The read counter equals the number of `EINTR` retries for any sequence
     /// of interruptions before the final successful read.
     #[test]

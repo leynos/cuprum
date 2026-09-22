@@ -3,20 +3,25 @@
 use rstest::rstest;
 use tracing::Level;
 
+#[cfg(not(miri))]
 use crate::{
     BufferSize,
-    buffer::ALLOCATION_FAILED_CATEGORY,
     consume_stream_files,
-    errors::PumpError,
     io_utils::{classify_write, read_stream},
     pump_machine::WriteEvent,
     pump_stream_files_readwrite,
     test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to},
+};
+use crate::{
+    buffer::ALLOCATION_FAILED_CATEGORY,
+    errors::PumpError,
+    io_utils::operation_span,
     tracing_capture::capture,
 };
 
 /// Consuming a pipe records its byte total and zero read retries in the span.
 #[rstest]
+#[cfg(not(miri))]
 fn consume_records_total_bytes_and_retries_on_span() {
     let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
     let payload = b"boundary-check-payload";
@@ -53,6 +58,7 @@ fn consume_records_total_bytes_and_retries_on_span() {
 
 /// The pump records completion fields even when its span filter allows errors.
 #[rstest]
+#[cfg(not(miri))]
 fn pump_records_span_fields_under_error_filter() {
     // Source pipe: the payload the pump reads. Sink pipe: where it writes.
     let (source_read, source_write) = crate::test_support::unwrap_ok(make_pipe());
@@ -113,6 +119,8 @@ fn pump_records_span_fields_under_error_filter() {
 #[rstest]
 fn allocation_failure_reports_a_bounded_category_event() {
     let captured = capture(Level::ERROR, || {
+        let span = operation_span("miri_allocation_failure", usize::MAX);
+        let _guard = span.enter();
         match crate::buffer::allocate_buffer(usize::MAX) {
             Ok(buffer) => panic!(
                 "an unallocatable buffer must fail, got {} bytes",
@@ -142,10 +150,18 @@ fn allocation_failure_reports_a_bounded_category_event() {
         ),
         "a refused allocation must emit its stable category and bounded buffer size at error level",
     );
+    assert_eq!(
+        captured
+            .span_field("miri_allocation_failure", "buffer_size")
+            .as_deref(),
+        Some(usize::MAX.to_string().as_str()),
+        "the Miri-compatible allocation path must retain its production span",
+    );
 }
 
 /// The pump's allocation failure keeps the operation span's context.
 #[rstest]
+#[cfg(not(miri))]
 fn allocation_failure_inside_the_pump_span_keeps_its_context() {
     // The realistic wiring: `pump_stream_files_readwrite` enters its operation
     // span before allocating, so the event is emitted inside that span and
@@ -181,6 +197,7 @@ fn allocation_failure_inside_the_pump_span_keeps_its_context() {
 
 /// A successful write is classified with the number of bytes delivered.
 #[rstest]
+#[cfg(not(miri))]
 fn classify_write_reports_a_completed_write() {
     let (read_end, write_end) = crate::test_support::unwrap_ok(make_pipe());
 
@@ -196,6 +213,7 @@ fn classify_write_reports_a_completed_write() {
 
 /// A fatal write error is returned instead of being treated as a closed writer.
 #[rstest]
+#[cfg(not(miri))]
 fn classify_write_propagates_a_fatal_error() {
     // Writing to the read end of a pipe is a fatal `EBADF`, which must
     // propagate rather than latch the writer closed.
@@ -209,6 +227,7 @@ fn classify_write_propagates_a_fatal_error() {
 
 /// A broken writer still drains the reader before the pump reports completion.
 #[rstest]
+#[cfg(not(miri))]
 fn pump_drains_the_reader_after_the_writer_breaks() {
     // The downstream stage hangs up before the pump writes anything, which is
     // the real-world `head`-style early exit. The loop must latch the writer
