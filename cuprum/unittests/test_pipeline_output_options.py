@@ -18,6 +18,7 @@ from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum.sh import (
     CommandResult,
     ExecutionContext,
+    IOOptions,
     Pipeline,
     PipelineResult,
     RunOutputOptions,
@@ -25,6 +26,8 @@ from cuprum.sh import (
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
+from cuprum.sinks import GitHubActionsSink
+from cuprum.unittests._sink_test_support import RecordingSink
 from tests.helpers.catalogue import PythonCatalogue, python_catalogue
 
 if typ.TYPE_CHECKING:
@@ -237,6 +240,8 @@ _OUTPUT_OPTIONS = st.one_of(
             st.none(),
             st.integers(min_value=1, max_value=1 << 20),
         ),
+        group=st.booleans(),
+        annotate_failure=st.booleans(),
     ),
 )
 
@@ -280,9 +285,25 @@ def test_resolve_pipeline_output_preserves_option_invariants(
         return
 
     resolved = _resolve_pipeline_output(output, flags)
-    assert resolved == (output or RunOutputOptions()), (
-        "omitted flags must resolve to the supplied or default options"
+    if output is None:
+        # The default options are reconstructible byte-for-byte, so equality is
+        # meaningful here.
+        assert resolved == RunOutputOptions(), (
+            "omitted flags must resolve to the default options"
+        )
+        return
+    # Not an equality check: the convenience flags may have synthesized a sink,
+    # and two distinct adapters are not equal, so the supplied object is
+    # compared by identity and by the fields resolution promises to carry.
+    assert resolved is output, (
+        "omitted flags must resolve to the supplied options object"
     )
+    assert resolved.capture == output.capture
+    assert resolved.max_echo_line_bytes == output.max_echo_line_bytes
+    assert (resolved.group, resolved.annotate_failure) == (
+        output.group,
+        output.annotate_failure,
+    ), "resolution must carry the convenience flags unchanged"
 
 
 @given(
@@ -462,6 +483,163 @@ def test_run_output_options_rejects_invalid_echo_bound(
     """Invalid ``max_echo_line_bytes`` values are rejected at construction."""
     with pytest.raises(ValueError, match="must be a positive integer"):
         RunOutputOptions(max_echo_line_bytes=invalid_bound)
+
+
+# ---------------------------------------------------------------------------
+# Group and annotate flags
+# ---------------------------------------------------------------------------
+
+
+def test_group_and_annotate_failure_default_off() -> None:
+    """Both convenience flags default to ``False`` and synthesize nothing."""
+    options = RunOutputOptions()
+
+    assert options.group is False, "group must default to False"
+    assert options.annotate_failure is False, "annotate_failure must default to False"
+    assert options.sink is None, (
+        "the defaults must not synthesize a sink; a run with no flags and no "
+        "sink must keep its plain destinations"
+    )
+
+
+@pytest.mark.parametrize("flag", ["group", "annotate_failure"])
+@pytest.mark.parametrize("invalid", [1, 0, "yes", None, 1.0])
+def test_run_output_options_rejects_non_bool_flags(
+    flag: str,
+    invalid: object,
+) -> None:
+    """A non-``bool`` flag value is rejected at construction.
+
+    ``1`` is the interesting case: it is truthy, so a lenient implementation
+    would silently frame where the caller wrote something that is not the
+    documented ``bool``. ``max_echo_line_bytes`` already draws this line.
+    """
+    with pytest.raises(TypeError, match=f"{flag} must be a bool"):
+        RunOutputOptions(**{flag: invalid})  # type: ignore[arg-type]
+
+
+def test_flags_synthesize_github_actions_sink() -> None:
+    """Each flag maps onto the adapter toggle of the same effect.
+
+    The synthesized adapter carries no ``force``, so it stays inactive outside
+    GitHub Actions exactly as an explicitly passed sink would.
+    """
+    both = RunOutputOptions(group=True, annotate_failure=True)
+    group_only = RunOutputOptions(group=True)
+    annotate_only = RunOutputOptions(annotate_failure=True)
+
+    assert isinstance(both.sink, GitHubActionsSink), (
+        f"the flags must synthesize a GitHubActionsSink; got {both.sink!r}"
+    )
+    assert (both.sink.emit_group, both.sink.emit_annotation) == (True, True), (
+        "both flags must map onto both adapter toggles"
+    )
+    assert isinstance(group_only.sink, GitHubActionsSink)
+    assert (
+        group_only.sink.emit_group,
+        group_only.sink.emit_annotation,
+    ) == (True, False), "group=True alone must enable only the group toggle"
+    assert isinstance(annotate_only.sink, GitHubActionsSink)
+    assert (
+        annotate_only.sink.emit_group,
+        annotate_only.sink.emit_annotation,
+    ) == (False, True), (
+        "annotate_failure=True alone must enable only the annotation toggle"
+    )
+    assert both.sink.force is False, (
+        "the synthesized sink must stay environment-gated, not forced"
+    )
+
+
+def test_explicit_sink_wins_over_flags() -> None:
+    """An explicit sink is kept verbatim; the flags become no-ops."""
+    recording = RecordingSink()
+    options = RunOutputOptions(
+        group=True,
+        annotate_failure=True,
+        sink=recording,
+    )
+
+    assert options.sink is recording, (
+        f"an explicit sink must win over the flags; got {options.sink!r}"
+    )
+    assert not isinstance(options.sink, GitHubActionsSink), (
+        "no adapter may be synthesized when a sink was supplied"
+    )
+    assert options.group is True, "the flags are still recorded as requested"
+
+
+def test_io_options_inherits_the_flags() -> None:
+    """The deprecated alias resolves the flags through the same initializer."""
+    with pytest.warns(DeprecationWarning, match="IOOptions is deprecated"):
+        options = IOOptions(group=True, annotate_failure=True)
+
+    assert isinstance(options.sink, GitHubActionsSink), (
+        "IOOptions must inherit the synthesis from RunOutputOptions"
+    )
+    assert (options.group, options.annotate_failure) == (True, True), (
+        "IOOptions must inherit both flags unchanged"
+    )
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        pytest.param({"group": True}, id="group"),
+        pytest.param({"annotate_failure": True}, id="annotate"),
+        pytest.param({"group": True, "annotate_failure": True}, id="both"),
+    ],
+)
+def test_resolve_pipeline_output_preserves_flags(
+    flags: dict[str, bool],
+) -> None:
+    """Pipeline resolution carries both flags onto the resolved options.
+
+    Resolution returns the caller's own options object unchanged when they
+    supplied one, so the flags — and the sink the initializer synthesized from
+    them — survive onto the pipeline run.
+    """
+    supplied = RunOutputOptions(**flags)
+
+    resolved = _resolve_pipeline_output(supplied, _DeprecatedOutputFlags())
+
+    assert resolved is supplied, (
+        "pipeline resolution must forward the caller's own options object"
+    )
+    assert resolved.group is flags.get("group", False), (
+        "group must survive pipeline resolution"
+    )
+    assert resolved.annotate_failure is flags.get("annotate_failure", False), (
+        "annotate_failure must survive pipeline resolution"
+    )
+    assert isinstance(resolved.sink, GitHubActionsSink), (
+        "the synthesized sink must survive pipeline resolution with the flags"
+    )
+    assert (
+        resolved.sink.emit_group,
+        resolved.sink.emit_annotation,
+    ) == (flags.get("group", False), flags.get("annotate_failure", False)), (
+        "the resolved sink's toggles must still reflect the caller's flags"
+    )
+
+
+def test_flags_are_output_only_not_flat_kwargs() -> None:
+    """The new flags travel in ``output=``, never as flat pipeline kwargs.
+
+    ``_resolve_pipeline_output`` admits only the deprecated ``capture`` and
+    ``echo`` keys, so ``group=True`` passed directly to ``Pipeline.run`` is
+    rejected rather than silently ignored. That keeps the flags on the same
+    footing as every other option: one carrier, ``RunOutputOptions``.
+    """
+    unknown: dict[str, bool] = {"group": True}
+
+    with pytest.raises(TypeError, match="unexpected keyword arguments: group"):
+        _resolve_pipeline_output(None, typ.cast("_DeprecatedOutputFlags", unknown))
+
+    # The same key works through the supported carrier.
+    assert RunOutputOptions(group=True).group is True, (
+        "group must be settable via RunOutputOptions"
+    )
 
 
 def test_run_output_options_default_bound_matches_github_log_limit() -> None:

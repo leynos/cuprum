@@ -57,6 +57,9 @@ from cuprum.program import (
 from cuprum.sinks import (
     base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
+from cuprum.sinks.github_actions import (
+    GitHubActionsSink,
+)
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
@@ -409,6 +412,33 @@ class StdinInput:
         return self.data
 
 
+def _validate_convenience_flags(options: RunOutputOptions) -> None:
+    """Reject non-``bool`` values for the convenience opt-in flags.
+
+    Both flags gate whether workflow commands are written, so a value that
+    merely coerces to a truthy bool — the integer ``1``, say — would frame a
+    run on the strength of something the caller never documented as a flag.
+    ``max_echo_line_bytes`` draws the same line for the same reason.
+
+    Parameters
+    ----------
+    options : RunOutputOptions
+        The options whose ``group`` and ``annotate_failure`` are checked.
+
+    Raises
+    ------
+    TypeError
+        If either flag is not a ``bool``.
+    """
+    for name, value in (
+        ("group", options.group),
+        ("annotate_failure", options.annotate_failure),
+    ):
+        if not isinstance(value, bool):
+            msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
+            raise TypeError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
     """Configure captured and mirrored command output.
@@ -457,6 +487,41 @@ class RunOutputOptions:
         example, a GitHub Actions group); the default ``None`` keeps the
         plain two-stream behaviour. An adapter is inactive for a run when it
         declines activation, in which case output is unchanged.
+    group : bool, default=False
+        Convenience opt-in for a GitHub Actions collapsible log group around
+        this run's echoed output. It is a shim over ``sink``: setting it
+        constructs ``GitHubActionsSink(group=True)`` and stores it in
+        ``sink`` when the caller supplied none, so the framing, the
+        stop-commands lease that shields it from child output, and the
+        workflow-command syntax all stay inside the adapter and the execution
+        layer learns nothing new. A pipeline emits one group for the whole
+        pipeline, not one per stage.
+    annotate_failure : bool, default=False
+        Convenience opt-in for a single ``::error::`` annotation when the run
+        ends in a non-zero exit, a timeout, or an error. Synthesizes
+        ``GitHubActionsSink(annotate=True)`` the same way ``group``
+        does, and composes with it: either flag alone synthesizes the adapter
+        with only its own half enabled.
+
+    Notes
+    -----
+    The two convenience flags reuse the same environment gate as any other
+    sink: the adapter they construct carries no ``force``, so they take effect
+    only when the parent process runs on GitHub Actions
+    (``GITHUB_ACTIONS == "true"``). Outside that environment they synthesize a
+    sink that declines activation and the run keeps its plain destinations
+    byte-for-byte — which is the intended behaviour, not a failure to apply
+    them. Callers who want the framing locally, on a non-standard runner, or
+    through a custom destination or title pass ``sink=`` explicitly, possibly
+    with ``force=True``.
+
+    An explicit ``sink`` always wins: when one is supplied the flags are
+    recorded but ignored, and no adapter is synthesized. That keeps a shared
+    ``RunOutputOptions`` carrying ``group=True`` composable with a per-call
+    sink, without an exception to catch at the call site.
+
+    Workflow commands are written to the parent's stderr by default. Neither
+    flag changes capture, exit codes, or the returned result.
 
     Examples
     --------
@@ -467,6 +532,10 @@ class RunOutputOptions:
     (False, True)
     >>> RunOutputOptions(capture=False, idle_after=30.0).capture
     False
+    >>> RunOutputOptions(group=True).sink is not None
+    True
+    >>> RunOutputOptions().sink is None
+    True
     """
 
     capture: bool = True
@@ -478,9 +547,11 @@ class RunOutputOptions:
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
     sink: sinks.OutputSink | None = None
+    group: bool = False
+    annotate_failure: bool = False
 
     def __post_init__(self) -> None:
-        """Resolve per-stream echo from the ``echo`` shorthand."""
+        """Resolve the echo shorthand and synthesize a sink from the flags."""
         object.__setattr__(
             self,
             "echo_stdout",
@@ -498,6 +569,8 @@ class RunOutputOptions:
             "idle_after",
             _validate_idle_options(self.idle_after, self.on_idle),
         )
+        _validate_convenience_flags(self)
+        self._synthesize_sink_from_flags()
 
         if self.max_echo_line_bytes is None:
             return
@@ -509,6 +582,29 @@ class RunOutputOptions:
                 f"integer or None, got {bound!r}"
             )
             raise ValueError(msg)
+
+    def _synthesize_sink_from_flags(self) -> None:
+        """Materialize the convenience flags as this run's presentation sink.
+
+        Both flags are spelled as a configuration of the existing
+        :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
+        code, which is what keeps workflow-command syntax inside the adapter.
+        The synthesized sink carries no ``force``, so it stays subject to the
+        adapter's own ``GITHUB_ACTIONS`` gate; and an explicit ``sink`` wins
+        outright, so a caller can override a shared options object per call.
+        """
+        if self.sink is not None:
+            return
+        if not (self.group or self.annotate_failure):
+            return
+        object.__setattr__(
+            self,
+            "sink",
+            GitHubActionsSink(
+                group=self.group,
+                annotate=self.annotate_failure,
+            ),
+        )
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:
