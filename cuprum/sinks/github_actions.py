@@ -45,6 +45,7 @@ Pass ``force=True`` to frame local or non-standard-runner runs deliberately.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import os
 import secrets
 import sys
@@ -112,9 +113,47 @@ def _new_stop_token() -> str:
     return secrets.token_hex(_STOP_TOKEN_LENGTH // 2)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _Annotation:
+    """One run's annotation title and the two halves of its frame.
+
+    Bundling these keeps them travelling together: the annotation title is
+    only meaningful beside the toggle that decides whether it is written, and
+    the two toggles are set together from
+    :class:`~cuprum.sh.RunOutputOptions`, so a partial bundle would be a
+    caller mistake rather than a configuration.
+
+    Attributes
+    ----------
+    label:
+        Title for a failure annotation, always the run's bounded label.
+    emit_group:
+        Whether the session writes the group command, its stop-commands
+        lease, and the endgroup. ``False`` suppresses all three together: the
+        lease shields an open group, so it must not outlive the group it was
+        taken for.
+    emit_annotation:
+        Whether a failed outcome emits its ``::error::`` annotation.
+        Independent of ``emit_group``: annotation without framing is a valid
+        combination for a caller who wants a run summary entry but not
+        collapsible logs.
+    """
+
+    label: str
+    emit_group: bool = True
+    emit_annotation: bool = True
+
+
 def _stderr() -> typ.IO[str]:
     """Return the parent's stderr as the default workflow-command stream."""
     return sys.stderr
+
+
+def _reject_non_bool(name: str, value: object) -> None:
+    """Reject a value that is not the documented ``bool`` for a toggle."""
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool, got {value!r}"
+        raise TypeError(msg)
 
 
 class GitHubActionsSession:
@@ -136,10 +175,7 @@ class GitHubActionsSession:
         self,
         log: typ.IO[str],
         label: str,
-        *,
-        annotation_label: str,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
+        annotation: _Annotation,
     ) -> None:
         """Frame the run: the group opening, then the stop-commands lease.
 
@@ -149,29 +185,21 @@ class GitHubActionsSession:
             The parent-facing destination for the framing and framed output.
         label : str
             The group title. Bounded by the caller and escaped here.
-        annotation_label : str
-            The title for a failure annotation. Kept separate from *label* so
-            a group titled with the run's argv never republishes those
-            arguments in an annotation.
-        emit_group : bool, default=True
-            Whether to write the group command, its stop-commands lease, and
-            the endgroup. ``False`` suppresses all three together: the lease
-            shields an open group, so it must not outlive the group it was
-            taken for.
-        emit_annotation : bool, default=True
-            Whether a failed outcome emits its ``::error::`` annotation.
-            Independent of ``emit_group``: annotation without framing is a
-            valid combination for a caller who wants a run summary entry but
-            not collapsible logs.
+        annotation : _Annotation
+            Which halves of the frame to write: the group opening with its
+            stop-commands lease, and a failure annotation. The annotation also
+            carries the title that failure uses, which is kept separate from
+            *label* so a group titled with the run's argv never republishes
+            those arguments in an annotation.
         """
         self._log = log
         self._label = label
-        self._annotation_label = annotation_label
-        self._emit_group = emit_group
-        self._emit_annotation = emit_annotation
+        self._annotation_label = annotation.label
+        self._emit_group = annotation.emit_group
+        self._emit_annotation = annotation.emit_annotation
         self._closed = False
         self._stop_token = _new_stop_token()
-        if not emit_group:
+        if not annotation.emit_group:
             return
         self._log.write(f"{_GROUP_PREFIX}{_escape_data(self._label)}\n")
         # The lease opens *inside* the group, after the ``::group::`` command,
@@ -243,6 +271,12 @@ class GitHubActionsSink:
     :class:`GitHubActionsSession` from :meth:`open_session`, so one sink
     instance can serve many sequential or concurrent runs.
 
+    ``group`` and ``annotate`` name the two halves of the frame as
+    :class:`~cuprum.sh.RunOutputOptions` names them, so a caller moving
+    between the two keeps one vocabulary; the stored ``emit_group`` and
+    ``emit_annotation`` spellings are the framing vocabulary the session code
+    reads better in.
+
     Parameters
     ----------
     destination:
@@ -258,32 +292,41 @@ class GitHubActionsSink:
         GitHub Actions. Intended for local reproduction of CI framing and
         non-standard runners; when ``False`` (the default) the sink defers
         to the environment check.
-    emit_group:
+    group:
         Whether a session writes the group commands and their stop-commands
         lease. ``False`` leaves the run's log destination unframed, which is
         what ``RunOutputOptions(annotate_failure=True)`` asks for: an
         annotation without collapsible logs.
-    emit_annotation:
+    annotate:
         Whether a failed outcome emits its ``::error::`` annotation. ``False``
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
+
+    Raises
+    ------
+    TypeError
+        If ``group`` or ``annotate`` is not a ``bool``. They gate workflow
+        commands, so a merely truthy value would frame a run on the strength
+        of something the caller never documented as a flag.
     """
 
-    def __init__(
+    def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
         self,
         destination: typ.IO[str] | None = None,
         *,
         title: str | None = None,
         force: bool = False,
-        emit_group: bool = True,
-        emit_annotation: bool = True,
+        group: bool = True,
+        annotate: bool = True,
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
+        _reject_non_bool("group", group)
+        _reject_non_bool("annotate", annotate)
         self.destination = destination
         self.title = title
         self.force = force
-        self.emit_group = emit_group
-        self.emit_annotation = emit_annotation
+        self.emit_group = group
+        self.emit_annotation = annotate
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
@@ -318,11 +361,13 @@ class GitHubActionsSink:
         # arguments there would leak them into the run summary.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
-            log=log,
-            label=label,
-            annotation_label=self.title or start.label,
-            emit_group=self.emit_group,
-            emit_annotation=self.emit_annotation,
+            log,
+            label,
+            _Annotation(
+                label=self.title or start.label,
+                emit_group=self.emit_group,
+                emit_annotation=self.emit_annotation,
+            ),
         )
 
     def _is_active(self) -> bool:
