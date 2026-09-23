@@ -9,6 +9,7 @@ on:
       delay_minutes:
         description: 'Minutes to wait before commenting'
         required: true
+        type: number
       message:
         description: 'Comment body'
         required: true
@@ -23,9 +24,19 @@ jobs:
     steps:
       - name: Convert minutes to seconds
         id: calc
-        run: echo "secs=$(( ${{ github.event.inputs.delay_minutes }} * 60 ))" >> "$GITHUB_OUTPUT"
+        env:
+          DELAY_MINUTES: ${{ inputs.delay_minutes }}
+        shell: bash
+        run: |
+          if [[ ! "$DELAY_MINUTES" =~ ^[0-9]+$ ]]; then
+            echo "delay_minutes must be a non-negative integer" >&2
+            exit 1
+          fi
+          echo "secs=$((10#$DELAY_MINUTES * 60))" >> "$GITHUB_OUTPUT"
       - name: Wait requested time
-        run: sleep ${{ steps.calc.outputs.secs }}
+        env:
+          SECONDS_TO_WAIT: ${{ steps.calc.outputs.secs }}
+        run: sleep "$SECONDS_TO_WAIT"
         shell: bash
       - name: Comment PR
         uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
