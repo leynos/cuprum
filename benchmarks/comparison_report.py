@@ -223,12 +223,21 @@ def _render_size(size: int) -> str:
     The unit is chosen per size rather than once for the whole payload list:
     the throughput sweep's smallest tier is 1 KB, so scaling every size to MiB
     would render that tier as ``0`` and misdescribe the payload the ratios
-    beneath it were measured at.
+    beneath it were measured at. Non-zero sub-KiB sizes retain a non-zero
+    display value rather than rounding away to zero.
+
+    Returns
+    -------
+    str
+        The formatted size with its unit.
     """
     mib = 1024 * 1024
     if size >= mib:
         return f"{size / mib:.0f} MiB"
-    return f"{size / 1024:.0f} KiB"
+    kib = round(size / 1024)
+    if size and not kib:
+        kib = 1 if size > 0 else -1
+    return f"{kib} KiB"
 
 
 def describe_protocol(protocol: WorkloadProtocol) -> str:

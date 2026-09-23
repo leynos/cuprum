@@ -12,6 +12,12 @@ import pytest
 
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    SMOKE_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
+    WORKLOAD_PLAN_KEY,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -71,13 +77,25 @@ def when_generate_plans(
     dict[str, object]
         The parsed benchmark plan payload.
     """
+    return _run_benchmark_cli(
+        output_path=benchmark_output_path,
+        workload_flags=("--smoke",),
+    )
+
+
+def _run_benchmark_cli(
+    *,
+    output_path: pth.Path,
+    workload_flags: tuple[str, ...],
+) -> dict[str, object]:
+    """Run the benchmark CLI in dry-run mode and parse its plan."""
     command = [
         sys.executable,
         "benchmarks/pipeline_throughput.py",
-        "--smoke",
+        *workload_flags,
         "--dry-run",
         "--output",
-        str(benchmark_output_path),
+        str(output_path),
     ]
     try:
         subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]  # command is fixed test input
@@ -91,7 +109,32 @@ def when_generate_plans(
         pytest.fail(
             f"benchmark dry-run command timed out after 30s: {exc.cmd!r}",
         )
-    return json.loads(benchmark_output_path.read_text(encoding="utf-8"))
+    return json.loads(output_path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("workload_flags", "expected_workload"),
+    [
+        pytest.param((), THROUGHPUT_SWEEP_WORKLOAD, id="default"),
+        pytest.param(("--smoke",), SMOKE_WORKLOAD, id="smoke"),
+        pytest.param(("--ci-ratchet",), CI_RATCHET_WORKLOAD, id="ci-ratchet"),
+    ],
+)
+def test_cli_records_the_selected_workload(
+    tmp_path: pth.Path,
+    workload_flags: tuple[str, ...],
+    expected_workload: str,
+) -> None:
+    """Each CLI workload is recorded under the plan's workload key."""
+    payload = _run_benchmark_cli(
+        output_path=tmp_path / "benchmark-plan.json",
+        workload_flags=workload_flags,
+    )
+
+    assert payload.get(WORKLOAD_PLAN_KEY) == expected_workload, (
+        f"expected workload {expected_workload!r}, "
+        f"got {payload.get(WORKLOAD_PLAN_KEY)!r}"
+    )
 
 
 @then("the benchmark plan file exists")

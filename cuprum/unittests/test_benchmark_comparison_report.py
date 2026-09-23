@@ -662,6 +662,11 @@ def _sweep_protocol(
             id="one-sub-mib-payload",
         ),
         pytest.param(
+            _sweep_protocol(payload_bytes=(1,)),
+            "the throughput-sweep workload, payload 1 KiB",
+            id="smallest-positive-payload",
+        ),
+        pytest.param(
             _sweep_protocol(payload_bytes=(64 * 1024, 1024 * 1024)),
             "the throughput-sweep workload, payloads 64 KiB/1 MiB",
             id="mixed-units",

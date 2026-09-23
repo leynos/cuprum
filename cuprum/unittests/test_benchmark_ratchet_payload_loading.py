@@ -96,6 +96,10 @@ def test_load_plan_rejects_legacy_profile_metadata(tmp_path: pth.Path) -> None:
             "pipeline-worker-release-ratio-v3",
             id="immediate_predecessor_profile_version",
         ),
+        pytest.param(
+            "pipeline-worker-release-ratio-v4",
+            id="profile_before_payload_and_iteration_change",
+        ),
     ],
 )
 def test_load_plan_rejects_incompatible_profile_version(
