@@ -191,6 +191,17 @@ a paid runner. `tests/test_ci_placement_reader.py` drives the reader with
 synthetic declarations, because a rule parametrized over this repository's own
 correct workflows passes whether or not it discriminates.
 
+Reading is fallible, and the failure has one boundary. Every query reaches the
+filesystem through `read_source` and `read_workflow` in
+`tests/helpers/ci_workflows.py`, which translate an I/O error, invalid YAML, or
+a document that is not a mapping into an `AssertionError` naming the file.
+`tests/test_ci_workflow_loader.py` drives both against real files in a
+temporary directory. The queries take workflow and job names rather than an
+injected reader: their only input is this repository's committed workflows, and
+the reader tests already substitute a synthetic declaration at the module seam,
+so the placement logic is exercised over plain mappings without a reader
+threaded through every contract.
+
 Three layers sit above it, each answering a question the layer below cannot:
 
 - `tests/test_ci_placement_guards.py` covers whether a job runs and which

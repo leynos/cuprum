@@ -4,6 +4,13 @@ The manifests that say which jobs and caches are intended live in
 ``tests/helpers/ci_runners.py``; this module only reads the workflows back.
 Every accessor validates the shape it narrows, so a malformed workflow fails
 with a named diagnostic rather than an opaque ``TypeError`` deep in a test.
+
+Reading and parsing are fallible too, and every query in the contract helpers
+reaches the filesystem through the two readers here, ``read_workflow`` and
+``read_source``. They translate an I/O or YAML failure into an
+``AssertionError`` naming the file, so a contract over an unreadable workflow
+fails as a contract, citing the file, rather than raising an unattributed
+parser error from whichever query happened to touch it first.
 """
 
 from __future__ import annotations
@@ -48,20 +55,81 @@ def _mapping(value: object, message: str) -> dict[str, object]:
     return typ.cast("dict[str, object]", value)
 
 
-def workflow_document(workflow_name: str) -> dict[object, object]:
-    """Parse one repository workflow, without narrowing its top-level keys."""
-    path = WORKFLOW_DIR / workflow_name
+def read_source(path: Path) -> str:
+    """Return one workflow's source text, naming the file if it cannot be read.
+
+    Parameters
+    ----------
+    path : Path
+        The workflow file to read.
+
+    Returns
+    -------
+    str
+        The file's UTF-8 text.
+
+    Raises
+    ------
+    AssertionError
+        If the file cannot be read, naming the file and the ``OSError``.
+
+    Examples
+    --------
+    >>> "jobs:" in read_source(WORKFLOW_DIR / "ci.yml")
+    True
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        message = f"{path.name} could not be read: {error}"
+        raise AssertionError(message) from error
+
+
+def read_workflow(path: Path) -> dict[object, object]:
+    """Parse one workflow file, without narrowing its top-level keys.
+
+    Parameters
+    ----------
+    path : Path
+        The workflow file to parse.
+
+    Returns
+    -------
+    dict[object, object]
+        The parsed document, whose trigger key YAML 1.1 reads as ``True``.
+
+    Raises
+    ------
+    AssertionError
+        If the file cannot be read, is not valid YAML, or does not parse to a
+        mapping, naming the file in each case.
+
+    Examples
+    --------
+    >>> "jobs" in read_workflow(WORKFLOW_DIR / "ci.yml")
+    True
+    """
+    source = read_source(path)
+    try:
+        document = yaml.safe_load(source)
+    except yaml.YAMLError as error:
+        message = f"{path.name} is not valid YAML: {error}"
+        raise AssertionError(message) from error
     # YAML 1.1 reads the `on:` trigger key as the boolean `True`, so the
     # document is genuinely not string-keyed and the return type says so.
     # Claiming `dict[str, object]` here would be a false contract that hides
     # the one key a caller cannot reach by name. Callers that need a
     # string-keyed mapping narrow one of its values through `_mapping`.
-    document = yaml.safe_load(path.read_text(encoding="utf-8"))
     _require(
         condition=isinstance(document, dict),
-        message=f"{workflow_name} must parse to a mapping",
+        message=f"{path.name} must parse to a mapping",
     )
     return typ.cast("dict[object, object]", document)
+
+
+def workflow_document(workflow_name: str) -> dict[object, object]:
+    """Parse one repository workflow, without narrowing its top-level keys."""
+    return read_workflow(WORKFLOW_DIR / workflow_name)
 
 
 def workflow_env(workflow_name: str) -> dict[str, object]:
@@ -259,9 +327,20 @@ def expand(manifest: cabc.Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]
     ]
 
 
-def workflow_sources() -> list[tuple[str, str]]:
-    """Return every workflow's name and source text."""
-    return [
-        (path.name, path.read_text(encoding="utf-8"))
-        for path in sorted(WORKFLOW_DIR.glob("*.yml"))
-    ]
+def workflow_sources(directory: Path = WORKFLOW_DIR) -> list[tuple[str, str]]:
+    """Return every workflow's name and source text.
+
+    Parameters
+    ----------
+    directory : Path
+        The directory to sweep. It defaults to this repository's workflows;
+        the loader tests pass a temporary one to show that an unreadable file
+        fails by name.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        Each ``*.yml`` file's name and text, sorted by path. Every read goes
+        through ``read_source``, so an unreadable file fails by name.
+    """
+    return [(path.name, read_source(path)) for path in sorted(directory.glob("*.yml"))]
