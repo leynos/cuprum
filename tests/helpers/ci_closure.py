@@ -17,10 +17,19 @@ Two readings fail towards refusal rather than a quietly smaller set:
     and drops the workflow from every pull-request clause (mxd #563).
 Local calls
     Matched by shape rather than by an enumerated prefix list: strip a leading
-    ``./`` and ask whether the rest is a file directly under this repository's
-    workflow directory. A call of that shape which names no existing workflow
-    is refused, since GitHub would not run a pull request that silently skipped
-    it either.
+    ``./`` or ``$/`` and ask whether the rest is a file directly under this
+    repository's workflow directory. A call of that shape which names no
+    existing workflow is refused, since GitHub would not run a pull request
+    that silently skipped it either.
+
+``workflow_run``
+    A workflow triggered by the completion of a reached workflow runs as a
+    downstream run with the repository's secrets, so it is reached too. It is
+    matched on the watched workflow's ``name:``, which is what GitHub matches.
+Self-qualified calls
+    ``leynos/cuprum/.github/workflows/x.yml@ref`` names this repository at a
+    revision this contract cannot read, so it is refused rather than treated
+    as remote and skipped.
 
 Scope: the reachability question only. What a reached workflow may contain is
 the business of the contract that consumes the closure.
@@ -40,8 +49,17 @@ if typ.TYPE_CHECKING:
 PULL_REQUEST_EVENTS: typ.Final = frozenset({"pull_request", "pull_request_target"})
 
 #: The directory a same-repository reusable workflow must live in, as written
-#: in a ``uses:`` value after any leading ``./``.
+#: in a ``uses:`` value after any leading ``./`` or ``$/``.
 _LOCAL_PREFIX = ".github/workflows/"
+
+#: Leading spellings of a same-repository call. ``$/`` is read as local by
+#: shape: if GitHub accepts it the callee runs, and reading it costs nothing
+#: if GitHub does not.
+_LOCAL_SPELLINGS = ("./", "$/")
+
+#: This repository's qualified workflow path. A call through it names a ref
+#: the contract cannot inspect, so it is refused.
+SELF_QUALIFIED_PREFIX: typ.Final = "leynos/cuprum/.github/workflows/"
 
 #: The extensions GitHub reads as workflows, compared case-insensitively.
 _WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
@@ -134,7 +152,17 @@ def local_calls(document: dict[object, object], name: str) -> frozenset[str]:
         reference = job.get("uses") if isinstance(job, dict) else None
         if not isinstance(reference, str):
             continue
-        path = reference.strip().removeprefix("./")
+        path = reference.strip()
+        _require(
+            condition=not path.lower().startswith(SELF_QUALIFIED_PREFIX),
+            message=(
+                f"{name}:{job_name} calls this repository by its qualified name, "
+                f"{reference!r}, at a revision this contract cannot read; call "
+                "it as ./.github/workflows/<file> instead"
+            ),
+        )
+        for spelling in _LOCAL_SPELLINGS:
+            path = path.removeprefix(spelling)
         if not path.startswith(_LOCAL_PREFIX):
             continue
         callee = path.removeprefix(_LOCAL_PREFIX)
@@ -146,6 +174,40 @@ def local_calls(document: dict[object, object], name: str) -> frozenset[str]:
         )
         called.add(callee)
     return frozenset(called)
+
+
+def watched_workflows(document: dict[object, object], name: str) -> frozenset[str]:
+    """Return the workflow names whose completion triggers this workflow.
+
+    Returns
+    -------
+    frozenset[str]
+        The names under ``on.workflow_run.workflows``; empty when the workflow
+        has no ``workflow_run`` trigger.
+
+    Examples
+    --------
+    >>> watched_workflows({True: {"workflow_run": {"workflows": ["CI"]}}}, "x.yml")
+    frozenset({'CI'})
+    """
+    if "workflow_run" not in triggers(document, name):
+        return frozenset()
+    declared = document.get("on", document.get(True))
+    settings = typ.cast("dict[object, object]", declared).get("workflow_run")
+    watched = settings.get("workflows") if isinstance(settings, dict) else None
+    _require(
+        condition=isinstance(watched, list)
+        and bool(watched)
+        and all(isinstance(item, str) for item in watched),
+        message=f"{name} declares workflow_run without a readable workflows list",
+    )
+    return frozenset(typ.cast("list[str]", watched))
+
+
+def _display_name(document: dict[object, object], name: str) -> str:
+    """Return the name GitHub reports for a workflow: ``name:`` or its path."""
+    declared = document.get("name")
+    return declared if isinstance(declared, str) else f"{_LOCAL_PREFIX}{name}"
 
 
 def workflow_names(directory: Path = WORKFLOW_DIR) -> list[str]:
@@ -195,14 +257,23 @@ def reachable(
     ]
     reached: dict[str, dict[object, object]] = {}
     while pending:
-        current = pending.pop()
-        if current in reached:
-            continue
-        reached[current] = documents[current]
-        for callee in local_calls(documents[current], current):
-            _require(
-                condition=callee in documents,
-                message=f"{current} calls {callee}, which is not a workflow here",
-            )
-            pending.append(callee)
+        while pending:
+            current = pending.pop()
+            if current in reached:
+                continue
+            reached[current] = documents[current]
+            for callee in local_calls(documents[current], current):
+                _require(
+                    condition=callee in documents,
+                    message=f"{current} calls {callee}, which is not a workflow here",
+                )
+                pending.append(callee)
+        # Downstream runs: a workflow watching a reached one runs after it,
+        # with secrets, so it joins the closure and its own calls follow.
+        names = {_display_name(document, name) for name, document in reached.items()}
+        pending = [
+            name
+            for name, document in documents.items()
+            if name not in reached and watched_workflows(document, name) & names
+        ]
     return reached

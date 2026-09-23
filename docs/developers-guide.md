@@ -547,9 +547,13 @@ Nothing a pull request can run may contact CodeScene or reach its token, and
 reusable-workflow calls transitively, because a `workflow_call` workflow runs
 on its caller's pull request and `secrets: inherit` hands it the token. It reads
 `on:` as a scalar, a sequence, or a mapping, under the string key or the
-boolean `True`, and it matches a local call by shape: strip a leading `./` and
-ask whether the rest names a file directly under `.github/workflows/`. A local
-call it cannot resolve fails the contract rather than shrinking the set.
+boolean `True`, and it matches a local call by shape: strip a leading `./` or
+`$/` and ask whether the rest names a file directly under `.github/workflows/`.
+A local call it cannot resolve fails the contract rather than shrinking the
+set, and so does a call to `leynos/cuprum/.github/workflows/...@ref`, which
+names this repository at a revision the contract cannot read. A workflow
+triggered by `workflow_run` on a reached workflow's `name:` joins the closure
+too: it runs downstream with the repository's secrets.
 `tests/helpers/ci_codescene.py` then walks every key and string value of each
 reached document, so a `run` body, an action input, an `env` value at any
 scope, and a `secrets:` forwarding are all read, along with `secrets: inherit`

@@ -109,6 +109,17 @@ def test_the_token_check_reads_the_secret_and_nothing_else() -> None:
     assert "env" not in check, "the token check must declare no env"
 
 
+def test_the_token_is_checked_before_the_upload_reads_the_answer() -> None:
+    """An upload that runs first reads an empty output and skips in silence."""
+    workflow_name, job_name = TRUNK_PUBLISHER
+    job_steps = steps(workflow_name, job_name)
+    check = job_steps.index(_token_check())
+    upload = job_steps.index(_upload())
+    assert check < upload, (
+        f"the token check (step {check}) must precede the upload (step {upload})"
+    )
+
+
 def test_the_upload_is_guarded_to_main_and_to_a_present_token() -> None:
     """The upload's guard must require both the check's answer and the main ref.
 
