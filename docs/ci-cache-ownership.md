@@ -99,16 +99,15 @@ family is the exception: `loom.yml` saves it only during scheduled runs on
 `refs/heads/main`. Its manual dispatches and pull-request smoke runs restore
 the family without saving it.
 
-| Family                                | Writer                                |
-| ------------------------------------- | ------------------------------------- |
-| Cargo registry, Ubicloud              | `ci.yml` `extension-tests`            |
-| Tools, per interpreter                | `ci.yml` `typecheck-test`, that leg   |
-| Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`            |
-| Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg   |
-| Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`          |
-| Compiler, 3.13 instrumented           | `coverage-main.yml` `coverage-upload` |
-| Compiler, Cranelift lint              | `ci.yml` `lint-test`                  |
-| Compiler, Loom model                  | `loom.yml` `loom`                     |
+| Family                                | Writer                              |
+| ------------------------------------- | ----------------------------------- |
+| Cargo registry, Ubicloud              | `ci.yml` `extension-tests`          |
+| Tools, per interpreter                | `ci.yml` `typecheck-test`, that leg |
+| Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`          |
+| Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg |
+| Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`        |
+| Compiler, Cranelift lint              | `ci.yml` `lint-test`                |
+| Compiler, Loom model                  | `loom.yml` `loom`                   |
 
 `lint-test` moved to the Ubicloud lane with the fork fallback, taking its
 Cranelift lint family with it, and stopped saving the Cargo registry: on its
@@ -123,6 +122,46 @@ which a fork can never produce, so the fork arm restores and never publishes.
 
 _Table 2: The single job that publishes each family under the writer trigger
 described above._
+
+The instrumented coverage family is absent from that table, and from the
+repository. Both coverage lanes, `ci.yml`'s `coverage` and `coverage-main.yml`'s
+`coverage-upload`, run sccache on the Actions cache service instead of on an
+archived directory. On an Ubicloud runner that service is Ubicloud's own proxy
+on the runner's private network, reached by calling
+`export-ubicloud-cache-credentials` before `setup-sccache` and asking it for
+`backend: gha`. Each run reads and writes that store directly, so there is no
+generation for a writer to publish.
+
+The store is branch scoped, as GitHub's own is. Ubicloud's cache branch
+protection, on by default, lets a run read entries from its own branch and from
+`main` only. `coverage-upload` on each push to `main` therefore warms every
+pull request, and a pull request's own entries warm only its later pushes. The
+design depends on that protection staying on, and a cold pull request is not a
+reason to switch it off: this repository is public, and sharing entries across
+branches would let objects compiled on any branch reach every other branch's
+build, which is the cross-branch cache poisoning Ubicloud's documentation warns
+about.
+
+The archive those lanes replaced was the single worst one here. It was 286 MB,
+larger than the five Ubicloud families put together, and it served exactly one
+reader: `coverage` on a pull request, which could only match what the last push
+to `main` had saved. Run 35664872714 measured what that was worth: 1 hit
+against 562 misses, 0.18%, over roughly nine minutes.
+
+The other Rust lanes keep the directory backend. `loom` runs GitHub-hosted,
+where the Actions cache service really is GitHub's and sccache traffic would
+compete with the Windows and macOS lanes for the per-repository quota. That was
+the reason the whole repository chose a directory in the first place, measured
+from the Ubicloud console on 2026-09-03, and for a GitHub-hosted lane it still
+holds. The Ubicloud lanes other than coverage archive their directories through
+the key families above; moving any of them to the proxy is a separate change.
+
+A fork's pull request runs `coverage` on the GitHub-hosted fork arm, where
+there is no proxy and the credentials action fails closed. That arm skips the
+credentials step and passes `backend: local`, so it compiles cold into a
+directory nothing saves, as every fork arm already does. Both halves are read
+by position from the same fork expression the runner uses, and a contract
+asserts each.
 
 The interpreter matrix has one leg, 3.13, that only typechecks, because the
 coverage job already runs that interpreter's suite. It compiles nothing, so it
@@ -173,9 +212,10 @@ The estimate that justified the split was wrong by a factor of seven, which is
 the reason this section exists. Six families were expected to cost about 1 GB
 per generation against the single 287 MB archive they replaced. Measured, the
 five Ubicloud families total about 101 MB, at 19.8 to 20.5 MB each, and the
-instrumented coverage family is 286 MB on its own. The old archive was large
+instrumented coverage family was 286 MB on its own. The old archive was large
 because it held one job's instrumented workspace objects, which is precisely
-why it served nobody else.
+why it served nobody else, and why that family is now gone rather than split
+further: the coverage lanes went to the Actions backend instead.
 
 Two comparisons follow from those numbers, and they have different bases. Say
 which one you mean.

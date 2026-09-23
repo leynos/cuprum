@@ -335,12 +335,34 @@ the binary becomes `RUSTC_WRAPPER`, so being executable is not evidence of
 provenance. Bumping the version or digest inputs therefore also replaces a
 stale cached binary, and changes the tool cache key.
 
-The action points sccache at `~/.cache/sccache` with a 4 GB ceiling, sized to
-hold two build shapes. The GitHub Actions backend is deliberately not used:
-Ubicloud console listings on 2026-09-03 showed sccache's GHA traffic landing in
-GitHub's cache rather than Ubicloud's, where it competes with the Windows and
-macOS lanes for GitHub's per-repository quota. A directory the caller caches
-goes to the same store as every other archive and appears in the same listing.
+The action binds exactly one store, chosen by its `backend` input, and the two
+are never combined, because sccache prefers whichever it finds configured first
+and reports a plausible hit rate either way:
+
+- `local`, the default, exports `SCCACHE_DIR=~/.cache/sccache` and a 4 GB
+  `SCCACHE_CACHE_SIZE`, sized to hold two build shapes. The caller archives the
+  directory through `actions/cache`. Every lane uses it except the two coverage
+  lanes. For the GitHub-hosted `loom`, and for every fork arm, the Actions
+  cache service really is GitHub's and would compete with the Windows and macOS
+  lanes for the per-repository quota.
+- `gha` exports `SCCACHE_GHA_ENABLED=true` and nothing else. It is for an
+  Ubicloud lane that has already run `export-ubicloud-cache-credentials`, which
+  republishes the runner's cache-proxy address and token through `GITHUB_ENV`
+  and clears `ACTIONS_CACHE_SERVICE_V2`, so sccache reaches Ubicloud's proxy
+  instead of GitHub's v2 results service. The step fails closed when
+  `ACTIONS_CACHE_URL` or `ACTIONS_RUNTIME_TOKEN` is empty: a server started
+  without them caches the whole build to a directory that dies with the runner
+  and stays green. Only `ci.yml`'s `coverage` and `coverage-main.yml`'s
+  `coverage-upload` use it, and a contract requires the credentials step ahead
+  of the setup step in both. `coverage` is fork-reachable, so it passes
+  `${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}` and
+  guards the credentials step with `!github.event.pull_request.head.repo.fork`:
+  the fork arm runs GitHub-hosted, where there is no proxy and the credentials
+  action fails closed.
+
+An unknown backend fails the step before anything is exported.
+`tests/test_setup_sccache_action.py` runs the step's own shell for each case
+and asserts the exit status and the exported variables.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,
@@ -353,14 +375,15 @@ per compile shape and one writer for each:
 [CI cache ownership](ci-cache-ownership.md) lists them and records the
 measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
-own interpreter's, `benchmark-ratchet` writes the 3.13 release family,
-`coverage-upload` writes the instrumented one, and `lint-test` writes the
-Cranelift lint family, which moves to the Ubicloud lane with it. The scheduled
-`loom.yml` job writes its separate model family only on `refs/heads/main`, and
-stays on the GitHub-hosted lane because its writer does, while manual
-dispatches and `loom-smoke` restore it without saving. Apart from that Loom
-family, a fork's pull request reads a `github-hosted` scope that nothing
-writes, so it compiles cold.
+own interpreter's, `benchmark-ratchet` writes the 3.13 release family, and
+`lint-test` writes the Cranelift lint family, which moves to the Ubicloud lane
+with it. The instrumented coverage shape has no family: both coverage lanes use
+the `gha` backend described above, so there is no archive for a job to publish.
+The scheduled `loom.yml` job writes its separate model family only on
+`refs/heads/main`, and stays on the GitHub-hosted lane because its writer does,
+while manual dispatches and `loom-smoke` restore it without saving. Apart from
+that Loom family, a fork's pull request reads a `github-hosted` scope that
+nothing writes, so it compiles cold.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged
