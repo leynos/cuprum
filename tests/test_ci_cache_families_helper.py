@@ -17,6 +17,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tests.helpers import ci_cache_families as families
+from tests.helpers.ci_placement import Placement
 
 if typ.TYPE_CHECKING:
     from tests.helpers.workflow_types import Step
@@ -133,8 +134,40 @@ def test_an_unmapped_runner_label_is_a_contract_failure(
         "uses": families.CACHE_KEYS_ACTION,
         "with": {"python-version": "3.13", "compiler-shape": "debug"},
     }
-    monkeypatch.setattr(families, "job", lambda *_: {"runs-on": "some-new-shape"})
+    monkeypatch.setattr(
+        families,
+        "placement",
+        lambda *_: Placement(
+            "literal", "some-new-shape", None, frozenset(), frozenset()
+        ),
+    )
     monkeypatch.setattr(families, "steps", lambda *_: [renderer])
     monkeypatch.setattr(families, "save_steps", lambda *_: [])
     with pytest.raises(AssertionError, match="unmapped label"):
+        families.writer_families("w.yml", "j")
+
+
+def test_a_job_without_one_owned_runner_has_no_cache_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refuse to place an archive for a job whose runner the matrix decides.
+
+    A matrix placement resolves to several labels and therefore to several
+    lanes. Choosing one would attribute an archive to a store it may never
+    reach, so the reader refuses rather than guesses.
+    """
+    renderer = {
+        "uses": families.CACHE_KEYS_ACTION,
+        "with": {"python-version": "3.13", "compiler-shape": "debug"},
+    }
+    monkeypatch.setattr(
+        families,
+        "placement",
+        lambda *_: Placement(
+            "matrix", None, None, frozenset({"ubuntu-latest"}), frozenset()
+        ),
+    )
+    monkeypatch.setattr(families, "steps", lambda *_: [renderer])
+    monkeypatch.setattr(families, "save_steps", lambda *_: [])
+    with pytest.raises(AssertionError, match="no single owned runner"):
         families.writer_families("w.yml", "j")
