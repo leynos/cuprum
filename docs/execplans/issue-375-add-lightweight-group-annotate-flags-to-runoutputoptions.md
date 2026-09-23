@@ -188,8 +188,23 @@ processes.
   passed all seven gates sequentially. `make test` reported 2,183 passed and 63
   skipped in the main suite; additional suites reported 12 passed/3 skipped and
   21 passed/13 skipped. Logs use the `-review2fix4.out` suffix under `/tmp`.
-- [ ] Review the gated compatibility fixes with CodeRabbit and resolve any
-  remaining in-scope findings.
+- [x] (2026-09-24) Third CodeRabbit review on `1d8147ed` found a shared-stderr
+  concurrency limitation and documentation drift. Documented that concurrent
+  grouped runs using the default destination must be serialized, corrected the
+  shared-options sink guidance and planned session signature, and aligned the
+  public option validation with issue #375's required `ValueError` contract. A
+  narrow `type-check-without-type-error` suppression records that explicit
+  exception requirement.
+- [x] (2026-09-24) Corrected the suppression to use the configured lint rule
+  name and passed all seven deterministic gates sequentially. `make test`
+  reported 2,183 passed and 63 skipped in the main suite; auxiliary suites
+  passed, with 3 Rust doctests ignored. Logs use the `-review3fix3.out` suffix
+  under `/tmp`.
+- [x] (2026-09-24) Updated the plan after the full gate run; `make fmt`,
+  `make markdownlint`, `make spelling`, and `make nixie` all passed. The docs
+  gate logs use the `-review3fix4.out` suffix under `/tmp`.
+- [ ] Review the gated fixes with CodeRabbit and resolve any remaining
+  in-scope findings.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -261,12 +276,13 @@ processes.
   module, not after.**
 
 - Observation: `raise ValueError` for the non-`bool` flag check trips ruff's
-  `type-check-without-type-error`, which requires `TypeError` for an invalid
-  *type*. Evidence: `make python-lint` on the first Phase 3 draft reported
-  `type-check-without-type-error: Prefer TypeError exception for invalid type`
-  at `cuprum/sh.py:439`. Impact: both the option-level check and the
-  adapter-level check raise `TypeError`. The two tests that asserted
-  `ValueError` were updated in the same change.
+  `type-check-without-type-error` rule, which prefers `TypeError` for an
+  invalid *type*. Evidence: the first Phase 3 gate reported this rule at the
+  options validation. Resolution: issue #375 explicitly requires `ValueError`
+  for the `RunOutputOptions` flags, so that public contract keeps the requested
+  exception with a narrow suppression and an adjacent reason. Standalone
+  `GitHubActionsSink` toggle validation retains its existing `TypeError`
+  behaviour.
 
 - Observation: **commit `977065cf` temporarily renamed the sink's keywords to
   `group=`/`annotate=` while `_open_gha_session` still passed `emit_group=`/
@@ -332,14 +348,11 @@ processes.
   2026-09-22, agent.
 
 - Decision: validate `group`/`annotate_failure` as strict `bool` and raise
-  `TypeError` otherwise. Rationale: follows the `max_echo_line_bytes` precedent
-  already in `__post_init__`
-  (`isinstance(x, int) and not isinstance(x, bool)`). A truthy non-bool (for
-  example `1`) would otherwise silently frame, and the flags gate output
-  behaviour. The exception *class* is `TypeError` rather than the `ValueError`
-  this entry originally recorded, because the gate is unambiguous that an
-  invalid type raises `TypeError`; see the `type-check-without-type-error`
-  discovery above. Date/Author: 2026-09-22, agent.
+  `ValueError` otherwise, as issue #375 explicitly requires. Rationale: reject
+  truthy non-bools such as `1` and preserve the requested public exception
+  contract; a narrowly scoped `type-check-without-type-error` suppression
+  records why the preferred `TypeError` is not used here. Date/Author:
+  2026-09-24, agent.
 
 ## Conformance basis
 
@@ -600,9 +613,10 @@ In `cuprum/sh.py`:
    whole pipeline. Add a doctest-style example to the existing `Examples` block.
 4. In `__post_init__`, validate both are `bool` (`isinstance(x, bool)`, in a
    helper `_validate_convenience_flags` rather than inline), raising
-   `TypeError` with the offending value. See the `Decision log` for why the
-   drafted `ValueError` became `TypeError`. Do the validation *before* the
-   `max_echo_line_bytes` early return so it always runs.
+   `ValueError` with the offending value as specified by issue #375. A narrow
+   `type-check-without-type-error` suppression documents the intentional
+   difference from the lint rule's preferred exception class. Do the validation
+   *before* the `max_echo_line_bytes` early return so it always runs.
 5. After validation, synthesize in a helper `_synthesize_sink_from_flags`:
    if `self.sink is None and (self.group or self.annotate_failure)`, then
    `object.__setattr__(self, "sink", GitHubActionsSink(emit_group=self.group,
@@ -825,7 +839,8 @@ class GitHubActionsSession:
         self,
         log: typ.IO[str],
         label: str,
-        annotation: _Annotation,
+        *,
+        annotation_label: str | _Annotation,
     ) -> None: ...
 
     @property

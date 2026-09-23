@@ -541,7 +541,7 @@ def test_run_output_options_rejects_non_bool_flags(
     would silently frame where the caller wrote something that is not the
     documented ``bool``. ``max_echo_line_bytes`` already draws this line.
     """
-    with pytest.raises(TypeError, match=f"{flag} must be a bool"):
+    with pytest.raises(ValueError, match=f"{flag} must be a bool"):
         construct(invalid)
 
 

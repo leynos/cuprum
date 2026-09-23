@@ -759,10 +759,17 @@ stop-commands lease to shield, so none is taken. A pipeline receives one group
 for the whole pipeline. In annotation-only mode, child output therefore keeps
 its usual ability to emit workflow commands.
 
+The default GitHub Actions sink does not serialize overlapping sessions. Do not
+share group-enabled options between concurrent runs that write to the same
+parent stderr; run those commands sequentially so their workflow frames cannot
+interleave.
+
 An explicit `sink=` takes precedence and makes both flags no-ops. That is what
-makes the flags safe to add to options a caller already passes around: a shared
-`RunOutputOptions` carrying `group=True` will not override a sink chosen at the
-call site.
+makes the flags safe to include in shared options. To select an explicit sink,
+put it on a new `RunOutputOptions` object, or call
+`dataclasses.replace(shared, sink=...)`. `SafeCmd.run` and `Pipeline.run` do
+not accept a separate `sink=` argument and do not override the sink on an
+existing options object.
 
 Like the adapter they construct, the flags are inactive unless the parent
 process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no
@@ -772,7 +779,7 @@ runs in CI", not "frame this unconditionally". To get the framing locally,
 construct the sink yourself with `force=True` as shown above.
 
 The flags are validated: passing anything but a `bool` for either raises
-`TypeError`, rather than accepting a truthy value that was never a documented
+`ValueError`, rather than accepting a truthy value that was never a documented
 flag.
 
 ### Migrating from `capture`/`echo` keyword arguments

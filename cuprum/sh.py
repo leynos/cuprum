@@ -427,7 +427,7 @@ def _validate_convenience_flags(options: RunOutputOptions) -> None:
 
     Raises
     ------
-    TypeError
+    ValueError
         If either flag is not a ``bool``.
     """
     for name, value in (
@@ -436,7 +436,8 @@ def _validate_convenience_flags(options: RunOutputOptions) -> None:
     ):
         if not isinstance(value, bool):
             msg = f"RunOutputOptions {name} must be a bool, got {value!r}"
-            raise TypeError(msg)
+            # Issue #375 expressly specifies ValueError for these flags.
+            raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -516,9 +517,14 @@ class RunOutputOptions:
     with ``force=True``.
 
     An explicit ``sink`` always wins: when one is supplied the flags are
-    recorded but ignored, and no adapter is synthesized. That keeps a shared
-    ``RunOutputOptions`` carrying ``group=True`` composable with a per-call
-    sink, without an exception to catch at the call site.
+    recorded but ignored, and no adapter is synthesized. Put the sink on a
+    new ``RunOutputOptions`` or use ``dataclasses.replace`` when adapting
+    shared options; ``run`` methods do not override ``output.sink`` per call.
+
+    The default GitHub Actions sink does not serialize overlapping sessions.
+    Do not share group-enabled options between concurrent runs that write to
+    the same parent stderr; run those commands sequentially so their workflow
+    frames cannot interleave.
 
     Workflow commands are written to the parent's stderr by default. Neither
     flag changes capture, exit codes, or the returned result.
