@@ -1,4 +1,10 @@
-"""Scoped execution contexts derived from explicit configuration or catalogues."""
+"""Create narrowed execution contexts from configuration or catalogues.
+
+``scoped`` accepts either a ``ScopeConfig`` or a ``ProgramCatalogue`` and
+returns a context manager that activates a narrowed ``CuprumContext``. The
+context-state helpers set the context on entry and restore its previous value
+on exit, including when the managed block raises.
+"""
 
 from __future__ import annotations
 
