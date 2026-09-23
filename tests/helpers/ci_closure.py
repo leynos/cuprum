@@ -257,23 +257,53 @@ def reachable(
     ]
     reached: dict[str, dict[object, object]] = {}
     while pending:
-        while pending:
-            current = pending.pop()
-            if current in reached:
-                continue
-            reached[current] = documents[current]
-            for callee in local_calls(documents[current], current):
-                _require(
-                    condition=callee in documents,
-                    message=f"{current} calls {callee}, which is not a workflow here",
-                )
-                pending.append(callee)
-        # Downstream runs: a workflow watching a reached one runs after it,
-        # with secrets, so it joins the closure and its own calls follow.
-        names = {_display_name(document, name) for name, document in reached.items()}
-        pending = [
-            name
-            for name, document in documents.items()
-            if name not in reached and watched_workflows(document, name) & names
-        ]
+        _follow_calls(documents, pending, reached)
+        pending = _downstream(documents, reached)
     return reached
+
+
+def _follow_calls(
+    documents: dict[str, dict[object, object]],
+    pending: list[str],
+    reached: dict[str, dict[object, object]],
+) -> None:
+    """Add ``pending`` and everything it calls, transitively, to ``reached``.
+
+    Notes
+    -----
+    Consumes ``pending``, and fails the contract when a reached workflow calls
+    a local workflow that does not exist.
+    """
+    while pending:
+        current = pending.pop()
+        if current in reached:
+            continue
+        reached[current] = documents[current]
+        for callee in local_calls(documents[current], current):
+            _require(
+                condition=callee in documents,
+                message=f"{current} calls {callee}, which is not a workflow here",
+            )
+            pending.append(callee)
+
+
+def _downstream(
+    documents: dict[str, dict[object, object]],
+    reached: dict[str, dict[object, object]],
+) -> list[str]:
+    """Return the unreached workflows that a reached workflow's completion starts.
+
+    A workflow watching a reached one runs after it, with secrets, so it joins
+    the closure and its own calls follow.
+
+    Returns
+    -------
+    list[str]
+        File names of the new downstream workflows; empty at the fixpoint.
+    """
+    names = {_display_name(document, name) for name, document in reached.items()}
+    return [
+        name
+        for name, document in documents.items()
+        if name not in reached and watched_workflows(document, name) & names
+    ]
