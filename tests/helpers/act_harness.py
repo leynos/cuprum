@@ -87,6 +87,9 @@ CI_WORKFLOW = ".github/workflows/ci.yml"
 DEFAULT_BRANCH = "main"
 #: The job that owns the benchmark gate decision.
 CHANGES_JOB = "changes"
+#: Every `runs-on` label a projected job can select. `changes` is preserved
+#: whole, so its fork fallback's two arms are both here.
+MAPPED_RUNNER_LABELS: typ.Final = ("ubuntu-latest", "ubicloud-standard-2")
 #: The pinned runner image. `act` maps a workflow's `runs-on` label onto this
 #: through `-P`; the immutable digest makes scenarios reproducible.
 IMAGE = (
@@ -299,9 +302,14 @@ def _act_argv(event: Event, job: str, image: str) -> list[str]:
         CI_WORKFLOW,
         "-j",
         job,
-        # Every projected job uses the same immutable runner image.
-        "-P",
-        f"ubuntu-latest={image}",
+        # Every projected job uses the same immutable runner image, including
+        # `changes`, whose owned arm asks for the Ubicloud label: act skips a
+        # job whose label it cannot map and exits zero.
+        *(
+            argument
+            for label in MAPPED_RUNNER_LABELS
+            for argument in ("-P", f"{label}={image}")
+        ),
         # An empty token routes `dorny/paths-filter` onto its local `git diff`
         # path instead of the GitHub API.
         "-s",

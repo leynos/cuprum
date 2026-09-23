@@ -139,6 +139,7 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "extension-tests",
         "coverage",
         "benchmark-ratchet",
+        "changes",
     ),
     "coverage-main.yml": ("coverage-upload",),
 }
@@ -160,6 +161,7 @@ FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
         "extension-tests",
         "coverage",
         "benchmark-ratchet",
+        "changes",
     ),
 }
 #: The one job permitted to fail without failing the workflow, and the matrix
@@ -172,10 +174,13 @@ CONTINUE_ON_ERROR_JOBS: typ.Final = (("ci.yml", "typecheck-test"),)
 #: else built gains nothing from a metered build slot.
 GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     # `lint-test` moved to the Ubicloud manifest: it is a developer-blocking
-    # Linux gate that compiles, which is what buys a paid runner. `loom-smoke`
-    # and `workflow-harness` stay here, and `rust-boundaries.yml`'s verifier
-    # lanes stay by this repository's own decision recorded below.
-    "ci.yml": ("changes", "loom-smoke"),
+    # Linux gate that compiles, which is what buys a paid runner. `changes`
+    # followed because it gates the required `benchmark-ratchet` and a hosted
+    # queue held whole pull requests behind it. `loom-smoke` and
+    # `workflow-harness` gate no required check and stay here, and
+    # `rust-boundaries.yml`'s verifier lanes stay by this repository's own
+    # decision recorded below.
+    "ci.yml": ("loom-smoke",),
     "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "loom.yml": ("loom",),
