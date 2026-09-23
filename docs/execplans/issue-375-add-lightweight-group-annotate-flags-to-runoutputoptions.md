@@ -203,7 +203,15 @@ processes.
 - [x] (2026-09-24) Updated the plan after the full gate run; `make fmt`,
   `make markdownlint`, `make spelling`, and `make nixie` all passed. The docs
   gate logs use the `-review3fix4.out` suffix under `/tmp`.
-- [ ] Review the gated fixes with CodeRabbit and resolve any remaining
+- [x] (2026-09-24) Rebased the 13 issue commits from boundary `e82cf9f6` onto
+  fetched `origin/main` at `a01eca4d`. `git range-diff` matched all 13 commits
+  exactly; there were no conflicts or empty commits. The shared
+  `docs/developers-guide.md` edits stayed in separate sections.
+- [x] (2026-09-24) All seven gates passed on the rebased head. `make test`
+  reported 2,183 passed and 63 skipped in the main suite; auxiliary suites
+  passed, with 3 Rust doctests ignored. Logs use the `-rebased.out` suffix under
+  `/tmp`.
+- [ ] Review the rebased head with CodeRabbit and resolve any remaining
   in-scope findings.
 - [ ] Push and open the draft pull request.
 
