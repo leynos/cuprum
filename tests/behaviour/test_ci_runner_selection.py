@@ -39,9 +39,9 @@ if typ.TYPE_CHECKING:
     from tests.helpers.ci_events import Scheduled
 
 FEATURE = "../features/ci_runner_selection.feature"
-#: The wheel jobs that only a call can reach. `build-wheels.yml` declares
+#: The Ubicloud wheel job that only a call can reach. `build-wheels.yml` declares
 #: `workflow_call` alone, so its own trigger says nothing about who runs it.
-CALLED_WHEEL_JOBS: typ.Final = ("build-pure-wheel", "verify-wheel-install")
+CALLED_WHEEL_JOBS: typ.Final = ("verify-wheel-install",)
 PLATFORM_LABELS: typ.Final = frozenset({
     "macos-15-intel",
     "macos-latest",

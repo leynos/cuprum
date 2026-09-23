@@ -68,7 +68,6 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `extension-tests`         | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 45      |
 | `coverage`                | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 65      |
 | `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 60      |
-| `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
 | `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
 | `changes`                 | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 10      |
 | `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` | none            | 65      |
@@ -292,11 +291,15 @@ contract test pins the equality.
 Compiled tools carry the runner environment and the Ubuntu release in their
 key. A binary built against Ubuntu 24.04's glibc 2.39 fails on the 22.04 image.
 
-`build-pure-wheel` and `verify-wheel-install` cache nothing on purpose. The
-first runs `uv build` and then checks the repository out again inside its
-composite action, which would delete any workspace-scoped restore before it was
-read; caching the uv store there would also give `~/.cache/uv` a second writer.
-The second installs published wheels into a throwaway virtual environment.
+`verify-wheel-install` builds the pure wheel and then verifies both wheels in
+one job, because as two jobs they did 0.2 and 0.3 minutes of work and billed a
+minute each. It caches nothing on purpose. The pure-wheel action runs
+`uv build` and then checks the repository out again, which would delete any
+workspace-scoped restore before it was read, and caching the uv store there
+would give `~/.cache/uv` a second writer. The verification installs both wheels
+into a fresh virtual environment. It builds the pure wheel before downloading
+the artefacts, because the download is how it reads that wheel back, and
+`release.yml`'s publish reads the same `wheels-pure` artefact.
 
 Installed tools use the parent `~/.local/bin` cache path. Do not cache the
 terminal `~/.local/bin/sccache` file: a restore creates an empty directory at a

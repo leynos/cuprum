@@ -149,7 +149,7 @@ OBSERVATION_STEP = "Record cache observations"
 #: Repository-owned Linux build and test jobs. Every one is developer-blocking
 #: and does real work, which is what buys it a paid runner.
 UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
+    "build-wheels.yml": ("verify-wheel-install",),
     "ci.yml": (
         "lint-test",
         "typecheck-test",
@@ -166,12 +166,12 @@ UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
 #: holds it against the triggers so a lane cannot quietly leave the set.
 #:
 #: `coverage-upload` is absent because `coverage-main.yml` triggers only on a
-#: push to `main` and a dispatch, neither of which a fork can cause. The two
-#: `build-wheels.yml` jobs are present because `ci.yml` calls that workflow on
+#: push to `main` and a dispatch, neither of which a fork can cause. The
+#: `build-wheels.yml` job is present because `ci.yml` calls that workflow on
 #: every pull request, so its own `workflow_call` trigger understates its
 #: exposure (weaver: a called workflow's triggers are its callers').
 FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
-    "build-wheels.yml": ("build-pure-wheel", "verify-wheel-install"),
+    "build-wheels.yml": ("verify-wheel-install",),
     "ci.yml": (
         "lint-test",
         "typecheck-test",
