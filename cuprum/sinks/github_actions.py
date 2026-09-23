@@ -214,6 +214,11 @@ class GitHubActionsSession:
         return self._log
 
     @property
+    def redirects_echo(self) -> bool:
+        """Whether echoed child output should use this session's log."""
+        return self._emit_group
+
+    @property
     def stop_token(self) -> str:
         """The unique stop-commands token leased for this run.
 

@@ -51,10 +51,11 @@ def _resolve_stream_sink(
 ) -> typ.IO[str]:
     """Return the sink echoed output for one stream is written to.
 
-    A live presentation-sink session owns the destination, so mirrored output
-    lands inside the adapter's framing — the GitHub Actions group, say — in the
-    order the adapter received it. Without a session the caller-configured sink
-    wins, and the process's own stream is the last resort.
+    A live presentation-sink session normally owns the destination, so
+    mirrored output lands inside the adapter's framing — the GitHub Actions
+    group, say — in the order the adapter received it. A session exposing
+    ``redirects_echo = False`` leaves echo on the caller-configured sink, or
+    the process's own stream when no sink was configured.
 
     This is the middle rung of one resolution the whole run shares: the
     sibling :meth:`cuprum._sink_lifecycle._SinkBracket.resolve_destination`
@@ -67,7 +68,7 @@ def _resolve_stream_sink(
     typ.IO[str]
         The destination for this stream's echoed output.
     """
-    if session is not None:
+    if session is not None and getattr(session, "redirects_echo", True) is not False:
         return session.log
     return fallback if configured is None else configured
 

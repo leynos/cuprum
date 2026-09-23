@@ -94,10 +94,10 @@ class _SinkBracket:
     def resolve_destination(self, fallback: typ.IO[str]) -> typ.IO[str]:
         """Return the active session's log destination, or *fallback*.
 
-        Every parent-facing byte a run writes through the sink belongs inside
-        the adapter's framing, so each destination the run resolves — the
-        mirrored streams and the idle keepalive alike — goes through here
-        rather than each deciding for itself.
+        Sessions normally frame mirrored output through their log. An
+        annotation-only session may opt to preserve the caller's per-stream
+        echo destinations by exposing ``redirects_echo = False``; sessions
+        without that optional hint keep the original routing behaviour.
 
         Parameters
         ----------
@@ -110,7 +110,9 @@ class _SinkBracket:
             The session's log destination, or *fallback*.
         """
         session = self.session
-        return fallback if session is None else session.log
+        if session is None or getattr(session, "redirects_echo", True) is False:
+            return fallback
+        return session.log
 
     def close(self, *, outcome: sinks.SessionOutcome) -> None:
         """Finalize the owned session, recording *outcome* on the way out.

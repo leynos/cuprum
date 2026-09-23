@@ -1006,7 +1006,10 @@ close on every terminal path. The shared mechanics live in
   leaves the bracket empty and the run unchanged with nothing to unwind.
 - Stream configuration routes echoed stdout and stderr through the bracket's
   `session.log` when a session is active, replacing the default destinations
-  for that run only.
+  for that run only. A session can expose `redirects_echo = False` to retain
+  the original echo destinations while continuing to use `session.log` for its
+  own workflow commands; the GitHub Actions adapter does this when only failure
+  annotations are enabled.
 - Every terminal path finalizes through `_SinkBracket.close`, which releases the
   session and delegates to `_close_sink_session` with a bounded
   `SessionOutcome`. The close is exactly-once — only the first reaches the

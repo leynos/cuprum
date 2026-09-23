@@ -1,14 +1,15 @@
 """End-to-end tests for an active presentation sink on a real run.
 
 The adapter's own tests pin the sequence of workflow commands it emits; these
-tests pin the integration around it. A real subprocess driven through the
-public ``run_sync`` command and pipeline APIs, with a forced
+tests pin the integration around it. Real subprocesses driven through the
+public ``run`` and ``run_sync`` command and pipeline APIs, with a forced
 ``GitHubActionsSink``, must frame the run's mirrored output — and only that
 output — without changing the result the caller sees.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import typing as typ
 
@@ -294,6 +295,30 @@ def test_flags_frame_successful_run(
     _assert_framed(capsys.readouterr().err, command)
 
 
+def test_flags_annotate_async_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The async command entry point applies both convenience flags."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command("raise SystemExit(5)")
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = asyncio.run(
+            command.run(
+                output=_flags_output(group=True, annotate_failure=True),
+            )
+        )
+
+    value = capsys.readouterr().err
+    assert result.exit_code == 5, f"the failing run must report 5; got {result!r}"
+    assert value.count("::group::") == 1, "the async run must open one group"
+    assert value.count("::endgroup::") == 1, "the async run must close one group"
+    assert _annotations(value) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "the async run must annotate its categorical failure"
+
+
 def _annotations(value: str) -> list[str]:
     """Return the annotation payloads in a run's workflow-command output.
 
@@ -341,6 +366,41 @@ def test_flags_annotate_non_zero_exit(
     assert secret not in value, (
         f"a group-less run must not publish argv anywhere; got {value!r}"
     )
+
+
+def test_annotation_only_preserves_echo_destinations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An annotation-only session leaves stdout and stderr echo in place."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    command, allowlist = _python_command(
+        "import sys; print('child stdout'); print('child stderr', file=sys.stderr); "
+        "raise SystemExit(6)"
+    )
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(
+            output=RunOutputOptions(echo=True, annotate_failure=True),
+        )
+
+    value = capsys.readouterr()
+    assert result.exit_code == 6, f"the failing run must report 6; got {result!r}"
+    assert value.out == "child stdout\n", (
+        f"stdout echo must keep its original destination; got {value.out!r}"
+    )
+    assert value.err.startswith("child stderr\n"), (
+        f"stderr echo must keep its original destination; got {value.err!r}"
+    )
+    assert "::group::" not in value.err, (
+        f"annotation-only output must not open a group; got {value.err!r}"
+    )
+    assert "::stop-commands::" not in value.err, (
+        f"annotation-only output must not open a stop-commands lease; got {value.err!r}"
+    )
+    assert _annotations(value.err) == [
+        f"title={_escape_property(_run_label(command))}::exit_nonzero",
+    ], "the workflow annotation remains on the parent's stderr"
 
 
 def test_flags_annotate_timeout(
@@ -546,4 +606,35 @@ def test_flags_frame_pipeline_as_single_group(
     )
     assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
         f"the annotation must report the pipeline's categorical outcome; got {value!r}"
+    )
+
+
+def test_flags_annotate_async_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The async pipeline entry point applies both convenience flags."""
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", "print('piped')")
+    failing = python("-c", "import sys; sys.stdin.read(); raise SystemExit(7)")
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = asyncio.run(
+            (producer | failing).run(
+                output=_flags_output(group=True, annotate_failure=True),
+            )
+        )
+
+    value = capsys.readouterr().err
+    assert [stage.exit_code for stage in result.stages] == [0, 7], (
+        "the async pipeline must retain its stage outcomes"
+    )
+    assert value.count("::group::") == 1, "one pipeline opens one group"
+    assert value.startswith("::group::pipeline\n"), (
+        f"the async pipeline group must use its aggregate label; got {value!r}"
+    )
+    assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
+        f"the async pipeline must annotate the first failing stage; got {value!r}"
     )

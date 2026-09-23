@@ -742,16 +742,22 @@ result = cmd.run_sync(
 
 `group=True` frames the run in a collapsible log group; `annotate_failure=True`
 turns a failed run into an `::error::` annotation. They construct a
-`GitHubActionsSink` behind the scenes and store it as the run's sink, so
-everything the section above says about the adapter — the destination, the
-stop-commands lease, the annotation contract — applies unchanged.
+`GitHubActionsSink` behind the scenes and store it as the run's sink, so the
+adapter handles the workflow commands. Workflow commands go to the parent's
+stderr. When grouping is enabled, echoed output is framed in the group and
+protected by the stop-commands lease. Annotation-only mode leaves echoed stdout
+and stderr on their usual destinations and writes its annotation to the
+parent's stderr.
+
 `RunOutputOptions(sink=GitHubActionsSink(force=True, title="..."))` remains the
 way to reach anything the flags do not cover.
 
 The two flags are independent. `group=True` alone frames without annotating;
 `annotate_failure=True` alone annotates without framing, for a run-summary
 entry with uncollapsed logs. With `group=False` there is no group for a
-stop-commands lease to shield, so none is taken.
+stop-commands lease to shield, so none is taken. A pipeline receives one group
+for the whole pipeline. In annotation-only mode, child output therefore keeps
+its usual ability to emit workflow commands.
 
 An explicit `sink=` takes precedence and makes both flags no-ops. That is what
 makes the flags safe to add to options a caller already passes around: a shared

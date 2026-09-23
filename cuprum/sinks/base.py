@@ -108,7 +108,11 @@ class OutputSession(typ.Protocol):
     An adapter emits its opening framing as the session is constructed, so it
     is already written when :meth:`OutputSink.open_session` returns; the
     execution layer offers no framing hook and never reaches into an adapter's
-    internals. :attr:`log` is therefore a pure accessor.
+    internals. :attr:`log` is therefore a pure accessor. A session may expose an
+    optional ``redirects_echo`` boolean attribute; when it is ``False``, the
+    shared lifecycle leaves echoed output on the caller's original destinations
+    while the session still handles its terminal annotation. Sessions without
+    this hint continue to route echoed output through :attr:`log`.
     """
 
     @property
@@ -118,7 +122,9 @@ class OutputSession(typ.Protocol):
         Mirrored child output and run diagnostics are routed through this one
         writer so their relative order in the log is the order the adapter
         received them. Implementations may back it with the parent's stderr
-        or a caller-supplied sink.
+        or a caller-supplied sink. A session that opts out of echo redirection
+        with ``redirects_echo = False`` still uses this writer for its own
+        workflow commands.
 
         Returns
         -------

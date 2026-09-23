@@ -1100,13 +1100,16 @@ parent-facing output — framing it in a GitHub Actions log group and annotating
 failures — without changing capture, success semantics, or the returned result.
 The execution layer knows only the narrow protocol in `cuprum.sinks.base`: open
 one session before the subprocess starts, route echoed output through the
-session's `log` writer, and close the session exactly once per terminal path
-with a bounded categorical outcome. All presentation knowledge
-(workflow-command syntax, escaping, injection shielding) stays inside the
-adapter; runs without a sink are unchanged. The single-command and pipeline
-runners share this contract, and both close the session through the same
-shielded finalization that reconciles observe-hook tasks, so cancellation
-cannot abandon the framing part-way.
+session's `log` writer by default, and close the session exactly once per
+terminal path with a bounded categorical outcome. A session may opt out of echo
+redirection with `redirects_echo = False`; the annotation-only
+`GitHubActionsSession` uses this to leave stdout and stderr on their usual
+destinations while still writing workflow commands through its `log` writer.
+All presentation knowledge (workflow-command syntax, escaping, injection
+shielding) stays inside the adapter; runs without a sink are unchanged. The
+single-command and pipeline runners share this contract, and both close the
+session through the same shielded finalization that reconciles observe-hook
+tasks, so cancellation cannot abandon the framing part-way.
 
 Activation policy is also adapter-local: `GitHubActionsSink` reads
 `GITHUB_ACTIONS` from the parent environment at `open_session` time and

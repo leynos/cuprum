@@ -218,12 +218,16 @@ displace a caller's own adapter.
 
 That is the distinction worth recording. Option B was a *placement* objection —
 where the vendor's log format lives — not an interface objection to two
-booleans existing. The flags add no code to the runner or pipeline, no branch
-to a terminal path, and no second place a presentation change must touch; they
-inherit the session lifecycle, the injection shield, and the annotation hygiene
-that the adapter already enforces. Had they been implemented as the rejection
-reads, by writing workflow commands from the run paths directly, that rejection
-would have applied unchanged.
+booleans existing. The flags add no workflow-command code to the runner or
+pipeline, no branch to a terminal path, and no second place a presentation
+change must touch. They inherit the session lifecycle and annotation hygiene
+that the adapter already enforces. Group mode also inherits its stop-commands
+shield. Annotation-only mode deliberately emits no group or stop-commands
+lease, as required by the flag contract, and keeps echoed stdout and stderr on
+their usual destinations; child output in that mode can therefore still emit
+workflow commands. Had the flags been implemented by writing workflow commands
+from the run paths directly, the Option B rejection would have applied
+unchanged.
 
 Two consequences the option text did not anticipate are settled here rather
 than left to be rediscovered. First, the toggles are validated as `bool` and a

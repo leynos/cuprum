@@ -165,8 +165,22 @@ processes.
   `make lint`, `make typecheck`, `make test`, `make markdownlint`,
   `make spelling`, and `make nixie`. Evidence is in the `-6.out` logs under
   `/tmp` for this worktree.
-- [ ] Run `coderabbit review --agent` against the gated commit and resolve any
-  valid findings.
+- [x] (2026-09-23) First CodeRabbit review on `563f8a52` found annotation-only
+  echo routing through the sink log. The session now opts out of echo
+  redirection when grouping is disabled, preserving stdout/stderr while still
+  writing workflow commands to the parent's stderr. Added async command and
+  pipeline integration coverage and corrected the lifecycle, guide, design,
+  developer, and ADR documentation. The suggested stop-commands lease when
+  `emit_group=False` conflicts with the explicit adapter contract, which says
+  not to emit that lease; the tests continue to assert it is absent.
+- [x] (2026-09-23) Remediation gates passed sequentially: `make check-fmt`,
+  `make lint`, `make typecheck`, `make test`, `make markdownlint`,
+  `make spelling`, and `make nixie`. The second run found that command stream
+  routing bypasses `_SinkBracket.resolve_destination`; `_resolve_stream_sink`
+  now honours the session echo-routing hint too. The corrected end-to-end test
+  confirms that annotation-only mode preserves both parent streams.
+- [ ] Run CodeRabbit against the gated remediation commit and resolve any
+  remaining in-scope findings.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -451,15 +465,13 @@ produce the expected annotation by accident. Discharge: passes.
 
 **V8 — Both entry points.** Statement: `group`/`annotate_failure` work through
 `SafeCmd.run`, `SafeCmd.run_sync`, `Pipeline.run`, and `Pipeline.run_sync`.
-Method: existing fixture-driven parameterization in
-`cuprum/unittests/test_pipeline_output_options.py` already runs the pipeline
-tests over both `run()` and `run_sync()`; the command-side end-to-end tests are
-parametrized over both call styles. Artefacts: the
-`pipeline_execution_strategy` fixture, and a parametrized command runner in the
-end-to-end module. Evidence: the same assertion body passes for all four.
-Non-vacuity: each parameterization row executes a distinct real code path
-(`asyncio.run` versus the awaited coroutine), so a green row cannot stand in
-for a red one. Discharge: all pass.
+Method: real-subprocess tests call both the synchronous and asynchronous entry
+points directly. Artefacts: `test_flags_frame_successful_run` and
+`test_flags_annotate_async_run` cover `SafeCmd.run_sync` and `SafeCmd.run`;
+`test_flags_frame_pipeline_as_single_group` and
+`test_flags_annotate_async_pipeline` cover `Pipeline.run_sync` and
+`Pipeline.run`. Evidence: each assertion checks framing, result or stage exit
+codes, and the categorical annotation. Discharge: all four pass.
 
 **Axioms relied on (not verified here, treated as documented interfaces):**
 that the GitHub Actions runner parses workflow commands from the parent's
@@ -778,8 +790,8 @@ class GitHubActionsSink:
         *,
         title: str | None = None,
         force: bool = False,
-        group: bool = True,
-        annotate: bool = True,
+        emit_group: bool = True,
+        emit_annotation: bool = True,
     ) -> None: ...
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None: ...
@@ -862,11 +874,14 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   amendment names the Option B reconciliation. Recovery: revert the docs
   commit. Remaining gaps: none.
 
-- **EP-M4 (gates and review).** Outcome: all seven local gates pass; CodeRabbit
-  review is pending. Acceptance evidence: `scrutineer`'s `-6` gate report and
-  the upcoming CodeRabbit verdict. Conformance check: full trace chain still
-  current. Recovery: address any valid finding, then rerun the full gates and
-  review. Remaining gaps: CodeRabbit review and publication.
+- **EP-M4 (gates and review).** Outcome: all seven local gates pass after the
+  review remediation; CodeRabbit review is pending. Acceptance evidence:
+  `scrutineer`'s `-reviewfix2` gate report and the upcoming CodeRabbit verdict.
+  Conformance check: annotation-only echo retains the caller's original
+  destinations, while `emit_group=False` still writes no group, lease, or
+  endgroup as explicitly required. Recovery: address any in-scope finding, then
+  rerun the full gates and review. Remaining gaps: CodeRabbit review and
+  publication.
 
 ## Outcomes & retrospective
 

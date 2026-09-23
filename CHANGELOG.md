@@ -297,8 +297,8 @@
   Both flags default to `False`, so unflagged runs are unchanged
   ([#375](https://github.com/leynos/cuprum/issues/375)).
 - **`GitHubActionsSink` framing toggles:** The adapter's constructor takes
-  `group=` and `annotate=` to switch the two halves of its frame off
-  independently, matching the flag vocabulary above
+  `emit_group=` and `emit_annotation=` to switch the two halves of its frame
+  off independently, matching the flag vocabulary above
   ([#375](https://github.com/leynos/cuprum/issues/375)).
 
 ### Breaking changes
