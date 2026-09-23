@@ -197,8 +197,9 @@ working on the Rust portions of the project:
     ```
 
     validating formatting across the Rust workspace without modifying files.
-  - `make lint` executes its Rustdoc and Clippy steps through
-    `RUST_DEBUG_CARGO`, then runs Whitaker separately:
+  - `make lint` runs `lint-clippy`, `lint-whitaker`, and spelling in sequence.
+    Its Rustdoc and Clippy leaf runs through `RUST_DEBUG_CARGO`; Whitaker is a
+    separate fragment-free leaf:
 
     ```sh
     cd rust && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" \

@@ -22,6 +22,12 @@ if typ.TYPE_CHECKING:
 FRAGMENT_SHA256 = "8619efda5ea1c3232f413ae96ff56869ab6b2b7cd5bdef5a001ad16ebeac23a5"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
+# The Clippy leaf's own arguments are identical on every host; only the Cargo
+# route in front of them varies. `RUST_DEBUG_CARGO` prepends the dev-fast
+# toolchain and its `--config` fragment on Linux and nothing at all elsewhere,
+# so anchoring an order assertion on that fragment raises ValueError on macOS
+# and Windows even though the leaf order under test is unchanged.
+_CLIPPY_LEAF = " clippy --all-targets"
 SAFE_MATURIN_FLAGS = st.sampled_from((
     "--release",
     "-r",
@@ -298,6 +304,62 @@ def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
     assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in windows, (
         "Windows lint must retain its platform route"
     )
+
+
+def test_portable_lint_orchestration_preserves_leaf_order() -> None:
+    """The aggregate lint gates avoid GNU Make 4.4-only prerequisite markers."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    output = _dry_run("lint")
+
+    # Strip comments before looking for `.WAIT`: the Makefile describes the
+    # marker in prose precisely to record why it is not used, and a raw text
+    # search would match that explanation instead of any real prerequisite.
+    directives = "\n".join(
+        line for line in makefile.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert ".WAIT" not in directives, "hosted Make must not require GNU Make 4.4"
+    # `.NOTPARALLEL` with prerequisites is itself GNU Make 4.4-only, so the
+    # ordering cannot rest on it alone. Make 4.3 ignores the prerequisites and
+    # serializes the whole run instead, which preserves the order either way.
+    assert ".NOTPARALLEL: lint rust-lint" in directives, (
+        "both lint aggregates must be serialized, present on GNU Make 4.3 and 4.4"
+    )
+    assert "RECURSIVE_MAKE" not in makefile, (
+        "lint leaves must run in one Make process so caller `-f` files are "
+        "honoured without forwarding a `MAKEFILE_LIST` that cannot distinguish "
+        "`-f` inputs from included files"
+    )
+    python_lint = output.index("python-lint")
+    clippy = output.index(_CLIPPY_LEAF)
+    whitaker = output.index("whitaker --all --")
+    spelling = output.index("typos-config-builder gate --repository . --scope all")
+    workflow_lint = output.index("yamllint --strict --config-file")
+
+    assert python_lint < clippy < whitaker < spelling < workflow_lint, (
+        "lint must serialize Python, Rust leaves, and GitHub Actions validation"
+    )
+
+
+def test_leaf_order_is_identical_on_both_cargo_routes() -> None:
+    """The serialized order must not depend on which Cargo route a host selects.
+
+    The leaf order is a property of the prerequisite graph, not of the toolchain
+    in front of it. Asserting it on the Linux route alone would let a change
+    that reorders only the stable route pass unnoticed, so both selectors are
+    checked here.
+    """
+    for selector in ("yes", ""):
+        output = _dry_run("lint", variables={"DEV_FAST_HOST_IS_LINUX": selector})
+        python_lint = output.index("python-lint")
+        clippy = output.index(_CLIPPY_LEAF)
+        whitaker = output.index("whitaker --all --")
+        spelling = output.index("typos-config-builder gate --repository . --scope all")
+        workflow_lint = output.index("yamllint --strict --config-file")
+
+        assert python_lint < clippy < whitaker < spelling < workflow_lint, (
+            f"lint must serialize its leaves identically with "
+            f"DEV_FAST_HOST_IS_LINUX={selector!r}"
+        )
 
 
 def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:

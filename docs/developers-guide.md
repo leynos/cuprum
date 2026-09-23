@@ -383,7 +383,61 @@ verification, MSRV, and Whitaker commands, together with macOS and Windows,
 retain their prescribed fragment-free or separately pinned toolchains. The
 stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
 maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
-job environment (`0.2.7`, the workflow's configured installer version).
+job environment (`0.2.7`, the workflow's configured installer version). The
+Makefile runs `lint-clippy`, `lint-whitaker`, and spelling sequentially;
+`lint-whitaker` passes Cargo `--package` arguments for `cuprum-rust`,
+`cuprum-streams`, and `cuprum-native-io` after Whitaker's `--` separator.
+Whitaker's `--all` chooses lint libraries, not workspace packages.
+
+Whitaker's lint suite is a rolling release, and that is the distribution model
+rather than a defect. Its `rolling-release.yml` runs on every push to `main`
+and publishes prebuilt lint libraries for that commit as
+`whitaker-lints-<sha>-<toolchain>-<target>.tar.zst`, together with a per-target
+manifest naming the same `git_sha`. The source revision is therefore part of
+the artefact identity: a suite is addressed by commit SHA, not by version
+number. The installer verifies each downloaded archive's SHA-256 against that
+manifest before extraction, because `VerificationPolicy::default()` requires a
+checksum.
+
+Retention is the limit, and it is narrower than the tag name suggests. All
+assets live under one `rolling` tag that is *moved* to the newest commit rather
+than recreated: `scripts/publish-rolling-release.sh` uploads the new archives,
+replaces the manifests, repoints the tag, and only then deletes the superseded
+`whitaker-lints-*` assets. That ordering is deliberate — an earlier
+delete-then-recreate pair left the tag and every asset absent for six to seven
+seconds per publish, and a downstream consumer resolved `rolling` inside that
+gap and silently fell back to a source build
+([Whitaker PR 413](https://github.com/leynos/whitaker/pull/413)). By the end
+of each publish only the newest commit's lint archives remain, so a `<sha>`
+names an immutable artefact but not a permanently addressable one.
+
+The local binding is fragment-free, and it is fail-closed about scope. The
+package list, the `--package` flags derived from it, and the final
+`WHITAKER_CARGO_FLAGS` the recipe expands are all `override`n, so no
+caller-supplied variable can narrow the audited package set or replace the flag
+list wholesale. The Makefile's list is checked against the workspace itself:
+`cuprum/unittests/test_whitaker_make_contract.py` reads the members from
+`rust/Cargo.toml` rather than repeating their names, so adding a member without
+extending the list fails the contract instead of silently skipping it. The
+binding cannot by itself guarantee, however, that the gate consumed a prebuilt,
+commit-addressed suite. Three upstream contracts are outstanding, and none
+argues against the rolling model.
+[Whitaker issue 403](https://github.com/leynos/whitaker/issues/403) covers the
+cost of pinning: `--suite-version` (added in installer 0.2.8, and so absent
+from the 0.2.7 this repository pins) lets a consumer select a commit
+(`SuiteRef`), but prebuilt lint archives are published only for the branch tip,
+so a pin forces a source build — the CLI documents the trade as install time
+against reproducibility.
+[shared-actions issue 499](https://github.com/leynos/shared-actions/issues/499)
+covers fail-closed installation: the installer maps prebuilt-suite failures to
+`Fallback`, and its dependency install falls back to `cargo binstall` and then
+`cargo install --locked`, so a job can silently compile rather than fail. The
+switch that would forbid this, `--no-source-fallback`, is on Whitaker's `main`
+and is in no release yet.
+[Whitaker issue 425](https://github.com/leynos/whitaker/issues/425) asks for a
+retained provenance record binding the installed library bytes to the source
+revision and archive. Until those contracts land, this gate must remain a draft
+integration layer rather than a claim of reproducible binary-only CI.
 
 cargo-nextest is no longer installed here at all. The coverage job is the only
 place it runs, and the shared action installs it from checksummed official

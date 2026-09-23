@@ -112,11 +112,11 @@ _SKYLOS_WHITELIST_TOKENS: typ.Final = (
     "$${SKYLOS_REASON}",
 )
 _SKYLOS_WHITELIST_LOCK_TOKENS: typ.Final = (".skylos-whitelist.lock",)
-_LINT_PREREQUISITES: typ.Final = (
-    "python-lint",
-    "rust-lint",
-    "github-actions-lint",
-)
+_LINT_PREREQUISITES: typ.Final = ("python-lint", "rust-lint", "github-actions-lint")
+# `lint` carries no recipe: the leaves are prerequisites, and `.NOTPARALLEL`
+# serializes them. Running the leaves in the same Make process is what keeps a
+# caller's `-f` override file effective without forwarding `MAKEFILE_LIST`,
+# which cannot distinguish `-f` inputs from files pulled in by `include`.
 _DOCUMENTED_WHITELIST_NAMES: typ.Final = frozenset({"_check_rust_available"})
 _RUNTIME_PARAMETER_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
@@ -305,7 +305,11 @@ def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
         subject="lint target prerequisites",
     )
     assert lint_prerequisites == _LINT_PREREQUISITES, (
-        "Skylos lint delegation contract must retain the Python lint target"
+        "lint must sequence its leaves as prerequisites in a single Make process"
+    )
+    lint_recipes = _sole_recipe_rule("lint", require_recipes=False).get("recipes")
+    assert _objects(lint_recipes, subject="lint recipes") == [], (
+        "lint must delegate to its leaves as prerequisites, not recursive sub-makes"
     )
     skylos_commands = [
         command

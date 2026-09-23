@@ -279,7 +279,11 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
     )
     overrides = tmp_path / "lint-target-overrides.mk"
     overrides.write_text(
-        ".PHONY: python-lint rust-lint\npython-lint:\n\t@:\nrust-lint:\n\t@:\n",
+        ".PHONY: python-lint lint-clippy lint-whitaker spelling\n"
+        "python-lint:\n\t@:\n"
+        "lint-clippy:\n\t@:\n"
+        "lint-whitaker:\n\t@:\n"
+        "spelling:\n\t@:\n",
         encoding="utf-8",
     )
 

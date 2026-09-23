@@ -73,8 +73,23 @@ TEST_JOBS ?= 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
 DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
-WHITAKER_CARGO_FLAGS ?= $(CARGO_FLAGS) --jobs 1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
+# Whitaker's `--all` selects its lint libraries, rather than Cargo packages.
+# Keep the package boundary explicit and Makefile-owned so every Rust member is
+# checked even when the wrapper's library-selection semantics change.
+override WHITAKER_PACKAGES := cuprum-rust cuprum-streams cuprum-native-io
+# Both the package list and the flags built from it are `override`n. Marking
+# only the list would leave the derived flags caller-writable, and a caller
+# could pass `WHITAKER_PACKAGE_FLAGS=--package evil` to displace every audited
+# package while the list itself still looked intact.
+override WHITAKER_PACKAGE_FLAGS := $(foreach package,$(WHITAKER_PACKAGES),--package $(package))
+# The audited Whitaker command is Makefile-owned end to end. It does not forward
+# `CARGO_FLAGS`: that variable is caller-overridable, so a caller could pass
+# `--config ../tools/dev-fast/config.toml` after Whitaker's `--` separator and
+# quietly acquire the development fragment on a route that must stay
+# fragment-free. The flags below are the whole of what Whitaker may receive.
+override WHITAKER_CARGO_FLAGS := $(WHITAKER_PACKAGE_FLAGS) \
+	--all-targets --all-features --jobs 1
 # Extra flags for the `maturin develop` invocation in the `develop` target.
 # Empty by default: a debug build is what contributors and the extension-tests
 # job want. The benchmark ratchet needs an optimized build, and an optimized
@@ -209,15 +224,30 @@ SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
 MDLINT_FILES_FIND = bash -o pipefail -c 'git ls-files -z --cached --others --exclude-standard -- "$$@" | while IFS= read -r -d "" markdown_file; do if [ -f "$$markdown_file" ] && [ ! -L "$$markdown_file" ]; then case "$$markdown_file" in -*) printf "./%s\0" "$$markdown_file" ;; *) printf "%s\0" "$$markdown_file" ;; esac; fi; done' -- $(MARKDOWN_GLOBS)
 MDLINT_FIX_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) --fix < "$$markdown_files"
 MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT) < "$$markdown_files"
-.PHONY: help all clean build build-release lint python-lint rust-lint \
-        github-actions-lint \
+.PHONY: help all clean build build-release lint python-lint rust-lint lint-clippy \
+        lint-whitaker github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-python test-rust loom test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
         $(TOOLS) $(VENV_TOOLS)
-.NOTPARALLEL: lint
+# Serialize the lint hierarchy. Each aggregate target lists its leaves as plain
+# prerequisites, so a caller's `-f` override file is honoured directly by the
+# one Make process that reads it, with no forwarding to get wrong.
+#
+# `.WAIT` would express the ordering in the prerequisite list itself, but it is
+# GNU Make 4.4-only. `.NOTPARALLEL` is not: the prereq-less form dates from Make
+# 3.79, and `.NOTPARALLEL` with prerequisites from 4.4. Naming the aggregates
+# here therefore works on both, and degrades safely in the direction that
+# matters: Make 4.3 ignores the prerequisites and serializes the whole run,
+# while Make 4.4 serializes exactly the two named subtrees. Both were verified
+# against real 4.3 and 4.4 binaries, so the hosted runners' Make needs no pin.
+#
+# Leaves are deliberately not named here. Naming `lint` alone would leave
+# `rust-lint`'s own prerequisites free to interleave under `-j`; naming both
+# subtrees is what fixes the order without serializing unrelated work.
+.NOTPARALLEL: lint rust-lint
 
 .DEFAULT_GOAL := all
 
@@ -309,11 +339,13 @@ python-lint: ruff uv ## Run Ruff, interrogate, pylint, df12-python-lints, and am
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 
-rust-lint: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+rust-lint: lint-clippy lint-whitaker spelling ## Run Rust documentation, Clippy, Whitaker, and spelling checks
+
+lint-clippy: $(RUST_DEBUG_PREREQUISITE) ## Run Rust documentation and Clippy
 	cd $(RUST_DIR) && RUSTDOCFLAGS="$(RUSTDOC_FLAGS)" $(RUST_DEBUG_CARGO) doc --no-deps $(DOC_FLAGS) && $(RUST_DEBUG_CARGO) clippy $(CLIPPY_FLAGS)
-	@if ! $(LOCAL_TOOL_ENV) command -v $(WHITAKER) >/dev/null 2>&1; then echo "whitaker is required for linting. Install it before running this target." >&2; exit 1; fi
+
+lint-whitaker: ## Run Whitaker for every Rust workspace package
 	cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- $(WHITAKER_CARGO_FLAGS)
-	+$(MAKE) spelling
 
 skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
 skylos-allow: export SKYLOS_REASON = $(value REASON)
