@@ -148,12 +148,20 @@ reader: `coverage` on a pull request, which could only match what the last push
 to `main` had saved. Run 35664872714 measured what that was worth: 1 hit
 against 562 misses, 0.18%, over roughly nine minutes.
 
-The two remaining GitHub-hosted lanes, `lint-test` and `loom`, keep the
-directory backend deliberately. Their Actions cache service really is GitHub's,
-where sccache traffic competes with the Windows and macOS lanes for the
-per-repository quota. That was the reason the whole repository chose a
-directory in the first place, measured from the Ubicloud console on 2026-09-03,
-and for a GitHub-hosted lane it still holds.
+The other Rust lanes keep the directory backend. `loom` runs GitHub-hosted,
+where the Actions cache service really is GitHub's and sccache traffic would
+compete with the Windows and macOS lanes for the per-repository quota. That was
+the reason the whole repository chose a directory in the first place, measured
+from the Ubicloud console on 2026-09-03, and for a GitHub-hosted lane it still
+holds. The Ubicloud lanes other than coverage archive their directories through
+the key families above; moving any of them to the proxy is a separate change.
+
+A fork's pull request runs `coverage` on the GitHub-hosted fork arm, where
+there is no proxy and the credentials action fails closed. That arm skips the
+credentials step and passes `backend: local`, so it compiles cold into a
+directory nothing saves, as every fork arm already does. Both halves are read
+by position from the same fork expression the runner uses, and a contract
+asserts each.
 
 The interpreter matrix has one leg, 3.13, that only typechecks, because the
 coverage job already runs that interpreter's suite. It compiles nothing, so it

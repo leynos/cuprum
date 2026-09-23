@@ -1043,6 +1043,11 @@ jobs:
         # end of a double-quoted YAML scalar elides the break and the next
         # line's indentation, so the value is the single reference it
         # reads as, not two joined by a space.
+        #
+        # A fork's pull request runs this job on the GitHub-hosted fork arm,
+        # where there is no proxy and the action fails closed, so the step
+        # runs on the owned arm only.
+        if: ${{ !github.event.pull_request.head.repo.fork }}
         uses: "leynos/shared-actions/.github/actions/\
           export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
 
@@ -1052,7 +1057,10 @@ jobs:
           # Ubicloud's own cache proxy, reached through the credentials the
           # step above published. Branch scoped, like GitHub's: this lane
           # reads main's entries and its own branch's, and writes its own.
-          backend: gha
+          # The fork arm has no proxy and no credentials, so it takes the
+          # directory backend and compiles cold, as every fork arm does. The
+          # arms are read by position, like the runner's.
+          backend: ${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}
 
       # Immediately after the wrapper exists, so nothing between setup and
       # the build can compile outside the measured window. `lint-test` built

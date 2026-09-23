@@ -342,7 +342,7 @@ and reports a plausible hit rate either way:
 - `local`, the default, exports `SCCACHE_DIR=~/.cache/sccache` and a 4 GB
   `SCCACHE_CACHE_SIZE`, sized to hold two build shapes. The caller archives the
   directory through `actions/cache`. Every lane uses it except the two coverage
-  lanes, including the GitHub-hosted `lint-test` and `loom`, whose Actions
+  lanes. For the GitHub-hosted `loom`, and for every fork arm, the Actions
   cache service really is GitHub's and would compete with the Windows and macOS
   lanes for the per-repository quota.
 - `gha` exports `SCCACHE_GHA_ENABLED=true` and nothing else. It is for an
@@ -354,7 +354,11 @@ and reports a plausible hit rate either way:
   without them caches the whole build to a directory that dies with the runner
   and stays green. Only `ci.yml`'s `coverage` and `coverage-main.yml`'s
   `coverage-upload` use it, and a contract requires the credentials step ahead
-  of the setup step in both.
+  of the setup step in both. `coverage` is fork-reachable, so it passes
+  `${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}` and
+  guards the credentials step with `!github.event.pull_request.head.repo.fork`:
+  the fork arm runs GitHub-hosted, where there is no proxy and the credentials
+  action fails closed.
 
 An unknown backend fails the step before anything is exported.
 `tests/test_setup_sccache_action.py` runs the step's own shell for each case

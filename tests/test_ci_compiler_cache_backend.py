@@ -27,6 +27,8 @@ from tests.helpers.ci_runners import (
     CACHE_RESTORE,
     CREDENTIALS_ACTION,
     CREDENTIALS_STEP,
+    FORK_FIELD,
+    FORK_REACHABLE_UBICLOUD_JOBS,
     GHA_BACKEND_JOBS,
     SCCACHE_ACTION,
     SCCACHE_ACTION_FILE,
@@ -48,6 +50,26 @@ if typ.TYPE_CHECKING:  # pragma: no cover - typing only
 LOCAL_BACKEND_JOBS: typ.Final = tuple(
     pair for pair in SCCACHE_JOBS if pair not in GHA_BACKEND_JOBS
 )
+
+#: What a fork-reachable Actions-backend lane must pass as its backend. A
+#: fork's pull request runs on the GitHub-hosted fork arm, which has no proxy,
+#: so that arm takes the directory backend; the arms are read by position, as
+#: the runner's are, so swapping them fails.
+FORK_ARM_BACKEND: typ.Final = f"${{{{ {FORK_FIELD} && 'local' || 'gha' }}}}"
+
+#: The guard that keeps the credentials step off the fork arm, where the action
+#: fails closed because there is no proxy to export.
+OWNED_ARM_ONLY: typ.Final = f"${{{{ !{FORK_FIELD} }}}}"
+
+
+def _normalized(value: object) -> str:
+    """Collapse runs of whitespace so formatting cannot decide a comparison."""
+    return " ".join(str(value).split())
+
+
+def _is_fork_reachable(workflow_name: str, job_name: str) -> bool:
+    """Report whether a pull request from a fork can schedule this job."""
+    return (workflow_name, job_name) in set(expand(FORK_REACHABLE_UBICLOUD_JOBS))
 
 
 def _setup_step(workflow_name: str, job_name: str) -> Step:
@@ -120,9 +142,13 @@ def test_the_actions_backend_lanes_ask_for_it_explicitly(
     Without this the manifest could name a lane the workflow still points at a
     directory, and every rule below would be asserted against the wrong arm.
     """
-    assert _declared_backend(workflow_name, job_name) == "gha", (
-        f"{workflow_name}:{job_name} is listed as an Actions-backend lane but "
-        "does not pass backend: gha to setup-sccache"
+    expected = (
+        FORK_ARM_BACKEND if _is_fork_reachable(workflow_name, job_name) else "gha"
+    )
+    declared = _normalized(_declared_backend(workflow_name, job_name))
+    assert declared == expected, (
+        f"{workflow_name}:{job_name} is listed as an Actions-backend lane and "
+        f"must pass backend {expected!r} to setup-sccache, not {declared!r}"
     )
 
 
@@ -188,6 +214,30 @@ def test_the_credentials_step_runs_the_action_that_exports_them(
         f"{workflow_name}:{job_name}: {CREDENTIALS_STEP!r} must pin a commit "
         f"SHA rather than a tag or branch, but {ref!r} is not hexadecimal"
     )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), GHA_BACKEND_JOBS)
+def test_the_credentials_step_runs_exactly_where_there_is_a_proxy(
+    workflow_name: str, job_name: str
+) -> None:
+    """Guarded off the fork arm, and unguarded where no fork can reach.
+
+    On a fork's pull request the job runs GitHub-hosted, where the action fails
+    closed and would redden a required check. Everywhere else the step must
+    run unconditionally: a guard there could only switch the proxy off.
+    """
+    job_steps = steps(workflow_name, job_name)
+    guard = job_steps[_step_index(job_steps, CREDENTIALS_STEP)].get("if")
+    if _is_fork_reachable(workflow_name, job_name):
+        assert _normalized(guard) == OWNED_ARM_ONLY, (
+            f"{workflow_name}:{job_name}: {CREDENTIALS_STEP!r} must be guarded "
+            f"with {OWNED_ARM_ONLY!r}, not {guard!r}"
+        )
+    else:
+        assert guard is None, (
+            f"{workflow_name}:{job_name}: {CREDENTIALS_STEP!r} runs where no "
+            f"fork can reach, so it must not be guarded, got {guard!r}"
+        )
 
 
 def test_no_github_hosted_lane_exports_ubicloud_credentials() -> None:
