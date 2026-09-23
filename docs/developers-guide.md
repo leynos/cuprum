@@ -500,9 +500,13 @@ workflow's `GITHUB_TOKEN` starts no `push` workflow, so an automerged change
 reaches this job only when someone dispatches it. Runs share the concurrency
 group `coverage-main-${{ github.ref }}` with `cancel-in-progress: false`,
 because a cancelled publisher abandons both its upload and its baseline write.
-GitHub keeps one pending run per group, though, so a dispatch that replaces a
-pending push leaves the baseline one commit behind until the next push to
-`main` publishes. The properties worth pinning are these:
+For triggered runs, push and dispatch, that means one publisher at a time and
+the latest trigger winning the pending slot. GitHub keeps one pending run per
+group, though, so a dispatch that replaces a pending push leaves the baseline
+one commit behind until the next push to `main` publishes. A manual "Re-run
+jobs" on an older run is outside that ordering: it is an operator action that
+republishes that older commit's coverage and baseline until the next push
+supersedes it. The properties worth pinning are these:
 
 - **Publication has two guards.** The `publish-baseline` dispatch input is a
   boolean defaulting to publishing, so a dispatch carrying an automerged change

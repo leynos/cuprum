@@ -10,7 +10,7 @@ one job that does hold it, ``coverage-main.yml``'s ``coverage-upload``:
   ``main``, split on ``&&`` with any unquoted ``||`` refused;
 * the token reaches the upload as its ``access-token`` input and through no
   ``env`` at the workflow, job or step scope; and
-* the publisher's runs queue per ref and are never cancelled.
+* the publisher's runs share one slot per ref and are never cancelled.
 
 The developers' guide records two consequences a reader cannot see from the
 workflow, and the last clause holds it to them.
@@ -41,8 +41,9 @@ CODESCENE_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-cover
 DIRECT_CREDENTIAL = "${{ secrets.CS_ACCESS_TOKEN }}"
 
 #: The publisher's concurrency, asserted exactly. The group is the ref alone
-#: under the workflow's own prefix, so pushes to `main` queue behind each other
-#: and nothing else shares their slot.
+#: under the workflow's own prefix, so triggered runs on `main` share one slot:
+#: the running one is never cancelled, and the newest trigger takes the
+#: pending slot.
 PUBLISHER_CONCURRENCY = {
     "group": "coverage-main-${{ github.ref }}",
     "cancel-in-progress": False,
@@ -153,7 +154,7 @@ def test_the_token_reaches_the_upload_as_its_input_and_through_no_env() -> None:
     assert not findings, f"the token must reach no env scope: {findings}"
 
 
-def test_the_publisher_queues_per_ref_and_never_cancels() -> None:
+def test_the_publisher_shares_one_slot_per_ref_and_never_cancels() -> None:
     """A cancelled publisher abandons its upload and its baseline write."""
     concurrency = workflow_document("coverage-main.yml").get("concurrency")
     assert concurrency == PUBLISHER_CONCURRENCY, (
