@@ -280,8 +280,12 @@ def test_resolve_pipeline_output_preserves_option_invariants(
     if flags:
         with pytest.warns(DeprecationWarning, match="RunOutputOptions"):
             resolved = _resolve_pipeline_output(output, flags)
-        assert resolved.capture is flags.get("capture", True)
-        assert resolved.echo is flags.get("echo", False)
+        assert resolved.capture is flags.get("capture", True), (
+            "legacy capture flags must resolve to the supplied value"
+        )
+        assert resolved.echo is flags.get("echo", False), (
+            "legacy echo flags must resolve to the supplied value"
+        )
         return
 
     resolved = _resolve_pipeline_output(output, flags)
@@ -298,8 +302,12 @@ def test_resolve_pipeline_output_preserves_option_invariants(
     assert resolved is output, (
         "omitted flags must resolve to the supplied options object"
     )
-    assert resolved.capture == output.capture
-    assert resolved.max_echo_line_bytes == output.max_echo_line_bytes
+    assert resolved.capture == output.capture, (
+        "resolution must preserve the capture option"
+    )
+    assert resolved.max_echo_line_bytes == output.max_echo_line_bytes, (
+        "resolution must preserve the maximum echoed-line size"
+    )
     assert (resolved.group, resolved.annotate_failure) == (
         output.group,
         output.annotate_failure,

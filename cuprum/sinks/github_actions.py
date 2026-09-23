@@ -115,28 +115,9 @@ def _new_stop_token() -> str:
 
 @dc.dataclass(frozen=True, slots=True)
 class _Annotation:
-    """One run's annotation title and the two halves of its frame.
+    """Carry an annotation title and its independent framing toggles.
 
-    Bundling these keeps them travelling together: the annotation title is
-    only meaningful beside the toggle that decides whether it is written, and
-    the two toggles are set together from
-    :class:`~cuprum.sh.RunOutputOptions`, so a partial bundle would be a
-    caller mistake rather than a configuration.
-
-    Attributes
-    ----------
-    label:
-        Title for a failure annotation, always the run's bounded label.
-    emit_group:
-        Whether the session writes the group command, its stop-commands
-        lease, and the endgroup. ``False`` suppresses all three together: the
-        lease shields an open group, so it must not outlive the group it was
-        taken for.
-    emit_annotation:
-        Whether a failed outcome emits its ``::error::`` annotation.
-        Independent of ``emit_group``: annotation without framing is a valid
-        combination for a caller who wants a run summary entry but not
-        collapsible logs.
+    Keep the error title separate from the group label, which may contain argv.
     """
 
     label: str
@@ -175,7 +156,8 @@ class GitHubActionsSession:
         self,
         log: typ.IO[str],
         label: str,
-        annotation: _Annotation,
+        *,
+        annotation_label: str | _Annotation,
     ) -> None:
         """Frame the run: the group opening, then the stop-commands lease.
 
@@ -185,13 +167,26 @@ class GitHubActionsSession:
             The parent-facing destination for the framing and framed output.
         label : str
             The group title. Bounded by the caller and escaped here.
-        annotation : _Annotation
-            Which halves of the frame to write: the group opening with its
-            stop-commands lease, and a failure annotation. The annotation also
-            carries the title that failure uses, which is kept separate from
-            *label* so a group titled with the run's argv never republishes
+        annotation_label : str | _Annotation
+            A string keeps the original direct-construction API and becomes
+            the failure annotation title. The adapter passes a private bundle
+            to include both framing toggles. The annotation title remains
+            separate from *label* so a group titled with argv never republishes
             those arguments in an annotation.
+
+        Raises
+        ------
+        TypeError
+            If *annotation_label* is neither a string nor an annotation bundle.
         """
+        match annotation_label:
+            case str():
+                annotation = _Annotation(label=annotation_label)
+            case _Annotation() as supplied_annotation:
+                annotation = supplied_annotation
+            case _:
+                msg = "annotation_label must be a str or _Annotation"
+                raise TypeError(msg)
         self._log = log
         self._label = label
         self._annotation_label = annotation.label
@@ -365,7 +360,7 @@ class GitHubActionsSink:
         return GitHubActionsSession(
             log,
             label,
-            _Annotation(
+            annotation_label=_Annotation(
                 label=self.title or start.label,
                 emit_group=self.emit_group,
                 emit_annotation=self.emit_annotation,

@@ -179,7 +179,16 @@ processes.
   routing bypasses `_SinkBracket.resolve_destination`; `_resolve_stream_sink`
   now honours the session echo-routing hint too. The corrected end-to-end test
   confirms that annotation-only mode preserves both parent streams.
-- [ ] Run CodeRabbit against the gated remediation commit and resolve any
+- [x] (2026-09-23) Second CodeRabbit review on `2b4db194` found duplicated
+  plan-evidence corrections, a public constructor compatibility gap, one `Path`
+  construction improvement, and missing assertion messages. Corrected the
+  plan's test evidence and stream-routing contract, retained the legacy
+  `GitHubActionsSession(annotation_label=<str>)` form, and updated the tests.
+- [x] (2026-09-23) Corrected the constructor dispatch to satisfy R9101, then
+  passed all seven gates sequentially. `make test` reported 2,183 passed and 63
+  skipped in the main suite; additional suites reported 12 passed/3 skipped and
+  21 passed/13 skipped. Logs use the `-review2fix4.out` suffix under `/tmp`.
+- [ ] Review the gated compatibility fixes with CodeRabbit and resolve any
   remaining in-scope findings.
 - [ ] Push and open the draft pull request.
 
@@ -358,12 +367,18 @@ Trace chain:
 
 ```plaintext
 ISSUE-375-flags -> ADR-013-decision-outcome -> RunOutputOptions.group
-  -> GitHubActionsSink.emit_group -> EP-M2 -> cuprum/unittests/test_sinks_github_actions.py::test_emit_group_false_suppresses_group_framing
+  -> GitHubActionsSink.emit_group -> EP-M2
+  -> cuprum/unittests/test_sinks_github_actions.py
+  ::test_emit_group_false_suppresses_group_framing
 ISSUE-375-flags -> ADR-013-decision-outcome -> RunOutputOptions.annotate_failure
-  -> GitHubActionsSink.emit_annotation -> EP-M2 -> cuprum/unittests/test_sinks_github_actions.py::test_emit_annotation_false_suppresses_error
+  -> GitHubActionsSink.emit_annotation -> EP-M2
+  -> cuprum/unittests/test_sinks_github_actions.py
+  ::test_emit_annotation_false_suppresses_every_error
 ISSUE-375-aggregation -> EP-M1 -> cuprum/sh.py::_resolve_pipeline_output
   -> EP-M3 -> cuprum/unittests/test_pipeline_output_options.py::test_flags_synthesize_github_actions_sink
-ISSUE-375-unchanged-defaults -> ADR-013-non-goals -> EP-M4 -> cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged
+ISSUE-375-unchanged-defaults -> ADR-013-non-goals -> EP-M4
+  -> cuprum/unittests/test_sinks_end_to_end.py
+  ::test_flags_leave_default_output_unchanged
 ```
 
 No Terms of Reference or technical design document governs this change; the ADR
@@ -380,15 +395,15 @@ introduces no non-trivial invariant or lemma" clause.
 
 **V1 — Defaults are inert.** Statement: for any `RunOutputOptions` with
 `group=False` and `annotate_failure=False`, `__post_init__` leaves `self.sink`
-as `None`, and a run using it writes no framing byte. Method: named example
-test plus the pre-existing suite. Artefact:
-`cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged`.
-Evidence: the test asserts `output.sink is None` and that the captured
-parent-facing bytes contain none of `::group::`, `::stop-commands::`,
-`::endgroup::`, `::error`. Non-vacuity: the *same* file's
-`test_flags_frame_successful_run` has all four strings present with the flags
-set and the environment forced, so the negative test is not passing because the
-framing is unreachable. Discharge: both tests pass.
+as `None`, and a run using the options writes no framing byte. Method: one
+options test and one end-to-end comparison. Artefacts:
+`cuprum/unittests/test_pipeline_output_options.py::test_group_and_annotate_failure_default_off`
+asserts both defaults and `sink is None`;
+`cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged`
+compares bytes from flags-off and flag-absent runs. Non-vacuity: the
+successful framing test opens the group and lease, closes the group, and emits
+no error; `test_flags_annotate_non_zero_exit` separately proves the annotation
+path. Discharge: all tests pass.
 
 **V2 — "Sink wins" precedence.** Statement: when `sink` is supplied,
 `__post_init__` binds `self.sink` to that object and never constructs a
@@ -409,7 +424,7 @@ suppresses every `::error::` line while leaving the framing intact. Method:
 finite parameter table over the four toggle combinations for the framing
 assertions, plus named example tests for the cross-cases. Artefacts:
 `cuprum/unittests/test_sinks_github_actions.py::test_emit_group_false_suppresses_group_framing`
-and `::test_emit_annotation_false_suppresses_error`. Evidence:
+and `::test_emit_annotation_false_suppresses_every_error`. Evidence:
 `group=False, annotation=True` yields a buffer with one `::error` and zero
 `::group::`; `group=True, annotation=False` yields a buffer with one
 `::group::`, one lease, one endgroup, and zero `::error` on `EXIT_NONZERO`,
@@ -442,14 +457,16 @@ Evidence: the argument appears in the `::group::` title and does not appear
 after `::error`. Non-vacuity: the test asserts the value *is* present in the
 buffer, so a run that framed nothing cannot pass it. Discharge: passes.
 
-**V6 — Outcome matrix.** Statement: a non-zero exit annotates `exit_nonzero`
-with the exit code; a timeout raises `TimeoutExpired`, annotates `timeout`, and
-still closes the group; a non-timeout error annotates `error`, closes the
-group, and re-raises unchanged. Method: named example tests, one per terminal
-path. Artefacts: `test_flags_annotate_non_zero_exit`,
-`test_flags_annotate_timeout`, `test_flags_annotate_internal_error` in
-`cuprum/unittests/test_sinks_end_to_end.py`. Evidence: each asserts
-`value.count("::error ") == 1` and the exact message. Non-vacuity: the three
+**V6 — Outcome matrix.** Statement: a non-zero exit returns its exit code and
+annotates `exit_nonzero`; a timeout raises `TimeoutExpired` and annotates
+`timeout`; a non-timeout spawn error raises `FileNotFoundError` and annotates
+`error`. These tests use annotation-only mode, so they do not establish group
+closure. Method: named example tests, one per terminal path. Artefacts:
+`test_flags_annotate_non_zero_exit`, `test_flags_annotate_timeout`,
+`test_flags_annotate_internal_error` in
+`cuprum/unittests/test_sinks_end_to_end.py`. Evidence: each asserts exactly one
+`::error` annotation and its categorical message; the tests also assert the
+exit code, raised timeout, or unchanged spawn exception. Non-vacuity: the three
 messages are distinct, so an implementation that hard-coded one categorical
 string fails two of the three. Discharge: all pass.
 
@@ -491,25 +508,29 @@ framing byte was written.
 Cuprum is a safe subprocess-execution library. A caller builds a `SafeCmd` from
 a curated `Program` and runs it; `RunOutputOptions` (`cuprum/sh.py`) carries
 every output-related setting: `capture`, `echo`, `echo_stdout`, `echo_stderr`,
-`max_echo_line_bytes`, `on_line`, `idle_after`, `on_idle`, and `sink`.
+`max_echo_line_bytes`, `on_line`, `idle_after`, `on_idle`, `sink`, `group`, and
+`annotate_failure`.
 
 The **presentation-sink** feature (ADR-013) lets a caller reframe the
 parent-facing output of a run without changing capture, exit codes, or the
 returned result. The protocol lives in `cuprum/sinks/base.py`: an `OutputSink`
-opens one `OutputSession` per run, the run routes every parent-facing byte
-through `session.log`, and the execution layer closes the session exactly once
-per terminal path with a `SessionOutcome` (a `TerminalOutcome` from the closed
-set `exit_zero`, `exit_nonzero`, `timeout`, `cancelled`, `error`, an optional
-exit code, and an optional categorical detail).
+opens one `OutputSession` per run, routes echoed output through `session.log`
+by default, and closes the session exactly once per terminal path with a
+`SessionOutcome` (a `TerminalOutcome` from the closed set `exit_zero`,
+`exit_nonzero`, `timeout`, `cancelled`, `error`, an optional exit code, and an
+optional categorical detail). A session with `redirects_echo=False` keeps echo
+on the caller's ordinary destinations while still using `session.log` for its
+own workflow commands.
 
 `cuprum/sinks/github_actions.py` implements the protocol for GitHub Actions. It
 writes, in order: `::group::<program args>`, a `::stop-commands::<token>` lease
 with a cryptographically random token, then (through `session.log`) the run's
-echoed output, then at close `::<token>::` to release the lease,
-`::endgroup::`, and — for any outcome other than `exit_zero` — one
-`::error title=<bounded label>::<categorical detail>` annotation. Activation is
-read per run from `GITHUB_ACTIONS`, and only the exact value `true` activates
-it, unless the sink was constructed with `force=True`.
+echoed output when `redirects_echo` is true, then at close `::<token>::` to
+release the lease, `::endgroup::`, and — for any outcome other than
+`exit_zero` — one `::error title=<bounded label>::<categorical detail>`
+annotation. Activation is read per run from `GITHUB_ACTIONS`, and only the
+exact value `true` activates it, unless the sink was constructed with
+`force=True`.
 
 The lifecycle that brackets every run lives in `cuprum/_sink_lifecycle.py`:
 `_SinkBracket.open(sink, start)` wraps `sink.open_session(start)`, and
@@ -542,13 +563,15 @@ In `cuprum/sinks/github_actions.py`:
 1. Add `emit_group: bool = True` and `emit_annotation: bool = True` to
    `GitHubActionsSink.__init__`, store both, and document them in the class
    docstring's `Parameters` section.
-2. Pass both through `open_session` into `GitHubActionsSession.__init__` as
-   keyword-only parameters, defaulting to `True` so any direct construction
-   keeps the current behaviour.
+2. Pass the annotation title and both toggles through `open_session` in one
+   `_Annotation` value. Preserve direct `GitHubActionsSession` construction
+   with the existing keyword-only `annotation_label=<str>` form; its toggles
+   default to `True`.
 3. In `GitHubActionsSession.__init__`, when `emit_group` is `False`, do not
    write the group command and do not write the lease — the lease exists only
-   to shield a group, so a suppressed group must not leave a lease open. Log
-   destination resolution is unchanged.
+   to shield a group, so a suppressed group must not leave a lease open. Its
+   `log` accessor is unchanged; the optional `redirects_echo` hint lets
+   annotation-only sessions preserve normal echo destinations.
 4. In `GitHubActionsSession.close`, when `emit_group` is `False`, skip the
    lease release and the endgroup; when `emit_annotation` is `False`, skip
    `_emit_error_annotation`. Keep the idempotent `_closed` guard first.
@@ -609,11 +632,11 @@ Tests, per `Verification plan` V1–V8:
   `cuprum/unittests/_sink_test_support.py`), and
   `test_io_options_inherits_the_flags`, and a resolution test that
   `_resolve_pipeline_output` preserves both flags.
-- `cuprum/unittests/test_sinks_end_to_end.py`: the eight flag tests named in
+- `cuprum/unittests/test_sinks_end_to_end.py`: the flag-related tests named in
   the `Verification plan`, each monkeypatching `GITHUB_ACTIONS=true` (the
   synthesized sink is env-gated and carries no `force`), reusing the existing
   `_stop_token`/scoped-allowlist helpers and the `python_catalogue()` helper.
-  Parametrize the single-command cases over `run` and `run_sync`.
+  Cover single-command cases across both `run` and `run_sync`.
 - `test_flags_annotation_omits_argv` must not collide with the existing
   `test_failing_run_annotates_without_argv`; if a class-level grouping is used,
   keep each class at or below 20 public methods (ruff `PLR0904` / pylint

@@ -156,6 +156,26 @@ def _open_gha_session(
     return session, buffer
 
 
+def test_session_accepts_legacy_annotation_label() -> None:
+    """Direct session construction keeps the original string keyword."""
+    buffer = io.StringIO()
+    session = GitHubActionsSession(
+        typ.cast("typ.IO[str]", buffer),
+        "group label",
+        annotation_label="failure label",
+    )
+
+    session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=3))
+
+    value = buffer.getvalue()
+    assert value.startswith("::group::group label\n::stop-commands::"), (
+        "direct construction must keep opening a group and lease by default"
+    )
+    assert value.endswith(
+        "::error title=failure label::exit_nonzero\n",
+    ), "the legacy annotation_label string must remain the failure title"
+
+
 # ---------------------------------------------------------------------------
 # Environment-gated activation
 # ---------------------------------------------------------------------------

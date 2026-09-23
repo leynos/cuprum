@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -441,7 +442,9 @@ def test_flags_annotate_internal_error(
     """A run that never spawns annotates with the categorical ``error`` detail."""
     monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
     _, python_program = python_catalogue()
-    absent_program = Program(f"{python_program}.does-not-exist")
+    python_path = Path(python_program)
+    absent_path = python_path.with_name(f"{python_path.name}.does-not-exist")
+    absent_program = Program(str(absent_path))
     absent = sh.make(
         absent_program,
         catalogue=ProgramCatalogue.from_programs(
