@@ -27,7 +27,7 @@ import re
 import typing as typ
 from pathlib import Path
 
-import yaml
+from tests.helpers.strict_yaml import load
 
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1]
@@ -54,7 +54,7 @@ EXPECTED_WITH = {
 
 def _load() -> dict[typ.Any, typ.Any]:
     """Parse the workflow file."""
-    workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    workflow = load(WORKFLOW_PATH.read_text(encoding="utf-8"), WORKFLOW_PATH.name)
     assert isinstance(workflow, dict), "the workflow must parse to a mapping"
     return workflow
 

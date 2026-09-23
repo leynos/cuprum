@@ -18,7 +18,7 @@ from __future__ import annotations
 import typing as typ
 from pathlib import Path
 
-import yaml
+from tests.helpers import strict_yaml
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -98,23 +98,18 @@ def read_workflow(path: Path) -> dict[object, object]:
     dict[object, object]
         The parsed document, whose trigger key YAML 1.1 reads as ``True``.
 
-    Raises
-    ------
-    AssertionError
-        If the file cannot be read, is not valid YAML, or does not parse to a
-        mapping, naming the file in each case.
+    Notes
+    -----
+    Fails the contract when the file cannot be read, is not valid YAML,
+    declares a mapping key twice, or does not parse to a mapping, naming the
+    file in each case.
 
     Examples
     --------
     >>> "jobs" in read_workflow(WORKFLOW_DIR / "ci.yml")
     True
     """
-    source = read_source(path)
-    try:
-        document = yaml.safe_load(source)
-    except yaml.YAMLError as error:
-        message = f"{path.name} is not valid YAML: {error}"
-        raise AssertionError(message) from error
+    document = strict_yaml.load(read_source(path), path.name)
     # YAML 1.1 reads the `on:` trigger key as the boolean `True`, so the
     # document is genuinely not string-keyed and the return type says so.
     # Claiming `dict[str, object]` here would be a false contract that hides

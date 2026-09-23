@@ -18,9 +18,8 @@ import dataclasses as dc
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
 import typing as typ
 
-import yaml
-
 from tests.helpers.ci_workflows import ROOT
+from tests.helpers.strict_yaml import load
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -66,8 +65,9 @@ def action_document(action_path: str) -> dict[str, object]:
     Fails the contract, through :func:`_require`, when the file does not parse
     to a mapping.
     """
-    document = yaml.safe_load(
-        (ROOT / action_path / "action.yml").read_text(encoding="utf-8")
+    document = load(
+        (ROOT / action_path / "action.yml").read_text(encoding="utf-8"),
+        f"{action_path}/action.yml",
     )
     _require(
         condition=isinstance(document, dict),
