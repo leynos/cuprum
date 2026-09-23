@@ -129,9 +129,18 @@ repository. Both coverage lanes, `ci.yml`'s `coverage` and `coverage-main.yml`'s
 archived directory. On an Ubicloud runner that service is Ubicloud's own proxy
 on the runner's private network, reached by calling
 `export-ubicloud-cache-credentials` before `setup-sccache` and asking it for
-`backend: gha`. Nothing about that store is branch restricted, so each run
-reads and writes it directly, a pull request warms the next one, and there is
-no generation for a writer to publish.
+`backend: gha`. Each run reads and writes that store directly, so there is no
+generation for a writer to publish.
+
+The store is branch scoped, as GitHub's own is. Ubicloud's cache branch
+protection, on by default, lets a run read entries from its own branch and from
+`main` only. `coverage-upload` on each push to `main` therefore warms every
+pull request, and a pull request's own entries warm only its later pushes. The
+design depends on that protection staying on, and a cold pull request is not a
+reason to switch it off: this repository is public, and sharing entries across
+branches would let objects compiled on any branch reach every other branch's
+build, which is the cross-branch cache poisoning Ubicloud's documentation warns
+about.
 
 The archive those lanes replaced was the single worst one here. It was 286 MB,
 larger than the five Ubicloud families put together, and it served exactly one

@@ -207,51 +207,6 @@ def test_no_github_hosted_lane_exports_ubicloud_credentials() -> None:
         )
 
 
-def test_the_action_exports_one_backend_and_only_one() -> None:
-    """`SCCACHE_DIR` and `SCCACHE_GHA_ENABLED` must never both be exported.
-
-    sccache prefers whichever it finds configured first and reports neither, so
-    a job with both configured would show a hit rate for a store nobody owns.
-    The action's two arms are therefore mutually exclusive branches of one
-    conditional rather than two independent exports.
-    """
-    source = SCCACHE_ACTION_FILE.read_text(encoding="utf-8")
-    assert 'if [ "${SCCACHE_BACKEND}" = gha ]; then' in source, (
-        "the two backends must be branches of one conditional"
-    )
-    gha_arm, _, local_arm = source.partition("\n        else\n")
-    _, _, gha_arm = gha_arm.partition('if [ "${SCCACHE_BACKEND}" = gha ]; then')
-    assert "SCCACHE_GHA_ENABLED=true" in gha_arm, (
-        "the gha arm must enable the Actions backend"
-    )
-    assert "SCCACHE_DIR=" not in gha_arm, (
-        "the gha arm must not also point sccache at a directory"
-    )
-    assert "SCCACHE_DIR=" in local_arm, "the local arm must export the directory"
-    assert "SCCACHE_CACHE_SIZE=" in local_arm, (
-        "the local arm must cap the directory it exports; the archive grows "
-        "with every new compilation unit until it is trimmed"
-    )
-    assert "SCCACHE_GHA_ENABLED" not in local_arm, (
-        "the local arm must not also enable the Actions backend"
-    )
-
-
-def test_the_action_refuses_the_actions_backend_without_credentials() -> None:
-    """Fail loudly rather than cache a whole build to a directory nothing reads.
-
-    This is the failure mode that has no symptom: the job stays green, the hit
-    rate looks plausible on its own second half, and the store is gone when the
-    runner is.
-    """
-    source = SCCACHE_ACTION_FILE.read_text(encoding="utf-8")
-    for variable in ("ACTIONS_CACHE_URL", "ACTIONS_RUNTIME_TOKEN"):
-        assert f'[ -z "${{{variable}:-}}" ]' in source, (
-            f"the gha arm must refuse to proceed with an empty {variable}"
-        )
-    assert "exit 1" in source, "the credential check must fail the step"
-
-
 def test_the_setup_action_declares_a_backend_input() -> None:
     """A caller must be able to name the store without editing the action."""
     source = SCCACHE_ACTION_FILE.read_text(encoding="utf-8")

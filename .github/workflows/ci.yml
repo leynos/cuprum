@@ -982,8 +982,11 @@ jobs:
       # Pull requests only, so this job never saves: it reads the generation
       # that the `main` writers published and publishes nothing of its own.
       # The compiler cache is not one of those generations. It runs against
-      # Ubicloud's cache proxy, which is not branch restricted, so this lane
-      # both reads and writes it directly and warms the next pull request.
+      # Ubicloud's cache proxy, which this lane reads and writes directly. The
+      # proxy keeps Ubicloud's default branch protection: a pull request reads
+      # its own branch's entries and main's (written by coverage-upload), and
+      # its writes warm only its own later pushes. Keep that protection on;
+      # see docs/ci-cache-ownership.md.
       - name: Restore the Cargo registry
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -1047,8 +1050,8 @@ jobs:
         uses: ./.github/actions/setup-sccache
         with:
           # Ubicloud's own cache proxy, reached through the credentials the
-          # step above published. Not branch restricted, so this lane both
-          # reads and writes it and a pull request warms the next one.
+          # step above published. Branch scoped, like GitHub's: this lane
+          # reads main's entries and its own branch's, and writes its own.
           backend: gha
 
       # Immediately after the wrapper exists, so nothing between setup and

@@ -111,8 +111,9 @@ CREDENTIALS_ACTION = (
 CREDENTIALS_STEP = "Export the Ubicloud cache credentials"
 #: Jobs that bind sccache to the Actions cache service rather than to a
 #: directory this repository archives. On Ubicloud that service is Ubicloud's
-#: own proxy, which is not branch restricted, so these lanes read and write one
-#: store and no job publishes a generation for them.
+#: own proxy, which these lanes read and write directly, so no job publishes a
+#: generation for them. The store is branch scoped under Ubicloud's default
+#: protection: pull requests read what `coverage-upload` writes on `main`.
 GHA_BACKEND_JOBS: typ.Final = (
     ("ci.yml", "coverage"),
     ("coverage-main.yml", "coverage-upload"),
@@ -284,8 +285,9 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
     # one publishes.
     # `coverage-main.yml:coverage-upload` is deliberately absent, as is
     # ci.yml's `coverage`. Both run sccache against Ubicloud's cache proxy,
-    # which is not branch restricted, so each run reads and writes the store
-    # directly and there is no archive generation for a job to publish.
+    # reading and writing the store directly, so there is no archive
+    # generation for a job to publish. The store stays branch scoped under
+    # Ubicloud's default protection; see docs/ci-cache-ownership.md.
     "SCCACHE_CACHE_KEY": (
         ("ci.yml", "benchmark-ratchet"),
         ("ci.yml", "extension-tests"),

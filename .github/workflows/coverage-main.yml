@@ -111,8 +111,10 @@ jobs:
 
       # There is no compiler-cache archive to restore here. This lane and
       # ci.yml's `coverage` both run sccache against Ubicloud's cache proxy,
-      # which is not branch restricted, so each run reads and writes the store
-      # directly and neither needs an `actions/cache` generation of its own.
+      # reading and writing the store directly, so neither needs an
+      # `actions/cache` generation of its own. Under Ubicloud's default branch
+      # protection, which must stay on, this lane's entries on main are the
+      # ones every pull request can read.
       # The `compiler-shape: coverage` input above still renders
       # `SCCACHE_CACHE_KEY`; nothing in this lane reads it. Restoring the
       # backend would mean restoring that key's restore and save steps
@@ -153,8 +155,8 @@ jobs:
         uses: ./.github/actions/setup-sccache
         with:
           # Ubicloud's own cache proxy, reached through the credentials the
-          # step above published. Not branch restricted, so this lane both
-          # reads and writes it and a pull request warms the next one.
+          # step above published. Branch scoped, like GitHub's: what this
+          # lane writes on main is what every pull request can read.
           backend: gha
 
       # Immediately after the wrapper exists, so nothing between setup and
