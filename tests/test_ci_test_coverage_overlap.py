@@ -19,6 +19,7 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import (
     GENERATE_COVERAGE,
     ROOT,
@@ -195,7 +196,8 @@ def test_the_covered_interpreter_does_not_repeat_the_python_suite() -> None:
         for step in steps("ci.yml", "typecheck-test")
         if step.get("name") == "Run tests"
     )
-    assert run_step.get("if") == "matrix.python-suite", (
+    guard = ungated("ci.yml", "typecheck-test", run_step.get("if"))
+    assert guard == "matrix.python-suite", (
         "the test step must be gated on the matrix flag rather than on a "
         "version literal, so adding an interpreter cannot silently duplicate it"
     )

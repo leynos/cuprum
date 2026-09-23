@@ -14,6 +14,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.ci_cache_families import CacheFamily, writer_families
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import (
     CACHE_FAMILY_WRITERS,
     CACHE_KEYS_ACTION,
@@ -239,7 +240,7 @@ def test_every_restore_is_reported_in_the_run_summary(
         f"{workflow_name}:{job_name} must record its cache observations once"
     )
     report = reports[0]
-    assert report.get("if") == "always()", (
+    assert ungated(workflow_name, job_name, report.get("if")) == "always()", (
         f"{workflow_name}:{job_name} must record observations even on failure"
     )
     script = report.get("run")
