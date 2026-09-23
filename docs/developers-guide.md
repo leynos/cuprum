@@ -422,13 +422,13 @@ deduplication had just reduced to a typechecker.
 
 Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
-`coverage-upload`, and the `typecheck-test` legs that run the Python suite.
-
-The 3.13 leg is the exception, and its steps are gated on `matrix.python-suite`
-for a reason worth keeping: a job that installs sccache and then reports zero
-compile requests looks exactly like one whose `RUSTC_WRAPPER` never reached the
-compiler, which is a failure this repository has already had. The leg that only
-typechecks therefore reports nothing rather than zero. Each zeroes the counters
+`coverage-upload`, and every `typecheck-test` leg. The matrix has no 3.13 leg:
+the coverage job runs that interpreter's suite and `extension-tests` runs its
+`make typecheck`, so every leg compiles and none is gated. A job that installs
+sccache and then reports zero compile requests looks exactly like one whose
+`RUSTC_WRAPPER` never reached the compiler, which is a failure this repository
+has already had, and a leftover `matrix.python-suite` guard would now skip its
+step outright, because no leg declares the key. Each job zeroes the counters
 before its build and writes `sccache --show-stats`, plus the JSON form, into
 the step summary afterwards. The probe is not masked with `|| true`: a compiler
 cache that cannot report is a broken compiler cache, and a job reporting zero
