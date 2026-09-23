@@ -3,80 +3,75 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](
 https://deepwiki.com/leynos/cuprum)
 
-Typed, async command execution for Python—so you can ditch the shell scripts
-without losing your mind.
+Typed command execution for Python, with a curated program catalogue and
+predictable output, failures, and cancellation.
 
 ## What is this?
 
-If you've ever written a Python script that calls out to external commands,
-you've probably experienced the joys of `subprocess`: stringly-typed arguments,
-mysterious failures, and output that vanishes into the void. Cuprum is here to
-help.
+Cuprum builds argument vectors for approved executables and returns structured
+results. It does not pass command strings to a shell.
 
-We give you a **typed, safe approach to running external programs**. Instead of
-passing arbitrary strings to a shell, you work with a curated catalogue of
-approved executables. Each command carries metadata about its project, so
-downstream tooling knows how to filter noise from logs or where to find
-documentation.
+The default catalogue covers common tools; an application can define its own
+catalogue and project metadata. A catalogue controls builder creation, and an
+optional execution scope narrows which commands may run.
 
-Cuprum is async-first but provides synchronous wrappers for scripts that don't
-need the full async machinery. Whether you're building deployment helpers, CI
-glue, or maintenance scripts, we want "Python instead of Bash" to feel like an
-upgrade rather than a chore.
+Cuprum offers async execution and synchronous wrappers for scripts. Python 3.12
+or newer is required.
 
 ## Quick taste
 
+<!-- tested-example: readme-quick-start -->
+
 ```python
-from cuprum import ECHO, ExecutionContext, RunOutputOptions, sh
+import asyncio
+import sys
 
-# Create a builder for a curated program
-echo = sh.make(ECHO)
+from cuprum import Program, ProgramCatalogue, sh
 
-# Build a command with typed arguments
-cmd = echo("-n", "hello, cuprum!")
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="quick-start")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "print('hello, cuprum!')")
 
-# Run it (async)
-result = await cmd.run(output=RunOutputOptions(echo=True))
-if result.ok:
-    print(f"Output: {result.stdout}")
 
-# Or run it synchronously
-result = cmd.run_sync()
+async def main() -> None:
+    result = await command.run()
+    assert result.ok and result.stdout == "hello, cuprum!\n"
+
+
+asyncio.run(main())
 ```
+
+The [users' guide](docs/users-guide.md) continues with synchronous execution,
+output observation, pipelines, concurrency, policy, and troubleshooting.
 
 ## Features
 
-- **Catalogue-based safety** – Only approved programs can run; unknown
-  executables raise `UnknownProgramError`.
-- **Typed command building** – `sh.make()` returns builders that validate
-  arguments and carry project metadata.
-- **Async-first execution** – `await cmd.run()` with capture/echo toggles,
-  environment overlays, and working directory control.
-- **Synchronous convenience** – `cmd.run_sync()` when you don't need async.
-- **Graceful cancellation** – Cancelled tasks send `SIGTERM`, wait briefly,
-  then escalate to `SIGKILL`.
-- **Structured results** – `CommandResult` gives you exit code, pid, stdout,
-  stderr, and an `ok` helper.
-- **Zero dependencies** – Just Python 3.12+ and the standard library.
+- **Catalogue-backed builders** – Unknown programs raise
+  `UnknownProgramError` before execution.
+- **Structured results** – Exit code, process ID, captured output, timing,
+  resource measurements where supported, and an `ok` property.
+- **Output choices** – Capture, echo, line observation, and an optional idle
+  heartbeat can be configured independently.
+- **Composition** – Pipelines and bounded concurrent execution.
+- **Context policy** – Scoped allowlists, environment overlays, and hooks.
+- **Optional acceleration** – A Rust extension is available; the pure Python
+  installation has no runtime dependencies.
 
 ## Installation
 
-```shell
-pip install cuprum
-```
+Run `python -m pip install cuprum` to install it with pip.
 
 Or with [uv](https://docs.astral.sh/uv/):
 
-```shell
-uv add cuprum
-```
+Run `uv add cuprum` to add it to a uv project.
 
 ## Status
 
-Cuprum is in early development. The typed command core and execution runtime
-are complete (Phase 1 of the [roadmap](docs/roadmap.md)), but context-scoped
-allowlists and hooks are still on the way. The API may shift as we learn what
-works best.
+Cuprum is in early development. The command runtime, scoped allowlists, hooks,
+and optional native stream backend are implemented. Check the
+[changelog](CHANGELOG.md) and
+[0.2.0 migration guide](docs/v0-2-0-migration-guide.md) when upgrading; the
+public API may evolve before a stable release.
 
 ## Documentation
 

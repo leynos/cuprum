@@ -11,9 +11,9 @@ open each document.
   impact summaries.
 - [Users' guide](users-guide.md) - user-facing command-building, catalogue,
   runtime, pipeline, and Rust backend behaviour.
-- [0.2.0 migration guide][migration-020] - upgrade guidance for the optional
-  aggregate Python stream-operation observation API, the opt-in idle heartbeat
-  for quiet children, the opt-in presentation sink, and the benchmark ratchet's
+- [0.2.0 migration guide][migration-020] - upgrade guidance for catalogue
+  construction, line observation, result measurements, stream metrics,
+  diagnostics, idle heartbeats, presentation sinks, and the benchmark ratchet's
   measurement protocol.
 - [Developers' guide](developers-guide.md) - maintainer workflows for profiling,
   linting, benchmarking, and internal development practices.
@@ -105,7 +105,7 @@ open each document.
 [adr-014]: adr-014-benchmark-gate-telemetry-sink.md
 [adr-015]: adr-015-actions-runner-integration-harness.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
-[migration-020]: migration-0.2.0.md
+[migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
