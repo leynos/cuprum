@@ -1025,6 +1025,12 @@ close on every terminal path. The shared mechanics live in
   timeout or cancellation, and a drain that raised would skip the close
   entirely.
 
+`RunOutputOptions` uses the private `_FlagsGeneratedGitHubActionsSink` subtype
+only to distinguish its synthesized adapter from a caller-supplied sink when
+`dataclasses.replace` constructs a modified options object. Keep that marker
+local to flag synthesis; callers and other adapters should use
+`GitHubActionsSink` directly.
+
 When adding an exit path to `_execute_with_hooks` or the pipeline runner, close
 the run's bracket in the same change. A path that skips the close leaks the
 stop-commands lease and leaves the group open for the rest of the job log.

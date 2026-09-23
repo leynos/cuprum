@@ -229,13 +229,23 @@ workflow commands. Had the flags been implemented by writing workflow commands
 from the run paths directly, the Option B rejection would have applied
 unchanged.
 
-Two consequences the option text did not anticipate are settled here rather
-than left to be rediscovered. First, the toggles are validated as `bool` and a
-non-`bool` raises `TypeError`: they gate workflow commands, so a merely truthy
-value would frame a run on the strength of something the caller never
-documented as a flag. Second, the two flags are independent, so
+One consequence the option text did not anticipate is settled here rather than
+left to be rediscovered. The two flags are independent, so
 `annotate_failure=True` alone yields an annotation with no group. That is a
 supported configuration rather than a degenerate one — a run summary entry
 without collapsible logs — and the stop-commands lease is suppressed with the
 group, because a lease with no group would silence workflow-command
 interpretation for the rest of the step and display nothing for it.
+
+### Amendment (2026-09-24): Flag validation and replacement semantics
+
+Issue #375 requires `RunOutputOptions` to reject non-`bool` flag values with
+`ValueError`. Direct `GitHubActionsSink` construction retains `TypeError` for
+invalid adapter toggles. A narrowly scoped lint exception preserves the
+requested options contract.
+
+The synthesized adapter uses a private marker subtype so `dataclasses.replace`
+can rebuild its toggles when either flag changes. An explicit sink remains
+authoritative through construction and replacement. The default adapter does
+not serialize concurrent sessions, so grouped commands that write to the same
+parent stderr must run sequentially to keep their workflow frames intact.

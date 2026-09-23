@@ -293,8 +293,9 @@
   where a caller wants the adapter directly. The flags are independent —
   annotation without framing is supported, and a suppressed group takes its
   lease with it — and inherit the adapter's environment gate, so they are inert
-  unless `GITHUB_ACTIONS == "true"`. A non-`bool` value raises `TypeError`.
-  Both flags default to `False`, so unflagged runs are unchanged
+  unless `GITHUB_ACTIONS == "true"`. A non-`bool` `RunOutputOptions` flag raises
+  `ValueError`; direct adapter toggle values retain `TypeError`. Both flags
+  default to `False`, so unflagged runs are unchanged
   ([#375](https://github.com/leynos/cuprum/issues/375)).
 - **`GitHubActionsSink` framing toggles:** The adapter's constructor takes
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame

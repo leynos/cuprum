@@ -211,8 +211,22 @@ processes.
   reported 2,183 passed and 63 skipped in the main suite; auxiliary suites
   passed, with 3 Rust doctests ignored. Logs use the `-rebased.out` suffix under
   `/tmp`.
-- [ ] Review the rebased head with CodeRabbit and resolve any remaining
-  in-scope findings.
+- [x] (2026-09-24) The next CodeRabbit review on `35cd545d` found that
+  `dataclasses.replace` could carry a generated sink with stale toggles when
+  the flags changed, and that the CHANGELOG/ADR overstated the options
+  validation exception as `TypeError`. Replaced the generated sink with a
+  private marker subtype that allows replacement to rebuild only synthesized
+  adapters; explicit `GitHubActionsSink` instances remain authoritative.
+  Clarified the `ValueError` contract in the public docstring, CHANGELOG, and
+  ADR-013, and documented the marker's limited reuse scope in the developers'
+  guide. The replacement regression test proves flag changes rebuild the
+  generated adapter and caller-supplied adapters remain authoritative.
+- [x] (2026-09-24) All seven deterministic gates passed for this remediation.
+  `make test` reported 2,184 passed and 63 skipped in the main suite; auxiliary
+  suites passed, with 3 Rust doctests ignored. Logs use the `-review4fix1.out`
+  suffix under `/tmp`.
+- [ ] Review the gated remediation commit with CodeRabbit and resolve any
+  remaining in-scope findings.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -361,6 +375,13 @@ processes.
   contract; a narrowly scoped `type-check-without-type-error` suppression
   records why the preferred `TypeError` is not used here. Date/Author:
   2026-09-24, agent.
+
+- Decision: mark flag-generated GitHub Actions adapters with a private subtype.
+  Rationale: `dataclasses.replace` passes every unchanged field, including the
+  synthesized sink, into the new options object; the marker lets
+  `__post_init__` rebuild that adapter when flags change while preserving an
+  explicitly supplied `GitHubActionsSink`. The marker is scoped to this
+  synthesis path and is not an adapter API. Date/Author: 2026-09-24, agent.
 
 ## Conformance basis
 
@@ -921,13 +942,13 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   commit. Remaining gaps: none.
 
 - **EP-M4 (gates and review).** Outcome: all seven local gates pass after the
-  review remediation; CodeRabbit review is pending. Acceptance evidence:
-  `scrutineer`'s `-reviewfix2` gate report and the upcoming CodeRabbit verdict.
-  Conformance check: annotation-only echo retains the caller's original
-  destinations, while `emit_group=False` still writes no group, lease, or
-  endgroup as explicitly required. Recovery: address any in-scope finding, then
-  rerun the full gates and review. Remaining gaps: CodeRabbit review and
-  publication.
+  replacement-semantics review remediation; CodeRabbit review is pending.
+  Acceptance evidence: `scrutineer`'s `-review4fix1` gate report and the
+  upcoming CodeRabbit verdict. Conformance check: annotation-only echo retains
+  the caller's original destinations, `emit_group=False` still writes no group,
+  lease, or endgroup, and `dataclasses.replace` refreshes only flag-generated
+  sinks. Recovery: address any in-scope finding, then rerun the full gates and
+  review. Remaining gaps: CodeRabbit review and publication.
 
 ## Outcomes & retrospective
 

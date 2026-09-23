@@ -596,6 +596,42 @@ def test_explicit_sink_wins_over_flags() -> None:
     assert options.group is True, "the flags are still recorded as requested"
 
 
+def test_replace_rebuilds_generated_sink_when_flags_change() -> None:
+    """Frozen copies refresh generated sinks but retain replacement sinks."""
+    original = RunOutputOptions(group=True)
+    changed_flags = dc.replace(
+        original,
+        group=False,
+        annotate_failure=True,
+    )
+    disabled_flags = dc.replace(original, group=False)
+    explicit_sink = GitHubActionsSink(
+        emit_group=False,
+        emit_annotation=True,
+    )
+    replaced_sink = dc.replace(original, sink=explicit_sink)
+
+    assert isinstance(changed_flags.sink, GitHubActionsSink), (
+        "changing generated options must keep the GitHub Actions adapter"
+    )
+    assert (
+        changed_flags.sink.emit_group,
+        changed_flags.sink.emit_annotation,
+    ) == (False, True), "the generated adapter must follow changed flag values"
+    assert disabled_flags.sink is None, (
+        "disabling all generated flags must remove the synthesized adapter"
+    )
+    assert replaced_sink.sink is explicit_sink, (
+        "an explicitly replaced adapter must retain precedence over the flags"
+    )
+    assert (
+        replaced_sink.sink.emit_group,
+        replaced_sink.sink.emit_annotation,
+    ) == (False, True), (
+        "an explicit GitHubActionsSink must not be mistaken for a generated one"
+    )
+
+
 def test_io_options_inherits_the_flags() -> None:
     """The deprecated alias resolves the flags through the same initializer."""
     with pytest.warns(DeprecationWarning, match="IOOptions is deprecated"):

@@ -760,16 +760,17 @@ for the whole pipeline. In annotation-only mode, child output therefore keeps
 its usual ability to emit workflow commands.
 
 The default GitHub Actions sink does not serialize overlapping sessions. Do not
-share group-enabled options between concurrent runs that write to the same
-parent stderr; run those commands sequentially so their workflow frames cannot
-interleave.
+run grouped commands concurrently when they write to the same parent stderr;
+run them sequentially so their workflow frames cannot interleave.
 
 An explicit `sink=` takes precedence and makes both flags no-ops. That is what
 makes the flags safe to include in shared options. To select an explicit sink,
 put it on a new `RunOutputOptions` object, or call
 `dataclasses.replace(shared, sink=...)`. `SafeCmd.run` and `Pipeline.run` do
 not accept a separate `sink=` argument and do not override the sink on an
-existing options object.
+existing options object. When `dataclasses.replace` changes either flag on
+flag-generated options, the adapter is rebuilt to match; an explicitly supplied
+sink remains unchanged.
 
 Like the adapter they construct, the flags are inactive unless the parent
 process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no

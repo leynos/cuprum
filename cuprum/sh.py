@@ -440,6 +440,19 @@ def _validate_convenience_flags(options: RunOutputOptions) -> None:
             raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
+class _FlagsGeneratedGitHubActionsSink(GitHubActionsSink):
+    """Mark adapters synthesized from RunOutputOptions flags for replacement.
+
+    This private subtype lets frozen option copies rebuild their own adapter
+    when the flags change, while ordinary GitHubActionsSink instances remain
+    explicit sinks that take precedence.
+    """
+
+    def __init__(self, *, group: bool, annotate_failure: bool) -> None:
+        """Create an adapter whose toggles match the caller-facing flags."""
+        super().__init__(emit_group=group, emit_annotation=annotate_failure)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
     """Configure captured and mirrored command output.
@@ -496,13 +509,15 @@ class RunOutputOptions:
         stop-commands lease that shields it from child output, and the
         workflow-command syntax all stay inside the adapter and the execution
         layer learns nothing new. A pipeline emits one group for the whole
-        pipeline, not one per stage.
+        pipeline, not one per stage. Values other than ``bool`` raise
+        ``ValueError``.
     annotate_failure : bool, default=False
         Convenience opt-in for a single ``::error::`` annotation when the run
         ends in a non-zero exit, a timeout, or an error. Synthesizes
         ``GitHubActionsSink(emit_annotation=True)`` the same way ``group`` does,
         and composes with it: either flag alone synthesizes the adapter with
-        only its own half enabled.
+        only its own half enabled. Values other than ``bool`` raise
+        ``ValueError``.
 
     Notes
     -----
@@ -520,11 +535,12 @@ class RunOutputOptions:
     recorded but ignored, and no adapter is synthesized. Put the sink on a
     new ``RunOutputOptions`` or use ``dataclasses.replace`` when adapting
     shared options; ``run`` methods do not override ``output.sink`` per call.
+    Replacing either flag on flag-generated options rebuilds their adapter to
+    match the new values, while an explicitly supplied sink remains untouched.
 
     The default GitHub Actions sink does not serialize overlapping sessions.
-    Do not share group-enabled options between concurrent runs that write to
-    the same parent stderr; run those commands sequentially so their workflow
-    frames cannot interleave.
+    Do not run grouped commands concurrently when they write to the same parent
+    stderr; run them sequentially so their workflow frames cannot interleave.
 
     Workflow commands are written to the parent's stderr by default. Neither
     flag changes capture, exit codes, or the returned result.
@@ -596,19 +612,23 @@ class RunOutputOptions:
         :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
         code, which is what keeps workflow-command syntax inside the adapter.
         The synthesized sink carries no ``force``, so it stays subject to the
-        adapter's own ``GITHUB_ACTIONS`` gate; and an explicit ``sink`` wins
-        outright, so a caller can override a shared options object per call.
+        adapter's own ``GITHUB_ACTIONS`` gate. A private sink subtype marks
+        generated adapters so :func:`dataclasses.replace` can resynthesize
+        them when flags change; explicit sinks remain untouched.
         """
-        if self.sink is not None:
+        is_synthesized_sink = isinstance(self.sink, _FlagsGeneratedGitHubActionsSink)
+        if self.sink is not None and not is_synthesized_sink:
             return
         if not (self.group or self.annotate_failure):
+            if is_synthesized_sink:
+                object.__setattr__(self, "sink", None)
             return
         object.__setattr__(
             self,
             "sink",
-            GitHubActionsSink(
-                emit_group=self.group,
-                emit_annotation=self.annotate_failure,
+            _FlagsGeneratedGitHubActionsSink(
+                group=self.group,
+                annotate_failure=self.annotate_failure,
             ),
         )
 
