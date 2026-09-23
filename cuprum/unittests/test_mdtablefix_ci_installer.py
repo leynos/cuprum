@@ -68,8 +68,8 @@ def test_full_python_test_jobs_install_mdtablefix_before_running_tests(
     ), f"{workflow_name}:{job_name} must install mdtablefix before {test_step_name}"
 
 
-def test_typecheck_python_suite_installs_mdtablefix_conditionally() -> None:
-    """Skip the formatter download only on the non-test matrix leg."""
+def test_typecheck_python_suite_installs_mdtablefix_on_every_leg() -> None:
+    """Every matrix leg runs the Python suite, so every leg needs the formatter."""
     installer = next(
         step
         for step in steps("ci.yml", "typecheck-test")
@@ -77,6 +77,7 @@ def test_typecheck_python_suite_installs_mdtablefix_conditionally() -> None:
     )
 
     guard = ungated("ci.yml", "typecheck-test", installer.get("if"))
-    assert guard == "matrix.python-suite", (
-        "typecheck-test must install mdtablefix exactly on the Python test legs"
+    assert guard == "", (
+        "typecheck-test must install mdtablefix on every leg, gated only by "
+        f"the leg flag, got if: {installer.get('if')!r}"
     )

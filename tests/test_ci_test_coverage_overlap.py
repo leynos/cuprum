@@ -164,7 +164,12 @@ def test_no_other_job_executes_the_rust_suite() -> None:
 
 
 def test_the_covered_interpreter_does_not_repeat_the_python_suite() -> None:
-    """Run pytest once per interpreter, counting the coverage job's run."""
+    """Run pytest once per interpreter, counting the coverage job's run.
+
+    The matrix has no leg on the interpreter the coverage job runs, so its
+    test step can be unconditional. That interpreter is still typechecked:
+    `extension-tests` runs it and runs `make typecheck`.
+    """
     matrix_job = job("ci.yml", "typecheck-test")
     strategy = matrix_job.get("strategy")
     assert isinstance(strategy, dict), "typecheck-test must declare a strategy"
@@ -173,34 +178,24 @@ def test_the_covered_interpreter_does_not_repeat_the_python_suite() -> None:
     include = matrix.get("include")
     assert isinstance(include, list), "typecheck-test must list its legs"
     # Every leg, not a mapping keyed by version: two legs naming the same
-    # interpreter would collapse, and the survivor could report `false` while
-    # the other one ran the suite.
-    wrong = [
-        leg
-        for leg in include
-        if leg["python-suite"] is not (leg["python-version"] != COVERED_PYTHON_VERSION)
-    ]
-    assert not wrong, (
-        f"every leg on {COVERED_PYTHON_VERSION} must set python-suite false, "
-        f"because the coverage job already runs pytest there, and every other "
-        f"leg must set it true; wrong legs: {wrong}"
-    )
+    # interpreter would collapse and hide one of them.
     covered = [
         leg for leg in include if leg["python-version"] == COVERED_PYTHON_VERSION
     ]
-    assert len(covered) == 1, (
-        f"expected exactly one {COVERED_PYTHON_VERSION} leg, found {len(covered)}"
+    assert not covered, (
+        f"no matrix leg may run {COVERED_PYTHON_VERSION}: the coverage job runs "
+        f"its suite and extension-tests its typechecker; found {covered}"
     )
-    run_step = next(
+    typecheck = [
         step
-        for step in steps("ci.yml", "typecheck-test")
-        if step.get("name") == "Run tests"
+        for step in steps("ci.yml", "extension-tests")
+        if " ".join(str(step.get("run", "")).split()) == "make typecheck"
+    ]
+    assert len(typecheck) == 1, (
+        f"extension-tests must run `make typecheck` once for "
+        f"{COVERED_PYTHON_VERSION}, found {len(typecheck)}"
     )
-    guard = ungated("ci.yml", "typecheck-test", run_step.get("if"))
-    assert guard == "matrix.python-suite", (
-        "the test step must be gated on the matrix flag rather than on a "
-        "version literal, so adding an interpreter cannot silently duplicate it"
-    )
+    assert "if" not in typecheck[0], "the 3.13 typecheck must not be guarded"
 
 
 def test_the_extension_gate_is_not_a_duplicate_run() -> None:

@@ -415,29 +415,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # `python-suite` is false only for the interpreter the coverage job
-          # already runs pytest on. That leg keeps the typechecker, and its
-          # required check name, without repeating a suite verbatim.
+          # No 3.13 leg: the coverage job runs that interpreter's suite, and
+          # `extension-tests` runs its typechecker, so a leg here would only
+          # start a runner to repeat one of them.
           - python-version: '3.12'
             python-label: '3.12'
             allow-prereleases: false
             experimental: false
-            python-suite: true
-          - python-version: '3.13'
-            python-label: '3.13'
-            allow-prereleases: false
-            experimental: false
-            python-suite: false
           - python-version: '3.14'
             python-label: '3.14'
             allow-prereleases: false
             experimental: false
-            python-suite: true
           - python-version: '3.15'
             python-label: '3.15a'
             allow-prereleases: true
             experimental: true
-            python-suite: true
     steps:
       - name: Check out repository
         if: env.LEG_RUNS == 'true'
@@ -490,13 +482,9 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
 
-      # The compiler cache follows the Python suite. The leg that only
-      # typechecks compiles nothing, so installing the wrapper there would
-      # report zero compile requests, which reads as a broken integration
-      # rather than as a job with nothing to compile.
       - name: Restore the compiler cache
         id: sccache-dir
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/sccache
@@ -527,7 +515,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         uses: ./.github/actions/setup-sccache
 
       # Immediately after the wrapper exists, so nothing between setup and
@@ -535,7 +523,7 @@ jobs:
       # the cranelift Whitaker suite before this ran, and those requests were
       # zeroed away before the report.
       - name: Reset compiler-cache counters
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         run: sccache --zero-stats
 
       - name: Set up Python
@@ -571,7 +559,7 @@ jobs:
       # The full Python suite exercises the native mdtablefix file selector.
       # Restoring the tool cache is an optimization, not a prerequisite.
       - name: Install mdtablefix
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
@@ -581,8 +569,8 @@ jobs:
         run: make typecheck
 
       # `make test-python`, not `make test`: the Rust suite runs exactly once
-      # per event, inside the coverage job, under instrumentation. This step is
-      # also skipped on the interpreter the coverage job already runs, because
+      # per event, inside the coverage job, under instrumentation. The matrix
+      # has no leg on the interpreter the coverage job already runs, because
       # that would be the same suite on the same interpreter twice.
       #
       # `make test-python` defaults Cargo's job count to 1 for a developer
@@ -592,13 +580,13 @@ jobs:
       # Cargo target directory, so xdist workers would contend on one build
       # lock rather than overlap.
       - name: Run tests
-        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        if: env.LEG_RUNS == 'true'
         run: |
           make test-python \
             PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
       - name: Record compiler-cache effectiveness
-        if: always() && matrix.python-suite && env.LEG_RUNS == 'true'
+        if: always() && env.LEG_RUNS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -611,9 +599,9 @@ jobs:
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # One writer per key. This matrix is the only job that installs the whole
-      # tool set (nextest included) on every supported interpreter, so it owns
-      # the tool archive; every other job restores it. Saving only on `main`,
+      # One writer per key. This matrix installs the whole tool set (nextest
+      # included) on its interpreters, so it owns their tool archives;
+      # `extension-tests` owns the 3.13 one. Saving only on `main`,
       # and only after a miss, keeps pull requests from racing each other for a
       # key they are not trusted to publish.
       - name: Save the installed tools
@@ -633,12 +621,10 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
 
       - name: Save the compiler cache
-        # Each leg that runs the Python suite compiles the extension against
-        # its own interpreter, and `pyo3` is built without `abi3`, so those
-        # objects serve no other leg. The interpreter is part of the key, so
-        # each leg is the sole writer of its own family rather than four legs
-        # racing for one. The typecheck-only leg compiles nothing and has no
-        # compiler cache to save.
+        # Each leg compiles the extension against its own interpreter, and
+        # `pyo3` is built without `abi3`, so those objects serve no other leg.
+        # The interpreter is part of the key, so each leg is the sole writer of
+        # its own family rather than three legs racing for one.
         #
         # The entry is a rolling generation named after the run, so there is
         # no cache-hit guard to skip: the key is new every time, and a run
@@ -648,7 +634,6 @@ jobs:
         # not trusted to own.
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          matrix.python-suite &&
           env.LEG_RUNS == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -820,6 +805,13 @@ jobs:
       - name: Run extension-gated tests
         run: make test-extension
 
+      # The 3.13 typechecker runs here rather than in a matrix leg of its own.
+      # This job already builds the 3.13 environment, so the typecheck costs
+      # seconds, where the leg cost a runner start and a Makefile-parser
+      # install to run the same command.
+      - name: Run typechecker
+        run: make typecheck
+
       - name: Record compiler-cache effectiveness
         if: always()
         shell: bash
@@ -833,6 +825,24 @@ jobs:
             cat sccache-stats.txt
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      # The 3.13 tool family's writer, since the matrix has no 3.13 leg. The
+      # same main-only, miss-only guard as the matrix's own save, so pull
+      # requests never race for a key they are not trusted to publish.
+      - name: Save the installed tools
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.tool-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/bin
+            ~/.cache/uv
+            ~/.local/share/uv
+            .uv-cache
+            .uv-tools
+          key: ${{ env.TOOL_CACHE_KEY }}
 
       # This is the heaviest Rust gate that runs on `main`: it resolves the
       # locked graph and compiles the extension. It therefore owns the Cargo
