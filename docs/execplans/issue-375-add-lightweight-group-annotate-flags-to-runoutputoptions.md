@@ -149,19 +149,24 @@ processes.
   the Lody session title.
 - [x] (2026-09-22) Phase 1 read-only confirmation pass complete. See
   `Surprises & discoveries` for the three corrections it produced.
-- [x] (2026-09-22) Phase 2 complete: adapter toggles committed as `9e055db2`.
-  `GitHubActionsSession` takes its title and both toggles as one `_Annotation`
-  value; `GitHubActionsSink` takes `group=`/`annotate=` keywords and stores
-  them as the `emit_group`/`emit_annotation` attributes.
-- [x] (2026-09-22) Phase 3 complete: `RunOutputOptions.group`/`annotate_failure`
-  plus sink synthesis committed as `33f72288`. Gate repair recorded in
-  `aa32be63`; the stale call sites it left behind repaired as `77532cf2`.
-- [x] (2026-09-22) Phase 4 complete. Eight end-to-end tests driving the flags
-  through real subprocess runs (`ae36fa03`); users' guide subsection, CHANGELOG
-  entry, ADR-013 amendment, and this plan (`f67282c2`). `make markdownlint` and
-  its `spelling` tier pass, exit 0.
-- [ ] Gates: `make check-fmt`, `make lint`, `make typecheck`, `make test` via
-  `scrutineer`, then CodeRabbit.
+- [x] (2026-09-22) Phase 2 complete: adapter toggles committed as `24c63aa8`
+  and updated to the specified `emit_group=`/`emit_annotation=` API in
+  `2aa2634d`. `GitHubActionsSession` takes its title and both toggles as one
+  `_Annotation` value.
+- [x] (2026-09-22) Phase 3 complete: `RunOutputOptions.group` and
+  `annotate_failure` plus sink synthesis committed as `8276dd9d`. Gate findings
+  were recorded in `5047f22d`; affected call sites were repaired in `cc319a87`.
+- [x] (2026-09-22) Phase 4 complete: real-subprocess coverage is in
+  `cc319a87`/`d680cfa9`; the users' guide subsection, CHANGELOG entry, ADR-013
+  amendment, and plan update are in `0617b31e`.
+- [x] (2026-09-23) Rebased onto `origin/main` at `e82cf9f6`; `git range-diff`
+  confirmed all nine feature commits replayed without patch changes.
+- [x] (2026-09-23) All seven sequential gates passed: `make check-fmt`,
+  `make lint`, `make typecheck`, `make test`, `make markdownlint`,
+  `make spelling`, and `make nixie`. Evidence is in the `-6.out` logs under
+  `/tmp` for this worktree.
+- [ ] Run `coderabbit review --agent` against the gated commit and resolve any
+  valid findings.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -240,26 +245,19 @@ processes.
   adapter-level check raise `TypeError`. The two tests that asserted
   `ValueError` were updated in the same change.
 
-- Observation: **commit `977065cf` renamed the sink's keywords to
-  `group=`/`annotate=` but left `_open_gha_session`'s call passing `emit_group=`
-  /`emit_annotation=`**, so that revision of the branch has a test file that
-  cannot construct the object it tests — a `TypeError` on every use of the
-  helper, i.e. roughly a third of the adapter suite. The next session found it
-  only because the working tree still held the correction, unstaged, while the
-  ExecPlan recorded Phase 2 as green. Impact: repaired in `77532cf2`, a
-  dedicated commit rather than an amend to `977065cf`. Interactive rebase is
-  unavailable in this environment, so the choice was between a non-interactive
-  history rewrite and an honest follow-up; the follow-up is preferable because
-  the branch is a review artefact whose value is partly that the correction is
-  visible beside the mistake. The helper's own parameters keep the `emit_*`
-  spelling the tests' assertions read, and map to the sink's `group`/`annotate`
-  keywords at the single construction site, so the two vocabularies meet in one
-  place. **Lesson: a rename decided in review is not finished until every call
-  site is updated in the same commit — and a gate run whose output was never
-  matched against the commit it validated is not evidence about that commit.**
-  The tolerance that should have caught it is `Tolerances`' gate-at-each-
-  commit requirement; the failure mode was running the gates after the
-  *amendment* commit and crediting them to the *earlier* one.
+- Observation: **commit `977065cf` temporarily renamed the sink's keywords to
+  `group=`/`annotate=` while `_open_gha_session` still passed `emit_group=`/
+  `emit_annotation=`**, so that revision could not construct the object used by
+  a third of the adapter suite. The mismatch was repaired in `77532cf2`, but
+  the public keyword names still diverged from the supplied implementation
+  contract. During the resumed review, the constructor and helper were aligned
+  on `emit_group=`/`emit_annotation=`; this is an additive configuration
+  surface on `GitHubActionsSink`, while the convenience flags retain the shorter
+  `RunOutputOptions.group` and `RunOutputOptions.annotate_failure` names.
+  **Lesson: keep constructor names, helpers, tests, and the recorded contract
+  aligned in the same change.** The tolerance that should have caught the
+  earlier mismatch is the requirement to gate every commit; a gate run is
+  evidence only for the exact candidate it validated.
 
 ## Decision log
 
@@ -288,23 +286,20 @@ processes.
   failures). The adapter names describe what the adapter writes; the option
   names describe what the caller wants. Date/Author: 2026-09-22, agent.
 
-- Decision: the sink's **constructor** keywords are `group=`/`annotate=`, while
-  its stored **attributes** stay `emit_group`/`emit_annotation`. Rationale:
-  this supersedes the wording above on the constructor only. The synthesis in
-  `sh.py` is the sink's principal programmatic caller, and naming its keywords
-  after the `RunOutputOptions` fields it copies means the copy reads
-  `group=self.group` rather than crossing two vocabularies in one expression.
-  The attribute names are what the session and the framing code read, where the
-  `emit_*` vocabulary describes what is written and reads better; they are also
-  what `test_pipeline_output_options.py` asserts on. Date/Author: 2026-09-22,
-  agent.
-
 - Decision: validate the toggles in **both** places — `RunOutputOptions` and
   the adapter constructor. Rationale: each is usable without the other. A
-  caller may pass `GitHubActionsSink(group=1)` directly, and the flags may be
-  set on an options object whose sink is later overridden per call. One check
-  at either site would leave the other entry point accepting a merely truthy
-  value. Date/Author: 2026-09-22, agent.
+  caller may pass `GitHubActionsSink(emit_group=1)` directly, and the flags may
+  be set on an options object whose sink is later overridden per call. One
+  check at either site would leave the other entry point accepting a merely
+  truthy value. Date/Author: 2026-09-22, agent.
+
+- Decision: keep the adapter constructor's toggle keywords as
+  `emit_group=`/`emit_annotation=`, as specified in the ticket's coding plan.
+  The `RunOutputOptions` fields retain `group`/`annotate_failure`; synthesis
+  maps those public convenience fields to the adapter's explicit write
+  controls. Rationale: the shorter names describe caller intent, while the
+  adapter names state which workflow-command frames it writes. Date/Author:
+  2026-09-23, agent.
 
 - Decision: the synthesized sink carries no `force` and no `title`.
   Rationale: `force` would frame runs outside GitHub Actions, contradicting
@@ -575,8 +570,8 @@ In `cuprum/sh.py`:
    `max_echo_line_bytes` early return so it always runs.
 5. After validation, synthesize in a helper `_synthesize_sink_from_flags`:
    if `self.sink is None and (self.group or self.annotate_failure)`, then
-   `object.__setattr__(self, "sink", GitHubActionsSink(group=self.group,
-   annotate=self.annotate_failure))`.
+   `object.__setattr__(self, "sink", GitHubActionsSink(emit_group=self.group,
+   emit_annotation=self.annotate_failure))`.
    Otherwise leave `self.sink` alone.
 6. `IOOptions` inherits the fields and the synthesis through
    `RunOutputOptions.__post_init__`; no change needed there, but confirm the
@@ -867,10 +862,11 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   amendment names the Option B reconciliation. Recovery: revert the docs
   commit. Remaining gaps: none.
 
-- **EP-M4 (gates and review).** Outcome: all gates green and CodeRabbit
-  concerns resolved. Acceptance evidence: `scrutineer`'s gate report plus the
-  CodeRabbit verdict. Conformance check: full trace chain still current.
-  Recovery: fix and re-run the failing gate only. Remaining gaps: none.
+- **EP-M4 (gates and review).** Outcome: all seven local gates pass; CodeRabbit
+  review is pending. Acceptance evidence: `scrutineer`'s `-6` gate report and
+  the upcoming CodeRabbit verdict. Conformance check: full trace chain still
+  current. Recovery: address any valid finding, then rerun the full gates and
+  review. Remaining gaps: CodeRabbit review and publication.
 
 ## Outcomes & retrospective
 

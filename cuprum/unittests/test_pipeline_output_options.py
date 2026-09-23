@@ -502,10 +502,29 @@ def test_group_and_annotate_failure_default_off() -> None:
     )
 
 
-@pytest.mark.parametrize("flag", ["group", "annotate_failure"])
+def _options_with_invalid_group(value: object) -> RunOutputOptions:
+    """Construct options with an invalid group value for validation tests."""
+    return RunOutputOptions(group=typ.cast("bool", value))
+
+
+def _options_with_invalid_annotation(value: object) -> RunOutputOptions:
+    """Construct options with an invalid annotation value for validation tests."""
+    return RunOutputOptions(annotate_failure=typ.cast("bool", value))
+
+
+@pytest.mark.parametrize(
+    ("flag", "construct"),
+    [
+        pytest.param("group", _options_with_invalid_group, id="group"),
+        pytest.param(
+            "annotate_failure", _options_with_invalid_annotation, id="annotate"
+        ),
+    ],
+)
 @pytest.mark.parametrize("invalid", [1, 0, "yes", None, 1.0])
 def test_run_output_options_rejects_non_bool_flags(
     flag: str,
+    construct: cabc.Callable[[object], RunOutputOptions],
     invalid: object,
 ) -> None:
     """A non-``bool`` flag value is rejected at construction.
@@ -515,7 +534,7 @@ def test_run_output_options_rejects_non_bool_flags(
     documented ``bool``. ``max_echo_line_bytes`` already draws this line.
     """
     with pytest.raises(TypeError, match=f"{flag} must be a bool"):
-        RunOutputOptions(**{flag: invalid})  # type: ignore[arg-type]
+        construct(invalid)
 
 
 def test_flags_synthesize_github_actions_sink() -> None:
@@ -583,15 +602,16 @@ def test_io_options_inherits_the_flags() -> None:
 
 
 @pytest.mark.parametrize(
-    "flags",
+    ("group", "annotate_failure"),
     [
-        pytest.param({"group": True}, id="group"),
-        pytest.param({"annotate_failure": True}, id="annotate"),
-        pytest.param({"group": True, "annotate_failure": True}, id="both"),
+        pytest.param(True, False, id="group"),
+        pytest.param(False, True, id="annotate"),
+        pytest.param(True, True, id="both"),
     ],
 )
 def test_resolve_pipeline_output_preserves_flags(
-    flags: dict[str, bool],
+    group: bool,
+    annotate_failure: bool,
 ) -> None:
     """Pipeline resolution carries both flags onto the resolved options.
 
@@ -599,17 +619,15 @@ def test_resolve_pipeline_output_preserves_flags(
     supplied one, so the flags — and the sink the initializer synthesized from
     them — survive onto the pipeline run.
     """
-    supplied = RunOutputOptions(**flags)
+    supplied = RunOutputOptions(group=group, annotate_failure=annotate_failure)
 
     resolved = _resolve_pipeline_output(supplied, _DeprecatedOutputFlags())
 
     assert resolved is supplied, (
         "pipeline resolution must forward the caller's own options object"
     )
-    assert resolved.group is flags.get("group", False), (
-        "group must survive pipeline resolution"
-    )
-    assert resolved.annotate_failure is flags.get("annotate_failure", False), (
+    assert resolved.group is group, "group must survive pipeline resolution"
+    assert resolved.annotate_failure is annotate_failure, (
         "annotate_failure must survive pipeline resolution"
     )
     assert isinstance(resolved.sink, GitHubActionsSink), (
@@ -618,7 +636,7 @@ def test_resolve_pipeline_output_preserves_flags(
     assert (
         resolved.sink.emit_group,
         resolved.sink.emit_annotation,
-    ) == (flags.get("group", False), flags.get("annotate_failure", False)), (
+    ) == (group, annotate_failure), (
         "the resolved sink's toggles must still reflect the caller's flags"
     )
 

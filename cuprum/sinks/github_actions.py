@@ -271,11 +271,8 @@ class GitHubActionsSink:
     :class:`GitHubActionsSession` from :meth:`open_session`, so one sink
     instance can serve many sequential or concurrent runs.
 
-    ``group`` and ``annotate`` name the two halves of the frame as
-    :class:`~cuprum.sh.RunOutputOptions` names them, so a caller moving
-    between the two keeps one vocabulary; the stored ``emit_group`` and
-    ``emit_annotation`` spellings are the framing vocabulary the session code
-    reads better in.
+    ``emit_group`` and ``emit_annotation`` independently control whether the
+    session writes the collapsible group frame and failure annotation.
 
     Parameters
     ----------
@@ -292,12 +289,12 @@ class GitHubActionsSink:
         GitHub Actions. Intended for local reproduction of CI framing and
         non-standard runners; when ``False`` (the default) the sink defers
         to the environment check.
-    group:
+    emit_group:
         Whether a session writes the group commands and their stop-commands
         lease. ``False`` leaves the run's log destination unframed, which is
         what ``RunOutputOptions(annotate_failure=True)`` asks for: an
         annotation without collapsible logs.
-    annotate:
+    emit_annotation:
         Whether a failed outcome emits its ``::error::`` annotation. ``False``
         keeps the framing and drops the annotation, which is what
         ``RunOutputOptions(group=True)`` asks for.
@@ -305,9 +302,9 @@ class GitHubActionsSink:
     Raises
     ------
     TypeError
-        If ``group`` or ``annotate`` is not a ``bool``. They gate workflow
-        commands, so a merely truthy value would frame a run on the strength
-        of something the caller never documented as a flag.
+        If ``emit_group`` or ``emit_annotation`` is not a ``bool``. They gate
+        workflow commands, so a merely truthy value would frame a run on the
+        strength of something the caller never documented as a flag.
     """
 
     def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
@@ -316,17 +313,17 @@ class GitHubActionsSink:
         *,
         title: str | None = None,
         force: bool = False,
-        group: bool = True,
-        annotate: bool = True,
+        emit_group: bool = True,
+        emit_annotation: bool = True,
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
-        _reject_non_bool("group", group)
-        _reject_non_bool("annotate", annotate)
+        _reject_non_bool("emit_group", emit_group)
+        _reject_non_bool("emit_annotation", emit_annotation)
         self.destination = destination
         self.title = title
         self.force = force
-        self.emit_group = group
-        self.emit_annotation = annotate
+        self.emit_group = emit_group
+        self.emit_annotation = emit_annotation
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.

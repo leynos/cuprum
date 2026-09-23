@@ -239,7 +239,11 @@ def test_forced_sink_frames_pipeline_and_keeps_results() -> None:
 _ON_CI = "true"
 
 
-def _flags_output(**flags: bool) -> RunOutputOptions:
+def _flags_output(
+    *,
+    group: bool = False,
+    annotate_failure: bool = False,
+) -> RunOutputOptions:
     """Build options carrying only the convenience flags under test.
 
     No ``sink`` is passed: these tests exercise the synthesis, and the
@@ -250,7 +254,11 @@ def _flags_output(**flags: bool) -> RunOutputOptions:
     RunOutputOptions
         Echoing options carrying *flags* and no sink.
     """
-    return RunOutputOptions(echo=True, **flags)
+    return RunOutputOptions(
+        echo=True,
+        group=group,
+        annotate_failure=annotate_failure,
+    )
 
 
 def _python_command(

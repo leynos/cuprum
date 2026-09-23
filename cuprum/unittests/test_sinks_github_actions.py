@@ -148,8 +148,8 @@ def _open_gha_session(
     sink = GitHubActionsSink(
         typ.cast("typ.IO[str]", buffer),
         force=force,
-        group=emit_group,
-        annotate=emit_annotation,
+        emit_group=emit_group,
+        emit_annotation=emit_annotation,
     )
     session = sink.open_session(SessionStart(label="project: program", argv=argv))
     assert session is not None, "a forced sink must return an active session"
@@ -570,9 +570,29 @@ def test_toggles_compose_independently(
     )
 
 
-@pytest.mark.parametrize("toggle", ["group", "annotate"])
+def _sink_with_invalid_group(value: object) -> GitHubActionsSink:
+    """Construct a sink with an invalid group value for validation tests."""
+    return GitHubActionsSink(emit_group=typ.cast("bool", value))
+
+
+def _sink_with_invalid_annotation(value: object) -> GitHubActionsSink:
+    """Construct a sink with an invalid annotation value for validation tests."""
+    return GitHubActionsSink(emit_annotation=typ.cast("bool", value))
+
+
+@pytest.mark.parametrize(
+    ("toggle", "construct"),
+    [
+        pytest.param("emit_group", _sink_with_invalid_group, id="group"),
+        pytest.param("emit_annotation", _sink_with_invalid_annotation, id="annotation"),
+    ],
+)
 @pytest.mark.parametrize("invalid", [1, 0, "yes", None, 1.0])
-def test_sink_rejects_non_bool_toggles(toggle: str, invalid: object) -> None:
+def test_sink_rejects_non_bool_toggles(
+    toggle: str,
+    construct: cabc.Callable[[object], GitHubActionsSink],
+    invalid: object,
+) -> None:
     """A non-``bool`` toggle is rejected where the sink is constructed.
 
     The toggles gate workflow commands, so a merely truthy value would frame a
@@ -581,4 +601,4 @@ def test_sink_rejects_non_bool_toggles(toggle: str, invalid: object) -> None:
     falsy or not remotely boolean-shaped.
     """
     with pytest.raises(TypeError, match=f"{toggle} must be a bool"):
-        GitHubActionsSink(**{toggle: invalid})  # type: ignore[arg-type]
+        construct(invalid)

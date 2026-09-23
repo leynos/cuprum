@@ -490,7 +490,7 @@ class RunOutputOptions:
     group : bool, default=False
         Convenience opt-in for a GitHub Actions collapsible log group around
         this run's echoed output. It is a shim over ``sink``: setting it
-        constructs ``GitHubActionsSink(group=True)`` and stores it in
+        constructs ``GitHubActionsSink(emit_group=True)`` and stores it in
         ``sink`` when the caller supplied none, so the framing, the
         stop-commands lease that shields it from child output, and the
         workflow-command syntax all stay inside the adapter and the execution
@@ -499,9 +499,9 @@ class RunOutputOptions:
     annotate_failure : bool, default=False
         Convenience opt-in for a single ``::error::`` annotation when the run
         ends in a non-zero exit, a timeout, or an error. Synthesizes
-        ``GitHubActionsSink(annotate=True)`` the same way ``group``
-        does, and composes with it: either flag alone synthesizes the adapter
-        with only its own half enabled.
+        ``GitHubActionsSink(emit_annotation=True)`` the same way ``group`` does,
+        and composes with it: either flag alone synthesizes the adapter with
+        only its own half enabled.
 
     Notes
     -----
@@ -601,8 +601,8 @@ class RunOutputOptions:
             self,
             "sink",
             GitHubActionsSink(
-                group=self.group,
-                annotate=self.annotate_failure,
+                emit_group=self.group,
+                emit_annotation=self.annotate_failure,
             ),
         )
 
