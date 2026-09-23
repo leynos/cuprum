@@ -494,8 +494,15 @@ to the CodeScene changed-line gate, which no longer runs in this lane.
 
 `coverage-main.yml`'s `coverage-upload` job owns both things the CI lane leaves
 out — the ratchet baseline publication and the only CodeScene upload — and it
-runs on `push` to `main` and on `workflow_dispatch`. Three properties of that
-arrangement are worth pinning:
+runs on `push` to `main` and on `workflow_dispatch`. The dispatch is needed
+because Dependabot's automerge fires no push: a merge made with the automerge
+workflow's `GITHUB_TOKEN` starts no `push` workflow, so an automerged change
+reaches this job only when someone dispatches it. Runs share the concurrency
+group `coverage-main-${{ github.ref }}` with `cancel-in-progress: false`,
+because a cancelled publisher abandons both its upload and its baseline write.
+GitHub keeps one pending run per group, though, so a dispatch that replaces a
+pending push leaves the baseline one commit behind until the next push to
+`main` publishes. The properties worth pinning are these:
 
 - **Publication has two guards.** The `publish-baseline` dispatch input is a
   boolean defaulting to publishing, so a dispatch carrying an automerged change
@@ -504,21 +511,30 @@ arrangement are worth pinning:
   trigger is restricted to `main` but `workflow_dispatch` is not:
   `gh workflow run coverage-main.yml --ref some-branch` would otherwise publish
   that branch's coverage as the authoritative baseline.
-- **The upload is guarded to `main` too.** The CodeScene step's guard is
-  `env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'`, for the same
-  reason: a dispatch from another branch would otherwise upload that branch's
-  coverage to a project that analyses only `main`.
+- **The upload is guarded to `main` too.** A step with the id
+  `codescene-token` runs only
+  `echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"`,
+  and the upload's guard is
+  `steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'`,
+  for the same reason: a dispatch from another branch would otherwise upload
+  that branch's coverage to a project that analyses only `main`.
+- **The token is in no `env`.** The upload takes it directly as
+  `access-token: ${{ secrets.CS_ACCESS_TOKEN }}`. The composite upload action
+  passes a step's `env` on to every step nested inside it, so a token held in
+  `env` at any scope reaches code this workflow never reads.
 - **The upload mode is explicit.** The CodeScene step declares `mode: upload`.
   The shared action already defaults to `upload`, so that input is not
   load-bearing today, but the sibling `check` mode is the pull-request
   comparison, and switching to it would silently retire main-branch publication.
 - **Both contracts are pinned.** `tests/test_ci_ratchet_publication.py`
   evaluates the publication expression per event rather than matching its text,
-  and `tests/test_ci_codescene_boundary.py` asserts the upload mode by value
-  and splits the upload guard on `&&`, refusing any unquoted `||`. A substring
-  check for the ref would pass
-  `... && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'`,
-  which uploads from every dispatched branch.
+  `tests/test_ci_codescene_boundary.py` asserts the upload mode by value, and
+  `tests/test_ci_codescene_publisher.py` holds the token check, the direct
+  input, the absence of the token from every `env` scope, and the exact
+  concurrency. It splits the upload guard on `&&` and refuses any unquoted
+  `||`: an alternative hidden in an extra narrowing conjunct, as in
+  `<guard> && github.actor != 'x' || github.event_name == 'workflow_dispatch'`,
+  leaves both required conjuncts whole while making them optional.
 
 Nothing a pull request can run may contact CodeScene or reach its token, and
 "can run" is a closure rather than a trigger list.

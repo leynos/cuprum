@@ -236,7 +236,8 @@ def test_an_alternative_hidden_in_an_extra_conjunct_is_refused() -> None:
     dispatched branch. This is the case that proves the refusal is needed.
     """
     guard = (
-        "env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main' "
+        "steps.codescene-token.outputs.available == 'true' "
+        "&& github.ref == 'refs/heads/main' "
         "&& github.actor != 'x' || github.event_name == 'workflow_dispatch'"
     )
     with pytest.raises(AssertionError, match=r"must not contain \|\|"):
@@ -251,7 +252,8 @@ def test_an_appended_alternative_is_not_accepted() -> None:
     contract's behaviour on the obvious escape is pinned all the same.
     """
     guard = (
-        "env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main' "
+        "steps.codescene-token.outputs.available == 'true' "
+        "&& github.ref == 'refs/heads/main' "
         "|| github.event_name == 'workflow_dispatch'"
     )
     try:

@@ -137,12 +137,22 @@ def contact_findings(documents: cabc.Mapping[str, object]) -> list[str]:
     ]
 
 
+#: The `id` of the publisher step that reports whether the token exists.
+CREDENTIAL_CHECK_ID: typ.Final = "codescene-token"
+
+#: That step's whole command. It renders only `true` or `false`, and reads the
+#: secret without placing it in any `env`, which the composite upload action
+#: would pass on to every step nested inside it.
+CREDENTIAL_CHECK_COMMAND: typ.Final = (
+    'echo "available=${{ secrets.CS_ACCESS_TOKEN != \'\' }}" >> "$GITHUB_OUTPUT"'
+)
+
 #: The conjuncts the publisher's upload guard must contain, as written after
 #: whitespace normalization. Extra narrowing conjuncts are permitted, which is
 #: why an unquoted ``||`` must be refused outright: hidden in an extra
 #: conjunct it leaves both of these whole and still makes them optional.
 UPLOAD_GUARD: typ.Final = frozenset({
-    "env.CS_ACCESS_TOKEN != ''",
+    f"steps.{CREDENTIAL_CHECK_ID}.outputs.available == 'true'",
     "github.ref == 'refs/heads/main'",
 })
 
@@ -157,8 +167,8 @@ def missing_upload_conjuncts(condition: object) -> list[str]:
 
     Examples
     --------
-    >>> missing_upload_conjuncts("env.CS_ACCESS_TOKEN != ''")
-    ["github.ref == 'refs/heads/main'"]
+    >>> missing_upload_conjuncts("github.ref == 'refs/heads/main'")
+    ["steps.codescene-token.outputs.available == 'true'"]
     """
     return sorted(UPLOAD_GUARD - guard_conjuncts(condition))
 

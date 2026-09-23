@@ -9,7 +9,9 @@ reads as satisfied while the others are intact:
 * none of them may name, forward, or inherit the access token,
 * the trunk publisher must ask for the upload mode rather than the
   pull-request check mode, and
-* the upload's guard must require the main ref as well as the token.
+* the upload's guard must require the main ref as well as the token, which
+  ``tests/test_ci_codescene_publisher.py`` holds with the publisher's other
+  clauses.
 
 "A workflow a pull request can run" is a closure, not a trigger list: it
 follows same-repository reusable-workflow calls, because a called workflow runs
@@ -41,7 +43,6 @@ import typing as typ
 from tests.helpers.ci_closure import PULL_REQUEST_EVENTS, reachable
 from tests.helpers.ci_codescene import (
     contact_findings,
-    missing_upload_conjuncts,
     token_findings,
 )
 from tests.helpers.ci_runners import (
@@ -195,27 +196,6 @@ def test_no_pull_request_workflow_can_read_the_codescene_token() -> None:
     findings = token_findings(_pull_request_closure())
     assert not findings, (
         f"pull-request workflows must not reach the CodeScene token: {findings}"
-    )
-
-
-def test_the_upload_is_guarded_to_main_and_to_a_present_token() -> None:
-    """The upload's guard must require both the main ref and the token.
-
-    ``coverage-main.yml`` also answers ``workflow_dispatch``, which may start
-    from any branch, so the trigger's ``branches: [main]`` filter does not
-    cover a dispatch. The guard is split on ``&&`` and an unquoted ``||``
-    refused, since an ``||`` hidden in an extra narrowing conjunct leaves both
-    required conjuncts whole while making them optional.
-    """
-    workflow_name, job_name = TRUNK_PUBLISHER
-    uploads = _codescene_steps(workflow_name, job_name)
-    assert len(uploads) == 1, (
-        f"{workflow_name}:{job_name} must upload to CodeScene exactly once"
-    )
-    guard = uploads[0].get("if")
-    missing = missing_upload_conjuncts(guard)
-    assert not missing, (
-        f"{workflow_name}:{job_name} must guard its upload on {missing}, got {guard!r}"
     )
 
 
