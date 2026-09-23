@@ -1,5 +1,13 @@
 # Migration guide for 0.2.0
 
+## Catalogue-backed scoped contexts
+
+When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue
+directly to `scoped(catalogue=catalogue)`; `scoped` derives the allowlist from
+its programs. Keep using `scoped(ScopeConfig(...))` when the scope also needs
+hook or policy configuration. For examples and nesting behaviour, see the
+[Scoped contexts section](users-guide.md#scoped-contexts) in the users' guide.
+
 ## Line-level output observation
 
 Cuprum 0.2.0 adds `SafeCmd.lines()` and the `RunOutputOptions.on_line` callback

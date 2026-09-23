@@ -835,9 +835,13 @@ surface is re-exported from `cuprum/context/__init__.py`:
   the before/after hook type aliases.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
   `get_context`, and the internal set/reset helpers).
-- `cuprum/context/registration.py` — `scoped`, the `_TokenRegistration`
-  base, the registration handles, and the `allow`/`before`/`after`/`env`/
-  `observe` factories.
+- `cuprum/context/scoped.py` — `_ScopedContext` and `scoped`, which narrows a
+  `CuprumContext` from either `ScopeConfig` or `ProgramCatalogue` and restores
+  the prior context on exit. `registration.py` re-exports `scoped` for
+  compatibility.
+- `cuprum/context/registration.py` — the `_TokenRegistration` base, the
+  registration handles, and the `allow`/`before`/`after`/`env`/`observe`
+  factories.
 
 Most context importers are unaffected. `ExecHook` is the exception: its
 definition site is `cuprum.events`, it remains available from top-level

@@ -41,6 +41,9 @@ as a default.
   example, copying or removing trees) go through the `shutil` standard library
   module.
 
+The self-contained scripts below pin Cuprum 0.1.0 and use that release's
+keyword-based scope API.
+
 ### Minimal script (no CLI)
 
 ```python
@@ -228,7 +231,7 @@ each program.
 ```python
 from cuprum import scoped
 
-with scoped(allowlist=CATALOGUE.allowlist):
+with scoped(catalogue=CATALOGUE):
     result = git("--no-pager", "log", "-1", "--pretty=%H").run_sync()
 
 if not result.ok:
@@ -248,7 +251,14 @@ Guidance:
 
 ```python
 from pathlib import Path
-from cuprum import ExecutionContext, Program, RunOutputOptions, scoped, sh
+from cuprum import (
+    ExecutionContext,
+    Program,
+    RunOutputOptions,
+    ScopeConfig,
+    scoped,
+    sh,
+)
 
 MAKE = Program("make")
 make = sh.make(MAKE)
@@ -259,7 +269,7 @@ context = ExecutionContext(
     env={"CI": "1", "GIT_AUTHOR_NAME": "CI"},
 )
 
-with scoped(allowlist=frozenset([MAKE])):
+with scoped(ScopeConfig(allowlist=frozenset([MAKE]))):
     result = make("--version").run_sync(
         context=context,
         output=RunOutputOptions(echo=True),
@@ -273,7 +283,7 @@ if not result.ok:
 ```python
 from cuprum import scoped
 
-with scoped(allowlist=CATALOGUE.allowlist):
+with scoped(catalogue=CATALOGUE):
     pipeline_result = (git("--no-pager", "log", "--oneline") | grep("fix")).run_sync()
 
 if pipeline_result.failure is not None:
@@ -457,7 +467,7 @@ pytest_plugins = ("cmd_mox.pytest_plugin",)
 ```
 
 ```python
-from cuprum import Program, scoped, sh
+from cuprum import Program, ScopeConfig, scoped, sh
 
 GIT = Program("git")
 git = sh.make(GIT)
@@ -471,7 +481,7 @@ def test_git_tag_happy_path(cmd_mox, monkeypatch, tmp_path):
 
     # Run the code under test while shims are active
     cmd_mox.replay()
-    with scoped(allowlist=frozenset([GIT])):
+    with scoped(ScopeConfig(allowlist=frozenset([GIT]))):
         result = git("tag", "v1.2.3").run_sync()
     cmd_mox.verify()
     assert result.ok
@@ -483,7 +493,7 @@ def test_git_tag_failure_surface_error(cmd_mox, monkeypatch, tmp_path):
     cmd_mox.mock("git").with_args("tag", "v1.2.3").returns(exit_code=1, stderr="denied")
 
     cmd_mox.replay()
-    with scoped(allowlist=frozenset([GIT])):
+    with scoped(ScopeConfig(allowlist=frozenset([GIT]))):
         result = git("tag", "v1.2.3").run_sync()
     cmd_mox.verify()
     assert not result.ok
@@ -494,7 +504,7 @@ def test_git_tag_failure_surface_error(cmd_mox, monkeypatch, tmp_path):
 ### Spies and passthrough capture (turn real calls into fixtures)
 
 ```python
-from cuprum import Program, scoped, sh
+from cuprum import Program, ScopeConfig, scoped, sh
 
 ECHO = Program("echo")
 echo = sh.make(ECHO)
@@ -507,7 +517,7 @@ def test_spy_and_record(cmd_mox, monkeypatch, tmp_path):
     spy = cmd_mox.spy("echo").passthrough()
 
     cmd_mox.replay()
-    with scoped(allowlist=frozenset([ECHO])):
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))):
         result = echo("hello world").run_sync()
     cmd_mox.verify()
     assert result.ok
@@ -545,8 +555,9 @@ def test_spy_and_record(cmd_mox, monkeypatch, tmp_path):
    `ExecutionContext(cwd=..., env=...)`.
 5. Error handling: replace exception-driven command checks with explicit
    `result.ok`, `result.exit_code`, and `result.stderr` handling.
-6. Security posture: apply `scoped(allowlist=...)` consistently; treat missing
-   allowlist entries as policy failures that must be fixed rather than bypassed.
+6. Security posture: apply `scoped(ScopeConfig(allowlist=...))` consistently;
+   treat missing allowlist entries as policy failures that must be fixed rather
+   than bypassed.
 
 ## Migration guidance (Typer → Cyclopts)
 

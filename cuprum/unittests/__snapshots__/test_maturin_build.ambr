@@ -90,6 +90,7 @@
       'cuprum/context/core.py',
       'cuprum/context/env_overlay.py',
       'cuprum/context/registration.py',
+      'cuprum/context/scoped.py',
       'cuprum/context/state.py',
       'cuprum/echo_events.py',
       'cuprum/echo_observation.py',

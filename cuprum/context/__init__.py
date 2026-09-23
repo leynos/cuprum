@@ -71,8 +71,8 @@ from cuprum.context.registration import (
     before,
     env,
     observe,
-    scoped,
 )
+from cuprum.context.scoped import scoped
 from cuprum.context.state import current_context, get_context
 
 __all__ = [

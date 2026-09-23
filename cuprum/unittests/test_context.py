@@ -9,7 +9,8 @@ from unittest import mock
 import pytest
 from hypothesis import settings
 
-from cuprum.catalogue import ECHO, LS
+from cuprum import sh
+from cuprum.catalogue import ECHO, LS, ProgramCatalogue
 from cuprum.context import (
     AfterHook,
     BeforeHook,
@@ -167,6 +168,73 @@ def test_scoped_narrows_allowlist_in_block() -> None:
     with scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as ctx:
         assert ctx.is_allowed(ECHO) is True
         assert current_context() is ctx
+
+
+def test_scoped_catalogue_narrows_to_its_allowlist() -> None:
+    """scoped(catalogue=...) derives permissions from the catalogue."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+    original = current_context()
+
+    with scoped(catalogue=catalogue) as ctx:
+        assert ctx.allowlist == catalogue.allowlist, (
+            "catalogue scope should copy the catalogue allowlist"
+        )
+        assert ctx.is_allowed(LS) is False, (
+            "catalogue scope should exclude programs outside its allowlist"
+        )
+        assert current_context() is ctx, (
+            "catalogue scope should activate its narrowed context"
+        )
+        ctx.check_allowed(ECHO)
+        with pytest.raises(ForbiddenProgramError, match="ls"):
+            sh.make(LS)("--version").run_sync()
+
+    assert current_context() is original, (
+        "catalogue scope should restore the previous context after normal exit"
+    )
+
+
+def test_scoped_catalogue_restores_context_after_exception() -> None:
+    """scoped(catalogue=...) restores the previous context on exceptions."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+    original = current_context()
+    message = "catalogue scope failure"
+
+    with (
+        pytest.raises(ValueError, match=message),
+        scoped(catalogue=catalogue),
+    ):
+        raise ValueError(message)
+
+    assert current_context() is original, (
+        "catalogue scope should restore the previous context after exceptions"
+    )
+
+
+def test_scoped_rejects_config_and_catalogue_together() -> None:
+    """scoped() keeps its configuration sources mutually exclusive."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+
+    with pytest.raises(TypeError, match="either config or catalogue"):
+        scoped(ScopeConfig(), catalogue=catalogue)
+
+
+def test_scoped_requires_config_or_catalogue() -> None:
+    """scoped() rejects calls that do not establish a scope configuration."""
+    with pytest.raises(TypeError, match="requires config or catalogue"):
+        scoped()
+
+
+def test_scoped_type_hints_resolve_at_runtime() -> None:
+    """scoped() exposes both accepted configuration source types."""
+    hints = typ.get_type_hints(scoped)
+
+    assert hints["config"] == ScopeConfig | None, (
+        "scoped config annotation should resolve to ScopeConfig | None"
+    )
+    assert hints["catalogue"] == ProgramCatalogue | None, (
+        "scoped catalogue annotation should resolve to ProgramCatalogue | None"
+    )
 
 
 def test_scoped_restores_context_after_block() -> None:

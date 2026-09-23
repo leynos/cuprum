@@ -38,9 +38,9 @@ Split the module into a `cuprum/context/` package with one module per concern:
   aliases.
 - `state.py` holds the `ContextVar` plumbing and the associated set/reset
   helpers.
-- `registration.py` holds `scoped`, the token registration base, the
-  registration handles, and the `allow`/`before`/`after`/`env`/`observe`
-  factories.
+- `registration.py` holds the token registration base, the registration
+  handles, and the `allow`/`before`/`after`/`env`/`observe` factories. At the
+  time of this decision, it also held `scoped`.
 
 `cuprum/context/__init__.py` re-exports the existing public `__all__`
 unchanged, so `from cuprum.context import …` continues to work without changes
@@ -57,3 +57,13 @@ ______________________________________________________________________
   package-level root (`ContextError`).
 - Concern boundaries are enforced by module structure rather than by
   convention alone.
+
+## Addendum (2026-09-23): isolate scoped context management
+
+`_ScopedContext` and `scoped` now live in `cuprum/context/scoped.py`. This
+module derives a scope from either `ScopeConfig` or a `ProgramCatalogue` and
+uses the context-state helpers to activate and restore the narrowed
+`CuprumContext`. `registration.py` re-exports `scoped` for compatibility; the
+package-level exports remain the public import path. New scoped-context
+behaviour belongs in `scoped.py`, while registration handles and factories
+remain in `registration.py`.
