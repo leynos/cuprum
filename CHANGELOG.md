@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0]
+## [0.2.0-beta1]
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
