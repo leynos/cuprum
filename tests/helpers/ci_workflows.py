@@ -342,5 +342,22 @@ def workflow_sources(directory: Path = WORKFLOW_DIR) -> list[tuple[str, str]]:
     list[tuple[str, str]]
         Each ``*.yml`` file's name and text, sorted by path. Every read goes
         through ``read_source``, so an unreadable file fails by name.
+
+    Raises
+    ------
+    AssertionError
+        If ``directory`` is not a readable directory or holds no workflow.
+        ``Path.glob`` returns nothing for a missing directory, and an empty
+        sweep would satisfy every "no workflow does X" contract vacuously.
     """
-    return [(path.name, read_source(path)) for path in sorted(directory.glob("*.yml"))]
+    _require(
+        condition=directory.is_dir(),
+        message=f"{directory} is not a workflow directory",
+    )
+    try:
+        paths = sorted(directory.glob("*.yml"))
+    except OSError as error:
+        message = f"{directory} could not be listed: {error}"
+        raise AssertionError(message) from error
+    _require(condition=bool(paths), message=f"{directory} holds no workflow")
+    return [(path.name, read_source(path)) for path in paths]

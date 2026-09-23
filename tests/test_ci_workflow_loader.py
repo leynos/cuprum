@@ -81,3 +81,25 @@ def test_the_source_sweep_reads_through_the_named_boundary(tmp_path: Path) -> No
     (tmp_path / "stuck.yml").mkdir()
     with pytest.raises(AssertionError, match=r"stuck\.yml could not be read"):
         workflow_sources(tmp_path)
+
+
+@pytest.mark.parametrize("shape", ["missing", "file", "empty"])
+def test_the_source_sweep_refuses_a_directory_it_cannot_sweep(
+    tmp_path: Path, shape: str
+) -> None:
+    """A sweep that finds nothing fails instead of reporting a clean estate.
+
+    ``Path.glob`` on a missing directory returns an empty list, and every
+    "no workflow does X" contract would then pass having read nothing. A path
+    that is a file, and a directory holding no workflow, are the same hazard.
+    """
+    target = tmp_path / "workflows"
+    match shape:
+        case "file":
+            target.write_text("", encoding="utf-8")
+        case "empty":
+            target.mkdir()
+        case _:
+            pass
+    with pytest.raises(AssertionError, match=r"workflow directory|holds no workflow"):
+        workflow_sources(target)

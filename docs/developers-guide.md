@@ -66,10 +66,10 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
 
 The hosted rows are hosted for a reason, not by omission. `changes` and
-`loom-smoke` are cheap gate jobs; `workflow-harness`, `loom` and `extended` run
-only on a schedule or a dispatch; and `rust-boundaries.yml`'s verifier lanes
-stay on GitHub-hosted Linux by this repository's own decision. Placing `verus`
-or `loom-smoke` on the paid lane is a separate question needing its own
+`loom-smoke` are cheap gate jobs; `workflow-harness`, `loom`, and `extended`
+run only on a schedule or a dispatch; and `rust-boundaries.yml`'s verifier
+lanes stay on GitHub-hosted Linux by this repository's own decision. Placing
+`verus` or `loom-smoke` on the paid lane is a separate question needing its own
 measurements.
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
@@ -88,7 +88,7 @@ neither a fixed nor a larger shape.
 
 `lint-test` moved onto the paid lane. It is a developer-blocking gate that
 compiles real work: Whitaker, clippy under two toolchains, a Windows
-cross-target check and Nixie. Six runs measured it at 198 to 292 seconds on
+cross-target check, and Nixie. Six runs measured it at 198 to 292 seconds on
 four GitHub-hosted vCPU, with a queue that was two to three seconds five times
 and 154 seconds once; the same run queued every hosted lane 77 to 164 seconds
 while its Ubicloud neighbours queued 18 to 37. The case is that tail. Ubicloud
@@ -136,9 +136,12 @@ of which a fork can cause.
 The fork arm runs cold, and that is the accepted price. Every cache key carries
 `runner.environment`, which renders `github-hosted` on the fork arm and
 `self-hosted` on the owned one, so the two arms read different scopes. No
-writer changes: every save step is guarded on a push to `refs/heads/main`,
-which is never a fork, so the fork arm restores and never publishes. Since
-`lint-test` moved, no job writes a `github-hosted` family at all.
+writer changes: every key-family save step is guarded on a push to
+`refs/heads/main`, which is never a fork, so the fork arm restores and never
+publishes. Since `lint-test` moved, the one `github-hosted` family still
+written is the Loom model family, which `loom.yml` saves only on its scheduled
+runs on `main`; `loom-smoke` restores it on a pull request, a fork's included,
+and never saves it.
 
 `lint-test` therefore no longer saves the Cargo registry. On its owned arm it
 renders the same `self-hosted` family `extension-tests` writes, and one writer

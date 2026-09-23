@@ -191,7 +191,17 @@ def _matrix_values(workflow_name: str, job_name: str, key: str) -> list[object]:
     # perfectly ordinary workflow.
     direct = declared.get(key)
     if isinstance(direct, list):
-        return list(typ.cast("list[object]", direct))
+        # `include` can still add a leg with a new value for the key, and that
+        # leg runs too. An entry without the key only extends existing legs.
+        extra = declared.get("include", [])
+        require(
+            condition=isinstance(extra, list)
+            and all(isinstance(leg, dict) for leg in extra),
+            message=f"{workflow_name}:{job_name} declares an unreadable include",
+        )
+        return list(typ.cast("list[object]", direct)) + [
+            leg[key] for leg in typ.cast("list[dict[str, object]]", extra) if key in leg
+        ]
     include = declared.get("include")
     require(
         condition=isinstance(include, list),
@@ -222,7 +232,9 @@ def _literal_labels(
     labels: set[str] = set()
     for value in values:
         require(
-            condition=isinstance(value, str) and EXPRESSION.match(value) is None,
+            # Any interpolation, not only a wholly-expression value:
+            # `ubuntu-${{ inputs.release }}` runs on a label nobody wrote down.
+            condition=isinstance(value, str) and _INTERPOLATION.search(value) is None,
             message=(
                 f"{workflow_name}:{job_name} resolves its runner to {value!r}; "
                 "a matrix value holding an expression is a placement this "

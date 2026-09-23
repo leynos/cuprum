@@ -19,21 +19,6 @@ import pytest
 
 from tests.helpers import ci_placement as reader
 
-#: Every workflow the traversal must reach. Named rather than derived, so the
-#: claim that `all_jobs` sees the whole estate is asserted rather than merely
-#: true: a file the reader skipped would otherwise be invisible.
-ESTATE_WORKFLOWS = frozenset({
-    "benchmark-gate-harness.yml",
-    "build-wheels.yml",
-    "ci.yml",
-    "coverage-main.yml",
-    "delayed-pr-comment.yml",
-    "dependabot-automerge.yml",
-    "loom.yml",
-    "mutation-testing.yml",
-    "release.yml",
-    "rust-boundaries.yml",
-})
 OWNED = "ubicloud-standard-2"
 HOSTED = "ubuntu-latest"
 FORK_EXPRESSION = f"${{{{ {reader.FORK_FIELD} && '{HOSTED}' || '{OWNED}' }}}}"
@@ -161,22 +146,56 @@ def test_a_matrix_placement_resolves_through_its_include(
     )
 
 
-def test_a_matrix_value_holding_an_expression_is_refused(
+def test_a_direct_matrix_list_also_reads_its_include_legs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Refuse the shape rstest-bdd #788's contract read straight through.
+    """An `include` leg with a new value for the key runs on that label too.
 
-    A reader that stopped at `matrix.os` never saw that the value behind the
-    key was itself the fork expression, so a name reading the fork field shared
-    no reference with `runs-on` and the stability contract passed while the
-    name rendered differently per event.
+    An `include` entry without the key only extends the existing legs, so it
+    is read past rather than refused.
     """
     _declare(
         monkeypatch,
         {
             "runs-on": "${{ matrix.os }}",
             "steps": [],
-            "strategy": {"matrix": {"include": [{"os": FORK_EXPRESSION}]}},
+            "strategy": {
+                "matrix": {
+                    "os": [HOSTED],
+                    "include": [{"os": "windows-2022", "target": "x"}, {"target": "y"}],
+                }
+            },
+        },
+    )
+    placed = reader.placement("w.yml", "j")
+    assert placed.labels == frozenset({HOSTED, "windows-2022"}), (
+        f"the include leg's label must be read, got {sorted(placed.labels)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [FORK_EXPRESSION, "ubuntu-${{ inputs.release }}", " ${{ matrix.x }}"],
+    ids=["whole-expression", "partial-interpolation", "padded-expression"],
+)
+def test_a_matrix_value_holding_an_expression_is_refused(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Refuse the shape rstest-bdd #788's contract read straight through.
+
+    A reader that stopped at `matrix.os` never saw that the value behind the
+    key was itself the fork expression, so a name reading the fork field shared
+    no reference with `runs-on` and the stability contract passed while the
+    name rendered differently per event. A partial interpolation is the same
+    defect: GitHub evaluates it, so the recorded text is not the label that
+    runs.
+    """
+    _declare(
+        monkeypatch,
+        {
+            "runs-on": "${{ matrix.os }}",
+            "steps": [],
+            "strategy": {"matrix": {"include": [{"os": value}]}},
         },
     )
     with pytest.raises(AssertionError, match="cannot model"):

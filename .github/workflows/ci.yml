@@ -102,11 +102,14 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: lint
 
-      # Every key carries `runner.environment`, so the owned arm and the fork
-      # arm cannot restore each other's entries even though they share a family
-      # name. Nothing writes the fork arm's scope: every save below requires a
-      # push to `refs/heads/main`, which a fork can never produce, so a fork's
-      # pull request restores nothing and compiles cold.
+      # Every `CARGO_CACHE_KEY` and `SCCACHE_CACHE_KEY` family carries
+      # `runner.environment`, so the owned arm and the fork arm cannot restore
+      # each other's entries even though they share a family name. Nothing
+      # writes the fork arm's scope of those two families: their saves require
+      # a push to `refs/heads/main`, which a fork can never produce, so a
+      # fork's pull request restores nothing from them and compiles cold. The
+      # plain `actions/cache` tool caches further down are not key families:
+      # they save on every event under GitHub's own branch scoping.
       - name: Restore the Cargo registry
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0

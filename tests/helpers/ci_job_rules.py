@@ -114,8 +114,11 @@ def never_runs(workflow_name: str, job_name: str) -> bool:
         Whether the job's own ``if:`` reduces to a constant false.
     """
     condition = job(workflow_name, job_name).get("if")
+    # YAML types an unquoted `if: false` or `if: 0` before GitHub sees it, so
+    # the commonest way to switch a job off arrives as a bool or a number,
+    # not as text. Its truthiness is what GitHub evaluates.
     if not isinstance(condition, str):
-        return False
+        return isinstance(condition, (bool, int, float)) and not condition
     text = " ".join(condition.split())
     expression = EXPRESSION.match(text)
     if expression is not None:

@@ -60,10 +60,15 @@ def _declare(monkeypatch: pytest.MonkeyPatch, declared: dict[str, object]) -> No
         "false && matrix.target == 'x'",
         "null && matrix.target == 'x'",
         "0 && matrix.target == 'x'",
+        # YAML types these before GitHub sees them: an unquoted `if: false`
+        # arrives as a bool, and `if: 0` as a number.
+        False,
+        0,
+        0.0,
     ],
 )
 def test_a_constant_false_guard_is_reported(
-    monkeypatch: pytest.MonkeyPatch, condition: str
+    monkeypatch: pytest.MonkeyPatch, condition: object
 ) -> None:
     """Catch a lane that satisfies every declaration rule and runs nothing."""
     _declare(monkeypatch, {"runs-on": HOSTED, "steps": [], "if": condition})
@@ -86,10 +91,12 @@ def test_a_constant_false_guard_is_reported(
         '"false"',
         "falsey",
         "false_positive_guard",
+        True,
+        1,
     ],
 )
 def test_a_real_guard_is_not_reported_as_never_running(
-    monkeypatch: pytest.MonkeyPatch, condition: str
+    monkeypatch: pytest.MonkeyPatch, condition: object
 ) -> None:
     """Prove the rule narrow: a legitimate condition must still pass.
 
