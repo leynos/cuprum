@@ -700,6 +700,21 @@ When updating Rust dependencies, keep the requested version aligned to the
 patch baseline already present in `Cargo.lock`. This keeps lockfile updates
 focused, small, and easy to review.
 
+## Dependabot update policy
+
+`.github/dependabot.yml` declares one stanza per package ecosystem
+(`github-actions`, `uv` and `cargo`). Each stanza checks for updates daily.
+Each has exactly one group: a catch-all matching `*`, limited to `minor` and
+`patch` updates, with no `exclude-patterns` and no `applies-to` other than
+`version-updates`. Routine bumps therefore arrive as one pull request per
+ecosystem, and every major update arrives in its own pull request, where it can
+be reviewed and built on its own.
+
+`tests/test_ci_dependabot_config.py` enforces this. It also checks that each
+stanza's `directory` holds its manifest, that each stanza carries its labels,
+and that each stanza bounds its open pull requests. A new ecosystem needs a new
+entry in `EXPECTED_STANZAS` as well as a stanza.
+
 ## Linux debug-build acceleration
 
 [ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and

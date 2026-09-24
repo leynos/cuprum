@@ -43,6 +43,9 @@ INTERVAL = "daily"
 #: each one arrives in a pull request of its own.
 GROUPED_UPDATE_TYPES = frozenset({"minor", "patch"})
 
+#: The `applies-to` value a routine-update group must carry, when it names one.
+VERSION_UPDATES = "version-updates"
+
 
 @dc.dataclass(frozen=True, slots=True)
 class ExpectedStanza:
@@ -288,6 +291,17 @@ def test_each_stanza_batches_minor_and_patch_updates_only(
         assert set(update_types) == GROUPED_UPDATE_TYPES, (
             f"group {name!r} must batch exactly "
             f"{sorted(GROUPED_UPDATE_TYPES)}; got {update_types}"
+        )
+        # An exclusion carves dependencies out of the batch, and a group that
+        # applies only to security updates leaves routine version updates
+        # ungrouped; either defeats the catch-all while `*` still matches.
+        assert "exclude-patterns" not in group, (
+            f"group {name!r} must not exclude dependencies from the catch-all; "
+            f"got {group['exclude-patterns']!r}"
+        )
+        applies_to = group.get("applies-to", VERSION_UPDATES)
+        assert applies_to == VERSION_UPDATES, (
+            f"group {name!r} must apply to {VERSION_UPDATES!r}; got {applies_to!r}"
         )
 
 
