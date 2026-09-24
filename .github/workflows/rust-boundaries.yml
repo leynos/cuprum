@@ -126,7 +126,7 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           python-version: '3.13'
       - name: Restore pinned verifier, solver, and compiler objects
@@ -208,7 +208,7 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           python-version: '3.13'
       - name: Restore proof tools and Miri sysroots
