@@ -1,4 +1,4 @@
-# cuprum
+# 🔧 cuprum
 
 [![Ask DeepWiki][dw]][deepwiki] [![PyPI Version][pypi]][package]
 
@@ -7,37 +7,59 @@
 [pypi]: https://img.shields.io/pypi/v/cuprum "PyPI package"
 [package]: https://pypi.org/project/cuprum/
 
-Typed, async command execution for Python—so you can ditch the shell scripts
-without losing your mind.
+*Typed, async command execution for Python—so you can ditch the shell scripts
+without losing your mind.*
 
 Website: <https://df12.studio/cuprum>
 
 ______________________________________________________________________
 
-## What is this?
+## Why cuprum?
 
 If you've ever written a Python script that calls out to external commands,
 you've probably experienced the joys of `subprocess`: stringly-typed arguments,
 mysterious failures, and output that vanishes into the void. Cuprum is here to
 help.
 
-We give you a **typed, safe approach to running external programs**. Instead of
-passing arbitrary strings to a shell, you build argument vectors for a curated
-catalogue of approved executables and get structured results back. Each command
-carries metadata about its project, so downstream tooling knows how to filter
-noise from logs or where to find documentation.
+- **No shell roulette**: You build argument vectors for approved executables,
+  so there are no command strings to quote, escape, or get wrong.
+- **You choose what runs**: A catalogue decides which programs can be built
+  into commands. Use the default one, or define your own with project metadata.
+  An optional execution scope narrows things further at run time.
+- **Answers, not guesswork**: Every completed run returns a structured result,
+  so success, failure, and output are right there to inspect.
+- **Async when you want it**: Cuprum is async-first, with synchronous wrappers
+  for scripts that don't need an event loop.
 
-The default catalogue covers common tools, and your application can define its
-own catalogue and project metadata. The catalogue decides which builders you
-can create; an optional execution scope narrows things further by limiting
-which commands may actually run.
+Whether you're building deployment helpers, CI glue, or maintenance scripts, we
+want "Python instead of Bash" to feel like an upgrade rather than a chore.
 
-Cuprum is async-first but provides synchronous wrappers for scripts that don't
-need the full async machinery. Whether you're building deployment helpers, CI
-glue, or maintenance scripts, we want "Python instead of Bash" to feel like an
-upgrade rather than a chore. All you need is Python 3.12 or newer.
+______________________________________________________________________
 
-## Quick taste
+## Quick start
+
+### Installation
+
+Cuprum needs Python 3.12 or newer. Install it with pip:
+
+<!-- shell-example: readme-install-pip -->
+
+```shell
+python -m pip install cuprum
+```
+
+Or add it to a [uv](https://docs.astral.sh/uv/) project:
+
+<!-- shell-example: readme-install-uv -->
+
+```shell
+uv add cuprum
+```
+
+### Quick taste
+
+This example approves the Python interpreter that is running it, so it works on
+any machine without assuming which other tools are installed:
 
 <!-- tested-example: readme-quick-start -->
 
@@ -60,43 +82,51 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The [users' guide](docs/users-guide.md) continues with synchronous execution,
-output observation, pipelines, concurrency, policy, and troubleshooting.
+Prefer to skip the event loop? `command.run_sync()` returns the same result.
+
+______________________________________________________________________
 
 ## Features
 
 - **Catalogue-backed builders** – Unknown programs raise
-  `UnknownProgramError` before execution.
+  `UnknownProgramError` before anything runs.
 - **Structured results** – Exit code, process ID, captured output, timing,
-  resource measurements where supported, and an `ok` property.
-- **Output choices** – Capture, echo, line observation, and an optional idle
-  heartbeat can be configured independently.
-- **Composition** – Pipelines and bounded concurrent execution.
-- **Context policy** – Scoped allowlists, environment overlays, and hooks.
-- **Optional acceleration** – A Rust extension is available; the pure Python
-  installation has no runtime dependencies.
+  resource measurements where the platform supports them, and a handy `ok`
+  property.
+- **Output your way** – Capture, echo, per-line observation, and an optional
+  heartbeat for quiet children can each be switched on independently.
+- **Graceful cancellation** – Cancelled or timed-out runs terminate the child,
+  wait for a configurable grace period, then escalate to `SIGKILL`.
+- **Composition** – Build pipelines, or run commands concurrently with a
+  bounded level of parallelism.
+- **Context policy** – Scoped allowlists, environment overlays, and hooks keep
+  each part of your application to the commands it should use.
+- **Optional acceleration** – A Rust extension speeds up stream handling; the
+  pure Python installation has no runtime dependencies at all.
 
-## Installation
-
-Run `python -m pip install cuprum` to install it with pip.
-
-Or with [uv](https://docs.astral.sh/uv/):
-
-Run `uv add cuprum` to add it to a uv project.
+______________________________________________________________________
 
 ## Status
 
-Cuprum is in early development. The command runtime, scoped allowlists, hooks,
-and optional native stream backend are implemented. Check the
-[changelog](CHANGELOG.md) and
-[0.2.0 migration guide](docs/v0-2-0-migration-guide.md) when upgrading; the
-public API may evolve before a stable release.
+Cuprum is young but busy. The command runtime, scoped allowlists, hooks, and
+the optional native stream backend are all in place. The public API may still
+evolve before a stable release, so check the changelog and migration guide when
+you upgrade.
 
-## Documentation
+______________________________________________________________________
 
-For the full guide—including how to build your own program catalogues, write
-project-specific builders, and control execution contexts—see the
-[users' guide](docs/users-guide.md).
+## Learn more
+
+- [Users' guide](docs/users-guide.md) — synchronous execution, output
+  observation, pipelines, concurrency, policy, and troubleshooting
+- [Developers' guide](docs/developers-guide.md) — building, testing, and
+  maintaining cuprum
+- [Roadmap](docs/roadmap.md) — planned features and progress
+- [Changelog](CHANGELOG.md) — what changed in each release
+- [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) — upgrading an
+  existing application
+
+______________________________________________________________________
 
 ## Why "cuprum"?
 
@@ -106,6 +136,16 @@ pleasant. "Cuprum" is Latin for copper—another metal used in pipes—and we ho
 to carry that spirit forward with a focus on type safety and explicit
 allowlists.
 
+______________________________________________________________________
+
 ## Licence
 
-[ISC](LICENSE)
+ISC — see [LICENSE](LICENSE) for details.
+
+______________________________________________________________________
+
+## Contributing
+
+Contributions are welcome! Please read [AGENTS.md](AGENTS.md) for the house
+rules and the [developers' guide](docs/developers-guide.md) for how to build
+and test the project.
