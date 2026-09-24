@@ -163,7 +163,8 @@ scenarios whilst maintaining pure Python as a first-class pathway.
   minimal PyO3 bindings exposing `is_available()` stub and verify import from
   Python.
 - [x] 4.1.3. Extend the CI matrix to build native wheels for Linux (x86_64,
-  aarch64), macOS (x86_64, arm64), and Windows (x86_64, arm64) using maturin.
+  aarch64), macOS (x86_64, arm64), and Windows (x86_64) using maturin. Windows
+  arm64 is tracked in 8.5.1.
 - [x] 4.1.4. Add a pure Python fallback wheel job that excludes native code;
   verify both wheel types install correctly and coexist in the same environment.
 
@@ -568,6 +569,16 @@ workspace boundaries. See [ADR-011](adr-011-audited-rust-boundaries.md) and
     used for unsuitable representations with bounded results labelled as such;
     Miri runs applicable isolated targets; CI has affordable pull-request
     checks and documented scheduled or manual heavier validation.
+
+### 8.5. Complete native wheel platform coverage
+
+Native wheels target the CPython 3.12 stable ABI, so each platform needs one
+wheel for every supported interpreter. See
+[ADR-016](adr-016-stable-abi-native-wheels.md).
+
+- [ ] 8.5.1. Publish a Windows arm64 native wheel in a later 0.2.0 beta.
+  - Success: the release workflow builds a `cp312-abi3` `win_arm64` wheel, and
+    CI installs it and confirms that `is_rust_available()` returns `True`.
 
 ## 9. Idle heartbeat for quiet children (issue `#359`)
 
