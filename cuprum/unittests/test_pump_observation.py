@@ -2,11 +2,12 @@
 
 The failure policy here is a deliberate divergence from the exec-event channel,
 which re-raises so a broken observe hook fails the command it was observing.
-Both pump emission sites sit on paths whose contract is that they must complete
-— the Python-pump fall-back and cancellation unwinding — so a raising collector
-must not be able to turn a pipeline that would have succeeded into one that
-fails. These tests pin that divergence in both directions: the failure is
-reported, and it does not travel.
+Every pump emission site sits on a path whose contract is that it must complete
+— the Python-pump fall-back, hand-off setup, and cancellation unwinding — so a
+raising collector must not be able to turn a pipeline that would have succeeded
+into one that fails. These tests pin that divergence in both directions: the
+failure is reported, and it does not travel. Shutdown signals are the exception
+and always propagate.
 """
 
 from __future__ import annotations
@@ -18,9 +19,14 @@ import typing as typ
 
 import pytest
 
-from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_events import (
+    PumpEvent,
+    RustPumpDeclineReason,
+    RustPumpHandoffOutcome,
+)
 from cuprum.pump_observation import (
     _emit_pump_event,
+    _emit_rust_pump_handoff_outcome,
     current_pump_hooks,
     observe_pump,
 )
@@ -184,6 +190,24 @@ def test_a_cancellation_from_a_hook_still_travels() -> None:
 
     with observe_pump(cancel_now), pytest.raises(asyncio.CancelledError):
         _emit_pump_event(_DECLINE)
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [SystemExit(3), KeyboardInterrupt(), asyncio.CancelledError()],
+    ids=["system-exit", "keyboard-interrupt", "cancelled"],
+)
+def test_a_shutdown_signal_from_a_handoff_hook_still_travels(
+    signal: BaseException,
+) -> None:
+    """Hand-off emission honours the same shutdown contract as declines."""
+
+    def raise_signal(_event: PumpEvent) -> None:
+        """Raise the shutdown signal while observing a hand-off."""
+        raise signal
+
+    with observe_pump(raise_signal), pytest.raises(type(signal)):
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.SUBMITTED)
 
 
 def test_an_awaitable_returning_hook_is_reported_and_closed(

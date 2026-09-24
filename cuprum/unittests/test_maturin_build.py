@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests assert trusted maturin command handling.
 import sys
+import tomllib
 import typing as typ
 import zipfile
 
@@ -31,6 +33,9 @@ if typ.TYPE_CHECKING:
 # `test_maturin_wheel_build_snapshot`, so the snapshot itself stays stable
 # across maturin bumps instead of churning on every pin update.
 MATURIN_GENERATOR_PLACEHOLDER = "<maturin-version>"
+# Redacted in place of the wheel's `Version` header, which is asserted against
+# the project version first, so a release bump does not rewrite the snapshot.
+PROJECT_VERSION_PLACEHOLDER = "<project-version>"
 
 
 def _build_with_fake_subprocess_run(
@@ -141,6 +146,10 @@ def test_maturin_wheel_build_snapshot(
         )
 
     wheel_path = build_native_wheel_artefact(root, tmp_path / "wheelhouse")
+    # One stable-ABI wheel serves every supported interpreter from 3.12 on.
+    assert "-cp312-abi3-" in wheel_path.name, (
+        f"native wheel must target the CPython 3.12 stable ABI: {wheel_path.name}"
+    )
     snapshot_payload = wheel_build_snapshot(wheel_path)
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
@@ -148,12 +157,24 @@ def test_maturin_wheel_build_snapshot(
     assert not any(
         entry.startswith("cuprum/unittests/") for entry in snapshot_payload["entries"]
     ), "distribution wheels must exclude the in-package unittest suite"
-    # The generator version is pinned by the assertion above, so the snapshot
-    # compares the redacted placeholder instead of the raw version string and
-    # stays stable across maturin bumps.
+    # The installed distribution's metadata carries `pyproject.toml`'s version
+    # after the build backend's PEP 440 normalization (`0.2.0-beta1` becomes
+    # `0.2.0b1`), which is the form a wheel's `Version` header must use.
+    project_version = importlib.metadata.version("cuprum")
+    wheel_version = snapshot_payload["metadata"]["version"]
+    assert wheel_version == project_version, (
+        f"native wheel version {wheel_version!r} != project {project_version!r}"
+    )
+    # The generator and project versions are pinned by the assertions above, so
+    # the snapshot compares redacted placeholders instead of the raw strings and
+    # stays stable across maturin and release bumps.
     redacted_payload = {
         **snapshot_payload,
         "generator": MATURIN_GENERATOR_PLACEHOLDER,
+        "metadata": {
+            **snapshot_payload["metadata"],
+            "version": PROJECT_VERSION_PLACEHOLDER,
+        },
     }
     assert redacted_payload == snapshot, (
         "Built wheel metadata, file list, and build settings changed."
@@ -201,4 +222,28 @@ def test_wheel_build_snapshot_reports_missing_dist_info(
 
     assert str(exc_info.value) == expected_message, (
         f"expected exactly {expected_message!r}, found {str(exc_info.value)!r}"
+    )
+
+
+def test_stable_abi_floor_matches_requires_python() -> None:
+    """The native wheel's stable-ABI floor is the minimum supported Python.
+
+    A lower floor would advertise wheels for unsupported interpreters; a higher
+    one would silently send the oldest supported interpreter to the pure Python
+    wheel.
+    """
+    root = repo_root()
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    requires_python = pyproject["project"]["requires-python"]
+    manifest = tomllib.loads(
+        (root / "rust" / "cuprum-rust" / "Cargo.toml").read_text(encoding="utf-8")
+    )
+    features = manifest["dependencies"]["pyo3"]["features"]
+    abi3_floors = [feature for feature in features if feature.startswith("abi3-py")]
+
+    major, minor = requires_python.removeprefix(">=").split(".")
+    expected = f"abi3-py{major}{minor}"
+    assert abi3_floors == [expected], (
+        f"requires-python {requires_python} needs pyo3 feature {expected}, "
+        f"got {abi3_floors}"
     )

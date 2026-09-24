@@ -18,8 +18,12 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 _GENERATOR_RE = re.compile(r"^Generator:\s*maturin\s*\(([^)]+)\)\s*$", re.MULTILINE)
+# The extension targets the stable ABI, so its file name carries no interpreter
+# version: `.abi3.so` on POSIX and a bare `.pyd` on Windows. A version-tagged
+# `cpython-3xx` module is deliberately left unnormalized, so a build that lost
+# the `abi3-py312` feature changes the snapshot instead of hiding behind it.
 _EXTENSION_MODULE_RE = re.compile(
-    r"^cuprum/_rust_backend_native\.cpython-[^/]+\.so$",
+    r"^cuprum/_rust_backend_native\.(?:abi3\.so|pyd)$",
 )
 _DIST_INFO_SUFFIXES: dict[str, str] = {
     ".dist-info/RECORD": "cuprum-<version>.dist-info/RECORD",
@@ -124,7 +128,7 @@ def _parse_metadata(raw_metadata: str) -> WheelMetadata:
 def _normalize_wheel_entry(name: str) -> str:
     """Normalize platform/version wheel entry names to stable placeholders."""
     if _EXTENSION_MODULE_RE.match(name):
-        return "cuprum/_rust_backend_native.cpython-<platform>.so"
+        return "cuprum/_rust_backend_native.<abi3-extension>"
     if "/sboms/" in name:
         return "cuprum-<version>.dist-info/sboms/<sbom>.cyclonedx.json"
     for suffix, normalized in _DIST_INFO_SUFFIXES.items():

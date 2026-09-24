@@ -44,7 +44,7 @@ def python_catalogue() -> tuple[ProgramCatalogue, Program]:
     catalogue = ProgramCatalogue.from_programs(
         python_program,
         name="runtime-tests",
-        documentation_locations=("docs/users-guide.md#execution-runtime",),
+        documentation_locations=("docs/users-guide.md#capture-and-echo",),
     )
     return catalogue, python_program
 

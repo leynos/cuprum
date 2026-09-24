@@ -192,10 +192,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # The native wheel targets the stable ABI (`abi3`) from CPython 3.12, so
+      # one wheel must serve every supported interpreter. Verify it on the
+      # oldest and newest: setup-python makes the last listed version the
+      # default `python`, so the full check below runs on the 3.12 minimum.
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
-          python-version: ${{ inputs['python-version'] }}
+          python-version: |
+            3.14
+            3.12
       - name: Download wheel artefacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -247,16 +253,13 @@ jobs:
           PY
           )
 
-          PYTAG=$(python - <<'PY'
-          import sys
-          print(f"cp{sys.version_info.major}{sys.version_info.minor}")
-          PY
-          )
           ARCH=$(uname -m)
+          # One stable-ABI wheel per platform; a per-interpreter tag here means
+          # the `abi3-py312` pyo3 feature was lost.
           # Note: NATIVE_WHEEL_DIR_PATTERN must NOT be quoted to allow glob expansion
           # shellcheck disable=SC2206 # the contract below validates the expanded glob count
           NATIVE_WHEEL_GLOB=(
-            ${NATIVE_WHEEL_DIR_PATTERN}/*${PYTAG}*manylinux*${ARCH}*.whl
+            ${NATIVE_WHEEL_DIR_PATTERN}/*-cp312-abi3-manylinux*${ARCH}*.whl
           )
           if [ "${#NATIVE_WHEEL_GLOB[@]}" -ne 1 ]; then
             echo "Expected exactly one native wheel for ${ARCH}." >&2
@@ -320,3 +323,48 @@ jobs:
               )
           PY
           )
+      - name: Verify the native wheel on the newest interpreter
+        shell: bash
+        env:
+          NATIVE_WHEEL_DIR_PATTERN: dist/wheels-native-*
+        run: |
+          set -euo pipefail
+          python3.14 -m venv .venv-newest
+          source .venv-newest/bin/activate
+          ARCH=$(uname -m)
+          # shellcheck disable=SC2206 # the previous step validated this glob
+          NATIVE_WHEEL_GLOB=(
+            ${NATIVE_WHEEL_DIR_PATTERN}/*-cp312-abi3-manylinux*${ARCH}*.whl
+          )
+          python -m pip install "$(realpath "${NATIVE_WHEEL_GLOB[0]}")"
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          import sys
+
+          import cuprum as c
+          from cuprum import (
+              Program,
+              ProgramCatalogue,
+              RustPumpHandoffOutcome,
+              observe_pump,
+              sh,
+          )
+
+          assert sys.version_info[:2] == (3, 14), sys.version
+          assert c.is_rust_available() is True, "abi3 wheel failed to load"
+          catalogue = ProgramCatalogue.from_programs(sys.executable, name="verify")
+          python = sh.make(Program(sys.executable), catalogue=catalogue)
+          producer = python("-c", "print('x' * 100000)")
+          consumer = python("-c", "import sys; print(len(sys.stdin.read()))")
+          # Identical output would also come from a silent Python fall-back, so
+          # require the hop to have been handed to the native pump.
+          events = []
+          with observe_pump(events.append):
+              result = (producer | consumer).run_sync()
+          assert result.ok and result.stdout == "100001\n", result
+          assert any(
+              event.phase == "handoff"
+              and event.outcome is RustPumpHandoffOutcome.SUBMITTED
+              for event in events
+          ), f"the hop did not reach the Rust pump: {events}"
+          PY

@@ -161,10 +161,10 @@ def _emit_pump_event(event: PumpEvent) -> None:
     A hook that raises :class:`Exception` is reported at ``WARNING`` with its
     traceback and the remaining hooks still run. This deliberately diverges from
     :func:`cuprum._observability._emit_exec_event`, which re-raises so a broken
-    observe hook fails the command it was observing. Both emission sites here
-    sit on paths whose contract is that they must complete: one is the
-    fall-back that keeps a hop working when the fast path is unavailable, the
-    other is cancellation unwinding, where a raise would replace the
+    observe hook fails the command it was observing. Every emission site sits
+    on a path whose contract is that it must complete: the fall-back that keeps
+    a hop working when the fast path is unavailable, hand-off setup and its
+    rollback, and cancellation unwinding, where a raise would replace the
     ``CancelledError`` the caller asked for. Propagating would let registering a
     metrics backend turn a pipeline that would have succeeded into one that
     fails — a change in execution behaviour caused by observing it, which is
@@ -188,21 +188,14 @@ def _emit_pump_event(event: PumpEvent) -> None:
 
 
 def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
-    """Best-effort delivery of one bounded writer-resource hand-off outcome."""
-    try:
-        _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
-    except BaseException as error:
-        _LOGGER.warning(
-            "pump_handoff_observer_failed outcome=%s error=%s",
-            outcome,
-            type(error).__name__,
-            exc_info=error,
-            extra={
-                "cuprum_action": "pump_handoff_observer_failed",
-                "cuprum_outcome": outcome,
-                "cuprum_error_type": type(error).__name__,
-            },
-        )
+    """Deliver one bounded writer-resource hand-off outcome to pump hooks.
+
+    Hook failures follow :func:`_emit_pump_event`: an :class:`Exception` is
+    reported and absorbed, while shutdown signals propagate. Every call site
+    has already closed or handed off the descriptors it owns before emitting,
+    so a propagating signal cannot strand one.
+    """
+    _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
 
 
 def _invoke_pump_hook(hook: PumpHook, event: PumpEvent) -> None:
@@ -246,8 +239,33 @@ def _discard_hook_result(result: object, event: PumpEvent) -> None:
             "cuprum_result_type": type(result).__name__,
         },
     )
-    if inspect.iscoroutine(result):
+    _close_returned_coroutine(result, event)
+
+
+def _close_returned_coroutine(result: object, event: PumpEvent) -> None:
+    """Close ``result`` if it is a coroutine, reporting a failure from cleanup.
+
+    A coroutine the hook already started runs its ``finally`` blocks here, so
+    closing it can raise. An :class:`Exception` follows the channel's policy
+    and is reported rather than interrupting emission to later hooks; a
+    shutdown signal still propagates.
+    """
+    if not inspect.iscoroutine(result):
+        return
+    try:
         result.close()
+    except Exception as exc:
+        _LOGGER.warning(
+            "pump_observer_disposal_failed phase=%s error=%s",
+            event.phase,
+            type(exc).__name__,
+            exc_info=True,
+            extra={
+                "cuprum_action": "pump_observer_disposal_failed",
+                "cuprum_phase": event.phase,
+                "cuprum_error_type": type(exc).__name__,
+            },
+        )
 
 
 __all__ = [

@@ -316,9 +316,10 @@ def test_the_compiler_cache_key_names_the_interpreter_and_the_build_shape() -> N
     Measured on 2026-09-04, before the key carried either component: one
     instrumented Python 3.13 archive served every Ubicloud job, the 3.13 reader
     took 14 of its 17 cacheable compiles, and the 3.12, 3.14 and 3.15a readers
-    took none at all. `pyo3` is declared with `extension-module` and without
-    `abi3`, so an extension compiled against one CPython is useless to another,
-    and an optimized or instrumented object is useless to an unoptimized build.
+    took none at all. Even with `pyo3` on the stable ABI, its build script
+    rebuilds for each interpreter, so an object compiled under one CPython does
+    not serve another, and an optimized or instrumented object is useless to an
+    unoptimized build.
     """
     source = CACHE_KEYS_ACTION_FILE.read_text(encoding="utf-8")
     prefix = next(line for line in source.splitlines() if "sccache_prefix=" in line)
@@ -328,19 +329,22 @@ def test_the_compiler_cache_key_names_the_interpreter_and_the_build_shape() -> N
         )
 
 
-def test_pyo3_is_still_declared_without_abi3() -> None:
-    """Anchor the reason the interpreter is in the key to the manifest.
+def test_pyo3_targets_the_stable_abi_but_keeps_per_interpreter_objects() -> None:
+    """Anchor the reason the interpreter is still in the key to the manifest.
 
-    Adopting `abi3` would make one archive serve every interpreter and would
-    make the per-interpreter families pure overhead. This test is the reminder
-    to revisit them, not an objection to the feature.
+    `pyo3` builds against the stable ABI from CPython 3.12 (`abi3-py312`), so
+    one wheel serves every supported interpreter. Compiler output is still
+    per-interpreter: measured on 2026-09-24, switching `maturin build -i` from
+    3.13 to 3.12 recompiled `pyo3-ffi`, `pyo3`, and the extension, because the
+    pyo3 build script records the interpreter's configuration file and rebuilds
+    when it changes. Keep the per-interpreter families until a CI measurement
+    shows that archives written under one interpreter serve another.
     """
     manifest = (ROOT / "rust" / "cuprum-rust" / "Cargo.toml").read_text(
         encoding="utf-8"
     )
     pyo3 = next(line for line in manifest.splitlines() if line.startswith("pyo3"))
-    assert "abi3" not in pyo3, (
-        "pyo3 now builds against a stable ABI, so one compiler-cache family "
-        "could serve every interpreter: collapse the per-interpreter families "
-        "in tests/helpers/ci_runners.py rather than leaving them split"
+    assert "abi3-py312" in pyo3, (
+        "pyo3 no longer targets the CPython 3.12 stable ABI, so native wheels "
+        "would cover a single interpreter again; restore the abi3-py312 feature"
     )

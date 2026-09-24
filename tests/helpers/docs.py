@@ -8,7 +8,7 @@ from pathlib import Path
 
 # These constants ensure that heading renames only need to be updated in one place
 BUILD_PREREQUISITES_HEADING = "Build prerequisites for native extensions"
-TROUBLESHOOTING_HEADING = "Troubleshooting"
+TROUBLESHOOTING_HEADING = "Troubleshooting the native extension"
 
 
 # -- Documentation file access ------------------------------------------------

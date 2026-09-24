@@ -1,4 +1,9 @@
-# Migration guide for 0.2.0
+# Cuprum 0.2.0 migration guide
+
+This guide is for applications already using Cuprum. The additions below are
+opt-in unless a section says otherwise. Start with the
+[users' guide](users-guide.md) for a complete first command. Every Python
+example here is executed from this document by the behavioural suite.
 
 ## Catalogue-backed scoped contexts
 
@@ -6,7 +11,7 @@ When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue
 directly to `scoped(catalogue=catalogue)`; `scoped` derives the allowlist from
 its programs. Keep using `scoped(ScopeConfig(...))` when the scope also needs
 hook or policy configuration. For examples and nesting behaviour, see the
-[Scoped contexts section](users-guide.md#scoped-contexts) in the users' guide.
+[policy section](users-guide.md#apply-a-policy) in the users' guide.
 
 ## Line-level output observation
 
@@ -34,12 +39,15 @@ for ordering, timestamps, teardown, and capture/echo details.
 empty tuples. Callers whose project has no documentation references or output
 noise rules can omit both fields:
 
+<!-- tested-example: migration-catalogue -->
+
 ```python
 from cuprum import Program
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 
 settings = ProjectSettings(name="rust-test-gates", programs=(Program("cargo"),))
 catalogue = ProgramCatalogue.from_project(settings)
+assert catalogue.lookup(Program("cargo")).project_name == "rust-test-gates"
 ```
 
 Callers with project metadata can continue to pass `documentation_locations=`
@@ -80,16 +88,22 @@ observer or metric is installed unless the application registers one with
 To adopt the channel, register a synchronous hook around the command or
 pipeline scope that should be observed:
 
+<!-- tested-example: migration-stream-metrics -->
+
 ```python
-from cuprum import ECHO, sh
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
 from cuprum.adapters.stream_metrics import stream_operation_metrics_hook
 from cuprum.stream_observation import observe_stream_operation
 
 metrics = InMemoryMetrics()
-command = sh.make(ECHO)("hello")
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="metrics")
+command = sh.make(Program(sys.executable), catalogue=catalogue)("-c", "print('hello')")
 with observe_stream_operation(stream_operation_metrics_hook(metrics)):
     result = command.run_sync()
+assert result.ok and result.stdout == "hello\n"
 ```
 
 The hook receives one aggregate `StreamOperationEvent` for each completed
@@ -136,11 +150,17 @@ read on a monitored stream resets the timer.
 
 To adopt the heartbeat, set the interval on the run's output options:
 
-```python
-from cuprum import Program, RunOutputOptions, sh
+<!-- tested-example: migration-idle -->
 
-cmd = sh.make(Program("cargo"))("build", "--locked")
-result = cmd.run_sync(output=RunOutputOptions(idle_after=30.0))
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="idle")
+command = sh.make(Program(sys.executable), catalogue=catalogue)("-c", "print('done')")
+result = command.run_sync(output=RunOutputOptions(idle_after=30.0))
+assert result.ok and result.stdout == "done\n"
 ```
 
 By default, the built-in renderer writes one flushed, newline-terminated,
@@ -165,6 +185,8 @@ write and flush hand off without blocking: run the blocking call in a worker
 thread or an executor, or use a genuinely non-blocking drain such as a queue
 fed with `put_nowait`.
 
+<!-- tested-example: migration-queue-sink -->
+
 ```python
 import queue
 
@@ -180,6 +202,13 @@ class QueueSink:
 
     def flush(self) -> None:
         pass
+
+
+pending: queue.Queue[str] = queue.Queue()
+sink = QueueSink(pending)
+sink.write("ready")
+sink.flush()
+assert pending.get_nowait() == "ready"
 ```
 
 A separate asyncio task is not enough because draining that queue still runs on
@@ -200,14 +229,20 @@ returned result are unchanged.
 To adopt the sink, pass it through `RunOutputOptions` on the `SafeCmd` or
 `Pipeline` to be framed:
 
+<!-- tested-example: migration-actions-sink -->
+
 ```python
-from cuprum import ECHO, RunOutputOptions, sh
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
 from cuprum.sinks import GitHubActionsSink
 
-command = sh.make(ECHO)("hello")
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="actions")
+command = sh.make(Program(sys.executable), catalogue=catalogue)("-c", "print('hello')")
 result = command.run_sync(
     output=RunOutputOptions(echo=True, sink=GitHubActionsSink()),
 )
+assert result.ok and result.stdout == "hello\n"
 ```
 
 `GitHubActionsSink` activates automatically when the parent process runs on
@@ -249,8 +284,8 @@ are pinned to the defaults in `benchmarks/ratchet_history.py` by a CI contract
 test, so a reproduction should not need to pass them explicitly.
 
 For the full description, see
-[the CI ratchet workload](users-guide.md#the-ci-ratchet-workload) in the users'
-guide and `docs/cuprum-design.md` (§13.9), which also links
+[the CI ratchet workload](developers-guide.md#the-ci-ratchet-workload) in the
+developers' guide and `docs/cuprum-design.md` (§13.9), which also links
 [the noise measurements](debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md)
 behind the change.
 
@@ -260,13 +295,20 @@ Cuprum 0.2.0 also adds two additive flags on `RunOutputOptions` that reach the
 same framing without constructing a sink, for callers who want collapsible
 groups and failure annotations and nothing else:
 
-```python
-from cuprum import ECHO, RunOutputOptions, sh
+<!-- tested-example: migration-group-annotate -->
 
-command = sh.make(ECHO)("hello")
-result = command.run_sync(
-    output=RunOutputOptions(echo=True, group=True, annotate_failure=True),
-)
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="migration-flags")
+command = sh.make(Program(sys.executable), catalogue=catalogue)("-c", "print('hello')")
+options = RunOutputOptions(echo=True, group=True, annotate_failure=True)
+assert isinstance(options.sink, GitHubActionsSink)
+result = command.run_sync(output=options)
+assert result.ok and result.stdout == "hello\n"
 ```
 
 Both flags default to `False`, so existing applications do not need to change
@@ -290,7 +332,7 @@ adapter decision in
 why they construct the sink instead of teaching the execution layer workflow
 commands. For the equivalent sink-first example, custom destinations and
 titles, and deliberate local activation, see the
-[presentation sinks section](users-guide.md#presentation-sinks) in the users'
-guide and the
-[group and annotate flags section](users-guide.md#group-and-annotate-flags)
-beside it.
+[GitHub Actions presentation section](users-guide.md#present-output-in-github-actions)
+in the users' guide, which covers the
+[group and annotate flags](users-guide.md#group-and-annotate-flags) and
+[direct sink configuration](users-guide.md#configure-the-sink-directly).

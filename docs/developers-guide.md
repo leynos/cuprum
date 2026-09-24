@@ -18,11 +18,29 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
 - [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
 - [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
+- [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
 is the source of truth for native safety contracts, verifier bounds, trusted
 assumptions, and current proof status.
+
+## Published documentation examples
+
+`tests/behaviour/test_documentation_examples_behaviour.py` checks every fenced
+code block in `README.md`, `docs/users-guide.md`, and the 0.2.0 migration
+guide. An HTML comment on the line before each fence, separated from it by at
+most blank lines, declares what kind of block it is:
+
+- `<!-- tested-example: name -->` must precede a `python` fence. The suite
+  executes that code, and the code must contain at least one `assert` that
+  checks the documented outcome.
+- `<!-- shell-example: name -->` must precede a `shell` fence. It is for
+  commands that readers copy, such as installation, and the suite never runs it.
+
+A fence with no marker, or with a marker for the other kind of block, fails the
+suite. That way a Python example cannot be marked as a shell example to avoid
+being run.
 
 ## Boundary compilation selections
 
@@ -1383,6 +1401,37 @@ tracebacks are never metric labels. Observer failures are logged and do not
 alter the successful fallback or the caller's cancellation.
 [ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
 
+#### Pump hook failure policy
+
+Every pump event, including a hand-off outcome, is delivered through
+`_emit_pump_event` in `cuprum/pump_observation.py`.
+`_emit_rust_pump_handoff_outcome` delegates to it rather than wrapping it, so
+hand-off events share the channel's one failure policy.
+
+A hook that raises an ordinary `Exception` is reported at `WARNING` on the
+`cuprum.pump_observation` logger as `pump_observer_failed`, naming the hook's
+error type and the event's phase, then absorbed; the remaining hooks still
+receive the event. A hook that returns a value is reported as
+`pump_observer_returned_value`, and a returned coroutine is closed. Should
+closing that coroutine itself raise an ordinary `Exception`, it is reported as
+`pump_observer_disposal_failed` and absorbed the same way, so disposal can
+neither interrupt emission nor skip later hooks.
+
+Anything that is not an `Exception` — `SystemExit`, `KeyboardInterrupt`,
+`asyncio.CancelledError` — propagates unchanged, whether raised from the hook
+call or from disposal. Emission sites include cancellation unwinding, where
+absorbing a shutdown signal would swallow the cancellation the caller asked
+for. Propagation is safe at every hand-off site because each has already closed
+or handed off the descriptors it owns before emitting: a failure site closes
+the writer first, the rollback emits after restoring state, and the `submitted`
+emission happens once the completion callback owns cleanup — so a propagating
+signal cannot strand a descriptor.
+
+This deliberately differs from `sh.observe` hooks, whose exceptions fail the
+observed command: a pump observer must not be able to turn a hop that would
+have succeeded into a failure. `cuprum/unittests/test_pump_observation.py` and
+`cuprum/unittests/test_pump_hook_disposal.py` carry the regression coverage.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same command-query
@@ -2191,6 +2240,196 @@ Property tests for the merge and resolve invariants live in
 counts, payload contents, and overlap patterns, and to confirm that the helpers
 never mutate caller-supplied mappings.
 
+## Building the native extension
+
+The optional Rust extension needs two tools beyond the Python development
+environment:
+
+- **Rust 1.85 or later**, including `cargo`. The crates use `edition = "2024"`,
+  which requires Rust 1.85. Install the toolchain with
+  [rustup](https://rustup.rs/); `rust/rust-toolchain.toml` pins the exact
+  version used inside `rust/`.
+- **maturin**, the Rust-to-Python build bridge. It is pinned in the `dev`
+  dependency group (`maturin==1.15.0`), so `uv sync --group dev` installs it.
+
+Build the extension into the development virtual environment with:
+
+```bash
+make develop
+```
+
+[Building the extension for tests](#building-the-extension-for-tests) explains
+why that target, rather than a bare `maturin develop`, is the supported route.
+Confirm the result with:
+
+```bash
+uv run python -c "import cuprum; print(cuprum.is_rust_available())"
+```
+
+The command prints `True` once the extension is importable.
+
+### Building distributable wheels
+
+The pure Python wheel needs no Rust toolchain; it is built with `uv_build`:
+
+```bash
+uv build --wheel --out-dir dist
+```
+
+A native wheel is built per platform with maturin:
+
+```bash
+maturin build --release --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+Linux wheels are built inside a manylinux-compatible container, with a matching
+compatibility tag and an explicit interpreter. The interpreter only drives the
+build: every native wheel targets the CPython 3.12 stable ABI.
+
+```bash
+maturin build --release --manylinux 2_28 \
+  -i python3.13 --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+`.github/workflows/build-wheels.yml` supplies `manylinux 2_28` through the
+maturin action and builds one `cp312-abi3` wheel each for Linux x86_64 and
+aarch64, macOS x86_64 and arm64, and Windows x86_64. The `abi3-py312` feature on
+`pyo3` makes each wheel load on CPython 3.12 and every later version; see
+[ADR-016](adr-016-stable-abi-native-wheels.md). `verify-wheel-install` checks
+the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor equal to
+`requires-python` in `pyproject.toml`.
+
+### Verifying a wheel pair
+
+Check a release candidate's two wheels against each other:
+
+1. Install the pure Python wheel and confirm that `is_rust_available()` returns
+   `False`.
+2. Force-reinstall the native wheel and confirm that it returns `True`.
+3. Compare the name, version, `requires-python`, dependencies, and
+   classifiers of the two installations to detect metadata drift.
+
+## Running the benchmark suite
+
+The benchmark suite compares the Python and Rust stream backends. Benchmark
+modules are excluded from `make test` unless `CUPRUM_RUN_BENCHMARKS=1` is set,
+which the targets below do.
+
+Run the pytest-benchmark microbenchmarks, which write
+`dist/benchmarks/microbenchmarks.json`:
+
+```bash
+make benchmark-micro
+```
+
+Run the hyperfine end-to-end throughput benchmarks, which write
+`dist/benchmarks/pipeline-throughput.json`:
+
+```bash
+make benchmark-e2e
+```
+
+Generate a dry-run plan without executing hyperfine:
+
+```bash
+uv run python benchmarks/pipeline_throughput.py \
+  --smoke \
+  --dry-run \
+  --worker-iterations 20 \
+  --output /tmp/pipeline-throughput-plan.json
+```
+
+The plan records scenario metadata, command lines, the benchmark profile, the
+worker iteration count, and whether the Rust extension is available. Each
+worker process batches `--worker-iterations` pipeline executions (default 20),
+so the recorded mean covers all of them. Do not compare baselines produced with
+different iteration counts; profile validation rejects mismatched plans.
+Iteration options are bounded to prevent accidental resource exhaustion:
+`--warmup`, `--runs`, `--warmup-count`, and `--repeat-count` each accept at most
+`1000`.
+
+### Scenario matrix
+
+The end-to-end suite runs every combination of:
+
+- payload size: small (1 KB), medium (1 MB), and large (100 MB), reduced to
+  1 KB, 64 KB, and 1 MB in smoke mode;
+- pipeline depth: single-stage (`writer|sink`) and multi-stage
+  (`writer|passthrough|sink`);
+- line callbacks: with (line-by-line sink processing) and without (bulk binary
+  reads).
+
+That gives 12 scenarios per available backend, named
+`{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
+or `rust-large-multi-cb`.
+
+### The CI ratchet workload
+
+Separate from the throughput sweep, `--ci-ratchet` selects the single-payload
+matrix that the continuous integration (CI) ratchet compares between runs:
+
+```bash
+uv run python benchmarks/pipeline_throughput.py \
+  --ci-ratchet \
+  --dry-run \
+  --output /tmp/ratchet-plan.json
+```
+
+The workload replaces the three payload tiers with one 64 MiB payload, which
+yields four scenarios per available backend — single-stage and multi-stage,
+each with and without line callbacks — named with a `ratchet` size label, for
+example `python-ratchet-single-nocb`.
+
+The payload is large so that the ratio the ratchet computes tracks the
+pipeline. The ratchet compares each scenario's within-run
+`rust_mean / python_mean` between a baseline and a candidate, so a cost that
+every run pays regardless of payload — interpreter start, the `cuprum` import,
+per-iteration pipeline set-up — cancels out only in proportion to how small it
+is. At the smoke payloads that fixed cost dominated what hyperfine timed, which
+made the gate flaky (issue #219). At 64 MiB the streaming work dominates while
+the measurement still fits the job's wall-clock budget.
+
+`--ci-ratchet` and `--smoke` select contradictory payloads and are mutually
+exclusive: the command line rejects the pair, and `default_pipeline_scenarios`
+raises `ValueError` for a caller that bypasses argparse.
+
+`--ci-ratchet` also changes the default `--worker-iterations` to `5`, where the
+sweep and smoke matrix default to `20`. The iteration count is measurement
+protocol rather than a tuning dial: it is recorded in every sample, and the
+ratchet compares only samples whose profile metadata agrees. An explicit
+`--worker-iterations` still overrides the default, but its samples are not
+comparable with the CI ratchet's own.
+
+The job does not invoke the benchmark once per command. It runs
+`benchmarks/ci_benchmark_ratchet_profile.py`, which rebuilds the filtered
+command line and passes `--warmup 1` with `--runs 20`, so each matched scenario
+pair sits next to its counterpart and records twenty measured runs per command
+after one discarded warm-up. The worker iteration count says how many pipelines
+run inside each measured process; the run count says how many times hyperfine
+measures that process.
+
+### Reading benchmark results
+
+- Pump-latency microbenchmarks reflect inter-stage transfer overhead;
+  consume-throughput microbenchmarks reflect stdout capture, which always uses
+  the Python path.
+- Small payloads show little difference between backends, because the
+  overhead avoided is per chunk.
+- `splice()` is Linux-only. macOS uses the Rust read and write loop, and
+  Windows inter-stage pumping declines to the Python path until overlapped I/O
+  is implemented for asyncio subprocess pipes.
+- The CI comparison summary reports speed-up as `python_mean / rust_mean`:
+  `2.00x` means Rust was twice as fast, `1.00x` a tie, and `0.80x` that Python
+  was faster.
+
+Both backends are tested for identical pipeline output across empty streams,
+multibyte UTF-8 split at chunk boundaries, broken pipes, and backpressure under
+large payloads, with Hypothesis generating random payloads and chunk
+boundaries. For parent-side tee and capture profiling, use the harness
+described in [Profiling harness overview](#profiling-harness-overview).
+
 ## Pipeline throughput benchmark configuration
 
 `PipelineBenchmarkConfig` controls the hyperfine-based end-to-end throughput
@@ -2239,7 +2478,8 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 `benchmarks/benchmark_workload.py` is the benchmark-plan workload parsing and
 validation boundary. It owns the workload identifiers a plan may declare and
 the validated protocol read back from one; it does not render report prose, and
-it does not own the CLI flags, which stay with the users' guide.
+it does not own the CLI flags, which are documented in
+[Running the benchmark suite](#running-the-benchmark-suite).
 
 The identifiers are `THROUGHPUT_SWEEP_WORKLOAD` (`throughput-sweep`), the
 default three-tier sweep; `SMOKE_WORKLOAD` (`smoke`), the reduced-payload

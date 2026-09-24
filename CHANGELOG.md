@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0]
+## [0.2.0-beta1]
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
@@ -57,6 +57,19 @@
   `cleanup_deferred`; resuming the already-closed transport is a no-op. A
   release that fails is recorded at `DEBUG` as `rust_pump_teardown_failed` with
   `cuprum_site="reader_close"`.
+- **Shutdown signals from pump hooks are no longer lost on hand-off:** A
+  `KeyboardInterrupt`, `SystemExit`, or `asyncio.CancelledError` raised while a
+  pump hook observed a `handoff` event used to be logged as
+  `pump_handoff_observer_failed` and discarded, contrary to the pump channel's
+  contract that shutdown signals always propagate. Hand-off events now follow
+  the same policy as every other pump event: ordinary hook exceptions are still
+  reported and absorbed, while shutdown signals reach the caller.
+- **Native wheels cover every supported Python:** Releases built native wheels
+  for CPython 3.13 only, so installations on 3.12 and 3.14 silently fell back
+  to the pure Python wheel and lost Rust acceleration. The extension now
+  targets the CPython 3.12 stable ABI, so each platform's single `cp312-abi3`
+  wheel loads on 3.12 and every later version. Free-threaded builds still use
+  the pure Python wheel. See ADR-016.
 
 ### Added
 
