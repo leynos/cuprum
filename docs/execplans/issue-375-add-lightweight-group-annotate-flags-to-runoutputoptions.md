@@ -279,6 +279,33 @@ processes.
   PR [#477](https://github.com/leynos/cuprum/pull/477), titled
   `Add lightweight group/annotate flags to RunOutputOptions (#375)`. The PR
   body includes `Closes #375` and the Lody session reference.
+- [x] (2026-09-24) The PR was marked ready for review. CodeRabbit then
+  returned three pre-merge warnings on `087f1a25` (summary comment
+  `5805721703`): Linked Issues, User-Facing Documentation, and Domain
+  Architecture. Each was adjudicated separately — see `Decision log`.
+- [x] (2026-09-24) Adjudication, per warning. **User-Facing Documentation:**
+  accepted; no migration-guide section existed. Added
+  `## Group and annotate flags` to `docs/migration-0.2.0.md`. **Linked
+  Issues:** partly accepted. The "one group per command" reading was already
+  disproved above, but the stale ADR number was not the whole of it: the issue
+  also requires an ADR cross-reference, and no flag documentation cited any
+  ADR. Cited ADR-013 from the users' guide flag section, the migration-guide
+  flag section, and the CHANGELOG entry. **Domain Architecture:** partially
+  accepted, and narrowed rather than removed. Evidence:
+  `cuprum/sinks/__init__.py:17-20` executes the `github_actions` submodule
+  import, so `import cuprum.sh` already loaded the adapter on `origin/main` —
+  the dependency is pre-existing and the flags did not introduce it. The import
+  now reads from `cuprum.sinks` rather than the submodule, so `sh.py` depends
+  only on the package's declared `__all__` surface. The synthesis itself is
+  retained because the issue's `sink=` precedence clause and the zero-ceremony
+  contract require it; the Option B objection is answered in ADR-013's
+  `### Amendment (2026-09-22)`. Committed as `40fdda49` and `499639d2`.
+- [x] (2026-09-24) The `cuprum/sh.py` import narrowing passed
+  `ruff check` and `ruff format --check`; `test_sinks_end_to_end.py` and
+  `test_sinks_github_actions.py` passed 63 tests. `make fmt` and
+  `make markdownlint` (which includes the `spelling` typos tier) passed on the
+  documentation edits, and `make markdownlint` reported `0 error(s)` over 73
+  files. No `typos.toml` churn this time.
 
 ## Surprises & discoveries
 
@@ -434,6 +461,30 @@ processes.
   starts with no provenance metadata and remains explicit regardless of its
   concrete type. Keep the keyword-only field private to this lifecycle. Date/
   Author: 2026-09-24, agent.
+
+- Decision: accept the Domain Architecture warning only to the extent of
+  narrowing the import path, and retain the synthesis in
+  `RunOutputOptions.__post_init__`. Rationale: the warning's premise — that the
+  change "introduces a vendor-specific adapter dependency into the core
+  execution module" — is falsified by the tree. `cuprum/sinks/__init__.py`
+  imports `GitHubActionsSink` from `cuprum.sinks.github_actions`, so
+  `import cuprum.sh` already executed the adapter module on `origin/main`
+  before this branch existed; the flags added no import edge. The offered
+  resolution — move the flags out to an integration layer — would leave the
+  issue's zero-ceremony contract unmet and its `sink=` precedence clause
+  unimplementable, and would put `RunOutputOptions` construction outside
+  `cuprum/sh.py`, where `RunOutputOptions` is defined. The part worth acting on
+  is surface discipline, so the import now reads
+  `from cuprum.sinks import GitHubActionsSink`, reaching the package's declared
+  `__all__` rather than the submodule. Date/Author: 2026-09-24, agent.
+
+- Decision: cross-reference ADR-013 from the flag documentation rather than
+  ADR-010. Rationale: issue #375's acceptance criteria say "ADR-010
+  cross-referenced", but ADR-010 is "Rust-pump executor-hop spans"; the
+  presentation-sink decision is ADR-013, and `docs/roadmap.md:80-86` records
+  issue `#360` as the origin of the sink that ADR-013 governs. The stale number
+  is corrected in the citation rather than obeyed literally. Date/ Author:
+  2026-09-24, agent.
 
 ## Conformance basis
 
