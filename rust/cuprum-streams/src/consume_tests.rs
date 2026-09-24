@@ -54,7 +54,7 @@ fn consume(reader: &mut ScriptedReader) -> Result<String, PumpError> {
 
 #[rstest]
 #[case::empty_stream(&[], "")]
-#[case::two_byte_sequence_split(&[b"caf\xC3".as_slice(), b"\xA9!"], "café!")]
+#[case::two_byte_sequence_split(&[b"na\xC3".as_slice(), b"\xAFve"], "naïve")]
 #[case::four_byte_sequence_split_three_ways(
     &[b"\xF0".as_slice(), b"\x9F\x98", b"\x80"],
     "\u{1F600}"
