@@ -1,10 +1,18 @@
 # cuprum
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](
-https://deepwiki.com/leynos/cuprum)
+[![Ask DeepWiki][dw]][deepwiki] [![PyPI Version][pypi]][package]
+
+[dw]: https://deepwiki.com/badge.svg
+[deepwiki]: https://deepwiki.com/leynos/cuprum
+[pypi]: https://img.shields.io/pypi/v/cuprum "PyPI package"
+[package]: https://pypi.org/project/cuprum/
 
 Typed, async command execution for Python—so you can ditch the shell scripts
 without losing your mind.
+
+Website: <https://df12.studio/cuprum>
+
+______________________________________________________________________
 
 ## What is this?
 
