@@ -6,6 +6,8 @@ mod buffer;
 mod buffer_size_tests;
 #[cfg(all(test, unix))]
 mod consume_snapshot_tests;
+#[cfg(test)]
+mod consume_tests;
 mod errors;
 mod io_utils;
 #[cfg(all(test, unix))]
@@ -265,6 +267,28 @@ fn consume_stream_files(
     reader: &impl AsStream,
     buffer_size: BufferSize,
 ) -> Result<String, PumpError> {
+    consume_with_reader(|buffer| read_stream(reader, buffer), buffer_size, "unix")
+}
+
+#[cfg(windows)]
+fn consume_stream_files(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer_size: BufferSize,
+) -> Result<String, PumpError> {
+    consume_with_reader(|buffer| read_stream(reader, buffer), buffer_size, "windows")
+}
+
+/// Drain `read` to EOF, decoding the bytes as UTF-8 with replacement.
+///
+/// Each platform entry point supplies a closure over its own capability-typed
+/// `read_stream`, so this loop never sees a handle and cannot widen the
+/// Windows synchronous-handle boundary. `platform` labels the length-overflow
+/// event so it names the entry point's platform.
+fn consume_with_reader(
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, PumpError>,
+    buffer_size: BufferSize,
+    platform: &'static str,
+) -> Result<String, PumpError> {
     // Operation span (see `operation_span`) so the read seam's `warn!`/`error!`
     // events inherit this operation's context even under a `warn`/`error`-only
     // production filter.
@@ -277,58 +301,13 @@ fn consume_stream_files(
     let mut output = String::new();
     let mut total_read = 0_u64;
 
-    #[cfg(unix)]
-    let platform = "unix";
-    #[cfg(windows)]
-    let platform = "windows";
-
     loop {
-        let read_len = read_stream(reader, &mut buffer)?;
+        let read_len = read(&mut buffer)?;
         if read_len == 0 {
             break;
         }
         let read_bytes = u64::try_from(read_len).map_err(|_| {
             tracing::error!(platform, "read length conversion overflowed");
-            PumpError::LengthOverflow
-        })?;
-        total_read = total_read.saturating_add(read_bytes);
-        let chunk = buffer
-            .get(..read_len)
-            .ok_or(PumpError::BufferRangeExceeded)?;
-        pending.extend_from_slice(chunk);
-        decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
-    }
-
-    decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(true));
-
-    span.record("total_bytes", total_read);
-    span.record("read_retries", io_utils::read_retry_count());
-    Ok(output)
-}
-
-#[cfg(windows)]
-fn consume_stream_files(
-    reader: SynchronousBorrowedStream<'_>,
-    buffer_size: BufferSize,
-) -> Result<String, PumpError> {
-    // Operation span (see `operation_span`) so the read seam's fatal-I/O
-    // events inherit this operation's context.
-    let span = operation_span("consume_stream", buffer_size.value());
-    let _guard = span.enter();
-    io_utils::reset_retry_counters();
-
-    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
-    let mut pending: Vec<u8> = Vec::new();
-    let mut output = String::new();
-    let mut total_read = 0_u64;
-
-    loop {
-        let read_len = read_stream(reader, &mut buffer)?;
-        if read_len == 0 {
-            break;
-        }
-        let read_bytes = u64::try_from(read_len).map_err(|_| {
-            tracing::error!(platform = "windows", "read length conversion overflowed");
             PumpError::LengthOverflow
         })?;
         total_read = total_read.saturating_add(read_bytes);
