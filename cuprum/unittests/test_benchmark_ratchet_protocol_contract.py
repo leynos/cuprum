@@ -28,7 +28,7 @@ from benchmarks.ratchet_history import (
     DEFAULT_WINDOW_SIZE,
 )
 from tests.helpers.workflow import BENCHMARK_JOB, Workflow, script_of, step_named
-from tests.helpers.workflow_shell import (
+from tests.helpers.workflow_recipe import (
     flag_value,
     shell_function,
     shell_statements,

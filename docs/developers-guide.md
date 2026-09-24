@@ -3696,10 +3696,12 @@ configuration.
 The support is split by responsibility: `workflow_types.py` defines the narrow
 `TypedDict` shapes; `workflow.py` parses the workflow and provides queries over
 its jobs and steps; `workflow_gate.py` contains the pure path matching and
-benchmark-admission model; and `workflow_shell.py` recognizes commands in
-`run:` scripts while ignoring comments and here-document bodies. Keep
-repository access in the fixtures and use these helpers rather than creating
-another workflow parser in a test.
+benchmark-admission model; `workflow_shell.py` recognizes commands in `run:`
+scripts while ignoring comments and here-document bodies; and
+`workflow_recipe.py` answers what a step's recipe says — which shell function
+it declares, what a flag is set to, and how a condition binds its operators.
+Keep repository access in the fixtures and use these helpers rather than
+creating another workflow parser in a test.
 
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:

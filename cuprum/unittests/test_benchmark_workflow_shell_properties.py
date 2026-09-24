@@ -1,6 +1,6 @@
 """Generated-input properties for the workflow's shell readers.
 
-`tests/helpers/workflow_shell.py` reads `.github/workflows/ci.yml` so the
+`tests/helpers/workflow_recipe.py` reads `.github/workflows/ci.yml` so the
 ratchet contract tests can assert on what a step's script *says*. Two of its
 readers are small state machines over shell text: `top_level_operators` counts
 an operator outside quotes and parentheses, and `shell_statements` splits a
@@ -22,7 +22,7 @@ from __future__ import annotations
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tests.helpers.workflow_shell import shell_statements, top_level_operators
+from tests.helpers.workflow_recipe import shell_statements, top_level_operators
 
 _WORD = st.text(alphabet="abc01", min_size=1, max_size=4)
 _PLAIN = st.text(alphabet="abc01 ", max_size=6)
