@@ -342,7 +342,13 @@ jobs:
           import sys
 
           import cuprum as c
-          from cuprum import Program, ProgramCatalogue, sh
+          from cuprum import (
+              Program,
+              ProgramCatalogue,
+              RustPumpHandoffOutcome,
+              observe_pump,
+              sh,
+          )
 
           assert sys.version_info[:2] == (3, 14), sys.version
           assert c.is_rust_available() is True, "abi3 wheel failed to load"
@@ -350,6 +356,15 @@ jobs:
           python = sh.make(Program(sys.executable), catalogue=catalogue)
           producer = python("-c", "print('x' * 100000)")
           consumer = python("-c", "import sys; print(len(sys.stdin.read()))")
-          result = (producer | consumer).run_sync()
+          # Identical output would also come from a silent Python fall-back, so
+          # require the hop to have been handed to the native pump.
+          events = []
+          with observe_pump(events.append):
+              result = (producer | consumer).run_sync()
           assert result.ok and result.stdout == "100001\n", result
+          assert any(
+              event.phase == "handoff"
+              and event.outcome is RustPumpHandoffOutcome.SUBMITTED
+              for event in events
+          ), f"the hop did not reach the Rust pump: {events}"
           PY
