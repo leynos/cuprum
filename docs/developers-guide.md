@@ -2208,6 +2208,148 @@ Property tests for the merge and resolve invariants live in
 counts, payload contents, and overlap patterns, and to confirm that the helpers
 never mutate caller-supplied mappings.
 
+## Building the native extension
+
+The optional Rust extension needs two tools beyond the Python development
+environment:
+
+- **Rust 1.85 or later**, including `cargo`. The crates use `edition = "2024"`,
+  which requires Rust 1.85. Install the toolchain with
+  [rustup](https://rustup.rs/); `rust/rust-toolchain.toml` pins the exact
+  version used inside `rust/`.
+- **maturin**, the Rust-to-Python build bridge. It is pinned in the `dev`
+  dependency group (`maturin==1.15.0`), so `uv sync --group dev` installs it.
+
+Build the extension into the development virtual environment with:
+
+```bash
+make develop
+```
+
+[Building the extension for tests](#building-the-extension-for-tests) explains
+why that target, rather than a bare `maturin develop`, is the supported route.
+Confirm the result with:
+
+```bash
+uv run python -c "import cuprum; print(cuprum.is_rust_available())"
+```
+
+The command prints `True` once the extension is importable.
+
+### Building distributable wheels
+
+The pure Python wheel needs no Rust toolchain; it is built with `uv_build`:
+
+```bash
+uv build --wheel --out-dir dist
+```
+
+A native wheel is built per platform with maturin:
+
+```bash
+maturin build --release --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+Linux wheels are built inside a manylinux-compatible container, with a matching
+compatibility tag and an explicit interpreter:
+
+```bash
+maturin build --release --manylinux 2_28 \
+  -i python3.13 --out wheelhouse \
+  --manifest-path rust/cuprum-rust/Cargo.toml
+```
+
+`.github/workflows/build-wheels.yml` supplies `manylinux 2_28` through the
+maturin action and builds CPython 3.13 wheels for Linux x86_64 and aarch64,
+macOS x86_64 and arm64, and Windows x86_64. The extension does not use the
+stable `abi3` interface, so each wheel serves only the interpreter it was built
+for, and every other interpreter receives the pure Python wheel.
+
+### Verifying a wheel pair
+
+Check a release candidate's two wheels against each other:
+
+1. Install the pure Python wheel and confirm that `is_rust_available()` returns
+   `False`.
+2. Force-reinstall the native wheel and confirm that it returns `True`.
+3. Compare the name, version, `requires-python`, dependencies, and
+   classifiers of the two installations to detect metadata drift.
+
+## Running the benchmark suite
+
+The benchmark suite compares the Python and Rust stream backends. Benchmark
+modules are excluded from `make test` unless `CUPRUM_RUN_BENCHMARKS=1` is set,
+which the targets below do.
+
+Run the pytest-benchmark microbenchmarks, which write
+`dist/benchmarks/microbenchmarks.json`:
+
+```bash
+make benchmark-micro
+```
+
+Run the hyperfine end-to-end throughput benchmarks, which write
+`dist/benchmarks/pipeline-throughput.json`:
+
+```bash
+make benchmark-e2e
+```
+
+Generate a dry-run plan without executing hyperfine:
+
+```bash
+uv run python benchmarks/pipeline_throughput.py \
+  --smoke \
+  --dry-run \
+  --worker-iterations 20 \
+  --output /tmp/pipeline-throughput-plan.json
+```
+
+The plan records scenario metadata, command lines, the benchmark profile, the
+worker iteration count, and whether the Rust extension is available. Each
+worker process batches `--worker-iterations` pipeline executions (default 20),
+so the recorded mean covers all of them. Do not compare baselines produced with
+different iteration counts; profile validation rejects mismatched plans.
+Iteration options are bounded to prevent accidental resource exhaustion:
+`--warmup`, `--runs`, `--warmup-count`, and `--repeat-count` each accept at most
+`1000`.
+
+### Scenario matrix
+
+The end-to-end suite runs every combination of:
+
+- payload size: small (1 KB), medium (1 MB), and large (100 MB), reduced to
+  1 KB, 64 KB, and 1 MB in smoke mode;
+- pipeline depth: single-stage (`writer|sink`) and multi-stage
+  (`writer|passthrough|sink`);
+- line callbacks: with (line-by-line sink processing) and without (bulk binary
+  reads).
+
+That gives 12 scenarios per available backend, named
+`{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
+or `rust-large-multi-cb`.
+
+### Reading benchmark results
+
+- Pump-latency microbenchmarks reflect inter-stage transfer overhead;
+  consume-throughput microbenchmarks reflect stdout capture, which always uses
+  the Python path.
+- Small payloads show little difference between backends, because the
+  overhead avoided is per chunk.
+- `splice()` is Linux-only. macOS uses the Rust read and write loop, and
+  Windows inter-stage pumping declines to the Python path until overlapped I/O
+  is implemented for asyncio subprocess pipes.
+- The CI comparison summary reports speed-up as `python_mean / rust_mean`:
+  `2.00x` means Rust was twice as fast, `1.00x` a tie, and `0.80x` that Python
+  was faster.
+
+Both backends are tested for identical pipeline output across empty streams,
+multibyte UTF-8 split at chunk boundaries, broken pipes, and backpressure under
+large payloads, with Hypothesis generating random payloads and chunk
+boundaries. For parent-side tee and capture profiling, use the harness
+described in [Profiling harness overview](#profiling-harness-overview).
+
 ## Pipeline throughput benchmark configuration
 
 `PipelineBenchmarkConfig` controls the hyperfine-based end-to-end throughput

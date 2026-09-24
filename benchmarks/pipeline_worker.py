@@ -145,7 +145,9 @@ def _catalogue_for_worker() -> tuple[ProgramCatalogue, Program]:
     project = ProjectSettings(
         name="benchmark-worker",
         programs=(python_program,),
-        documentation_locations=("docs/users-guide.md#benchmark-suite",),
+        documentation_locations=(
+            "docs/developers-guide.md#running-the-benchmark-suite",
+        ),
         noise_rules=(),
     )
     return ProgramCatalogue(projects=(project,)), python_program

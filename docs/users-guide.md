@@ -369,18 +369,14 @@ result measurements, heartbeats, and presentation sinks.
 
 _Table 1: First checks for common execution outcomes._
 
-For native-backend installation, benchmarking, and internal pump diagnostics,
-see the
+For the optional native extension, see
+[Choosing a stream backend](#choosing-a-stream-backend) and
+[Troubleshooting the native extension](#troubleshooting-the-native-extension).
+Benchmarking and the implementation's verification are maintainer topics,
+covered in the
 [developers' guide](developers-guide.md), [Rust boundary verification](rust-boundary-verification.md),
-and [Cuprum design](cuprum-design.md). These explain implementation and
-verification choices; they are not prerequisites for running commands.
-
-### Benchmark suite
-
-The benchmark suite compares Python and optional Rust stream backends across
-representative output and pipeline shapes. Use the
-[developers' guide](developers-guide.md) for prerequisites, reproducible
-commands, and how to interpret results before choosing a backend.
+and the [Cuprum design](cuprum-design.md); none of them is needed to run
+commands.
 
 ## Going further
 
@@ -1334,149 +1330,57 @@ unchanged — the counters supplement them rather than replacing them.
 
 ### Choosing a stream backend
 
-Most users should leave backend selection on `auto`. This uses the Rust pathway
-when the native extension is installed and falls back cleanly to pure Python
-otherwise. Select `python` when the pure Python path is required regardless of
-wheel availability, for example when debugging, reproducing an issue on a pure
-Python installation, or relying on Python-only capture features. Select `rust`
-for benchmarking or throughput-heavy workloads and to require the native
-extension (fail if unavailable).
+Most applications should leave the backend on `auto`. The
+`CUPRUM_STREAM_BACKEND` environment variable accepts three values:
+
+- `auto` (default): uses the Rust pathway when the native extension is
+  installed and falls back to pure Python otherwise. The choice is recorded
+  once as a `DEBUG` `resolved stream backend` record on the `cuprum._backend`
+  logger, whose `resolved_backend` field names the pathway.
+- `python`: forces the pure Python pathway, for example when debugging or
+  reproducing an issue from a pure Python installation.
+- `rust`: requires the native extension. Pipeline execution raises
+  `ImportError` if it is unavailable, rather than silently falling back.
 
 Set `CUPRUM_STREAM_BACKEND` before first backend resolution in the process.
+Cuprum resolves the backend once and caches it, so later changes have no effect.
 
-If the environment variable is changed after Cuprum has already resolved the
-backend in the current process, the cached result will continue to be used.
+The backend applies only to inter-stage pipeline pumping. The Rust pathway runs
+outside the global interpreter lock (GIL) on a dedicated worker pool that
+Cuprum owns, independent of the event loop's default executor.
 
-The backend selection is active for inter-stage stream pumping in pipelines.
-When the Rust backend is selected, data transfer between pipeline stages uses
-the Rust extension outside the GIL on a dedicated worker pool that Cuprum owns,
-independent of the event loop's default executor. Stream consumption
-(stdout/stderr capture) currently always uses the Python pathway regardless of
-the backend setting; this ensures line callbacks and echo features remain
-available.
+For stdout/stderr capture, Cuprum always uses the Python pathway, so line
+callbacks, echo, and custom encodings behave identically on either backend.
 
-Pipeline pumping applies additional safety guards: if Rust is selected but
-Cuprum cannot extract raw file descriptors from asyncio transports for a
-specific transfer, it falls back to the Python pump for that transfer. On
-Windows, it declines before descriptor extraction with `platform_unsupported`,
-because asyncio subprocess pipes use overlapped handles that the synchronous
-native I/O path cannot safely use. Both fallbacks are automatic and preserve
-pipeline correctness.
+Even with `rust` selected, an individual hop falls back to the Python pump when
+its descriptors cannot be borrowed safely; on Windows every asyncio
+subprocess-pipe hop does so. Fall-backs never change pipeline output. See
+[Why a hop fell back to Python](#why-a-hop-fell-back-to-python) to detect them.
 
-Forced Rust mode is intentionally strict. If `CUPRUM_STREAM_BACKEND=rust` is
-set and the Rust extension is unavailable, pipeline execution raises
-`ImportError` instead of silently falling back.
+Rust acceleration pays off for large, multi-stage pipelines, especially on
+Linux, where the pump uses the zero-copy `splice()` system call between pipes.
+macOS uses a read and write loop. For small outputs the difference is usually
+negligible, because the saving is per chunk and small payloads have few chunks.
+Measure a representative workload before standardizing on `rust`: from a source
+checkout, `make benchmark-e2e` runs the end-to-end throughput suite, and the
+[developers' guide](developers-guide.md#running-the-benchmark-suite) explains
+its scenarios.
 
-Current Rust acceleration applies to inter-stage pipeline pumping. For
-high-throughput, multi-stage pipelines, this can reduce per-chunk overhead and
-deliver substantial multi-fold throughput improvements on large transfers,
-especially on Linux pipe-to-pipe workloads where `splice()` is available. For
-small outputs, the difference is often negligible. When stdout/stderr capture,
-custom encoding/error handling, or line-oriented callbacks matter more than raw
-throughput, prefer `python`. The current backend selection does not change
-capture semantics: stdout/stderr capture still uses the Python pathway.
+### Checking the native extension
 
-Use `make benchmark-e2e` to measure workload before standardizing on `rust` for
-a production path. The benchmark suite gives a better answer than a fixed rule
-of thumb when payload size, platform, or callback behaviour differ from the
-default scenarios.
+`is_rust_available()` reports whether the native backend can be used. It returns
+`False` on a pure Python installation rather than raising, while other import
+failures still surface so that a broken installation is visible:
 
-For parent-side tee and capture profiling, use the dedicated harness documented
-in `benchmarks/README.md`. That harness replays deterministic base64 fixtures
-into the parent process and records text-first `perf` artefacts for the
-`echo=True` and `capture=True` consumption paths. It is the right tool when
-investigating sink write cost, line-callback overhead, capture accumulation, or
-the boundary between inter-stage pumping and final stream consumption.
+<!-- tested-example: rust-availability -->
 
-The profiling harness accepts a `BackendSelector` dependency for benchmark
-workers that need to force a backend around a single parent-side run. The
-default selector mutates `CUPRUM_STREAM_BACKEND` process-wide while holding a
-backend lock, clears Cuprum's cached backend choice for the scoped run, and
-restores the original environment afterwards. It is intentionally non-reentrant
-on the same thread: nested selector activation raises `RuntimeError` rather
-than risking a stale environment value or backend cache leak. Avoid wrapping one
-`BackendSelector` activation inside another; start a separate worker process
-or let the outer selector own the full profiled run.
+```python
+import cuprum
 
-Both backends are tested for behavioural parity across edge cases including
-empty streams, multibyte UTF-8 at chunk boundaries, broken pipes (where the
-downstream stage exits before the upstream finishes), and backpressure under
-large payloads. The test suite verifies that pipeline output is identical
-regardless of which backend is active, so switching between backends does not
-change observable behaviour.
+assert isinstance(cuprum.is_rust_available(), bool)
+```
 
-The stream test suite also includes property-based coverage using Hypothesis.
-These tests generate randomized payload bytes and randomized chunk boundaries,
-run them through real pipelines, and assert byte-preservation by comparing
-deterministic hexadecimal output. This provides broad regression coverage for
-content integrity across both Python and Rust pumping pathways.
-
-Cuprum also tests the Python backend's pure line-callback splitting helpers
-directly. Those tests prove that completed lines and final partial lines
-account for all generated text, and that recognized line endings are stripped
-without editing the rest of the line. In development environments, CrossHair
-adds bounded symbolic checks for the same contracts; those checks are skipped
-on Python versions where CrossHair cannot trace the active bytecode.
-
-### Build prerequisites for native extensions
-
-Contributors who want to build or develop the optional Rust extension from
-source need the following tools installed:
-
-- **Rust toolchain (rustc and cargo) 1.85 or later.** The Rust crate uses
-  `edition = "2024"`, which requires Rust 1.85+. Install via
-  [rustup](https://rustup.rs/).
-
-  cargo ships as part of the standard rustup installation and does not need to
-  be installed separately.
-
-- **maturin** (the Rust-to-Python build bridge). maturin is pinned as a dev
-  dependency and is installed automatically when you run `uv sync --group dev`.
-  Alternatively, install `maturin==1.15.0` with pip.
-
-To build and install the Rust extension in development mode, run
-`maturin develop` from the project root. This compiles the Rust crate, links
-the resulting shared library into Cuprum, and makes the extension available for
-import. Call `is_rust_available()` from `cuprum` to verify the extension; it
-returns `True` when the native backend can be used.
-
-Pure Python wheels do not require a Rust toolchain. Running `uv build --wheel`
-produces a pure Python wheel using `uv_build` without any Rust dependencies.
-
-### Troubleshooting
-
-This section addresses common issues when working with the optional Rust
-extension.
-
-**Missing wheels on unsupported platforms.** Pre-built native wheels are
-published for CPython 3.13 on Linux (x86_64, aarch64), macOS (x86_64, arm64),
-and Windows (x86_64). On other platforms and other Python versions,
-`pip install cuprum` installs the pure Python wheel automatically. The pure
-Python wheel provides the same functionality without Rust acceleration.
-Contributors who want Rust acceleration on unsupported platforms can build from
-source using the prerequisites described above and running `maturin develop`.
-
-Windows wheels and direct Rust extension APIs remain available even though the
-pipeline dispatcher declines Windows asyncio subprocess-pipe pumping with
-`platform_unsupported`. This restriction protects ProactorEventLoop handles;
-selecting `CUPRUM_STREAM_BACKEND=rust` still runs those pipeline hops through
-the correct Python fallback.
-
-**Forced fallback behaviour.** The `CUPRUM_STREAM_BACKEND` environment variable
-controls which stream implementation is used:
-
-- `auto` (default): uses the Rust pathway when available, otherwise falls
-  back to the Python pathway. The choice is recorded once as a `DEBUG`
-  `resolved stream backend` record on the `cuprum._backend` logger, whose
-  `resolved_backend` field names the pathway.
-- `python`: forces the pure Python pathway regardless of whether the Rust
-  extension is installed.
-- `rust`: forces the Rust pathway and raises `ImportError` if the extension
-  is unavailable.
-
-If `CUPRUM_STREAM_BACKEND=rust` is set but the Rust extension is not installed,
-pipeline execution raises `ImportError` instead of falling back. To diagnose
-whether the extension is available, run:
+The same check runs from a shell:
 
 <!-- shell-example: rust-availability -->
 
@@ -1484,23 +1388,57 @@ whether the extension is available, run:
 python -c "import cuprum; print(cuprum.is_rust_available())"
 ```
 
-It prints `True` when the native backend can be used.
+### Build prerequisites for native extensions
 
-See the "Choosing a stream backend" section above for full details on backend
-selection.
+Building the optional Rust extension from source, for example on a platform
+without a native wheel, needs:
 
-**Benchmark result interpretation.** When reading benchmark results, keep the
-following in mind:
+- **Rust 1.85 or later**, including `cargo`, because the crates use
+  `edition = "2024"`. Install the toolchain with [rustup](https://rustup.rs/),
+  which provides `cargo` as well.
+- **maturin**, the Rust-to-Python build bridge. The project pins
+  `maturin==1.15.0`.
 
-- Small payloads show negligible difference between Python and Rust pathways.
-  The overhead being avoided is per-chunk, and small payloads have few chunks.
-- The `splice()` optimization is Linux-only. macOS uses the Rust read/write
-  loop, while Windows inter-stage pumping declines to the Python path until
-  true overlapped I/O is implemented for asyncio subprocess pipes.
-- The CI comparison summary reports speedup as `python_mean / rust_mean`.
-  Values above `1.0x` mean Rust was faster.
-- Use `make benchmark-e2e` to measure performance on your specific workload
-  and platform before drawing conclusions.
+From a source checkout, run `maturin develop` inside the target Python
+environment to compile the extension and install it there, then confirm it with
+`is_rust_available()` as shown in
+[Checking the native extension](#checking-the-native-extension). Pure Python
+wheels need no Rust toolchain. Contributors should use `make develop` instead;
+the [developers' guide](developers-guide.md#building-the-native-extension)
+covers that workflow and distributable wheel builds.
 
-See the "Benchmark suite" section above for scenario definitions and metric
-details.
+### Troubleshooting the native extension
+
+#### No native wheel for this platform
+
+Pre-built native wheels are published for CPython 3.13 on Linux (x86_64,
+aarch64), macOS (x86_64, arm64), and Windows (x86_64). On other platforms and
+Python versions, `pip install cuprum` installs the pure Python wheel, which
+provides the same functionality without Rust acceleration. To add acceleration
+anyway, build the extension as described in
+[Build prerequisites for native extensions](#build-prerequisites-for-native-extensions).
+
+#### A forced Rust backend raises `ImportError`
+
+With `CUPRUM_STREAM_BACKEND=rust`, pipeline execution raises `ImportError` when
+the extension is not installed, instead of silently using the fallback. Check
+the installation with `is_rust_available()`, or set `CUPRUM_STREAM_BACKEND` to
+`auto` to fall back to the Python pathway automatically.
+
+#### Hops use the Python fallback on Windows
+
+Windows native wheels remain useful even though every pipeline hop there uses
+the Python pump: the restriction protects the event loop's overlapped pipe
+handles, and `CUPRUM_STREAM_BACKEND=rust` still runs those hops correctly
+through the fallback. On other platforms, a hop that falls back records its
+reason as described in
+[Why a hop fell back to Python](#why-a-hop-fell-back-to-python).
+
+#### Benchmark results show little difference
+
+Small payloads show little difference between the backends, because the
+overhead the Rust pump avoids is per chunk. `splice()` acceleration is
+Linux-only. Benchmark comparisons report speed-up as `python_mean / rust_mean`,
+so values above `1.0x` mean Rust was faster. The
+[developers' guide](developers-guide.md#reading-benchmark-results) explains how
+to read the full benchmark output.
