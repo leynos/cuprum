@@ -267,7 +267,12 @@ processes.
 - [x] (2026-09-24) Final plan correction passed `make markdownlint`,
   `make spelling`, and `make nixie`; logs use the `-review7plan3.out` suffix
   under `/tmp`.
-- [ ] Review the final plan correction with CodeRabbit.
+- [x] (2026-09-24) CodeRabbit reviewed `dd793615` and found that V1's defaults
+  invariant omitted explicitly supplied sinks. Narrowed V1 to options with no
+  explicit sink; `make markdownlint`, `make spelling`, and `make nixie` pass.
+- [x] (2026-09-24) The V1 correction passed the docs gates; logs use the
+  `-review7plan5.out` suffix under `/tmp`.
+- [ ] Review the corrected V1 invariant with CodeRabbit.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -478,9 +483,11 @@ formal proof obligation arises. Recorded explicitly per the "if the change
 introduces no non-trivial invariant or lemma" clause.
 
 **V1 — Defaults are inert.** Statement: for any `RunOutputOptions` with
-`group=False` and `annotate_failure=False`, `__post_init__` leaves `self.sink`
-as `None`, and a run using the options writes no framing byte. Method: one
-options test and one end-to-end comparison. Artefacts:
+`group=False` and `annotate_failure=False` and no explicit `sink`,
+`__post_init__` leaves `self.sink` as `None`, and a run using the options
+writes no framing byte. Explicit sinks remain authoritative regardless of these
+flag defaults. Method: one options test and one end-to-end comparison.
+Artefacts:
 `cuprum/unittests/test_pipeline_output_options.py::test_group_and_annotate_failure_default_off`
 asserts both defaults and `sink is None`;
 `cuprum/unittests/test_sinks_end_to_end.py::test_flags_leave_default_output_unchanged`
@@ -990,15 +997,16 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   the earlier replacement-semantics, transcript-assertion, and documentation
   remediations. CodeRabbit reviewed the exact `d34feb4a` head and found one
   minor mismatch in this plan; the plan now describes the per-options
-  identity-based provenance rule. The corrected plan passes `make markdownlint`,
-  `make spelling`, and `make nixie`. Acceptance evidence: `scrutineer`'s
-  `-review7fix1` report, the `-review7fix2` CodeRabbit report, and the
-  `-review7plan3` docs-gate logs; final review of the correction remains.
-  Conformance check: annotation-only echo retains the caller's original
-  destinations, `emit_group=False` still writes no group, lease, or endgroup,
-  and `dataclasses.replace` refreshes only the adapter generated for the
-  current options object. Recovery: address any further in-scope finding, then
-  rerun the docs gates. Remaining gaps: final review and publication.
+  identity-based provenance rule. CodeRabbit reviewed that correction on
+  `dd793615` and found one minor overstatement in V1; V1 now excludes
+  caller-supplied sinks explicitly. Acceptance evidence: `scrutineer`'s
+  `-review7fix1` report, CodeRabbit's `-review7fix2` and `-review7fix3`
+  reports, and the `-review7plan5` docs-gate logs. Conformance check:
+  annotation-only echo retains the caller's original destinations,
+  `emit_group=False` still writes no group, lease, or endgroup, and
+  `dataclasses.replace` refreshes only the adapter generated for the current
+  options object. Recovery: complete the CodeRabbit review of this V1
+  correction. Remaining gaps: final review and publication.
 
 ## Outcomes & retrospective
 
