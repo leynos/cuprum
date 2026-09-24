@@ -3,20 +3,31 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](
 https://deepwiki.com/leynos/cuprum)
 
-Typed command execution for Python, with a curated program catalogue and
-predictable output, failures, and cancellation.
+Typed, async command execution for Python—so you can ditch the shell scripts
+without losing your mind.
 
 ## What is this?
 
-Cuprum builds argument vectors for approved executables and returns structured
-results. It does not pass command strings to a shell.
+If you've ever written a Python script that calls out to external commands,
+you've probably experienced the joys of `subprocess`: stringly-typed arguments,
+mysterious failures, and output that vanishes into the void. Cuprum is here to
+help.
 
-The default catalogue covers common tools; an application can define its own
-catalogue and project metadata. A catalogue controls builder creation, and an
-optional execution scope narrows which commands may run.
+We give you a **typed, safe approach to running external programs**. Instead of
+passing arbitrary strings to a shell, you build argument vectors for a curated
+catalogue of approved executables and get structured results back. Each command
+carries metadata about its project, so downstream tooling knows how to filter
+noise from logs or where to find documentation.
 
-Cuprum offers async execution and synchronous wrappers for scripts. Python 3.12
-or newer is required.
+The default catalogue covers common tools, and your application can define its
+own catalogue and project metadata. The catalogue decides which builders you
+can create; an optional execution scope narrows things further by limiting
+which commands may actually run.
+
+Cuprum is async-first but provides synchronous wrappers for scripts that don't
+need the full async machinery. Whether you're building deployment helpers, CI
+glue, or maintenance scripts, we want "Python instead of Bash" to feel like an
+upgrade rather than a chore. All you need is Python 3.12 or newer.
 
 ## Quick taste
 
