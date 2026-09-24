@@ -75,7 +75,7 @@ def given_random_data() -> tuple[Pipeline, frozenset[Program]]:
         python_prog,
         cat_prog,
         project_name="stream-fidelity-tests",
-        documentation_locations=("docs/users-guide.md#pipeline-execution",),
+        documentation_locations=("docs/users-guide.md#connect-a-pipeline",),
     )
 
     python_cmd = sh.make(python_prog, catalogue=catalogue)

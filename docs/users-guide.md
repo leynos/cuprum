@@ -3,7 +3,8 @@
 Cuprum helps Python applications run a known set of external programs without
 building shell command strings. This guide starts with a complete command, then
 continues through output, failures, pipelines, policy, and production use. Each
-Python example is executed from this document by the behavioural suite.
+Python example is executed from this document by the behavioural suite. The
+[glossary](#glossary) at the end defines recurring terms.
 
 ## Choose a path
 
@@ -17,8 +18,8 @@ Python example is executed from this document by the behavioural suite.
 - **Growing an application:** [Going further](#going-further) has task
   recipes for catalogues, builders, streaming, hooks, and telemetry.
 - **Exact contracts:** the
-  [operational reference](#detailed-operational-reference) lists events,
-  metrics, log records, and backend behaviour.
+  [operational reference](#operational-reference) lists events, metrics, log
+  records, and backend behaviour.
 
 The examples that launch a child use the current Python interpreter. This
 avoids assuming that an optional executable such as git is installed.
@@ -47,8 +48,6 @@ adds optional Rust acceleration for pipelines; behaviour is the same either
 way. See [Optional Rust acceleration](#choosing-a-stream-backend) for details.
 
 ## Run a command
-
-### Program catalogue
 
 Declare the executable, make a builder, build an argument vector, then run it.
 `sh.make()` consults a catalogue before returning a builder. The default
@@ -136,17 +135,22 @@ assert command.argv_with_program == (sys.executable, *command.argv)
 
 For domain-specific constraints, use the typed builders in `cuprum.builders`
 for Git, rsync, and tar. They validate relevant paths, refs, and options at
-construction time. Use `ProgramCatalogue.from_project(ProjectSettings(...))`
-when one project's name, documentation locations, and noise rules should travel
-with its commands. Cuprum stores noise rules for downstream log processing but
-does not apply them itself. A catalogue that lists the same program twice raises
+construction time; see
+[Wrap commands in project builders](#wrap-commands-in-project-builders).
+
+Use `ProgramCatalogue.from_project(ProjectSettings(...))` when one project's
+name, documentation locations, and noise rules should travel with its commands.
+Cuprum stores noise rules for downstream log processing but does not apply them
+itself. A catalogue that lists the same program twice raises
 `DuplicateProgramError`; a multi-project `ProgramCatalogue(projects=...)` with
 two projects of the same name raises `DuplicateProjectError`. Both are
 `ValueError` subclasses importable from `cuprum.catalogue`.
+[Define an application catalogue](#define-an-application-catalogue) shows a
+complete example.
 
 ## Control output
 
-### Execution runtime
+### Capture and echo
 
 Capture is on and echo is off by default. `stdout` and `stderr` are decoded
 strings when capture is on; they are `None` when it is off. Echo sends output
@@ -191,6 +195,17 @@ marker and terminator; captured output remains complete. Set
 `CommandResult.relay_fallbacks` records handled text-sink encoding failures by
 stream without including output content. Other sink errors may propagate.
 
+### Quiet children
+
+`RunOutputOptions(idle_after=30.0)` enables an optional heartbeat after 30
+seconds without outward output, then once per further silent interval. The
+default is off. The built-in notification goes to the configured stderr sink or
+`sys.stderr`; it is not captured child output. A pipeline monitors its final
+stdout and all stage stderr streams. `on_idle(total, idle)` replaces the
+built-in notification. Keep the callback and sink writes prompt: they run on
+the command's event loop. A heartbeat reports silence, not a deadlock, and does
+not alter the deadline or exit status.
+
 ## Supply input, environment, and a deadline
 
 `StdinInput(text=...)` uses the context's encoding. Use `StdinInput(data=...)`
@@ -222,20 +237,7 @@ A timeout raises `TimeoutExpired`; cancellation of an async run also starts
 child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
 
-### Quiet children
-
-`RunOutputOptions(idle_after=30.0)` enables an optional heartbeat after 30
-seconds without outward output, then once per further silent interval. The
-default is off. The built-in notification goes to the configured stderr sink or
-`sys.stderr`; it is not captured child output. A pipeline monitors its final
-stdout and all stage stderr streams. `on_idle(total, idle)` replaces the
-built-in notification. Keep the callback and sink writes prompt: they run on
-the command's event loop. A heartbeat reports silence, not a deadlock, and does
-not alter the deadline or exit status.
-
 ## Connect a pipeline
-
-### Pipeline execution
 
 Use `|` between command objects. Only final-stage stdout is captured; each
 stage has an exit result. Inspect `PipelineResult.ok` or `failure_index`, since
@@ -295,8 +297,6 @@ its original submission index.
 
 ## Apply a policy
 
-### Scoped contexts
-
 A catalogue controls builder creation. A scope additionally narrows which
 commands may run. Nested scopes cannot widen their parent's allowlist.
 Registrations such as `env()`, `before()`, `after()`, and `observe()` are
@@ -322,11 +322,13 @@ catalogue alone is insufficient. `allow()` is the explicit way to widen policy:
 it adds programs to the current allowlist, even inside a restricted scope,
 until the registration is detached or its block exits. Calling `allow()` in the
 default unrestricted context restricts it to exactly the programs allowed.
-Review `allow()` calls as policy changes. A failing `before` or `after` hook is
-application code and can affect a run. Use `observe()` for structured
-`ExecEvent` lifecycle events; telemetry adapters in `cuprum.adapters` project
-them to logging, metrics, or tracing. Avoid making untrusted arguments into
-metric labels or log fields.
+Review `allow()` calls as policy changes.
+
+A failing `before` or `after` hook is application code and can affect a run; see
+[Run code around every command](#run-code-around-every-command). Use
+`observe()` for structured `ExecEvent` lifecycle events; telemetry adapters in
+`cuprum.adapters` project them to logging, metrics, or tracing. Avoid making
+untrusted arguments into metric labels or log fields.
 
 ## Observe production runs
 
@@ -684,7 +686,7 @@ assert result.ok and result.stdout == "building\n"
 assert workflow_log.getvalue().startswith("::group::Build")
 ```
 
-## Detailed operational reference
+## Operational reference
 
 These contracts support diagnosis and integration after the first run. They
 retain the exact event and configuration names used by telemetry.
@@ -704,50 +706,26 @@ before it was killed.
 
 Under `capture=True` those attributes are always strings, never `None`: a
 stream that produced nothing before the deadline reports the empty string.
-Cuprum gives the readers a brief bounded window to observe end-of-file once the
-process has died, and keeps whatever a reader had already read even when the
-window closes first and that reader has to be cancelled — which is what happens
-when a grandchild process inherited the pipe and holds it open. The window is
-short and fixed, because teardown must never wait on a pipe that may never
-close.
 
-**Non-positive timeout behaviour:** a `timeout` of `0` or a negative value is
-treated as an already-elapsed deadline, so the command expires immediately: it
-never waits for the process to exit on its own. Cuprum instead terminates the
-running process (or every pipeline stage), waits for it to actually exit —
-honouring `cancel_grace` and escalating to `SIGKILL` if needed — drains the
-stream consumers, and then raises `TimeoutExpired`.
+Once the process has died, Cuprum gives its readers a brief, fixed window to
+observe end of file (EOF). A reader that is still waiting when the window
+closes is cancelled, but keeps whatever it had already read. This happens when
+a grandchild process inherited the pipe and holds it open; the window is fixed
+because teardown must never wait on a pipe that may never close.
 
-**Timeout diagnostics.** Every expiry writes a structured `WARNING` record to
-the `cuprum.timeout` logger, even when no observe hook is registered. The
-`subprocess_timeout_expired pid=… timeout=… mode=…` record carries:
+#### Where a timeout comes from
 
-- `cuprum_operation`: `"wait"`
-- `cuprum_pid`: the subprocess PID (`None` when no process was spawned)
-- `cuprum_timeout_s`: the configured timeout in seconds
-- `cuprum_timeout_mode`: `"elapsed_deadline"` or `"non_positive_immediate"`
-- `cuprum_error_type`: `"TimeoutError"`
+Cuprum uses the first of these that is set:
 
-If cleanup fails to drain a stream consumer, an `ERROR`
-`subprocess_teardown_drain_failed pid=… errors=…` record carries
-`cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
-`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
-The failure is absorbed so it cannot displace `TimeoutExpired` or
-`CancelledError`. Logging is best-effort; the same values are emitted as
-`timeout` and `teardown_error` events, so the channels cannot disagree.
-
-Timeout resolution order:
-
-- Explicit `timeout` argument on `run()` / `run_sync` when not `None`.
-- `ExecutionContext.timeout` when provided and not `None`.
-- `ScopeConfig(timeout=...)` default set via `scoped()` when present.
+1. An explicit `timeout` argument on `run()` / `run_sync()`.
+2. `ExecutionContext.timeout`.
+3. A `ScopeConfig(timeout=...)` default from the enclosing `scoped()` block.
 
 `ScopeConfig(timeout=...)` and `CuprumContext(timeout=...)` validate their
 timeouts when constructed. Values must be finite and non-negative; `None` means
 no timeout, and numeric values are stored as `float`. Negative values, `NaN`,
-and positive or negative infinity raise `ValueError`. A value too large to
-convert to `float` also raises `ValueError` rather than leaking the conversion
-`OverflowError`.
+and positive or negative infinity raise `ValueError`, as does a value too large
+to convert to `float`.
 
 A scope-level default applies to every command run inside it. The expired
 command's partial output is still available on the exception:
@@ -774,13 +752,44 @@ with scoped(ScopeConfig(timeout=1.0)):
         raise AssertionError("the scope timeout should have expired")
 ```
 
-Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
-using the same capture rules as successful runs.
+#### Non-positive timeouts
 
-A pipeline enforces its deadline once for the whole run, but reports it per
-stage: each stage gets a `timeout` event, a `cuprum.timeout` record with its
-`pid`, and one `cuprum_timeouts_total` increment. The fields and `timeout_mode`
-values match the single-command case.
+A `timeout` of `0` or a negative value is treated as an already-elapsed
+deadline, so the command expires immediately, without waiting for the process
+to exit on its own. Cuprum terminates the running process (or every pipeline
+stage), waits for it to exit — honouring `cancel_grace` and escalating to
+`SIGKILL` if needed — drains the stream consumers, and then raises
+`TimeoutExpired`.
+
+#### Pipeline timeouts
+
+A pipeline enforces its deadline once for the whole run; partial output follows
+the same capture rules as a successful run. Expiry is reported per stage: each
+stage gets a `timeout` event, a `cuprum.timeout` record with its `pid`, and one
+`cuprum_timeouts_total` increment. The fields and `timeout_mode` values match
+the single-command case.
+
+#### Timeout diagnostics
+
+Every expiry writes a structured `WARNING` record to the `cuprum.timeout`
+logger, even when no observe hook is registered. The
+`subprocess_timeout_expired pid=… timeout=… mode=…` record carries:
+
+- `cuprum_operation`: `"wait"`
+- `cuprum_pid`: the subprocess process ID (PID), or `None` when no process was
+  spawned
+- `cuprum_timeout_s`: the configured timeout in seconds
+- `cuprum_timeout_mode`: `"elapsed_deadline"` or `"non_positive_immediate"`
+- `cuprum_error_type`: `"TimeoutError"`
+
+If cleanup fails to drain a stream consumer, an `ERROR`
+`subprocess_teardown_drain_failed pid=… errors=…` record carries
+`cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
+`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
+
+The drain failure is absorbed so it cannot displace `TimeoutExpired` or
+`CancelledError`. Logging is best-effort; the same values are emitted as
+`timeout` and `teardown_error` events, so the two channels cannot disagree.
 
 ### Structured execution events
 
@@ -824,9 +833,9 @@ hooks receive `ExecEvent` values describing:
   copies, whereas the typed fields always report the stage the pipeline
   actually acted on.
 
-Line events omit their line terminators. A CRLF pair split across internal
-reads is held until both bytes arrive, so it emits one line event and never an
-empty event for the boundary.
+Line events omit their line terminators. A carriage-return and line-feed (CRLF)
+pair split across internal reads is held until both bytes arrive, so it emits
+one line event and never an empty event for the boundary.
 
 Hooks can be used for structured logging, metrics, or tracing without coupling
 Cuprum to a specific telemetry library.
@@ -891,9 +900,11 @@ pipeline transfer finishes. It reports aggregate `bytes_consumed`, completed
 `operation` values are `stream_drain` and `pipeline_transfer`; its closed
 `outcome` values are `eof`, `cancelled`, `failed`, `downstream_closed`, and
 `post_close_drain_timeout`. No event is emitted per read or per chunk, and no
-payload is included. Observer failures are best-effort and do not alter stream
-execution. `exec_id` is present only when an existing pipeline-stage
-correlation context safely provides it; direct drains carry `None`.
+payload is included.
+
+Observer failures are best-effort and do not alter stream execution. `exec_id`
+is present only when an existing pipeline-stage correlation context safely
+provides it; direct drains carry `None`.
 
 The optional `stream_operation_metrics_hook` records these metrics, all in the
 units named by their metric:
@@ -961,45 +972,49 @@ The hook collects:
 - `cuprum_resource_usage_measurements_total`: Counter incremented once per
   terminal `exit` event that recorded a `resource_usage_mode`, including
   `unavailable`
-- `cuprum_child_max_rss_bytes`: Histogram of child maximum RSS in bytes, from
-  the attributable `wait4` path only
+- `cuprum_child_max_rss_bytes`: Histogram of the child's maximum resident set
+  size (RSS) in bytes, recorded only when the operating system's `wait4` call
+  attributes it to that child
 - `cuprum_child_user_cpu_seconds`: Histogram of child user CPU seconds,
   observed only where that figure was actually measured
 - `cuprum_child_system_cpu_seconds`: Histogram of child system CPU seconds,
   observed only where that figure was actually measured
 
 All metrics carry `program` and `project` labels; missing, empty, or explicit
-`None` project tags still fall back to `unknown`. The four resource metrics
-above additionally carry a low-cardinality `resource_usage_mode` label naming
-how the measurement was obtained — `wait4_child`, `aggregate_cpu_delta`, or
-`unavailable`. That label is scoped to those four because it is meaningless for
-every other metric. The three resource histograms are observed only where the
-figure was actually measured, while the counter is emitted for every recorded
-mode, including `unavailable` — so a platform that measures nothing is still
-countable, and distinguishable from a run whose samples went missing.
+`None` project tags fall back to `unknown`.
+
+The four resource metrics also carry a low-cardinality `resource_usage_mode`
+label naming how the measurement was obtained: `wait4_child`,
+`aggregate_cpu_delta`, or `unavailable`. The label applies only to those four
+because it means nothing for any other metric. The three resource histograms
+are observed only where a figure was actually measured, while the counter is
+emitted for every mode, including `unavailable`. A platform that measures
+nothing therefore stays countable, and distinguishable from a run whose samples
+went missing.
 
 `cuprum_timeouts_total` counts both modes; use the `timeout` event's
 `timeout_mode`, or the `cuprum.timeout` record, to distinguish an elapsed
 deadline from an immediate non-positive expiry.
 
-`cuprum_pipeline_fail_fast_total` in particular does **not** use `exec_id`,
-stage index, exit code, command arguments, or paths as labels. `exec_id` is
-unique per execution and would give the series unbounded cardinality; the
-others would multiply series for no aggregate a dashboard needs. Those fields
-remain on the `pipeline_fail_fast` event itself and on the trace span, which is
-where per-incident detail belongs. A counter spike therefore cannot be joined
-to a span through the metric: when reading the observe event, use
-`ExecEvent.exec_id`; when reading its matching structured log record, use
-`cuprum_exec_id`. Both fields carry the same existing execution token, which
-identifies the individual stage spans behind the spike.
+`cuprum_pipeline_fail_fast_total` does **not** use `exec_id`, stage index, exit
+code, command arguments, or paths as labels. `exec_id` is unique per execution
+and would give the series unbounded cardinality; the others would multiply
+series for no aggregate a dashboard needs. Those fields remain on the
+`pipeline_fail_fast` event and on the trace span, where per-incident detail
+belongs.
+
+A counter spike therefore cannot be joined to a span through the metric itself.
+Use `ExecEvent.exec_id` on the observe event, or `cuprum_exec_id` on the
+matching structured log record: both carry the same execution token, which
+identifies the stage spans behind the spike.
 
 To integrate with a metrics library, implement the `MetricsCollector` protocol.
 
 ### Tracing adapter
 
 The `tracing_adapter` module provides an OpenTelemetry-style tracing hook that
-creates spans for command execution. It uses protocol classes so you can
-implement the backend with your preferred tracing library.
+creates spans for command execution. It defines protocol classes, so any
+tracing library can back it.
 
 The hook creates spans with these attributes:
 
@@ -1022,26 +1037,31 @@ The hook creates spans with these attributes:
 Output lines (stdout/stderr) are recorded as span events when
 `record_output=True` (the default).
 
-**Ancillary span events.** `stdin_error`, `timeout`, `teardown_error`, and
-`capture_eof_grace_expired` are recorded as `cuprum.<phase>` events on the
-execution's open span. They leave it neither ended nor marked; a later `exit`
-closes it normally. `timeout` is always followed by `exit`, while
-`teardown_error` may be the final event. Ancillary events carry their set
-`line`, `operation`, `error_type`, `note`, `timeout_s`, `timeout_mode`,
-`eof_grace_s`, and `pending_readers` fields, and correlate by `exec_id`; an
-event without a matching open span is dropped. The grace-expiry event carries
-no captured stdout or stderr payload.
+#### Ancillary span events
 
-**Correlation note:** the hook correlates an execution's `start`, `stdout`,
-`stderr`, and `exit` events by `ExecEvent.exec_id`, a stable token minted once
-per execution (per pipeline stage for pipelines) — not by `pid`, since the
-operating system can recycle a `pid` across executions. `pid` is still recorded
-as the `cuprum.pid` attribute for observability. Events emitted by Cuprum
-always carry an `exec_id`, so ordinary usage is unaffected. Only hand-built or
-legacy events that omit `exec_id` are affected: the hook cannot correlate them,
-so it ignores them — a `start` without an `exec_id` creates no span, and
-`stdout`/`stderr`/`stdin_error`/`timeout`/`teardown_error`/
-`capture_eof_grace_expired`/`pipeline_fail_fast`/`exit` without one are dropped.
+The `stdin_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
+phases are recorded as `cuprum.<phase>` events on the execution's open span.
+They leave the span neither ended nor marked; a later `exit` closes it normally.
+`timeout` is always followed by `exit`, while `teardown_error` may be the
+final event.
+
+Ancillary events carry whichever of the `line`, `operation`, `error_type`,
+`note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers`
+fields are set. An event without a matching open span is dropped. The
+grace-expiry event carries no captured stdout or stderr payload.
+
+#### Correlating events with spans
+
+The hook matches every event to its span by `ExecEvent.exec_id`, a stable token
+minted once per execution, or once per stage in a pipeline. It does not use
+`pid`, because the operating system can reuse a process ID for a later
+execution; `pid` is still recorded as the `cuprum.pid` attribute.
+
+Events emitted by Cuprum always carry an `exec_id`, so ordinary usage is
+unaffected. The hook ignores hand-built or legacy events that omit it:
+
+- a `start` event without an `exec_id` creates no span;
+- any other event without one is dropped.
 
 A pipeline's `pipeline_fail_fast` event is recorded as a
 `cuprum.pipeline_fail_fast` span event on the failing stage's already-open
@@ -1053,6 +1073,66 @@ caused it. No separate span is started, and the stage's own `exit` event still
 closes and marks the span.
 
 OpenTelemetry integrations implement the `Tracer` and `Span` protocols.
+
+### Choosing a stream backend
+
+Most applications should leave the backend on `auto`. The
+`CUPRUM_STREAM_BACKEND` environment variable accepts three values:
+
+- `auto` (default): uses the Rust pathway when the native extension is
+  installed and falls back to pure Python otherwise. The choice is recorded
+  once as a `DEBUG` `resolved stream backend` record on the `cuprum._backend`
+  logger, whose `resolved_backend` field names the pathway.
+- `python`: forces the pure Python pathway, for example when debugging or
+  reproducing an issue from a pure Python installation.
+- `rust`: requires the native extension. Pipeline execution raises
+  `ImportError` if it is unavailable, rather than silently falling back.
+
+Set `CUPRUM_STREAM_BACKEND` before first backend resolution in the process.
+Cuprum resolves the backend once and caches it, so later changes have no effect.
+
+The backend applies only to inter-stage pipeline pumping. The Rust pathway runs
+outside the global interpreter lock (GIL) on a dedicated worker pool that
+Cuprum owns, independent of the event loop's default executor.
+
+For stdout/stderr capture, Cuprum always uses the Python pathway, so line
+callbacks, echo, and custom encodings behave identically on either backend.
+
+Even with `rust` selected, an individual hop falls back to the Python pump when
+its descriptors cannot be borrowed safely; on Windows every asyncio
+subprocess-pipe hop does so. Fall-backs never change pipeline output. See
+[Why a hop fell back to Python](#why-a-hop-fell-back-to-python) to detect them.
+
+Rust acceleration pays off for large, multi-stage pipelines, especially on
+Linux, where the pump uses the zero-copy `splice()` system call between pipes.
+macOS uses a read and write loop. For small outputs the difference is usually
+negligible, because the saving is per chunk and small payloads have few chunks.
+Measure a representative workload before standardizing on `rust`: from a source
+checkout, `make benchmark-e2e` runs the end-to-end throughput suite, and the
+[developers' guide](developers-guide.md#running-the-benchmark-suite) explains
+its scenarios.
+
+### Checking the native extension
+
+`is_rust_available()` reports whether the native backend can be used. It returns
+`False` on a pure Python installation rather than raising, while other import
+failures still surface so that a broken installation is visible:
+
+<!-- tested-example: rust-availability -->
+
+```python
+import cuprum
+
+assert isinstance(cuprum.is_rust_available(), bool)
+```
+
+The same check runs from a shell:
+
+<!-- shell-example: rust-availability -->
+
+```shell
+python -c "import cuprum; print(cuprum.is_rust_available())"
+```
 
 ### Rust-pump executor-hop spans
 
@@ -1066,7 +1146,9 @@ One span is opened for each registered tracer and each Rust-pump hop that is
 actually scheduled. A fast-path decline creates no hop span. The span starts
 immediately before executor scheduling and ends from the completion callback,
 after the native worker has settled; cancellation therefore includes the
-cleanup drain. The Rust-internal pump span remains parentless across PyO3.
+cleanup drain. The pump's own Rust-side span is not parented to it, because
+trace context does not cross PyO3, the layer that binds the Rust extension to
+Python.
 
 Hop spans contain only bounded attributes: `cuprum.operation` (currently
 `rust_pump`), `cuprum.buffer_size`, and `cuprum.outcome`, whose values are
@@ -1138,8 +1220,10 @@ a worker-owned duplicate, restoring blocking mode, or resuming the reader is
 suppressed rather than raised, because the transfer itself has already settled.
 Each suppression records a `DEBUG` event with a `cuprum_action` of
 `rust_pump_teardown_failed`, a `cuprum_site` naming the step, and the exception
-class and `errno`. The `resume`, `reader_close`, and `restore_blocking` sites
-log on `cuprum._pipeline_stream_fds`; the `writer_close`, `resume_reader`, and
+class and `errno`.
+
+The `resume`, `reader_close`, and `restore_blocking` sites log on
+`cuprum._pipeline_stream_fds`; the `writer_close`, `resume_reader`, and
 `restore_state` sites log on `cuprum._pipeline_streams`. The record carries
 nothing drawn from the transferred data. Any of these records indicates a
 teardown problem worth investigating.
@@ -1178,50 +1262,57 @@ emits a `handoff` event and increments
 records each failed hand-off outcome once, so it can show both the number of
 hops that were submitted successfully and each terminal hand-off failure.
 
-Cancellation emits `PumpEvent.phase="cleanup_started"` when it starts waiting
-for native worker cleanup. It emits `PumpEvent.phase="cleanup_completed"` when
-that cleanup releases descriptor ownership. `PumpEvent.duration_s` is the
-monotonic cleanup-wait duration and is set only on `cleanup_completed`. The
-executor worker retains descriptor ownership until it settles. Set
-`ExecutionContext(native_pump_cleanup_grace=seconds)` to bound that caller
-wait; its default is 0.5 seconds. On expiry, the caller receives its original
-`CancelledError`, while worker-owned descriptors stay quarantined for the
-completion callback. Grace expiry emits `cleanup_grace_expired` with
-`PumpEvent.elapsed_s`; eventual callback cleanup emits `cleanup_deferred`. That
-callback closes its borrowed reader and restores callback-owned state. Rust
-owns the submitted writer duplicate, so the callback neither double closes it
-nor resumes a reader while native I/O can still use it. The native-pump
-executor is independent of `asyncio.run()` shutdown, so this caller-facing
-bound also holds for `run_sync()`. If the worker completes after the
-originating event loop has closed, the completion callback still closes and
-restores its descriptors; the closed loop's reader transport is not resumed. A
-deferred hop's paused reader transport is instead released — closed — at grace
-expiry, before the loop closes, which is why nothing needs to resume it later.
+#### Cleanup after cancellation
 
-Cleanup can also be correlated with the active pipeline-stage span. Register
-the same `TracingHook` with both `sh.observe(hook)` and
-`observe_pump(hook.record_pump_event)`. For each inter-stage hop, the cleanup
-events reuse the source stage's `ExecId` only to find its existing open span;
-the token is not a trace attribute, and no PID is used for correlation. The
-hook emits `cuprum.cleanup_started`, `cuprum.cleanup_completed`,
-`cuprum.cleanup_grace_expired`, and `cuprum.cleanup_deferred`. Each carries the
-bounded attributes `operation="native_pump_cleanup"` and `outcome`; normal
-completion carries `duration_s` and grace expiry carries `elapsed_s`, in
-monotonic seconds. No descriptor numbers, command arguments, exception text, or
-other unbounded values are emitted. An event without a matching active span is
-dropped safely; cleanup tracing neither changes span status nor ends the span.
+When a pipeline is cancelled mid-hop, the native worker keeps ownership of its
+descriptors until it settles, and the caller waits for that cleanup. The pump
+channel reports each step:
+
+- `cleanup_started` when the caller begins waiting for the native worker;
+- `cleanup_completed` when the worker releases descriptor ownership, with the
+  monotonic wait in `PumpEvent.duration_s`;
+- `cleanup_grace_expired` when the caller stops waiting, with the time spent in
+  `PumpEvent.elapsed_s`;
+- `cleanup_deferred` when the worker later settles and its completion callback
+  finishes the cleanup.
+
+`ExecutionContext(native_pump_cleanup_grace=seconds)` bounds the caller's wait;
+the default is 0.5 seconds. When the grace expires, the caller receives its
+original `CancelledError` straight away. The worker's descriptors stay
+quarantined until its completion callback closes them, and the paused reader
+transport is closed at expiry, while its event loop can still run the close.
+The native worker pool is independent of `asyncio.run()` shutdown, so the same
+bound holds for `run_sync()`, and a callback that completes after the loop has
+closed still releases its descriptors.
+
+To place these steps in a trace, register the same `TracingHook` with both
+`sh.observe(hook)` and `observe_pump(hook.record_pump_event)`. The hook adds
+`cuprum.cleanup_started`, `cuprum.cleanup_completed`,
+`cuprum.cleanup_grace_expired`, and `cuprum.cleanup_deferred` events to the
+source stage's open span, found through its `ExecId`. Each event carries the
+bounded attributes `operation="native_pump_cleanup"` and `outcome`, plus
+`duration_s` or `elapsed_s` in monotonic seconds where they apply.
+
+The token is not added as a trace attribute, and no PID, descriptor number,
+command argument, or exception text is emitted. An event without a matching
+open span is dropped; cleanup tracing neither changes span status nor ends the
+span.
 
 #### Cleanup DEBUG records
 
 Cancellation cleanup also emits `DEBUG` records on the
 `cuprum._pipeline_streams` logger. Each record has
 `cuprum_action="rust_pump_cleanup"` and
-`cuprum_operation="native_pump_cleanup"`; start records have
-`cuprum_outcome="started"`; normal completion records have
-`cuprum_outcome="completed"` and `cuprum_duration_s`. Grace expiry has
-`cuprum_outcome="grace_expired"` and `cuprum_elapsed_s`, while the eventual
-callback has `cuprum_outcome="deferred"`. The callback record is emitted only
-after the native worker has released descriptor ownership.
+`cuprum_operation="native_pump_cleanup"`, and a `cuprum_outcome` naming the
+step:
+
+- `cuprum_outcome="started"` when the wait begins;
+- `cuprum_outcome="completed"`, with `cuprum_duration_s`, on normal
+  completion;
+- `cuprum_outcome="grace_expired"`, with `cuprum_elapsed_s`, when the caller
+  stops waiting;
+- `cuprum_outcome="deferred"` from the eventual completion callback, emitted
+  only after the native worker has released descriptor ownership.
 
 #### Pump metrics
 
@@ -1314,79 +1405,18 @@ a label, so the series count is fixed. A successful hand-off increments the
 handoff counter once with `outcome="submitted"`. The `DEBUG` records above are
 unchanged — the counters supplement them rather than replacing them.
 
-> **Note**
+> [!NOTE]
 > A pump hook that raises is reported on the `cuprum.pump_observation` logger
 > at `WARNING` with its traceback, and the hop continues. This differs from
 > `sh.observe` hooks, whose exceptions fail the command being observed. The
-> difference is deliberate: a decline is recorded on the path that falls back
-> to the Python pump and completes the hop, so a misconfigured metrics backend
-> must not be able to abort a pipe hop that would otherwise have succeeded.
-> Only `Exception` instances are reported and suppressed. Everything else
-> propagates unchanged: `SystemExit`, `KeyboardInterrupt`, and
-> `asyncio.CancelledError`. The last matters because some emission sites run
-> during cancellation unwinding, so a hook running there must not be able to
-> absorb the cancellation the caller asked for. Hooks must be synchronous; one
-> that returns an awaitable is reported and discarded.
-
-### Choosing a stream backend
-
-Most applications should leave the backend on `auto`. The
-`CUPRUM_STREAM_BACKEND` environment variable accepts three values:
-
-- `auto` (default): uses the Rust pathway when the native extension is
-  installed and falls back to pure Python otherwise. The choice is recorded
-  once as a `DEBUG` `resolved stream backend` record on the `cuprum._backend`
-  logger, whose `resolved_backend` field names the pathway.
-- `python`: forces the pure Python pathway, for example when debugging or
-  reproducing an issue from a pure Python installation.
-- `rust`: requires the native extension. Pipeline execution raises
-  `ImportError` if it is unavailable, rather than silently falling back.
-
-Set `CUPRUM_STREAM_BACKEND` before first backend resolution in the process.
-Cuprum resolves the backend once and caches it, so later changes have no effect.
-
-The backend applies only to inter-stage pipeline pumping. The Rust pathway runs
-outside the global interpreter lock (GIL) on a dedicated worker pool that
-Cuprum owns, independent of the event loop's default executor.
-
-For stdout/stderr capture, Cuprum always uses the Python pathway, so line
-callbacks, echo, and custom encodings behave identically on either backend.
-
-Even with `rust` selected, an individual hop falls back to the Python pump when
-its descriptors cannot be borrowed safely; on Windows every asyncio
-subprocess-pipe hop does so. Fall-backs never change pipeline output. See
-[Why a hop fell back to Python](#why-a-hop-fell-back-to-python) to detect them.
-
-Rust acceleration pays off for large, multi-stage pipelines, especially on
-Linux, where the pump uses the zero-copy `splice()` system call between pipes.
-macOS uses a read and write loop. For small outputs the difference is usually
-negligible, because the saving is per chunk and small payloads have few chunks.
-Measure a representative workload before standardizing on `rust`: from a source
-checkout, `make benchmark-e2e` runs the end-to-end throughput suite, and the
-[developers' guide](developers-guide.md#running-the-benchmark-suite) explains
-its scenarios.
-
-### Checking the native extension
-
-`is_rust_available()` reports whether the native backend can be used. It returns
-`False` on a pure Python installation rather than raising, while other import
-failures still surface so that a broken installation is visible:
-
-<!-- tested-example: rust-availability -->
-
-```python
-import cuprum
-
-assert isinstance(cuprum.is_rust_available(), bool)
-```
-
-The same check runs from a shell:
-
-<!-- shell-example: rust-availability -->
-
-```shell
-python -c "import cuprum; print(cuprum.is_rust_available())"
-```
+> difference is deliberate: a misconfigured metrics backend must not be able to
+> abort a pipe hop that would otherwise have succeeded.
+>
+> Only `Exception` instances are suppressed. `SystemExit`, `KeyboardInterrupt`,
+> and `asyncio.CancelledError` propagate unchanged, because some emission sites
+> run during cancellation unwinding, where a hook must not absorb the
+> cancellation the caller asked for. Hooks must be synchronous; one that returns
+> an awaitable is reported and its result discarded.
 
 ### Build prerequisites for native extensions
 
@@ -1442,3 +1472,33 @@ Linux-only. Benchmark comparisons report speed-up as `python_mean / rust_mean`,
 so values above `1.0x` mean Rust was faster. The
 [developers' guide](developers-guide.md#reading-benchmark-results) explains how
 to read the full benchmark output.
+
+## Glossary
+
+- **Allowlist:** the set of programs a context permits to run. The default
+  context permits every program; a scope narrows it. The catalogue separately
+  controls which programs can be built into commands.
+- **Builder:** the callable that `sh.make()` returns. Calling it with arguments
+  produces a `SafeCmd`.
+- **Catalogue:** a `ProgramCatalogue`, the set of programs for which builders
+  may be created, grouped into projects with metadata.
+- **Descriptor:** an operating-system handle for an open pipe or file. The Rust
+  pump borrows the descriptors of the pipes it connects.
+- **End of file (EOF):** the signal that a pipe's writer has closed and no more
+  data will arrive.
+- **Execution ID (`exec_id`):** a token shared by every event from one
+  execution, used to correlate events with each other and with trace spans.
+- **Global interpreter lock (GIL):** the CPython lock that lets only one thread
+  run Python code at a time. The Rust pump moves data without holding it.
+- **Hop:** one transfer of data from a pipeline stage's stdout to the next
+  stage's stdin.
+- **Observe hook:** a callable registered with `sh.observe()` that receives
+  every `ExecEvent`.
+- **Process ID (PID):** the operating system's number for a running process.
+  Numbers are reused, so Cuprum correlates by execution ID instead.
+- **Pump:** the component that performs a hop, either in Python or in the
+  optional Rust extension.
+- **Resident set size (RSS):** the memory a process holds in RAM; Cuprum
+  reports the child's peak where the platform measures it.
+- **Scope:** a `with scoped(...)` block that narrows the allowlist and can add
+  hooks, a timeout, or environment overlays for the code inside it.

@@ -10,13 +10,14 @@ open each document.
 - [Changelog](../CHANGELOG.md) - consumer-facing release notes and migration
   impact summaries.
 - [Users' guide](users-guide.md) - user-facing command-building, catalogue,
-  runtime, pipeline, and Rust backend behaviour.
+  runtime, pipeline, and Rust backend behaviour, with task recipes, an
+  operational reference, and a glossary.
 - [0.2.0 migration guide][migration-020] - upgrade guidance for catalogue
   construction, line observation, result measurements, stream metrics,
   diagnostics, idle heartbeats, presentation sinks, and the benchmark ratchet's
   measurement protocol.
-- [Developers' guide](developers-guide.md) - maintainer workflows for profiling,
-  linting, benchmarking, and internal development practices.
+- [Developers' guide](developers-guide.md) - maintainer workflows for native
+  builds, profiling, linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and
   repository structure for contributors.
 - [Documentation style guide](documentation-style-guide.md) - documentation

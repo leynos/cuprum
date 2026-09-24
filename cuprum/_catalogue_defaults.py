@@ -29,7 +29,7 @@ DEFAULT_PROJECT_DATA: tuple[
     (
         CORE_OPS_PROJECT,
         (ECHO, GIT, LS, RSYNC, TAR),
-        ("docs/users-guide.md#program-catalogue",),
+        ("docs/users-guide.md#run-a-command",),
         (r"^progress:", r"^note:"),
     ),
     (
