@@ -19,9 +19,14 @@ No ordinary test notices any of that, so these tests parse `ci.yml` and read
 the contract back. They pin the *declarations*; the decision those
 declarations produce for a given pull request is stated in
 `tests/behaviour/test_benchmark_path_gate_behaviour.py`, and both suites read
-the workflow through `tests.helpers.workflow`. The build half of the same
-workflow's contract — which job builds the extension, and how — lives in
-`test_extension_ci_contract.py`.
+the workflow through `tests.helpers.workflow`.
+
+This module owns the gate: whether the paid job runs at all. What the job
+measures once it does — the ratchet's thresholds, its workload, its iteration
+count, and when a main-branch sample is published — is a second contract,
+asserted in `test_benchmark_ratchet_protocol_contract.py`. The build half of
+the same workflow's contract, which job builds the extension and how, lives
+in `test_extension_ci_contract.py`.
 """
 
 from __future__ import annotations
@@ -102,222 +107,6 @@ IRRELEVANT_PATHS = (
 STATUS_FUNCTIONS = ("always(", "failure(", "cancelled(")
 
 
-def test_the_changes_job_publishes_the_filter_result(workflow_data: Workflow) -> None:
-    """Require `changes` to expose the filter verdict as its `bench` output."""
-    outputs = mapping(
-        job(workflow_data, CHANGES_JOB).get("outputs"),
-        f"the {CHANGES_JOB!r} job must declare outputs",
-    )
-
-    assert outputs.get(FILTER_NAME) == (
-        f"${{{{ steps.{FILTER_STEP_ID}.outputs.{FILTER_NAME} }}}}"
-    ), (
-        f"the {CHANGES_JOB!r} job must publish its {FILTER_NAME!r} output from the "
-        f"{FILTER_STEP_ID!r} step; found {outputs.get(FILTER_NAME)!r}"
-    )
-
-    step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
-    uses = step.get("uses")
-    assert isinstance(uses, str), (
-        f"the {FILTER_STEP_ID!r} step must run an action; found {uses!r}"
-    )
-    assert uses.startswith(PATHS_FILTER_ACTION), (
-        f"the {FILTER_STEP_ID!r} step must run {PATHS_FILTER_ACTION}…; found {uses!r}"
-    )
-
-
-def test_the_changes_job_runs_on_the_lane_it_gates(
-    workflow_data: Workflow,
-) -> None:
-    """The detector runs where the required check waiting on it runs.
-
-    It used to run GitHub-hosted so that deciding whether to spend paid
-    minutes cost none. That saved seconds and cost a pull request 46 minutes
-    on 2026-09-23 (run 35904789287), when the hosted queue held it while every
-    Ubicloud job started. A fork's pull request takes the hosted arm, because
-    a fork cannot obtain an Ubicloud runner.
-    """
-    runner = " ".join(str(job(workflow_data, CHANGES_JOB).get("runs-on")).split())
-    expected = (
-        "${{ github.event.pull_request.head.repo.fork "
-        "&& 'ubuntu-latest' || 'ubicloud-standard-2' }}"
-    )
-
-    assert runner == expected, (
-        f"the {CHANGES_JOB!r} job must run on the Ubicloud lane with the fork "
-        f"fallback, {expected!r}; found {runner!r}"
-    )
-
-
-def test_the_changes_job_has_only_the_permissions_its_filter_needs(
-    workflow_data: Workflow,
-) -> None:
-    """Paths-filter needs changed-file read access without write authority."""
-    permissions = mapping(
-        job(workflow_data, CHANGES_JOB).get("permissions"),
-        f"the {CHANGES_JOB!r} job must declare narrow permissions",
-    )
-
-    assert permissions == {"contents": "read", "pull-requests": "read"}, (
-        f"the {CHANGES_JOB!r} job must retain only the filter's read permissions; "
-        f"found {permissions!r}"
-    )
-
-
-def test_the_changes_checkout_does_not_persist_credentials(
-    workflow_data: Workflow,
-) -> None:
-    """The cheap detector must not write its token into Git configuration."""
-    checkout = step_named(workflow_data, CHANGES_JOB, CHECKOUT_STEP)
-    checkout_options = mapping(
-        checkout.get("with"),
-        f"the {CHANGES_JOB!r} checkout must declare explicit options",
-    )
-
-    assert checkout_options.get("persist-credentials") is False, (
-        f"the {CHANGES_JOB!r} checkout must disable credential persistence; "
-        f"found {checkout_options.get('persist-credentials')!r}"
-    )
-
-
-def test_the_paid_benchmark_checkout_does_not_persist_credentials(
-    workflow_data: Workflow,
-) -> None:
-    """The paid job fetches its baseline explicitly instead of retaining a token."""
-    checkout = step_named(workflow_data, BENCHMARK_JOB, CHECKOUT_STEP)
-    checkout_options = mapping(
-        checkout.get("with"),
-        f"the {BENCHMARK_JOB!r} checkout must declare explicit options",
-    )
-
-    assert checkout_options.get("persist-credentials") is False, (
-        f"the {BENCHMARK_JOB!r} checkout must disable credential persistence; "
-        f"found {checkout_options.get('persist-credentials')!r}"
-    )
-
-
-def test_the_paid_benchmark_uses_the_shared_optimized_setup(
-    workflow_data: Workflow,
-) -> None:
-    """The paid runner builds once through the local contributor target."""
-    script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
-    assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
-
-    assert "make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'" in script, (
-        "the benchmark must use the shared optimized extension-build target"
-    )
-    assert "UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python" in script, (
-        "the benchmark scripts must reuse checkout-local uv caches and tools"
-    )
-
-
-def test_the_detector_runs_on_every_event(workflow_data: Workflow) -> None:
-    """Require detector execution to be independent of the triggering event."""
-    changes_job = job(workflow_data, CHANGES_JOB)
-    filter_step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
-
-    assert changes_job.get("if") is None, (
-        f"the {CHANGES_JOB!r} job must not filter events before publishing its verdict"
-    )
-    assert filter_step.get("if") is None, (
-        f"the {FILTER_STEP_ID!r} step must run for every event so its output is "
-        "always available to the benchmark gate"
-    )
-
-
-def test_the_benchmark_job_waits_for_the_detector(workflow_data: Workflow) -> None:
-    """Require `benchmark-ratchet` to declare the detector dependency."""
-    needs = job(workflow_data, BENCHMARK_JOB).get("needs")
-    assert isinstance(needs, list), f"the {BENCHMARK_JOB!r} job must declare needs"
-
-    assert CHANGES_JOB in needs, (
-        f"the {BENCHMARK_JOB!r} job must list {CHANGES_JOB!r} in `needs`; "
-        f"found {needs!r}"
-    )
-
-
-def test_the_benchmark_job_declares_the_expected_gate(
-    workflow_data: Workflow,
-) -> None:
-    """Require the gate expression to match the model used by these tests."""
-    condition = benchmark_gate(workflow_data)
-
-    assert condition == EXPECTED_GATE, (
-        f"the {BENCHMARK_JOB!r} job's `if:` must be {EXPECTED_GATE!r} — pushes to "
-        "main always benchmark so the baseline artefact stays fresh, and pull "
-        f"requests benchmark only on performance-relevant diffs; found {condition!r}"
-    )
-
-
-def test_a_failed_detector_does_not_benchmark_ungated(
-    workflow_data: Workflow,
-) -> None:
-    """Require a failed detector to skip the paid benchmark rather than run ungated."""
-    named = sorted(fn for fn in STATUS_FUNCTIONS if fn in benchmark_gate(workflow_data))
-
-    assert not named, (
-        f"the {BENCHMARK_JOB!r} gate must leave GitHub's implicit `success()` in "
-        f"place so a failed {CHANGES_JOB!r} skips the paid job rather than running "
-        f"it ungated; found {named}"
-    )
-
-
-def test_a_failed_detector_skips_non_pull_request_events(
-    workflow_data: Workflow,
-) -> None:
-    """Require detector failure to skip the paid benchmark for every event."""
-    condition = benchmark_gate(workflow_data)
-
-    assert "needs.changes.result == 'success'" in condition, (
-        "the benchmark gate must make detector success explicit so a failed "
-        "detector skips all events rather than running ungated"
-    )
-    assert not benchmark_runs(
-        event_name="push", bench=False, detector_succeeded=False
-    ), "a failed detector must skip a non-pull-request event"
-
-
-def test_the_filter_declares_every_performance_relevant_path(
-    filter_path_patterns: frozenset[str],
-) -> None:
-    """Require the filter path list to be exactly the performance-relevant set."""
-    assert filter_path_patterns == EXPECTED_FILTER_PATHS, (
-        "the `bench` filter must watch exactly the performance-relevant paths; "
-        f"missing {sorted(EXPECTED_FILTER_PATHS - filter_path_patterns)}, "
-        f"unexpected {sorted(filter_path_patterns - EXPECTED_FILTER_PATHS)}"
-    )
-
-
-def test_the_filter_uses_only_modelled_pattern_forms(
-    filter_path_patterns: frozenset[str],
-) -> None:
-    """Require every declared filter pattern to use a modelled form."""
-    unmodelled = sorted(
-        pattern
-        for pattern in filter_path_patterns
-        if not pattern.endswith("/**") and any(c in pattern for c in "*?[")
-    )
-
-    assert not unmodelled, (
-        "these filter patterns are neither a literal path nor a `dir/**` "
-        f"prefix, so `matches_filter` no longer models the filter: {unmodelled}"
-    )
-
-
-def test_the_irrelevant_paths_are_genuinely_irrelevant(
-    filter_path_patterns: frozenset[str],
-) -> None:
-    """Require the property tests' docs-only paths to remain outside the filter."""
-    matched = sorted(
-        path for path in IRRELEVANT_PATHS if bench_output([path], filter_path_patterns)
-    )
-
-    assert not matched, (
-        "these paths are sampled as performance-irrelevant but the filter "
-        f"matches them, so the property tests below prove nothing: {matched}"
-    )
-
-
 def _relevant_paths() -> list[str]:
     """Return one concrete changed path per declared filter pattern."""
     return sorted(
@@ -328,243 +117,500 @@ def _relevant_paths() -> list[str]:
     )
 
 
-@given(
-    relevant=st.lists(st.sampled_from(_relevant_paths()), min_size=1, unique=True),
-    irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True),
-)
-def test_any_performance_relevant_change_benchmarks(
-    relevant: list[str],
-    irrelevant: list[str],
-    filter_path_patterns: frozenset[str],
-) -> None:
-    """Require a benchmark when any watched path changes.
+class TestTheDetectorJob:
+    """The `changes` job: what it declares, and what it records of its own run."""
 
-    Parameters
-    ----------
-    relevant : list[str]
-        Performance-relevant paths included in the sampled pull request.
-    irrelevant : list[str]
-        Non-performance paths mixed into the sampled pull request.
-    """
-    changed = [*relevant, *irrelevant]
+    def test_the_changes_job_publishes_the_filter_result(
+        self, workflow_data: Workflow
+    ) -> None:
+        """Require `changes` to expose the filter verdict as its `bench` output."""
+        outputs = mapping(
+            job(workflow_data, CHANGES_JOB).get("outputs"),
+            f"the {CHANGES_JOB!r} job must declare outputs",
+        )
 
-    assert benchmark_runs(
-        event_name="pull_request",
-        bench=bench_output(changed, filter_path_patterns),
-        detector_succeeded=True,
-    ), f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
+        assert outputs.get(FILTER_NAME) == (
+            f"${{{{ steps.{FILTER_STEP_ID}.outputs.{FILTER_NAME} }}}}"
+        ), (
+            f"the {CHANGES_JOB!r} job must publish its {FILTER_NAME!r} output from the "
+            f"{FILTER_STEP_ID!r} step; found {outputs.get(FILTER_NAME)!r}"
+        )
 
+        step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
+        uses = step.get("uses")
+        assert isinstance(uses, str), (
+            f"the {FILTER_STEP_ID!r} step must run an action; found {uses!r}"
+        )
+        assert uses.startswith(PATHS_FILTER_ACTION), (
+            f"the {FILTER_STEP_ID!r} step must run {PATHS_FILTER_ACTION}…; "
+            f"found {uses!r}"
+        )
 
-@given(irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True))
-def test_a_pull_request_touching_nothing_relevant_skips(
-    irrelevant: list[str], filter_path_patterns: frozenset[str]
-) -> None:
-    """Require a skip when a pull request touches no watched paths.
+    def test_the_changes_job_runs_on_the_lane_it_gates(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """The detector runs where the required check waiting on it runs.
 
-    Parameters
-    ----------
-    irrelevant : list[str]
-        Non-performance paths included in the sampled pull request.
-    """
-    assert not benchmark_runs(
-        event_name="pull_request",
-        bench=bench_output(irrelevant, filter_path_patterns),
-        detector_succeeded=True,
-    ), f"a pull request changing only {irrelevant} must skip {BENCHMARK_JOB!r}"
+        It used to run GitHub-hosted so that deciding whether to spend paid
+        minutes cost none. That saved seconds and cost a pull request 46 minutes
+        on 2026-09-23 (run 35904789287), when the hosted queue held it while every
+        Ubicloud job started. A fork's pull request takes the hosted arm, because
+        a fork cannot obtain an Ubicloud runner.
+        """
+        runner = " ".join(str(job(workflow_data, CHANGES_JOB).get("runs-on")).split())
+        expected = (
+            "${{ github.event.pull_request.head.repo.fork "
+            "&& 'ubuntu-latest' || 'ubicloud-standard-2' }}"
+        )
 
+        assert runner == expected, (
+            f"the {CHANGES_JOB!r} job must run on the Ubicloud lane with the fork "
+            f"fallback, {expected!r}; found {runner!r}"
+        )
 
-@given(
-    changed=st.lists(st.sampled_from([*_relevant_paths(), *IRRELEVANT_PATHS])),
-    event_name=st.sampled_from(["push", "workflow_dispatch", "schedule"]),
-)
-def test_a_non_pull_request_event_always_benchmarks(
-    changed: list[str], event_name: str, filter_path_patterns: frozenset[str]
-) -> None:
-    """Require benchmarking for every non-pull-request event.
+    def test_the_changes_job_has_only_the_permissions_its_filter_needs(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Paths-filter needs changed-file read access without write authority."""
+        permissions = mapping(
+            job(workflow_data, CHANGES_JOB).get("permissions"),
+            f"the {CHANGES_JOB!r} job must declare narrow permissions",
+        )
 
-    Parameters
-    ----------
-    changed : list[str]
-        Paths included in the sampled event.
-    event_name : str
-        Non-pull-request event type used by the sampled case.
+        assert permissions == {"contents": "read", "pull-requests": "read"}, (
+            f"the {CHANGES_JOB!r} job must retain only the filter's read permissions; "
+            f"found {permissions!r}"
+        )
 
-    """
-    assert benchmark_runs(
-        event_name=event_name,
-        bench=bench_output(changed, filter_path_patterns),
-        detector_succeeded=True,
-    ), (
-        f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
-        "the main baseline artefact is refreshed"
-    )
+    def test_the_changes_checkout_does_not_persist_credentials(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """The cheap detector must not write its token into Git configuration."""
+        checkout = step_named(workflow_data, CHANGES_JOB, CHECKOUT_STEP)
+        checkout_options = mapping(
+            checkout.get("with"),
+            f"the {CHANGES_JOB!r} checkout must declare explicit options",
+        )
 
+        assert checkout_options.get("persist-credentials") is False, (
+            f"the {CHANGES_JOB!r} checkout must disable credential persistence; "
+            f"found {checkout_options.get('persist-credentials')!r}"
+        )
 
-def test_the_gate_decision_is_recorded_in_the_run_summary(
-    workflow_data: Workflow,
-) -> None:
-    """Require the `changes` job to record its verdict in the run summary."""
-    changes_steps = steps(workflow_data, CHANGES_JOB)
-    filter_index = next(
-        index
-        for index, step in enumerate(changes_steps)
-        if step.get("id") == FILTER_STEP_ID
-    )
-    summary_step = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP)
-    summary_index = changes_steps.index(summary_step)
-    script = script_of(summary_step)
-    assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
+    def test_the_detector_runs_on_every_event(self, workflow_data: Workflow) -> None:
+        """Require detector execution to be independent of the triggering event."""
+        changes_job = job(workflow_data, CHANGES_JOB)
+        filter_step = step_with_id(workflow_data, CHANGES_JOB, FILTER_STEP_ID)
 
-    assert filter_index < summary_index, (
-        f"the {FILTER_STEP_ID!r} step must precede {SUMMARY_STEP!r} so the summary "
-        "records the detector's actual outcome and output"
-    )
+        assert changes_job.get("if") is None, (
+            f"the {CHANGES_JOB!r} job must not filter events before publishing "
+            "its verdict"
+        )
+        assert filter_step.get("if") is None, (
+            f"the {FILTER_STEP_ID!r} step must run for every event so its output is "
+            "always available to the benchmark gate"
+        )
 
-    for operand in ("EVENT", "BENCH", "DETECTOR", "pull_request"):
-        assert operand in script, (
-            f"the gate summary must read {operand!r} so the recorded decision "
-            f"matches the {BENCHMARK_JOB!r} gate; found:\n{script}"
+    def test_the_gate_decision_is_recorded_in_the_run_summary(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Require the `changes` job to record its verdict in the run summary."""
+        changes_steps = steps(workflow_data, CHANGES_JOB)
+        filter_index = next(
+            index
+            for index, step in enumerate(changes_steps)
+            if step.get("id") == FILTER_STEP_ID
+        )
+        summary_step = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP)
+        summary_index = changes_steps.index(summary_step)
+        script = script_of(summary_step)
+        assert script is not None, f"the {SUMMARY_STEP!r} step must run a script"
+
+        assert filter_index < summary_index, (
+            f"the {FILTER_STEP_ID!r} step must precede {SUMMARY_STEP!r} so the summary "
+            "records the detector's actual outcome and output"
+        )
+
+        for operand in ("EVENT", "BENCH", "DETECTOR", "pull_request"):
+            assert operand in script, (
+                f"the gate summary must read {operand!r} so the recorded decision "
+                f"matches the {BENCHMARK_JOB!r} gate; found:\n{script}"
+            )
+
+    def test_the_gate_decision_is_recorded_even_when_the_detector_fails(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Record decisions when detector execution fails, not only on success."""
+        condition = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP).get("if")
+
+        assert condition == "${{ !cancelled() }}", (
+            f"the {SUMMARY_STEP!r} step must run on every completed run, not only "
+            f"when the detector succeeded; found {condition!r}"
         )
 
 
-def test_the_gate_decision_is_recorded_even_when_the_detector_fails(
-    workflow_data: Workflow,
-) -> None:
-    """Require the summary step to record decisions when detector execution fails."""
-    condition = step_named(workflow_data, CHANGES_JOB, SUMMARY_STEP).get("if")
+class TestThePaidJobGate:
+    """Whether the paid `benchmark-ratchet` job runs, and how it is set up.
 
-    assert condition == "${{ !cancelled() }}", (
-        f"the {SUMMARY_STEP!r} step must run on every completed run, not only "
-        f"when the detector succeeded; found {condition!r}"
-    )
-
-
-def test_the_workflow_serializes_runs_per_ref(workflow_data: Workflow) -> None:
-    """Require per-ref concurrency that cancels pull-request runs only."""
-    concurrency = mapping(
-        typ.cast("dict[str, object]", workflow_data).get("concurrency"),
-        f"{CI_WORKFLOW} must declare a concurrency policy",
-    )
-
-    assert concurrency.get("group") == "ci-${{ github.ref }}", (
-        "the concurrency group must be per-ref, so a pull request's runs "
-        "supersede each other without touching another ref's; found "
-        f"{concurrency.get('group')!r}"
-    )
-    assert concurrency.get("cancel-in-progress") == (
-        "${{ github.event_name == 'pull_request' }}"
-    ), (
-        "only pull-request runs may be cancelled; a cancelled `main` run never "
-        "republishes the baseline artefact. Found "
-        f"{concurrency.get('cancel-in-progress')!r}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("newer_event", "expected_cancellation"),
-    [
-        pytest.param("pull_request", True, id="superseding-pull-request"),
-        pytest.param("push", False, id="superseding-main-push"),
-        pytest.param("workflow_dispatch", False, id="superseding-manual-run"),
-    ],
-)
-def test_a_new_run_cancels_only_superseded_pull_request_runs(
-    workflow_data: Workflow,
-    newer_event: str,
-    expected_cancellation: bool,
-) -> None:
-    """Model the cancellation policy for a newer run on the same ref.
-
-    Parameters
-    ----------
-    workflow_data : Workflow
-        Parsed workflow whose concurrency policy is modelled.
-    newer_event : str
-        Event that starts the newer run in the ref's concurrency group.
-    expected_cancellation : bool
-        Whether that newer run must cancel an in-progress predecessor.
+    The gate itself is one `if:` expression, but it is assembled from a `needs`
+    edge, a detector verdict, and an event check, so the parts are pinned here
+    individually as well as verbatim.
     """
-    concurrency = mapping(
-        typ.cast("dict[str, object]", workflow_data).get("concurrency"),
-        f"{CI_WORKFLOW} must declare a concurrency policy",
+
+    def test_the_paid_benchmark_checkout_does_not_persist_credentials(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """The paid job fetches its baseline explicitly instead of retaining a token."""
+        checkout = step_named(workflow_data, BENCHMARK_JOB, CHECKOUT_STEP)
+        checkout_options = mapping(
+            checkout.get("with"),
+            f"the {BENCHMARK_JOB!r} checkout must declare explicit options",
+        )
+
+        assert checkout_options.get("persist-credentials") is False, (
+            f"the {BENCHMARK_JOB!r} checkout must disable credential persistence; "
+            f"found {checkout_options.get('persist-credentials')!r}"
+        )
+
+    def test_the_paid_benchmark_uses_the_shared_optimized_setup(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """The paid runner builds once through the local contributor target."""
+        script = script_of(step_named(workflow_data, BENCHMARK_JOB, THROUGHPUT_STEP))
+        assert script is not None, f"the {THROUGHPUT_STEP!r} step must run a script"
+
+        assert (
+            "make develop MATURIN_DEVELOP_FLAGS='--release --skip-install'" in script
+        ), "the benchmark must use the shared optimized extension-build target"
+        assert "UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python" in script, (
+            "the benchmark scripts must reuse checkout-local uv caches and tools"
+        )
+
+    def test_the_benchmark_job_waits_for_the_detector(
+        self, workflow_data: Workflow
+    ) -> None:
+        """Require `benchmark-ratchet` to declare the detector dependency."""
+        needs = job(workflow_data, BENCHMARK_JOB).get("needs")
+        assert isinstance(needs, list), f"the {BENCHMARK_JOB!r} job must declare needs"
+
+        assert CHANGES_JOB in needs, (
+            f"the {BENCHMARK_JOB!r} job must list {CHANGES_JOB!r} in `needs`; "
+            f"found {needs!r}"
+        )
+
+    def test_the_benchmark_job_declares_the_expected_gate(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Require the gate expression to match the model used by these tests."""
+        condition = benchmark_gate(workflow_data)
+
+        assert condition == EXPECTED_GATE, (
+            f"the {BENCHMARK_JOB!r} job's `if:` must be {EXPECTED_GATE!r} — pushes to "
+            "main always benchmark so the baseline artefact stays fresh, and pull "
+            "requests benchmark only on performance-relevant diffs; "
+            f"found {condition!r}"
+        )
+
+    def test_a_failed_detector_does_not_benchmark_ungated(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Skip the paid benchmark when the detector fails, rather than run ungated."""
+        named = sorted(
+            fn for fn in STATUS_FUNCTIONS if fn in benchmark_gate(workflow_data)
+        )
+
+        assert not named, (
+            f"the {BENCHMARK_JOB!r} gate must leave GitHub's implicit `success()` in "
+            f"place so a failed {CHANGES_JOB!r} skips the paid job rather than running "
+            f"it ungated; found {named}"
+        )
+
+    def test_a_failed_detector_skips_non_pull_request_events(
+        self,
+        workflow_data: Workflow,
+    ) -> None:
+        """Require detector failure to skip the paid benchmark for every event."""
+        condition = benchmark_gate(workflow_data)
+
+        assert "needs.changes.result == 'success'" in condition, (
+            "the benchmark gate must make detector success explicit so a failed "
+            "detector skips all events rather than running ungated"
+        )
+        assert not benchmark_runs(
+            event_name="push", bench=False, detector_succeeded=False
+        ), "a failed detector must skip a non-pull-request event"
+
+
+class TestTheFilterPaths:
+    """The path set the `bench` filter declares, read back from the workflow."""
+
+    def test_the_filter_declares_every_performance_relevant_path(
+        self,
+        filter_path_patterns: frozenset[str],
+    ) -> None:
+        """Require the filter path list to be exactly the performance-relevant set."""
+        assert filter_path_patterns == EXPECTED_FILTER_PATHS, (
+            "the `bench` filter must watch exactly the performance-relevant paths; "
+            f"missing {sorted(EXPECTED_FILTER_PATHS - filter_path_patterns)}, "
+            f"unexpected {sorted(filter_path_patterns - EXPECTED_FILTER_PATHS)}"
+        )
+
+    def test_the_filter_uses_only_modelled_pattern_forms(
+        self,
+        filter_path_patterns: frozenset[str],
+    ) -> None:
+        """Require every declared filter pattern to use a modelled form."""
+        unmodelled = sorted(
+            pattern
+            for pattern in filter_path_patterns
+            if not pattern.endswith("/**") and any(c in pattern for c in "*?[")
+        )
+
+        assert not unmodelled, (
+            "these filter patterns are neither a literal path nor a `dir/**` "
+            f"prefix, so `matches_filter` no longer models the filter: {unmodelled}"
+        )
+
+    def test_the_irrelevant_paths_are_genuinely_irrelevant(
+        self,
+        filter_path_patterns: frozenset[str],
+    ) -> None:
+        """Require the property tests' docs-only paths to remain outside the filter."""
+        matched = sorted(
+            path
+            for path in IRRELEVANT_PATHS
+            if bench_output([path], filter_path_patterns)
+        )
+
+        assert not matched, (
+            "these paths are sampled as performance-irrelevant but the filter "
+            f"matches them, so the property tests below prove nothing: {matched}"
+        )
+
+
+class TestTheGateModel:
+    """The gate's decision for an event, sampled over the model.
+
+    These read the model rather than the workflow, so they state what the
+    declarations *mean* for a given pull request; the declarations themselves
+    are pinned above.
+    """
+
+    @given(
+        relevant=st.lists(st.sampled_from(_relevant_paths()), min_size=1, unique=True),
+        irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True),
     )
-    condition = concurrency.get("cancel-in-progress")
+    def test_any_performance_relevant_change_benchmarks(
+        self,
+        relevant: list[str],
+        irrelevant: list[str],
+        filter_path_patterns: frozenset[str],
+    ) -> None:
+        """Require a benchmark when any watched path changes.
 
-    assert condition == "${{ github.event_name == 'pull_request' }}"
-    assert (newer_event == "pull_request") is expected_cancellation
-
-
-def test_mapping_rejects_non_string_keys() -> None:
-    """Reject YAML mappings whose keys cannot satisfy the helper's model."""
-    with pytest.raises(AssertionError, match="string-keyed mapping"):
-        mapping({"jobs": {}, 1: "unexpected"}, "string-keyed mapping")
-
-
-def test_parse_workflow_rejects_a_numeric_top_level_key() -> None:
-    """Reject a numeric key rather than treating it as GitHub Actions ``on``."""
-    with pytest.raises(AssertionError, match="must parse to a mapping"):
-        parse_workflow("1: unexpected\n")
-
-
-def test_step_lookups_return_matches_and_explain_missing_steps() -> None:
-    """Look up declared steps by id and name without changing diagnostics."""
-    workflow_data = parse_workflow(
+        Parameters
+        ----------
+        relevant : list[str]
+            Performance-relevant paths included in the sampled pull request.
+        irrelevant : list[str]
+            Non-performance paths mixed into the sampled pull request.
         """
-        jobs:
-          changes:
-            steps:
-              - id: filter
-                name: Detect relevant changes
-              - id: summary
-                name: Record the decision
+        changed = [*relevant, *irrelevant]
+
+        assert benchmark_runs(
+            event_name="pull_request",
+            bench=bench_output(changed, filter_path_patterns),
+            detector_succeeded=True,
+        ), f"a pull request changing {changed} must run {BENCHMARK_JOB!r}"
+
+    @given(irrelevant=st.lists(st.sampled_from(IRRELEVANT_PATHS), unique=True))
+    def test_a_pull_request_touching_nothing_relevant_skips(
+        self, irrelevant: list[str], filter_path_patterns: frozenset[str]
+    ) -> None:
+        """Require a skip when a pull request touches no watched paths.
+
+        Parameters
+        ----------
+        irrelevant : list[str]
+            Non-performance paths included in the sampled pull request.
         """
+        assert not benchmark_runs(
+            event_name="pull_request",
+            bench=bench_output(irrelevant, filter_path_patterns),
+            detector_succeeded=True,
+        ), f"a pull request changing only {irrelevant} must skip {BENCHMARK_JOB!r}"
+
+    @given(
+        changed=st.lists(st.sampled_from([*_relevant_paths(), *IRRELEVANT_PATHS])),
+        event_name=st.sampled_from(["push", "workflow_dispatch", "schedule"]),
     )
+    def test_a_non_pull_request_event_always_benchmarks(
+        self, changed: list[str], event_name: str, filter_path_patterns: frozenset[str]
+    ) -> None:
+        """Require benchmarking for every non-pull-request event.
 
-    assert step_with_id(workflow_data, "changes", "filter") == {
-        "id": "filter",
-        "name": "Detect relevant changes",
-    }
-    assert step_named(workflow_data, "changes", "Record the decision") == {
-        "id": "summary",
-        "name": "Record the decision",
-    }
-    with pytest.raises(AssertionError, match="step with id 'missing'"):
-        step_with_id(workflow_data, "changes", "missing")
-    with pytest.raises(
-        AssertionError,
-        match=r"found \['Detect relevant changes', 'Record the decision'\]",
-    ):
-        step_named(workflow_data, "changes", "missing")
+        Parameters
+        ----------
+        changed : list[str]
+            Paths included in the sampled event.
+        event_name : str
+            Non-pull-request event type used by the sampled case.
 
-
-@pytest.mark.parametrize(
-    "invalid_step",
-    [
-        pytest.param("not a mapping", id="scalar"),
-        pytest.param({1: "non-string key"}, id="non-string-key"),
-    ],
-)
-def test_steps_reject_non_mapping_entries(invalid_step: object) -> None:
-    """Reject a declared step that cannot satisfy the narrow mapping model."""
-    workflow_data = typ.cast(
-        "Workflow",
-        {"jobs": {CHANGES_JOB: {"steps": [invalid_step]}}},
-    )
-
-    with pytest.raises(AssertionError, match="must declare mapping steps"):
-        steps(workflow_data, CHANGES_JOB)
-
-
-def test_first_step_running_propagates_malformed_shell_quoting() -> None:
-    """Expose malformed workflow shell syntax instead of treating it as absent."""
-    workflow_data = parse_workflow(
         """
-        jobs:
-          changes:
-            steps:
-              - run: "make 'develop"
-        """
-    )
+        assert benchmark_runs(
+            event_name=event_name,
+            bench=bench_output(changed, filter_path_patterns),
+            detector_succeeded=True,
+        ), (
+            f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
+            "the main baseline artefact is refreshed"
+        )
 
-    with pytest.raises(ValueError, match="No closing quotation"):
-        first_step_running(workflow_data, "make develop", job_name=CHANGES_JOB)
+
+class TestTheConcurrencyPolicy:
+    """Which runs supersede which, per ref."""
+
+    def test_the_workflow_serializes_runs_per_ref(
+        self, workflow_data: Workflow
+    ) -> None:
+        """Require per-ref concurrency that cancels pull-request runs only."""
+        concurrency = mapping(
+            typ.cast("dict[str, object]", workflow_data).get("concurrency"),
+            f"{CI_WORKFLOW} must declare a concurrency policy",
+        )
+
+        assert concurrency.get("group") == "ci-${{ github.ref }}", (
+            "the concurrency group must be per-ref, so a pull request's runs "
+            "supersede each other without touching another ref's; found "
+            f"{concurrency.get('group')!r}"
+        )
+        assert concurrency.get("cancel-in-progress") == (
+            "${{ github.event_name == 'pull_request' }}"
+        ), (
+            "only pull-request runs may be cancelled; a cancelled `main` run never "
+            "republishes the baseline artefact. Found "
+            f"{concurrency.get('cancel-in-progress')!r}"
+        )
+
+    @pytest.mark.parametrize(
+        ("newer_event", "expected_cancellation"),
+        [
+            pytest.param("pull_request", True, id="superseding-pull-request"),
+            pytest.param("push", False, id="superseding-main-push"),
+            pytest.param("workflow_dispatch", False, id="superseding-manual-run"),
+        ],
+    )
+    def test_a_new_run_cancels_only_superseded_pull_request_runs(
+        self,
+        workflow_data: Workflow,
+        newer_event: str,
+        expected_cancellation: bool,
+    ) -> None:
+        """Model the cancellation policy for a newer run on the same ref.
+
+        Parameters
+        ----------
+        workflow_data : Workflow
+            Parsed workflow whose concurrency policy is modelled.
+        newer_event : str
+            Event that starts the newer run in the ref's concurrency group.
+        expected_cancellation : bool
+            Whether that newer run must cancel an in-progress predecessor.
+        """
+        concurrency = mapping(
+            typ.cast("dict[str, object]", workflow_data).get("concurrency"),
+            f"{CI_WORKFLOW} must declare a concurrency policy",
+        )
+        condition = concurrency.get("cancel-in-progress")
+
+        assert condition == "${{ github.event_name == 'pull_request' }}"
+        assert (newer_event == "pull_request") is expected_cancellation
+
+
+class TestTheWorkflowHelpers:
+    """Contracts of `tests.helpers.workflow`, which every test above depends on.
+
+    A helper that silently accepted a malformed workflow would make the tests
+    above pass for the wrong reason, so its own failure behaviour is pinned
+    here rather than assumed.
+    """
+
+    def test_mapping_rejects_non_string_keys(self) -> None:
+        """Reject YAML mappings whose keys cannot satisfy the helper's model."""
+        with pytest.raises(AssertionError, match="string-keyed mapping"):
+            mapping({"jobs": {}, 1: "unexpected"}, "string-keyed mapping")
+
+    def test_parse_workflow_rejects_a_numeric_top_level_key(self) -> None:
+        """Reject a numeric key rather than treating it as GitHub Actions ``on``."""
+        with pytest.raises(AssertionError, match="must parse to a mapping"):
+            parse_workflow("1: unexpected\n")
+
+    def test_step_lookups_return_matches_and_explain_missing_steps(self) -> None:
+        """Look up declared steps by id and name without changing diagnostics."""
+        workflow_data = parse_workflow(
+            """
+            jobs:
+              changes:
+                steps:
+                  - id: filter
+                    name: Detect relevant changes
+                  - id: summary
+                    name: Record the decision
+            """
+        )
+
+        assert step_with_id(workflow_data, "changes", "filter") == {
+            "id": "filter",
+            "name": "Detect relevant changes",
+        }
+        assert step_named(workflow_data, "changes", "Record the decision") == {
+            "id": "summary",
+            "name": "Record the decision",
+        }
+        with pytest.raises(AssertionError, match="step with id 'missing'"):
+            step_with_id(workflow_data, "changes", "missing")
+        with pytest.raises(
+            AssertionError,
+            match=r"found \['Detect relevant changes', 'Record the decision'\]",
+        ):
+            step_named(workflow_data, "changes", "missing")
+
+    @pytest.mark.parametrize(
+        "invalid_step",
+        [
+            pytest.param("not a mapping", id="scalar"),
+            pytest.param({1: "non-string key"}, id="non-string-key"),
+        ],
+    )
+    def test_steps_reject_non_mapping_entries(self, invalid_step: object) -> None:
+        """Reject a declared step that cannot satisfy the narrow mapping model."""
+        workflow_data = typ.cast(
+            "Workflow",
+            {"jobs": {CHANGES_JOB: {"steps": [invalid_step]}}},
+        )
+
+        with pytest.raises(AssertionError, match="must declare mapping steps"):
+            steps(workflow_data, CHANGES_JOB)
+
+    def test_first_step_running_propagates_malformed_shell_quoting(self) -> None:
+        """Expose malformed workflow shell syntax instead of treating it as absent."""
+        workflow_data = parse_workflow(
+            """
+            jobs:
+              changes:
+                steps:
+                  - run: "make 'develop"
+            """
+        )
+
+        with pytest.raises(ValueError, match="No closing quotation"):
+            first_step_running(workflow_data, "make develop", job_name=CHANGES_JOB)

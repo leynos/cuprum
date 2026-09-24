@@ -18,6 +18,7 @@ from benchmarks._benchmark_types import (
     PipelineBenchmarkScenario,
 )
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import WORKLOAD_PLAN_KEY
 
 _logger = logging.getLogger(__name__)
 
@@ -217,6 +218,7 @@ def _write_dry_run_payload(
         "dry_run": True,
         "rust_available": config.rust_available,
         "worker_iterations": config.worker_iterations,
+        WORKLOAD_PLAN_KEY: config.workload,
         "command": list(command),
         "scenarios": [scenario.as_dict() for scenario in config.scenarios],
     }

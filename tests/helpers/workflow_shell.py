@@ -1,4 +1,17 @@
-"""Shell-command matching used by CI workflow contract tests."""
+"""Shell-command *matching* for CI workflow contract tests.
+
+``script_runs_command`` answers whether a workflow step runs a command at all.
+It owns the tokenizing and here-document tracking that question needs, because
+answering it means reading a whole script rather than a body already known to
+be the right one.
+
+Reading *what* a step's script says — which shell function it declares, what a
+flag is set to, how a condition binds its operators — lives in
+:mod:`tests.helpers.workflow_recipe`. The two modules split on that boundary so
+each stays within the line budget ``AGENTS.md`` sets and the lint gate enforces,
+and so the matcher's token-level machinery is not pulled into readers that never
+tokenize.
+"""
 
 from __future__ import annotations
 

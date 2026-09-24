@@ -6,6 +6,12 @@ import json
 import typing as typ
 
 from benchmarks._validation import _require_mapping
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    SMOKE_WORKLOAD,
+    THROUGHPUT_SWEEP_WORKLOAD,
+    WorkloadProtocol,
+)
 from benchmarks.comparison_analysis import (
     BenchmarkComparisonReport,
     RatchetStatus,
@@ -22,6 +28,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
+    from benchmarks.benchmark_workload import WorkloadName
+
 _BOOTSTRAP_SKIP_REASON = "no_previous_main_benchmark_baseline"
 _DECISION_FIELDS = (
     "baseline_source",
@@ -29,6 +37,25 @@ _DECISION_FIELDS = (
     "compatible_sample_count",
     "comparison_state",
 )
+
+#: Rendered workload descriptions, keyed by workload identifier. This is report
+#: prose, so it lives with the report rather than with the protocol value the
+#: plan recorded — wording changes here cannot reach what a run measured. The
+#: key type keeps the lookup honest at the edges: a protocol cannot carry a
+#: workload outside ``WorkloadName``, so a typo here is caught rather than
+#: reaching a render. It does not make the table complete — no type checker
+#: enforces that a literal-keyed dict covers every member — so
+#: ``test_every_workload_the_runner_produces_can_be_described`` holds this
+#: table against ``WORKLOADS`` and fails when a workload is added to one and
+#: not the other.
+_WORKLOAD_DESCRIPTIONS: dict[WorkloadName, str] = {
+    THROUGHPUT_SWEEP_WORKLOAD: "the throughput sweep, covering three payload tiers",
+    SMOKE_WORKLOAD: "the smoke workload, the sweep's shape at reduced payloads",
+    CI_RATCHET_WORKLOAD: (
+        "the CI-ratchet workload, one large payload measured at the ratchet's "
+        "own worker-iteration count"
+    ),
+}
 
 
 def _complete_decision_fields(
@@ -190,6 +217,103 @@ def load_ratchet_report(path: pth.Path) -> RatchetStatus:
     return _ratchet_passed_status(report)
 
 
+def _render_size(size: int) -> str:
+    """Return *size* as a whole MiB count, or a whole KiB count below 1 MiB.
+
+    The unit is chosen per size rather than once for the whole payload list:
+    the throughput sweep's smallest tier is 1 KB, so scaling every size to MiB
+    would render that tier as ``0`` and misdescribe the payload the ratios
+    beneath it were measured at. Non-zero sub-KiB sizes retain a non-zero
+    display value rather than rounding away to zero.
+
+    Returns
+    -------
+    str
+        The formatted size with its unit.
+    """
+    mib = 1024 * 1024
+    if size >= mib:
+        return f"{size / mib:.0f} MiB"
+    kib = round(size / 1024)
+    if size and not kib:
+        kib = 1 if size > 0 else -1
+    return f"{kib} KiB"
+
+
+def describe_protocol(protocol: WorkloadProtocol) -> str:
+    """Return a one-line summary of a workload and the protocol it recorded.
+
+    Only the metadata the plan actually carried is named. A plan that omits a
+    field is summarized without it rather than with a default, because a
+    default here would state a measurement protocol as fact when nothing
+    recorded it. Each payload size is rendered in the unit that keeps it
+    legible, so a tier below 1 MiB is not rounded away to nothing.
+
+    Parameters
+    ----------
+    protocol : WorkloadProtocol
+        The validated protocol a plan described.
+
+    Returns
+    -------
+    str
+        The summary rendered into maintainer-facing report prose.
+
+    Examples
+    --------
+    >>> describe_protocol(
+    ...     WorkloadProtocol(
+    ...         workload="ci-ratchet",
+    ...         profile_version=None,
+    ...         worker_iterations=5,
+    ...         payload_bytes=(1024,),
+    ...     )
+    ... )
+    'the ci-ratchet workload, payload 1 KiB, 5 worker iterations'
+    """
+    parts = [f"the {protocol.workload} workload"]
+    if protocol.profile_version is not None:
+        parts.append(f"profile {protocol.profile_version}")
+    if protocol.payload_bytes:
+        sizes = "/".join(_render_size(size) for size in protocol.payload_bytes)
+        parts.append(
+            f"payload {sizes}"
+            if len(protocol.payload_bytes) == 1
+            else f"payloads {sizes}"
+        )
+    if protocol.worker_iterations is not None:
+        parts.append(f"{protocol.worker_iterations} worker iterations")
+    return ", ".join(parts)
+
+
+def describe_workload(protocol: WorkloadProtocol) -> str:
+    """Return the prose sentence naming the protocol's workload.
+
+    Parameters
+    ----------
+    protocol : WorkloadProtocol
+        The validated protocol a plan described.
+
+    Returns
+    -------
+    str
+        The workload's expanded description, as rendered into report prose.
+
+    Examples
+    --------
+    >>> describe_workload(
+    ...     WorkloadProtocol(
+    ...         workload="smoke",
+    ...         profile_version=None,
+    ...         worker_iterations=None,
+    ...         payload_bytes=(),
+    ...     )
+    ... )
+    "the smoke workload, the sweep's shape at reduced payloads"
+    """
+    return _WORKLOAD_DESCRIPTIONS[protocol.workload]
+
+
 def render_summary_markdown(
     *,
     report: BenchmarkComparisonReport,
@@ -207,13 +331,23 @@ def render_summary_markdown(
     Returns
     -------
     str
-        A Markdown document with a heading, the ratchet detail, and a table of
+        A Markdown document with a heading, the workload and protocol the
+        compared plan recorded, the ratchet detail, and a table of
         per-scenario Python and Rust means, speed-up, and faster backend.
     """
     lines = [
         "## Python vs Rust benchmark comparison",
         "",
-        "Candidate smoke benchmark results for the current workflow run.",
+        (
+            "Candidate results for the current workflow run, measured on "
+            f"{describe_protocol(report.protocol)}."
+        ),
+        "",
+        (
+            f"The compared scenarios are {describe_workload(report.protocol)}, "
+            "which is what the ratchet compares between runs; a report for a "
+            "different workload does not describe the ratchet's own measurement."
+        ),
         "",
         ratchet_status.detail,
         "",

@@ -214,3 +214,42 @@ result = command.run_sync(
 GitHub Actions, which is when `GITHUB_ACTIONS` holds the runner's value `true`.
 For local reproduction of CI framing, or on a non-standard runner that does not
 export the variable, pass `force=True` to activate the sink deliberately.
+
+## Benchmark ratchet measurement protocol
+
+This section concerns the benchmark harness in `benchmarks/` rather than the
+`cuprum` library. Applications that only use `cuprum` need no change.
+
+The `benchmark-ratchet` job now measures a single 64 MiB payload at five worker
+iterations and twenty hyperfine runs, selected with `--ci-ratchet`. It
+previously compared a Rust-to-Python ratio over payload tiers where interpreter
+start-up, the `cuprum` import, and per-iteration set-up were most of both
+means, so a runner-to-runner swing in that fixed cost could move the ratio past
+the threshold on its own — the false positive reported against
+[PR #158](https://github.com/leynos/cuprum/pull/158).
+
+A local ratchet reproduction, or a comparison against recorded history, is
+affected by the following changes:
+
+- `BENCHMARK_PROFILE_VERSION` is now `pipeline-worker-release-ratio-v5`. The
+  payload and iteration changes are sampling-protocol changes, so the version
+  was bumped with them. The ratchet compares only samples whose profile
+  metadata agrees, and a plan carrying the older version is refused rather than
+  compared, so a stale plan must be regenerated instead of reused.
+- `--ci-ratchet` defaults `--worker-iterations` to the count the job measures
+  at. Omitting the flag on the sweep keeps the sweep's own count. An explicit
+  `--worker-iterations` overrides either.
+- `--ci-ratchet` and `--smoke` select contradictory payloads and are mutually
+  exclusive.
+
+While the rolling window refills with compatible `main` samples, the comparison
+falls back to a single-sample bar where the flat threshold decides alone. The
+workflow's `--max-regression`, `--noise-sigmas`, and `--history-window` values
+are pinned to the defaults in `benchmarks/ratchet_history.py` by a CI contract
+test, so a reproduction should not need to pass them explicitly.
+
+For the full description, see
+[the CI ratchet workload](users-guide.md#the-ci-ratchet-workload) in the users'
+guide and `docs/cuprum-design.md` (§13.9), which also links
+[the noise measurements](debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md)
+behind the change.

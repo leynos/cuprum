@@ -242,7 +242,7 @@ def test_the_re_measurement_does_not_overwrite_the_recorded_sample() -> None:
     script = script_of(_step(BENCHMARK_STEP))
     assert script is not None, f"the {BENCHMARK_STEP!r} step must run a script"
 
-    assert 'run_smoke_benchmarks "${GITHUB_WORKSPACE}" "confirmation"' in script, (
+    assert 'run_ratchet_benchmarks "${GITHUB_WORKSPACE}" "confirmation"' in script, (
         "the re-measurement must use the 'confirmation' prefix so "
         f"candidate-* stays the primary measurement. Found:\n{script}"
     )

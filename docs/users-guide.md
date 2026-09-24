@@ -2725,6 +2725,59 @@ matrix shape. Scenarios follow a systematic naming convention:
 `{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
 or `rust-large-multi-cb`.
 
+#### The CI ratchet workload
+
+Separate from the throughput sweep, `--ci-ratchet` selects a single-payload
+matrix for the continuous integration (CI) ratchet to compare between runs:
+
+```bash
+UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run python \
+  benchmarks/pipeline_throughput.py \
+  --ci-ratchet \
+  --dry-run \
+  --output /tmp/ratchet-plan.json
+```
+
+The workload replaces the three payload tiers with one 64 MiB payload, which
+yields four scenarios per available backend — single-stage and multi-stage
+depths, each with and without line callbacks — named with a `ratchet` size
+label, for example `python-ratchet-single-nocb`. All scenarios are 64 MiB
+regardless of the size label.
+
+The point of the workload is the ratio the ratchet computes. It compares each
+scenario's within-run `rust_mean / python_mean` between a baseline and a
+candidate, so any cost every run pays regardless of payload — interpreter
+start, the `cuprum` import, per-iteration pipeline set-up — cancels out of the
+comparison only in proportion to how small it is. At the smoke payloads that
+fixed cost was the bulk of what hyperfine timed, so the ratio was dominated by
+the variance of a component the ratchet is designed to eliminate, which made
+the gate flaky (issue #219). At 64 MiB the streaming work dominates the fixed
+per-run cost, so the ratio tracks the pipeline rather than the runner's
+start-up noise, while the measurement still fits the job's wall-clock budget.
+
+`--ci-ratchet` and `--smoke` select contradictory payloads and are mutually
+exclusive: the command line rejects the pair, and `default_pipeline_scenarios`
+raises `ValueError` for a caller that bypasses argparse, so there is no way to
+ask for both.
+
+`--ci-ratchet` also changes the default `--worker-iterations` to `5`, where the
+throughput sweep and smoke matrix default to `20`. The worker iteration count
+is measurement protocol rather than a tuning dial: it is recorded in every
+sample, and the ratchet only compares samples whose benchmark profile metadata
+agrees, so a run at another count is silently incomparable rather than wrong.
+Defaulting the workload to the count its samples are recorded at keeps a local
+reproduction on the same protocol as the job that will judge it. An explicit
+`--worker-iterations` still overrides the default, but the resulting samples
+are not comparable with the CI ratchet's own.
+
+The job itself does not invoke the benchmark once per command; it runs
+`benchmarks/ci_benchmark_ratchet_profile.py`, which rebuilds the filtered
+command line and passes `--warmup 1` with `--runs 20`, so each matched scenario
+pair sits next to its counterpart and records twenty measured runs per command
+after one discarded warm-up. The two counts are independent: the worker
+iteration count says how many pipelines run inside each measured process, and
+the run count says how many times hyperfine measures that process.
+
 ### Linux splice() optimization
 
 On Linux, the Rust extension automatically uses the `splice()` system call for
@@ -2863,15 +2916,19 @@ The continuous integration (CI) workflows run the following checks:
   baseline artefact. If the path detector fails, every event skips the paid
   benchmark without a path verdict, including pushes to `main`. Each run
   records the detector status and gate decision in its workflow summary.
-  - It benchmarks the current checkout in smoke mode with a release build of
-    the Rust extension.
+  - It benchmarks the current checkout with a release build of the Rust
+    extension. It runs `--ci-ratchet`, not the smoke matrix: the ratchet
+    compares one scenario's ratio between runs, so it measures a single 64 MiB
+    payload rather than a payload sweep, at the five worker iterations that
+    make one measured run long enough for its mean to be stable.
   - It compares each scenario's within-run `rust_mean / python_mean` ratio
     against compatible rolling history from completed `main` runs when it is
     available, including runs whose own ratchet failed. If no compatible
     history exists, it falls back to the latest completed `main` baseline
     artefact, so runner-speed differences between CI jobs cancel out.
   - It places matched Python/Rust commands next to each other and measures each
-    command ten times to reduce temporal runner drift and outlier sensitivity.
+    command twenty times, with one warm-up run, to reduce temporal runner drift
+    and outlier sensitivity.
   - It drops recorded samples that use an older benchmark profile shape,
     because different sampling protocols and worker timings are not
     comparable. It skips comparison only when no comparable history and no
@@ -2880,14 +2937,14 @@ The continuous integration (CI) workflows run the following checks:
   - Its baseline fetch helper follows GitHub’s signed archive redirects
     without forwarding GitHub-only authentication headers to the storage host.
   - It generates a Python-versus-Rust comparison report from the candidate
-    smoke artefacts and appends the same Markdown table to the GitHub Actions
+    ratchet artefacts and appends the same Markdown table to the GitHub Actions
     workflow summary.
   - It uploads candidate JSON artefacts plus `ratchet-report.json` and
     `comparison-report.json`. When a regression was measured a second time,
     `ratchet-report-primary.json` and `ratchet-report-confirmation.json`
     record the two measurements behind the combined verdict, which lists both
     `confirmed_regressions` and `unconfirmed_regressions`.
-  - On pushes to `main`, it also publishes the new smoke benchmark JSON and
+  - On pushes to `main`, it also publishes the new ratchet benchmark JSON and
     the updated `main-baseline-history.json` window as the baseline artefact
     for future runs.
   - If no previous `main` baseline exists yet, it records a bootstrap skip
@@ -2910,9 +2967,10 @@ The continuous integration (CI) workflows run the following checks:
     whose own ratchet failed. A re-run of a failing benchmark job cannot change
     the bar: the window only moves when `main` moves.
 
-The workflow summary table is derived from the filtered candidate smoke plan
-and throughput JSON. Rows are matched by the shared scenario label (
-`small-single-nocb`, `small-single-cb`, and so on) and include:
+The workflow summary table is derived from the filtered candidate ratchet plan
+and throughput JSON. Rows are matched by the shared scenario label — the
+ratchet retains only the two-stage scenarios, so its rows carry
+`ratchet-single-nocb` and `ratchet-single-cb` — and include:
 
 - Python mean runtime in seconds
 - Rust mean runtime in seconds

@@ -12,6 +12,10 @@ import pytest
 import benchmarks.pipeline_throughput_runner as runner
 from benchmarks._test_constants import _SCENARIO_NAME_PATTERN
 from benchmarks.benchmark_profile import BENCHMARK_PROFILE_VERSION
+from benchmarks.benchmark_workload import (
+    CI_RATCHET_WORKLOAD,
+    WORKLOAD_PLAN_KEY,
+)
 from benchmarks.pipeline_throughput import (
     HyperfineConfig,
     PipelineBenchmarkConfig,
@@ -20,6 +24,14 @@ from benchmarks.pipeline_throughput import (
     default_pipeline_scenarios,
     render_prefixed_command,
     run_pipeline_benchmarks,
+)
+from benchmarks.pipeline_throughput import (
+    main as throughput_main,
+)
+from benchmarks.pipeline_throughput_scenarios import (
+    _SMOKE_LARGE_PAYLOAD_BYTES,
+    CI_RATCHET_PAYLOAD_BYTES,
+    CI_RATCHET_WORKER_ITERATIONS,
 )
 from benchmarks.pipeline_worker import PipelineWorkerConfig
 
@@ -244,6 +256,46 @@ def test_pipeline_worker_config_rejects_excessive_iterations() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("workload", "error", "error_match"),
+    [
+        pytest.param(
+            "hyperfine-sweep",
+            ValueError,
+            "workload must be one of",
+            id="unknown",
+        ),
+        pytest.param("", ValueError, "workload must be a non-empty", id="empty"),
+        pytest.param(
+            typ.cast("str", 42),
+            TypeError,
+            "workload must be a non-empty",
+            id="not_a_string",
+        ),
+    ],
+)
+def test_pipeline_benchmark_config_rejects_an_unusable_workload(
+    workload: str,
+    error: type[Exception],
+    error_match: str,
+) -> None:
+    """A workload the runner cannot produce must not configure a run.
+
+    The config is what the runner records in its plan, so accepting an
+    unknown identifier here would put a value in the plan that no reader can
+    resolve back to a scenario matrix.
+    """
+    with pytest.raises(error, match=error_match):
+        PipelineBenchmarkConfig(
+            output_path=pth.Path("dist/benchmarks/bench.json"),
+            worker_path=pth.Path("benchmarks/pipeline_worker.py"),
+            scenarios=(),
+            warmup=0,
+            runs=1,
+            workload=workload,
+        )
+
+
 def test_pipeline_benchmark_config_rejects_non_pathlike_output_path() -> None:
     """Non-path-like values for output_path raise a clear TypeError."""
     with pytest.raises(
@@ -387,7 +439,13 @@ def test_build_hyperfine_command_contains_export_runs_and_warmup(
 
 
 def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None:
-    """Dry-run mode writes plan JSON without invoking hyperfine."""
+    """Dry-run mode writes plan JSON without invoking hyperfine.
+
+    The configured workload is asserted against a non-default value so the
+    check cannot pass on a constant: the plan must record *which* workload
+    selected its scenarios, because nothing downstream can recover that from
+    the scenario matrix.
+    """
     output_path = tmp_path / "bench.json"
     scenarios = (
         PipelineBenchmarkScenario(
@@ -405,6 +463,7 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
         dry_run=True,
         warmup=1,
         runs=2,
+        workload=CI_RATCHET_WORKLOAD,
     )
     result = run_pipeline_benchmarks(config=config)
 
@@ -415,6 +474,9 @@ def test_run_pipeline_benchmarks_dry_run_writes_json(tmp_path: pth.Path) -> None
     assert payload["dry_run"] is True, "expected payload dry_run flag to be True"
     assert payload["benchmark_profile_version"] == BENCHMARK_PROFILE_VERSION
     assert payload["worker_iterations"] == 20
+    assert payload[WORKLOAD_PLAN_KEY] == CI_RATCHET_WORKLOAD, (
+        "expected the plan to record the workload that selected its scenarios"
+    )
     assert "rust_available" in payload, (
         "expected payload to include rust_available metadata"
     )
@@ -547,3 +609,167 @@ def test_default_pipeline_scenarios_python_and_rust_backends() -> None:
     rust_count = sum(1 for s in scenarios if s.backend == "rust")
     assert python_count == 12, f"expected 12 python scenarios, got {python_count}"
     assert rust_count == 12, f"expected 12 rust scenarios, got {rust_count}"
+
+
+# -- CI ratchet matrix tests (issue #219) ------------------------------------
+
+
+def test_default_pipeline_scenarios_ci_ratchet_matrix_count() -> None:
+    """The ratchet matrix is one payload across both depths and callback modes."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=True,
+        ci_ratchet=True,
+    )
+
+    assert len(scenarios) == 8, (
+        f"expected 8 ratchet scenarios (1 size x 2 depths x 2 callbacks x 2 "
+        f"backends), got {len(scenarios)}"
+    )
+
+
+def test_default_pipeline_scenarios_ci_ratchet_uses_the_ratchet_payload() -> None:
+    """Every ratchet scenario measures the one payload streaming dominates."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=True,
+        ci_ratchet=True,
+    )
+
+    payload_sizes = {s.payload_bytes for s in scenarios}
+    assert payload_sizes == {CI_RATCHET_PAYLOAD_BYTES}, (
+        f"expected the ratchet matrix to measure only "
+        f"{CI_RATCHET_PAYLOAD_BYTES} bytes, got {payload_sizes}"
+    )
+
+
+def test_ci_ratchet_payload_exceeds_the_smoke_matrix() -> None:
+    """The ratchet needs a payload the smoke matrix cannot offer.
+
+    Choosing `--smoke` for the ratchet would be the obvious alternative to a
+    dedicated tier, so the tier only earns its place while its payload is
+    larger than anything the smoke matrix measures. If this ever stops being
+    true, the ratchet should use the smoke payload instead (issue #219).
+    """
+    assert CI_RATCHET_PAYLOAD_BYTES > _SMOKE_LARGE_PAYLOAD_BYTES, (
+        f"ratchet payload {CI_RATCHET_PAYLOAD_BYTES} must exceed the largest "
+        f"smoke payload {_SMOKE_LARGE_PAYLOAD_BYTES}"
+    )
+
+
+def test_default_pipeline_scenarios_ci_ratchet_gates_rust_backend() -> None:
+    """The ratchet matrix omits Rust scenarios when Rust is unavailable."""
+    scenarios = default_pipeline_scenarios(
+        smoke=False,
+        include_rust=False,
+        ci_ratchet=True,
+    )
+
+    assert len(scenarios) == 4, (
+        f"expected 4 python-only ratchet scenarios, got {len(scenarios)}"
+    )
+    assert all(s.backend == "python" for s in scenarios), (
+        "expected rust backend to be omitted when include_rust=False"
+    )
+
+
+def test_default_pipeline_scenarios_rejects_smoke_with_ci_ratchet() -> None:
+    """The smoke and ratchet workloads are distinct, so asking for both fails."""
+    with pytest.raises(ValueError, match="smoke and ci_ratchet"):
+        default_pipeline_scenarios(smoke=True, include_rust=True, ci_ratchet=True)
+
+
+def test_cli_rejects_smoke_with_ci_ratchet(tmp_path: pth.Path) -> None:
+    """The CLI rejects the contradictory workload pair before any matrix is built.
+
+    `default_pipeline_scenarios` raises on the pair as well, so the argument
+    parser's refusal is not the only guard — but it is the one a user meets,
+    and it reports a usage error rather than a traceback from inside the
+    scenario builder.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        throughput_main([
+            "--output",
+            str(tmp_path / "plan.json"),
+            "--dry-run",
+            "--smoke",
+            "--ci-ratchet",
+        ])
+
+    assert exc_info.value.code == 2, (
+        f"argparse reports usage errors with exit code 2, got {exc_info.value.code}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected_payloads"),
+    [
+        pytest.param("--smoke", (1024, 65536, 1048576), id="smoke"),
+        pytest.param("--ci-ratchet", (67108864,), id="ci-ratchet"),
+    ],
+)
+def test_cli_either_workload_alone_builds_its_own_plan(
+    flag: str,
+    expected_payloads: tuple[int, ...],
+    tmp_path: pth.Path,
+) -> None:
+    """Each workload flag stays usable on its own, and selects its own payloads.
+
+    Asserting on the written dry-run plan rather than on parsed attributes
+    keeps this a test of what the CLI does: the two workloads are told apart by
+    the payload tiers they plan, which is the user-visible difference.
+    """
+    output_path = tmp_path / "plan.json"
+
+    exit_code = throughput_main(["--output", str(output_path), "--dry-run", flag])
+
+    assert exit_code == 0, f"`{flag}` alone should exit cleanly, got {exit_code}"
+    plan = json.loads(output_path.read_text(encoding="utf-8"))
+    assert (
+        tuple(sorted({scenario["payload_bytes"] for scenario in plan["scenarios"]}))
+        == expected_payloads
+    ), f"`{flag}` alone must plan only its own payload tiers"
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_iterations"),
+    [
+        pytest.param((), 20, id="sweep-default"),
+        pytest.param(("--smoke",), 20, id="smoke-default"),
+        pytest.param(
+            ("--ci-ratchet",), CI_RATCHET_WORKER_ITERATIONS, id="ratchet-default"
+        ),
+        pytest.param(
+            ("--ci-ratchet", "--worker-iterations", "9"), 9, id="explicit-wins"
+        ),
+    ],
+)
+def test_cli_resolves_the_worker_iterations_for_its_workload(
+    argv: tuple[str, ...],
+    expected_iterations: int,
+    tmp_path: pth.Path,
+) -> None:
+    """Each workload measures at its own iteration count unless overridden.
+
+    The count is recorded in every sample and only samples whose profile
+    metadata agrees are compared, so a ratchet measured at the wrong count is
+    silently incomparable rather than visibly wrong. Defaulting `--ci-ratchet`
+    to the count CI measures at keeps a local reproduction on the same protocol
+    as the job that will judge it; the explicit flag still wins, because a
+    developer tuning the workload has to be able to change it.
+    """
+    output_path = tmp_path / "plan.json"
+
+    exit_code = throughput_main([
+        "--output",
+        str(output_path),
+        "--dry-run",
+        *argv,
+    ])
+
+    assert exit_code == 0, f"`{' '.join(argv)}` should exit cleanly, got {exit_code}"
+    plan = json.loads(output_path.read_text(encoding="utf-8"))
+    assert plan["worker_iterations"] == expected_iterations, (
+        f"`{' '.join(argv) or 'no workload flag'}` must record "
+        f"{expected_iterations} worker iterations, got {plan['worker_iterations']}"
+    )

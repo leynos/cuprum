@@ -2197,11 +2197,18 @@ The ratchet itself compares each scenario's within-run
 `rust_mean / python_mean` ratio between the baseline and candidate runs, so
 runner-speed differences and residual startup overhead cancel out of the
 comparison. Its CI profile places each matched Python/Rust scenario pair next
-to each other and records ten measured runs per command, reducing temporal
-runner drift and three-sample outliers. Dry-run plans record
+to each other and records twenty measured runs per command, reducing temporal
+runner drift and small-sample outliers. Dry-run plans record
 `benchmark_profile_version` and `worker_iterations`; ratchet comparison skips
 older baseline artefacts whose profile metadata does not match the current
 benchmark shape.
+
+`benchmarks/ci_benchmark_ratchet_profile.py` owns the measured-run count as
+`_CI_RATCHET_RUNS`, passed to hyperfine as `--runs`. The discarded warm-up is a
+separate `--warmup 1` literal in the same invocation, so `_CI_RATCHET_RUNS`
+does not govern it. Both are protocol rather than tuning: the ratchet compares
+only samples whose profile metadata agrees, so changing either invalidates the
+existing baseline rather than merely shifting it.
 
 The remaining fields follow the benchmark plan: `output_path` receives
 hyperfine JSON or dry-run plan JSON, `worker_path` points at the worker module,
@@ -2215,6 +2222,69 @@ for backward compatibility, but current benchmark command construction ignores
 it entirely. Keep it unset in new usage and set `python_bin` when a specific
 interpreter is required. In dry-run mode, command rendering does not resolve
 `python_bin` via PATH.
+
+### Benchmark workload identity (`benchmarks/benchmark_workload.py`)
+
+`benchmarks/benchmark_workload.py` is the benchmark-plan workload parsing and
+validation boundary. It owns the workload identifiers a plan may declare and
+the validated protocol read back from one; it does not render report prose, and
+it does not own the CLI flags, which stay with the users' guide.
+
+The identifiers are `THROUGHPUT_SWEEP_WORKLOAD` (`throughput-sweep`), the
+default three-tier sweep; `SMOKE_WORKLOAD` (`smoke`), the reduced-payload
+matrix for fast validation; and `CI_RATCHET_WORKLOAD` (`ci-ratchet`), the
+single-payload matrix the ratchet compares between runs. `WORKLOADS` is the
+tuple of every workload a plan may declare, and it is the membership set the
+validator checks against.
+
+`WORKLOAD_PLAN_KEY` (`workload`) names the plan field recording which workload
+produced the plan's scenario matrix; the module docstring owns why it cannot be
+inferred from the scenario names. Newly written plans record the producing
+workload there. Plans written before the runner recorded one describe the
+throughput sweep — the only workload then available — so `read_workload` reads
+a missing or null field as `THROUGHPUT_SWEEP_WORKLOAD`, which keeps those
+artefacts readable. That is a compatibility rule for absent metadata, not an
+implied value for a plan that recorded something else.
+
+`WorkloadProtocol` is the frozen, slotted, validated value object a plan's
+metadata is read into. It carries the `workload`; an optional benchmark profile
+version (`profile_version`) and an optional worker iteration count
+(`worker_iterations`); and `payload_bytes`, the distinct ascending payload
+sizes the plan's scenarios measure at. It preserves absence as `None` — or, for
+`payload_bytes`, an empty tuple — so a plan that recorded no protocol metadata
+is represented as carrying none rather than a default.
+
+`read_workload` returns the validated workload identifier, applying the legacy
+default above. `read_workload_protocol` parses the plan's metadata and
+constructs the `WorkloadProtocol`, delegating the workload itself to
+`read_workload`.
+
+The validation contract these enforce is:
+
+- A workload value must be a non-empty string drawn from `WORKLOADS`; an
+  unknown workload is rejected rather than passed through.
+- Optional profile metadata must be a non-empty string when present.
+- `worker_iterations` must be a positive integer, and must reject booleans:
+  `bool` is an `int` subclass, so `True` would otherwise read as a count of one.
+- `scenarios` must be a sequence — not a string or bytes — of mapping entries
+  when present. A scenario may omit `payload_bytes`, and a present
+  `payload_bytes` must be an integer, likewise rejecting booleans.
+- Parsed payload sizes are deduplicated and sorted ascending, so the carried
+  tuple is canonical whatever order the plan listed its scenarios in.
+
+Rendering is a separate concern with its own reason to change.
+`benchmarks/comparison_report.py::describe_protocol` summarizes the workload
+and the metadata the plan carried, and
+`benchmarks/comparison_report.py::describe_workload` expands the workload's
+description; both render report prose from an already-validated protocol.
+Report formatting must not invent omitted protocol metadata, because that would
+state a measurement protocol as fact when nothing recorded it.
+
+Add a workload by extending `WORKLOADS`, the `WorkloadName` literal, and the
+report's description table together. `benchmarks/comparison_report.py` states
+why the keyed lookup cannot be total at the type level, and
+`test_every_workload_the_runner_produces_can_be_described` holds the two
+collections together.
 
 ### The baseline the ratchet compares against
 
@@ -2352,6 +2422,14 @@ invoke it:
   evidence. `benchmarks/confirm_regression.py` is the JSON/CLI adapter: it
   writes the combined report and returns status 1 only for a reproduced
   regression.
+- `benchmarks/benchmark_workload.py` is the plan workload parsing and
+  validation boundary. It owns the workload identifiers and the validated
+  `WorkloadProtocol` read back from a plan's metadata through `read_workload`
+  and `read_workload_protocol`; see the workload-identity section above for the
+  identifiers, the legacy default, and the validation contract.
+  `benchmarks/comparison_report.py` renders the report prose instead —
+  `describe_protocol` and `describe_workload` — and must not invent protocol
+  metadata a plan did not record.
 - `benchmarks/update_baseline_history.py` is the `main`-run recorder. It loads
   the previous history through `ratchet_history_persistence`, derives one
   sample from the candidate plan and throughput, appends it when valid, and
@@ -2362,6 +2440,9 @@ invoke it:
 Keep these boundaries intact when changing the ratchet: ratio extraction must
 remain shared by comparison and recording, while history compatibility and
 regression policy must not be reimplemented in the workflow or in JSON callers.
+Parsing and validation stay in `benchmark_workload` and report rendering stays
+in `comparison_report`, so a plan's metadata is validated once on construction
+rather than re-checked at each render.
 
 ## Profiling harness overview
 
@@ -3630,10 +3711,12 @@ configuration.
 The support is split by responsibility: `workflow_types.py` defines the narrow
 `TypedDict` shapes; `workflow.py` parses the workflow and provides queries over
 its jobs and steps; `workflow_gate.py` contains the pure path matching and
-benchmark-admission model; and `workflow_shell.py` recognizes commands in
-`run:` scripts while ignoring comments and here-document bodies. Keep
-repository access in the fixtures and use these helpers rather than creating
-another workflow parser in a test.
+benchmark-admission model; `workflow_shell.py` recognizes commands in `run:`
+scripts while ignoring comments and here-document bodies; and
+`workflow_recipe.py` answers what a step's recipe says — which shell function
+it declares, what a flag is set to, and how a condition binds its operators.
+Keep repository access in the fixtures and use these helpers rather than
+creating another workflow parser in a test.
 
 `EXTENSION_TEST_TARGETS` gets two separate checks, because neither implies the
 other:

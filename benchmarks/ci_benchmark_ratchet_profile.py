@@ -1,9 +1,31 @@
-"""Build and execute the CI smoke benchmark profile for the Rust ratchet."""
+r"""Build and execute the CI benchmark profile for the Rust ratchet.
+
+Rewrites a dry-run benchmark plan down to the scenarios the CI ratchet is
+allowed to compare, then runs hyperfine over them and writes the filtered
+plan beside the throughput JSON. The filter is the profile: it keeps the
+two-stage scenarios inside a payload band and discards the rest, so the
+payload the ratchet compares from run to run is a property of this module
+rather than of whatever matrix the plan happens to carry. See
+``docs/cuprum-design.md`` 13.9 for why the band exists and the tuning
+record it cites for where its bounds came from.
+
+The command is normally invoked by the `benchmark-ratchet` job, after
+``pipeline_throughput.py --ci-ratchet --dry-run`` has written the full
+plan.
+
+Example
+-------
+uv run python benchmarks/ci_benchmark_ratchet_profile.py \\
+  --full-plan full-plan.json \\
+  --filtered-plan plan.json \\
+  --throughput throughput.json
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib as pth
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - helper intentionally invokes hyperfine
 import typing as typ
@@ -15,14 +37,34 @@ from benchmarks._validation import (
     _require_non_empty_string,
 )
 from benchmarks.benchmark_profile import require_worker_iterations
+from benchmarks.benchmark_workload import WORKLOAD_PLAN_KEY, read_workload
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _HYPERFINE_PREFIX_ARGUMENT_COUNT = 7
+# Kept separate from the module docstring for the same reason as in
+# `pipeline_throughput.py`: argparse reflows a multi-paragraph description into
+# one block, and `--help` reads better as a single line.
+_CLI_DESCRIPTION = "Build and execute the CI benchmark profile for the Rust ratchet."
 _CI_RATCHET_STAGE_COUNT = 2
-_CI_RATCHET_MAX_PAYLOAD_BYTES = 65536
-_CI_RATCHET_RUNS = 10
+# The ratchet only accepts payloads the streaming work dominates, so that the
+# ratio it compares is a measurement of the pipeline rather than of the fixed
+# per-run cost every scenario pays. The floor is the first payload above every
+# crossover measured on the reference host — the point where the streaming work
+# drawn across the five iterations outweighs the five iterations' set-up, which
+# the four backend/mode combinations reach between about 4 MiB and 22 MiB — so
+# a scenario the band accepts has paid for its ratio with streaming work; the
+# ceiling keeps one measured run to a few seconds in callback mode, so a job
+# still fits its timeout. The workload comes from
+# `benchmarks.pipeline_throughput_scenarios.CI_RATCHET_PAYLOAD_BYTES`, which
+# `test_ci_ratchet_profile_contract_matches_the_payload_matrix` holds inside
+# this band.
+_CI_RATCHET_MIN_PAYLOAD_BYTES = 32 * 1024 * 1024
+_CI_RATCHET_MAX_PAYLOAD_BYTES = 128 * 1024 * 1024
+#: Enough runs that the mean of each command is stable without, at the ratchet
+#: payload, spending more than a couple of minutes on the whole measurement.
+_CI_RATCHET_RUNS = 20
 _SUPPORTED_BACKENDS = ("python", "rust")
 
 
@@ -63,12 +105,43 @@ def load_plan_payload(full_plan_path: pth.Path) -> cabc.Mapping[str, object]:
     return full_payload
 
 
-def _require_numeric_payload_bytes(value: object) -> int | float:
-    """Return *value* as a numeric payload size, or raise ``TypeError``."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        msg = "scenario payload_bytes must be numeric"
-        raise TypeError(msg)
-    return value
+def _require_payload_bytes(value: object) -> int:
+    """Return *value* as a whole, finite payload size in bytes, or raise."""
+    # `json.loads` accepts the bare `NaN` and `Infinity` literals, and every
+    # comparison against a NaN is false, so a NaN payload would pass the
+    # non-negative check and both band bounds and be measured. An `int` is
+    # always finite, and testing one against `math.isfinite` would raise
+    # `OverflowError` on an absurd JSON integer rather than the `ValueError`
+    # the caller expects — so only floats reach the check, and an out-of-range
+    # integer is dropped by the ceiling like any other oversized payload.
+    # `bool` is an `int` subclass, so it is excluded before the numeric case.
+    #
+    # A whole float is converted rather than passed through. The retained
+    # scenarios are written out as the filtered plan and read back by
+    # `benchmark_workload`, which requires an `int` and rejects a float; a
+    # JSON payload written as `67108864.0` would otherwise pass every check
+    # here and make the plan unreadable later. A fractional payload is not a
+    # size any measurement could report, and truncating it would record a
+    # payload the plan never declared, so it is refused outright.
+    match value:
+        case bool():
+            msg = "scenario payload_bytes must be numeric"
+            raise TypeError(msg)
+        case int():
+            return value
+        case float() if not math.isfinite(value):
+            msg = f"scenario payload_bytes must be finite, got {value!r}"
+            raise ValueError(msg)
+        case float() if value.is_integer():
+            return int(value)
+        case float():
+            msg = (
+                f"scenario payload_bytes must be a whole number of bytes, got {value!r}"
+            )
+            raise ValueError(msg)
+        case _:
+            msg = "scenario payload_bytes must be numeric"
+            raise TypeError(msg)
 
 
 def _require_backend(value: object) -> str:
@@ -91,13 +164,20 @@ def _select_scenario(
     )
     if scenario.get("stages") != _CI_RATCHET_STAGE_COUNT:
         return None
-    payload_bytes = _require_numeric_payload_bytes(scenario.get("payload_bytes", 0))
+    payload_bytes = _require_payload_bytes(scenario.get("payload_bytes", 0))
     if payload_bytes < 0:
         msg = "scenario payload_bytes must be >= 0"
         raise ValueError(msg)
+    if payload_bytes < _CI_RATCHET_MIN_PAYLOAD_BYTES:
+        return None
     if payload_bytes > _CI_RATCHET_MAX_PAYLOAD_BYTES:
         return None
-    return scenario, scenario_command
+    # The validated size replaces whatever the plan spelled. A whole float is
+    # the case that needs it: it passes the band checks, and the retained
+    # scenarios are written out verbatim as the filtered plan, so leaving it
+    # as a float would put the same value back into the JSON that
+    # `benchmark_workload` then refuses to read as a payload size.
+    return {**scenario, "payload_bytes": payload_bytes}, scenario_command
 
 
 def select_ci_ratchet_scenarios(
@@ -148,7 +228,7 @@ def select_ci_ratchet_scenarios(
         raise ValueError(msg)
     selected.sort(
         key=lambda entry: (
-            _require_numeric_payload_bytes(entry[0].get("payload_bytes", 0)),
+            _require_payload_bytes(entry[0].get("payload_bytes", 0)),
             _require_bool(
                 entry[0].get("with_line_callbacks", False),
                 name="scenario with_line_callbacks",
@@ -226,6 +306,12 @@ def write_filtered_plan(
 ) -> None:
     """Write the filtered dry-run plan used by the benchmark ratchet."""
     rust_available = _require_rust_available(full_payload)
+    # The workload is carried through rather than restated: the filter selects
+    # scenarios from the plan it was handed, so the workload that produced them
+    # is whatever that plan recorded, and a summary rendering the filtered plan
+    # must be able to name it. `read_workload` validates it on the way through,
+    # so a plan naming an unknown workload is rejected here rather than being
+    # summarized as the sweep.
     filtered_payload = {
         "benchmark_profile_version": _require_non_empty_string(
             full_payload.get("benchmark_profile_version"),
@@ -234,6 +320,7 @@ def write_filtered_plan(
         "dry_run": True,
         "rust_available": rust_available,
         "worker_iterations": require_worker_iterations(full_payload),
+        WORKLOAD_PLAN_KEY: read_workload(full_payload),
         "command": command,
         "scenarios": [scenario for scenario, _ in selected],
     }
@@ -254,7 +341,7 @@ def _require_rust_available(payload: cabc.Mapping[str, object]) -> bool:
 
 def _parse_args(argv: cabc.Sequence[str] | None) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=_CLI_DESCRIPTION)
     parser.add_argument("--full-plan", type=pth.Path, required=True)
     parser.add_argument("--filtered-plan", type=pth.Path, required=True)
     parser.add_argument("--throughput", type=pth.Path, required=True)

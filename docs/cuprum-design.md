@@ -3336,7 +3336,14 @@ Both pathways are tested as first-class implementations:
   the same matrix shape with reduced payload sizes for fast validation.
   Scenarios follow a systematic naming convention:
   `{backend}-{size}-{depth}-{callbacks}` (for example
-  `python-small-single-nocb` or `rust-large-multi-cb`).
+  `python-small-single-nocb` or `rust-large-multi-cb`). The CI ratchet does not
+  sweep that matrix: `--ci-ratchet` replaces the three payload tiers with the
+  single `CI_RATCHET_PAYLOAD_BYTES` tier, labelled `ratchet`, so that the ratio
+  it compares is the same measurement from run to run — and one where the
+  pipeline, not the fixed per-run cost, is most of what is timed. That leaves
+  eight planned scenarios (one payload × two depths × two callback modes × two
+  backends), of which `ci_benchmark_ratchet_profile.py` keeps the four that are
+  two stages deep — one per backend and callback mode.
 
 CI includes a benchmark ratchet job on pushes to `main` and on pull requests
 that change performance-relevant paths. The job runs on a paid runner, so a
@@ -3347,24 +3354,38 @@ closed for every event, including pushes to `main`, so an unknown path verdict
 cannot spend paid-runner time. The gate summary records both the detector
 status and the resulting benchmark decision. The gate and its rationale are
 described under "Gating the paid benchmark job" in the developers' guide. The
-job executes smoke-mode throughput benchmarks for the current checkout (with a
-release build of the Rust extension) and compares each scenario's within-run
-Rust-to-Python mean ratio against compatible rolling history from completed
-`main` runs, falling back to the latest completed `main` baseline artefact when
-no compatible history is available. The CI profile measures ten runs per
-command and orders matched Python/Rust commands adjacently so time-dependent
-runner load is less likely to bias one backend block. On pushes to `main`, the
-new smoke benchmark output is uploaded as the next baseline artefact for future
-runs. When no prior `main` baseline is available yet, or when the existing
-baseline uses an incompatible (older) benchmark profile whose sampling protocol
-is not comparable, the job writes a skip report instead of failing the
-workflow. The baseline fetch helper follows GitHub’s signed archive redirects
-without forwarding GitHub-only authentication headers to the storage host,
-avoiding cross-origin 401 responses during artefact download. The same job also
-generates a Python-versus-Rust comparison report from the candidate smoke
+job executes the ratchet payload — the single 64 MiB tier `--ci-ratchet`
+selects, not the throughput sweep and not the smoke matrix — for the current
+checkout (with a release build of the Rust extension) and compares each
+scenario's within-run Rust-to-Python mean ratio against compatible rolling
+history from completed `main` runs, falling back to the latest completed `main`
+baseline artefact when no compatible history is available. The CI profile
+measures twenty runs per command and orders the selected scenarios by payload,
+then callback mode, then backend, so hyperfine runs the matched Python and Rust
+commands of one callback mode adjacently — `python-nocb`, `rust-nocb`,
+`python-cb`, then `rust-cb`. Hyperfine 1.20.0 does not interleave a command's
+runs with the next command's (upstream issue 21), so a pair is adjacent rather
+than simultaneous and slow drift still biases each ratio; the adjacency keeps
+the two backends of a pair close enough in time that the drift they see is
+largely common, which is one reason the gate compares ratios across runs rather
+than absolute wall clock, and one reason the payload is large enough that the
+drift is a small part of what is timed. On pushes to `main`, the new benchmark
+output is uploaded as the next baseline artefact for future runs. When no prior
+`main` baseline is available yet, or when the existing baseline uses an
+incompatible (older) benchmark profile whose sampling protocol is not
+comparable, the job writes a skip report instead of failing the workflow. The
+baseline fetch helper follows GitHub’s signed archive redirects without
+forwarding GitHub-only authentication headers to the storage host, avoiding
+cross-origin 401 responses during artefact download. The same job also
+generates a Python-versus-Rust comparison report from the candidate benchmark
 artefacts and appends a Markdown summary table to `$GITHUB_STEP_SUMMARY`, so
 reviewers can inspect backend speedups even when the Rust ratchet later fails
-the job.
+the job. The summary names the workload the plan recorded and the protocol the
+plan carried, and states that the compared scenarios are the ones the ratchet
+compares — because a table rendered from a throughput-sweep plan would look the
+same while describing a different measurement. A plan that omits a protocol
+field is summarized without it rather than with a default, so no field the plan
+did not record is presented as fact.
 
 The ratchet rule is:
 
@@ -3379,9 +3400,40 @@ The ratchet rule is:
 - fail only when a flagged scenario is still flagged by a second measurement
   taken in the same job
 
-Comparing within-run ratios rather than absolute wall-clock means cancels out
-runner-speed differences and interpreter startup overhead between the two CI
-jobs that produced the baseline and candidate runs.
+Comparing within-run ratios rather than absolute wall-clock means reduces the
+gate's sensitivity to runner-speed differences between the two CI jobs that
+produced the baseline and candidate runs. It does not remove them: a ratio only
+cancels a cost the two backends pay in the same proportion, and the backends do
+not respond to contention identically, so load that falls unevenly across the
+two measured blocks still moves the ratio.
+
+The interpreter start, the `cuprum` import, and the per-iteration pipeline
+set-up are the clearest case of that: they do not scale with the payload, and
+the two backends pay different amounts of them, so at a small payload those
+fixed costs are most of both means and the ratio compares start-up times: it is
+the spread of *those*, not of the pipeline, that decides whether a scenario is
+flagged. The ratchet therefore measures one payload large enough for the
+streaming work to dominate — 64 MiB, above the 32 MiB floor — the first tier
+past every crossover measured between the four backend/callback combinations,
+where streaming draws level with the per-iteration set-up cost — and below the
+128 MiB ceiling that keeps one measured run to a few seconds — and
+`ci_benchmark_ratchet_profile.py` rejects any scenario outside that band rather
+than comparing it. `--ci-ratchet` also defaults its `--worker-iterations` to
+the count the job measures at, because the count is part of the profile
+metadata the comparability check reads: a local reproduction at another count
+was previously not an error but a silently incomparable sample, which made the
+reproduction unrepresentative rather than visibly wrong. Because a payload size
+is not recorded in a sample, that change also bumped
+`BENCHMARK_PROFILE_VERSION`: samples measured at the old payloads are not
+comparable with the new ones and the window refills with compatible runs. Until
+the second such run lands the window yields at most one sample, which is the
+pre-window bar — the flat threshold decides alone and confirmation
+re-measurement guards the transition — and until the first such run lands there
+is no compatible history at all and the job skips the comparison rather than
+failing it. This is the fix for the false positives reported in
+[issue #219](https://github.com/leynos/cuprum/issues/219); the measurements
+behind it are recorded in
+`docs/debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md`.
 
 The median, rather than the latest sample, is the bar because a single run is
 not an estimate of anything: one anomalous measurement on `main` used to become
@@ -3439,7 +3491,8 @@ Artefacts uploaded by CI include:
   ratchet runs
 
 The workflow summary table is generated from matched Python and Rust candidate
-scenarios using the backend-independent scenario label (for example
+scenarios using the backend-independent scenario label (for the ratchet,
+`ratchet-single-nocb` or `ratchet-single-cb`; for the throughput sweep,
 `small-single-nocb`). Each row reports:
 
 - Python mean runtime in seconds

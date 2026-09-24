@@ -27,6 +27,7 @@ from benchmarks.benchmark_profile import (
 )
 from benchmarks.ratchet_baseline import baseline_window, compatible_history_window
 from benchmarks.ratchet_history import (
+    DEFAULT_MAX_REGRESSION,
     DEFAULT_NOISE_SIGMAS,
     DEFAULT_WINDOW_SIZE,
     BaselineHistory,
@@ -242,7 +243,7 @@ def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-regression",
         type=float,
-        default=0.30,
+        default=DEFAULT_MAX_REGRESSION,
         help=(
             "Minimum relative increase in the within-run Rust/Python mean "
             "ratio that can count as a regression, whatever the observed "
