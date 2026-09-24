@@ -295,8 +295,11 @@
   lease with it — and inherit the adapter's environment gate, so they are inert
   unless `GITHUB_ACTIONS == "true"`. A non-`bool` `RunOutputOptions` flag raises
   `ValueError`; direct adapter toggle values retain `TypeError`. Both flags
-  default to `False`, so unflagged runs are unchanged
-  ([#375](https://github.com/leynos/cuprum/issues/375)).
+  default to `False`, so unflagged runs are unchanged. The flags are a spelling
+  of the adapter decision in
+  [ADR-013](docs/adr-013-opt-in-github-actions-presentation-sink.md), which
+  records why they construct the sink rather than teach the execution layer
+  workflow commands ([#375](https://github.com/leynos/cuprum/issues/375)).
 - **`GitHubActionsSink` framing toggles:** The adapter's constructor takes
   `emit_group=` and `emit_annotation=` to switch the two halves of its frame
   off independently, matching the flag vocabulary above

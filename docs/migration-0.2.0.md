@@ -284,9 +284,13 @@ gate: they take effect only when the parent process runs on GitHub Actions
 (`GITHUB_ACTIONS == "true"`), and a run outside that environment behaves as if
 they were absent. Passing anything but a `bool` for either flag raises
 `ValueError`. Capture, echo destinations, exit codes, and the returned
-`CommandResult` are unchanged in every case. For the equivalent sink-first
-example, custom destinations and titles, and deliberate local activation, see
-the [presentation sinks section](users-guide.md#presentation-sinks) in the
-users' guide and the
+`CommandResult` are unchanged in every case. The flags are a spelling of the
+adapter decision in
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md), which records
+why they construct the sink instead of teaching the execution layer workflow
+commands. For the equivalent sink-first example, custom destinations and
+titles, and deliberate local activation, see the
+[presentation sinks section](users-guide.md#presentation-sinks) in the users'
+guide and the
 [group and annotate flags section](users-guide.md#group-and-annotate-flags)
 beside it.

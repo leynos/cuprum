@@ -785,6 +785,12 @@ The flags are validated: passing anything but a `bool` for either raises
 `ValueError`, rather than accepting a truthy value that was never a documented
 flag.
 
+The flags are a spelling of the adapter decision recorded in
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md): they construct
+the sink and store it as the run's sink, so the execution layer never learns
+any workflow-command syntax. The record also names the stop-commands limitation
+that overlapping grouped runs on one destination share.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using
