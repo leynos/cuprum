@@ -24,6 +24,23 @@ The
 is the source of truth for native safety contracts, verifier bounds, trusted
 assumptions, and current proof status.
 
+## Published documentation examples
+
+`tests/behaviour/test_documentation_examples_behaviour.py` checks every fenced
+code block in `README.md`, `docs/users-guide.md`, and the 0.2.0 migration
+guide. An HTML comment on the line before each fence, separated from it by at
+most blank lines, declares what kind of block it is:
+
+- `<!-- tested-example: name -->` must precede a `python` fence. The suite
+  executes that code, and the code must contain at least one `assert` that
+  checks the documented outcome.
+- `<!-- shell-example: name -->` must precede a `shell` fence. It is for
+  commands that readers copy, such as installation, and the suite never runs it.
+
+A fence with no marker, or with a marker for the other kind of block, fails the
+suite. That way a Python example cannot be marked as a shell example to avoid
+being run.
+
 ## Boundary compilation selections
 
 [`scripts/boundary_compile.py`](../scripts/boundary_compile.py) defines named
