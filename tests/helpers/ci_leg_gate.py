@@ -30,7 +30,30 @@ LEG_FLAG_EXPRESSION: typ.Final = (
 
 
 def normalized(condition: object) -> str:
-    """Collapse whitespace in a guard; an absent guard reads as empty."""
+    """Collapse the whitespace in a step guard so layout cannot decide a match.
+
+    Guards are compared as text, and YAML folding or a reflow can change
+    their spacing without changing what they mean.
+
+    Parameters
+    ----------
+    condition : object
+        A step's ``if:`` value as parsed, or ``None`` when the step has none.
+
+    Returns
+    -------
+    str
+        The guard with every run of whitespace collapsed to one space and the
+        ends trimmed, or ``""`` for ``None``, so an unguarded step compares
+        equal to an empty guard.
+
+    Examples
+    --------
+    >>> normalized("always()  &&   env.LEG_RUNS == 'true' ")
+    "always() && env.LEG_RUNS == 'true'"
+    >>> normalized(None)
+    ''
+    """
     return " ".join(str(condition).split()) if condition is not None else ""
 
 
