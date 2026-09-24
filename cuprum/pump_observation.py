@@ -239,8 +239,33 @@ def _discard_hook_result(result: object, event: PumpEvent) -> None:
             "cuprum_result_type": type(result).__name__,
         },
     )
-    if inspect.iscoroutine(result):
+    _close_returned_coroutine(result, event)
+
+
+def _close_returned_coroutine(result: object, event: PumpEvent) -> None:
+    """Close ``result`` if it is a coroutine, reporting a failure from cleanup.
+
+    A coroutine the hook already started runs its ``finally`` blocks here, so
+    closing it can raise. An :class:`Exception` follows the channel's policy
+    and is reported rather than interrupting emission to later hooks; a
+    shutdown signal still propagates.
+    """
+    if not inspect.iscoroutine(result):
+        return
+    try:
         result.close()
+    except Exception as exc:
+        _LOGGER.warning(
+            "pump_observer_disposal_failed phase=%s error=%s",
+            event.phase,
+            type(exc).__name__,
+            exc_info=True,
+            extra={
+                "cuprum_action": "pump_observer_disposal_failed",
+                "cuprum_phase": event.phase,
+                "cuprum_error_type": type(exc).__name__,
+            },
+        )
 
 
 __all__ = [

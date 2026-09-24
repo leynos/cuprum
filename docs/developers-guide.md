@@ -1401,6 +1401,37 @@ tracebacks are never metric labels. Observer failures are logged and do not
 alter the successful fallback or the caller's cancellation.
 [ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
 
+#### Pump hook failure policy
+
+Every pump event, including a hand-off outcome, is delivered through
+`_emit_pump_event` in `cuprum/pump_observation.py`.
+`_emit_rust_pump_handoff_outcome` delegates to it rather than wrapping it, so
+hand-off events share the channel's one failure policy.
+
+A hook that raises an ordinary `Exception` is reported at `WARNING` on the
+`cuprum.pump_observation` logger as `pump_observer_failed`, naming the hook's
+error type and the event's phase, then absorbed; the remaining hooks still
+receive the event. A hook that returns a value is reported as
+`pump_observer_returned_value`, and a returned coroutine is closed. Should
+closing that coroutine itself raise an ordinary `Exception`, it is reported as
+`pump_observer_disposal_failed` and absorbed the same way, so disposal can
+neither interrupt emission nor skip later hooks.
+
+Anything that is not an `Exception` — `SystemExit`, `KeyboardInterrupt`,
+`asyncio.CancelledError` — propagates unchanged, whether raised from the hook
+call or from disposal. Emission sites include cancellation unwinding, where
+absorbing a shutdown signal would swallow the cancellation the caller asked
+for. Propagation is safe at every hand-off site because each has already closed
+or handed off the descriptors it owns before emitting: a failure site closes
+the writer first, the rollback emits after restoring state, and the `submitted`
+emission happens once the completion callback owns cleanup — so a propagating
+signal cannot strand a descriptor.
+
+This deliberately differs from `sh.observe` hooks, whose exceptions fail the
+observed command: a pump observer must not be able to turn a hop that would
+have succeeded into a failure. `cuprum/unittests/test_pump_observation.py` and
+`cuprum/unittests/test_pump_hook_disposal.py` carry the regression coverage.
+
 ### `_pipeline_wait` completion command/query seam
 
 `cuprum/_pipeline_wait.py` splits completion handling on the same command-query
