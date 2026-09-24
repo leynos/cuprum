@@ -57,6 +57,13 @@
   `cleanup_deferred`; resuming the already-closed transport is a no-op. A
   release that fails is recorded at `DEBUG` as `rust_pump_teardown_failed` with
   `cuprum_site="reader_close"`.
+- **Shutdown signals from pump hooks are no longer lost on hand-off:** A
+  `KeyboardInterrupt`, `SystemExit`, or `asyncio.CancelledError` raised while a
+  pump hook observed a `handoff` event used to be logged as
+  `pump_handoff_observer_failed` and discarded, contrary to the pump channel's
+  contract that shutdown signals always propagate. Hand-off events now follow
+  the same policy as every other pump event: ordinary hook exceptions are still
+  reported and absorbed, while shutdown signals reach the caller.
 
 ### Added
 
