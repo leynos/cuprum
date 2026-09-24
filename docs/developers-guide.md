@@ -732,10 +732,16 @@ Each has exactly one group: a catch-all matching `*`, limited to `minor` and
 ecosystem, and every major update arrives in its own pull request, where it can
 be reviewed and built on its own.
 
-`tests/test_ci_dependabot_config.py` enforces this. It also checks that each
-stanza's `directory` holds its manifest, that each stanza carries its labels,
-and that each stanza bounds its open pull requests. A new ecosystem needs a new
-entry in `EXPECTED_STANZAS` as well as a stanza.
+The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
+Dependabot does not descend from `/` into `.github/actions`, and the composite
+actions there would otherwise keep stale pins.
+
+`tests/test_ci_dependabot_config.py` enforces this, including a check that
+every composite action under `.github/actions`, at any depth, is reached by one
+of the stanza's directory globs. It also checks that each stanza's `directory`
+holds its manifest, that each stanza carries its labels, and that each stanza
+bounds its open pull requests. A new ecosystem needs a new entry in
+`EXPECTED_STANZAS` as well as a stanza.
 
 ## Linux debug-build acceleration
 
