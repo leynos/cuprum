@@ -36,6 +36,16 @@ BASELINE_LABEL = "dependencies"
 #: The wildcard that makes a group match every dependency in its ecosystem.
 EVERYTHING = "*"
 
+#: Every stanza checks for updates daily (estate ruling, 2026-09-24).
+INTERVAL = "daily"
+
+#: The update types the catch-all group batches. Majors stay out of it, so
+#: each one arrives in a pull request of its own.
+GROUPED_UPDATE_TYPES = frozenset({"minor", "patch"})
+
+#: The `applies-to` value a routine-update group must carry, when it names one.
+VERSION_UPDATES = "version-updates"
+
 
 @dc.dataclass(frozen=True, slots=True)
 class ExpectedStanza:
@@ -48,8 +58,6 @@ class ExpectedStanza:
     manifest: str
     #: The channel labels the stanza adds on top of the baseline label.
     channel_labels: tuple[str, ...]
-    #: Whether the stanza batches its updates into one pull request.
-    grouped: bool = False
 
 
 #: One stanza per package ecosystem the repository uses. Listing them here
@@ -61,7 +69,6 @@ EXPECTED_STANZAS = (
         directory="/",
         manifest=".github/workflows",
         channel_labels=("github-actions",),
-        grouped=True,
     ),
     ExpectedStanza(
         ecosystem="uv",
@@ -238,25 +245,63 @@ def test_the_uv_stanza_targets_the_workspace_root() -> None:
     ), "the uv stanza must carry the dependencies, python, and uv labels"
 
 
-def test_github_actions_updates_are_batched_into_one_pull_request() -> None:
-    """Collapse every action bump into a single pull request."""
-    stanza = dependabot_stanzas()["github-actions"]
+@pytest.mark.parametrize("stanza", STANZA_CASES)
+def test_each_stanza_checks_for_updates_daily(stanza: ExpectedStanza) -> None:
+    """Check every ecosystem for updates each day."""
+    declared = dependabot_stanzas()[stanza.ecosystem]
+    schedule = _mapping(
+        declared.get("schedule"),
+        f"the {stanza.ecosystem} stanza must declare a `schedule`",
+    )
+    assert schedule.get("interval") == INTERVAL, (
+        f"the {stanza.ecosystem} stanza must run {INTERVAL!r}; "
+        f"got {schedule.get('interval')!r}"
+    )
+
+
+@pytest.mark.parametrize("stanza", STANZA_CASES)
+def test_each_stanza_batches_minor_and_patch_updates_only(
+    stanza: ExpectedStanza,
+) -> None:
+    """Batch routine bumps into one pull request and leave majors ungrouped."""
+    declared = dependabot_stanzas()[stanza.ecosystem]
     groups = _mapping(
-        stanza.get("groups"),
-        "the github-actions stanza must declare `groups` to batch updates",
+        declared.get("groups"),
+        f"the {stanza.ecosystem} stanza must declare `groups` to batch updates",
     )
     assert len(groups) == 1, (
-        "one group keeps every action bump in a single pull request; "
+        "one catch-all group keeps routine bumps in a single pull request; "
         f"got {sorted(groups)}"
     )
-    for name, group in groups.items():
+    for name, raw_group in groups.items():
+        group = _mapping(raw_group, f"group {name!r} must be a mapping")
         patterns = _sequence(
-            _mapping(group, f"group {name!r} must be a mapping").get("patterns"),
-            f"group {name!r} must declare `patterns`",
+            group.get("patterns"), f"group {name!r} must declare `patterns`"
         )
-        assert EVERYTHING in patterns, (
-            f"group {name!r} must match every dependency with {EVERYTHING!r}; "
-            f"got {patterns}"
+        assert patterns == [EVERYTHING], (
+            f"group {name!r} must match every dependency with only "
+            f"{EVERYTHING!r}; got {patterns}"
+        )
+        # Without `update-types` a group also takes majors, so a breaking
+        # bump would hide inside the routine batch.
+        update_types = _sequence(
+            group.get("update-types"),
+            f"group {name!r} must limit itself with `update-types`",
+        )
+        assert set(update_types) == GROUPED_UPDATE_TYPES, (
+            f"group {name!r} must batch exactly "
+            f"{sorted(GROUPED_UPDATE_TYPES)}; got {update_types}"
+        )
+        # An exclusion carves dependencies out of the batch, and a group that
+        # applies only to security updates leaves routine version updates
+        # ungrouped; either defeats the catch-all while `*` still matches.
+        assert "exclude-patterns" not in group, (
+            f"group {name!r} must not exclude dependencies from the catch-all; "
+            f"got {group['exclude-patterns']!r}"
+        )
+        applies_to = group.get("applies-to", VERSION_UPDATES)
+        assert applies_to == VERSION_UPDATES, (
+            f"group {name!r} must apply to {VERSION_UPDATES!r}; got {applies_to!r}"
         )
 
 
