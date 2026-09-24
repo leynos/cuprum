@@ -20,22 +20,14 @@ if typ.TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
+    from benchmarks._tee_profile_stream_telemetry import StreamTelemetryGroupPayload
 
-def _assert_positive_stream_telemetry(
-    result: TeeProfileWorkerResult,
-    expected_operations: set[StreamOperation],
-) -> None:
-    """Assert observed telemetry uses only the closed vocabulary and totals."""
-    telemetry = result["stream_telemetry"]
-    groups = telemetry["groups"]
-    assert set(groups) == {operation.value for operation in expected_operations}, (
-        f"expected telemetry groups {expected_operations}, got {groups}"
-    )
-    for expected_operation in expected_operations:
-        assert groups.get(expected_operation.value), (
-            f"expected non-empty {expected_operation.value} telemetry, got {groups}"
-        )
-    group_payloads = []
+
+def _assert_closed_positive_group_payloads(
+    groups: dict[str, dict[str, StreamTelemetryGroupPayload]],
+) -> list[StreamTelemetryGroupPayload]:
+    """Assert every group uses closed outcome labels and positive counters."""
+    group_payloads: list[StreamTelemetryGroupPayload] = []
     for outcomes in groups.values():
         assert outcomes, f"operation telemetry must contain an outcome, got {groups}"
         assert set(outcomes) <= {outcome.value for outcome in StreamOperationOutcome}, (
@@ -52,6 +44,24 @@ def _assert_positive_stream_telemetry(
             assert group["operation_count"] > 0, (
                 f"expected positive operation count, got {group}"
             )
+    return group_payloads
+
+
+def _assert_positive_stream_telemetry(
+    result: TeeProfileWorkerResult,
+    expected_operations: set[StreamOperation],
+) -> None:
+    """Assert observed telemetry uses only the closed vocabulary and totals."""
+    telemetry = result["stream_telemetry"]
+    groups = telemetry["groups"]
+    assert set(groups) == {operation.value for operation in expected_operations}, (
+        f"expected telemetry groups {expected_operations}, got {groups}"
+    )
+    for expected_operation in expected_operations:
+        assert groups.get(expected_operation.value), (
+            f"expected non-empty {expected_operation.value} telemetry, got {groups}"
+        )
+    group_payloads = _assert_closed_positive_group_payloads(groups)
     totals = telemetry["totals"]
     assert totals["bytes_consumed"] == sum(
         group["bytes_consumed"] for group in group_payloads
