@@ -128,7 +128,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-## Why "cuprum"?
+## About the name
 
 The name is a tip of the hat to [Plumbum](https://plumbum.readthedocs.io/), the
 library that showed us shell-like scripting in Python could actually be
