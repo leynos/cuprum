@@ -486,6 +486,22 @@ processes.
   is corrected in the citation rather than obeyed literally. Date/ Author:
   2026-09-24, agent.
 
+- Decision: record the scope tolerance as breached rather than claim it was
+  met. Rationale: the tolerance is more than 12 tracked files or 700 net
+  changed lines. Measured against `origin/main`, the branch is 15 files and
+  2347 net lines (2398 insertions, 51 deletions). Excluding this living plan
+  document, it is 14 files and 1277 net lines; excluding documentation
+  entirely, it is still 8 files and 1088 net lines, of which 855 lines are
+  tests. The overage is not incidental spread: the issue's own acceptance
+  criteria require coverage across four entry points (`SafeCmd.run`,
+  `SafeCmd.run_sync`, `Pipeline.run`, `Pipeline.run_sync`) plus defaults, sink
+  precedence, failure outcomes, and two pipeline modes, and they require users'
+  guide, CHANGELOG, migration-guide, and ADR updates. No tolerance-respecting
+  subset of those criteria exists. The standing instruction to implement issue
+  #375 in full is the authority that carried the change past the threshold;
+  this entry is the record of the breach, not a claim of compliance. Date/
+  Author: 2026-09-24, agent.
+
 ## Conformance basis
 
 Upstream artefacts, named exactly:
