@@ -17,11 +17,22 @@ runs:
     - name: Build makeutil at the pinned revision
       shell: bash
       env:
-        # makeutil has no release yet, so it is built from a commit. The
-        # toolchain is the nightly its Polonius borrow checking needs.
-        MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+        # makeutil has no release yet, so it is built from a commit, and the
+        # commit must be one makeutil's `main` reaches. A commit no branch
+        # reaches still builds until GitHub garbage-collects it, and then every
+        # run breaks with no change here; the previous pin was such a commit.
+        # The first command refuses a pin `main` does not reach, and since a
+        # pin change changes the tool key, the pull request that makes the
+        # change always runs it. The toolchain is the nightly makeutil's
+        # Polonius borrow checking needs.
+        MAKEUTIL_REVISION: '6e64f4fe84419705badc30baa5649cbb6f69a298'
         MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
       run: |
+        history="$(mktemp -d)"
+        git -C "${history}" init --quiet
+        git -C "${history}" fetch --quiet --filter=tree:0 \
+          https://github.com/leynos/makeutil refs/heads/main
+        git -C "${history}" merge-base --is-ancestor "${MAKEUTIL_REVISION}" FETCH_HEAD
         rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
         RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
           --git https://github.com/leynos/makeutil \

@@ -17,6 +17,7 @@ pin, and these contracts hold the three things that make it so:
 
 from __future__ import annotations
 
+import re
 import shlex
 import typing as typ
 
@@ -46,15 +47,39 @@ MISS_GUARD: typ.Final = f"steps.{TOOL_CACHE_ID}.outputs.cache-hit != 'true'"
 #: Where `cargo install` puts the binary, and so what the tool cache must hold.
 CARGO_BIN: typ.Final = "~/.cargo/bin"
 #: The makeutil source, which only the action may name.
-MAKEUTIL_SOURCE: typ.Final = "https://github.com/leynos/makeutil"
+MAKEUTIL_SOURCE_URL: typ.Final = "https://github.com/leynos/makeutil"
 
 #: The pin, as the action declares it.
 PIN: typ.Final = {
-    "MAKEUTIL_REVISION": "29fc5a1634ffbaa18a773eed9dff1b2838a45d9c",
+    "MAKEUTIL_REVISION": "6e64f4fe84419705badc30baa5649cbb6f69a298",
     "MAKEUTIL_TOOLCHAIN": "nightly-2026-05-28",
 }
-#: The action's build command, tokenized.
+#: The branch the pin must descend from.
+PIN_BRANCH: typ.Final = "refs/heads/main"
+#: The action's whole command, tokenized: refuse a pin `main` does not reach,
+#: then build it.
 INSTALL_TOKENS: typ.Final = (
+    "history=$(mktemp -d)",
+    "git",
+    "-C",
+    "${history}",
+    "init",
+    "--quiet",
+    "git",
+    "-C",
+    "${history}",
+    "fetch",
+    "--quiet",
+    "--filter=tree:0",
+    MAKEUTIL_SOURCE_URL,
+    PIN_BRANCH,
+    "git",
+    "-C",
+    "${history}",
+    "merge-base",
+    "--is-ancestor",
+    "${MAKEUTIL_REVISION}",
+    "FETCH_HEAD",
     "rustup",
     "toolchain",
     "install",
@@ -66,7 +91,7 @@ INSTALL_TOKENS: typ.Final = (
     "+${MAKEUTIL_TOOLCHAIN}",
     "install",
     "--git",
-    MAKEUTIL_SOURCE,
+    MAKEUTIL_SOURCE_URL,
     "--rev",
     "${MAKEUTIL_REVISION}",
     "--locked",
@@ -115,6 +140,21 @@ def test_the_action_builds_the_pinned_revision() -> None:
     )
 
 
+def test_the_pin_is_a_full_commit() -> None:
+    """An abbreviated or symbolic pin could name different code tomorrow.
+
+    The pin is read from the action rather than from ``PIN``. That the commit
+    descends from makeutil's ``main`` needs the network, so the action checks
+    it before building, and ``INSTALL_TOKENS`` holds that check in place.
+    """
+    environment = _action_step().get("env")
+    assert isinstance(environment, dict), f"{INSTALL_ACTION_PATH} must pin in env"
+    revision = str(typ.cast("dict[str, object]", environment).get("MAKEUTIL_REVISION"))
+    assert re.fullmatch(r"[0-9a-f]{40}", revision), (
+        f"the makeutil pin must be a 40-hex commit, got {revision!r}"
+    )
+
+
 def test_the_tool_key_hashes_the_pin() -> None:
     """Without this, a changed pin would hit the old key and skip the rebuild."""
     source = CACHE_KEYS_ACTION_FILE.read_text(encoding="utf-8")
@@ -126,7 +166,7 @@ def test_the_tool_key_hashes_the_pin() -> None:
 def test_only_the_action_builds_makeutil() -> None:
     """A second build elsewhere would carry a pin the tool key does not hash."""
     builders = [
-        name for name, source in workflow_sources() if MAKEUTIL_SOURCE in source
+        name for name, source in workflow_sources() if MAKEUTIL_SOURCE_URL in source
     ]
     assert builders == [], f"only {INSTALL_ACTION_PATH} may build makeutil: {builders}"
 
