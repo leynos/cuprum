@@ -51,10 +51,13 @@ runs:
         CARGO_HASH: ${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
         # The tool family follows everything that decides which executables and
         # uv environments end up on disk, including the pinned sccache release
-        # and digests declared by the setup-sccache action.
+        # and digests declared by the setup-sccache action, and the makeutil
+        # revision and toolchain the install-makeutil action pins. Callers skip
+        # that install on an exact hit, so its pin must be part of the key.
         TOOL_HASH: >-
           ${{ hashFiles('uv.lock', 'pyproject.toml', 'Makefile',
-          '.github/actions/setup-sccache/action.yml') }}
+          '.github/actions/setup-sccache/action.yml',
+          '.github/actions/install-makeutil/action.yml') }}
       run: |
         set -euo pipefail
         # `runner.environment` is in every scope. The Ubicloud lane and the

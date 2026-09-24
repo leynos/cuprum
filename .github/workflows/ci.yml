@@ -403,8 +403,6 @@ jobs:
     timeout-minutes: 45
     env:
       MDTABLEFIX_VERSION: '0.6.0'
-      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
-      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     strategy:
       fail-fast: false
       matrix:
@@ -546,15 +544,13 @@ jobs:
           use-sccache: 'false'
           install-binstall: 'false'
 
+      # Skipped on an exact tool-cache hit. The tool key hashes the action,
+      # which holds the pin, so the restored `~/.cargo/bin/makeutil` is
+      # already the pinned build and neither the nightly nor the compile is
+      # needed.
       - name: Install Makefile parser
-        run: |
-          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
-          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
-            --git https://github.com/leynos/makeutil \
-            --rev "${MAKEUTIL_REVISION}" \
-            --locked \
-            --force \
-            makeutil
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/install-makeutil
 
       # The full Python suite exercises the native mdtablefix file selector.
       # Restoring the tool cache is an optimization, not a prerequisite.
@@ -954,8 +950,6 @@ jobs:
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
       MDTABLEFIX_VERSION: '0.6.0'
-      MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
-      MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1094,15 +1088,13 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
+      # Skipped on an exact tool-cache hit. The tool key hashes the action,
+      # which holds the pin, so the restored `~/.cargo/bin/makeutil` is
+      # already the pinned build and neither the nightly nor the compile is
+      # needed.
       - name: Install Makefile parser
-        run: |
-          rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
-          RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
-            --git https://github.com/leynos/makeutil \
-            --rev "${MAKEUTIL_REVISION}" \
-            --locked \
-            --force \
-            makeutil
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/install-makeutil
 
       - name: Prepare Cargo dependencies
         run: cargo fetch --locked --manifest-path rust/cuprum-rust/Cargo.toml

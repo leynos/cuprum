@@ -22,27 +22,6 @@ import yaml
 from tests.helpers.docs import repo_root
 
 _MAKEUTIL_COMMAND: typ.Final = ("makeutil", "parse", "Makefile")
-_MAKEUTIL_REVISION: typ.Final = "29fc5a1634ffbaa18a773eed9dff1b2838a45d9c"
-_MAKEUTIL_TOOLCHAIN: typ.Final = "nightly-2026-05-28"
-_MAKEUTIL_INSTALL_TOKENS: typ.Final = (
-    "rustup",
-    "toolchain",
-    "install",
-    "${MAKEUTIL_TOOLCHAIN}",
-    "--profile",
-    "minimal",
-    "RUSTFLAGS=-Zpolonius=next",
-    "cargo",
-    "+${MAKEUTIL_TOOLCHAIN}",
-    "install",
-    "--git",
-    "https://github.com/leynos/makeutil",
-    "--rev",
-    "${MAKEUTIL_REVISION}",
-    "--locked",
-    "--force",
-    "makeutil",
-)
 _TYPOS_CONFIG_BUILDER_VERSION_TOKENS: typ.Final = ("v0.1.2",)
 _TYPOS_CONFIG_BUILDER_TOKENS: typ.Final = (
     "$(UV_RUN_ENV)",
@@ -271,16 +250,6 @@ def _documented_whitelist_names(skylos: dict[str, object]) -> frozenset[str]:
     return frozenset(documented)
 
 
-def _assert_makeutil_installation(command: object, *, contract: str) -> None:
-    """Assert that `command` installs the pinned Makeutil parser."""
-    assert isinstance(command, str), (
-        f"{contract} must provide a Makeutil installation shell command"
-    )
-    assert (
-        tuple(shlex.split(command.replace("\\\n", ""))) == _MAKEUTIL_INSTALL_TOKENS
-    ), f"{contract} must pin the Makeutil installation command"
-
-
 def test_lint_recipe_runs_the_production_dead_code_gate() -> None:
     """`make lint` must scan production code with Skylos's strict gate."""
     test_prerequisites = _text_sequence(
@@ -403,40 +372,15 @@ def test_skylos_configuration_models_implicit_runtime_callers() -> None:
         assert reason, "Skylos entry-point contract must provide a non-empty reason"
 
 
-def test_ci_runs_the_lint_target_and_installs_makeutil() -> None:
-    """CI must run the same lint target and provide its Makefile parser."""
+def test_ci_runs_the_lint_target() -> None:
+    """CI must run the same lint target.
+
+    The Makefile parser CI provides for these contracts is pinned and cached
+    under ``tests/test_ci_makeutil_install.py``.
+    """
     lint_step = _sole_workflow_step(
         "lint-test", "Run lint, including Skylos dead-code detection"
     )
     assert lint_step.get("run") == (
         '/usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint'
     ), "CI lint-step contract must invoke the shared make lint target"
-
-    parser_step = _sole_workflow_step("typecheck-test", "Install Makefile parser")
-    _assert_makeutil_installation(
-        parser_step.get("run"), contract="CI Makeutil-install contract"
-    )
-
-    for workflow_path, job_name in (
-        (".github/workflows/ci.yml", "typecheck-test"),
-        (".github/workflows/ci.yml", "coverage"),
-        (".github/workflows/coverage-main.yml", "coverage-upload"),
-    ):
-        coverage_job = _workflow_job(workflow_path, job_name)
-        environment = _mapping(
-            coverage_job.get("env"), subject=f"{workflow_path} Makeutil environment"
-        )
-        assert environment.get("MAKEUTIL_REVISION") == _MAKEUTIL_REVISION, (
-            f"{workflow_path} {job_name} Makeutil revision contract must stay pinned"
-        )
-        assert environment.get("MAKEUTIL_TOOLCHAIN") == _MAKEUTIL_TOOLCHAIN, (
-            f"{workflow_path} {job_name} Makeutil toolchain contract must stay pinned"
-        )
-        if job_name != "typecheck-test":
-            coverage_parser_step = _sole_workflow_step(
-                job_name, "Install Makefile parser", workflow_path=workflow_path
-            )
-            _assert_makeutil_installation(
-                coverage_parser_step.get("run"),
-                contract=f"{workflow_path} coverage Makeutil-install contract",
-            )

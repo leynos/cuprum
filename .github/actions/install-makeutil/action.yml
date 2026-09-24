@@ -1,0 +1,31 @@
+name: Install the Makefile parser
+description: >-
+  Build and install the pinned `makeutil`, which the Makefile contract tests
+  run, into `~/.cargo/bin`.
+
+  The pin lives here and nowhere else. `.github/actions/cache-keys` hashes
+  this file into the tool family's key, and `~/.cargo/bin` is in that family,
+  so an exact tool-cache hit means the restored `makeutil` was built from this
+  revision with this toolchain. Callers therefore run this action only when
+  the tool cache missed: a hit makes the build, and the nightly toolchain it
+  needs, redundant. Changing the pin changes the key, so the first run after a
+  change misses and rebuilds rather than keeping a stale binary.
+
+runs:
+  using: composite
+  steps:
+    - name: Build makeutil at the pinned revision
+      shell: bash
+      env:
+        # makeutil has no release yet, so it is built from a commit. The
+        # toolchain is the nightly its Polonius borrow checking needs.
+        MAKEUTIL_REVISION: '29fc5a1634ffbaa18a773eed9dff1b2838a45d9c'
+        MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
+      run: |
+        rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
+        RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
+          --git https://github.com/leynos/makeutil \
+          --rev "${MAKEUTIL_REVISION}" \
+          --locked \
+          --force \
+          makeutil

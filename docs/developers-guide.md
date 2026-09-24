@@ -4073,8 +4073,13 @@ an alternate lock path. Never use a broad or unreasoned exception.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
-available before running the test suite. CI installs its pinned Makeutil
-revision before running that target.
+available before running the test suite. In CI the pin lives only in
+`.github/actions/install-makeutil`, and a job runs that action only when its
+tool cache missed. The tool family's key hashes the action, and `~/.cargo/bin`
+is in the family, so an exact hit already holds the pinned build and skips the
+nightly toolchain and the compile. Changing the pin changes the key, so the
+next run misses and rebuilds. `tests/test_ci_makeutil_install.py` holds that
+arrangement.
 
 For local test runs, install the same pinned parser and toolchain before running
 `make test`:
