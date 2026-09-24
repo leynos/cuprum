@@ -17,7 +17,7 @@ loom-defect-fixture = []
 [dependencies]
 cuprum-streams = { path = "../cuprum-streams", version = "0.1.0" }
 cuprum-native-io = { path = "../cuprum-native-io", version = "0.1.0" }
-pyo3 = { version = "0.29.0", features = ["extension-module"] }
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py312"] }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.7.2"

@@ -65,9 +65,12 @@ The compiler cache carries two dimensions the other families do not, because
 compiler output is only interchangeable between jobs that compile the same way.
 
 The interpreter. `rust/cuprum-rust/Cargo.toml` declares `pyo3` with the
-`extension-module` feature and without `abi3`, so the extension is compiled
-against one specific CPython version. Objects built against 3.12 are useless to
-a 3.14 build.
+`abi3-py312` feature, so the built extension loads on every supported CPython
+([ADR-016](adr-016-stable-abi-native-wheels.md)). Compiler output is still
+per-interpreter: the pyo3 build script records the building interpreter's
+configuration and reruns when it changes, so switching `maturin build -i` from
+3.13 to 3.12 recompiles `pyo3-ffi`, `pyo3`, and the extension. Objects built
+under 3.12 are therefore not shown to serve a 3.14 build.
 
 The build shape. An unoptimized `maturin develop` build, the same build with
 `--release`, the Cranelift-backed lint build, the instrumented `cargo llvm-cov`
@@ -82,9 +85,10 @@ compiles and the 3.12, 3.14, and 3.15a readers took none. Read and write errors
 were zero throughout: the archive restored perfectly and simply held nothing
 those jobs could use.
 
-If `pyo3` ever adopts `abi3`, one archive could serve every interpreter and the
-per-interpreter split becomes pure overhead.
-`test_pyo3_is_still_declared_without_abi3` is the reminder to collapse it.
+Collapse the per-interpreter split only after a CI measurement shows an archive
+written under one interpreter serving compiles under another.
+`test_pyo3_targets_the_stable_abi_but_keeps_per_interpreter_objects` records
+the current evidence.
 
 ## One writer per family
 

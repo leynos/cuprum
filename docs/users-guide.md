@@ -42,10 +42,11 @@ Or add it to a uv project:
 uv add cuprum
 ```
 
-The pure Python installation has no runtime dependencies. On CPython 3.13 for
-Linux, macOS, and Windows x86_64, pip may instead select a native wheel that
-adds optional Rust acceleration for pipelines; behaviour is the same either
-way. See [Optional Rust acceleration](#choosing-a-stream-backend) for details.
+The pure Python installation has no runtime dependencies. On glibc-based Linux,
+macOS, and Windows x86_64, pip selects a native wheel instead, which adds
+optional Rust acceleration for pipelines; behaviour is the same either way. See
+[Optional Rust acceleration](#choosing-a-stream-backend)
+for details.
 
 ## Run a command
 
@@ -1441,11 +1442,12 @@ covers that workflow and distributable wheel builds.
 
 #### No native wheel for this platform
 
-Pre-built native wheels are published for CPython 3.13 on Linux (x86_64,
-aarch64), macOS (x86_64, arm64), and Windows (x86_64). On other platforms and
-Python versions, `pip install cuprum` installs the pure Python wheel, which
-provides the same functionality without Rust acceleration. To add acceleration
-anyway, build the extension as described in
+Pre-built native wheels are published for glibc-based Linux (x86_64, aarch64),
+macOS (x86_64, arm64), and Windows (x86_64). Each targets the CPython stable
+ABI, so one wheel serves CPython 3.12 and every later version. On other
+platforms, and on free-threaded CPython builds, `pip install cuprum` installs
+the pure Python wheel, which provides the same functionality without Rust
+acceleration. To add acceleration anyway, build the extension as described in
 [Build prerequisites for native extensions](#build-prerequisites-for-native-extensions).
 
 #### A forced Rust backend raises `ImportError`

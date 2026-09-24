@@ -311,10 +311,11 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
 #: The compiler split was measured on 2026-09-04. Before it, one instrumented
 #: 3.13 archive served every Ubicloud job: the 3.13 reader took 14 of its 17
 #: cacheable compiles and the 3.12, 3.14 and 3.15a readers took none, because
-#: `pyo3` is declared without `abi3` and an extension compiled against one
-#: CPython serves no other. `benchmark-ratchet` builds with `--release` and the
-#: coverage jobs build under instrumentation, so neither can share an archive
-#: with an unoptimized build either.
+#: the pyo3 build script rebuilds for each interpreter, even on the stable
+#: ABI, so an extension compiled under one CPython serves no other.
+#: `benchmark-ratchet` builds with `--release` and the coverage jobs build
+#: under instrumentation, so neither can share an archive with an unoptimized
+#: build either.
 #:
 #: The typecheck-only leg is absent by construction: it compiles nothing, its
 #: save step is gated on ``matrix.python-suite``, and `extension-tests` owns

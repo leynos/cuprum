@@ -64,6 +64,12 @@
   contract that shutdown signals always propagate. Hand-off events now follow
   the same policy as every other pump event: ordinary hook exceptions are still
   reported and absorbed, while shutdown signals reach the caller.
+- **Native wheels cover every supported Python:** Releases built native wheels
+  for CPython 3.13 only, so installations on 3.12 and 3.14 silently fell back
+  to the pure Python wheel and lost Rust acceleration. The extension now
+  targets the CPython 3.12 stable ABI, so each platform's single `cp312-abi3`
+  wheel loads on 3.12 and every later version. Free-threaded builds still use
+  the pure Python wheel. See ADR-016.
 
 ### Added
 

@@ -33,9 +33,9 @@ CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 #: lane that every family carries. The Cargo registry holds the resolved
 #: dependency graph, which no interpreter or build shape changes. The tool
 #: archive holds uv's interpreter-specific environments. Compiler output is
-#: narrower still: `pyo3` is declared without `abi3`, so an object compiled
-#: against one CPython serves no other, and an optimized or instrumented object
-#: serves no unoptimized build.
+#: narrower still: even on the stable ABI, the pyo3 build script rebuilds for
+#: each interpreter, so an object compiled under one CPython serves no other,
+#: and an optimized or instrumented object serves no unoptimized build.
 KEY_SCOPES: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "CARGO_CACHE_KEY": (),
     "TOOL_CACHE_KEY": ("python-version",),

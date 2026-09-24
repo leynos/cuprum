@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests assert trusted maturin command handling.
 import sys
+import tomllib
 import typing as typ
 import zipfile
 
@@ -141,6 +142,10 @@ def test_maturin_wheel_build_snapshot(
         )
 
     wheel_path = build_native_wheel_artefact(root, tmp_path / "wheelhouse")
+    # One stable-ABI wheel serves every supported interpreter from 3.12 on.
+    assert "-cp312-abi3-" in wheel_path.name, (
+        f"native wheel must target the CPython 3.12 stable ABI: {wheel_path.name}"
+    )
     snapshot_payload = wheel_build_snapshot(wheel_path)
     assert snapshot_payload["generator"] == expected, (
         f"Expected generator {expected!r}, found {snapshot_payload['generator']!r}"
@@ -201,4 +206,28 @@ def test_wheel_build_snapshot_reports_missing_dist_info(
 
     assert str(exc_info.value) == expected_message, (
         f"expected exactly {expected_message!r}, found {str(exc_info.value)!r}"
+    )
+
+
+def test_stable_abi_floor_matches_requires_python() -> None:
+    """The native wheel's stable-ABI floor is the minimum supported Python.
+
+    A lower floor would advertise wheels for unsupported interpreters; a higher
+    one would silently send the oldest supported interpreter to the pure Python
+    wheel.
+    """
+    root = repo_root()
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    requires_python = pyproject["project"]["requires-python"]
+    manifest = tomllib.loads(
+        (root / "rust" / "cuprum-rust" / "Cargo.toml").read_text(encoding="utf-8")
+    )
+    features = manifest["dependencies"]["pyo3"]["features"]
+    abi3_floors = [feature for feature in features if feature.startswith("abi3-py")]
+
+    major, minor = requires_python.removeprefix(">=").split(".")
+    expected = f"abi3-py{major}{minor}"
+    assert abi3_floors == [expected], (
+        f"requires-python {requires_python} needs pyo3 feature {expected}, "
+        f"got {abi3_floors}"
     )

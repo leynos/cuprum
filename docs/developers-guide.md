@@ -18,6 +18,7 @@ of truth for day-to-day contributor expectations. For the system design, see the
 - [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
 - [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
 - [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
+- [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -2252,7 +2253,8 @@ maturin build --release --out wheelhouse \
 ```
 
 Linux wheels are built inside a manylinux-compatible container, with a matching
-compatibility tag and an explicit interpreter:
+compatibility tag and an explicit interpreter. The interpreter only drives the
+build: every native wheel targets the CPython 3.12 stable ABI.
 
 ```bash
 maturin build --release --manylinux 2_28 \
@@ -2261,10 +2263,12 @@ maturin build --release --manylinux 2_28 \
 ```
 
 `.github/workflows/build-wheels.yml` supplies `manylinux 2_28` through the
-maturin action and builds CPython 3.13 wheels for Linux x86_64 and aarch64,
-macOS x86_64 and arm64, and Windows x86_64. The extension does not use the
-stable `abi3` interface, so each wheel serves only the interpreter it was built
-for, and every other interpreter receives the pure Python wheel.
+maturin action and builds one `cp312-abi3` wheel each for Linux x86_64 and
+aarch64, macOS x86_64 and arm64, and Windows x86_64. The `abi3-py312` feature on
+`pyo3` makes each wheel load on CPython 3.12 and every later version; see
+[ADR-016](adr-016-stable-abi-native-wheels.md). `verify-wheel-install` checks
+the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor equal to
+`requires-python` in `pyproject.toml`.
 
 ### Verifying a wheel pair
 

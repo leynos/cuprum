@@ -71,8 +71,10 @@ open each document.
   retain bounded benchmark-gate observations in GitHub Actions artefacts with
   fail-open delivery and no external sink or secret.
 - [ADR-015: Actions-runner integration harness][adr-015] - accepted decision to
-  verify the `changes` job boundary with a pytest-driven `act` harness rather
+    verify the `changes` job boundary with a pytest-driven `act` harness rather
   than by reading the workflow source.
+- [ADR-016: Stable-ABI native wheels][adr-016] - accepted decision to build
+  one native wheel per platform against the CPython 3.12 stable ABI.
 
 ## Planning and validation references
 
@@ -105,6 +107,7 @@ open each document.
 [adr-013]: adr-013-opt-in-github-actions-presentation-sink.md
 [adr-014]: adr-014-benchmark-gate-telemetry-sink.md
 [adr-015]: adr-015-actions-runner-integration-harness.md
+[adr-016]: adr-016-stable-abi-native-wheels.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md
