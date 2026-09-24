@@ -86,6 +86,19 @@ def test_profile_plan_lists_each_sweep_measurement(
     ], f"canonical plan must use the measurement artefact directories, got {matching}"
 
 
+def _successful_stream_telemetry_sample(read_size: int) -> dict[str, object]:
+    """Return a successful fake worker result carrying stream telemetry."""
+    group = {
+        "bytes_consumed": read_size,
+        "read_operations": 1,
+        "operation_count": 1,
+        "duration_seconds": float(read_size),
+    }
+    telemetry = {"groups": {"stream_drain": {"eof": group}}, "totals": group}
+    sample = {"exit_code": 0, "read_size": read_size, "status": "ok"}
+    return sample | {"stream_telemetry": telemetry}
+
+
 def test_profile_sweep_runs_every_size_in_each_round(
     tmp_path: pth.Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -103,21 +116,7 @@ def test_profile_sweep_runs_every_size_in_each_round(
         """Record the scenario's read size without running a subprocess."""
         _ = (config, scenario_dir)
         observed.append(scenario.read_size)
-        group = {
-            "bytes_consumed": scenario.read_size,
-            "read_operations": 1,
-            "operation_count": 1,
-            "duration_seconds": float(scenario.read_size),
-        }
-        return {
-            "exit_code": 0,
-            "read_size": scenario.read_size,
-            "status": "ok",
-            "stream_telemetry": {
-                "groups": {"stream_drain": {"eof": group}},
-                "totals": group,
-            },
-        }
+        return _successful_stream_telemetry_sample(scenario.read_size)
 
     monkeypatch.setattr(profile_tee_hotpath, "_run_profile_scenario", fake_run)
 
