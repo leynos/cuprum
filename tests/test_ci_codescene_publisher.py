@@ -8,8 +8,10 @@ one job that does hold it, ``coverage-main.yml``'s ``coverage-upload``:
   on to every step nested inside it;
 * the upload runs only when that check says the token exists and the ref is
   ``main``, split on ``&&`` with any unquoted ``||`` refused;
-* the token reaches the upload as its ``access-token`` input and through no
-  ``env`` at the workflow, job or step scope; and
+* the token reaches the upload as its ``access-token`` input, and the
+  publisher names it nowhere else, so no ``env`` scope and no ``run`` body
+  exporting it through ``$GITHUB_ENV`` can hand it to the upload's
+  environment; and
 * the publisher's runs share one slot per ref and are never cancelled.
 
 The developers' guide records two consequences a reader cannot see from the
@@ -18,6 +20,7 @@ workflow, and the last clause holds it to them.
 
 from __future__ import annotations
 
+import copy
 import typing as typ
 
 from tests.helpers.ci_codescene import (
@@ -134,35 +137,52 @@ def test_the_upload_is_guarded_to_main_and_to_a_present_token() -> None:
     assert not missing, f"the upload must be guarded on {missing}, got {guard!r}"
 
 
-def test_the_token_reaches_the_upload_as_its_input_and_through_no_env() -> None:
-    """The positive half and the prohibition, asserted together.
+def _without_the_permitted_mentions() -> dict[str, object]:
+    """Return the publisher's document with its two permitted mentions blanked.
 
-    Prohibiting ``env`` alone would let the token vanish from the upload, which
-    then runs with no credential and fails; requiring the input alone would let
-    a leftover ``env`` keep leaking it into the action's nested steps.
+    The check's command and the upload's ``access-token`` input are the only
+    places the token may be named; the other tests pin their exact values.
+
+    Returns
+    -------
+    dict[str, object]
+        A deep copy of the workflow, safe to edit, with those two values empty.
     """
     workflow_name, job_name = TRUNK_PUBLISHER
-    upload = _upload()
-    inputs = upload.get("with")
+    document = typ.cast(
+        "dict[str, object]", copy.deepcopy(workflow_document(workflow_name))
+    )
+    job = typ.cast("dict[str, dict[str, object]]", document["jobs"])[job_name]
+    job_steps = typ.cast("list[Step]", job["steps"])
+    original = steps(workflow_name, job_name)
+    job_steps[original.index(_token_check())]["run"] = ""
+    upload_inputs = job_steps[original.index(_upload())].get("with")
+    if isinstance(upload_inputs, dict):
+        typ.cast("dict[str, object]", upload_inputs)["access-token"] = ""
+    return document
+
+
+def test_the_token_reaches_the_upload_as_its_input_and_by_no_other_route() -> None:
+    """The positive half and the prohibition, asserted together.
+
+    Prohibiting other routes alone would let the token vanish from the upload,
+    which then runs with no credential and fails; requiring the input alone
+    would let a leftover route keep leaking it into the action's nested steps.
+    The prohibition reads the whole document rather than the ``env`` scopes,
+    because a ``run`` body can write the token to ``$GITHUB_ENV``, and every
+    later step, the upload included, then holds it with no ``env`` naming it.
+    """
+    workflow_name, _ = TRUNK_PUBLISHER
+    inputs = _upload().get("with")
     assert isinstance(inputs, dict), "the upload must declare inputs"
     token = _normalized(inputs.get("access-token"))
     assert token == DIRECT_CREDENTIAL, (
         f"the upload must take access-token {DIRECT_CREDENTIAL!r}, got {token!r}"
     )
-    document = workflow_document(workflow_name)
-    job = typ.cast("dict[str, object]", document["jobs"])[job_name]
-    scopes = {
-        f"{workflow_name} env": document.get("env"),
-        f"{workflow_name}:{job_name} env": typ.cast("dict[str, object]", job).get(
-            "env"
-        ),
-        **{
-            f"{workflow_name}:{job_name} step {index} env": step.get("env")
-            for index, step in enumerate(steps(workflow_name, job_name))
-        },
-    }
-    findings = token_findings({name: env for name, env in scopes.items() if env})
-    assert not findings, f"the token must reach no env scope: {findings}"
+    findings = token_findings({workflow_name: _without_the_permitted_mentions()})
+    assert not findings, (
+        f"the token may be named only by the check and the upload's input: {findings}"
+    )
 
 
 def test_the_publisher_shares_one_slot_per_ref_and_never_cancels() -> None:

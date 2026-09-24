@@ -522,10 +522,13 @@ supersedes it. The properties worth pinning are these:
   `steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'`,
   for the same reason: a dispatch from another branch would otherwise upload
   that branch's coverage to a project that analyses only `main`.
-- **The token is in no `env`.** The upload takes it directly as
+- **The token is named in two places only.** The upload takes it directly as
   `access-token: ${{ secrets.CS_ACCESS_TOKEN }}`. The composite upload action
   passes a step's `env` on to every step nested inside it, so a token held in
-  `env` at any scope reaches code this workflow never reads.
+  `env` at any scope reaches code this workflow never reads. A `run` body that
+  writes the token to `$GITHUB_ENV` does the same with no `env` naming it, so
+  the check's command and that input are the only places the workflow may name
+  the token at all.
 - **The upload mode is explicit.** The CodeScene step declares `mode: upload`.
   The shared action already defaults to `upload`, so that input is not
   load-bearing today, but the sibling `check` mode is the pull-request
@@ -534,8 +537,8 @@ supersedes it. The properties worth pinning are these:
   evaluates the publication expression per event rather than matching its text,
   `tests/test_ci_codescene_boundary.py` asserts the upload mode by value, and
   `tests/test_ci_codescene_publisher.py` holds the token check, the direct
-  input, the absence of the token from every `env` scope, and the exact
-  concurrency. It splits the upload guard on `&&` and refuses any unquoted
+  input, the absence of the token from anywhere else in the workflow, and the
+  exact concurrency. It splits the upload guard on `&&` and refuses any unquoted
   `||`: an alternative hidden in an extra narrowing conjunct, as in
   `<guard> && github.actor != 'x' || github.event_name == 'workflow_dispatch'`,
   leaves both required conjuncts whole while making them optional.
