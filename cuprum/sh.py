@@ -53,13 +53,13 @@ from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
 
+# ``GitHubActionsSink`` comes from the same package surface rather than its
+# ``github_actions`` submodule: the package publishes it in ``__all__``, and the
+# convenience flags synthesize it as part of this class's documented contract.
+from cuprum.sinks import GitHubActionsSink
+
 # ``RunOutputOptions.sink`` is public, so ``sinks`` must resolve at runtime too.
-from cuprum.sinks import (
-    base as sinks,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
-)
-from cuprum.sinks.github_actions import (
-    GitHubActionsSink,
-)
+from cuprum.sinks import base as sinks
 
 type _ArgValue = str | int | float | bool | Path
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]

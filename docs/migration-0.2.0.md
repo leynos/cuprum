@@ -253,3 +253,40 @@ For the full description, see
 guide and `docs/cuprum-design.md` (§13.9), which also links
 [the noise measurements](debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md)
 behind the change.
+
+## Group and annotate flags
+
+Cuprum 0.2.0 also adds two additive flags on `RunOutputOptions` that reach the
+same framing without constructing a sink, for callers who want collapsible
+groups and failure annotations and nothing else:
+
+```python
+from cuprum import ECHO, RunOutputOptions, sh
+
+command = sh.make(ECHO)("hello")
+result = command.run_sync(
+    output=RunOutputOptions(echo=True, group=True, annotate_failure=True),
+)
+```
+
+Both flags default to `False`, so existing applications do not need to change
+and unflagged output is byte-for-byte what it was. `group=True` frames the run
+in a `::group::` / `::endgroup::` pair with a stop-commands lease; a pipeline
+emits one group for the whole pipeline, matching `GitHubActionsSink`. The two
+flags are independent: `annotate_failure=True` alone emits the single
+`::error::` annotation on a non-zero exit, timeout, or error and frames no
+group. An explicit `sink=` takes precedence and makes both flags no-ops, so a
+shared options object carrying `group=True` never displaces a sink chosen at
+the call site.
+
+The flags synthesize a `GitHubActionsSink`, so they inherit its activation
+gate: they take effect only when the parent process runs on GitHub Actions
+(`GITHUB_ACTIONS == "true"`), and a run outside that environment behaves as if
+they were absent. Passing anything but a `bool` for either flag raises
+`ValueError`. Capture, echo destinations, exit codes, and the returned
+`CommandResult` are unchanged in every case. For the equivalent sink-first
+example, custom destinations and titles, and deliberate local activation, see
+the [presentation sinks section](users-guide.md#presentation-sinks) in the
+users' guide and the
+[group and annotate flags section](users-guide.md#group-and-annotate-flags)
+beside it.
