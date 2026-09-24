@@ -92,7 +92,7 @@ pub(super) fn rust_pump_stream(
         let _ = py;
         validate_buffer_size(buffer_size)?;
         convert_fd(reader_fd)?;
-        return reject_transferred_windows_writer(convert_fd(writer_fd)?);
+        reject_transferred_windows_writer(convert_fd(writer_fd)?)
     }
     #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {
@@ -138,7 +138,7 @@ pub(super) fn rust_consume_stream(
         let _ = py;
         validate_buffer_size(buffer_size)?;
         convert_fd(reader_fd)?;
-        return raw_windows_handle_error();
+        raw_windows_handle_error()
     }
     #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {

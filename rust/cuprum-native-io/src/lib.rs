@@ -121,7 +121,7 @@ pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> BorrowedStream<'ow
 /// not have been opened with `FILE_FLAG_OVERLAPPED`.
 #[must_use]
 #[cfg(windows)]
-pub unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> SynchronousBorrowedStream<'owner> {
+pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> SynchronousBorrowedStream<'owner> {
     // SAFETY: the caller establishes the borrowed handle's validity and
     // synchronous, non-overlapped I/O contract for the returned lifetime.
     let handle = unsafe { BorrowedStream::borrow_raw(raw as RawHandle) };
