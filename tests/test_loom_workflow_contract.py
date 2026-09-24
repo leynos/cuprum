@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
+from tests.helpers.strict_yaml import load
 from tests.helpers.workflow_shell import script_runs_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +34,7 @@ def _string_mapping(value: object, description: str) -> dict[str, object]:
 
 def _load() -> dict[object, object]:
     """Parse the scheduled workflow without losing YAML's ``on`` key."""
-    workflow: object = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    workflow: object = load(WORKFLOW_PATH.read_text(encoding="utf-8"), "loom.yml")
     return _object_mapping(workflow, "the Loom workflow")
 
 
@@ -140,7 +139,10 @@ def test_make_loom_runs_the_full_driver() -> None:
 
 def test_smoke_job_uses_the_same_loom_shape_and_driver() -> None:
     """Relevant pull requests compile and execute the smaller deterministic set."""
-    ci: object = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    ci: object = load(
+        (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "ci.yml",
+    )
     jobs = _object_mapping(_object_mapping(ci, "ci.yml").get("jobs"), "ci.yml jobs")
     smoke = jobs.get("loom-smoke")
     smoke = _string_mapping(smoke, "ci.yml loom-smoke")

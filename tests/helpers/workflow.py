@@ -7,6 +7,7 @@ import typing as typ
 import yaml
 
 from .docs import repo_root
+from .strict_yaml import load
 from .workflow_gate import bench_output, benchmark_runs, matches_filter
 from .workflow_shell import script_runs_command
 from .workflow_types import Job, Step, Workflow
@@ -80,18 +81,15 @@ def parse_workflow(source: str) -> Workflow:
     Raises
     ------
     AssertionError
-        If the parsed document is not a mapping.
-    yaml.YAMLError
-        If ``source`` is not valid YAML.
+        If ``source`` is not valid YAML, declares a mapping key twice, or does
+        not parse to a mapping.
     """  # ruff: ignore[docstring-extraneous-exception] - parser and contract validator exceptions propagate.
-    parsed = yaml.safe_load(source)
-    boolean_on_key = (
-        next((key for key in parsed if key is True), None)
-        if isinstance(parsed, dict)
-        else None
-    )
-    if boolean_on_key is not None:
-        parsed["on"] = parsed.pop(boolean_on_key)
+    parsed = load(source, CI_WORKFLOW)
+    if isinstance(parsed, dict):
+        document = typ.cast("dict[object, object]", parsed)
+        boolean_on_key = next((key for key in document if key is True), None)
+        if boolean_on_key is not None:
+            document["on"] = document.pop(boolean_on_key)
     return typ.cast(
         "Workflow", mapping(parsed, f"{CI_WORKFLOW} must parse to a mapping")
     )

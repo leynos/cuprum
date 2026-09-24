@@ -29,6 +29,14 @@ on:
 permissions:
   contents: read
 
+# One run per ref at a time, and the running one is never cancelled: a
+# cancelled publisher abandons both its upload and its ratchet baseline write.
+# GitHub keeps one pending run per group, so a newer triggered run replaces an
+# older pending one rather than queueing behind it.
+concurrency:
+  group: coverage-main-${{ github.ref }}
+  cancel-in-progress: false
+
 # These three values render the tool cache key. They must match ci.yml exactly,
 # because this job restores the archive that ci.yml's `typecheck-test` writes;
 # a contract test pins the equality so a bump in one file cannot silently make
@@ -268,16 +276,24 @@ jobs:
           all-features: 'true'
           doctests: 'true'
 
+      # Whether the token exists, without putting it in any `env`. The
+      # composite upload action passes a step's `env` on to every step nested
+      # inside it, so a token in `env` reaches code this workflow never reads.
+      # The expression renders only `true` or `false`.
+      - name: Check for the CodeScene token
+        id: codescene-token
+        run: echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
       - name: Upload coverage data to CodeScene
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
-        if: env.CS_ACCESS_TOKEN != ''
+        # A dispatch may start from any branch, and CodeScene accepts uploads
+        # only for the branch it analyses, so the ref is part of the guard.
+        if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
         uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
         with:
           format: cobertura
           mode: upload
           path: coverage.xml
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
+          access-token: ${{ secrets.CS_ACCESS_TOKEN }}
 
       - name: Record compiler-cache effectiveness
         if: always()

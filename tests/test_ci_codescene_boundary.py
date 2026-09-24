@@ -1,19 +1,24 @@
 """Contracts for where CodeScene publication may happen, and what it needs.
 
 CodeScene accepts an upload only for a branch it analyses, so publication
-belongs to ``coverage-main.yml`` and the pull-request lane must not reach for
-it even speculatively. Three separate controls hold that line, and each one
+belongs to ``coverage-main.yml`` and nothing a pull request runs may reach for
+it even speculatively. Four separate controls hold that line, and each one
 reads as satisfied while the others are intact:
 
-* the pull-request lane must not invoke the CodeScene action,
-* no environment scope the pull-request lane can reach may carry the access
-  token, and
+* no workflow a pull request can run may mention CodeScene or its client,
+* none of them may name, forward, or inherit the access token,
 * the trunk publisher must ask for the upload mode rather than the
-  pull-request check mode.
+  pull-request check mode, and
+* the upload's guard must require the main ref as well as the token, which
+  ``tests/test_ci_codescene_publisher.py`` holds with the publisher's other
+  clauses.
 
-The first is the obvious one and the easiest to check; the other two are what
-stop the first from being reintroduced, and they are the halves a review that
-only reads a step list will miss.
+"A workflow a pull request can run" is a closure, not a trigger list: it
+follows same-repository reusable-workflow calls, because a called workflow runs
+on the caller's pull request and ``secrets: inherit`` hands it the token.
+``tests/test_ci_codescene_closure.py`` proves each reader against constructed
+workflows, since these contracts, parametrized over this repository's correct
+files, pass whether or not the readers discriminate.
 
 A second group of contracts covers what the publisher may ask the shared
 action for. The action's committed CLI manifest is now the trust anchor for the
@@ -35,12 +40,15 @@ from __future__ import annotations
 import re
 import typing as typ
 
+from tests.helpers.ci_closure import PULL_REQUEST_EVENTS, reachable
+from tests.helpers.ci_codescene import (
+    contact_findings,
+    token_findings,
+)
 from tests.helpers.ci_runners import (
     WORKFLOW_DIR,
-    job_env,
     step_inputs,
     steps,
-    workflow_env,
     workflow_sources,
 )
 
@@ -54,19 +62,22 @@ PULL_REQUEST_LANE = ("ci.yml", "coverage")
 #: The trunk publisher, which owns both the baseline and the CodeScene upload.
 TRUNK_PUBLISHER = ("coverage-main.yml", "coverage-upload")
 
+#: Workflows a pull request is known to run, directly or through a call.
+#: Named rather than derived, so the traversal is asserted to reach them; the
+#: clauses themselves read whatever the traversal finds, including anything
+#: added later.
+PULL_REQUEST_WORKFLOWS = frozenset({
+    "build-wheels.yml",
+    "ci.yml",
+    "dependabot-automerge.yml",
+    "rust-boundaries.yml",
+})
+
+
 #: The CodeScene action's `uses:` prefix. Matched as a prefix rather than a
 #: substring so a step naming a differently owned action that happens to
 #: contain the phrase cannot satisfy, or trip, the contract.
 CODESCENE_ACTION = "leynos/shared-actions/.github/actions/upload-codescene-coverage@"
-
-#: The name of the secret the CodeScene action authenticates with. Not a
-#: credential: it is the key an environment scope would have to declare, and
-#: the contract is about that key's absence.
-CODESCENE_VARIABLE = "CS_ACCESS_TOKEN"
-
-#: The project URL the pull-request lane used to compare against before the
-#: gate moved to a local ratchet. Its return would mean the check came back.
-CODESCENE_PROJECT_URL = "api.codescene.io"
 
 #: The one approved revision of the CodeScene action. From this revision the
 #: committed `cli-manifest.json` is the trust anchor for the CLI archive, and
@@ -138,34 +149,53 @@ def _codescene_steps(workflow_name: str, job_name: str) -> list[Step]:
     ]
 
 
-def test_the_pull_request_lane_does_not_contact_codescene() -> None:
-    """A pull request must keep its report and CodeScene token local to main.
+def _pull_request_closure() -> dict[str, dict[object, object]]:
+    """Return every workflow a pull request can run, calls included.
 
-    Three levels are checked, and each can regress without the others noticing.
-    The step list catches a re-added action; the two environment scopes catch a
-    token a guard could read; and the project URL catches a gate configured
-    against CodeScene without the action itself named. A secret that fails to
-    resolve is empty inside a step but not at the job or workflow scope, where
-    an ``if: env.CS_ACCESS_TOKEN != ''`` guard would read a token and admit the
-    step, and a scope the reader cannot find fails the contract rather than
-    passing it: the reader can only vouch for a mapping it was handed.
+    Returns
+    -------
+    dict[str, dict[object, object]]
+        Each reachable workflow's name mapped to its parsed document. The
+        known members are asserted present, because a traversal that reached
+        nothing would satisfy every prohibition below.
     """
-    workflow_name, job_name = PULL_REQUEST_LANE
-    pull_request_steps = steps(workflow_name, job_name)
+    closure = reachable(PULL_REQUEST_EVENTS)
+    missing = sorted(PULL_REQUEST_WORKFLOWS - closure.keys())
+    assert not missing, (
+        f"the pull-request closure must reach {missing}, or the clauses over "
+        "it assert nothing about them"
+    )
+    return closure
 
-    assert not any(
-        CODESCENE_ACTION in str(step.get("uses", "")) for step in pull_request_steps
-    ), f"{workflow_name}:{job_name} must not invoke the CodeScene action"
-    for scope, variables in (
-        ("job", job_env(workflow_name, job_name)),
-        ("workflow", workflow_env(workflow_name)),
-    ):
-        assert CODESCENE_VARIABLE not in variables, (
-            f"{workflow_name}:{job_name} must not receive the CodeScene token "
-            f"at {scope} scope"
-        )
-    assert CODESCENE_PROJECT_URL not in str(pull_request_steps), (
-        f"{workflow_name}:{job_name} must not declare a CodeScene project"
+
+def test_no_pull_request_workflow_contacts_codescene() -> None:
+    """Nothing a pull request can run may name CodeScene, its host, or its client.
+
+    The clause reads the closure through reusable-workflow calls, not the
+    coverage job alone: a ``workflow_call`` workflow called from a pull-request
+    job runs on that pull request, and a plain ``curl`` to the API names
+    neither the shared action nor a step this contract used to read.
+    """
+    findings = contact_findings(_pull_request_closure())
+    assert not findings, (
+        f"pull-request workflows must not contact CodeScene: {findings}"
+    )
+
+
+def test_no_pull_request_workflow_can_read_the_codescene_token() -> None:
+    """No scope a pull request can reach may name or forward the token.
+
+    Every key and string value is read, so a ``run`` body, an action input, an
+    ``env`` value at any of the three scopes, and a ``secrets:`` forwarding all
+    count, as do ``secrets: inherit`` and ``toJSON(secrets)``, which hand over
+    the token without naming it. A secret that fails to resolve is empty
+    inside a step but not at the job or workflow scope, where an
+    ``if: env.CS_ACCESS_TOKEN != ''`` guard would read a token and admit the
+    step.
+    """
+    findings = token_findings(_pull_request_closure())
+    assert not findings, (
+        f"pull-request workflows must not reach the CodeScene token: {findings}"
     )
 
 

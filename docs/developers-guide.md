@@ -487,17 +487,26 @@ The two coverage jobs split the work by event. `ci.yml`'s `coverage` job is the
 continuous integration (CI) comparison lane: it runs on pull requests only
 (`github.event_name == 'pull_request'`), compares its report against the
 trusted baseline with `with-ratchet: 'true'`, and publishes nothing. It
-declares no `publish-baseline` input, invokes no CodeScene action, receives no
-`CS_ACCESS_TOKEN` at step, job, or workflow scope, and names no CodeScene
-project URL. Its checkout sets only `persist-credentials: false`, with no
-`fetch-depth`: nothing in this lane reads Git history, and the merge-base walk
-that once justified full history belonged to the CodeScene changed-line gate,
-which no longer runs in this lane.
+declares no `publish-baseline` input. Its checkout sets only
+`persist-credentials: false`, with no `fetch-depth`: nothing in this lane reads
+Git history, and the merge-base walk that once justified full history belonged
+to the CodeScene changed-line gate, which no longer runs in this lane.
 
 `coverage-main.yml`'s `coverage-upload` job owns both things the CI lane leaves
 out — the ratchet baseline publication and the only CodeScene upload — and it
-runs on `push` to `main` and on `workflow_dispatch`. Three properties of that
-arrangement are worth pinning:
+runs on `push` to `main` and on `workflow_dispatch`. The dispatch is needed
+because Dependabot's automerge fires no push: a merge made with the automerge
+workflow's `GITHUB_TOKEN` starts no `push` workflow, so an automerged change
+reaches this job only when someone dispatches it. Runs share the concurrency
+group `coverage-main-${{ github.ref }}` with `cancel-in-progress: false`,
+because a cancelled publisher abandons both its upload and its baseline write.
+For triggered runs, push and dispatch, that means one publisher at a time and
+the latest trigger winning the pending slot. GitHub keeps one pending run per
+group, though, so a dispatch that replaces a pending push leaves the baseline
+one commit behind until the next push to `main` publishes. A manual "Re-run
+jobs" on an older run is outside that ordering: it is an operator action that
+republishes that older commit's coverage and baseline until the next push
+supersedes it. The properties worth pinning are these:
 
 - **Publication has two guards.** The `publish-baseline` dispatch input is a
   boolean defaulting to publishing, so a dispatch carrying an automerged change
@@ -506,14 +515,62 @@ arrangement are worth pinning:
   trigger is restricted to `main` but `workflow_dispatch` is not:
   `gh workflow run coverage-main.yml --ref some-branch` would otherwise publish
   that branch's coverage as the authoritative baseline.
+- **The upload is guarded to `main` too.** A step with the id
+  `codescene-token` runs only
+  `echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"`,
+  and the upload's guard is
+  `steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'`,
+  for the same reason: a dispatch from another branch would otherwise upload
+  that branch's coverage to a project that analyses only `main`.
+- **The token is named in two places only.** The upload takes it directly as
+  `access-token: ${{ secrets.CS_ACCESS_TOKEN }}`. The composite upload action
+  passes a step's `env` on to every step nested inside it, so a token held in
+  `env` at any scope reaches code this workflow never reads. A `run` body that
+  writes the token to `$GITHUB_ENV` does the same with no `env` naming it, so
+  the check's command and that input are the only places the workflow may name
+  the token at all.
 - **The upload mode is explicit.** The CodeScene step declares `mode: upload`.
   The shared action already defaults to `upload`, so that input is not
   load-bearing today, but the sibling `check` mode is the pull-request
   comparison, and switching to it would silently retire main-branch publication.
 - **Both contracts are pinned.** `tests/test_ci_ratchet_publication.py`
   evaluates the publication expression per event rather than matching its text,
-  and `tests/test_ci_codescene_boundary.py` searches both environment scopes
-  for the token and asserts the upload mode by value.
+  `tests/test_ci_codescene_boundary.py` asserts the upload mode by value, and
+  `tests/test_ci_codescene_publisher.py` holds the token check, the direct
+  input, the absence of the token from anywhere else in the workflow, and the
+  exact concurrency. It splits the upload guard on `&&` and refuses any unquoted
+  `||`: an alternative hidden in an extra narrowing conjunct, as in
+  `<guard> && github.actor != 'x' || github.event_name == 'workflow_dispatch'`,
+  leaves both required conjuncts whole while making them optional.
+
+Nothing a pull request can run may contact CodeScene or reach its token, and
+"can run" is a closure rather than a trigger list.
+`tests/helpers/ci_closure.py` starts from every workflow triggered by
+`pull_request` or `pull_request_target` and follows same-repository
+reusable-workflow calls transitively, because a `workflow_call` workflow runs
+on its caller's pull request and `secrets: inherit` hands it the token. It reads
+`on:` as a scalar, a sequence, or a mapping, under the string key or the
+boolean `True`, and it matches a local call by shape: strip a leading `./` or
+`$/` and ask whether the rest names a file directly under `.github/workflows/`.
+A local call it cannot resolve fails the contract rather than shrinking the
+set, and so does a call to `leynos/cuprum/.github/workflows/...@ref`, which
+names this repository at a revision the contract cannot read. A workflow
+triggered by `workflow_run` on a reached workflow's `name:` joins the closure
+too: it runs downstream with the repository's secrets.
+`tests/helpers/ci_codescene.py` then walks every key and string value of each
+reached document, so a `run` body, an action input, an `env` value at any
+scope, and a `secrets:` forwarding are all read, along with `secrets: inherit`
+and `toJSON(secrets)`. Secret names are matched case-insensitively, as GitHub
+resolves them. Both helpers serve these contracts only;
+`tests/test_ci_codescene_closure.py` proves each reader against constructed
+workflows, including a called workflow that curls the CodeScene API with an
+inherited token, which the earlier single-job contract passed.
+
+Every workflow and composite-action reader in the suite parses through
+`tests/helpers/strict_yaml.py`, a `SafeLoader` that refuses a mapping declaring
+the same key twice. PyYAML otherwise keeps the last value silently, so a job
+declaring `runs-on` twice could carry a paid label in the discarded half while
+every placement contract read the other. New workflow readers use it too.
 
 ### Concurrency
 

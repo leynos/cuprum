@@ -15,7 +15,6 @@ and tool installation in `test_ci_tool_installation.py`.
 from __future__ import annotations
 
 import pytest
-import yaml
 
 from tests.helpers.ci_runners import (
     CONTINUE_ON_ERROR_JOBS,
@@ -34,6 +33,7 @@ from tests.helpers.ci_runners import (
     declares_steps,
     expand,
     job,
+    jobs,
     never_runs,
     placement,
     references,
@@ -303,8 +303,8 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
     """Fail on a new job rather than letting it choose a runner unreviewed."""
     declared = {
         (workflow_name, job_name)
-        for workflow_name, source in workflow_sources()
-        for job_name in (yaml.safe_load(source).get("jobs") or {})
+        for workflow_name, _ in workflow_sources()
+        for job_name in jobs(workflow_name)
     }
     known = (
         set(UBICLOUD_CASES)
