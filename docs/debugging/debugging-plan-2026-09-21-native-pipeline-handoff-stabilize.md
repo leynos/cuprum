@@ -67,3 +67,19 @@ failure. They are not repository metrics and do not determine the verdict.
 - [#366](https://github.com/leynos/cuprum/issues/366) established the precedent
   of reproducing a parallel race and retaining the assertion after identifying
   its cause.
+
+## Rebase note
+
+The branch was rebased onto `main` at `7db76e6d` ("Add lightweight
+group/annotate flags to `RunOutputOptions`"). That commit changes the echo and
+presentation-sink layer — the `redirects_echo` gate in `_resolve_stream_sink`,
+the sink lifecycle, and the GitHub Actions sink — and leaves the native
+hand-off path alone. `ScopeConfig.observe_hooks` and the `start`, `stdout`,
+`stderr`, and `exit` `ExecPhase` values this support observes are unchanged, so
+the rebase required no code change. The rebased tree was verified against the
+`git merge-tree` oracle for the branch.
+
+Neither test module this work adds is named by `PYTEST_TARGETS`; that list is
+deliberately bounded so `make test` needs no container runtime. Both run in the
+coverage job, whose shared action invokes `pytest` with no path targets and so
+collects the repository root.
