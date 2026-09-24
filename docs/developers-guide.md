@@ -1006,7 +1006,10 @@ close on every terminal path. The shared mechanics live in
   leaves the bracket empty and the run unchanged with nothing to unwind.
 - Stream configuration routes echoed stdout and stderr through the bracket's
   `session.log` when a session is active, replacing the default destinations
-  for that run only.
+  for that run only. A session can expose `redirects_echo = False` to retain
+  the original echo destinations while continuing to use `session.log` for its
+  own workflow commands; the GitHub Actions adapter does this when only failure
+  annotations are enabled.
 - Every terminal path finalizes through `_SinkBracket.close`, which releases the
   session and delegates to `_close_sink_session` with a bounded
   `SessionOutcome`. The close is exactly-once — only the first reaches the
@@ -1021,6 +1024,14 @@ close on every terminal path. The shared mechanics live in
   so closing afterwards would record the aggregate in place of the precise
   timeout or cancellation, and a drain that raised would skip the close
   entirely.
+
+`RunOutputOptions` keeps the identity of an adapter it synthesized in private
+`_synthesized_sink` metadata. The initializer compares identity so
+`dataclasses.replace` can rebuild only that options object's adapter when the
+flags change. Passing the adapter to a new `RunOutputOptions(sink=...)` leaves
+the new object's provenance empty, so the supplied sink remains explicit even
+when both convenience flags are false. Keep this metadata local to option
+synthesis; other adapters should use `GitHubActionsSink` directly.
 
 When adding an exit path to `_execute_with_hooks` or the pipeline runner, close
 the run's bracket in the same change. A path that skips the close leaks the

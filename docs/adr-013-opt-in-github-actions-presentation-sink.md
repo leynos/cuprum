@@ -199,3 +199,55 @@ not an environment-triggered default.
 - The protocol is an additional public surface to keep stable.
 - The stop-commands lease hides genuine workflow commands a child emits while
   framed, which may surprise callers migrating scripts that relied on them.
+
+### Amendment (2026-09-22): `group` and `annotate_failure` as a spelling of Option C
+
+Issue #375 asked for two convenience flags on `RunOutputOptions`, which is
+Option B's surface. The decision stands, and the flags ship: the question this
+amendment answers is why they are not the Option B this ADR rejected.
+
+Option B was rejected because it *teaches the execution layer about workflow
+commands* — it "spreads Actions-specific formatting across every terminal path
+of the runner and pipeline implementations." The flags as implemented do not do
+that. They are a constructor for the Option C adapter: `__post_init__` builds a
+`GitHubActionsSink` with the matching toggles and stores it in the existing
+`sink` field, so every run path continues to see an opaque `OutputSink` and
+`::group::` appears nowhere outside `cuprum/sinks/github_actions.py`. An
+explicit `sink=` wins and makes the flags no-ops, so the flags can never
+displace a caller's own adapter.
+
+That is the distinction worth recording. Option B was a *placement* objection —
+where the vendor's log format lives — not an interface objection to two
+booleans existing. The flags add no workflow-command code to the runner or
+pipeline, no branch to a terminal path, and no second place a presentation
+change must touch. They inherit the session lifecycle and annotation hygiene
+that the adapter already enforces. Group mode also inherits its stop-commands
+shield. Annotation-only mode deliberately emits no group or stop-commands
+lease, as required by the flag contract, and keeps echoed stdout and stderr on
+their usual destinations; child output in that mode can therefore still emit
+workflow commands. Had the flags been implemented by writing workflow commands
+from the run paths directly, the Option B rejection would have applied
+unchanged.
+
+One consequence the option text did not anticipate is settled here rather than
+left to be rediscovered. The two flags are independent, so
+`annotate_failure=True` alone yields an annotation with no group. That is a
+supported configuration rather than a degenerate one — a run summary entry
+without collapsible logs — and the stop-commands lease is suppressed with the
+group, because a lease with no group would silence workflow-command
+interpretation for the rest of the step and display nothing for it.
+
+### Amendment (2026-09-24): Flag validation and replacement semantics
+
+Issue #375 requires `RunOutputOptions` to reject non-`bool` flag values with
+`ValueError`. Direct `GitHubActionsSink` construction retains `TypeError` for
+invalid adapter toggles. A narrowly scoped lint exception preserves the
+requested options contract.
+
+`RunOutputOptions` keeps the identity of its synthesized adapter in private
+per-instance metadata, allowing `dataclasses.replace` to rebuild the adapter
+when either flag changes. A sink passed to a new options object remains
+explicit even if it came from another object's flag-generated adapter; its
+concrete type does not determine precedence. The default adapter does not
+serialize concurrent sessions, so grouped commands that write to the same
+parent stderr must run sequentially to keep their workflow frames intact.

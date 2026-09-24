@@ -730,6 +730,67 @@ By default the title is the joined program arguments for single commands and
 its `open_session`) leaves the run unchanged; see `cuprum.sinks.base` for the
 adapter protocol for custom presentation sinks.
 
+### Group and annotate flags
+
+Two flags on `RunOutputOptions` are the shorthand for the common case:
+
+```python
+result = cmd.run_sync(
+    output=RunOutputOptions(echo=True, group=True, annotate_failure=True),
+)
+```
+
+`group=True` frames the run in a collapsible log group; `annotate_failure=True`
+turns a failed run into an `::error::` annotation. They construct a
+`GitHubActionsSink` behind the scenes and store it as the run's sink, so the
+adapter handles the workflow commands. Workflow commands go to the parent's
+stderr. When grouping is enabled, echoed output is framed in the group and
+protected by the stop-commands lease. Annotation-only mode leaves echoed stdout
+and stderr on their usual destinations and writes its annotation to the
+parent's stderr.
+
+`RunOutputOptions(sink=GitHubActionsSink(force=True, title="..."))` remains the
+way to reach anything the flags do not cover.
+
+The two flags are independent. `group=True` alone frames without annotating;
+`annotate_failure=True` alone annotates without framing, for a run-summary
+entry with uncollapsed logs. With `group=False` there is no group for a
+stop-commands lease to shield, so none is taken. A pipeline receives one group
+for the whole pipeline. In annotation-only mode, child output therefore keeps
+its usual ability to emit workflow commands.
+
+The default GitHub Actions sink does not serialize overlapping sessions. Do not
+run grouped commands concurrently when they write to the same parent stderr;
+run them sequentially so their workflow frames cannot interleave.
+
+An explicit `sink=` takes precedence and makes both flags no-ops. That is what
+makes the flags safe to include in shared options. To select an explicit sink,
+put it on a new `RunOutputOptions` object, or call
+`dataclasses.replace(shared, sink=...)`. `SafeCmd.run` and `Pipeline.run` do
+not accept a separate `sink=` argument and do not override the sink on an
+existing options object. When `dataclasses.replace` changes either flag on
+flag-generated options, the adapter is rebuilt to match; an explicitly supplied
+sink remains unchanged. A sink taken from one options object is still explicit
+when passed to a new `RunOutputOptions(sink=...)`, even when that sink was
+originally synthesized from the convenience flags.
+
+Like the adapter they construct, the flags are inactive unless the parent
+process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no
+`force`. A run with the flags set but no runner environment behaves exactly as
+if they were absent. This is deliberate: the flags encode "frame this when it
+runs in CI", not "frame this unconditionally". To get the framing locally, pass
+`sink=GitHubActionsSink(force=True)` explicitly.
+
+The flags are validated: passing anything but a `bool` for either raises
+`ValueError`, rather than accepting a truthy value that was never a documented
+flag.
+
+The flags are a spelling of the adapter decision recorded in
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md): they construct
+the sink and store it as the run's sink, so the execution layer never learns
+any workflow-command syntax. The record also names the stop-commands limitation
+that overlapping grouped runs on one destination share.
+
 ### Migrating from `capture`/`echo` keyword arguments
 
 `IOOptions` is a deprecated alias for `RunOutputOptions`; keep using

@@ -21,10 +21,21 @@ Framing order per run:
    bounded label as the title and a categorical detail as the message, after
    the lease has been released so the runner interprets it.
 
+Steps 1, 2, and 4 are the *group* half of that sequence and step 5 is the
+*annotation* half; ``emit_group`` and ``emit_annotation`` switch each half off
+independently. A suppressed group takes its lease with it: the lease exists
+only to shield an open group, so a lease with no group would silence
+workflow-command interpretation for the rest of the step and show nothing for
+it.
+
 The sink never changes capture, success semantics, or the returned result: it
 is a presentation adapter over the same destinations a run already uses. A
 caller opts in per invocation with ``RunOutputOptions(sink=GitHubActionsSink())``
-and opt-out is simply omitting the sink.
+and opt-out is simply omitting the sink. ``RunOutputOptions.group`` and
+``RunOutputOptions.annotate_failure`` are the zero-ceremony spelling of the
+same opt-in: they construct this adapter with the matching toggles and store it
+as the run's sink, so the workflow commands stay here and the execution layer
+learns nothing about them.
 
 Activation is environment-gated to honour that opt-in outside CI: a sink
 passed without ``force`` stays inactive unless the parent process runs on
@@ -34,6 +45,7 @@ Pass ``force=True`` to frame local or non-standard-runner runs deliberately.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import os
 import secrets
 import sys
@@ -101,9 +113,28 @@ def _new_stop_token() -> str:
     return secrets.token_hex(_STOP_TOKEN_LENGTH // 2)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _Annotation:
+    """Carry an annotation title and its independent framing toggles.
+
+    Keep the error title separate from the group label, which may contain argv.
+    """
+
+    label: str
+    emit_group: bool = True
+    emit_annotation: bool = True
+
+
 def _stderr() -> typ.IO[str]:
     """Return the parent's stderr as the default workflow-command stream."""
     return sys.stderr
+
+
+def _reject_non_bool(name: str, value: object) -> None:
+    """Reject a value that is not the documented ``bool`` for a toggle."""
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool, got {value!r}"
+        raise TypeError(msg)
 
 
 class GitHubActionsSession:
@@ -114,6 +145,11 @@ class GitHubActionsSession:
     output can never appear above the group opening. The session holds that
     lease for the run's entire lifetime and closes the group with an error
     annotation when the run's terminal outcome is a failure.
+
+    Both halves of that frame are separately switchable. A session opened with
+    ``emit_group=False`` writes no group command and takes no lease — it is a
+    plain pass-through destination that may still annotate. A session opened
+    with ``emit_annotation=False`` frames normally but never annotates.
     """
 
     def __init__(
@@ -121,7 +157,7 @@ class GitHubActionsSession:
         log: typ.IO[str],
         label: str,
         *,
-        annotation_label: str,
+        annotation_label: str | _Annotation,
     ) -> None:
         """Frame the run: the group opening, then the stop-commands lease.
 
@@ -131,16 +167,35 @@ class GitHubActionsSession:
             The parent-facing destination for the framing and framed output.
         label : str
             The group title. Bounded by the caller and escaped here.
-        annotation_label : str
-            The title for a failure annotation. Kept separate from *label* so
-            a group titled with the run's argv never republishes those
-            arguments in an annotation.
+        annotation_label : str | _Annotation
+            A string keeps the original direct-construction API and becomes
+            the failure annotation title. The adapter passes a private bundle
+            to include both framing toggles. The annotation title remains
+            separate from *label* so a group titled with argv never republishes
+            those arguments in an annotation.
+
+        Raises
+        ------
+        TypeError
+            If *annotation_label* is neither a string nor an annotation bundle.
         """
+        match annotation_label:
+            case str():
+                annotation = _Annotation(label=annotation_label)
+            case _Annotation() as supplied_annotation:
+                annotation = supplied_annotation
+            case _:
+                msg = "annotation_label must be a str or _Annotation"
+                raise TypeError(msg)
         self._log = log
         self._label = label
-        self._annotation_label = annotation_label
+        self._annotation_label = annotation.label
+        self._emit_group = annotation.emit_group
+        self._emit_annotation = annotation.emit_annotation
         self._closed = False
         self._stop_token = _new_stop_token()
+        if not annotation.emit_group:
+            return
         self._log.write(f"{_GROUP_PREFIX}{_escape_data(self._label)}\n")
         # The lease opens *inside* the group, after the ``::group::`` command,
         # so the runner processes that command itself and then stops
@@ -154,8 +209,27 @@ class GitHubActionsSession:
         return self._log
 
     @property
+    def redirects_echo(self) -> bool:
+        """Whether echoed child output uses this session's log.
+
+        Returns
+        -------
+        bool
+            ``True`` routes echoed output through the session log so it appears
+            inside the group. ``False`` keeps echo on its configured
+            destinations while workflow commands continue to use the session
+            log.
+        """
+        return self._emit_group
+
+    @property
     def stop_token(self) -> str:
-        """The unique stop-commands token leased for this run."""
+        """The unique stop-commands token leased for this run.
+
+        Drawn for every session, whether or not a lease was written, so a
+        group-less session's token is simply unused rather than absent: the
+        alternative would make the property's contract depend on the toggle.
+        """
         return self._stop_token
 
     def close(self, outcome: SessionOutcome) -> None:
@@ -171,13 +245,16 @@ class GitHubActionsSession:
         if self._closed:
             return
         self._closed = True
-        # Release the lease *before* closing the group: the endgroup command
-        # itself must be interpreted by the runner, so it has to be written
-        # after the stop-commands bracket has ended. The runner resumes on
-        # reading the token as a command of its own, so this is
-        # ``::<token>::``, not the stop command repeated.
-        self._log.write(f"::{self._stop_token}::\n")
-        self._log.write(f"{_ENDGROUP}\n")
+        if self._emit_group:
+            # Release the lease *before* closing the group: the endgroup
+            # command itself must be interpreted by the runner, so it has to
+            # be written after the stop-commands bracket has ended. The runner
+            # resumes on reading the token as a command of its own, so this is
+            # ``::<token>::``, not the stop command repeated.
+            self._log.write(f"::{self._stop_token}::\n")
+            self._log.write(f"{_ENDGROUP}\n")
+        if not self._emit_annotation:
+            return
         if outcome.outcome == TerminalOutcome.EXIT_ZERO:
             return
         self._emit_error_annotation(outcome)
@@ -203,6 +280,9 @@ class GitHubActionsSink:
     :class:`GitHubActionsSession` from :meth:`open_session`, so one sink
     instance can serve many sequential or concurrent runs.
 
+    ``emit_group`` and ``emit_annotation`` independently control whether the
+    session writes the collapsible group frame and failure annotation.
+
     Parameters
     ----------
     destination:
@@ -218,19 +298,41 @@ class GitHubActionsSink:
         GitHub Actions. Intended for local reproduction of CI framing and
         non-standard runners; when ``False`` (the default) the sink defers
         to the environment check.
+    emit_group:
+        Whether a session writes the group commands and their stop-commands
+        lease. ``False`` leaves the run's log destination unframed, which is
+        what ``RunOutputOptions(annotate_failure=True)`` asks for: an
+        annotation without collapsible logs.
+    emit_annotation:
+        Whether a failed outcome emits its ``::error::`` annotation. ``False``
+        keeps the framing and drops the annotation, which is what
+        ``RunOutputOptions(group=True)`` asks for.
+
+    Raises
+    ------
+    TypeError
+        If ``emit_group`` or ``emit_annotation`` is not a ``bool``. They gate
+        workflow commands, so a merely truthy value would frame a run on the
+        strength of something the caller never documented as a flag.
     """
 
-    def __init__(
+    def __init__(  # ruff: ignore[too-many-arguments] - every argument after the destination is keyword-only, so there is no positional order to confuse
         self,
         destination: typ.IO[str] | None = None,
         *,
         title: str | None = None,
         force: bool = False,
+        emit_group: bool = True,
+        emit_annotation: bool = True,
     ) -> None:
         """Store immutable configuration; no output happens until a run."""
+        _reject_non_bool("emit_group", emit_group)
+        _reject_non_bool("emit_annotation", emit_annotation)
         self.destination = destination
         self.title = title
         self.force = force
+        self.emit_group = emit_group
+        self.emit_annotation = emit_annotation
 
     def open_session(self, start: SessionStart) -> GitHubActionsSession | None:
         """Open a framed session for one run.
@@ -265,9 +367,13 @@ class GitHubActionsSink:
         # arguments there would leak them into the run summary.
         log = self.destination if self.destination is not None else _stderr()
         return GitHubActionsSession(
-            log=log,
-            label=label,
-            annotation_label=self.title or start.label,
+            log,
+            label,
+            annotation_label=_Annotation(
+                label=self.title or start.label,
+                emit_group=self.emit_group,
+                emit_annotation=self.emit_annotation,
+            ),
         )
 
     def _is_active(self) -> bool:
