@@ -96,7 +96,7 @@ ______________________________________________________________________
 - **Output your way** – Capture, echo, per-line observation, and an optional
   heartbeat for quiet children can each be switched on independently.
 - **Graceful cancellation** – Cancelled or timed-out runs terminate the child,
-  wait for a configurable grace period, then escalate to `SIGKILL`.
+  wait for a configurable grace period, then force-kill it (`SIGKILL` on POSIX).
 - **Composition** – Build pipelines, or run commands concurrently with a
   bounded level of parallelism.
 - **Context policy** – Scoped allowlists, environment overlays, and hooks keep

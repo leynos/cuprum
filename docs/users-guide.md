@@ -766,8 +766,9 @@ retain the exact event and configuration names used by telemetry.
 Use the `timeout` parameter on `run()` / `run_sync()` to enforce a wall-clock
 limit in seconds. Timeouts are opt-in; when left as `None` no limit is
 enforced. When a timeout expires, Cuprum terminates the subprocess, waits for
-`cancel_grace`, escalates to `SIGKILL` if needed, and raises `TimeoutExpired`
-(mirroring `subprocess.TimeoutExpired`).
+`cancel_grace`, forcibly kills it if needed (`SIGKILL` on POSIX,
+`TerminateProcess` on Windows), and raises `TimeoutExpired` (mirroring
+`subprocess.TimeoutExpired`).
 
 Any output already captured before the timeout fired is preserved on the
 exception: `exc.output` / `exc.stderr` hold the partial stdout/stderr (or
@@ -827,9 +828,8 @@ with scoped(ScopeConfig(timeout=1.0)):
 A `timeout` of `0` or a negative value is treated as an already-elapsed
 deadline, so the command expires immediately, without waiting for the process
 to exit on its own. Cuprum terminates the running process (or every pipeline
-stage), waits for it to exit — honouring `cancel_grace` and escalating to
-`SIGKILL` if needed — drains the stream consumers, and then raises
-`TimeoutExpired`.
+stage), waits for it to exit — honouring `cancel_grace` and force-killing it if
+needed — drains the stream consumers, and then raises `TimeoutExpired`.
 
 #### Pipeline timeouts
 
