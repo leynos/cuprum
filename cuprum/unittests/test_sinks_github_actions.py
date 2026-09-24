@@ -534,8 +534,6 @@ def test_emit_annotation_false_suppresses_every_error(
     would still be caught here.
     """
     session, buffer = _open_gha_session(("deploy",), emit_annotation=False)
-    buffer.seek(0)
-    buffer.truncate()
 
     session.close(SessionOutcome(outcome, exit_code=3))
 
@@ -543,9 +541,10 @@ def test_emit_annotation_false_suppresses_every_error(
     assert "::error" not in value, (
         f"emit_annotation=False must suppress {outcome} annotations; got {value!r}"
     )
-    assert value == f"::{session.stop_token}::\n::endgroup::\n", (
-        f"the group must still close around a suppressed annotation; got {value!r}"
-    )
+    assert value == (
+        f"::group::deploy\n::stop-commands::{session.stop_token}\n"
+        f"::{session.stop_token}::\n::endgroup::\n"
+    ), f"the group must open and close around a suppressed annotation; got {value!r}"
 
 
 @pytest.mark.parametrize(

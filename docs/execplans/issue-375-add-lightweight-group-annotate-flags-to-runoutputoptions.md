@@ -225,7 +225,17 @@ processes.
   `make test` reported 2,184 passed and 63 skipped in the main suite; auxiliary
   suites passed, with 3 Rust doctests ignored. Logs use the `-review4fix1.out`
   suffix under `/tmp`.
-- [ ] Review the gated remediation commit with CodeRabbit and resolve any
+- [x] (2026-09-24) CodeRabbit reviewed `a2bc70ea` and found two minor issues:
+  the security criterion incorrectly excluded argv from the workflow log, and
+  the annotation-disabled test discarded the session's opening frame. Updated
+  the criterion to distinguish the argv-derived group title from the bounded
+  annotation, and asserted the complete group/lease/release/endgroup transcript
+  with no annotation.
+- [x] (2026-09-24) All seven deterministic gates passed for these two review
+  fixes. `make test` reported 2,184 passed and 63 skipped in the main suite;
+  auxiliary suites passed, with 3 Rust doctests ignored. Logs use the
+  `-review5fix1.out` suffix under `/tmp`.
+- [ ] Ask CodeRabbit to review the gated follow-up commit, then resolve any
   remaining in-scope findings.
 - [ ] Push and open the draft pull request.
 
@@ -783,9 +793,9 @@ Quality criteria — what "done" means:
 - **Formatting:** `make check-fmt` green, including `ruff format --check`; note
   that a clean `ruff check` is not evidence for formatting.
 - **Markdown:** `make markdownlint` and `make spelling` green.
-- **Security:** no new dependency, no new trust boundary, no argv or exception
-  text reaches the workflow log. The stop-commands lease continues to shield
-  child output.
+- **Security:** no new dependency, no new trust boundary, and neither argv nor
+  exception text reaches a failure annotation. The group title is argv-derived
+  by design; the stop-commands lease continues to shield child output.
 
 ## Idempotence and recovery
 
@@ -942,13 +952,14 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   commit. Remaining gaps: none.
 
 - **EP-M4 (gates and review).** Outcome: all seven local gates pass after the
-  replacement-semantics review remediation; CodeRabbit review is pending.
-  Acceptance evidence: `scrutineer`'s `-review4fix1` gate report and the
-  upcoming CodeRabbit verdict. Conformance check: annotation-only echo retains
-  the caller's original destinations, `emit_group=False` still writes no group,
-  lease, or endgroup, and `dataclasses.replace` refreshes only flag-generated
-  sinks. Recovery: address any in-scope finding, then rerun the full gates and
-  review. Remaining gaps: CodeRabbit review and publication.
+  replacement-semantics and transcript-assertion review remediations;
+  CodeRabbit review is pending. Acceptance evidence: `scrutineer`'s
+  `-review5fix1` gate report and the upcoming CodeRabbit verdict. Conformance
+  check: annotation-only echo retains the caller's original destinations,
+  `emit_group=False` still writes no group, lease, or endgroup, and
+  `dataclasses.replace` refreshes only flag-generated sinks. Recovery: address
+  any in-scope finding, then rerun the full gates and review. Remaining gaps:
+  CodeRabbit review and publication.
 
 ## Outcomes & retrospective
 
