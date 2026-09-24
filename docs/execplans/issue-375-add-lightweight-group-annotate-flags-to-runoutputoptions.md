@@ -235,8 +235,17 @@ processes.
   fixes. `make test` reported 2,184 passed and 63 skipped in the main suite;
   auxiliary suites passed, with 3 Rust doctests ignored. Logs use the
   `-review5fix1.out` suffix under `/tmp`.
-- [ ] Ask CodeRabbit to review the gated follow-up commit, then resolve any
-  remaining in-scope findings.
+- [x] (2026-09-24) CodeRabbit reviewed `1ac6afea` and found two documentation
+  issues: the public `redirects_echo` property lacked a return contract, and
+  the users' guide referred to constructing the sink without naming the
+  adapter. Added the NumPy-style boolean routing contract and named
+  `sink=GitHubActionsSink(force=True)` explicitly.
+- [x] (2026-09-24) All seven deterministic gates passed after these fixes.
+  `make test` reported 2,184 passed and 63 skipped in the main suite; auxiliary
+  suites passed, with 125 Rust tests passed and 3 Rust doctests ignored. Logs
+  use the `-review6fix1.out` suffix under `/tmp`.
+- [ ] Commit the gated documentation changes and ask CodeRabbit to review that
+  exact commit.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -951,15 +960,15 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   amendment names the Option B reconciliation. Recovery: revert the docs
   commit. Remaining gaps: none.
 
-- **EP-M4 (gates and review).** Outcome: all seven local gates pass after the
-  replacement-semantics and transcript-assertion review remediations;
-  CodeRabbit review is pending. Acceptance evidence: `scrutineer`'s
-  `-review5fix1` gate report and the upcoming CodeRabbit verdict. Conformance
-  check: annotation-only echo retains the caller's original destinations,
-  `emit_group=False` still writes no group, lease, or endgroup, and
-  `dataclasses.replace` refreshes only flag-generated sinks. Recovery: address
-  any in-scope finding, then rerun the full gates and review. Remaining gaps:
-  CodeRabbit review and publication.
+- **EP-M4 (gates and review).** Outcome: the replacement-semantics and
+  transcript-assertion, and public-documentation review remediations passed all
+  seven local gates. CodeRabbit review is pending. Acceptance evidence:
+  `scrutineer`'s `-review6fix1` gate report and the upcoming review result.
+  Conformance check: annotation-only echo retains the caller's original
+  destinations, `emit_group=False` still writes no group, lease, or endgroup,
+  and `dataclasses.replace` refreshes only flag-generated sinks. Recovery:
+  address any in-scope finding, then rerun the full gates and review. Remaining
+  gaps: CodeRabbit review and publication.
 
 ## Outcomes & retrospective
 

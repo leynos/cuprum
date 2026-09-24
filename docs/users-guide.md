@@ -776,8 +776,8 @@ Like the adapter they construct, the flags are inactive unless the parent
 process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no
 `force`. A run with the flags set but no runner environment behaves exactly as
 if they were absent. This is deliberate: the flags encode "frame this when it
-runs in CI", not "frame this unconditionally". To get the framing locally,
-construct the sink yourself with `force=True` as shown above.
+runs in CI", not "frame this unconditionally". To get the framing locally, pass
+`sink=GitHubActionsSink(force=True)` explicitly.
 
 The flags are validated: passing anything but a `bool` for either raises
 `ValueError`, rather than accepting a truthy value that was never a documented

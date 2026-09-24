@@ -210,7 +210,16 @@ class GitHubActionsSession:
 
     @property
     def redirects_echo(self) -> bool:
-        """Whether echoed child output should use this session's log."""
+        """Whether echoed child output uses this session's log.
+
+        Returns
+        -------
+        bool
+            ``True`` routes echoed output through the session log so it appears
+            inside the group. ``False`` keeps echo on its configured
+            destinations while workflow commands continue to use the session
+            log.
+        """
         return self._emit_group
 
     @property
