@@ -440,19 +440,6 @@ def _validate_convenience_flags(options: RunOutputOptions) -> None:
             raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
-class _FlagsGeneratedGitHubActionsSink(GitHubActionsSink):
-    """Mark adapters synthesized from RunOutputOptions flags for replacement.
-
-    This private subtype lets frozen option copies rebuild their own adapter
-    when the flags change, while ordinary GitHubActionsSink instances remain
-    explicit sinks that take precedence.
-    """
-
-    def __init__(self, *, group: bool, annotate_failure: bool) -> None:
-        """Create an adapter whose toggles match the caller-facing flags."""
-        super().__init__(emit_group=group, emit_annotation=annotate_failure)
-
-
 @dc.dataclass(frozen=True, slots=True)
 class RunOutputOptions:
     """Configure captured and mirrored command output.
@@ -535,6 +522,9 @@ class RunOutputOptions:
     recorded but ignored, and no adapter is synthesized. Put the sink on a
     new ``RunOutputOptions`` or use ``dataclasses.replace`` when adapting
     shared options; ``run`` methods do not override ``output.sink`` per call.
+    Passing a sink obtained from another options object to a new
+    ``RunOutputOptions(sink=...)`` also makes it explicit, even when the sink
+    was originally synthesized by the convenience flags.
     Replacing either flag on flag-generated options rebuilds their adapter to
     match the new values, while an explicitly supplied sink remains untouched.
 
@@ -571,6 +561,14 @@ class RunOutputOptions:
     sink: sinks.OutputSink | None = None
     group: bool = False
     annotate_failure: bool = False
+    # `dataclasses.replace` forwards init fields. Keep the generated identity
+    # separate so reusing its sink in a new options object remains explicit.
+    _synthesized_sink: sinks.OutputSink | None = dc.field(
+        default=None,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def __post_init__(self) -> None:
         """Resolve the echo shorthand and synthesize a sink from the flags."""
@@ -612,25 +610,31 @@ class RunOutputOptions:
         :class:`~cuprum.sinks.GitHubActionsSink` rather than as new framing
         code, which is what keeps workflow-command syntax inside the adapter.
         The synthesized sink carries no ``force``, so it stays subject to the
-        adapter's own ``GITHUB_ACTIONS`` gate. A private sink subtype marks
-        generated adapters so :func:`dataclasses.replace` can resynthesize
-        them when flags change; explicit sinks remain untouched.
+        adapter's own ``GITHUB_ACTIONS`` gate. Private identity metadata tracks
+        the adapter created by this options object so
+        :func:`dataclasses.replace` can resynthesize it when flags change.
+        An adapter supplied to a new options object remains explicit regardless
+        of its concrete type.
         """
-        is_synthesized_sink = isinstance(self.sink, _FlagsGeneratedGitHubActionsSink)
+        is_synthesized_sink = self.sink is self._synthesized_sink
         if self.sink is not None and not is_synthesized_sink:
+            object.__setattr__(self, "_synthesized_sink", None)
             return
         if not (self.group or self.annotate_failure):
             if is_synthesized_sink:
                 object.__setattr__(self, "sink", None)
+            object.__setattr__(self, "_synthesized_sink", None)
             return
+        synthesized_sink = GitHubActionsSink(
+            emit_group=self.group,
+            emit_annotation=self.annotate_failure,
+        )
         object.__setattr__(
             self,
             "sink",
-            _FlagsGeneratedGitHubActionsSink(
-                group=self.group,
-                annotate_failure=self.annotate_failure,
-            ),
+            synthesized_sink,
         )
+        object.__setattr__(self, "_synthesized_sink", synthesized_sink)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:

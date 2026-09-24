@@ -244,8 +244,10 @@ Issue #375 requires `RunOutputOptions` to reject non-`bool` flag values with
 invalid adapter toggles. A narrowly scoped lint exception preserves the
 requested options contract.
 
-The synthesized adapter uses a private marker subtype so `dataclasses.replace`
-can rebuild its toggles when either flag changes. An explicit sink remains
-authoritative through construction and replacement. The default adapter does
-not serialize concurrent sessions, so grouped commands that write to the same
+`RunOutputOptions` keeps the identity of its synthesized adapter in private
+per-instance metadata, allowing `dataclasses.replace` to rebuild the adapter
+when either flag changes. A sink passed to a new options object remains
+explicit even if it came from another object's flag-generated adapter; its
+concrete type does not determine precedence. The default adapter does not
+serialize concurrent sessions, so grouped commands that write to the same
 parent stderr must run sequentially to keep their workflow frames intact.

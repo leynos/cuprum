@@ -770,7 +770,9 @@ put it on a new `RunOutputOptions` object, or call
 not accept a separate `sink=` argument and do not override the sink on an
 existing options object. When `dataclasses.replace` changes either flag on
 flag-generated options, the adapter is rebuilt to match; an explicitly supplied
-sink remains unchanged.
+sink remains unchanged. A sink taken from one options object is still explicit
+when passed to a new `RunOutputOptions(sink=...)`, even when that sink was
+originally synthesized from the convenience flags.
 
 Like the adapter they construct, the flags are inactive unless the parent
 process runs on GitHub Actions (`GITHUB_ACTIONS == "true"`), and they carry no

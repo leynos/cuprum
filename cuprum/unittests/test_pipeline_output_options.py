@@ -561,12 +561,16 @@ def test_flags_synthesize_github_actions_sink() -> None:
     assert (both.sink.emit_group, both.sink.emit_annotation) == (True, True), (
         "both flags must map onto both adapter toggles"
     )
-    assert isinstance(group_only.sink, GitHubActionsSink)
+    assert isinstance(group_only.sink, GitHubActionsSink), (
+        "group=True must synthesize a GitHub Actions adapter"
+    )
     assert (
         group_only.sink.emit_group,
         group_only.sink.emit_annotation,
     ) == (True, False), "group=True alone must enable only the group toggle"
-    assert isinstance(annotate_only.sink, GitHubActionsSink)
+    assert isinstance(annotate_only.sink, GitHubActionsSink), (
+        "annotate_failure=True must synthesize a GitHub Actions adapter"
+    )
     assert (
         annotate_only.sink.emit_group,
         annotate_only.sink.emit_annotation,
@@ -629,6 +633,23 @@ def test_replace_rebuilds_generated_sink_when_flags_change() -> None:
         replaced_sink.sink.emit_annotation,
     ) == (False, True), (
         "an explicit GitHubActionsSink must not be mistaken for a generated one"
+    )
+
+
+def test_reusing_generated_sink_as_explicit_preserves_it() -> None:
+    """A sink from another options object is still an explicit sink."""
+    generated = RunOutputOptions(group=True).sink
+    assert isinstance(generated, GitHubActionsSink), (
+        "group=True must provide a sink that can be reused explicitly"
+    )
+
+    reused = RunOutputOptions(sink=generated)
+
+    assert reused.sink is generated, (
+        "a supplied sink must be retained even when both flags are false"
+    )
+    assert (reused.group, reused.annotate_failure) == (False, False), (
+        "reusing the sink must not enable either convenience flag"
     )
 
 

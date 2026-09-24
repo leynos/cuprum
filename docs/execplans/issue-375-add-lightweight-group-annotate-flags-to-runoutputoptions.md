@@ -214,13 +214,14 @@ processes.
 - [x] (2026-09-24) The next CodeRabbit review on `35cd545d` found that
   `dataclasses.replace` could carry a generated sink with stale toggles when
   the flags changed, and that the CHANGELOG/ADR overstated the options
-  validation exception as `TypeError`. Replaced the generated sink with a
-  private marker subtype that allows replacement to rebuild only synthesized
-  adapters; explicit `GitHubActionsSink` instances remain authoritative.
-  Clarified the `ValueError` contract in the public docstring, CHANGELOG, and
-  ADR-013, and documented the marker's limited reuse scope in the developers'
-  guide. The replacement regression test proves flag changes rebuild the
-  generated adapter and caller-supplied adapters remain authoritative.
+  validation exception as `TypeError`. The first fix used an interim private
+  marker subtype that allowed replacement to rebuild synthesized adapters; a
+  later review led to per-instance identity tracking so reused adapters stay
+  explicit. Clarified the `ValueError` contract in the public docstring,
+  CHANGELOG, and ADR-013, and documented the marker's limited reuse scope in
+  the developers' guide. The replacement regression test proves flag changes
+  rebuild the generated adapter and caller-supplied adapters remain
+  authoritative.
 - [x] (2026-09-24) All seven deterministic gates passed for this remediation.
   `make test` reported 2,184 passed and 63 skipped in the main suite; auxiliary
   suites passed, with 3 Rust doctests ignored. Logs use the `-review4fix1.out`
@@ -244,7 +245,19 @@ processes.
   `make test` reported 2,184 passed and 63 skipped in the main suite; auxiliary
   suites passed, with 125 Rust tests passed and 3 Rust doctests ignored. Logs
   use the `-review6fix1.out` suffix under `/tmp`.
-- [ ] Commit the gated documentation changes and ask CodeRabbit to review that
+- [x] (2026-09-24) Committed the public documentation fixes as `79ff1786` and
+  reviewed that exact head with CodeRabbit. The review found that an adapter
+  reused from another options object could be misidentified as generated, and
+  requested flag-specific messages on the two synthesis assertions.
+- [x] (2026-09-24) Track the generated adapter by identity in private
+  per-options metadata instead of inferring provenance from its concrete type.
+  Add a regression test that passes a generated sink into a fresh options
+  object with both flags false, and name both flags in the assertion messages.
+- [x] (2026-09-24) All seven deterministic gates passed for the provenance fix
+  and test updates. `make test` reported 2,185 passed and 63 skipped in the
+  main suite; auxiliary suites passed, with 125 Rust tests passed and 3 Rust
+  doctests ignored. Logs use the `-review7fix1.out` suffix under `/tmp`.
+- [ ] Commit the gate-verified provenance fix and ask CodeRabbit to review that
   exact commit.
 - [ ] Push and open the draft pull request.
 
@@ -395,12 +408,13 @@ processes.
   records why the preferred `TypeError` is not used here. Date/Author:
   2026-09-24, agent.
 
-- Decision: mark flag-generated GitHub Actions adapters with a private subtype.
-  Rationale: `dataclasses.replace` passes every unchanged field, including the
-  synthesized sink, into the new options object; the marker lets
-  `__post_init__` rebuild that adapter when flags change while preserving an
-  explicitly supplied `GitHubActionsSink`. The marker is scoped to this
-  synthesis path and is not an adapter API. Date/Author: 2026-09-24, agent.
+- Decision: track a synthesized adapter by identity in the private
+  `_synthesized_sink` field. Rationale: `dataclasses.replace` forwards the
+  generated sink and its identity metadata, so `__post_init__` can rebuild only
+  the owning options object's adapter. A sink passed to a fresh options object
+  starts with no provenance metadata and remains explicit regardless of its
+  concrete type. Keep the keyword-only field private to this lifecycle. Date/
+  Author: 2026-09-24, agent.
 
 ## Conformance basis
 
@@ -960,15 +974,16 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   amendment names the Option B reconciliation. Recovery: revert the docs
   commit. Remaining gaps: none.
 
-- **EP-M4 (gates and review).** Outcome: the replacement-semantics and
-  transcript-assertion, and public-documentation review remediations passed all
-  seven local gates. CodeRabbit review is pending. Acceptance evidence:
-  `scrutineer`'s `-review6fix1` gate report and the upcoming review result.
-  Conformance check: annotation-only echo retains the caller's original
-  destinations, `emit_group=False` still writes no group, lease, or endgroup,
-  and `dataclasses.replace` refreshes only flag-generated sinks. Recovery:
-  address any in-scope finding, then rerun the full gates and review. Remaining
-  gaps: CodeRabbit review and publication.
+- **EP-M4 (gates and review).** Outcome: the provenance fix, explicit-sink
+  reuse regression test, and assertion messages passed all seven gates after
+  the earlier replacement-semantics, transcript-assertion, and documentation
+  remediations. Acceptance evidence: `scrutineer`'s `-review7fix1` report and
+  the upcoming CodeRabbit verdict. Conformance check: annotation-only echo
+  retains the caller's original destinations, `emit_group=False` still writes
+  no group, lease, or endgroup, and `dataclasses.replace` refreshes only the
+  adapter generated for the current options object. Recovery: address any
+  in-scope finding, then rerun the full gates and review. Remaining gaps:
+  CodeRabbit review and publication.
 
 ## Outcomes & retrospective
 
