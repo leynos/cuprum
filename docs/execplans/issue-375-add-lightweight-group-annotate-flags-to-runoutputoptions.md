@@ -1,6 +1,6 @@
 # Add lightweight group and annotate flags to `RunOutputOptions`
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 This living ExecPlan records the implementation of issue
 [#375](https://github.com/leynos/cuprum/issues/375). It is self-contained: a
@@ -272,8 +272,13 @@ processes.
   explicit sink; `make markdownlint`, `make spelling`, and `make nixie` pass.
 - [x] (2026-09-24) The V1 correction passed the docs gates; logs use the
   `-review7plan5.out` suffix under `/tmp`.
-- [ ] Review the corrected V1 invariant with CodeRabbit.
-- [ ] Push and open the draft pull request.
+- [x] (2026-09-24) CodeRabbit reviewed the exact `7a13f0a4` implementation
+  head against `origin/main`; it found no further issues. The review log uses
+  the `-review8.out` suffix under `/tmp`.
+- [x] (2026-09-24) Pushed the branch with upstream tracking and opened draft
+  PR [#477](https://github.com/leynos/cuprum/pull/477), titled
+  `Add lightweight group/annotate flags to RunOutputOptions (#375)`. The PR
+  body includes `Closes #375` and the Lody session reference.
 
 ## Surprises & discoveries
 
@@ -1000,14 +1005,15 @@ construction, `self.sink is None` if and only if no explicit sink was supplied
   identity-based provenance rule. CodeRabbit reviewed that correction on
   `dd793615` and found one minor overstatement in V1; V1 now excludes
   caller-supplied sinks explicitly. Acceptance evidence: `scrutineer`'s
-  `-review7fix1` report, CodeRabbit's `-review7fix2` and `-review7fix3`
-  reports, and the `-review7plan5` docs-gate logs. Conformance check:
-  annotation-only echo retains the caller's original destinations,
+  `-review7fix1` report, CodeRabbit's `-review7fix2`, `-review7fix3`, and
+  `-review8` reports, and the `-review7plan6` docs-gate logs. Conformance
+  check: annotation-only echo retains the caller's original destinations,
   `emit_group=False` still writes no group, lease, or endgroup, and
   `dataclasses.replace` refreshes only the adapter generated for the current
-  options object. Recovery: complete the CodeRabbit review of this V1
-  correction. Remaining gaps: final review and publication.
+  options object. Recovery: all findings are resolved and the draft PR is
+  published for review. Remaining gaps: none.
 
 ## Outcomes & retrospective
 
-To be completed at `EP-M4`.
+Completed at `EP-M4`. Draft PR
+[#477](https://github.com/leynos/cuprum/pull/477) is open for review.
