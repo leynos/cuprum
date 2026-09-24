@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - tests assert trusted maturin command handling.
 import sys
 import tomllib
@@ -32,6 +33,9 @@ if typ.TYPE_CHECKING:
 # `test_maturin_wheel_build_snapshot`, so the snapshot itself stays stable
 # across maturin bumps instead of churning on every pin update.
 MATURIN_GENERATOR_PLACEHOLDER = "<maturin-version>"
+# Redacted in place of the wheel's `Version` header, which is asserted against
+# the project version first, so a release bump does not rewrite the snapshot.
+PROJECT_VERSION_PLACEHOLDER = "<project-version>"
 
 
 def _build_with_fake_subprocess_run(
@@ -153,12 +157,24 @@ def test_maturin_wheel_build_snapshot(
     assert not any(
         entry.startswith("cuprum/unittests/") for entry in snapshot_payload["entries"]
     ), "distribution wheels must exclude the in-package unittest suite"
-    # The generator version is pinned by the assertion above, so the snapshot
-    # compares the redacted placeholder instead of the raw version string and
-    # stays stable across maturin bumps.
+    # The installed distribution's metadata carries `pyproject.toml`'s version
+    # after the build backend's PEP 440 normalization (`0.2.0-beta1` becomes
+    # `0.2.0b1`), which is the form a wheel's `Version` header must use.
+    project_version = importlib.metadata.version("cuprum")
+    wheel_version = snapshot_payload["metadata"]["version"]
+    assert wheel_version == project_version, (
+        f"native wheel version {wheel_version!r} != project {project_version!r}"
+    )
+    # The generator and project versions are pinned by the assertions above, so
+    # the snapshot compares redacted placeholders instead of the raw strings and
+    # stays stable across maturin and release bumps.
     redacted_payload = {
         **snapshot_payload,
         "generator": MATURIN_GENERATOR_PLACEHOLDER,
+        "metadata": {
+            **snapshot_payload["metadata"],
+            "version": PROJECT_VERSION_PLACEHOLDER,
+        },
     }
     assert redacted_payload == snapshot, (
         "Built wheel metadata, file list, and build settings changed."

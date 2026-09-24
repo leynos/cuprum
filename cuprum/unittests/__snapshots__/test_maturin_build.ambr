@@ -121,7 +121,7 @@
       'requires_dist': list([
       ]),
       'requires_python': '>=3.12',
-      'version': '0.2.0b1',
+      'version': '<project-version>',
     }),
     'wheel': dict({
       'root_is_purelib': 'false',
