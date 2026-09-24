@@ -2334,6 +2334,51 @@ That gives 12 scenarios per available backend, named
 `{backend}-{size}-{depth}-{callbacks}`, for example `python-small-single-nocb`
 or `rust-large-multi-cb`.
 
+### The CI ratchet workload
+
+Separate from the throughput sweep, `--ci-ratchet` selects the single-payload
+matrix that the continuous integration (CI) ratchet compares between runs:
+
+```bash
+uv run python benchmarks/pipeline_throughput.py \
+  --ci-ratchet \
+  --dry-run \
+  --output /tmp/ratchet-plan.json
+```
+
+The workload replaces the three payload tiers with one 64 MiB payload, which
+yields four scenarios per available backend — single-stage and multi-stage,
+each with and without line callbacks — named with a `ratchet` size label, for
+example `python-ratchet-single-nocb`.
+
+The payload is large so that the ratio the ratchet computes tracks the
+pipeline. The ratchet compares each scenario's within-run
+`rust_mean / python_mean` between a baseline and a candidate, so a cost that
+every run pays regardless of payload — interpreter start, the `cuprum` import,
+per-iteration pipeline set-up — cancels out only in proportion to how small it
+is. At the smoke payloads that fixed cost dominated what hyperfine timed, which
+made the gate flaky (issue #219). At 64 MiB the streaming work dominates while
+the measurement still fits the job's wall-clock budget.
+
+`--ci-ratchet` and `--smoke` select contradictory payloads and are mutually
+exclusive: the command line rejects the pair, and `default_pipeline_scenarios`
+raises `ValueError` for a caller that bypasses argparse.
+
+`--ci-ratchet` also changes the default `--worker-iterations` to `5`, where the
+sweep and smoke matrix default to `20`. The iteration count is measurement
+protocol rather than a tuning dial: it is recorded in every sample, and the
+ratchet compares only samples whose profile metadata agrees. An explicit
+`--worker-iterations` still overrides the default, but its samples are not
+comparable with the CI ratchet's own.
+
+The job does not invoke the benchmark once per command. It runs
+`benchmarks/ci_benchmark_ratchet_profile.py`, which rebuilds the filtered
+command line and passes `--warmup 1` with `--runs 20`, so each matched scenario
+pair sits next to its counterpart and records twenty measured runs per command
+after one discarded warm-up. The worker iteration count says how many pipelines
+run inside each measured process; the run count says how many times hyperfine
+measures that process.
+
 ### Reading benchmark results
 
 - Pump-latency microbenchmarks reflect inter-stage transfer overhead;
@@ -2402,7 +2447,8 @@ interpreter is required. In dry-run mode, command rendering does not resolve
 `benchmarks/benchmark_workload.py` is the benchmark-plan workload parsing and
 validation boundary. It owns the workload identifiers a plan may declare and
 the validated protocol read back from one; it does not render report prose, and
-it does not own the CLI flags, which stay with the users' guide.
+it does not own the CLI flags, which are documented in
+[Running the benchmark suite](#running-the-benchmark-suite).
 
 The identifiers are `THROUGHPUT_SWEEP_WORKLOAD` (`throughput-sweep`), the
 default three-tier sweep; `SMOKE_WORKLOAD` (`smoke`), the reduced-payload

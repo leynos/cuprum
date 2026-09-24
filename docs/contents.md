@@ -14,8 +14,8 @@ open each document.
   operational reference, and a glossary.
 - [0.2.0 migration guide][migration-020] - upgrade guidance for catalogue
   construction, line observation, result measurements, stream metrics,
-  diagnostics, idle heartbeats, presentation sinks, and the benchmark ratchet's
-  measurement protocol.
+  diagnostics, idle heartbeats, presentation sinks and their group and annotate
+  flags, and the benchmark ratchet's measurement protocol.
 - [Developers' guide](developers-guide.md) - maintainer workflows for native
   builds, profiling, linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and

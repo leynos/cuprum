@@ -341,8 +341,9 @@ was read; it says nothing about whether the child is stuck. A Rust pump decline
 means Cuprum used another stream path, not that the child failed. Keep
 callbacks bounded and avoid recording payloads as metric labels.
 
-`GitHubActionsSink` from `cuprum.sinks` is opt-in through
-`RunOutputOptions(sink=...)`; see
+`RunOutputOptions(group=True, annotate_failure=True)`, or an explicit
+`GitHubActionsSink` from `cuprum.sinks`, frames echoed output and failures on
+GitHub Actions; see
 [Present output in GitHub Actions](#present-output-in-github-actions). The
 [migration guide](v0-2-0-migration-guide.md) shows adoption forms and optional
 stream metrics.
@@ -661,11 +662,79 @@ a file instead. [Metrics adapter](#metrics-adapter) and
 
 ### Present output in GitHub Actions
 
-`GitHubActionsSink` from `cuprum.sinks` groups a run's echoed output in a
-collapsible GitHub Actions log section and turns a failure into an error
-annotation. It activates only when `GITHUB_ACTIONS` is `true`; pass
-`force=True` to reproduce the framing elsewhere. The sink changes only what is
-echoed, never capture or the result.
+On GitHub Actions, Cuprum can frame a run's echoed output in a collapsible log
+group and turn a failed run into an `::error::` annotation. Both are
+presentation only: capture, exit codes, and the returned result are unchanged.
+The framing activates only when the parent process runs on GitHub Actions
+(`GITHUB_ACTIONS` is `true`); elsewhere, a run behaves as if it were absent.
+
+#### Group and annotate flags
+
+The `group` and `annotate_failure` flags on `RunOutputOptions` are the
+shorthand for the common case. They build a `GitHubActionsSink` and store it as
+the options' sink, so shared options can carry them safely:
+
+<!-- tested-example: group-and-annotate-flags -->
+
+```python
+import dataclasses
+import io
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="ci-flags")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+
+shared = RunOutputOptions(echo=True, group=True, annotate_failure=True)
+assert isinstance(shared.sink, GitHubActionsSink)
+result = python("-c", "print('building')").run_sync(output=shared)
+assert result.ok and result.stdout == "building\n"
+
+# An explicit sink wins, so shared flagged options never displace it.
+explicit = GitHubActionsSink(io.StringIO(), force=True)
+assert dataclasses.replace(shared, sink=explicit).sink is explicit
+
+try:
+    RunOutputOptions(group="yes")
+except ValueError:
+    pass
+else:
+    raise AssertionError("a non-bool flag should be rejected")
+```
+
+The flags are independent, and both default to `False`:
+
+- `group=True` frames the run in a `::group::` / `::endgroup::` pair and
+  protects echoed output with a stop-commands lease, so child output cannot
+  inject workflow commands. A pipeline receives one group for the whole run.
+- `annotate_failure=True` writes one `::error::` annotation when the run ends
+  in a non-zero exit, a timeout, or an error. On its own it frames no group and
+  takes no lease: echoed output keeps its usual destinations, and child output
+  keeps its usual ability to emit workflow commands.
+
+Workflow commands go to the parent's stderr. An explicit `sink=` takes
+precedence and makes both flags no-ops, which is what makes the flags safe in
+shared options. Pass the sink on a new `RunOutputOptions` object or through
+`dataclasses.replace(shared, sink=...)`; `run()` has no separate `sink`
+argument. When `dataclasses.replace` changes a flag on flag-built options, the
+sink is rebuilt to match, while an explicitly supplied sink is left alone.
+
+The flags carry no `force` and are validated: anything but a `bool` raises
+`ValueError`. The default sink does not serialize overlapping sessions, so run
+grouped commands sequentially when they share the parent's stderr; otherwise
+their workflow frames can interleave.
+[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md) records why the
+flags construct the sink rather than teach the execution layer workflow
+commands.
+
+#### Configure the sink directly
+
+Use `GitHubActionsSink` from `cuprum.sinks` for anything the flags do not
+cover: a custom `title`, another `destination`, `force=True` to reproduce the
+framing locally, or `emit_group=False` / `emit_annotation=False` to switch off
+either half of the frame.
 
 <!-- tested-example: github-actions-sink -->
 

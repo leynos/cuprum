@@ -284,8 +284,8 @@ are pinned to the defaults in `benchmarks/ratchet_history.py` by a CI contract
 test, so a reproduction should not need to pass them explicitly.
 
 For the full description, see
-[the CI ratchet workload](users-guide.md#the-ci-ratchet-workload) in the users'
-guide and `docs/cuprum-design.md` (§13.9), which also links
+[the CI ratchet workload](developers-guide.md#the-ci-ratchet-workload) in the
+developers' guide and `docs/cuprum-design.md` (§13.9), which also links
 [the noise measurements](debugging/debugging-plan-2026-09-16-ratchet-overhead-noise.md)
 behind the change.
 
@@ -332,7 +332,7 @@ adapter decision in
 why they construct the sink instead of teaching the execution layer workflow
 commands. For the equivalent sink-first example, custom destinations and
 titles, and deliberate local activation, see the
-[presentation sinks section](users-guide.md#presentation-sinks) in the users'
-guide and the
-[group and annotate flags section](users-guide.md#group-and-annotate-flags)
-beside it.
+[GitHub Actions presentation section](users-guide.md#present-output-in-github-actions)
+in the users' guide, which covers the
+[group and annotate flags](users-guide.md#group-and-annotate-flags) and
+[direct sink configuration](users-guide.md#configure-the-sink-directly).
