@@ -422,7 +422,30 @@ and positive or negative infinity raise `ValueError`. A value too large to
 convert to `float` also raises `ValueError` rather than leaking the conversion
 `OverflowError`.
 
-Example usage:
+A scope-level default applies to every command run inside it. The expired
+command's partial output is still available on the exception:
+
+<!-- tested-example: scope-timeout -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ScopeConfig, TimeoutExpired, scoped, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="timeouts")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import time; print('started', flush=True); time.sleep(30)")
+
+with scoped(ScopeConfig(timeout=1.0)):
+    try:
+        command.run_sync()
+    except TimeoutExpired as exc:
+        assert exc.timeout == 1.0
+        # A slow start can expire before the child prints anything.
+        assert exc.output in {"", "started\n"}
+    else:
+        raise AssertionError("the scope timeout should have expired")
+```
 
 Pipeline timeouts apply to the entire pipeline run; partial output is surfaced
 using the same capture rules as successful runs.
@@ -516,6 +539,24 @@ before the run completes.
 
 For opt-in aggregate telemetry from the pure-Python stream paths, register a
 hook with `cuprum.stream_observation.observe_stream_operation`:
+
+<!-- tested-example: stream-operation-metrics -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.stream_metrics import stream_operation_metrics_hook
+from cuprum.stream_observation import observe_stream_operation
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="stream-metrics")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+metrics = InMemoryMetrics()
+with observe_stream_operation(stream_operation_metrics_hook(metrics)):
+    python("-c", "print('hello')").run_sync()
+assert metrics.counters["cuprum_stream_operation_bytes_total"] > 0
+```
 
 One `StreamOperationEvent` is emitted when each completed stream drain or
 pipeline transfer finishes. It reports aggregate `bytes_consumed`, completed
@@ -709,6 +750,91 @@ not receive a success status. The existing `PumpEvent` channel and
 are contained so they do not alter pump execution, while control-flow
 exceptions continue to propagate.
 
+### Why a hop fell back to Python
+
+Selecting the `rust` backend does not guarantee that every inter-stage hop
+takes it. Handing the raw pipe descriptors to the Rust pump can fail in ways
+that are not errors: the hop runs on the Python pump instead and produces the
+same result, more slowly. Nothing surfaces to the caller, so a deployment that
+has quietly stopped taking the fast path looks exactly like one that never had
+it.
+
+Each fall-back is recorded at `DEBUG` on the `cuprum._pipeline_streams` logger
+with a `cuprum_action` of `rust_pump_declined` and one of these `cuprum_reason`
+values:
+
+| `cuprum_reason`             | Meaning                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over    |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, so it was left unpaused |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor        |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                   |
+| `duplicate_fds_unavailable` | a transport descriptor closed before the worker's copy of it could be made                     |
+| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use      |
+
+_Table 2: Reasons an inter-stage hop declines the Rust pump._
+
+These records sit at `DEBUG` rather than `WARNING` because a fall-back is a
+routing decision, not a fault; on platforms where the fast path does not apply,
+every hop would otherwise warn. Raise that one logger when investigating
+throughput:
+
+<!-- tested-example: decline-logging -->
+
+```python
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("cuprum._pipeline_streams").setLevel(logging.DEBUG)
+assert logging.getLogger("cuprum._pipeline_streams").isEnabledFor(logging.DEBUG)
+```
+
+`raw_fd_unavailable` on every hop usually means the streams are not real
+operating-system pipes. The other reasons mean the descriptors were found but
+could not be borrowed safely, which is worth investigating rather than
+accepting. On Windows, every asyncio subprocess-pipe hop records
+`platform_unsupported` and uses the Python pump.
+
+### A pump failure hidden by cancellation
+
+Cancelling a pipeline while the Rust pump is mid-transfer reports the
+cancellation to the caller, not any failure inside the pump. Such a failure is
+recorded on the same logger with a `cuprum_action` of
+`rust_pump_failed_after_cancel` and the original traceback attached, so it
+stays diagnosable. It also sits at `DEBUG`, so the logger adjustment above
+reveals it.
+
+### A teardown step that failed and was ignored
+
+Returning descriptors after a native hop is best-effort: an error while closing
+a worker-owned duplicate, restoring blocking mode, or resuming the reader is
+suppressed rather than raised, because the transfer itself has already settled.
+Each suppression records a `DEBUG` event with a `cuprum_action` of
+`rust_pump_teardown_failed`, a `cuprum_site` naming the step, and the exception
+class and `errno`. The `resume`, `reader_close`, and `restore_blocking` sites
+log on `cuprum._pipeline_stream_fds`; the `writer_close`, `resume_reader`, and
+`restore_state` sites log on `cuprum._pipeline_streams`. The record carries
+nothing drawn from the transferred data. Any of these records indicates a
+teardown problem worth investigating.
+
+### A pump hand-off failed before submission
+
+When Cuprum cannot prepare the worker-owned descriptors, it rolls the hand-off
+back and the hop falls back to the Python pump. A writer that could not be
+duplicated records `duplicate_writer_failed`, and descriptors that could not be
+switched to blocking mode record `blocking_setup_failed`. The
+`cuprum._pipeline_streams` logger records a bounded `DEBUG` diagnostic with
+`cuprum_action="rust_pump_handoff_failed"`, the exception class, and `errno`
+when available.
+
+Two setup failures still reach the caller. A rejected executor submission
+reports `executor_submission_rejected` and re-raises after rollback, because
+every later hop would be rejected the same way. A failure to duplicate
+descriptors that Cuprum already owns means descriptor exhaustion, which a
+fall-back cannot route around. Both close the writer transport first, so the
+downstream stage exits and the failure reaches the caller promptly instead of
+waiting for a deadline.
+
 ### Counting pump routing decisions
 
 Aggregating debug logs answers "why did this hop fall back?" one record at a
@@ -770,10 +896,35 @@ Cancellation cleanup also emits `DEBUG` records on the
 callback has `cuprum_outcome="deferred"`. The callback record is emitted only
 after the native worker has released descriptor ownership.
 
+#### Pump metrics
+
 `PumpMetricsHook` takes the same `MetricsCollector` protocol as `MetricsHook`,
 so one collector can back both channels:
 
-Table 2: metrics emitted by `PumpMetricsHook`
+<!-- tested-example: pump-metrics -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
+from cuprum.adapters.pump_metrics import PumpMetricsHook
+from cuprum.pump_observation import observe_pump
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="pump-metrics")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+pipeline = python("-c", "print('hello')") | python(
+    "-c", "import sys; print(sys.stdin.read(), end='')"
+)
+metrics = InMemoryMetrics()
+with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
+    result = pipeline.run_sync()
+assert result.ok
+assert metrics.counters["cuprum_executions_total"] == 2
+# Pump counters appear only when a hop reaches the Rust pump decision.
+pump_counters = [name for name in metrics.counters if "_rust_pump_" in name]
+assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
+```
 
 | Metric                                         | Labels    | Incremented when                                                 |
 | ---------------------------------------------- | --------- | ---------------------------------------------------------------- |
@@ -784,6 +935,8 @@ Table 2: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_grace_expired_total` | none      | caller-facing cleanup grace expired                              |
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
+
+_Table 3: Metrics emitted by `PumpMetricsHook`._
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -803,10 +956,20 @@ only label on this counter. Descriptor numbers, Windows handle values, errno
 values, exception types, exception messages, and tracebacks never become metric
 labels.
 
-The `reason` label takes exactly the values in Table 1, plus `unknown`, and
-nothing else. Table 1's values are published as the `RustPumpDeclineReason`
+The `reason` label takes exactly the values in Table 2, plus `unknown`, and
+nothing else. Table 2's values are published as the `RustPumpDeclineReason`
 enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
 a dashboard can enumerate the series it will see:
+
+<!-- tested-example: decline-reason-series -->
+
+```python
+from cuprum import RustPumpDeclineReason
+from cuprum.adapters.pump_metrics import UNKNOWN_DECLINE_REASON
+
+series = [reason.value for reason in RustPumpDeclineReason] + [UNKNOWN_DECLINE_REASON]
+assert "platform_unsupported" in series and series[-1] == "unknown"
+```
 
 `unknown` is a guard rather than an outcome: it is what a decline whose reason
 is not an enum member would be labelled, and no call site produces one. It is
@@ -983,6 +1146,14 @@ controls which stream implementation is used:
 If `CUPRUM_STREAM_BACKEND=rust` is set but the Rust extension is not installed,
 pipeline execution raises `ImportError` instead of falling back. To diagnose
 whether the extension is available, run:
+
+<!-- shell-example: rust-availability -->
+
+```shell
+python -c "import cuprum; print(cuprum.is_rust_available())"
+```
+
+It prints `True` when the native backend can be used.
 
 See the "Choosing a stream backend" section above for full details on backend
 selection.
