@@ -87,11 +87,13 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-`sh.make()` accepts strings, numbers, booleans, and paths as positional
-arguments. Keyword arguments become `--name=value`; underscores in names become
-hyphens. This suits tools that actually accept that form. For flags such as
-`--check`, pass a positional argument: `check=True` would produce
-`--check=True`. An argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts strings, numbers, booleans, and
+paths as positional arguments. Keyword arguments become `--name=value`;
+underscores in names become hyphens. This suits tools that actually accept that
+form. For flags such as `--check`, pass a positional argument: `check=True`
+would produce `--check=True`. `None` raises `TypeError` in either position, so
+decide whether to omit or substitute an optional flag before building. An
+argument containing spaces remains one argument.
 
 <!-- tested-example: arguments -->
 
@@ -110,9 +112,12 @@ assert command.argv_with_program == (sys.executable, *command.argv)
 For domain-specific constraints, use the typed builders in `cuprum.builders`
 for Git, rsync, and tar. They validate relevant paths, refs, and options at
 construction time. Use `ProgramCatalogue.from_project(ProjectSettings(...))`
-when project names, documentation locations, and noise rules matter. Duplicate
-project names or program owners raise `ValueError` subclasses during
-construction.
+when one project's name, documentation locations, and noise rules should travel
+with its commands. Cuprum stores noise rules for downstream log processing but
+does not apply them itself. A catalogue that lists the same program twice raises
+`DuplicateProgramError`; a multi-project `ProgramCatalogue(projects=...)` with
+two projects of the same name raises `DuplicateProjectError`. Both are
+`ValueError` subclasses importable from `cuprum.catalogue`.
 
 ## Control output
 
@@ -149,8 +154,11 @@ assert [(line.stream, line.text) for line in lines] == [
 
 For async consumers needing backpressure, `SafeCmd.lines()` returns an async
 iterator of `LineEvent(stream, at, text)`; its `result` is available after
-iteration finishes. A pipeline exposes final-stage stdout and every stage's
-stderr as line events. Interior stdout feeds the next stage instead.
+iteration finishes. Breaking out of the loop does not stop the child: close the
+stream with `async with cmd.lines() as stream:` or `await stream.aclose()` to
+guarantee teardown. Pipelines have no `lines()` method; `on_line` on a pipeline
+run observes final-stage stdout and every stage's stderr. Interior stdout feeds
+the next stage instead.
 
 Echo normally limits each mirrored line to 64 KiB, including its truncation
 marker and terminator; captured output remains complete. Set
@@ -235,9 +243,9 @@ result.
 
 `run_concurrent()` is async; `run_concurrent_sync()` is for synchronous
 callers. Set `ConcurrentConfig.concurrency` to bound simultaneous children.
-Results follow submission order in collect-all mode. `failures` indexes the
-returned result tuple; `failure_submission_indices` maps failures to the
-original commands when fail-fast cancellation omitted some results.
+Results follow submission order. `failures` indexes the returned result tuple;
+`failure_submission_indices` maps failures to the original commands when
+fail-fast cancellation omitted some results.
 
 <!-- tested-example: concurrent -->
 
@@ -284,13 +292,16 @@ with scoped(catalogue=catalogue), env(CUPRUM_EXAMPLE="scoped"):
 assert result.stdout == "scoped\n"
 ```
 
-`ScopeConfig` accepts allowlist and hook settings when a catalogue alone is
-insufficient. `allow()` can register permitted programs in a scope, subject to
-the parent restriction. A failing `before` or `after` hook is application code
-and can affect a run. Use `observe()` for structured `ExecEvent` lifecycle
-events; telemetry adapters in `cuprum.adapters` project them to logging,
-metrics, or tracing. Avoid making untrusted arguments into metric labels or log
-fields.
+`ScopeConfig` accepts allowlist, hook, timeout, and environment settings when a
+catalogue alone is insufficient. `allow()` is the explicit way to widen policy:
+it adds programs to the current allowlist, even inside a restricted scope,
+until the registration is detached or its block exits. Calling `allow()` in the
+default unrestricted context restricts it to exactly the programs allowed.
+Review `allow()` calls as policy changes. A failing `before` or `after` hook is
+application code and can affect a run. Use `observe()` for structured
+`ExecEvent` lifecycle events; telemetry adapters in `cuprum.adapters` project
+them to logging, metrics, or tracing. Avoid making untrusted arguments into
+metric labels or log fields.
 
 ## Observe production runs
 
@@ -320,16 +331,16 @@ result measurements, heartbeats, and presentation sinks.
 
 ## Troubleshoot a run
 
-| Symptom                 | Check                                                                       |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `UnknownProgramError`   | Register the exact program in the builder's catalogue.                      |
-| `ForbiddenProgramError` | Inspect the active scope and parent allowlist.                              |
-| `FileNotFoundError`     | Confirm the executable path or inherited `PATH`.                            |
-| `TimeoutExpired`        | Set an appropriate deadline; inspect the child for slow or blocked work.    |
-| Non-zero `exit_code`    | Use captured stderr and the tool's documented exit codes.                   |
-| No visible output       | Capture is silent by default; set `echo=True` or read `result.stdout`.      |
-| No heartbeat            | Supply a positive `idle_after`; output activity resets its clock.           |
-| No native speed-up      | The optional extension may be unavailable or this operation may use Python. |
+| Symptom                 | Check                                                                                     |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `UnknownProgramError`   | Register the exact program in the builder's catalogue.                                    |
+| `ForbiddenProgramError` | Inspect the active scope and parent allowlist.                                            |
+| `FileNotFoundError`     | Confirm the executable path or inherited `PATH`.                                          |
+| `TimeoutExpired`        | Set an appropriate deadline; inspect the child for slow or blocked work.                  |
+| Non-zero `exit_code`    | Use captured stderr and the tool's documented exit codes.                                 |
+| No visible output       | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`. |
+| No heartbeat            | Supply a positive `idle_after`; output activity resets its clock.                         |
+| No native speed-up      | The optional extension may be unavailable or this operation may use Python.               |
 
 _Table 1: First checks for common execution outcomes._
 
@@ -434,6 +445,13 @@ hooks receive `ExecEvent` values describing:
 
 - `exit` — subprocess finished (exit code and duration).
 
+- `stdin` — input supplied through `StdinInput` was written to the child;
+  `byte_count` gives its size.
+
+- `stdin_error` — writing or closing the child's stdin failed, typically
+  because the child stopped reading early, as `head` does. `operation` names
+  the failing step (`write` or `close`), and execution continues.
+
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
 
@@ -537,9 +555,10 @@ never swallowed. The two hook kinds differ only in when that happens:
   first is raised.
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
-reject unknown values. `pipeline_fail_fast` is a new phase, so such a hook
-raises on it — and so fails the pipeline — until it grows an arm for it. A hook
-that must never influence the run should catch its own exceptions.
+reject unknown values. `pipeline_fail_fast` arrived in 0.2.0, so such a hook
+written earlier raises on it — and so fails the pipeline — until it grows an
+arm for it. A hook that must never influence the run should catch its own
+exceptions.
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
@@ -814,8 +833,8 @@ unchanged — the counters supplement them rather than replacing them.
 > must not be able to abort a pipe hop that would otherwise have succeeded.
 > Only `Exception` instances are reported and suppressed. Everything else
 > propagates unchanged: `SystemExit`, `KeyboardInterrupt`, and
-> `asyncio.CancelledError`. The last matters because one of the two emission
-> sites is cancellation unwinding, so a hook running there must not be able to
+> `asyncio.CancelledError`. The last matters because some emission sites run
+> during cancellation unwinding, so a hook running there must not be able to
 > absorb the cancellation the caller asked for. Hooks must be synchronous; one
 > that returns an awaitable is reported and discarded.
 
@@ -836,10 +855,11 @@ backend in the current process, the cached result will continue to be used.
 
 The backend selection is active for inter-stage stream pumping in pipelines.
 When the Rust backend is selected, data transfer between pipeline stages uses
-the Rust extension outside the GIL via `loop.run_in_executor()`. Stream
-consumption (stdout/stderr capture) currently always uses the Python pathway
-regardless of the backend setting; this ensures line callbacks and echo
-features remain available.
+the Rust extension outside the GIL on a dedicated worker pool that Cuprum owns,
+independent of the event loop's default executor. Stream consumption
+(stdout/stderr capture) currently always uses the Python pathway regardless of
+the backend setting; this ensures line callbacks and echo features remain
+available.
 
 Pipeline pumping applies additional safety guards: if Rust is selected but
 Cuprum cannot extract raw file descriptors from asyncio transports for a
@@ -935,12 +955,12 @@ This section addresses common issues when working with the optional Rust
 extension.
 
 **Missing wheels on unsupported platforms.** Pre-built native wheels are
-published for common platforms: Linux (x86_64, aarch64), macOS (x86_64, arm64),
-and Windows (x86_64, arm64). On other platforms, `pip install cuprum` installs
-the pure Python wheel automatically. The pure Python wheel provides the same
-functionality without Rust acceleration. Contributors who want Rust
-acceleration on unsupported platforms can build from source using the
-prerequisites described above and running `maturin develop`.
+published for CPython 3.13 on Linux (x86_64, aarch64), macOS (x86_64, arm64),
+and Windows (x86_64). On other platforms and other Python versions,
+`pip install cuprum` installs the pure Python wheel automatically. The pure
+Python wheel provides the same functionality without Rust acceleration.
+Contributors who want Rust acceleration on unsupported platforms can build from
+source using the prerequisites described above and running `maturin develop`.
 
 Windows wheels and direct Rust extension APIs remain available even though the
 pipeline dispatcher declines Windows asyncio subprocess-pipe pumping with
@@ -952,7 +972,9 @@ the correct Python fallback.
 controls which stream implementation is used:
 
 - `auto` (default): uses the Rust pathway when available, otherwise falls
-  back to the Python pathway and emits a fallback log.
+  back to the Python pathway. The choice is recorded once as a `DEBUG`
+  `resolved stream backend` record on the `cuprum._backend` logger, whose
+  `resolved_backend` field names the pathway.
 - `python`: forces the pure Python pathway regardless of whether the Rust
   extension is installed.
 - `rust`: forces the Rust pathway and raises `ImportError` if the extension
