@@ -126,15 +126,26 @@ def test_the_changes_job_publishes_the_filter_result(workflow_data: Workflow) ->
     )
 
 
-def test_the_changes_job_runs_on_a_github_hosted_runner(
+def test_the_changes_job_runs_on_the_lane_it_gates(
     workflow_data: Workflow,
 ) -> None:
-    """The detector must not run on the runner it exists to avoid paying for."""
-    runner = job(workflow_data, CHANGES_JOB).get("runs-on")
+    """The detector runs where the required check waiting on it runs.
 
-    assert runner == "ubuntu-latest", (
-        f"the {CHANGES_JOB!r} job must run on ubuntu-latest so that deciding "
-        f"whether to spend paid runner minutes costs none; found {runner!r}"
+    It used to run GitHub-hosted so that deciding whether to spend paid
+    minutes cost none. That saved seconds and cost a pull request 46 minutes
+    on 2026-09-23 (run 35904789287), when the hosted queue held it while every
+    Ubicloud job started. A fork's pull request takes the hosted arm, because
+    a fork cannot obtain an Ubicloud runner.
+    """
+    runner = " ".join(str(job(workflow_data, CHANGES_JOB).get("runs-on")).split())
+    expected = (
+        "${{ github.event.pull_request.head.repo.fork "
+        "&& 'ubuntu-latest' || 'ubicloud-standard-2' }}"
+    )
+
+    assert runner == expected, (
+        f"the {CHANGES_JOB!r} job must run on the Ubicloud lane with the fork "
+        f"fallback, {expected!r}; found {runner!r}"
     )
 
 

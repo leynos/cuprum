@@ -1206,9 +1206,18 @@ jobs:
   # `needs` edge never leaves benchmark-ratchet skipped on pushes to
   # main, where the baseline artefact must stay fresh.
   changes:
-    # Stays GitHub-hosted: a five-second paths-filter call is administrative,
-    # API-bound work that gains nothing from a metered build slot.
-    runs-on: ubuntu-latest
+    # On the paid lane because it gates a required check: `benchmark-ratchet`
+    # waits on it. Its work is a five-second paths-filter call, but on the
+    # GitHub-hosted lane it sat queued for 46 minutes on 2026-09-23 (run
+    # 35904789287) while every Ubicloud job of later runs started, and the
+    # whole pull request waited with it. A pull request from a fork cannot
+    # obtain an Ubicloud runner, so the fork arm falls back to a GitHub-hosted
+    # label and only forks take it. Keep the continuation at this indent: a
+    # more-indented continuation in a folded scalar keeps its line break and
+    # puts a newline inside the expression.
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork
+      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 10
     permissions:
       contents: read

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import pathlib as pth
+import re
 
 import pytest
 import yaml
 
-from tests.helpers.act_harness import CI_WORKFLOW
+from tests.helpers.act_harness import CI_WORKFLOW, MAPPED_RUNNER_LABELS
 from tests.helpers.act_workflow import copy_workflow
 from tests.helpers.ci_workflows import workflow_document
 from tests.helpers.workflow import job, mapping, parse_workflow, step_named
@@ -41,8 +42,21 @@ def test_projection_preserves_the_detector_and_admission_contract(
     assert set(jobs) == {*needs, "benchmark-ratchet"}, (
         "projection must contain exactly the benchmark dependency graph"
     )
-    assert all(job(projected, name)["runs-on"] == "ubuntu-latest" for name in jobs), (
+    probes = [name for name in jobs if name != "changes"]
+    assert all(job(projected, name)["runs-on"] == "ubuntu-latest" for name in probes), (
         "all probes must use GitHub-hosted runner mappings"
+    )
+    # `changes` keeps its production placement, so act must map every label
+    # its expression can select; an unmapped label makes act skip the job and
+    # exit zero.
+    declared = str(job(projected, "changes")["runs-on"])
+    selectable = (
+        set(re.findall(r"'([^']+)'", declared)) if "${{" in declared else {declared}
+    )
+    assert selectable, "the changes job must name the labels it can select"
+    assert selectable <= set(MAPPED_RUNNER_LABELS), (
+        f"act must map every label changes can select; unmapped: "
+        f"{sorted(selectable - set(MAPPED_RUNNER_LABELS))}"
     )
 
 

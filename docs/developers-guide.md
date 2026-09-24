@@ -52,8 +52,8 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `benchmark-ratchet`       | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 60      |
 | `build-pure-wheel`        | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
 | `verify-wheel-install`    | `build-wheels.yml`           | `ubicloud-standard-2` | `ubuntu-latest` | 20      |
+| `changes`                 | `ci.yml`                     | `ubicloud-standard-2` | `ubuntu-latest` | 10      |
 | `coverage-upload`         | `coverage-main.yml`          | `ubicloud-standard-2` | none            | 65      |
-| `changes`                 | `ci.yml`                     | `ubuntu-latest`       | none            | 10      |
 | `loom-smoke`              | `ci.yml`                     | `ubuntu-latest`       | none            | 10      |
 | `workflow-harness`        | `benchmark-gate-harness.yml` | `ubuntu-latest`       | none            | 30      |
 | `loom`                    | `loom.yml`                   | `ubuntu-latest`       | none            | 30      |
@@ -65,12 +65,19 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    | none            | 45      |
 | `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
 
-The hosted rows are hosted for a reason, not by omission. `changes` and
-`loom-smoke` are cheap gate jobs; `workflow-harness`, `loom`, and `extended`
-run only on a schedule or a dispatch; and `rust-boundaries.yml`'s verifier
-lanes stay on GitHub-hosted Linux by this repository's own decision. Placing
-`verus` or `loom-smoke` on the paid lane is a separate question needing its own
-measurements.
+The hosted rows are hosted for a reason, not by omission. `loom-smoke` is a
+cheap gate job that gates no required check; `workflow-harness`, `loom`, and
+`extended` run only on a schedule or a dispatch; and `rust-boundaries.yml`'s
+verifier lanes stay on GitHub-hosted Linux by this repository's own decision.
+Placing `verus` or `loom-smoke` on the paid lane is a separate question needing
+its own measurements.
+
+A job that a paid lane waits on runs on the paid lane too, however trivial its
+work. `changes` is a five-second paths filter, but `benchmark-ratchet`, a
+required check, needs it. On the GitHub-hosted lane it sat queued for 46
+minutes on 2026-09-23 (run 35904789287) while later runs' Ubicloud jobs
+started, and the pull request waited with it. `tests/test_ci_gate_placement.py`
+holds the rule: no Ubicloud job may need a GitHub-hosted one.
 
 `ubicloud-standard-2` (2 vCPU, 8 GB, Ubuntu 24.04 amd64) is the default shape
 and the only self-hosted label registered in `.github/actionlint.yaml`.
@@ -4479,9 +4486,10 @@ tracking link, and are lifted once the upstream fix lands.
 `ubicloud-standard-2` runner, declared to `actionlint` in
 `.github/actionlint.yaml` alongside the configuration variables the workflows
 read. Most pull requests — documentation edits, Dependabot `github-actions`
-batches — cannot change pipeline throughput, so a cheap GitHub-hosted `changes`
-job classifies the diff with `dorny/paths-filter` and publishes a single
-`bench` output. `benchmark-ratchet` takes `changes` in `needs` and gates on:
+batches — cannot change pipeline throughput, so a cheap `changes` job, on the
+same Ubicloud lane as the check waiting on it, classifies the diff with
+`dorny/paths-filter` and publishes a single `bench` output. `benchmark-ratchet`
+takes `changes` in `needs` and gates on:
 
 ```yaml
 if: needs.changes.result == 'success' && (github.event_name != 'pull_request' || needs.changes.outputs.bench == 'true')
