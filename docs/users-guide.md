@@ -14,12 +14,37 @@ Python example is executed from this document by the behavioural suite.
   [control output](#control-output), and [apply a policy](#apply-a-policy).
 - **Several commands:** [Connect a pipeline](#connect-a-pipeline) or
   [run commands concurrently](#run-commands-concurrently).
+- **Growing an application:** [Going further](#going-further) has task
+  recipes for catalogues, builders, streaming, hooks, and telemetry.
+- **Exact contracts:** the
+  [operational reference](#detailed-operational-reference) lists events,
+  metrics, log records, and backend behaviour.
 
 The examples that launch a child use the current Python interpreter. This
-avoids assuming that an optional executable such as git is installed. Install
-Cuprum with `python -m pip install cuprum`, or add it to a uv project with
-`uv add cuprum`. Python 3.12 or newer is required. The pure Python installation
-has no runtime dependencies; the native extension is optional.
+avoids assuming that an optional executable such as git is installed.
+
+## Install Cuprum
+
+Cuprum requires Python 3.12 or newer. Install it with pip:
+
+<!-- shell-example: install-pip -->
+
+```shell
+python -m pip install cuprum
+```
+
+Or add it to a uv project:
+
+<!-- shell-example: install-uv -->
+
+```shell
+uv add cuprum
+```
+
+The pure Python installation has no runtime dependencies. On CPython 3.13 for
+Linux, macOS, and Windows x86_64, pip may instead select a native wheel that
+adds optional Rust acceleration for pipelines; behaviour is the same either
+way. See [Optional Rust acceleration](#choosing-a-stream-backend) for details.
 
 ## Run a command
 
@@ -313,11 +338,11 @@ was read; it says nothing about whether the child is stuck. A Rust pump decline
 means Cuprum used another stream path, not that the child failed. Keep
 callbacks bounded and avoid recording payloads as metric labels.
 
-`GitHubActionsSink` is opt-in through `RunOutputOptions(sink=...)`. On GitHub
-Actions it groups echoed output and annotates failed runs. It is inactive
-elsewhere unless constructed with `force=True`. Capture and result semantics
-stay the same. The [migration guide](v0-2-0-migration-guide.md) shows adoption
-forms and optional stream metrics.
+`GitHubActionsSink` from `cuprum.sinks` is opt-in through
+`RunOutputOptions(sink=...)`; see
+[Present output in GitHub Actions](#present-output-in-github-actions). The
+[migration guide](v0-2-0-migration-guide.md) shows adoption forms and optional
+stream metrics.
 
 ## Migrate a caller
 
@@ -356,6 +381,312 @@ The benchmark suite compares Python and optional Rust stream backends across
 representative output and pipeline shapes. Use the
 [developers' guide](developers-guide.md) for prerequisites, reproducible
 commands, and how to interpret results before choosing a backend.
+
+## Going further
+
+These recipes build on the sections above for tasks that come up once an
+application relies on Cuprum. Each one is a complete, executed example.
+
+### Define an application catalogue
+
+Give an application's programs a named project so that every command carries
+its documentation links and log-noise rules. `ProgramCatalogue.from_project()`
+builds a catalogue from one `ProjectSettings`; use
+`ProgramCatalogue(projects=(...))` when several projects must each own their
+programs. Cuprum stores `noise_rules` for downstream log processing but does
+not filter output itself.
+
+<!-- tested-example: application-catalogue -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, ProjectSettings, sh
+from cuprum.catalogue import DuplicateProgramError
+
+PYTHON = Program(sys.executable)
+settings = ProjectSettings(
+    name="report-builder",
+    programs=(PYTHON,),
+    documentation_locations=("docs/reports.md",),
+    noise_rules=(r"^progress:",),
+)
+catalogue = ProgramCatalogue.from_project(settings)
+
+command = sh.make(PYTHON, catalogue=catalogue)("-c", "print('ok')")
+assert command.project.name == "report-builder"
+assert command.project.noise_rules == (r"^progress:",)
+assert catalogue.lookup(PYTHON).project.documentation_locations == ("docs/reports.md",)
+
+try:
+    ProgramCatalogue.from_programs(PYTHON, PYTHON)
+except DuplicateProgramError as exc:
+    assert exc.program == PYTHON
+else:
+    raise AssertionError("a program listed twice should be rejected")
+```
+
+`catalogue.visible_settings` returns a read-only mapping from project name to
+`ProjectSettings` for services that propagate this metadata. An absolute
+program path is allowlisted exactly as written, so `/usr/bin/git` does not also
+permit `git` found on `PATH`.
+
+### Wrap commands in project builders
+
+Centralize argument construction in small functions that validate input and
+return a `SafeCmd`. Callers then cannot build an unvalidated command line.
+`cuprum.builders` provides ready-made builders for git, rsync, and tar, plus the
+`safe_path()` and `git_ref()` validators they use. Those builders use the
+default catalogue, so building their commands does not require the tools to be
+installed; running them does.
+
+<!-- tested-example: project-builders -->
+
+```python
+import sys
+from pathlib import Path
+
+from cuprum import Program, ProgramCatalogue, SafeCmd, sh
+from cuprum.builders import git_rev_parse, safe_path
+
+PYTHON = Program(sys.executable)
+CATALOGUE = ProgramCatalogue.from_programs(PYTHON, name="line-counter")
+
+
+def count_lines(path: Path) -> SafeCmd:
+    """Build a command that counts the lines in one existing file."""
+    checked = safe_path(path.resolve())
+    script = "import sys; print(sum(1 for _ in open(sys.argv[1])))"
+    return sh.make(PYTHON, catalogue=CATALOGUE)("-c", script, str(checked))
+
+
+result = count_lines(Path("README.md")).run_sync()
+assert result.ok and int(result.stdout) > 0
+
+command = git_rev_parse("main")
+assert command.argv_with_program == ("git", "rev-parse", "main")
+try:
+    git_rev_parse("main..evil")
+except ValueError:
+    pass
+else:
+    raise AssertionError("an unsafe ref should be rejected")
+```
+
+`safe_path()` rejects empty paths, NUL characters, and `..` segments, and
+requires an absolute path unless `allow_relative=True` is passed. `git_ref()`
+rejects whitespace, a leading `-`, `..`, `@{`, and other constructs that Git
+would interpret as options or revision syntax.
+
+### Stream lines as they arrive
+
+Use `lines()` when a caller should react to output before the command finishes.
+Use it as an async context manager whenever the loop can exit early: leaving
+the block closes the stream, which terminates the child in the same way as a
+cancelled `run()`.
+
+<!-- tested-example: stream-lines -->
+
+```python
+import asyncio
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="follow")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python(
+    "-c", "import time\nfor n in range(100):\n print(n, flush=True); time.sleep(0.01)"
+)
+
+
+async def first_line() -> str:
+    async with command.lines() as stream:
+        async for event in stream:
+            # Leaving the block closes the stream and stops the child.
+            return event.text
+    raise AssertionError("the child should print at least one line")
+
+
+assert asyncio.run(first_line()) == "0"
+```
+
+After a loop that runs to completion, `stream.result` holds the same
+`CommandResult` that `run()` would have returned.
+
+### Handle a slow command
+
+Pass `timeout` to `run()` or `run_sync()` and catch `TimeoutExpired`, which
+subclasses the built-in `TimeoutError`. `ExecutionContext.cancel_grace` sets
+how long Cuprum waits after asking the child to terminate before killing it.
+Output captured before the deadline stays available on the exception.
+
+<!-- tested-example: slow-command -->
+
+```python
+import sys
+
+from cuprum import ExecutionContext, Program, ProgramCatalogue, TimeoutExpired, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="slow")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+slow = python("-c", "import time; time.sleep(30)")
+
+try:
+    slow.run_sync(timeout=0.5, context=ExecutionContext(cancel_grace=0.2))
+except TimeoutExpired as exc:
+    assert exc.timeout == 0.5
+    assert exc.output == "" and exc.stderr == ""
+else:
+    raise AssertionError("the command should have timed out")
+```
+
+[Timeouts](#timeouts) in the reference covers scope-level defaults, pipeline
+deadlines, and the log records each expiry writes.
+
+### Restrict a block of code to specific programs
+
+A scope narrows which catalogued programs may run inside a `with` block.
+Running anything else raises `ForbiddenProgramError`, a `PermissionError`
+subclass, before a process starts. `current_context().is_allowed()` checks a
+program without running it.
+
+<!-- tested-example: restricted-scope -->
+
+```python
+import sys
+
+from cuprum import (
+    ForbiddenProgramError,
+    Program,
+    ProgramCatalogue,
+    ScopeConfig,
+    current_context,
+    scoped,
+    sh,
+)
+
+PYTHON = Program(sys.executable)
+OTHER = Program("some-other-tool")
+catalogue = ProgramCatalogue.from_programs(PYTHON, OTHER, name="policy")
+python = sh.make(PYTHON, catalogue=catalogue)
+
+with scoped(ScopeConfig(allowlist=frozenset([OTHER]))):
+    assert not current_context().is_allowed(PYTHON)
+    try:
+        python("-c", "pass").run_sync()
+    except ForbiddenProgramError:
+        pass
+    else:
+        raise AssertionError("the scope should forbid the interpreter")
+```
+
+### Run code around every command
+
+`before(hook)` receives each command before it starts, and `after(hook)`
+receives the command and its `CommandResult` once it finishes. Before hooks run
+in registration order and after hooks in reverse order, so an outer scope's
+setup runs first and its cleanup last. `logging_hook()` pairs the two to write
+start and exit records through the standard `logging` module.
+
+<!-- tested-example: before-and-after-hooks -->
+
+```python
+import logging
+import sys
+
+from cuprum import Program, ProgramCatalogue, after, before, logging_hook, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="hooks")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+seen = []
+
+
+def note_start(cmd):
+    seen.append(("before", cmd.argv[-1]))
+
+
+def note_finish(cmd, result):
+    seen.append(("after", result.exit_code))
+
+
+logger = logging.getLogger("myapp.commands")
+with before(note_start), after(note_finish), logging_hook(logger=logger):
+    python("-c", "pass").run_sync()
+assert seen == [("before", "pass"), ("after", 0)]
+```
+
+An exception from a before or after hook propagates to the caller, so keep
+hooks that must never affect a run defensive.
+
+### Log, measure, and trace runs
+
+The adapters in `cuprum.adapters` turn lifecycle events into structured log
+records, metrics, and trace spans. Each is an observe hook, so register it with
+`sh.observe()`. `InMemoryMetrics` and `InMemoryTracer` are reference backends;
+production code implements the `MetricsCollector` protocol, or the `Tracer` and
+`Span` protocols, over its telemetry library.
+
+<!-- tested-example: telemetry-adapters -->
+
+```python
+import logging
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+from cuprum.adapters.logging_adapter import structured_logging_hook
+from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
+from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="telemetry")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+metrics = InMemoryMetrics()
+tracer = InMemoryTracer()
+logger = logging.getLogger("myapp.telemetry")
+
+with (
+    sh.observe(structured_logging_hook(logger=logger)),
+    sh.observe(MetricsHook(metrics)),
+    sh.observe(TracingHook(tracer)),
+):
+    python("-c", "print('traced')").run_sync()
+
+assert metrics.counters["cuprum_executions_total"] == 1
+assert [span.name for span in tracer.spans] and tracer.spans[0].ended
+```
+
+The structured logging adapter records `argv` verbatim, so a secret passed as a
+command-line argument reaches the log. Pass secrets through the environment or
+a file instead. [Metrics adapter](#metrics-adapter) and
+[Tracing adapter](#tracing-adapter) list every metric and span attribute.
+
+### Present output in GitHub Actions
+
+`GitHubActionsSink` from `cuprum.sinks` groups a run's echoed output in a
+collapsible GitHub Actions log section and turns a failure into an error
+annotation. It activates only when `GITHUB_ACTIONS` is `true`; pass
+`force=True` to reproduce the framing elsewhere. The sink changes only what is
+echoed, never capture or the result.
+
+<!-- tested-example: github-actions-sink -->
+
+```python
+import io
+import sys
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh
+from cuprum.sinks import GitHubActionsSink
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="ci")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+workflow_log = io.StringIO()
+sink = GitHubActionsSink(workflow_log, title="Build", force=True)
+result = python("-c", "print('building')").run_sync(
+    output=RunOutputOptions(echo=True, sink=sink),
+)
+assert result.ok and result.stdout == "building\n"
+assert workflow_log.getvalue().startswith("::group::Build")
+```
 
 ## Detailed operational reference
 
