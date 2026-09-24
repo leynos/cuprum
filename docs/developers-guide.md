@@ -4082,7 +4082,12 @@ next run misses and rebuilds. Before building, the action fetches makeutil's
 `main` history and refuses a pin that `main` does not reach: a commit no branch
 reaches builds only until GitHub garbage-collects it, and the previous pin was
 one. Pin a full 40-hex commit from makeutil's `main`.
-`tests/test_ci_makeutil_install.py` holds that arrangement.
+`tests/test_ci_makeutil_install.py` holds the arrangement as text,
+`tests/test_ci_install_makeutil_action.py` runs the action's step against
+stand-in `git`, `rustup` and `cargo`, and
+`tests/integration/test_makeutil_cache_integration.py` (in `make test-act`)
+evaluates each consumer's guard under `act` for an exact hit, a restore-key hit
+and a miss.
 
 For local test runs, install the same pinned parser and toolchain before running
 `make test`:

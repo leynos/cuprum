@@ -59,6 +59,9 @@ PIN_BRANCH: typ.Final = "refs/heads/main"
 #: The action's whole command, tokenized: refuse a pin `main` does not reach,
 #: then build it.
 INSTALL_TOKENS: typ.Final = (
+    "set",
+    "-euo",
+    "pipefail",
     "history=$(mktemp -d)",
     "git",
     "-C",

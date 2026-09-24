@@ -27,7 +27,10 @@ runs:
         # Polonius borrow checking needs.
         MAKEUTIL_REVISION: '6e64f4fe84419705badc30baa5649cbb6f69a298'
         MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
+      # `set` restates what `shell: bash` already implies, so the ancestry
+      # refusal stops the build however the script is invoked.
       run: |
+        set -euo pipefail
         history="$(mktemp -d)"
         git -C "${history}" init --quiet
         git -C "${history}" fetch --quiet --filter=tree:0 \
