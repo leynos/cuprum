@@ -656,4 +656,103 @@ subprocess-capture half is already closed.
     guide. The current implementation needs no new Rust telemetry and no
     per-read cross-language call.
 
+## 10. Free-threaded stable-ABI wheels (after 0.2.0)
+
+Idea: the `cp312-abi3` wheel adopted in
+[ADR-016](adr-016-stable-abi-native-wheels.md) cannot load on free-threaded
+CPython, so those interpreters fall back to the pure Python wheel. PEP 803
+defines `abi3t`, a stable ABI that free-threaded and GIL-enabled builds of
+CPython 3.15 and later can both load. If PyO3's `abi3t-py315` feature and a
+maturin release that emits `abi3.abi3t` tags can produce one extra wheel per
+platform, and the extension and Cuprum's Python layer stay correct without a
+GIL, then free-threaded 3.15 users gain Rust acceleration without a
+per-interpreter build matrix. This work is out of scope for 0.2.0.
+
+### 10.1. Establish the toolchain and the decision
+
+- [ ] 10.1.1. Confirm the minimum PyO3 and maturin versions that build and tag
+  `cp315-abi3.abi3t` wheels, and update the pins in `pyproject.toml`,
+  `rust/cuprum-rust/Cargo.toml`, and the wheel workflows together.
+  - Success: a prototype build on CPython 3.15 produces a wheel whose file name
+    and `WHEEL` metadata carry the `abi3.abi3t` tag set, and the existing
+    maturin pin-synchronization tests cover the new pins.
+- [ ] 10.1.2. Record the free-threading packaging decision in an ADR that
+  amends ADR-016.
+  - Requires 10.1.1.
+  - Success: the ADR states the wheel set per platform (`cp312-abi3` plus
+    `cp315-abi3.abi3t`), whether a version-specific `cp314-cp314t` wheel is
+    shipped for free-threaded 3.14 and why, and the conditions under which the
+    `cp312-abi3` wheel can later be retired.
+
+### 10.2. Make the extension safe to load without a GIL
+
+- [ ] 10.2.1. Declare the extension module safe to run without the GIL, and
+  audit every PyO3 entry point and every Rust structure shared across calls for
+  correctness when Python threads call in concurrently.
+  - Requires 10.1.2.
+  - Success: importing the extension on a free-threaded interpreter leaves
+    `sys._is_gil_enabled()` `False` and emits no GIL re-enable warning, and the
+    audit is recorded in
+    [Rust boundary verification](rust-boundary-verification.md).
+- [ ] 10.2.2. Audit Cuprum's Python layer for shared mutable state that relied
+  on the GIL, including the backend-resolution caches, observation-hook
+  registries, native-pump worker pool, and context variables.
+  - Requires 10.1.2.
+  - Success: each shared structure is either shown immutable, guarded by an
+    explicit lock, or confined to one thread, with the reasoning recorded in
+    the developers' guide.
+
+### 10.3. Test rigorously on free-threaded interpreters
+
+- [ ] 10.3.1. Add required free-threaded CI rows that run the full Python and
+  extension suites on CPython 3.15t without a `PYTHON_GIL` override, so an
+  import that silently re-enables the GIL is detected rather than masked.
+  - Requires 10.2.1 and 10.2.2.
+  - Success: `make test` passes on 3.15t for both the Python and Rust stream
+    backends with the interpreter's GIL re-enable `RuntimeWarning` promoted
+    to an error, and a guard test fails if `sys._is_gil_enabled()` becomes
+    `True` at any point in the run.
+- [ ] 10.3.2. Run the suite in parallel threads with `pytest-run-parallel`,
+  and add concurrency stress tests that drive commands, pipelines,
+  `run_concurrent`, line observation, and pump and exec observers from many
+  threads at once.
+  - Requires 10.3.1.
+  - Success: repeated threaded runs pass without flaky failures, deadlocks, or
+    leaked descriptors, and Hypothesis stateful tests cover concurrent hook
+    registration and detachment.
+- [ ] 10.3.3. Run the extension-backed suites under ThreadSanitizer on a
+  free-threaded interpreter, and extend the Loom models to the concurrent entry
+  points identified in 10.2.1.
+  - Requires 10.3.1.
+  - Success: ThreadSanitizer reports no data races in Cuprum's Rust or Python
+    code across the pump, consume, and cleanup paths, and Loom exhausts the
+    new models.
+- [ ] 10.3.4. Show that byte fidelity and throughput hold without the GIL.
+  - Requires 10.3.2.
+  - Success: the stream-fidelity property tests pass on 3.15t for both
+    backends, and the benchmark suite records free-threaded results beside the
+    GIL-enabled baseline without a regression beyond the ratchet threshold.
+
+### 10.4. Build, verify, and publish the wheels
+
+- [ ] 10.4.1. Build a `cp315-abi3.abi3t` wheel on every native platform
+  alongside the existing `cp312-abi3` wheel, without renaming required check
+  contexts.
+  - Requires 10.1.1.
+  - Success: each release produces both wheels per platform, and the wheel
+    snapshot and tag assertions cover the new wheel.
+- [ ] 10.4.2. Verify installer selection and runtime loading across the full
+  interpreter matrix.
+  - Requires 10.4.1 and 10.3.1.
+  - Success: CI installs from a local index containing every published wheel
+    and confirms that 3.12, 3.13, and 3.14 select `cp312-abi3`, that 3.15 and
+    3.15t select `cp315-abi3.abi3t`, that any interpreter without a matching
+    native wheel falls back to the pure Python wheel, and that
+    `is_rust_available()` is `True` and a Rust-backed pipeline succeeds
+    wherever a native wheel was installed.
+- [ ] 10.4.3. Document free-threaded support.
+  - Requires 10.4.2.
+  - Success: the users' guide lists the supported free-threaded interpreters
+    and the wheel each receives, and the changelog records the new wheel.
+
 [issue-379]: https://github.com/leynos/cuprum/issues/379
