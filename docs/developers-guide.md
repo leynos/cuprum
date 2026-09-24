@@ -473,7 +473,12 @@ nothing; its green check means "not run", not "3.15a passed". On push to `main`
 and on dispatch it runs in full and writes its compiler family.
 `tests/test_ci_experimental_leg.py` holds the flag's exact expression, the flag
 on every step, and the steps' presence, and `tests/helpers/ci_leg_gate.py` lets
-the other contracts read a step's own guard without the flag.
+the other contracts read a step's own guard without the flag. Those read text;
+`tests/integration/test_experimental_leg_integration.py`, part of
+`make test-act`, executes it. It projects the job with every step body replaced
+by `true`, runs one leg at a time under `act` in host mode, and asserts which
+steps ran: none for 3.15a on a pull request, the work but no saves for 3.12,
+and the work and the saves for both on a push.
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
