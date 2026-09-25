@@ -1,16 +1,16 @@
 """Contracts for installing the Makefile parser from the tool cache.
 
-`makeutil` parses the Makefile for the contract tests. It has no release, so
-CI builds it from a pinned commit with a pinned nightly, which cost about 0.8
-minutes in every job that ran it. The binary lands in `~/.cargo/bin`, which the
-tool cache already carries, so a job whose tool cache hit exactly already
-holds it. Skipping the build on that hit is safe only while the hit implies the
-pin, and these contracts hold the three things that make it so:
+`makeutil` parses the Makefile for the contract tests. CI downloads a pinned
+release binary and checks it against a digest pinned beside the version; it no
+longer compiles makeutil. The binary lands in `~/.cargo/bin`, which the tool
+cache already carries, so a job whose tool cache hit exactly already holds it.
+Skipping the download on that hit is safe only while the hit implies the pin,
+and these contracts hold the three things that make it so:
 
 * the pin lives in one place, `.github/actions/install-makeutil`, and nothing
-  else in the workflows builds makeutil;
+  else in the workflows fetches or builds makeutil;
 * the tool family's key hashes that action, so changing the pin misses and
-  rebuilds rather than keeping a stale binary; and
+  downloads rather than keeping a stale binary; and
 * every consumer restores the tool cache, with `~/.cargo/bin` in it, before an
   install step that runs through the action and only on a miss.
 """
@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import shlex
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -45,62 +46,49 @@ INSTALL_STEP: typ.Final = "Install Makefile parser"
 TOOL_CACHE_ID: typ.Final = "tool-cache"
 #: The install step's whole guard: run only when the tool cache missed.
 MISS_GUARD: typ.Final = f"steps.{TOOL_CACHE_ID}.outputs.cache-hit != 'true'"
-#: Where `cargo install` puts the binary, and so what the tool cache must hold.
+#: Where the action installs the binary, and so what the tool cache must hold.
 CARGO_BIN: typ.Final = "~/.cargo/bin"
 #: The makeutil source, which only the action may name.
 MAKEUTIL_SOURCE_URL: typ.Final = "https://github.com/leynos/makeutil"
 
 #: The pin, as the action declares it.
 PIN: typ.Final = {
-    "MAKEUTIL_REVISION": "6e64f4fe84419705badc30baa5649cbb6f69a298",
-    "MAKEUTIL_TOOLCHAIN": "nightly-2026-05-28",
+    "MAKEUTIL_VERSION": "v0.1.0",
+    "MAKEUTIL_TARGET": "x86_64-unknown-linux-musl",
+    "MAKEUTIL_SHA256": (
+        "99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d"
+    ),
 }
-#: The branch the pin must descend from.
-PIN_BRANCH: typ.Final = "refs/heads/main"
-#: The action's whole command, tokenized: refuse a pin `main` does not reach,
-#: then build it.
+#: The action's whole command, tokenized: download into a scratch directory,
+#: check the pinned digest, and only then install.
 INSTALL_TOKENS: typ.Final = (
     "set",
     "-euo",
     "pipefail",
-    "history=$(mktemp -d)",
-    "git",
-    "-C",
-    "${history}",
-    "init",
-    "--quiet",
-    "git",
-    "-C",
-    "${history}",
-    "fetch",
-    "--quiet",
-    "--filter=tree:0",
-    MAKEUTIL_SOURCE_URL,
-    PIN_BRANCH,
-    "git",
-    "-C",
-    "${history}",
-    "merge-base",
-    "--is-ancestor",
-    "${MAKEUTIL_REVISION}",
-    "FETCH_HEAD",
-    "rustup",
-    "toolchain",
+    "download=$(mktemp -d)/makeutil",
+    "curl",
+    "--fail",
+    "--location",
+    "--show-error",
+    "--silent",
+    "--output",
+    "${download}",
+    (
+        f"{MAKEUTIL_SOURCE_URL}/releases/download/${{MAKEUTIL_VERSION}}"
+        "/makeutil-${MAKEUTIL_TARGET}"
+    ),
+    "printf",
+    "%s  %s\\n",
+    "${MAKEUTIL_SHA256}",
+    "${download}",
+    "|",
+    "sha256sum",
+    "--check",
     "install",
-    "${MAKEUTIL_TOOLCHAIN}",
-    "--profile",
-    "minimal",
-    "RUSTFLAGS=-Zpolonius=next",
-    "cargo",
-    "+${MAKEUTIL_TOOLCHAIN}",
-    "install",
-    "--git",
-    MAKEUTIL_SOURCE_URL,
-    "--rev",
-    "${MAKEUTIL_REVISION}",
-    "--locked",
-    "--force",
-    "makeutil",
+    "-D",
+    "--mode=0755",
+    "${download}",
+    "${HOME}/.cargo/bin/makeutil",
 )
 
 #: Every job that runs the Makefile contracts, and so needs the parser.
@@ -131,8 +119,8 @@ def _position(
     return matches[0]
 
 
-def test_the_action_builds_the_pinned_revision() -> None:
-    """The action's one step is the pinned build, with the pin in its ``env``."""
+def test_the_action_installs_the_checked_release() -> None:
+    """The action's one step is the checked download, with the pin in its ``env``."""
     step = _action_step()
     assert step.get("env") == PIN, (
         f"{INSTALL_ACTION_PATH} must pin {PIN}, got {step.get('env')!r}"
@@ -140,22 +128,25 @@ def test_the_action_builds_the_pinned_revision() -> None:
     command = step.get("run")
     assert isinstance(command, str), f"{INSTALL_ACTION_PATH} must run a command"
     assert tuple(shlex.split(command.replace("\\\n", ""))) == INSTALL_TOKENS, (
-        f"{INSTALL_ACTION_PATH} must run exactly the pinned build, got {command!r}"
+        f"{INSTALL_ACTION_PATH} must run exactly the checked download, got {command!r}"
     )
 
 
-def test_the_pin_is_a_full_commit() -> None:
-    """An abbreviated or symbolic pin could name different code tomorrow.
+def test_the_pin_is_a_release_and_a_full_digest() -> None:
+    """A floating version or a short digest could admit a different binary.
 
-    The pin is read from the action rather than from ``PIN``. That the commit
-    descends from makeutil's ``main`` needs the network, so the action checks
-    it before building, and ``INSTALL_TOKENS`` holds that check in place.
+    The pin is read from the action rather than from ``PIN``.
     """
     environment = _action_step().get("env")
     assert isinstance(environment, dict), f"{INSTALL_ACTION_PATH} must pin in env"
-    revision = str(typ.cast("dict[str, object]", environment).get("MAKEUTIL_REVISION"))
-    assert re.fullmatch(r"[0-9a-f]{40}", revision), (
-        f"the makeutil pin must be a 40-hex commit, got {revision!r}"
+    pin = typ.cast("dict[str, object]", environment)
+    version = str(pin.get("MAKEUTIL_VERSION"))
+    digest = str(pin.get("MAKEUTIL_SHA256"))
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", version), (
+        f"the makeutil pin must be an exact release, got {version!r}"
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", digest), (
+        f"the makeutil digest must be a full SHA-256, got {digest!r}"
     )
 
 
@@ -167,12 +158,63 @@ def test_the_tool_key_hashes_the_pin() -> None:
     )
 
 
-def test_only_the_action_builds_makeutil() -> None:
-    """A second build elsewhere would carry a pin the tool key does not hash."""
-    builders = [
-        name for name, source in workflow_sources() if MAKEUTIL_SOURCE_URL in source
+#: A command that builds or installs makeutil by package name rather than by
+#: URL: `cargo install`, `cargo +toolchain install`, and either binstall form.
+_PACKAGE_INSTALL = re.compile(
+    r"(cargo(\s+\+\S+)?\s+b?install|cargo-binstall)\b[^\n]*\bmakeutil\b"
+)
+
+
+def _installs_makeutil_elsewhere(source: str) -> bool:
+    """Return whether ``source`` fetches or installs makeutil by any route."""
+    joined = source.replace("\\\n", " ")
+    return MAKEUTIL_SOURCE_URL in joined or bool(_PACKAGE_INSTALL.search(joined))
+
+
+def _other_actions() -> list[tuple[str, str]]:
+    """Return every local composite action except the install action."""
+    return [
+        (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
+        for path in sorted(Path(ROOT, ".github", "actions").glob("*/action.y*ml"))
+        if str(path.relative_to(ROOT)) != INSTALL_ACTION_PATH
     ]
-    assert builders == [], f"only {INSTALL_ACTION_PATH} may build makeutil: {builders}"
+
+
+def test_only_the_action_fetches_makeutil() -> None:
+    """A second fetch or build elsewhere would carry a pin the key does not hash.
+
+    Both routes count: a fetch of the repository URL, and a package install
+    such as `cargo install makeutil`, which names no URL at all.
+    """
+    builders = [
+        name
+        for name, source in [*workflow_sources(), *_other_actions()]
+        if _installs_makeutil_elsewhere(source)
+    ]
+    assert builders == [], f"only {INSTALL_ACTION_PATH} may fetch makeutil: {builders}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cargo install makeutil",
+        "cargo +nightly-2026-05-28 install --locked makeutil",
+        "cargo binstall makeutil",
+        "cargo-binstall --no-confirm makeutil",
+        "cargo install \\\n  --locked makeutil",
+        f"curl -o m {MAKEUTIL_SOURCE_URL}/releases/download/v1/makeutil",
+    ],
+)
+def test_the_refusal_recognizes_every_install_route(command: str) -> None:
+    """Each route is found, so the refusal above cannot pass by missing one."""
+    assert _installs_makeutil_elsewhere(command), command
+
+
+def test_the_refusal_ignores_other_tools() -> None:
+    """Installing a different crate is not a makeutil install."""
+    assert not _installs_makeutil_elsewhere("cargo install cargo-nextest --locked"), (
+        "installing another crate must not read as a makeutil install"
+    )
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)
