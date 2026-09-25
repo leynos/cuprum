@@ -27,9 +27,21 @@ jobs:
     steps:
       - name: Convert minutes to seconds
         id: calc
-        run: echo "secs=$(( ${{ github.event.inputs.delay_minutes }} * 60 ))" >> "$GITHUB_OUTPUT"
+        shell: bash
+        env:
+          DELAY_MINUTES: ${{ github.event.inputs.delay_minutes }}
+        run: |
+          set -euo pipefail
+          # Refuse anything but a whole number before it reaches arithmetic.
+          if ! [[ "${DELAY_MINUTES}" =~ ^[0-9]+$ ]]; then
+            echo "delay_minutes must be a whole number of minutes." >&2
+            exit 1
+          fi
+          echo "secs=$(( 10#${DELAY_MINUTES} * 60 ))" >> "$GITHUB_OUTPUT"
       - name: Wait requested time
-        run: sleep ${{ steps.calc.outputs.secs }}
+        env:
+          DELAY_SECONDS: ${{ steps.calc.outputs.secs }}
+        run: sleep "${DELAY_SECONDS}"
         shell: bash
       - name: Comment PR
         uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b

@@ -78,7 +78,11 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `verus`                   | `rust-boundaries.yml`        | `ubuntu-latest`       | none            | 20      |
 | `extended`                | `rust-boundaries.yml`        | `ubuntu-latest`       | none            | 45      |
 | `extension-tests-windows` | `ci.yml`                     | `windows-2022`        | none            | 20      |
-| `publish`                 | `release.yml`                | `ubuntu-latest`       | none            | 20      |
+| `check-version`           | `release.yml`                | `ubuntu-latest`       | none            | 10      |
+| `attest`                  | `release.yml`                | `ubuntu-latest`       | none            | 10      |
+| `publish-pypi`            | `release.yml`                | `ubuntu-latest`       | none            | 20      |
+| `draft-release`           | `release.yml`                | `ubuntu-latest`       | none            | 10      |
+| `publish-release`         | `release.yml`                | `ubuntu-latest`       | none            | 10      |
 | `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       | none            | 180     |
 | `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    | none            | 45      |
 | `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
@@ -2324,21 +2328,104 @@ Check a release candidate's two wheels against each other:
 ### Publishing a release
 
 Pushing a `v*.*.*` tag runs `.github/workflows/release.yml`. It builds the
-sdist and every wheel through `build-wheels.yml`, and publishes them with
-`uv publish` using PyPI Trusted Publishing, so no token is stored in GitHub. The
-`publish` job:
+sdist and every wheel through `build-wheels.yml`, attests them, publishes them
+to PyPI using Trusted Publishing, so no token is stored in GitHub, and then
+publishes a GitHub Release carrying the same files. Runs for one tag share a
+concurrency group with `cancel-in-progress: false`: a re-pushed tag queues
+behind the running release rather than cancelling it part-way through the
+upload.
 
-1. collects every wheel and requires exactly one sdist;
-2. reads the files already published from PyPI's JSON simple index and skips
-   any artefact whose filename is present, logging a notice for each;
-3. uploads the remainder with `--check-url https://pypi.org/simple/`, which
-   also skips an identical file uploaded by an interrupted earlier attempt.
+The workflow grants nothing at the top level (`permissions: {}`), and each job
+declares only the scopes it uses:
+
+Table 1: Release jobs and their token scopes
+
+| Job               | Scopes                                                     | Waits on                                         |
+| ----------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| `check-version`   | `contents: read`                                           | nothing                                          |
+| `build-wheels`    | `contents: read`                                           | nothing                                          |
+| `attest`          | `contents: read`, `id-token: write`, `attestations: write` | `check-version`, `build-wheels`                  |
+| `publish-pypi`    | `id-token: write`, in the `pypi` environment               | `attest`                                         |
+| `draft-release`   | `contents: write`                                          | `check-version`, `attest`                        |
+| `publish-release` | `contents: write`                                          | `check-version`, `draft-release`, `publish-pypi` |
+
+The jobs do the following:
+
+1. `check-version` requires the tag to name the version being released. The
+   shared `ensure-cargo-version` action from `leynos/shared-actions` strips the
+   leading `v` and compares the rest with `rust/cuprum-rust/Cargo.toml`, and
+   the next step compares the same value with `[project].version` in
+   `pyproject.toml`. Both comparisons are exact strings, so `v0.2.0-beta1`
+   passes against manifests declaring `0.2.0-beta1`, while `v1.2.3` fails
+   against `1.2.2`, as does the PEP 440 respelling `v0.2.0b1`. The shared
+   pyproject validator lives only inside the `release-to-pypi-uv` action, which
+   also builds and publishes and expects the GitHub Release to be published
+   first, so this repository repeats its comparison in-line. The job also
+   reports whether the version is a pre-release, recognizing a SemVer or PEP
+   440 marker (`-beta1`, `b1`, `rc2`, `a3`, and so on) directly after the
+   release segment. It runs beside the build so the paid build lane never
+   queues behind it, and every job that attests, uploads, or releases waits on
+   it.
+2. `attest` collects every wheel and requires exactly one sdist, then
+   generates a build provenance attestation for all of them with
+   `actions/attest-build-provenance`. It hands the files and the Sigstore
+   bundle, `cuprum-<tag>.sigstore.json`, on as the `release-dist` artefact, so
+   every later job ships the attested bytes. Verify a downloaded file with
+   `gh attestation verify <file> --repo leynos/cuprum`.
+3. `publish-pypi` reads the files already published from PyPI's JSON simple
+   index and skips any artefact whose filename is present, logging a notice for
+   each. The index request retries transient failures and is bounded by
+   connection and total timeouts, and a 404 reads as an empty index. It uploads
+   the remainder with `pypa/gh-action-pypi-publish` and `skip-existing: true`,
+   which also skips a file an interrupted earlier attempt already uploaded.
+   That action is used rather than `uv publish` because, under Trusted
+   Publishing, it also signs and uploads a PEP 740 attestation for every file;
+   `skip-existing` takes the place of uv's `--check-url`. When every artefact
+   is already on PyPI, the upload step is skipped and the job succeeds.
+4. `draft-release` reuses the tag's GitHub Release if one exists, draft or
+   published, and otherwise creates a draft with generated notes, marked as a
+   pre-release when `check-version` says so. It uploads every wheel, the sdist,
+   and the provenance bundle with `--clobber`, so a re-run replaces rather than
+   duplicates them.
+5. `publish-release` makes the release visible only after `publish-pypi` has
+   succeeded, keeping its pre-release status. A failed upload therefore leaves
+   the release a draft.
 
 PyPI never accepts a second upload of an existing filename, and rebuilt wheels
 are rarely byte-identical, so skipping by name is what makes a re-run of the
-same tag safe. A run that finds everything already published succeeds without
-uploading. `cuprum/unittests/test_release_publish_steps.py` executes these
-steps against scratch directories.
+same tag safe. `cuprum/unittests/test_release_publish_steps.py` and
+`cuprum/unittests/test_release_github_steps.py` execute the steps' scripts
+against scratch directories and a recording `gh` stand-in, through
+`tests/helpers/release_workflow.py`, which is scoped to `release.yml`.
+`cuprum/unittests/test_release_workflow_contract.py` pins the job scopes, the
+environment, the concurrency, the job ordering, and the pinned actions, and
+also holds a repository-wide rule: no `run` script in a workflow or composite
+action may expand a `${{ }}` expression. Values reach a shell through `env` and
+are read as quoted shell variables. The single reviewed exception is the
+CodeScene token check in `coverage-main.yml`, which renders only `true` or
+`false` and must name the secret there rather than in an `env` value.
+
+#### Repository and PyPI settings for publishing
+
+The upload is guarded to release tags by a GitHub environment, for the same
+reason the CodeScene upload is guarded to `main` as well as by its trigger. A
+trigger restricts only when the checked-in workflow runs: a branch that edits
+`release.yml` to add another trigger would otherwise obtain a token PyPI
+accepts, because PyPI trusts the workflow file rather than the ref. The
+environment's deployment rule is enforced by GitHub, outside anything a branch
+can edit. A repository administrator must:
+
+1. create an environment named `pypi` under **Settings → Environments**;
+2. restrict its deployment branches and tags to selected tags matching
+   `v*.*.*`, so only a release tag can deploy to it;
+3. register the environment in PyPI's Trusted Publisher settings for the
+   `cuprum` project: owner `leynos`, repository `cuprum`, workflow
+   `release.yml`, environment `pypi`.
+
+Until the environment exists, GitHub creates it unprotected on the first run,
+and a PyPI publisher registered without an environment accepts any. Both work,
+but neither enforces the tag restriction, so complete all three steps before
+the next release.
 
 ## Running the benchmark suite
 

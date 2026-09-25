@@ -8,40 +8,99 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue rather than cancel. A re-pushed tag that cancelled the running
+  # release could stop it part-way through the PyPI upload, leaving some files
+  # published and the GitHub Release a draft. The queued run then starts from
+  # a complete state, and the skip-by-name and `skip-existing` handling below
+  # makes it safe to repeat.
+  cancel-in-progress: false
 
-permissions:
-  contents: write
-  id-token: write
-
+# Every job declares exactly what it needs, so nothing inherits a write scope.
+permissions: {}
 
 jobs:
+  # Runs beside the build rather than before it, so the paid build lane never
+  # queues behind a hosted job; every job that attests, uploads, or releases
+  # waits on it instead.
+  check-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.cargo-version.outputs.version }}
+      prerelease: ${{ steps.pyproject-version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned to shared-actions `main` at 2026-09-04, the revision this
+      # repository's other shared-actions pins use. The tag loses its `v` and
+      # is compared with the manifest as a string, so `v0.2.0-beta1` matches
+      # `0.2.0-beta1` and any other spelling fails.
+      - name: Check the Cargo manifest version against the tag
+        id: cargo-version
+        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        with:
+          manifests: rust/cuprum-rust/Cargo.toml
+      # The shared pyproject.toml validator exists only inside
+      # `release-to-pypi-uv`, which also builds and publishes and requires the
+      # GitHub Release to be published first, so its comparison is repeated
+      # here: the declared string must equal the tag-derived version exactly.
+      - name: Check the pyproject.toml version against the tag
+        id: pyproject-version
+        env:
+          TAG_VERSION: ${{ steps.cargo-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          expected = os.environ["TAG_VERSION"]
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          declared = pyproject["project"]["version"]
+          if declared != expected:
+              print(
+                  "::error file=pyproject.toml,title=Tag/pyproject.toml mismatch::"
+                  f"Tag version {expected} does not match pyproject.toml version {declared}"
+              )
+              raise SystemExit(1)
+          # A pre-release marker directly after the release segment, in either
+          # spelling: SemVer `0.2.0-beta1` or PEP 440 `0.2.0b1`.
+          marker = r"\d+(?:\.\d+)*[-_.]?(?:a|alpha|b|beta|c|rc|pre|preview|dev)"
+          is_prerelease = re.match(marker, declared.lower()) is not None
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"prerelease={str(is_prerelease).lower()}\n")
+          print(f"Release tag {expected} matches pyproject.toml.")
+          PY
+
   build-wheels:
+    permissions:
+      contents: read
     uses: ./.github/workflows/build-wheels.yml
     with:
       python-version: '3.13'
 
-  publish:
+  # Attests exactly the files that are published, before anything leaves the
+  # run, and hands them on as one artefact so every later job ships the same
+  # bytes the attestation names.
+  attest:
     needs:
+      - check-version
       - build-wheels
-    # Release orchestration: it collects the wheels and sdist other jobs built
-    # and uploads them. No build work, so it stays on a GitHub-hosted runner.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
-        with:
-          python-version: '3.13'
-      - name: Install uv
-        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
-        with:
-          enable-cache: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
+          pattern: wheels-*
           path: dist
       - name: Collect release artefacts
         run: |
@@ -57,14 +116,58 @@ jobs:
             ls -al dist/publish >&2
             exit 1
           fi
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/publish/*
+      - name: Stage the provenance bundle
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/attestations
+          cp "${BUNDLE_PATH}" "dist/attestations/cuprum-${GITHUB_REF_NAME}.sigstore.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-dist
+          path: |
+            dist/publish
+            dist/attestations
+          if-no-files-found: error
+
+  publish-pypi:
+    needs:
+      - attest
+    # Release orchestration: it uploads the artefacts other jobs built. No
+    # build work, so it stays on a GitHub-hosted runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: pypi
+      url: https://pypi.org/project/cuprum/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.13'
       # PyPI rejects any second upload of an existing filename, and rebuilt
       # wheels are rarely byte-identical, so a re-run of this workflow would
       # otherwise fail on the files a previous run already published. Skip them
-      # by name; `--check-url` below additionally covers a partial upload.
+      # by name; `skip-existing` below additionally covers a partial upload.
       - name: Skip artefacts already on PyPI
+        id: pending
         run: |
           set -euo pipefail
           status=$(curl --silent --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 10 --max-time 60 \
             --output pypi-index.json --write-out '%{http_code}' \
             --header 'Accept: application/vnd.pypi.simple.v1+json' \
             https://pypi.org/simple/cuprum/)
@@ -78,6 +181,7 @@ jobs:
           esac
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           index = json.loads(Path("pypi-index.json").read_text(encoding="utf-8"))
@@ -86,14 +190,83 @@ jobs:
               if artefact.name in published:
                   print(f"::notice::Skipping {artefact.name}: already on PyPI")
                   artefact.unlink()
+          has_remaining = any(Path("dist/publish").iterdir())
+          if not has_remaining:
+              print("Every artefact is already on PyPI; nothing to publish.")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"remaining={str(has_remaining).lower()}\n")
           PY
-      - name: Publish to PyPI with uv
+      # pypa's action rather than `uv publish`: with Trusted Publishing it also
+      # signs and uploads a PEP 740 attestation for every file, which uv does
+      # not. `skip-existing` takes the place of uv's `--check-url`, so a file
+      # an interrupted earlier attempt already uploaded is skipped, not fatal.
+      - name: Publish to PyPI
+        if: steps.pending.outputs.remaining == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          packages-dir: dist/publish/
+          skip-existing: true
+
+  # Drafted beside the PyPI upload, and made visible only by `publish-release`
+  # once that upload has succeeded, so a failure leaves nothing published.
+  draft-release:
+    needs:
+      - check-version
+      - attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: release-dist
+          path: dist
+      - name: Create or reuse the draft release
+        env:
+          IS_PRERELEASE: ${{ needs.check-version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # A re-run reuses whatever release the tag already has, draft or not.
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            echo "Reusing the existing release for ${GITHUB_REF_NAME}."
+            exit 0
+          fi
+          flags=(--draft --verify-tag --generate-notes --title "${GITHUB_REF_NAME}")
+          if [ "${IS_PRERELEASE}" = true ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${flags[@]}"
+      - name: Upload release assets
         run: |
           set -euo pipefail
           shopt -s nullglob
-          artefacts=(dist/publish/*)
-          if [ "${#artefacts[@]}" -eq 0 ]; then
-            echo "Every artefact is already on PyPI; nothing to publish."
-            exit 0
+          assets=(dist/publish/* dist/attestations/*)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release assets to upload." >&2
+            exit 1
           fi
-          uv publish --check-url https://pypi.org/simple/ "${artefacts[@]}"
+          gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
+
+  publish-release:
+    needs:
+      - check-version
+      - draft-release
+      - publish-pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.check-version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          gh release edit "${GITHUB_REF_NAME}" --draft=false \
+            --prerelease="${IS_PRERELEASE}"

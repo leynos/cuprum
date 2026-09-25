@@ -86,10 +86,13 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         id: pytag
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ inputs.python-version }}
         run: |
+          set -euo pipefail
           # Convert "3.13" or "3.13.1" to "cp313" format for manylinux /opt/python paths
           # Extract major.minor only, then remove the dot
-          version='${{ inputs.python-version }}'
+          version="${PYTHON_VERSION}"
           major_minor="$(echo "${version}" | cut -d. -f1,2)"
           pytag="cp$(echo "${major_minor}" | tr -d '.')"
           echo "tag=${pytag}" >> "$GITHUB_OUTPUT"

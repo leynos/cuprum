@@ -49,18 +49,25 @@ runs:
           cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ inputs.maturin-version }}-
     - name: Install maturin
       shell: bash
-      run: python -m pip install --upgrade "maturin==${{ inputs.maturin-version }}"
+      env:
+        MATURIN_VERSION: ${{ inputs.maturin-version }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade "maturin==${MATURIN_VERSION}"
     - name: Build wheels with maturin
       shell: bash
+      env:
+        WHEELHOUSE: ${{ inputs.wheelhouse }}
+        TARGET: ${{ inputs.target }}
       run: |
-        set -eu
+        set -euo pipefail
         args=(
           --release
-          --out "${{ inputs.wheelhouse }}"
+          --out "${WHEELHOUSE}"
           --manifest-path rust/cuprum-rust/Cargo.toml
         )
-        if [ -n "${{ inputs.target }}" ]; then
-          args+=(--target "${{ inputs.target }}")
+        if [ -n "${TARGET}" ]; then
+          args+=(--target "${TARGET}")
         fi
         maturin build "${args[@]}"
     - name: Upload wheel artefact
