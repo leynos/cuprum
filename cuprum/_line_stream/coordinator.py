@@ -15,6 +15,12 @@ The consumer tasks are registered in ``_RunTaskOwnership.consumers``, so the
 shared reconciliation cancels and drains them exactly once on every exit
 path: completion, timeout, caller ``break``, generator close, and external
 cancellation alike.
+
+This module holds the run, teardown, and coordination steps. The queue
+plumbing, telemetry types, pre-return spawn machinery, and post-exit drain live
+in sibling modules of the ``cuprum._line_stream`` package, which re-exports all
+of them. Tests that replace a collaborator of these steps patch this module,
+because each function resolves those names through this module's globals.
 """
 
 from __future__ import annotations
@@ -25,20 +31,19 @@ import typing as typ
 from time import perf_counter
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._line_callbacks import _chain_line_hooks
+from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._line_stream.spawn import (
+    _abandon_unstarted_run,
+    _build_unstarted_run,
+    _with_line_sink_hooks,
+)
+from cuprum._line_stream.telemetry import (
+    _LineStreamEventDetails,
+    _LineStreamTelemetry,
+)
 from cuprum._pipeline_types import _EventDetails
-from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_execution import (
-    _spawn_subprocess,
-    _SubprocessExecution,
-)
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_streams import (
-    _build_stream_config,
-    _spawn_stream_consumers,
-    _StreamConsumerSpawnContext,
-)
+from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_execution import _spawn_subprocess, _SubprocessExecution
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -51,294 +56,25 @@ from cuprum._subprocess_wait import (
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
-    _RunTaskOwnership,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum.line_stream_events import (
-    LineStreamEvent,
-    LineStreamPhase,
-    LineStreamSink,
-)
-from cuprum.line_stream_observation import _emit_line_stream_event
-from cuprum.lines import LineEvent, LineStreamName
+from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.events import ExecId
-    from cuprum.lines import _LineHookFn
+    from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
     from cuprum.sh import CommandResult
 
-# The queue item is a line event while the run streams, and the run's
-# ``CommandResult`` exactly once, when the coordinator finishes; the result
-# doubles as the sentinel that ends iteration.
-type _LineQueueItem = LineEvent | CommandResult
-
-# Finite on purpose. The sink awaits ``queue.put``, so a caller iterating
-# slowly stops the consumers reading the pipe instead of letting a chatty child
-# grow the queue without bound.
-_LINE_QUEUE_CAPACITY = 256
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _LineStreamEventDetails:
-    """Optional bounded fields attached to one line-stream lifecycle event."""
-
-    stream: LineStreamName | None = None
-    sink: LineStreamSink | None = None
-    error: BaseException | None = None
-    queue_size: int | None = None
-
-
-@dc.dataclass(slots=True)
-class _LineStreamTelemetry:
-    """Emit correlated, bounded lifecycle details for one line-stream run."""
-
-    exec_id: ExecId
-    queue_capacity: int
-    pid: int | None = None
-    is_queue_saturated: bool = False
-
-    def emit(
-        self,
-        phase: LineStreamPhase,
-        details: _LineStreamEventDetails | None = None,
-    ) -> None:
-        """Publish one lifecycle boundary without carrying decoded text."""
-        event_details = details or _LineStreamEventDetails()
-        _emit_line_stream_event(
-            LineStreamEvent(
-                phase=phase,
-                exec_id=self.exec_id,
-                pid=self.pid,
-                stream=event_details.stream,
-                sink=event_details.sink,
-                queue_size=event_details.queue_size,
-                queue_capacity=(
-                    self.queue_capacity
-                    if event_details.queue_size is not None
-                    else None
-                ),
-                error_type=(
-                    type(event_details.error).__name__
-                    if event_details.error is not None
-                    else None
-                ),
-            )
-        )
-
-    def report_queue_saturation(
-        self,
-        queue: asyncio.Queue[_LineQueueItem],
-        event: LineEvent,
-    ) -> None:
-        """Report a transition into bounded queue backpressure."""
-        if queue.full() and not self.is_queue_saturated:
-            self.is_queue_saturated = True
-            self.emit(
-                LineStreamPhase.QUEUE_SATURATED,
-                _LineStreamEventDetails(
-                    stream=event.stream,
-                    queue_size=queue.qsize(),
-                ),
-            )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _LineStreamRun:
-    """The spawned pieces one ``lines()`` iteration coordinates.
-
-    Attributes
-    ----------
-    process:
-        The subprocess whose stdout and stderr feed the queue.
-    tasks:
-        Ownership of the stdin writer and the stream consumers, so the shared
-        reconciliation cancels and drains each exactly once.
-    queue:
-        The queue every ``LineEvent`` is posted to; the sentinel ends
-        iteration.
-    started_at:
-        Monotonic reference the per-line ``at`` stamps are measured from.
-
-    """
-
-    process: asyncio.subprocess.Process
-    tasks: _RunTaskOwnership
-    queue: asyncio.Queue[_LineQueueItem]
-    started_at: float
-    telemetry: _LineStreamTelemetry
-
-
-def _line_event_queue() -> asyncio.Queue[_LineQueueItem]:
-    """Return the finite queue one ``lines()`` iteration consumes."""
-    return asyncio.Queue(maxsize=_LINE_QUEUE_CAPACITY)
-
-
-def _queue_line_sink(
-    queue: asyncio.Queue[_LineQueueItem],
-    telemetry: _LineStreamTelemetry | None = None,
-) -> _LineHookFn:
-    """Return an asynchronous hook that posts each ``LineEvent`` to the queue.
-
-    Asynchronous rather than a synchronous ``put_nowait`` because the queue is
-    finite: a full queue parks the stream consumer until the iterator drains a
-    slot, so ``lines()`` applies backpressure to the child instead of dropping
-    events or retaining them without limit. A synchronous sink could only
-    raise ``asyncio.QueueFull`` out of the drain loop.
-
-    Returns
-    -------
-    _LineHookFn
-        The hook that posts one event to *queue*, awaiting a free slot when the
-        queue is full.
-    """
-
-    async def enqueue(event: LineEvent) -> None:
-        """Post one stamped line to the consumer queue."""
-        if telemetry is not None:
-            telemetry.report_queue_saturation(queue, event)
-        await queue.put(event)
-        if telemetry is not None:
-            telemetry.is_queue_saturated = queue.full()
-
-    return enqueue
-
-
-def _observed_line_hook(
-    hook: _LineHookFn,
-    sink: LineStreamSink,
-    telemetry: _LineStreamTelemetry,
-) -> _LineHookFn:
-    """Wrap one delivery hook so its failure is correlated before it escapes."""
-
-    async def deliver(event: LineEvent) -> None:
-        """Deliver one event while preserving the hook's failure semantics."""
-        try:
-            outcome = hook(event)
-            if outcome is not None:
-                await outcome
-        except asyncio.CancelledError:
-            telemetry.emit(
-                LineStreamPhase.CANCELLED,
-                _LineStreamEventDetails(stream=event.stream, sink=sink),
-            )
-            raise
-        except BaseException as error:
-            telemetry.emit(
-                LineStreamPhase.SINK_FAILED,
-                _LineStreamEventDetails(
-                    stream=event.stream,
-                    sink=sink,
-                    error=error,
-                ),
-            )
-            raise
-
-    return deliver
-
-
-async def _abandon_unstarted_run(
-    run: _LineStreamRun,
-    execution: _SubprocessExecution,
-) -> None:
-    """Terminate, reap, and drain a run that failed before it was returned.
-
-    Reached when post-spawn setup raised, so nothing holds the run: the caller
-    never received it, and none of the exits that settle a handed-back run will
-    ever see it. The heartbeat stops first — the pipeline's spawn helper does
-    the same, and a keepalive narrating a child that is already being torn down
-    is worse than no keepalive at all. The child is then stopped and reaped
-    before its streams are drained, because both drain policies wait for the
-    consumers to reach EOF and a live child can hold its own pipe open.
-    Discarding whatever the drain finds is what keeps the post-spawn failure the
-    one that propagates.
-    """
-    await _stop_idle_monitor(execution.idle)
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    await _terminate_all_shielded((run.process,), execution.ctx.cancel_grace)
-    await _discard_drain(run, run.process.pid, execution)
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
-
-
-def _with_line_sink_hooks(
-    execution: _SubprocessExecution,
-    queue: asyncio.Queue[_LineQueueItem],
-    telemetry: _LineStreamTelemetry,
-) -> _SubprocessExecution:
-    """Chain the caller's ``on_line`` ahead of the driver's queue sink.
-
-    Each hook is wrapped so its failure is correlated before it escapes, and
-    the result is a rebuilt execution rather than a mutated one: the bundle is
-    a frozen dataclass, and the stream consumers read ``on_line`` off it.
-
-    Returns
-    -------
-    _SubprocessExecution
-        The execution whose per-line callback feeds both the caller and the
-        queue.
-    """
-    hooks: list[_LineHookFn] = []
-    if execution.on_line is not None:
-        hooks.append(_observed_line_hook(execution.on_line, "callback", telemetry))
-    hooks.append(
-        _observed_line_hook(_queue_line_sink(queue, telemetry), "queue", telemetry)
-    )
-    return dc.replace(execution, on_line=_chain_line_hooks(hooks))
-
-
-def _build_unstarted_run(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    queue: asyncio.Queue[_LineQueueItem],
-    telemetry: _LineStreamTelemetry,
-) -> _LineStreamRun:
-    """Build the run and own every task it will need, before anything can fail.
-
-    Splitting this from the spawn keeps the ownership complete by construction:
-    by the time this returns, the stdin writer and both consumers exist, so the
-    caller's first fallible step — the ``start`` emission — already has a whole
-    run to abandon rather than a partial one to guess at.
-
-    Nothing here suspends or fails. ``_build_stream_config`` only reads the
-    execution, ``_spawn_stdin_writer`` and ``_spawn_stream_consumers`` are plain
-    ``create_task`` calls, and ``_LineStreamRun`` is a frozen dataclass, so no
-    exception can escape and leave a child running with half-built ownership.
-
-    Returns
-    -------
-    _LineStreamRun
-        The unstarted run, owning the process and every task that reads it.
-    """
-    discard_on_cancel = asyncio.Event()
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
-    # The same consumer builder ``run()`` uses, so iterating lines can never
-    # silently diverge from it on capture, echo, or sink selection.
-    spawn_context = _StreamConsumerSpawnContext(
-        stream_config=stream_config,
-        pid=process.pid,
-        relay_diagnostics=relay_diagnostics,
-    )
-    return _LineStreamRun(
-        process=process,
-        tasks=_RunTaskOwnership(
-            stdin_task=_spawn_stdin_writer(
-                process, execution.stdin_data, execution.observation
-            ),
-            consumers=_spawn_stream_consumers(
-                process,
-                execution,
-                spawn_context,
-            ),
-            discard_on_cancel=discard_on_cancel,
-            relay_diagnostics=relay_diagnostics,
-            idle=execution.idle,
-        ),
-        queue=queue,
-        started_at=execution.started_at,
-        telemetry=telemetry,
-    )
+__all__ = [
+    "_cleanup_failed_line_stream_run",
+    "_coordinate_line_stream",
+    "_discard_drain",
+    "_run_line_stream_teardown",
+    "_run_to_command_result",
+    "_start_line_stream_run",
+    "_wait_for_line_stream_exit",
+]
 
 
 async def _start_line_stream_run(
@@ -520,25 +256,6 @@ async def _cleanup_failed_line_stream_run(
             ),
         ),
     )
-
-
-async def _drain_after_exit(
-    run: _LineStreamRun,
-    pid: int | None,
-    execution: _SubprocessExecution,
-) -> tuple[str | None, str | None]:
-    """Await the settled consumers and drain them exactly once on failure."""
-    if run.tasks.stdin_task is not None:
-        try:
-            await run.tasks.stdin_task
-        except BaseException:
-            await _discard_drain(run, pid, execution)
-            raise
-    try:
-        return await asyncio.gather(*run.tasks.consumers)
-    except BaseException:
-        await _discard_drain(run, pid, execution)
-        raise
 
 
 async def _discard_drain(

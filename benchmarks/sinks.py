@@ -180,7 +180,7 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         traceback: types.TracebackType | None,
-    ) -> bool | None:
+    ) -> None:
         """Close the sink and wait briefly for the drainer to finish."""
         if self._slave is not None:
             self._slave.close()
@@ -192,7 +192,6 @@ class PtyBlackhole(contextlib.AbstractContextManager[typ.IO[str]]):
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._publish_finished_drainer()
-        return None
 
     def _publish_finished_drainer(self) -> None:
         """Join a finished drainer and publish its byte count."""

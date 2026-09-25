@@ -185,16 +185,14 @@ INTERROGATE_TARGETS ?= benchmarks conftest.py cuprum scripts tests
 INTERROGATE = $(UV_RUN_ENV) uv run interrogate --fail-under 100 $(INTERROGATE_TARGETS)
 PYLINT_PYTHON ?= pypy
 PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests
-PYLINT_PYPY_SHIM_REF ?= 726d09f968b4d729ee4b29c71fc732e744854f3b
-PYLINT_PYPY_SHIM = git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)
-# Pin pylint itself: the shim ref is pinned but pylint is a floating
-# dependency of it, so new pylint releases would otherwise change lint
-# behaviour without any repository change (same skew class as ruff above).
-PYLINT_VERSION ?= 4.0.7
+# Pin pylint: a new release would otherwise change lint behaviour without any
+# repository change (same skew class as ruff above). Pylint 4.0.9 runs on PyPy
+# without the former pylint-pypy-shim patch.
+PYLINT_VERSION ?= 4.0.9
 PYLINT_CACHE ?= .cache/pylint
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
-  --from '$(PYLINT_PYPY_SHIM)' --with 'pylint==$(PYLINT_VERSION)' pylint-pypy
+  --from 'pylint==$(PYLINT_VERSION)' pylint
 TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.2
 TYPOS_CONFIG_BUILDER = $(UV_RUN_ENV) uv tool run --python 3.14 --from \
   "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \

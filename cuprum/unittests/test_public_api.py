@@ -260,6 +260,48 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
     assert hints["stdout"] == str | None
 
 
+@pytest.mark.parametrize(
+    ("qualname", "expected_return"),
+    [
+        ("SafeCmd.run", "CommandResult"),
+        ("SafeCmd.run_sync", "CommandResult"),
+        ("Pipeline.run", "PipelineResult"),
+        ("Pipeline.run_sync", "PipelineResult"),
+    ],
+)
+def test_execution_method_type_hints_resolve_at_runtime(
+    qualname: str,
+    expected_return: str,
+) -> None:
+    """Run methods resolve their result annotations via typing.get_type_hints."""
+    import typing as typ
+
+    from cuprum import sh
+
+    owner_name, method_name = qualname.split(".")
+    method = getattr(getattr(sh, owner_name), method_name)
+    hints = typ.get_type_hints(method)
+    assert hints["return"] is getattr(sh, expected_return), (
+        f"{qualname} must resolve its return annotation to "
+        f"cuprum.sh.{expected_return}, got {hints['return']!r}"
+    )
+    assert hints["context"] == sh.ExecutionContext | None
+
+
+def test_safe_cmd_and_make_type_hints_resolve_at_runtime() -> None:
+    """SafeCmd fields, pipeline composition, and make resolve their hints."""
+    import typing as typ
+
+    from cuprum import sh
+
+    assert typ.get_type_hints(sh.SafeCmd)["project"] is c.ProjectSettings
+    assert typ.get_type_hints(sh.Pipeline.concat)["return"] is sh.Pipeline
+    make_hints = typ.get_type_hints(sh.make)
+    assert make_hints["program"] is c.Program, (
+        f"make must resolve its Program annotation, got {make_hints['program']!r}"
+    )
+
+
 def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
     """RelayFallback is immutable and carries only closed-set vocabulary."""
     from cuprum.echo_events import EchoErrorCategory, EchoStream

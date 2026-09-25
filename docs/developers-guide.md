@@ -949,10 +949,14 @@ surface is re-exported from `cuprum/context/__init__.py`:
 - `cuprum/context/env_overlay.py` — pure overlay merging
   (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
   dependency.
-- `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
-  `ScopeConfig`), the `ContextError` package-level root of the domain exception
-  hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
-  the before/after hook type aliases.
+- `cuprum/context/core.py` — the `CuprumContext` domain dataclass and timeout
+  validation. It re-exports `ScopeConfig`, the `ContextError` package-level
+  root of the domain exception hierarchy, its `ForbiddenProgramError` subclass,
+  and the before/after hook type aliases, all now defined in
+  `cuprum/context/_scope.py`.
+- `cuprum/context/_scope.py` — `ContextError`, `ForbiddenProgramError`,
+  `ScopeConfig`, and the `BeforeHook`/`AfterHook` type aliases, split out of
+  `core.py` to keep it under the 400-line ceiling.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
   `get_context`, and the internal set/reset helpers).
 - `cuprum/context/scoped.py` — `_ScopedContext` and `scoped`, which narrows a
@@ -2792,6 +2796,14 @@ result platform-dependent.
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
 
+`benchmarks/tee_profile_worker.py` remains the public module and CLI entry point
+(`main()`), re-exporting the stable API while the implementation is split
+across supporting modules: configuration and result types in
+`benchmarks/_tee_profile_worker_config.py`, command construction in
+`benchmarks/_tee_profile_worker_command.py`, and execution and result assembly
+in `benchmarks/_tee_profile_worker_execution.py`. Backend selection continues
+to live in `benchmarks/_tee_profile_worker_backend.py`.
+
 `TeeProfileWorkerConfig` defines one worker run. It validates that
 `fixture_path` points to an existing file, `stages >= 1`, `repeat_count >= 1`,
 and that `mode`, `sink_kind`, and `backend` are members of the supported
@@ -4148,9 +4160,10 @@ docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
 *presence* at 100 per cent across every Python scope: `benchmarks`,
 `conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks run
-third through the `leynos/pylint-pypy-shim` package under PyPy. The pinned
-`df12-python-lints` plugin runs fourth under CPython 3.14, and `ambrleaks`
-scans Syrupy snapshots fifth under the same interpreter.
+third under PyPy 3.12, which uv resolves directly for `--python pypy`; no
+parser-patching shim is required. The pinned `df12-python-lints` plugin runs
+fourth under CPython 3.14, and `ambrleaks` scans Syrupy snapshots fifth under
+the same interpreter.
 
 The decisions are recorded in
 [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
@@ -4166,12 +4179,11 @@ The short version is:
 - Pylint owns selected checks that Ruff does not cover, especially logging
   interpolation, pattern matching, generator control flow, environment
   handling, subprocess safety, and selected readability checks.
-- Pylint runs through the PyPy shim so that the third tier is isolated from the
-  project virtual environment and matches the lint approach used by
-  `leynos/episodic`.
+- Pylint runs under PyPy so that the third tier is isolated from the project
+  virtual environment and matches the lint approach used by `leynos/episodic`.
 - `$(PYLINT)` pins Pylint itself with
-  `--with 'pylint==$(PYLINT_VERSION)'` because the shim revision and Pylint
-  package version are separate sources of lint behaviour.
+  `--from 'pylint==$(PYLINT_VERSION)'`, currently 4.0.9, which runs on PyPy
+  3.12 without the former `pylint-pypy-shim` patch.
 - `$(DF12_PYLINT)` enables every message shipped by
   `df12-python-lints` v0.3.0 under CPython 3.14 while retaining Cuprum's
   `py-version = "3.12"` semantic baseline.
@@ -4238,7 +4250,7 @@ make lint
 1. `$(RUFF) check`
 2. `$(INTERROGATE)` — `$(UV_RUN_ENV) uv run interrogate --fail-under 100`
    `benchmarks conftest.py cuprum scripts tests`
-3. The PyPy-backed `pylint-pypy` command stored in `$(PYLINT)`, with
+3. The PyPy-backed Pylint command stored in `$(PYLINT)`, with
    `$(PYLINT_TARGETS)` appended.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
    the same targets.
@@ -4410,36 +4422,34 @@ The root `Makefile` exposes the following lint-related variables:
 
 Table: Lint-related Makefile variables and their defaults.
 
-| Variable                    | Default                                                                      | Purpose                                                                                                                     |
-| --------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `VENV_TOOLS`                | `pytest ruff`                                                                | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
-| `RUFF_VERSION`              | `0.16.4`                                                                     | Ruff release supplied to `uv tool run --from`.                                                                              |
-| `RUFF_ENV`                  | `RAYON_NUM_THREADS=1`                                                        | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
-| `RUFF`                      | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff`  | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
-| `TY_VERSION`                | `0.0.74`                                                                     | ty release supplied to `uv tool run --from`.                                                                                |
-| `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                    | Pinned ty command used by `typecheck`.                                                                                      |
-| `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files interrogated for docstring coverage.                                                                  |
-| `INTERROGATE`               | Derived command                                                              | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
-| `PYLINT_PYTHON`             | `pypy`                                                                       | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
-| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                                | Directories and files passed to `pylint-pypy`.                                                                              |
-| `PYLINT_PYPY_SHIM_REF`      | `726d09f968b4d729ee4b29c71fc732e744854f3b`                                   | Pinned revision of `leynos/pylint-pypy-shim`.                                                                               |
-| `PYLINT_PYPY_SHIM`          | `git+https://github.com/leynos/pylint-pypy-shim.git@$(PYLINT_PYPY_SHIM_REF)` | Install source used by `uv tool run`.                                                                                       |
-| `PYLINT_VERSION`            | `4.0.7`                                                                      | Pylint package version supplied to `uv tool run` through `--with`.                                                          |
-| `PYLINT_CACHE`              | `.cache/pylint`                                                              | Worktree-local cache shared by both Pylint passes.                                                                          |
-| `PYLINT`                    | Derived command                                                              | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
-| `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                     | Controlled release tag selected for DF12 lint tooling.                                                                      |
-| `DF12_PYTHON`               | `3.14`                                                                       | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
-| `DF12_PYLINT_MESSAGES`      | All v0.3.0 message IDs, including `R9112`                                    | Explicit allowlist for the df12 Pylint pass.                                                                                |
-| `DF12_PYLINT`               | Derived command                                                              | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
-| `AMBRLEAKS`                 | Derived command                                                              | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
-| `SKYLOS_VERSION`            | `4.33.2`                                                                     | Pinned standalone Skylos release.                                                                                           |
-| `SKYLOS`                    | Derived command                                                              | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
-| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                     | Production paths passed to Skylos.                                                                                          |
-| `SKYLOS_EXCLUDE_FOLDERS`    | `cuprum/unittests`                                                           | Test-only paths excluded from the production scan.                                                                          |
-| `SKYLOS_WHITELIST_LOCK`     | `.skylos-whitelist.lock`                                                     | Lock file serializing `skylos-allow` updates.                                                                               |
-| `LOCAL_TOOL_ENV`            | POSIX: derived `PATH`; Windows: empty                                        | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
-| `UV_ENV`                    | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                               | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
-| `UV_RUN_ENV`                | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                                | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
+| Variable                    | Default                                                                     | Purpose                                                                                                                     |
+| --------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `VENV_TOOLS`                | `pytest ruff`                                                               | Tools checked in the project virtualenv; Ruff uses its pinned command.                                                      |
+| `RUFF_VERSION`              | `0.16.4`                                                                    | Ruff release supplied to `uv tool run --from`.                                                                              |
+| `RUFF_ENV`                  | `RAYON_NUM_THREADS=1`                                                       | Keeps Ruff parallelism deterministic for the lint and format gates.                                                         |
+| `RUFF`                      | `$(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from 'ruff==$(RUFF_VERSION)' ruff` | Pinned Ruff command used by `fmt`, `check-fmt`, and `lint`.                                                                 |
+| `TY_VERSION`                | `0.0.74`                                                                    | ty release supplied to `uv tool run --from`.                                                                                |
+| `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                   | Pinned ty command used by `typecheck`.                                                                                      |
+| `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files interrogated for docstring coverage.                                                                  |
+| `INTERROGATE`               | Derived command                                                             | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
+| `PYLINT_PYTHON`             | `pypy`                                                                      | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
+| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files passed to the PyPy-backed Pylint tier.                                                                |
+| `PYLINT_VERSION`            | `4.0.9`                                                                     | Pylint package version supplied to `uv tool run` through `--from`.                                                          |
+| `PYLINT_CACHE`              | `.cache/pylint`                                                             | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `PYLINT`                    | Derived command                                                             | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
+| `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                    | Controlled release tag selected for DF12 lint tooling.                                                                      |
+| `DF12_PYTHON`               | `3.14`                                                                      | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
+| `DF12_PYLINT_MESSAGES`      | All v0.3.0 message IDs, including `R9112`                                   | Explicit allowlist for the df12 Pylint pass.                                                                                |
+| `DF12_PYLINT`               | Derived command                                                             | CPython 3.14 Pylint command loading `df12_python_lints`.                                                                    |
+| `AMBRLEAKS`                 | Derived command                                                             | Lock-backed snapshot-scanner command used by `make lint`.                                                                   |
+| `SKYLOS_VERSION`            | `4.33.2`                                                                    | Pinned standalone Skylos release.                                                                                           |
+| `SKYLOS`                    | Derived command                                                             | Skylos command using the reviewed `pyproject.toml` configuration.                                                           |
+| `SKYLOS_PRODUCTION_TARGETS` | `cuprum`                                                                    | Production paths passed to Skylos.                                                                                          |
+| `SKYLOS_EXCLUDE_FOLDERS`    | `cuprum/unittests`                                                          | Test-only paths excluded from the production scan.                                                                          |
+| `SKYLOS_WHITELIST_LOCK`     | `.skylos-whitelist.lock`                                                    | Lock file serializing `skylos-allow` updates.                                                                               |
+| `LOCAL_TOOL_ENV`            | POSIX: derived `PATH`; Windows: empty                                       | On POSIX, adds local binary directories before invoking tools; on `Windows_NT`, preserves the PATH `setup-uv` configured.   |
+| `UV_ENV`                    | `UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools`                              | Keeps `uv` cache and tool installs local to the worktree.                                                                   |
+| `UV_RUN_ENV`                | `$(LOCAL_TOOL_ENV) $(UV_ENV)`                                               | Shared environment prefix for locked `uv run` commands and the pinned `uv tool run` commands used by `$(RUFF)` and `$(TY)`. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -4447,11 +4457,11 @@ Override these variables only for local diagnosis. For example, to lint a
 single module with the configured second tier:
 
 ```bash
-PYLINT_TARGETS=cuprum/sh.py make lint
+PYLINT_TARGETS=cuprum/sh make lint
 ```
 
-Do not change `PYLINT_PYPY_SHIM_REF` casually. Updating the pinned shim
-revision changes the lint runtime and must be reviewed like any other toolchain
+Do not change `PYLINT_VERSION` casually. A new Pylint release can change lint
+behaviour without any repository change, so treat it like any other toolchain
 update. Update the `df12-python-lints` development dependency and
 `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
 select the same controlled release tag. When adopting a new release, update
@@ -4468,7 +4478,7 @@ a separate house style. The imported policy consists of:
 - Test-file exceptions for assertion-heavy tests and pytest method conventions.
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
-- A PyPy-backed Pylint invocation through the pinned shim repository.
+- A PyPy-backed Pylint invocation, pinned to a specific Pylint release.
 - Every `df12-python-lints` v0.3.0 message, including `R9112`, executed under
   CPython 3.14.
 - `ambrleaks` coverage for unit, script, and behavioural Syrupy snapshots.
@@ -5402,7 +5412,12 @@ Table 1: Line-observation implementation boundaries
 
 | Module                                                               | Responsibility                                                                                                                                          |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cuprum/_line_stream.py`                                             | Owns the line-run queue, queue sink, subprocess start, coordinator, and final result hand-off.                                                          |
+| `cuprum/_line_stream/`                                               | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
+| `cuprum/_line_stream/coordinator.py`                                 | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
+| `cuprum/_line_stream/telemetry.py`                                   | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
+| `cuprum/_line_stream/line_queue.py`                                  | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
+| `cuprum/_line_stream/spawn.py`                                       | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
+| `cuprum/_line_stream/drain.py`                                       | Drains a line stream's settled consumers once the child has exited.                                                                                     |
 | `cuprum/_line_iteration.py`                                          | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
 | `cuprum/_line_callbacks.py`                                          | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
 | `cuprum/_subprocess_streams.py`                                      | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |

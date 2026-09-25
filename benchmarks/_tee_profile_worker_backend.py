@@ -92,7 +92,6 @@ class BackendSelector(typ.Protocol):
         _MetricsState
             Metrics accumulated during selector activation.
         """
-        ...
 
     def __call__(self, backend: BackendName) -> contextlib.AbstractContextManager[None]:
         """Return a context manager that activates *backend*.
@@ -107,7 +106,6 @@ class BackendSelector(typ.Protocol):
         contextlib.AbstractContextManager[None]
             Context manager that activates the selected backend.
         """
-        ...
 
 
 class Clock(typ.Protocol):
@@ -125,7 +123,6 @@ class Clock(typ.Protocol):
         float
             Monotonically increasing time in seconds.
         """
-        ...
 
 
 _default_clock: Clock = time.perf_counter
