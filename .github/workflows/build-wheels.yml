@@ -18,33 +18,6 @@ env:
     ghcr.io/rust-cross/manylinux_2_28-cross@sha256:4864c3e931d790def6dba05cbf133b236b242d0c732f77546c68663c7923116e
 
 jobs:
-  # Deliberately uncached. Its only work is `uv build`, which resolves the
-  # build backend and nothing else, and the composite action checks the
-  # repository out again, so any workspace-scoped restore would be deleted
-  # before it was read. Caching the uv store here would also give
-  # `~/.cache/uv` a second writer alongside ci.yml's tool cache for a job that
-  # would save less time than the archive costs to move.
-  build-pure-wheel:
-    # Reached from ci.yml on every pull request, forks included, and from
-    # release.yml on a tag. A called workflow inherits its caller's `github`
-    # context, so this expression reads the caller's event: on the tag caller
-    # `github.event.pull_request` is null and the Ubicloud arm is selected,
-    # and on a fork's pull request the hosted arm is, because a fork cannot
-    # obtain an Ubicloud runner. Keep the continuation at this indent; a
-    # more-indented one would put a newline inside the expression.
-    runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork
-      && 'ubuntu-latest' || 'ubicloud-standard-2' }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/pure-python-wheel
-        with:
-          python-version: ${{ inputs['python-version'] }}
-          artifact-name: wheels-pure
-
   build-native-wheels:
     # Unchanged placement. GitHub spells matrix values into the check name, so
     # both `ubuntu-latest` legs are named verbatim in the `main-required-checks`
@@ -174,8 +147,13 @@ jobs:
           name: wheels-native-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
 
-  # Also uncached: it installs published wheels into a throwaway virtual
-  # environment and imports them. There is nothing expensive to keep.
+  # Builds the pure wheel and then verifies both wheels, in one job. The two
+  # used to be separate jobs doing 0.2 and 0.3 minutes of work and billing a
+  # minute each on every run; the build is cheap enough to sit on the native
+  # legs' critical path. Uncached on purpose: the pure-wheel action checks the
+  # repository out again, which would delete any workspace-scoped restore
+  # before it was read, and the verification installs into a fresh virtual
+  # environment.
   verify-wheel-install:
     # Reached from ci.yml on every pull request, forks included, and from
     # release.yml on a tag. A called workflow inherits its caller's `github`
@@ -189,12 +167,18 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 20
     needs:
-      - build-pure-wheel
       - build-native-wheels
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # Uploads `wheels-pure`, which the download below and release.yml's
+      # publish both read, so it must precede the download.
+      - name: Build pure Python wheel
+        uses: ./.github/actions/pure-python-wheel
+        with:
+          python-version: ${{ inputs['python-version'] }}
+          artifact-name: wheels-pure
       # The native wheel targets the stable ABI (`abi3`) from CPython 3.12, so
       # one wheel must serve every supported interpreter. Verify it on the
       # oldest and newest: setup-python makes the last listed version the
