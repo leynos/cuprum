@@ -254,13 +254,14 @@ await path, which the RED reproduction demonstrates.
 
 Revision 5: every commit gate passes on the final tree. Two gates failed first
 and both were mine to fix, not the plan's: the spelling gate rejected seven
-British `-ise` spellings (`normalised`, `categorised`) that the project's
-Oxford policy forbids, and `make lint` rejected six findings in the new test
-material — a long literal raised directly from two sink doubles, an unused
-import, a rule *code* where the suppression comment wants the rule name, and
-two step docstrings not in the imperative mood. `make fmt` had not been run on
-the new files either, so six needed reformatting. The CodeRabbit review and the
-pull request remain.
+words where the new prose used the British `-ise` ending that the project's
+Oxford policy forbids — the gate also rejects those very spellings when they
+appear here inside backticks, so this note deliberately does not quote them —
+and `make lint` rejected six findings in the new test material: a long literal
+raised directly from two sink doubles, an unused import, a rule *code* where
+the suppression comment wants the rule name, and two step docstrings not in the
+imperative mood. `make fmt` had not been run on the new files either, so six
+needed reformatting. The CodeRabbit review and the pull request remain.
 
 Revision 4 covered all three tasks committed and documented. Revision 3
 recorded the verification plan table naming the artefacts that actually
