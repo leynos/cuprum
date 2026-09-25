@@ -8,17 +8,31 @@ keyword Python values into an argv tuple using the same rules that
 
 from __future__ import annotations
 
+import typing as typ
 from pathlib import Path
 
-type _ArgValue = str | int | float | bool | Path
+type ArgValue = str | int | float | bool | Path
+"""Values a ``sh.make`` builder accepts as positional or keyword arguments.
+
+The alias is public so callers can annotate their own wrappers and fixtures
+with the same argument domain the builders enforce, without repeating the
+union or reaching for ``object``. ``None`` is deliberately absent: a builder
+that receives it raises :exc:`TypeError` at call time.
+"""
 
 __all__ = [
+    "ArgValue",
     "build_argv",
 ]
 
+# Runtime tuple derived from ``ArgValue`` so validation and the published
+# annotation cannot drift. ``ArgValue`` is a PEP 695 alias, whose
+# ``__value__`` carries the union that ``typing.get_args`` can unpack.
+_ARG_TYPES = typ.get_args(ArgValue.__value__)
 
-def _stringify_arg(value: _ArgValue) -> str:
-    """Stringify supported argv values and reject ``bytes`` with TypeError."""
+
+def _stringify_arg(value: ArgValue) -> str:
+    """Convert values into argv-safe strings."""
     if value is None:
         # None is disallowed because it is almost always a mistake in CLI argv
         # construction; callers must represent missing values themselves (for
@@ -26,12 +40,21 @@ def _stringify_arg(value: _ArgValue) -> str:
         msg = "None is not a valid argv element for sh.make"
         raise TypeError(msg)
     if isinstance(value, bytes):
+        # bytes is a sequence of integers rather than text, so it is rejected
+        # ahead of the domain check to quote the offending value: the caller
+        # almost always passed an encoded payload where a str was intended.
         msg = f"bytes is not a valid argv element for sh.make: {value!r}"
+        raise TypeError(msg)
+    if not isinstance(value, _ARG_TYPES):
+        # str() would happily render any object, silently putting a repr such
+        # as "<object object at 0x...>" on a real command line. Rejecting the
+        # type keeps the runtime domain identical to the annotated one.
+        msg = f"{type(value).__name__} is not a valid argv element for sh.make"
         raise TypeError(msg)
     return str(value)
 
 
-def _serialize_kwargs(kwargs: dict[str, _ArgValue]) -> tuple[str, ...]:
+def _serialize_kwargs(kwargs: dict[str, ArgValue]) -> tuple[str, ...]:
     """Serialize keyword arguments to CLI-style ``--flag=value`` entries."""
     flags: list[str] = []
     for key, value in kwargs.items():
@@ -40,7 +63,7 @@ def _serialize_kwargs(kwargs: dict[str, _ArgValue]) -> tuple[str, ...]:
     return tuple(flags)
 
 
-def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
+def build_argv(*args: ArgValue, **kwargs: ArgValue) -> tuple[str, ...]:
     """Build an argv tuple using the same rules as ``sh.make`` builders.
 
     Parameters
@@ -49,16 +72,23 @@ def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
         Positional text, integer, float, boolean, or path values. They are
         stringified in the order supplied and appear before generated keyword
         flags.
-        **kwargs
+
+    **kwargs
         Keyword text, integer, float, boolean, or path values. Each key is
         normalized by replacing underscores with hyphens, then serialized as
-        ``--flag=value`` in insertion order. ``None`` and ``bytes`` values
-        raise ``TypeError`` in positional and keyword positions.
+        ``--flag=value`` in insertion order.
 
     Returns
     -------
     tuple[str, ...]
         The constructed argv tuple, excluding the program name.
+
+    Raises
+    ------
+    TypeError
+        If any value is ``None``, or is not a ``str``, ``int``, ``float``,
+        ``bool``, or :class:`pathlib.Path`, in either position. ``bytes`` is
+        rejected with the offending value quoted in the message.
 
     Examples
     --------
