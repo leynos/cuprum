@@ -209,7 +209,7 @@ working on the Rust portions of the project:
       RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \
       $(WHITAKER_CARGO_FLAGS)
     yamllint --config-file .yamllint.yml .github/workflows .github/actions
-    actionlint
+    actionlint -config-file .github/actionlint.yaml -shellcheck=
     ```
 
     On Linux, `RUST_DEBUG_CARGO` selects `nightly-2026-08-23` with the explicit
@@ -222,6 +222,9 @@ working on the Rust portions of the project:
     unquoted `on` trigger key and require each workflow and composite action to
     begin with `---`. CI must install yamllint with `uv tool` and use the
     pinned, checksum-verified actionlint binary before invoking `make lint`.
+    Pass `-shellcheck=` so the gate needs no shellcheck binary and cannot reach
+    the v1.7.12 stdin deadlock (rhysd/actionlint#702, #704, #712); a clean
+    `main` can hang the same way.
   - `make test` executes `cargo nextest run` when `cargo-nextest` is available,
     otherwise:
 
