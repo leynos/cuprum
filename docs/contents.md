@@ -75,6 +75,10 @@ open each document.
   than by reading the workflow source.
 - [ADR-016: Stable-ABI native wheels][adr-016] - accepted decision to build
   one native wheel per platform against the CPython 3.12 stable ABI.
+- [ADR-017: Attested, reconciled release pipeline][adr-017] - accepted
+  decision to reconcile PyPI and GitHub Release assets by filename precedence,
+  with least-privilege jobs, build provenance and PEP 740 attestations, and
+  fail-open telemetry.
 
 ## Planning and validation references
 
@@ -108,6 +112,7 @@ open each document.
 [adr-014]: adr-014-benchmark-gate-telemetry-sink.md
 [adr-015]: adr-015-actions-runner-integration-harness.md
 [adr-016]: adr-016-stable-abi-native-wheels.md
+[adr-017]: adr-017-release-pipeline.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

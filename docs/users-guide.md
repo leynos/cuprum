@@ -48,6 +48,17 @@ optional Rust acceleration for pipelines; behaviour is the same either way. See
 [Optional Rust acceleration](#choosing-a-stream-backend)
 for details.
 
+Each release also publishes a source distribution (`cuprum-<version>.tar.gz`)
+on PyPI and on the GitHub Release, alongside the wheels. pip and uv install it
+only when no wheel matches the current platform, or when asked for it
+explicitly, for example `pip install --no-binary cuprum cuprum`. In practice the
+`py3-none-any` wheel already covers every platform, so the sdist mainly
+matters to packagers and to people building from source. Building or installing
+from it always yields the pure Python package: its build backend (`uv_build`)
+never compiles the Rust extension, even when a Rust toolchain is present, so
+`is_rust_available()` then returns `False`. Install a platform wheel for native
+acceleration; see [Optional Rust acceleration](#choosing-a-stream-backend).
+
 ## Run a command
 
 Declare the executable, make a builder, build an argument vector, then run it.

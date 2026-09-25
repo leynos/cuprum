@@ -575,6 +575,22 @@ def test_spy_and_record(cmd_mox, monkeypatch, tmp_path):
    Actions. Export `INPUT_*` environment variables and call `uv run` on the
    script.
 
+## Exception: stdlib-only release scripts
+
+`scripts/release_assets.py`, `scripts/release_telemetry.py`, and
+`scripts/release_version.py` deliberately do not follow this baseline: they use
+only the Python standard library and `argparse`, not Cyclopts or Cuprum, and
+run under the runner's preinstalled `python3` rather than `uv run`.
+`publish-pypi` in `.github/workflows/release.yml` holds the PyPI Trusted
+Publishing (OIDC) credential and must resolve no third-party package, from PyPI
+or elsewhere, while that credential is live; every network call these scripts
+might otherwise make instead stays in the workflow's own `curl` and `gh` steps.
+See
+[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+for the full rationale. This exception is confined to those three scripts; no
+other script in the repository is exempt from the Cyclopts, Cuprum, and Python
+3.13 defaults above.
+
 ## CI wiring: GitHub Actions (Cyclopts‑first)
 
 ```yaml
