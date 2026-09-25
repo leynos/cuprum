@@ -23,7 +23,7 @@ from tests.helpers.catalogue import python_builder, python_catalogue
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import SafeCmd, SafeCmdBuilder
+    from cuprum.sh import SafeCmd
 
 _CLOSED_READER = "closed presentation destination"
 _SCRIPT = "print('hello')"
@@ -179,7 +179,7 @@ def _run_default(
                 stdout_sink=typ.cast("typ.IO[str]", state["sink"]),
             ),
         )
-    except BaseException as exc:  # ruff: ignore[BLE001] - the scenario records it
+    except BaseException as exc:  # ruff: ignore[blind-except] - records it
         state["error"] = exc
         return
     msg = "the default policy must propagate the sink's broken pipe"
@@ -212,7 +212,7 @@ def _assert_fallback(scenario_state: _BrokenPipeFixture) -> None:
 
 @then("the run raises BrokenPipeError instead of returning a result")
 def _assert_propagated(scenario_state: _BrokenPipeFixture) -> None:
-    """The default policy leaves the existing contract untouched."""
+    """Leave the existing contract untouched under the default policy."""
     error = scenario_state["error"]
     assert isinstance(error, BrokenPipeError), (
         f"the default policy must raise BrokenPipeError, got {error!r}"
@@ -233,7 +233,7 @@ def _assert_lines(scenario_state: _BrokenPipeFixture) -> None:
 
 @then("the run reports the child's own exit status")
 def _assert_exit_status(scenario_state: _BrokenPipeFixture) -> None:
-    """A tolerated echo failure never changes the child's outcome."""
+    """Report the child's own outcome despite the tolerated echo failure."""
     result = scenario_state["result"]
     assert result.exit_code == 0, (
         f"the child succeeded, so the result must say so, got {result.exit_code!r}"

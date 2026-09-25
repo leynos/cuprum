@@ -36,6 +36,9 @@ if typ.TYPE_CHECKING:
     from cuprum.adapters.metrics_adapter import MetricsCollector
 
 
+_CLOSED_READER = "closed presentation destination"
+
+
 class _Cp1252TextOnlySink:
     """Text-only sink modelling a parent stream too narrow for the output."""
 
@@ -294,7 +297,7 @@ class _BrokenPipeSink:
     def write(self, payload: str) -> int:
         """Record the attempt, then fail the way a closed reader does."""
         self.attempts.append(payload)
-        raise BrokenPipeError("closed presentation destination")
+        raise BrokenPipeError(_CLOSED_READER)
 
     def flush(self) -> None:
         """Model the flush call on a broken stream."""

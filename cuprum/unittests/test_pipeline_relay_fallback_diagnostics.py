@@ -24,6 +24,9 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import PipelineResult, SafeCmd
 
 
+_CLOSED_READER = "closed presentation destination"
+
+
 class _Cp1252TextOnlySink:
     """Text-only sink rejecting payloads CP1252 cannot represent."""
 
@@ -67,7 +70,7 @@ class _BrokenPipeSink:
     def write(self, payload: str) -> int:
         """Record the attempt, then fail the way a closed reader does."""
         self.attempts.append(payload)
-        raise BrokenPipeError("closed presentation destination")
+        raise BrokenPipeError(_CLOSED_READER)
 
     def flush(self) -> None:
         """Model the flush call on a broken stream."""
