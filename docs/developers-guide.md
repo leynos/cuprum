@@ -738,10 +738,11 @@ actions there would otherwise keep stale pins.
 
 `tests/test_ci_dependabot_config.py` enforces this, including a check that
 every composite action under `.github/actions`, at any depth, is reached by one
-of the stanza's directory globs. It also checks that each stanza's `directory`
-holds its manifest, that each stanza carries its labels, and that each stanza
-bounds its open pull requests. A new ecosystem needs a new entry in
-`EXPECTED_STANZAS` as well as a stanza.
+of the stanza's directory globs. It also checks that each stanza lists exactly
+its expected directories, whether under `directory` or `directories`, that the
+primary directory holds the stanza's manifest, that each stanza carries its
+labels, and that each stanza bounds its open pull requests. A new ecosystem
+needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
 
 ## Linux debug-build acceleration
 
