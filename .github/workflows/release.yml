@@ -196,7 +196,7 @@ jobs:
           set -euo pipefail
           mkdir -p github-state/files
           gh release view "${GITHUB_REF_NAME}" --json assets > github-state/assets.json
-          python3 scripts/release_assets.py carryover --publish dist/publish \
+          python3 -m scripts.release_assets_cli carryover --publish dist/publish \
             --assets github-state/assets.json > github-state/carryover.txt
           while IFS= read -r name; do
             gh release download "${GITHUB_REF_NAME}" --pattern "${name}" \
@@ -278,7 +278,7 @@ jobs:
         id: pending
         run: |
           set -euo pipefail
-          python3 scripts/release_assets.py stage-pypi --publish dist/publish \
+          python3 -m scripts.release_assets_cli stage-pypi --publish dist/publish \
             --index pypi-index.json --assets github-state/assets.json \
             --github-files github-state/files
       # pypa's action rather than `uv publish`: with Trusted Publishing it also
@@ -334,7 +334,7 @@ jobs:
         id: stage
         run: |
           set -euo pipefail
-          python3 scripts/release_assets.py stage-github --publish dist/publish \
+          python3 -m scripts.release_assets_cli stage-github --publish dist/publish \
             --index pypi-index.json --assets release-assets.json \
             --bundles dist/attestations --output github-upload > pypi-fetch.tsv
           while IFS=$'\t' read -r name url; do
@@ -346,7 +346,7 @@ jobs:
       - name: Check the fetched PyPI bytes
         id: fetched
         run: |
-          python3 scripts/release_assets.py check-fetched --publish dist/publish \
+          python3 -m scripts.release_assets_cli check-fetched --publish dist/publish \
             --index pypi-index.json --assets release-assets.json --output github-upload
       # No `--clobber`: an asset the release already holds is canonical.
       - name: Upload the assets the release lacks
@@ -373,7 +373,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "${GITHUB_REF_NAME}" --json assets > release-assets.json
-          python3 scripts/release_assets.py verify --publish dist/publish \
+          python3 -m scripts.release_assets_cli verify --publish dist/publish \
             --index pypi-index.json --assets release-assets.json \
             --bundles dist/attestations
       - name: Publish the GitHub Release

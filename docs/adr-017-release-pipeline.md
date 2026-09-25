@@ -112,6 +112,8 @@ bytes are canonical: PyPI's, if PyPI already has the name; otherwise the GitHub
 Release's, if it already has the name; otherwise this run's freshly built and
 attested file. Each destination then receives only the names it still lacks.
 There is no `--clobber` anywhere in the workflow: nothing is ever overwritten.
+`scripts/release_assets_cli.py` wraps this library in the `argparse` interface
+`release.yml` calls; the library itself declares no command line.
 
 ### No-overwrite verification and manual recovery
 
@@ -183,15 +185,18 @@ a consumer.
 
 ### Stdlib-only release scripts
 
-`scripts/release_assets.py`, `scripts/release_telemetry.py`, and
-`scripts/release_version.py` use only the Python standard library and
-`argparse`, not Cyclopts or Cuprum, and run under the runner's preinstalled
-`python3` rather than through `uv run`. This is a deliberate, documented
-exception to [scripting standards](scripting-standards.md): `publish-pypi`
-holds the PyPI OIDC credential and must not resolve any third-party package,
-from PyPI or otherwise, while that credential is live. Every network call these
-scripts might otherwise make instead stays in the workflow's own `curl` and
-`gh` steps, which the scripts only plan for.
+`scripts/release_assets_cli.py`, `scripts/release_telemetry.py`, and
+`scripts/release_version.py` are the release workflow's `argparse` entry points;
+`scripts/release_assets_cli.py` wraps the importable reconciliation library
+`scripts/release_assets.py`, which declares no command line of its own. All
+four modules use only the Python standard library, not Cyclopts or Cuprum, and
+the entry points run under the runner's preinstalled `python3` rather than
+through `uv run`. This is a deliberate, documented exception to
+[scripting standards](scripting-standards.md): `publish-pypi` holds the PyPI
+OIDC credential and must not resolve any third-party package, from PyPI or
+otherwise, while that credential is live. Every network call these scripts
+might otherwise make instead stays in the workflow's own `curl` and `gh` steps,
+which the scripts only plan for.
 
 ## Consequences
 
@@ -206,10 +211,10 @@ scripts might otherwise make instead stays in the workflow's own `curl` and
 - Publication history is durably observable through the `release-telemetry-*`
   artefacts without adding an external telemetry service, secret, or dashboard,
   mirroring [ADR-014](adr-014-benchmark-gate-telemetry-sink.md).
-- The three release scripts intentionally diverge from the repository's
-  Cyclopts-and-Cuprum scripting baseline; that divergence is confined to
-  scripts that run only inside `release.yml`, immediately before or alongside
-  the PyPI credential's use.
+- The release library and its three entry points intentionally diverge from
+  the repository's Cyclopts-and-Cuprum scripting baseline; that divergence is
+  confined to modules that run only inside `release.yml`, immediately before or
+  alongside the PyPI credential's use.
 - No tracing spans exist for release phases; the telemetry records are the
   sole durable, cross-run observability surface until a tracing backend for
   GitHub Actions exists.

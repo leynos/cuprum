@@ -2425,13 +2425,13 @@ The jobs do the following:
 #### Reconciliation, verification, and manual recovery
 
 PyPI never accepts a second upload of an existing filename, and rebuilt wheels
-are rarely byte-identical, so `scripts/release_assets.py` reconciles by
-filename rather than by content. Each name's canonical bytes are, in order:
-PyPI's, if PyPI already holds the name; otherwise the GitHub Release's, if it
-already holds the name; otherwise this run's freshly built and attested file.
-Each destination receives only the names it lacks, and nothing already
-published is ever overwritten, which is what makes a re-run of the same tag
-safe to repeat.
+are rarely byte-identical, so the `scripts/release_assets.py` library, called
+through the `scripts/release_assets_cli.py` entry point, reconciles by filename
+rather than by content. Each name's canonical bytes are, in order: PyPI's, if
+PyPI already holds the name; otherwise the GitHub Release's, if it already
+holds the name; otherwise this run's freshly built and attested file. Each
+destination receives only the names it lacks, and nothing already published is
+ever overwritten, which is what makes a re-run of the same tag safe to repeat.
 
 `publish-release`'s final check compares PyPI's and the GitHub Release's
 SHA-256 digest for every artefact name and confirms the run's Sigstore bundle

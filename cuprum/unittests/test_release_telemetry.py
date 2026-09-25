@@ -225,6 +225,33 @@ def _telemetry_steps(job_name: str) -> list[dict[str, typ.Any]]:
     return [item for item in job["steps"] if item.get("uses") == _ACTION]
 
 
+def _assert_outcome_references_are_known(
+    job_name: str, declared_steps: str, ids: set[object]
+) -> None:
+    """Assert every ``category=outcome`` reference names a real, closed pair."""
+    assert not _OUTCOME_REFERENCE.sub("", declared_steps).strip(), (
+        f"{job_name} must list only category=outcome pairs"
+    )
+    for category, step_id in _OUTCOME_REFERENCE.findall(declared_steps):
+        assert category in telemetry.FAILURE_CATEGORIES, (
+            f"{job_name} references unknown failure category {category!r}"
+        )
+        assert step_id in ids, f"{job_name} has no step {step_id!r}"
+
+
+def _assert_records_on_every_outcome(
+    job_name: str, item: dict[str, typ.Any], ids: set[object]
+) -> str:
+    """Assert one telemetry step fails open and reports a real operation."""
+    assert item["if"] == "${{ !cancelled() }}", "a failed phase must record"
+    assert item["continue-on-error"] is True, "telemetry must fail open"
+    assert item["with"]["job-status"] == "${{ job.status }}", (
+        f"{job_name} must report the job's own status"
+    )
+    _assert_outcome_references_are_known(job_name, item["with"]["steps"], ids)
+    return typ.cast("str", item["with"]["operation"])
+
+
 def test_every_release_phase_records_even_when_it_fails() -> None:
     """Each phase is recorded once, after its steps, unless the run is cancelled."""
     recorded = []
@@ -238,18 +265,9 @@ def test_every_release_phase_records_even_when_it_fails() -> None:
         assert declared["steps"][-1] == found[-1], "the record must come last"
         assert found[-1]["with"].get("upload", "true") == "true"
         assert all(item["with"]["upload"] == "false" for item in found[:-1])
-        for item in found:
-            assert item["if"] == "${{ !cancelled() }}", "a failed phase must record"
-            assert item["continue-on-error"] is True, "telemetry must fail open"
-            assert item["with"]["job-status"] == "${{ job.status }}"
-            recorded.append(item["with"]["operation"])
-            declared_steps = item["with"]["steps"]
-            assert not _OUTCOME_REFERENCE.sub("", declared_steps).strip(), (
-                f"{job_name} must list only category=outcome pairs"
-            )
-            for category, step_id in _OUTCOME_REFERENCE.findall(declared_steps):
-                assert category in telemetry.FAILURE_CATEGORIES
-                assert step_id in ids, f"{job_name} has no step {step_id!r}"
+        recorded.extend(
+            _assert_records_on_every_outcome(job_name, item, ids) for item in found
+        )
     assert sorted(recorded) == sorted(telemetry.OPERATIONS)
 
 
