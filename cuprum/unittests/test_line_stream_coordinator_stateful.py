@@ -36,7 +36,7 @@ from hypothesis.stateful import (
     rule,
 )
 
-from cuprum import CommandResult, Program, _line_stream
+from cuprum import CommandResult, Program
 from cuprum._line_callbacks import _chain_line_hooks
 from cuprum._line_iteration import _next_queue_item
 from cuprum._line_stream import (
@@ -44,6 +44,7 @@ from cuprum._line_stream import (
     _LineStreamTelemetry,
     _observed_line_hook,
     _queue_line_sink,
+    coordinator,
 )
 from cuprum.events import new_exec_id
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
@@ -91,8 +92,8 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
         asyncio.set_event_loop(self._loop)
         self._events: list[LineStreamEvent] = []
         self._registration = observe_line_stream(self._events.append)
-        self._original_wait = _line_stream._run_to_command_result
-        _line_stream._run_to_command_result = self._programmed_outcome  # ty: ignore[invalid-assignment] - a bound method stands in for the module function
+        self._original_wait = coordinator._run_to_command_result
+        coordinator._run_to_command_result = self._programmed_outcome  # ty: ignore[invalid-assignment] - a bound method stands in for the module function
 
         self._execution_stub = typ.cast("_SubprocessExecution", types.SimpleNamespace())
         self._drive(self._build(1, "none"))
@@ -604,7 +605,7 @@ class _LineStreamCoordinatorMachine(RuleBasedStateMachine):
             self._drive(asyncio.gather(self._coordinator, return_exceptions=True))
         self._mark_future_retrieved()
         self._registration.detach()
-        _line_stream._run_to_command_result = self._original_wait  # ty: ignore[invalid-assignment] - restore the saved module function
+        coordinator._run_to_command_result = self._original_wait  # ty: ignore[invalid-assignment] - restore the saved module function
         self._loop.close()
         # Leave the thread as the rules found it: no loop installed, so a later
         # test's `asyncio.run` never inherits this machine's closed loop.

@@ -1,10 +1,9 @@
 """Build and, on failure, unwind one unstarted ``SafeCmd.lines()`` run.
 
-Split out of ``cuprum._line_stream`` to keep that module within the
-repository's line-count limit. This module owns the pieces that exist before
-the run is handed back to its caller: the stdin writer, the stream consumers,
-the chained line hooks that feed both the caller's callback and the queue,
-and the teardown of a run that failed before it could be returned.
+Part of the ``cuprum._line_stream`` package. This module owns the pieces that
+exist before the run is handed back to its caller: the stdin writer, the stream
+consumers, the chained line hooks that feed both the caller's callback and the
+queue, and the teardown of a run that failed before it could be returned.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._line_callbacks import _chain_line_hooks
-from cuprum._line_stream_queue import (
+from cuprum._line_stream.line_queue import (
     _LineStreamRun,
     _observed_line_hook,
     _queue_line_sink,
@@ -32,8 +31,8 @@ from cuprum._subprocess_wait import _RunTaskOwnership
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
-    from cuprum._line_stream_queue import _LineQueueItem
-    from cuprum._line_stream_telemetry import _LineStreamTelemetry
+    from cuprum._line_stream.line_queue import _LineQueueItem
+    from cuprum._line_stream.telemetry import _LineStreamTelemetry
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import _LineHookFn
 
@@ -57,10 +56,10 @@ async def _abandon_unstarted_run(
     one that propagates.
     """
     # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
-    # stays in ``cuprum._line_stream`` because a test patches its module-level
-    # ``_drain_stream_consumers`` name, and that module imports this one for
-    # the rest of the spawn machinery.
-    from cuprum._line_stream import _discard_drain
+    # lives in ``cuprum._line_stream.coordinator`` because a test patches its
+    # module-level ``_drain_stream_consumers`` name, and that module imports
+    # this one for the rest of the spawn machinery.
+    from cuprum._line_stream.coordinator import _discard_drain
 
     await _stop_idle_monitor(execution.idle)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)

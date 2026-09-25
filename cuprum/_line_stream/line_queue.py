@@ -1,9 +1,9 @@
 """The bounded queue and run record behind one ``SafeCmd.lines()`` iteration.
 
-Split out of ``cuprum._line_stream`` to keep that module within the
-repository's line-count limit. This module owns the queue item type, its
-capacity, the spawned-run record every coordinator step reads and updates,
-and the sink/hook wrappers that feed the queue from the stream consumers.
+Part of the ``cuprum._line_stream`` package. This module owns the queue item
+type, its capacity, the spawned-run record every coordinator step reads and
+updates, and the sink/hook wrappers that feed the queue from the stream
+consumers.
 """
 
 from __future__ import annotations
@@ -12,11 +12,11 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._line_stream_telemetry import _LineStreamEventDetails
+from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
-    from cuprum._line_stream_telemetry import _LineStreamTelemetry
+    from cuprum._line_stream.telemetry import _LineStreamTelemetry
     from cuprum._subprocess_wait import _RunTaskOwnership
     from cuprum.line_stream_events import LineStreamSink
     from cuprum.lines import LineEvent, _LineHookFn

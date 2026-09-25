@@ -4444,7 +4444,7 @@ Override these variables only for local diagnosis. For example, to lint a
 single module with the configured second tier:
 
 ```bash
-PYLINT_TARGETS=cuprum/sh.py make lint
+PYLINT_TARGETS=cuprum/sh make lint
 ```
 
 Do not change `PYLINT_VERSION` casually. A new Pylint release can change lint
@@ -5399,11 +5399,12 @@ Table 1: Line-observation implementation boundaries
 
 | Module                                                               | Responsibility                                                                                                                                          |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cuprum/_line_stream.py`                                             | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; re-exports the queue, spawn, and drain helpers below.                      |
-| `cuprum/_line_stream_telemetry.py`                                   | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
-| `cuprum/_line_stream_queue.py`                                       | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
-| `cuprum/_line_stream_spawn.py`                                       | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
-| `cuprum/_line_stream_drain.py`                                       | Drains a line stream's settled consumers once the child has exited.                                                                                     |
+| `cuprum/_line_stream/`                                               | Package that re-exports every line-stream helper below; import from `cuprum._line_stream` regardless of the defining submodule.                         |
+| `cuprum/_line_stream/coordinator.py`                                 | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.             |
+| `cuprum/_line_stream/telemetry.py`                                   | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
+| `cuprum/_line_stream/line_queue.py`                                  | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
+| `cuprum/_line_stream/spawn.py`                                       | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
+| `cuprum/_line_stream/drain.py`                                       | Drains a line stream's settled consumers once the child has exited.                                                                                     |
 | `cuprum/_line_iteration.py`                                          | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
 | `cuprum/_line_callbacks.py`                                          | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
 | `cuprum/_subprocess_streams.py`                                      | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |

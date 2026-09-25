@@ -1,9 +1,9 @@
 """Correlated lifecycle telemetry for one ``SafeCmd.lines()`` run.
 
-Split out of ``cuprum._line_stream`` to keep that module within the
-repository's line-count limit. The telemetry types carry no coupling to the
-run's spawn or teardown mechanics; they only translate lifecycle boundaries
-into bounded :class:`~cuprum.line_stream_events.LineStreamEvent` records.
+Part of the ``cuprum._line_stream`` package. The telemetry types carry no
+coupling to the run's spawn or teardown mechanics; they only translate
+lifecycle boundaries into bounded
+:class:`~cuprum.line_stream_events.LineStreamEvent` records.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from cuprum.line_stream_observation import _emit_line_stream_event
 if typ.TYPE_CHECKING:
     import asyncio
 
-    from cuprum._line_stream_queue import _LineQueueItem
+    from cuprum._line_stream.line_queue import _LineQueueItem
     from cuprum.events import ExecId
     from cuprum.line_stream_events import LineStreamSink
     from cuprum.lines import LineEvent, LineStreamName

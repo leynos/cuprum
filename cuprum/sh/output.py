@@ -4,9 +4,8 @@
 command or pipeline's stdout and stderr are captured, mirrored, and
 optionally reframed through a presentation sink. This module also hosts the
 deprecated flat ``capture``/``echo`` keyword resolution used by
-``Pipeline.run``/``run_sync``. It lives apart from ``cuprum.sh`` purely to
-keep that facade module within the project's file-size ceiling; behaviour is
-unchanged.
+``Pipeline.run``/``run_sync``. The ``cuprum.sh`` package re-exports the
+public names.
 """
 
 from __future__ import annotations

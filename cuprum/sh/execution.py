@@ -3,9 +3,8 @@
 These types describe how a command or pipeline stage is run rather than what
 it does: the environment overlay, working directory, cancellation grace
 periods, echo sinks, and encoding used to run it, alongside the timeout
-exception and stdin payload types that accompany execution. They live apart
-from ``cuprum.sh`` purely to keep that facade module within the project's
-file-size ceiling; behaviour is unchanged.
+exception and stdin payload types that accompany execution. The
+``cuprum.sh`` package re-exports them.
 """
 
 from __future__ import annotations

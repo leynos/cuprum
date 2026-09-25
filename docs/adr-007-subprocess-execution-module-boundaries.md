@@ -411,24 +411,27 @@ No public API changes, and the module-size suppression is still unnecessary.
 `_subprocess_wait` continues to own teardown through the unchanged drain
 interface.
 
-## Addendum (2026-09-25): sh.py becomes a thin re-exporting facade
+## Addendum (2026-09-25): `cuprum.sh` becomes a package
 
-`cuprum/sh.py` grew back over the module-size ceiling as pylint 4.0.9's PyPy
-3.12 run started parsing files PyPy 3.11 had silently skipped. The 2026-09-19
-addendum's claim that `cuprum/sh.py` still holds "the value types it exchanges"
-no longer describes the file: those value types now live in grouped
-`cuprum._sh_*` modules, and `cuprum/sh.py` re-exports every one of them with
-the same object identity.
+`cuprum/sh.py` grew back over the module-size ceiling once Pylint 4.0.9 on PyPy
+3.12 started parsing files that PyPy 3.11 had silently skipped. The 2026-09-19
+addendum's statement that `cuprum/sh.py` holds "the value types it exchanges"
+no longer describes the code. `cuprum.sh` is now a package whose submodules
+each own one responsibility:
 
-- `cuprum/_sh_argv.py` — argv construction (`build_argv`, `_ArgValue`,
+- `cuprum/sh/argv.py` — argv construction (`build_argv`, `_ArgValue`,
   `_stringify_arg`, `_serialize_kwargs`).
-- `cuprum/_sh_context.py` — `ExecutionContext`, `TimeoutExpired`, and
+- `cuprum/sh/execution.py` — `ExecutionContext`, `TimeoutExpired`, and
   `StdinInput`.
-- `cuprum/_sh_results.py` — `CommandResult` and `PipelineResult`.
-- `cuprum/_sh_output.py` — `RunOutputOptions` and `IOOptions`.
-- `cuprum/_sh_safe_cmd.py` — `SafeCmd`, `Pipeline`, and `SafeCmdBuilder`.
+- `cuprum/sh/results.py` — `CommandResult` and `PipelineResult`.
+- `cuprum/sh/output.py` — `RunOutputOptions` and `IOOptions`.
+- `cuprum/sh/safe_cmd.py` — `SafeCmd`, `Pipeline`, and `SafeCmdBuilder`.
+- `cuprum/sh/factory.py` — the `make()` builder factory.
 
-`cuprum/sh.py` itself now holds only the `make()` builder and the re-exports
-listed above; it remains the stable public and internal entry point, and
+`cuprum/sh/__init__.py` contains only the package docstring and re-exports. It
+exposes every name the former module did, with the same object identity, so
 `cuprum.sh.SafeCmd`, `cuprum.sh.CommandResult`, and the rest of the public
-surface are unchanged for importers.
+surface are unchanged for importers. `cuprum._line_stream` follows the same
+package layout. Its `coordinator` submodule holds the run, teardown, and
+coordination steps, so tests that replace one of their collaborators patch
+`cuprum._line_stream.coordinator`.

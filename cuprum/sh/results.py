@@ -1,9 +1,8 @@
 """Structured result types returned by ``cuprum.sh`` execution.
 
 ``CommandResult`` and ``PipelineResult`` describe the outcome of running a
-single command or a pipeline of commands, respectively. They live apart from
-``cuprum.sh`` purely to keep that facade module within the project's
-file-size ceiling; behaviour is unchanged.
+single command or a pipeline of commands, respectively. The ``cuprum.sh``
+package re-exports both.
 """
 
 # No ``from __future__ import annotations`` here: the result fields are public

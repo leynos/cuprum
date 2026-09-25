@@ -9,7 +9,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import _line_stream
+from cuprum._line_stream import coordinator
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
@@ -117,12 +117,12 @@ class _FailedExitTestDouble:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Patch the failed-exit seams this double supplies."""
         monkeypatch.setattr(
-            _line_stream, "_wait_for_exit_code_within_timeout", self.wait_for_exit
+            coordinator, "_wait_for_exit_code_within_timeout", self.wait_for_exit
         )
-        monkeypatch.setattr(_line_stream, "_reconcile_run_tasks", self.reconcile)
-        monkeypatch.setattr(_line_stream, "_drain_stream_consumers", self.drain)
-        monkeypatch.setattr(_line_stream, "_shielded_cleanup", self.shield)
-        monkeypatch.setattr(_line_stream, "_handle_stream_timeout", self.handle_timeout)
+        monkeypatch.setattr(coordinator, "_reconcile_run_tasks", self.reconcile)
+        monkeypatch.setattr(coordinator, "_drain_stream_consumers", self.drain)
+        monkeypatch.setattr(coordinator, "_shielded_cleanup", self.shield)
+        monkeypatch.setattr(coordinator, "_handle_stream_timeout", self.handle_timeout)
 
     def run_timeout_exit(
         self,
@@ -131,7 +131,7 @@ class _FailedExitTestDouble:
     ) -> None:
         """Drive the timeout path, which ends in the translator sentinel."""
         with pytest.raises(_TimeoutHandledError):
-            asyncio.run(_line_stream._wait_for_line_stream_exit(run, execution))
+            asyncio.run(coordinator._wait_for_line_stream_exit(run, execution))
 
     def run_failed_exit(
         self,
@@ -140,7 +140,7 @@ class _FailedExitTestDouble:
     ) -> BaseException:
         """Drive a non-timeout failure and return the recorded exception."""
         with pytest.raises(type(self.error)) as caught:
-            asyncio.run(_line_stream._wait_for_line_stream_exit(run, execution))
+            asyncio.run(coordinator._wait_for_line_stream_exit(run, execution))
         return caught.value
 
     def assert_cleanup_contract(
@@ -267,7 +267,7 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
     )
     double.install(monkeypatch)
 
-    result = asyncio.run(_line_stream._discard_drain(run, 456, execution))
+    result = asyncio.run(coordinator._discard_drain(run, 456, execution))
 
     assert result == ("stdout", "stderr"), (
         f"the discard drain must return its drain result, got {result!r}"
@@ -321,7 +321,7 @@ def test_teardown_wrapper_brackets_a_successful_cleanup() -> None:
             await asyncio.sleep(0)
             return "captured"
 
-        await _line_stream._run_line_stream_teardown(
+        await coordinator._run_line_stream_teardown(
             _teardown_run(order),
             operation(),
         )
@@ -347,7 +347,7 @@ def test_teardown_wrapper_returns_the_operation_result_unchanged() -> None:
             await asyncio.sleep(0)
             return expected
 
-        return await _line_stream._run_line_stream_teardown(
+        return await coordinator._run_line_stream_teardown(
             _teardown_run([]),
             operation(),
         )
@@ -370,7 +370,7 @@ def test_teardown_wrapper_reports_no_completion_when_cleanup_fails() -> None:
             await asyncio.sleep(0)
             raise failure
 
-        await _line_stream._run_line_stream_teardown(
+        await coordinator._run_line_stream_teardown(
             _teardown_run(order),
             operation(),
         )

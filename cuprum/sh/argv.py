@@ -2,9 +2,8 @@
 
 This module hosts the small, allocation-free helpers that turn positional and
 keyword Python values into an argv tuple using the same rules that
-``cuprum.sh.make`` builders apply. It is split out of ``cuprum.sh`` purely to
-keep that facade module within the project's file-size ceiling; behaviour is
-unchanged.
+``cuprum.sh.make`` builders apply. The ``cuprum.sh`` package re-exports
+``build_argv``.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 ``SafeCmd`` is the typed, immutable curated command; ``Pipeline`` composes
 ``SafeCmd`` stages piped stdout-to-stdin. They reference each other at
 runtime (``SafeCmd.__or__`` builds a ``Pipeline``), so they stay in one module
-to avoid a runtime import cycle. Split out of ``cuprum.sh`` for file size;
-behaviour is unchanged.
+to avoid a runtime import cycle. The ``cuprum.sh`` package re-exports
+both.
 """
 
 from __future__ import annotations
@@ -29,12 +29,6 @@ from cuprum._pipeline_internals import (
     _enforce_allowlist,
     _run_pipeline,
 )
-from cuprum._sh_context import ExecutionContext, StdinInput
-from cuprum._sh_output import (
-    RunOutputOptions,
-    _DeprecatedOutputFlags,
-    _resolve_pipeline_output,
-)
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import (
@@ -44,9 +38,15 @@ from cuprum.context import current_context
 from cuprum.program import (
     Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
 )
+from cuprum.sh.execution import ExecutionContext, StdinInput
+from cuprum.sh.output import (
+    RunOutputOptions,
+    _DeprecatedOutputFlags,
+    _resolve_pipeline_output,
+)
 
 if typ.TYPE_CHECKING:
-    from cuprum._sh_results import CommandResult, PipelineResult
+    from cuprum.sh.results import CommandResult, PipelineResult
 
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 

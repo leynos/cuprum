@@ -499,9 +499,10 @@ def test_lines_stamp_events_from_the_spawn_clock(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
     """The line event clock subtracts the reference stamped after spawning."""
-    from cuprum import _line_callbacks, _line_stream
+    from cuprum import _line_callbacks
+    from cuprum._line_stream import coordinator
 
-    monkeypatch.setattr(_line_stream, "perf_counter", lambda: 40.0)
+    monkeypatch.setattr(coordinator, "perf_counter", lambda: 40.0)
     monkeypatch.setattr(_line_callbacks, "perf_counter", lambda: 43.25)
     command = python_builder("-c", "print('clock')")
 

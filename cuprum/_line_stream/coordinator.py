@@ -16,10 +16,11 @@ shared reconciliation cancels and drains them exactly once on every exit
 path: completion, timeout, caller ``break``, generator close, and external
 cancellation alike.
 
-The queue plumbing, the telemetry types, and the pre-return spawn machinery
-live in sibling ``cuprum._line_stream_*`` modules and are re-exported here;
-this module keeps only the run/teardown/coordination steps whose bodies
-reference names that tests patch directly on this module.
+This module holds the run, teardown, and coordination steps. The queue
+plumbing, telemetry types, pre-return spawn machinery, and post-exit drain live
+in sibling modules of the ``cuprum._line_stream`` package, which re-exports all
+of them. Tests that replace a collaborator of these steps patch this module,
+because each function resolves those names through this module's globals.
 """
 
 from __future__ import annotations
@@ -30,21 +31,13 @@ import typing as typ
 from time import perf_counter
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._line_stream_drain import _drain_after_exit
-from cuprum._line_stream_queue import (
-    _LINE_QUEUE_CAPACITY,
-    _line_event_queue,
-    _LineQueueItem,
-    _LineStreamRun,
-    _observed_line_hook,
-    _queue_line_sink,
-)
-from cuprum._line_stream_spawn import (
+from cuprum._line_stream.drain import _drain_after_exit
+from cuprum._line_stream.spawn import (
     _abandon_unstarted_run,
     _build_unstarted_run,
     _with_line_sink_hooks,
 )
-from cuprum._line_stream_telemetry import (
+from cuprum._line_stream.telemetry import (
     _LineStreamEventDetails,
     _LineStreamTelemetry,
 )
@@ -70,28 +63,17 @@ from cuprum.line_stream_events import LineStreamPhase
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._line_stream.line_queue import _LineQueueItem, _LineStreamRun
     from cuprum.sh import CommandResult
 
 __all__ = [
-    "_LINE_QUEUE_CAPACITY",
-    "_LineQueueItem",
-    "_LineStreamEventDetails",
-    "_LineStreamRun",
-    "_LineStreamTelemetry",
-    "_abandon_unstarted_run",
-    "_build_unstarted_run",
     "_cleanup_failed_line_stream_run",
     "_coordinate_line_stream",
     "_discard_drain",
-    "_drain_after_exit",
-    "_line_event_queue",
-    "_observed_line_hook",
-    "_queue_line_sink",
     "_run_line_stream_teardown",
     "_run_to_command_result",
     "_start_line_stream_run",
     "_wait_for_line_stream_exit",
-    "_with_line_sink_hooks",
 ]
 
 
