@@ -19,7 +19,6 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import (
     GENERATE_COVERAGE,
     ROOT,
