@@ -353,9 +353,16 @@ skylos-allow: ## Document one named Skylos exception, not an entry point
 	@case "$${SKYLOS_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2;; esac
 	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
-github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
-	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows
-	$(ACTIONLINT) -config-file .github/actionlint.yaml
+# `-shellcheck=` disables actionlint's shellcheck integration so the gate needs
+# no shellcheck binary and matches the lint job, which installs none. It is not
+# a style preference: actionlint v1.7.12 writes each `run:` body to the
+# shellcheck child's stdin before starting it, so a body larger than the pipe
+# buffer (about 64 KiB; `ci.yml`'s benchmark step is over 9 KiB) races a
+# deadlock once the pipe fills. A clean checkout of main can hang here too.
+# Upstream tracks it as rhysd/actionlint#702, #704, and #712.
+github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows and composite actions
+	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows .github/actions
+	$(ACTIONLINT) -config-file .github/actionlint.yaml -shellcheck=
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

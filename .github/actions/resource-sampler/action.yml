@@ -1,3 +1,4 @@
+---
 name: Resource sampler
 description: >-
   Record the peak memory and disk a job actually uses, so a runner-shape

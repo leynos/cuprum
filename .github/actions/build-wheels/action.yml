@@ -1,3 +1,4 @@
+---
 name: Build Wheels
 description: Builds native Python wheels using maturin and uploads them.
 inputs:
@@ -22,12 +23,12 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
         persist-credentials: false
     - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
       with:
         python-version: ${{ inputs.python-version }}
     - name: Install Rust toolchain
@@ -38,13 +39,15 @@ runs:
     # across this repository, and a `target` tree is invalidated far more often
     # than the registry it would be stored beside.
     - name: Cache native wheel build dependencies
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/.cache/pip
           ~/.cargo/registry
           ~/.cargo/git
-        key: cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ inputs.maturin-version }}-${{ hashFiles('rust/Cargo.lock') }}
+        key: >-
+          ${{ format('cuprum-wheel-{0}-{1}-{2}-{3}-{4}', runner.os, runner.arch,
+          inputs.target, inputs.maturin-version, hashFiles('rust/Cargo.lock')) }}
         restore-keys: |
           cuprum-wheel-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ inputs.maturin-version }}-
     - name: Install maturin
@@ -71,7 +74,7 @@ runs:
         fi
         maturin build "${args[@]}"
     - name: Upload wheel artefact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ inputs.wheelhouse }}/*.whl

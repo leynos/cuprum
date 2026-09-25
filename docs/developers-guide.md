@@ -4467,12 +4467,35 @@ both Markdown structure and en-GB-oxendict spelling.
 ### GitHub Actions workflow linting
 
 `make lint` finishes by running
-`yamllint --strict --config-file .yamllint.yml .github/workflows`, followed by
-`actionlint -config-file .github/actionlint.yaml`. Together they validate YAML
-policy, GitHub Actions expressions, and shell used by workflow `run:` steps.
-The actionlint command reads `.github/actionlint.yaml` from the repository root.
-`.yamllint.yml` requires each workflow to start with `---`, permits GitHub's
-unquoted `on` trigger key, and requires quoted `'true'` and `'false'` values.
+`yamllint --strict --config-file .yamllint.yml .github/workflows .github/actions`,
+followed by `actionlint -config-file .github/actionlint.yaml -shellcheck=`.
+Yamllint enforces the YAML policy; actionlint enforces GitHub Actions
+semantics: expression syntax and context, including `${{ }}` interpolations
+inside `run:` steps, plus the workflow schema and `uses:` references. It does
+not check the shell syntax of `run:` bodies, because `-shellcheck=` disables
+that integration (see below). The yamllint invocation covers the composite
+actions under `.github/actions` as well as the workflows, because a shared step
+obeys the same YAML policy and a style or structural error there would
+otherwise pass the gate silently.
+
+The actionlint command reads `.github/actionlint.yaml` from the repository
+root. It stays pointed at `.github/workflows` alone: actionlint parses every
+path it receives as a workflow, so a composite action, which has no `on:` or
+`jobs:` section, would fail its workflow schema. `.yamllint.yml` requires each
+linted file to start with `---`, permits GitHub's unquoted `on` trigger key,
+and requires quoted `'true'` and `'false'` values.
+
+`-shellcheck=` disables actionlint's shellcheck integration, so no shellcheck
+binary is needed and the gate matches `lint-test`, which installs none. Version
+1.7.12 writes each `run:` body to its shellcheck child's standard input before
+starting that child, so a body larger than the kernel pipe buffer (about 64 KiB;
+`ci.yml`'s benchmark step already exceeds 9 KiB) races a deadlock once the
+pipe fills. A clean checkout of `main` can hang the same way, and upstream
+tracks the defect as
+[rhysd/actionlint#702](https://github.com/rhysd/actionlint/issues/702), [#704](https://github.com/rhysd/actionlint/issues/704),
+and [#712](https://github.com/rhysd/actionlint/issues/712). Drop the flag only
+alongside an actionlint release that fixes the write-before-start ordering, and
+re-check that the lint gate still terminates.
 
 Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
 install actionlint using its

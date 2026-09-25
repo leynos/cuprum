@@ -1,3 +1,4 @@
+---
 name: Compute cache keys
 description: >-
   Render the repository's cache keys once so every job that restores a path and

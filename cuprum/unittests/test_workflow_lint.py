@@ -25,6 +25,18 @@ if typ.TYPE_CHECKING:
 
 _CI_WORKFLOW = ".github/workflows/ci.yml"
 _WORKFLOW_DIRECTORY = ".github/workflows"
+_ACTION_DIRECTORY = ".github/actions"
+#: The directories the yamllint-backed half of the target covers, in order.
+#: Spelled out rather than derived from the constants above: this is the value
+#: the target must produce, so deriving it would let a mutated directory
+#: constant agree with a mutated recipe and leave the contract unchecked.
+_LINTED_DIRECTORIES = (".github/workflows", ".github/actions")
+#: The actionlint invocation, which disables shellcheck to dodge the v1.7.12
+#: stdin deadlock (rhysd/actionlint#702, #704, #712) and match CI, which
+#: installs no shellcheck binary.
+_ACTIONLINT_INVOCATION = (
+    "actionlint\t-config-file\t.github/actionlint.yaml\t-shellcheck="
+)
 _RUN_LINT_STEP = "Run lint, including Skylos dead-code detection"
 _ACTIONLINT_INSTALLER_LINES = (
     "readonly ACTIONLINT_VERSION='1.7.12'",
@@ -259,8 +271,9 @@ def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
-        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
+        + "\t".join(_LINTED_DIRECTORIES),
+        _ACTIONLINT_INVOCATION,
     ]
 
 
@@ -298,8 +311,9 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
         "uv\trun\twhich\truff",
         "mold\t--version",
         "rustup\tcomponent\tlist\t--installed\t--toolchain\tnightly-2026-08-23",
-        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
+        + "\t".join(_LINTED_DIRECTORIES),
+        _ACTIONLINT_INVOCATION,
     ]
 
 
@@ -330,19 +344,25 @@ def test_the_workflow_lint_target_rejects_actionlint_failure(
     assert completed.returncode == 2
     assert "Error 31" in completed.stderr
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
-        f"yamllint\t--strict\t--config-file\t.yamllint.yml\t{_WORKFLOW_DIRECTORY}",
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
+        + "\t".join(_LINTED_DIRECTORIES),
+        _ACTIONLINT_INVOCATION,
     ]
 
 
-def test_all_workflows_declare_yaml_document_starts() -> None:
-    """The shared YAML policy has a compatible marker in every workflow."""
-    workflow_paths = sorted((repo_root() / _WORKFLOW_DIRECTORY).glob("*.yml"))
+def test_all_linted_yaml_declares_document_starts() -> None:
+    """The shared YAML policy has a compatible marker in every linted file."""
+    linted_paths = sorted((repo_root() / _WORKFLOW_DIRECTORY).glob("*.yml")) + sorted(
+        (repo_root() / _ACTION_DIRECTORY).glob("*/action.yml")
+    )
 
-    assert workflow_paths, "expected at least one GitHub Actions workflow"
-    for workflow_path in workflow_paths:
-        assert workflow_path.read_text(encoding="utf-8").startswith("---\n"), (
-            f"{workflow_path.relative_to(repo_root())} must begin with a YAML "
+    assert linted_paths, "expected at least one GitHub Actions YAML file"
+    assert any(path.parent.parent.name == "actions" for path in linted_paths), (
+        "expected at least one composite action under the linted directories"
+    )
+    for linted_path in linted_paths:
+        assert linted_path.read_text(encoding="utf-8").startswith("---\n"), (
+            f"{linted_path.relative_to(repo_root())} must begin with a YAML "
             "document start"
         )
 
