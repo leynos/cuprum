@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import shlex
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -83,7 +84,6 @@ INSTALL_TOKENS: typ.Final = (
     "|",
     "sha256sum",
     "--check",
-    "--status",
     "install",
     "-D",
     "--mode=0755",
@@ -158,12 +158,63 @@ def test_the_tool_key_hashes_the_pin() -> None:
     )
 
 
+#: A command that builds or installs makeutil by package name rather than by
+#: URL: `cargo install`, `cargo +toolchain install`, and either binstall form.
+_PACKAGE_INSTALL = re.compile(
+    r"(cargo(\s+\+\S+)?\s+b?install|cargo-binstall)\b[^\n]*\bmakeutil\b"
+)
+
+
+def _installs_makeutil_elsewhere(source: str) -> bool:
+    """Return whether ``source`` fetches or installs makeutil by any route."""
+    joined = source.replace("\\\n", " ")
+    return MAKEUTIL_SOURCE_URL in joined or bool(_PACKAGE_INSTALL.search(joined))
+
+
+def _other_actions() -> list[tuple[str, str]]:
+    """Return every local composite action except the install action."""
+    return [
+        (str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
+        for path in sorted(Path(ROOT, ".github", "actions").glob("*/action.y*ml"))
+        if str(path.relative_to(ROOT)) != INSTALL_ACTION_PATH
+    ]
+
+
 def test_only_the_action_fetches_makeutil() -> None:
-    """A second fetch or build elsewhere would carry a pin the key does not hash."""
+    """A second fetch or build elsewhere would carry a pin the key does not hash.
+
+    Both routes count: a fetch of the repository URL, and a package install
+    such as `cargo install makeutil`, which names no URL at all.
+    """
     builders = [
-        name for name, source in workflow_sources() if MAKEUTIL_SOURCE_URL in source
+        name
+        for name, source in [*workflow_sources(), *_other_actions()]
+        if _installs_makeutil_elsewhere(source)
     ]
     assert builders == [], f"only {INSTALL_ACTION_PATH} may fetch makeutil: {builders}"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cargo install makeutil",
+        "cargo +nightly-2026-05-28 install --locked makeutil",
+        "cargo binstall makeutil",
+        "cargo-binstall --no-confirm makeutil",
+        "cargo install \\\n  --locked makeutil",
+        f"curl -o m {MAKEUTIL_SOURCE_URL}/releases/download/v1/makeutil",
+    ],
+)
+def test_the_refusal_recognizes_every_install_route(command: str) -> None:
+    """Each route is found, so the refusal above cannot pass by missing one."""
+    assert _installs_makeutil_elsewhere(command), command
+
+
+def test_the_refusal_ignores_other_tools() -> None:
+    """Installing a different crate is not a makeutil install."""
+    assert not _installs_makeutil_elsewhere("cargo install cargo-nextest --locked"), (
+        "installing another crate must not read as a makeutil install"
+    )
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), CONSUMERS)

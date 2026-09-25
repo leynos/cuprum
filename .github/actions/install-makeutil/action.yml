@@ -30,5 +30,5 @@ runs:
         download="$(mktemp -d)/makeutil"
         curl --fail --location --show-error --silent --output "${download}" \
           "https://github.com/leynos/makeutil/releases/download/${MAKEUTIL_VERSION}/makeutil-${MAKEUTIL_TARGET}"
-        printf '%s  %s\n' "${MAKEUTIL_SHA256}" "${download}" | sha256sum --check --status
+        printf '%s  %s\n' "${MAKEUTIL_SHA256}" "${download}" | sha256sum --check
         install -D --mode=0755 "${download}" "${HOME}/.cargo/bin/makeutil"

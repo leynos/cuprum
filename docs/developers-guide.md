@@ -4555,16 +4555,18 @@ stand-in download with the real digest check, and
 evaluates each consumer's guard under `act` for an exact hit, a restore-key hit
 and a miss.
 
-For local test runs, install the same pinned release before running `make test`:
+For local test runs, install the same pinned release before running
+`make test`. Each command runs only if the one before it succeeded, so a
+rejected checksum installs nothing:
 
 ```bash
 curl --fail --location --output makeutil \
-  https://github.com/leynos/makeutil/releases/download/v0.1.0/makeutil-x86_64-unknown-linux-musl
-printf '%s  %s\n' \
-  99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d makeutil \
-  | sha256sum --check
-install -D --mode=0755 makeutil ~/.cargo/bin/makeutil
-make test
+  https://github.com/leynos/makeutil/releases/download/v0.1.0/makeutil-x86_64-unknown-linux-musl &&
+  printf '%s  %s\n' \
+    99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d makeutil |
+  sha256sum --check &&
+  install -D --mode=0755 makeutil ~/.cargo/bin/makeutil &&
+  make test
 ```
 
 ### Spelling policy
