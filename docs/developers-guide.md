@@ -2327,6 +2327,18 @@ Check a release candidate's two wheels against each other:
 
 ### Publishing a release
 
+Before pushing a release tag, a repository administrator must complete the
+one-time setup in
+[Repository and PyPI settings for publishing](#repository-and-pypi-settings-for-publishing):
+
+- create a GitHub environment named `pypi`, restricted to tags matching
+  `v*.*.*`;
+- set that environment name, `pypi`, in PyPI's Trusted Publisher settings for
+  the `cuprum` project.
+
+Without the second step the upload still succeeds, but the tag restriction is
+not enforced.
+
 Pushing a `v*.*.*` tag runs `.github/workflows/release.yml`. It builds the
 sdist and every wheel through `build-wheels.yml`, attests them, publishes them
 to PyPI using Trusted Publishing, so no token is stored in GitHub, and then
