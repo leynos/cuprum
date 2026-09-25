@@ -5,6 +5,21 @@
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
+- **Opt-in recovery from a closed echo destination:** A presentation sink whose
+  destination has closed reports `BrokenPipeError`, which aborted the run and
+  took the otherwise-captured result with it. Passing
+  `RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` now
+  disables echoing for the affected stream only, so capture, line observation,
+  and child reaping continue and `run_sync` still returns a `CommandResult`
+  carrying one `RelayFallback` whose `error_category` is `broken_pipe`. The
+  transition is reported once through `CommandResult.relay_fallbacks` /
+  `PipelineResult.stages[i].relay_fallbacks`, the echo observation channel, and
+  a structured `cuprum.stream` `WARNING`; `EchoMetricsHook` counts it on its
+  own `cuprum_echo_broken_pipe_total` series, so a sink that cannot encode
+  stays distinguishable from a reader that keeps disconnecting. Only
+  `BrokenPipeError` is affected — any other sink `OSError` still propagates —
+  and `BrokenPipePolicy.STRICT` remains the default, so every caller that does
+  not opt in keeps the existing behaviour byte-for-byte [^3].
 - **Capture preserved when echo sinks reject unicode:** A text-only echo sink
   whose encoding cannot represent the subprocess output (for example a Windows
   CP1252 console echoing UTF-8 `ś`/`ń`) no longer aborts stream draining with
@@ -434,3 +449,4 @@
 
 [^1]: <https://github.com/leynos/cuprum/issues/348>
 [^2]: <https://github.com/leynos/cuprum/issues/356>
+[^3]: <https://github.com/leynos/cuprum/issues/435>
