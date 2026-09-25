@@ -772,6 +772,14 @@ jobs:
           use-sccache: 'false'
           install-binstall: 'false'
 
+      # This job runs no Makefile contract, but it writes the 3.13 tool family
+      # that `coverage` and `coverage-upload` restore, and they skip their own
+      # install on an exact hit. The archive must therefore carry the parser,
+      # so the writer installs it too, on the same miss-only guard.
+      - name: Install Makefile parser
+        if: steps.tool-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/install-makeutil
+
       - name: Install Linux dev-fast prerequisites
         uses: ./.github/actions/setup-dev-fast
 
