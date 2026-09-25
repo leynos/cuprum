@@ -218,12 +218,10 @@ working on the Rust portions of the project:
     release, verification, and MSRV paths also retain their separate toolchain
     and linker policy. The target lints every target with all features enabled,
     denies all Clippy warnings, and validates GitHub Actions workflows and the
-    composite actions they call. Keep
-    `.yamllint.yml`
-    compatible with GitHub's unquoted `on` trigger key and require each
-    workflow and composite action to begin with `---`. CI must install
-    yamllint with `uv tool` and use the pinned, checksum-verified actionlint
-    binary before invoking `make lint`.
+    composite actions they call. Keep `.yamllint.yml` compatible with GitHub's
+    unquoted `on` trigger key and require each workflow and composite action to
+    begin with `---`. CI must install yamllint with `uv tool` and use the
+    pinned, checksum-verified actionlint binary before invoking `make lint`.
   - `make test` executes `cargo nextest run` when `cargo-nextest` is available,
     otherwise:
 
