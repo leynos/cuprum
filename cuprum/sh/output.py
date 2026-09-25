@@ -229,7 +229,7 @@ class RunOutputOptions:
             "idle_after",
             _validate_idle_options(self.idle_after, self.on_idle),
         )
-        # Normalised rather than merely checked, so the drain compares against
+        # Normalized rather than merely checked, so the drain compares against
         # a member even when the caller spelled the policy as a string, and an
         # unknown value fails here rather than after a child has spawned.
         object.__setattr__(
@@ -288,7 +288,7 @@ class RunOutputOptions:
     def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
         """The policy behind the declared ``BrokenPipePolicy | str`` field.
 
-        ``__post_init__`` normalises the field, but the declared type stays
+        ``__post_init__`` normalizes the field, but the declared type stays
         wide because a caller may spell the policy as a string. This is the
         narrow view the execution layer reads, so it never has to parse.
         """

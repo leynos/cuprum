@@ -58,7 +58,7 @@ remedies. An encoding failure is inherent to the sink's configuration and
 recurs for every run that reaches it; a broken pipe means a destination that
 was expected to stay open did not, which is exactly the signal an operator
 wants to alert on separately. Folding them together would make a permanently
-mis-encoded sink indistinguishable from a downstream reader that keeps
+misencoded sink indistinguishable from a downstream reader that keeps
 disconnecting.
 
 Only recorded when the caller opted in with

@@ -138,7 +138,7 @@ escalation, not a workaround.
   reproduction emits belongs to the **`STRICT`** run, not the recovered one:
   teardown drains a consumer that is already unwinding from the propagated
   error. It is pre-existing behaviour and out of scope for this change; the
-  `BEST_EFFORT` run's only log record is its one categorised `WARNING`.
+  `BEST_EFFORT` run's only log record is its one categorized `WARNING`.
 - Six `cuprum/unittests/test_release_github_steps.py` tests fail locally with
   `AssertionError: failed to run git: fatal: not a git repository`. The message
   appears nowhere in the tracked tree, which is the clue: this host sets
@@ -165,7 +165,7 @@ escalation, not a workaround.
   the single-run and pipeline builders already construct.
 - Decision: name the metric `cuprum_echo_broken_pipe_total` and keep
   `ECHO_ENCODING_FAILURES_TOTAL` unchanged. Rationale: the module comment
-  requires a distinct series per category, and a mis-encoded sink must stay
+  requires a distinct series per category, and a misencoded sink must stay
   distinguishable from a reader that keeps disconnecting.
 - Decision: extract `_disable_echo` in `cuprum/_stream_echo.py`, so both
   recoveries share one guard flip and one set of three projections. Rationale:
@@ -175,7 +175,7 @@ escalation, not a workaround.
   `RunOutputOptions` and expose `resolved_broken_pipe_policy` as the narrow
   view. Rationale: it mirrors `resolved_echo`, which exists for exactly this
   reason, and keeps the execution layer from re-parsing a value the options
-  object already normalised.
+  object already normalized.
 - Decision: add the field to `_SubprocessExecution` and `_PipelineRunConfig`
   with a `STRICT` default rather than without one. Rationale: two test modules
   build those dataclasses directly, and the plan's tolerance says existing

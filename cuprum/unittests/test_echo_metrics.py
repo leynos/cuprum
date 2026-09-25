@@ -346,7 +346,7 @@ def test_broken_pipe_counter_is_distinct_from_the_encoding_counter(
     )
     name, value, labels = collector.counters[0]
     assert name == ECHO_BROKEN_PIPE_TOTAL, (
-        "the broken-pipe series must be its own, so a mis-encoded sink stays "
+        "the broken-pipe series must be its own, so a misencoded sink stays "
         f"distinguishable from a closing reader, found name={name!r}"
     )
     assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
