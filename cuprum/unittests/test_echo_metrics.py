@@ -15,12 +15,18 @@ import pytest
 
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.adapters.echo_metrics import (
+    ECHO_BROKEN_PIPE_TOTAL,
     ECHO_ENCODING_FAILURES_TOTAL,
     ECHO_TRUNCATIONS_TOTAL,
     EchoMetricsHook,
     echo_metrics_hook,
 )
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream
+from cuprum.echo_events import (
+    BrokenPipePolicy,
+    EchoErrorCategory,
+    EchoEvent,
+    EchoStream,
+)
 from cuprum.echo_observation import observe_echo
 from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 
@@ -276,3 +282,96 @@ def test_metrics_hook_increments_once_per_disablement() -> None:
     assert name == ECHO_ENCODING_FAILURES_TOTAL
     assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
     assert labels == {"stream": "stdout", "error_category": "unicode_encode"}
+
+
+class _BrokenPipeSink:
+    """Text-only sink whose destination has closed under the drain."""
+
+    def __init__(self) -> None:
+        """Record each attempted write before failing."""
+        self.attempts: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Record the attempt, then fail the way a closed reader does."""
+        self.attempts.append(payload)
+        raise BrokenPipeError("closed presentation destination")
+
+    def flush(self) -> None:
+        """Model the flush call on a broken stream."""
+
+
+def _broken_pipe_config(
+    sink: typ.IO[str],
+    stream: EchoStream,
+    *,
+    policy: BrokenPipePolicy = BrokenPipePolicy.BEST_EFFORT,
+) -> _StreamConfig:
+    """Build a config whose sink will report a broken pipe."""
+    return _StreamConfig(
+        capture_output=True,
+        echo_output=True,
+        sink=sink,
+        encoding="utf-8",
+        errors="replace",
+        stream=stream,
+        broken_pipe_policy=policy,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stream", "expected_stream_label"),
+    [
+        pytest.param(EchoStream.STDOUT, "stdout", id="stdout"),
+        pytest.param(EchoStream.STDERR, "stderr", id="stderr"),
+    ],
+)
+def test_broken_pipe_counter_is_distinct_from_the_encoding_counter(
+    stream: EchoStream,
+    expected_stream_label: str,
+) -> None:
+    """A tolerated broken pipe increments its own series, not the encoding one."""
+    collector = RecordingCollector()
+    sink = typ.cast("typ.IO[str]", _BrokenPipeSink())
+
+    with observe_echo(_MetricsProbe(collector)):
+        asyncio.run(
+            _drain(
+                _echo_reader((b"one ", b"two ", b"three")),
+                _broken_pipe_config(sink, stream),
+            ),
+        )
+
+    assert len(collector.counters) == 1, (
+        f"one tolerated disablement must increment once, found {collector.counters}"
+    )
+    name, value, labels = collector.counters[0]
+    assert name == ECHO_BROKEN_PIPE_TOTAL, (
+        "the broken-pipe series must be its own, so a mis-encoded sink stays "
+        f"distinguishable from a closing reader, found name={name!r}"
+    )
+    assert value == 1.0  # ruff: ignore[float-equality-comparison] - exact increment
+    assert labels == {
+        "stream": expected_stream_label,
+        "error_category": "broken_pipe",
+    }
+
+
+def test_no_broken_pipe_counter_under_the_default_policy() -> None:
+    """The default policy propagates, so nothing is counted for it."""
+    collector = RecordingCollector()
+    sink = typ.cast("typ.IO[str]", _BrokenPipeSink())
+    strict_config = _broken_pipe_config(
+        sink,
+        EchoStream.STDOUT,
+        policy=BrokenPipePolicy.STRICT,
+    )
+
+    with observe_echo(_MetricsProbe(collector)), pytest.raises(BrokenPipeError):
+        asyncio.run(
+            _drain(_echo_reader((b"payload",)), strict_config),
+        )
+
+    assert collector.counters == [], (
+        "a propagated broken pipe is not a handled transition and must not be "
+        f"counted, found {collector.counters}"
+    )

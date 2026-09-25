@@ -165,6 +165,29 @@ def test_relay_fallback_is_exported_from_its_definition_site() -> None:
     )
 
 
+def test_broken_pipe_policy_is_exported_from_its_definition_site() -> None:
+    """The package-root BrokenPipePolicy is the echo_events definition."""
+    assert c.BrokenPipePolicy is echo_events.BrokenPipePolicy, (
+        "BrokenPipePolicy must be exported from cuprum.echo_events"
+    )
+    assert "BrokenPipePolicy" in c.__all__, (
+        "the policy is public surface; __all__ must name it"
+    )
+
+
+def test_broken_pipe_policy_members_are_the_documented_spellings() -> None:
+    """The policy's members are the two values callers name in the contract."""
+    assert c.BrokenPipePolicy.STRICT == "strict", (
+        "STRICT is the default; its spelling is part of the contract"
+    )
+    assert c.BrokenPipePolicy.BEST_EFFORT == "best_effort", (
+        "BEST_EFFORT is opt-in; its spelling is part of the contract"
+    )
+    assert c.BrokenPipePolicy("strict") is c.BrokenPipePolicy.STRICT, (
+        "the string spelling the options field accepts must parse"
+    )
+
+
 def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
     """``relay_fallbacks`` must stay the seventh positional CommandResult field.
 

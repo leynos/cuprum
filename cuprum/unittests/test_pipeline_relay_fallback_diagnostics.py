@@ -7,7 +7,13 @@ import typing as typ
 
 import pytest
 
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, EchoStream, RelayFallback
+from cuprum.echo_events import (
+    BrokenPipePolicy,
+    EchoErrorCategory,
+    EchoEvent,
+    EchoStream,
+    RelayFallback,
+)
 from cuprum.echo_observation import observe_echo
 from cuprum.sh import ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_builder as build_python_builder
@@ -51,6 +57,26 @@ class _PassthroughSink:
         """Model the flush call on a text stream."""
 
 
+class _BrokenPipeSink:
+    """Text-only sink whose destination has closed under the run."""
+
+    def __init__(self) -> None:
+        """Record each attempted write before failing."""
+        self.attempts: list[str] = []
+
+    def write(self, payload: str) -> int:
+        """Record the attempt, then fail the way a closed reader does."""
+        self.attempts.append(payload)
+        raise BrokenPipeError("closed presentation destination")
+
+    def flush(self) -> None:
+        """Model the flush call on a broken stream."""
+
+
+_EXPECTED_BROKEN_PIPE_FALLBACK = RelayFallback(
+    stream=EchoStream.STDOUT,
+    error_category=EchoErrorCategory.BROKEN_PIPE,
+)
 _EXPECTED_STDERR_FALLBACK = RelayFallback(
     stream=EchoStream.STDERR,
     error_category=EchoErrorCategory.UNICODE_ENCODE,
@@ -157,4 +183,52 @@ def test_pipeline_stage_results_keep_stage_order(
     )
     assert len(rejecting.attempts) == 2, (
         f"each stage must make one independent echo attempt, got {rejecting.attempts!r}"
+    )
+
+
+def test_pipeline_best_effort_tolerates_a_closed_stdout_sink(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """One policy governs every stage; each closed sink is reported once."""
+    closed = _BrokenPipeSink()
+    # The final stage's stdout echoes to the closed destination while its
+    # stderr goes somewhere healthy, so the run has to keep going for one
+    # stream while abandoning the other.
+    healthy = _PassthroughSink()
+
+    async def run_case() -> PipelineResult:
+        """Pipe two stages under BEST_EFFORT with a closed stdout sink."""
+        with observe_echo(lambda _event: None):
+            pipeline = python_builder("-c", "print('stage one')") | python_builder(
+                "-c", "import sys; print(sys.stdin.read().strip() + ' done')"
+            )
+            return await pipeline.run(
+                output=RunOutputOptions(
+                    capture=True,
+                    echo=True,
+                    broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
+                ),
+                context=ExecutionContext(
+                    stdout_sink=typ.cast("typ.IO[str]", closed),
+                    stderr_sink=typ.cast("typ.IO[str]", healthy),
+                ),
+            )
+
+    result = asyncio.run(run_case())
+
+    assert result.stages[-1].stdout == "stage one done\n", (
+        "the pipeline must still carry its data end to end, got "
+        f"{result.stages[-1].stdout!r}"
+    )
+    assert result.stages[0].relay_fallbacks == (), (
+        "the first stage has no echo of its own stdout, got "
+        f"{result.stages[0].relay_fallbacks!r}"
+    )
+    assert result.stages[-1].relay_fallbacks == (_EXPECTED_BROKEN_PIPE_FALLBACK,), (
+        "the final stage must own its tolerated stdout failure, got "
+        f"{result.stages[-1].relay_fallbacks!r}"
+    )
+    assert closed.attempts == ["stage one done\n"], (
+        "echo must stop after the first broken write, got "
+        f"attempts={closed.attempts!r}"
     )
