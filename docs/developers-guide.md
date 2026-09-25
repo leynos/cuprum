@@ -2274,11 +2274,17 @@ The command prints `True` once the extension is importable.
 
 ### Building distributable wheels
 
-The pure Python wheel needs no Rust toolchain; it is built with `uv_build`:
+The source distribution and the pure Python wheel need no Rust toolchain; both
+are built with `uv_build`. Without `--sdist` or `--wheel`, uv builds the sdist
+first and then builds the wheel from it, which is how CI proves the sdist is
+buildable:
 
 ```bash
-uv build --wheel --out-dir dist
+uv build --out-dir dist
 ```
+
+The sdist carries the Rust workspace so the extension can be built from it; see
+[Native Rust source-distribution contract](#native-rust-source-distribution-contract).
 
 A native wheel is built per platform with maturin:
 
@@ -2314,6 +2320,25 @@ Check a release candidate's two wheels against each other:
 2. Force-reinstall the native wheel and confirm that it returns `True`.
 3. Compare the name, version, `requires-python`, dependencies, and
    classifiers of the two installations to detect metadata drift.
+
+### Publishing a release
+
+Pushing a `v*.*.*` tag runs `.github/workflows/release.yml`. It builds the
+sdist and every wheel through `build-wheels.yml`, and publishes them with
+`uv publish` using PyPI Trusted Publishing, so no token is stored in GitHub. The
+`publish` job:
+
+1. collects every wheel and requires exactly one sdist;
+2. reads the files already published from PyPI's JSON simple index and skips
+   any artefact whose filename is present, logging a notice for each;
+3. uploads the remainder with `--check-url https://pypi.org/simple/`, which
+   also skips an identical file uploaded by an interrupted earlier attempt.
+
+PyPI never accepts a second upload of an existing filename, and rebuilt wheels
+are rarely byte-identical, so skipping by name is what makes a re-run of the
+same tag safe. A run that finds everything already published succeeds without
+uploading. `cuprum/unittests/test_release_publish_steps.py` executes these
+steps against scratch directories.
 
 ## Running the benchmark suite
 

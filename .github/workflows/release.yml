@@ -24,8 +24,8 @@ jobs:
   publish:
     needs:
       - build-wheels
-    # Release orchestration: it collects wheels other jobs built and uploads
-    # them. No build work, so it stays on a GitHub-hosted runner.
+    # Release orchestration: it collects the wheels and sdist other jobs built
+    # and uploads them. No build work, so it stays on a GitHub-hosted runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,13 +43,57 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: dist
-      - name: Collect wheel artefacts
+      - name: Collect release artefacts
         run: |
-          set -eu
+          set -euo pipefail
           mkdir -p dist/publish
-          find dist -type f -name "*.whl" -print0 | \
+          find dist -path dist/publish -prune -o -type f \
+            \( -name "*.whl" -o -name "*.tar.gz" \) -print0 | \
             xargs -0 -r -I {} cp {} dist/publish/
+          shopt -s nullglob
+          sdists=(dist/publish/*.tar.gz)
+          if [ "${#sdists[@]}" -ne 1 ]; then
+            echo "Expected exactly one source distribution." >&2
+            ls -al dist/publish >&2
+            exit 1
+          fi
+      # PyPI rejects any second upload of an existing filename, and rebuilt
+      # wheels are rarely byte-identical, so a re-run of this workflow would
+      # otherwise fail on the files a previous run already published. Skip them
+      # by name; `--check-url` below additionally covers a partial upload.
+      - name: Skip artefacts already on PyPI
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --location \
+            --output pypi-index.json --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.pypi.simple.v1+json' \
+            https://pypi.org/simple/cuprum/)
+          case "${status}" in
+            200) ;;
+            404) echo '{"files": []}' > pypi-index.json ;;
+            *)
+              echo "PyPI simple index returned HTTP ${status}." >&2
+              exit 1
+              ;;
+          esac
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          index = json.loads(Path("pypi-index.json").read_text(encoding="utf-8"))
+          published = {entry["filename"] for entry in index.get("files", [])}
+          for artefact in sorted(Path("dist/publish").iterdir()):
+              if artefact.name in published:
+                  print(f"::notice::Skipping {artefact.name}: already on PyPI")
+                  artefact.unlink()
+          PY
       - name: Publish to PyPI with uv
         run: |
-          set -eu
-          uv publish dist/publish/*.whl
+          set -euo pipefail
+          shopt -s nullglob
+          artefacts=(dist/publish/*)
+          if [ "${#artefacts[@]}" -eq 0 ]; then
+            echo "Every artefact is already on PyPI; nothing to publish."
+            exit 0
+          fi
+          uv publish --check-url https://pypi.org/simple/ "${artefacts[@]}"

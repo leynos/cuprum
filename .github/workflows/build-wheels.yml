@@ -225,6 +225,13 @@ jobs:
             ls -al dist/wheels-pure >&2 || true
             exit 1
           fi
+          # The release publishes this sdist, so fail here rather than at tag time.
+          SDIST_GLOB=(dist/wheels-pure/*.tar.gz)
+          if [ "${#SDIST_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one source distribution." >&2
+            echo "Matched: ${SDIST_GLOB[*]:-<none>}" >&2
+            exit 1
+          fi
           PURE_WHEEL=$(realpath "${PURE_WHEEL_GLOB[0]}")
           python -m pip install "${PURE_WHEEL}"
 

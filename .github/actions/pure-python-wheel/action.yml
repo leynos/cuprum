@@ -1,11 +1,13 @@
-name: Build Pure Python Wheel
-description: Builds a pure Python wheel using UV and uploads it as an artefact.
+name: Build Pure Python Wheel and Sdist
+description: >-
+  Builds the source distribution and, from it, the pure Python wheel using uv,
+  then uploads both as one artefact.
 inputs:
   python-version:
     description: Python version to set up
     required: true
   out-dir:
-    description: Directory to place built wheel
+    description: Directory to place the built sdist and wheel
     required: false
     default: dist
   artifact-name:
@@ -26,11 +28,15 @@ runs:
       uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
       with:
         enable-cache: false
-    - name: Build wheel
+    # Without --sdist or --wheel, uv builds the sdist first and then the wheel
+    # from that sdist, so every run also proves the sdist is buildable.
+    - name: Build sdist and wheel
       shell: bash
-      run: uv build --wheel --out-dir ${{ inputs.out-dir }}
-    - name: Upload wheel artefact
+      run: uv build --out-dir ${{ inputs.out-dir }}
+    - name: Upload sdist and wheel artefact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.out-dir }}/*.whl
+        path: |
+          ${{ inputs.out-dir }}/*.whl
+          ${{ inputs.out-dir }}/*.tar.gz
