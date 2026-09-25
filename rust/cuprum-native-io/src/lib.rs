@@ -58,6 +58,7 @@ pub fn borrow(stream: &impl AsStream) -> BorrowedStream<'_> {
 /// The caller relinquishes ownership and must never close or reuse it after
 /// this call. Range validation alone does not establish these obligations.
 #[must_use]
+#[cfg(unix)]
 pub unsafe fn adopt_writer(raw: PlatformFd) -> OwnedStream {
     #[cfg(unix)]
     {
@@ -72,6 +73,22 @@ pub unsafe fn adopt_writer(raw: PlatformFd) -> OwnedStream {
     }
 }
 
+/// Accept a synchronous Windows writer transferred by the integration boundary.
+///
+/// # Safety
+/// `raw` must denote a valid open Win32 handle owned exclusively by the
+/// caller. The caller relinquishes ownership and must never close or reuse it
+/// after this call. It must support blocking synchronous `ReadFile`/`WriteFile`
+/// semantics and must not have been opened with `FILE_FLAG_OVERLAPPED`.
+#[must_use]
+#[cfg(windows)]
+pub unsafe fn adopt_writer(raw: PlatformFd) -> SynchronousOwnedStream {
+    // SAFETY: the caller transfers a valid independently duplicated Win32
+    // handle, not a CRT descriptor. The cast preserves pointer width.
+    let handle = unsafe { OwnedStream::from_raw_handle(raw as RawHandle) };
+    SynchronousOwnedStream::from_known_synchronous(handle)
+}
+
 /// Borrow a raw reader whose owner is maintained by the integration layer.
 ///
 /// # Safety
@@ -79,6 +96,7 @@ pub unsafe fn adopt_writer(raw: PlatformFd) -> OwnedStream {
 /// The caller must prevent close/reuse, including during GIL release and
 /// cancellation. It retains responsibility for closing the resource.
 #[must_use]
+#[cfg(unix)]
 pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> BorrowedStream<'owner> {
     #[cfg(unix)]
     {
@@ -91,6 +109,24 @@ pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> BorrowedStream<'ow
         // the integer is a pointer-width Win32 handle, not a CRT descriptor.
         unsafe { BorrowedStream::borrow_raw(raw as RawHandle) }
     }
+}
+
+/// Borrow a synchronous Windows reader whose owner is maintained externally.
+///
+/// # Safety
+/// `raw` must stay open and refer to the same Win32 handle throughout
+/// `'owner`. The caller must prevent close/reuse, including during GIL release
+/// and cancellation, and retains responsibility for closing it. The handle
+/// must support blocking synchronous `ReadFile`/`WriteFile` semantics and must
+/// not have been opened with `FILE_FLAG_OVERLAPPED`.
+#[must_use]
+#[cfg(windows)]
+pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> SynchronousBorrowedStream<'owner> {
+    // SAFETY: the caller establishes the borrowed handle's validity and
+    // synchronous, non-overlapped I/O contract for the returned lifetime.
+    let handle = unsafe { BorrowedStream::borrow_raw(raw as RawHandle) };
+    // SAFETY: the caller establishes the synchronous-I/O capability contract.
+    unsafe { SynchronousBorrowedStream::new_unchecked(handle) }
 }
 
 /// Read once into initialized storage, retaining the resource borrow.
@@ -215,4 +251,11 @@ mod windows;
 #[cfg(all(test, windows))]
 pub(crate) use windows::fd_is_open;
 #[cfg(windows)]
-pub use windows::{pipe, read_once, write_once};
+pub use windows::{
+    SynchronousBorrowedStream,
+    SynchronousOwnedStream,
+    pipe,
+    read_once,
+    synchronous_pipe,
+    write_once,
+};

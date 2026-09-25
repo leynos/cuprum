@@ -3856,6 +3856,15 @@ snapshots and properties cover the `consume_stream_files` read-and-decode loop,
 while `TestRustConsumeStream` covers the exported surface a caller actually
 touches. Keep both when changing either.
 
+Both platform entry points named `consume_stream_files` delegate to one private
+loop, `consume_with_reader`. Each entry point passes a read closure over its
+own capability-typed `read_stream`, plus its platform label for the
+length-overflow event. The loop therefore never receives a handle, and Windows
+still requires a `SynchronousBorrowedStream`. `consume_tests.rs` drives that
+loop through a scripted read closure. It pins split sequences, EOF, and
+read-error propagation on every platform, including Windows, where the
+pipe-backed snapshots do not run.
+
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
 which keeps the expected text beside the case that produces it and leaves no

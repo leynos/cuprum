@@ -51,9 +51,10 @@ fn record_write_retry() {
     WRITE_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
 }
 
+#[cfg(windows)]
+use cuprum_native_io::SynchronousBorrowedStream;
 #[cfg(unix)]
-use cuprum_native_io::BorrowedStream;
-use cuprum_native_io::{AsStream, borrow};
+use cuprum_native_io::{AsStream, BorrowedStream, borrow};
 
 /// Result of a single write attempt on the stream.
 #[derive(Debug, PartialEq, Eq)]
@@ -90,21 +91,23 @@ pub(crate) fn operation_span(operation: &'static str, buffer_size: usize) -> tra
 }
 
 /// Read bytes from the stream into the buffer.
+#[cfg(unix)]
 pub(crate) fn read_stream(reader: &impl AsStream, buffer: &mut [u8]) -> Result<usize, PumpError> {
-    #[cfg(unix)]
-    {
-        read_stream_unix(reader, buffer)
-    }
+    read_stream_unix(reader, buffer)
+}
 
-    #[cfg(windows)]
-    {
-        cuprum_native_io::read_once(borrow(reader), buffer)
-            .and_then(|count| usize::try_from(count).map_err(io::Error::other))
-            .map_err(PumpError::from)
-    }
+#[cfg(windows)]
+pub(crate) fn read_stream(
+    reader: SynchronousBorrowedStream<'_>,
+    buffer: &mut [u8],
+) -> Result<usize, PumpError> {
+    cuprum_native_io::read_once(reader, buffer)
+        .and_then(|count| usize::try_from(count).map_err(io::Error::other))
+        .map_err(PumpError::from)
 }
 
 /// Write all bytes from a chunk to the writer, returning the write outcome.
+#[cfg(unix)]
 pub(crate) fn handle_write(
     writer: &impl AsStream,
     chunk: &[u8],
@@ -116,6 +119,14 @@ pub(crate) fn handle_write(
     let outcome = write_all_windows(writer, chunk)?;
 
     Ok(outcome)
+}
+
+#[cfg(windows)]
+pub(crate) fn handle_write(
+    writer: SynchronousBorrowedStream<'_>,
+    chunk: &[u8],
+) -> Result<WriteOutcome, PumpError> {
+    write_all_windows(writer, chunk)
 }
 
 /// Attempt one write and classify it into a non-fatal [`WriteEvent`].
@@ -140,8 +151,17 @@ pub(crate) fn handle_write(
 /// let event = classify_write(&mut writer, b"chunk")?;
 /// assert_eq!(event, WriteEvent::Closed { bytes: 0 });
 /// ```
+#[cfg(unix)]
 pub(crate) fn classify_write(
     writer: &impl AsStream,
+    chunk: &[u8],
+) -> Result<WriteEvent, PumpError> {
+    classify_write_outcome(handle_write(writer, chunk))
+}
+
+#[cfg(windows)]
+pub(crate) fn classify_write(
+    writer: SynchronousBorrowedStream<'_>,
     chunk: &[u8],
 ) -> Result<WriteEvent, PumpError> {
     classify_write_outcome(handle_write(writer, chunk))
@@ -281,11 +301,14 @@ fn write_all_unix_with(
 }
 
 #[cfg(windows)]
-fn write_all_windows(writer: &impl AsStream, mut chunk: &[u8]) -> Result<WriteOutcome, PumpError> {
+fn write_all_windows(
+    writer: SynchronousBorrowedStream<'_>,
+    mut chunk: &[u8],
+) -> Result<WriteOutcome, PumpError> {
     let mut total_written = 0_u64;
 
     while !chunk.is_empty() {
-        match cuprum_native_io::write_once(borrow(writer), chunk)
+        match cuprum_native_io::write_once(writer, chunk)
             .and_then(|count| usize::try_from(count).map_err(io::Error::other))
         {
             Ok(0) => {

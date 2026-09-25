@@ -3,7 +3,7 @@
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, IntoRawHandle};
+use std::os::windows::io::AsRawHandle;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{LockResult, Mutex, MutexGuard},
@@ -11,7 +11,11 @@ use std::{
 
 use rstest::{fixture, rstest};
 
-use super::{adopt_writer, borrow, borrow_reader, fd_is_open, pipe, read_once, with_owned_writer};
+#[cfg(unix)]
+use super::{adopt_writer, borrow, borrow_reader, pipe, with_owned_writer};
+use super::{fd_is_open, read_once};
+#[cfg(windows)]
+use super::{synchronous_pipe, write_once};
 
 // Closed-descriptor observations must not race this test binary's next pipe.
 // The guard is outside catch_unwind, so intentional panics do not poison it.
@@ -42,6 +46,7 @@ fn descriptor_is_open(raw: super::PlatformFd) -> bool {
 #[rstest]
 #[case::normal(false)]
 #[case::real_unwind(true)]
+#[cfg(unix)]
 fn borrowed_reader_survives(
     #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
     #[case] should_panic: bool,
@@ -88,6 +93,7 @@ fn borrowed_reader_survives(
 #[case::normal(0)]
 #[case::error(1)]
 #[case::real_unwind(2)]
+#[cfg(unix)]
 fn transferred_writer_closes_and_delivers_eof(
     #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
     #[case] exit: u8,
@@ -143,6 +149,7 @@ fn transferred_writer_closes_and_delivers_eof(
 }
 
 #[rstest]
+#[cfg(unix)]
 fn owned_descriptor_reads_and_closes(
     #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
 ) {
@@ -168,6 +175,7 @@ fn owned_descriptor_reads_and_closes(
     drop(guard);
 }
 
+#[cfg(unix)]
 fn raw_of(resource: &super::OwnedStream) -> super::PlatformFd {
     #[cfg(unix)]
     {
@@ -179,6 +187,7 @@ fn raw_of(resource: &super::OwnedStream) -> super::PlatformFd {
     }
 }
 
+#[cfg(unix)]
 fn into_raw(resource: super::OwnedStream) -> super::PlatformFd {
     #[cfg(unix)]
     {
@@ -188,4 +197,61 @@ fn into_raw(resource: super::OwnedStream) -> super::PlatformFd {
     {
         resource.into_raw_handle() as usize
     }
+}
+
+#[cfg(windows)]
+fn raw_of(resource: &impl super::AsStream) -> super::PlatformFd {
+    resource.as_handle().as_raw_handle() as usize
+}
+
+#[rstest]
+#[case::normal(false)]
+#[case::real_unwind(true)]
+#[cfg(windows)]
+fn synchronous_borrow_survives(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    #[case] should_panic: bool,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) =
+        synchronous_pipe().unwrap_or_else(|error| panic!("create synchronous pipe: {error:?}"));
+    let reader_raw = raw_of(&reader);
+    let writer_raw = raw_of(&writer);
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let reader_view = reader.as_synchronous_borrowed();
+        if should_panic {
+            drop(super::windows::with_file(reader_view, |_| {
+                panic!("injected real unwind")
+            }));
+        }
+        assert!(!should_panic, "injected real unwind");
+        assert_eq!(
+            write_once(writer.as_synchronous_borrowed(), b"ping")
+                .unwrap_or_else(|error| panic!("write payload: {error:?}")),
+            4
+        );
+        drop(writer);
+        let mut buffer = [0; 8];
+        assert_eq!(
+            read_once(reader_view, &mut buffer)
+                .unwrap_or_else(|error| panic!("read through capability: {error:?}")),
+            4
+        );
+        assert_eq!(buffer.get(..4), Some(b"ping".as_slice()));
+    }));
+    assert_eq!(outcome.is_err(), should_panic);
+    assert!(
+        descriptor_is_open(reader_raw),
+        "borrowing must not close the caller's reader"
+    );
+    assert!(
+        !descriptor_is_open(writer_raw),
+        "the synchronous writer must close when its owner drops, including during unwind"
+    );
+    drop(reader);
+    assert!(
+        !descriptor_is_open(reader_raw),
+        "the actual owner still closes the reader"
+    );
+    drop(guard);
 }
