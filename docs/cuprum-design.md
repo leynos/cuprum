@@ -461,8 +461,7 @@ The `sh` facade provides the main entry point for safe usage.
 
 #### 6.2.1 Creating commands
 
-The primary constructor is
-`sh.make(program: Program) -> SafeCmdBuilder`:
+The primary constructor is `sh.make(program: Program) -> SafeCmdBuilder`:
 
 ```python
 from cuprum import RunOutputOptions, sh, Program
