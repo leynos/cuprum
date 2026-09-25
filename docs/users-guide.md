@@ -133,13 +133,24 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts text (`str`), `int`, `float`,
-`bool`, and `Path` values as positional and keyword arguments. Keyword
-arguments become `--name=value`; underscores in names become hyphens. This
-suits tools that actually accept that form. For flags such as `--check`, pass a
-positional argument: `check=True` would produce `--check=True`. `bytes` values
-raise `TypeError`, as `None` does, so decode bytes before passing them to the
-builder. An argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts `str | int | float | bool | Path`
+in positional and keyword positions alike. Keyword arguments become
+`--name=value`; underscores in names become hyphens. This suits tools that
+actually accept that form. For flags such as `--check`, pass a positional
+argument: `check=True` would produce `--check=True`. Booleans are values, not
+presence switches: `porcelain=True` produces `--porcelain=True`, and
+`porcelain=False` produces `--porcelain=False`. `None` raises `TypeError` in
+either position, so decide whether to omit or substitute an optional flag
+before building. An argument containing spaces remains one argument.
+
+Any other unsupported type raises `TypeError` naming the offending type, not
+rendering it with `str()`: `bytes`, `list`, and a user-defined `os.PathLike`
+all fail, and only `pathlib.Path` itself is accepted. `bytes` values are
+rejected with the offending value quoted in the message, so decode bytes before
+passing them to the builder. That domain is the `ArgValue` alias, importable
+from both `cuprum` and `cuprum.sh`; the builder `sh.make()` returns is a
+`SafeCmdBuilder`, and this is the contract a static type checker enforces at
+the call site.
 
 `os.fsdecode()` converts caller-held filesystem bytes to text using the
 configured filesystem encoding and error handler. On POSIX, the default
