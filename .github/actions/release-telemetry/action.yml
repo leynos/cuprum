@@ -1,0 +1,60 @@
+---
+name: Release telemetry
+description: >-
+  Writes one bounded JSONL record for a release.yml phase and uploads the
+  job's records, failing open so telemetry never gates a release.
+# The record contract follows the benchmark-gate precedent (ADR-014); the
+# writer is scripts/release_telemetry.py, which the calling job has checked out.
+inputs:
+  operation:
+    description: The release phase, from the writer's closed vocabulary
+    required: true
+  steps:
+    description: Whitespace-separated category=outcome pairs, the action last
+    required: true
+  job-status:
+    description: The caller's job.status when the record is written
+    required: true
+  attempts:
+    description: The PyPI index request's attempt count, if the phase made one
+    required: false
+    default: ''
+  http-status:
+    description: The PyPI index request's final HTTP status, if any
+    required: false
+    default: ''
+  upload:
+    description: Whether to upload the job's records after this one
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Write the release phase record
+      id: write
+      continue-on-error: true
+      shell: bash
+      env:
+        RELEASE_OPERATION: ${{ inputs.operation }}
+        RELEASE_STEPS: ${{ inputs.steps }}
+        RELEASE_JOB_STATUS: ${{ inputs.job-status }}
+        RELEASE_ATTEMPTS: ${{ inputs.attempts }}
+        RELEASE_HTTP_STATUS: ${{ inputs.http-status }}
+      run: python3 "${GITHUB_WORKSPACE}/scripts/release_telemetry.py"
+    # One artefact per job and attempt. A job that writes two records uploads
+    # once, after the second; `warn` keeps a missing file visible.
+    - name: Upload the release phase records
+      id: upload
+      if: ${{ !cancelled() && inputs.upload == 'true' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: release-telemetry-${{ github.job }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/release-telemetry/records.jsonl
+        retention-days: 90
+        if-no-files-found: warn
+    - name: Warn when the release phase record is unavailable
+      if: ${{ !cancelled() && (steps.write.outcome == 'failure' || steps.upload.outcome == 'failure') }}
+      shell: bash
+      run: |
+        echo '::warning title=release-telemetry::Release record write or upload failed; the release is unchanged.'

@@ -23,6 +23,9 @@ dev = [
     "hypothesis>=6.163.0,<7.0",
     "hypothesis-crosshair",
     "interrogate",
+    # The release-version property tests use it as an independent PEP 440
+    # oracle, so declare it rather than rely on pytest pulling it in.
+    "packaging>=25.0,<26.0",
     # Constrained below pytest 9.1 until pytest-bdd supports its node-based
     # fixture-registration API; 9.1 deprecates the nodeid/baseid path that
     # pytest-bdd 8.1.0 uses, raising PytestRemovedIn10Warning.

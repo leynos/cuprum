@@ -3,19 +3,28 @@
 Each step runs its checked-in script against a ``gh`` stand-in that records
 every call, so the assertions are about what the release asks GitHub to do: a
 re-run reuses the tag's release instead of creating a second, a new release is
-drafted and marked pre-release from the version check, assets are uploaded
-with ``--clobber``, and the release is made visible last.
+drafted and marked pre-release from the version check, the draft's existing
+assets are snapshotted for the PyPI job, and the release is made visible last.
+The reconciling upload and digest check are covered by
+``test_release_reconciliation.py``.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import typing as typ
 
 import pytest
 
-from tests.helpers.release_workflow import install_tool, run_bash, step_script
+from tests.helpers.release_workflow import (
+    fake_release,
+    install_tool,
+    link_scripts,
+    run_bash,
+    step_script,
+)
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
@@ -99,45 +108,37 @@ def test_a_missing_release_is_created_as_a_draft(
     )
 
 
-def test_every_artefact_and_the_bundle_are_uploaded_with_clobber(
+def test_the_snapshot_carries_the_release_bytes_for_this_runs_names(
     tmp_path: pth.Path,
 ) -> None:
-    """A re-run replaces the assets a previous attempt uploaded."""
-    for relative in (
-        "dist/publish/c-1-py3-none-any.whl",
-        "dist/publish/c-1.tar.gz",
-        "dist/attestations/cuprum-v1.2.3.sigstore.json",
-    ):
-        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / relative).write_bytes(b"")
+    """Only assets sharing a name with this run's artefacts are downloaded."""
+    fake = fake_release(tmp_path)
+    link_scripts(tmp_path)
+    publish = tmp_path / "dist" / "publish"
+    publish.mkdir(parents=True)
+    for name in ("c-1-py3-none-any.whl", "c-1.tar.gz"):
+        (publish / name).write_bytes(b"rebuilt")
+    for name in ("c-1.tar.gz", "c-0.9.tar.gz", "cuprum-v1.2.3-run1-1.sigstore.json"):
+        (fake.github / name).write_bytes(b"published")
 
-    status, stderr, calls = _run_with_fake_gh(
-        tmp_path, step_script("draft-release", "Upload release assets")
+    completed = run_bash(
+        step_script("draft-release", "Snapshot the release assets"),
+        tmp_path,
+        fake.env(GITHUB_REF_NAME=_TAG),
     )
 
-    assert status == 0, stderr
-    assert calls == [
-        [
-            "release",
-            "upload",
-            _TAG,
-            "--clobber",
-            "dist/publish/c-1-py3-none-any.whl",
-            "dist/publish/c-1.tar.gz",
-            "dist/attestations/cuprum-v1.2.3.sigstore.json",
-        ]
-    ], "every wheel, the sdist, and the provenance bundle must be attached"
-
-
-def test_an_empty_upload_fails(tmp_path: pth.Path) -> None:
-    """A release with nothing to attach fails rather than publishing bare."""
-    status, stderr, calls = _run_with_fake_gh(
-        tmp_path, step_script("draft-release", "Upload release assets")
+    assert completed.returncode == 0, completed.stderr
+    state = tmp_path / "github-state"
+    carried = {path.name: path.read_bytes() for path in (state / "files").iterdir()}
+    assert carried == {"c-1.tar.gz": b"published"}, (
+        "the PyPI job needs GitHub's bytes for exactly the names both share"
     )
-
-    assert status != 0, "an upload with no assets must fail"
-    assert "No release assets to upload." in stderr
-    assert calls == [], "nothing may be sent to GitHub"
+    listed = json.loads((state / "assets.json").read_text(encoding="utf-8"))
+    assert len(listed["assets"]) == 3, "the snapshot must list every asset"
+    assert [call[:2] for call in fake.calls("gh")] == [
+        ["release", "view"],
+        ["release", "download"],
+    ], "the snapshot only reads the release"
 
 
 @pytest.mark.parametrize("is_prerelease", ["true", "false"])

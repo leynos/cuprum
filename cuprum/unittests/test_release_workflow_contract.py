@@ -12,6 +12,8 @@ import re
 import typing as typ
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from tests.helpers.ci_codescene import CREDENTIAL_CHECK_COMMAND, CREDENTIAL_CHECK_ID
 from tests.helpers.ci_workflows import ROOT, jobs, workflow_document
@@ -28,15 +30,17 @@ _PYPROJECT_CHECK = "Check the pyproject.toml version against the tag"
 
 #: Each job's exact token scopes. Only the GitHub Release jobs may write
 #: repository contents, and only the attesting and uploading jobs may mint an
-#: OpenID Connect token.
+#: OpenID Connect token. `publish-pypi` reads contents only to check out
+#: `scripts/`; it sees the draft through `draft-release`'s snapshot instead.
 _EXPECTED_PERMISSIONS: typ.Final = {
     "check-version": {"contents": "read"},
     "build-wheels": {"contents": "read"},
     "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
-    "publish-pypi": {"id-token": "write"},
+    "publish-pypi": {"contents": "read", "id-token": "write"},
     "draft-release": {"contents": "write"},
     "publish-release": {"contents": "write"},
 }
+_FETCH_INDEX = "Fetch the PyPI index"
 
 #: The one reviewed template expansion inside a shell script. It renders only
 #: `true` or `false`, and the CodeScene contract requires the secret to be read
@@ -109,16 +113,17 @@ def test_a_repushed_tag_queues_instead_of_cancelling() -> None:
 
 
 def test_the_index_lookup_retries_and_is_bounded() -> None:
-    """A transient PyPI failure is retried and a stalled one times out."""
-    script = step_script("publish-pypi", "Skip artefacts already on PyPI")
-    for flag in (
-        "--retry 5",
-        "--retry-all-errors",
-        "--retry-delay 2",
+    """Both index readers share one bounded, retrying, timed-out lookup."""
+    script = step_script("publish-pypi", _FETCH_INDEX)
+    assert step_script("publish-release", _FETCH_INDEX) == script
+    for fragment in (
+        'while [ "${attempt}" -lt 6 ]; do',
         "--connect-timeout 10",
         "--max-time 60",
+        "000|429|5??)",
+        "attempts=%s",
     ):
-        assert flag in script, f"the index curl must pass {flag}"
+        assert fragment in script, f"the index lookup must include {fragment!r}"
     assert "404) echo '{\"files\": []}' > pypi-index.json ;;" in script, (
         "a project absent from PyPI must still read as an empty index"
     )
@@ -126,6 +131,12 @@ def test_the_index_lookup_retries_and_is_bounded() -> None:
 
 def test_every_publishing_job_waits_on_the_version_check() -> None:
     """No attestation, upload, or release happens for a mismatched tag."""
+    assert _needs("publish-pypi") >= {"attest", "draft-release"}, (
+        "PyPI needs the draft's snapshot to carry GitHub's bytes over"
+    )
+    assert "publish-pypi" in _needs("publish-release"), (
+        "GitHub's missing assets take PyPI's bytes, so PyPI goes first"
+    )
     for name in ("attest", "publish-pypi", "draft-release", "publish-release"):
         assert "check-version" in _needs(name), f"{name} must wait on check-version"
     cargo = _uses("check-version", _CARGO_CHECK)
@@ -140,10 +151,14 @@ def test_the_published_artefacts_are_the_attested_ones() -> None:
     """Provenance covers every file, and later jobs ship exactly those bytes."""
     attest = _uses("attest", "actions/attest-build-provenance")
     assert attest["with"] == {"subject-path": "dist/publish/*"}
-    for name in ("publish-pypi", "draft-release"):
+    for name in ("publish-pypi", "draft-release", "publish-release"):
         assert "attest" in _needs(name), f"{name} must wait on the attestation"
-        download = _uses(name, "actions/download-artifact")
-        assert download["with"]["name"] == "release-dist", (
+        downloads = [
+            item["with"]
+            for item in _job(name)["steps"]
+            if str(item.get("uses", "")).startswith("actions/download-artifact@")
+        ]
+        assert {"name": "release-dist", "path": "dist"} in downloads, (
             f"{name} must take the attested artefact, not rebuilt files"
         )
 
@@ -156,15 +171,40 @@ def test_the_upload_keeps_pypi_attestations_and_is_idempotent() -> None:
 
 
 def test_the_release_is_published_only_after_pypi() -> None:
-    """A failed upload leaves the GitHub Release a draft."""
+    """A failed upload or a digest mismatch leaves the GitHub Release a draft."""
     assert {"draft-release", "publish-pypi"} <= _needs("publish-release")
     assert "--draft" in step_script(
         "draft-release", "Create or reuse the draft release"
     )
-    assert "--clobber" in step_script("draft-release", "Upload release assets")
+    names = [item.get("name") for item in _job("publish-release")["steps"]]
+    upload = names.index("Upload the assets the release lacks")
+    check = names.index("Check both destinations hold the same bytes")
+    assert upload < check < names.index("Publish the GitHub Release"), (
+        "the digests must be compared after the upload and before the release"
+    )
     assert "--draft=false" in step_script(
         "publish-release", "Publish the GitHub Release"
     )
+
+
+def test_nothing_is_ever_overwritten_and_pypi_holds_no_github_token() -> None:
+    """No script clobbers an asset, and the PyPI job cannot touch GitHub."""
+    scripts = [holder["run"] for _, holder in _run_scripts(jobs(WORKFLOW), WORKFLOW)]
+    assert scripts, "the scan must reach the release scripts"
+    assert not any("--clobber" in script for script in scripts)
+    assert "GH_TOKEN" not in str(_job("publish-pypi")), (
+        "the job holding the PyPI token must not also hold a GitHub token"
+    )
+
+
+def test_every_scripts_checkout_is_sparse_and_credential_free() -> None:
+    """The jobs that run `scripts/` fetch it and the telemetry action only."""
+    for name in ("attest", "draft-release", "publish-pypi", "publish-release"):
+        checkout = _uses(name, "actions/checkout")
+        assert checkout["with"] == {
+            "persist-credentials": False,
+            "sparse-checkout": "scripts\n.github/actions/release-telemetry\n",
+        }, f"{name} must check out only what its steps run"
 
 
 def _run_scripts(
@@ -260,3 +300,42 @@ def test_the_expansion_scan_discriminates(
 ) -> None:
     """The scan flags pasted values and admits only the one reviewed exception."""
     assert bool(_expansions_in(name, document)) is is_flagged
+
+
+_LEAVES = st.one_of(st.none(), st.booleans(), st.integers(), st.text(max_size=4))
+#: `run` often enough that holders, and non-string `run` values, both appear.
+_KEYS = st.sampled_from(["run", "run", "steps", "with", "id"])
+_DOCUMENTS = st.recursive(
+    _LEAVES,
+    lambda children: st.one_of(
+        st.lists(children, max_size=4), st.dictionaries(_KEYS, children, max_size=4)
+    ),
+    max_leaves=30,
+)
+
+
+def _run_holders(document: object) -> list[int]:
+    """Return the identity of every mapping with a string ``run``, iteratively."""
+    found: list[int] = []
+    pending = [document]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            if isinstance(node.get("run"), str):
+                found.append(id(node))
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return found
+
+
+@given(document=_DOCUMENTS)
+def test_the_run_script_scan_finds_exactly_the_run_holders(document: object) -> None:
+    """The scan yields every mapping with a string ``run`` and nothing else."""
+    scanned = list(_run_scripts(document, "doc"))
+
+    assert sorted(id(holder) for _, holder in scanned) == sorted(
+        _run_holders(document)
+    ), "a missed holder is a script the expansion scan never reads"
+    locations = [where for where, _ in scanned]
+    assert len(set(locations)) == len(locations), "each holder has one location"
