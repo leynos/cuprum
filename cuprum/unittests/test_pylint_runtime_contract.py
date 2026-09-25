@@ -99,8 +99,8 @@ def test_classic_environment_is_pypy_312_with_pinned_tools() -> None:
         "pypy",
         "(3, 12)",
         "(8, 0, 0)",
-        "4.0.8",
-        "4.0.4",
+        _required_environment("PYLINT_VERSION"),
+        _required_environment("ASTROID_VERSION"),
     ]
 
 
@@ -200,7 +200,12 @@ def test_df12_environment_is_cpython_314_and_not_loaded_by_classic() -> None:
 
     assert classic.returncode == 0, classic.stderr
     assert df12.returncode == 0, df12.stderr
-    assert df12.stdout.splitlines() == ["cpython", "(3, 14)", "4.0.8", "4.0.4"]
+    assert df12.stdout.splitlines() == [
+        "cpython",
+        "(3, 14)",
+        _required_environment("PYLINT_VERSION"),
+        _required_environment("ASTROID_VERSION"),
+    ]
 
 
 def test_df12_diagnostic_and_make_failure_propagate(tmp_path: pathlib.Path) -> None:

@@ -4405,9 +4405,9 @@ The short version is:
   tool environment seeded from the checksum-verified binary above. It pins
   Pylint with `--from 'pylint==$(PYLINT_VERSION)'` and Astroid with
   `--with 'astroid==$(ASTROID_VERSION)'`, currently 4.0.9 and 4.0.4, and
-  verifies PyPy 8.0.0, Python 3.12, and both package versions before
-  analysing source. One worker is used deliberately, so the pass is
-  reproducible and its resource use stays bounded on shared builders.
+  verifies PyPy 8.0.0, Python 3.12, and both package versions before analysing
+  source. One worker is used deliberately, so the pass is reproducible and its
+  resource use stays bounded on shared builders.
 - `$(DF12_PYLINT)` keeps its own `PYLINTHOME` under CPython 3.14, so the two
   Pylint passes never share cache state.
 - `$(DF12_PYLINT)` enables every message shipped by
@@ -4477,8 +4477,8 @@ make lint
 2. `$(INTERROGATE)` — `$(UV_RUN_ENV) uv run interrogate --fail-under 100`
    `benchmarks conftest.py cuprum scripts tests`
 3. The PyPy-backed vanilla Pylint command stored in `$(PYLINT)`, run twice
-   over `$(PYLINT_TARGETS)`: once over `$(PYLINT_STRICT_TARGETS)` and once
-   over `$(PYLINT_TEST_TARGETS)`, where only `too-many-lines` is disabled.
+   over `$(PYLINT_TARGETS)`: once over `$(PYLINT_STRICT_TARGETS)` and once over
+   `$(PYLINT_TEST_TARGETS)`, where only `too-many-lines` is disabled.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
    the same targets.
 5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
@@ -4671,7 +4671,7 @@ Table: Lint-related Makefile variables and their defaults.
 | `PYPY312_PYTHON`            | `$(abspath .pypy/pypy3.12-v8.0.0-linux64/bin/pypy3.12)`                     | Explicit interpreter path handed to `uv tool run` for the classic tier.                                                     |
 | `PYLINT_PYTHON`             | `$(PYPY312_PYTHON)`                                                         | Python interpreter requested by `uv tool run` for the classic Pylint tier.                                                  |
 | `PYLINT_TARGETS`            | Broad roots plus the non-package test directories                           | Directories and files passed to the PyPy-backed Pylint tiers.                                                               |
-| `PYLINT_TEST_TARGETS`       | `cuprum/unittests scripts/tests tests/behaviour tests/features`             | Test roots analysed with only `too-many-lines` disabled.                                                                   |
+| `PYLINT_TEST_TARGETS`       | `cuprum/unittests scripts/tests tests/behaviour tests/features`             | Test roots analysed with only `too-many-lines` disabled.                                                                    |
 | `PYLINT_STRICT_TARGETS`     | `$(PYLINT_TARGETS)` minus `$(PYLINT_TEST_TARGETS)`                          | Targets held to the full classic diagnostic set, including the line cap.                                                    |
 | `PYLINT_VERSION`            | `4.0.9`                                                                     | Pylint package version supplied to `uv tool run` through `--from`.                                                          |
 | `ASTROID_VERSION`           | `4.0.4`                                                                     | Astroid package version pinned between the classic and DF12 Pylint passes.                                                  |
@@ -4703,13 +4703,13 @@ PYLINT_TARGETS=cuprum/sh make lint
 
 Do not change the PyPy, Pylint, or Astroid pins casually. Their runtime
 identities are part of the lint contract, `verify-classic-pylint` and
-`verify-df12-pylint` assert them before each pass, and `make pylint-integration`
-exercises the assertions. A new Pylint release can change lint behaviour
-without any repository change, so treat the whole trio like any other toolchain
-update. Update the `df12-python-lints` development dependency and
-`DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
-select the same controlled release tag. When adopting a new release, update
-both references to that tag.
+`verify-df12-pylint` assert them before each pass, and
+`make pylint-integration` exercises the assertions. A new Pylint release can
+change lint behaviour without any repository change, so treat the whole trio
+like any other toolchain update. Update the `df12-python-lints` development
+dependency and `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and
+standalone scanner select the same controlled release tag. When adopting a new
+release, update both references to that tag.
 
 ### Episodic lint policy
 
