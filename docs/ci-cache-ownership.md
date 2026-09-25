@@ -61,6 +61,14 @@ lived anywhere the key does not hash would let a hit skip the rebuild and run a
 stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a second
 copy.
 
+The proof holds only if the archive's writer installed the executable. A hit
+restores what the writer saved, so a writer that never ran the install would
+publish an archive without the parser, and every consumer would skip its own
+install and fail. Every writer of a tool family therefore installs makeutil
+before it saves, including `extension-tests`, which writes the 3.13 family and
+runs no Makefile contract itself. The same test module requires that of every
+writer in the family registry.
+
 ## Why the lane is in every key
 
 `runner.environment` renders to `self-hosted` on Ubicloud and `github-hosted`
