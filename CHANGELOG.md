@@ -73,6 +73,11 @@
 
 ### Added
 
+- **PEP 561 typing marker:** The package now ships `cuprum/py.typed`, so a type
+  checker treats `cuprum` as a typed package and reads its annotations instead
+  of falling back to `Any` for every import. The marker is empty, which under
+  PEP 561 declares the package fully typed; the marker travels in the pure
+  Python wheel, the native wheel, and both source distributions.
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper
