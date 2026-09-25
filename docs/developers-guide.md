@@ -451,14 +451,35 @@ extra.
 
 Table 2: CI suite execution by job and interpreter
 
-| Job                                | Python | Rust suite                     | Python suite           | Extension |
-| ---------------------------------- | ------ | ------------------------------ | ---------------------- | --------- |
-| `coverage` (pull requests)         | 3.13   | **the only run**, instrumented | full collection        | absent    |
-| `coverage-upload` (`main`)         | 3.13   | **the only run**, instrumented | full collection        | absent    |
-| `typecheck-test` 3.12, 3.14, 3.15a | each   | none                           | `make test-python`     | absent    |
-| `typecheck-test` 3.13              | 3.13   | none                           | none, coverage runs it | absent    |
-| `extension-tests`                  | 3.13   | none                           | 13 gated modules       | **built** |
-| `extension-tests-windows`          | 3.13   | none                           | 13 gated modules       | **built** |
+| Job                         | Python | Rust suite                     | Python suite                             | Extension |
+| --------------------------- | ------ | ------------------------------ | ---------------------------------------- | --------- |
+| `coverage` (pull requests)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
+| `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
+| `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
+| `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
+| `typecheck-test` 3.13       | 3.13   | none                           | none, coverage runs it                   | absent    |
+| `extension-tests`           | 3.13   | none                           | 13 gated modules                         | **built** |
+| `extension-tests-windows`   | 3.13   | none                           | 13 gated modules                         | **built** |
+
+The 3.15a leg is experimental: it may fail without failing the run, and its
+check, `Typecheck and test (Python 3.15a)`, is not a required context. On a
+pull request it could only spend, so it does no work there. GitHub cannot skip
+one matrix leg: a job-level `if:` cannot read `matrix`, and `exclude` runs
+before `include`, so it cannot remove an include-only leg. Instead the job sets
+`LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}`
+and every step carries `env.LEG_RUNS == 'true'` as its last conjunct. On a
+pull request the leg starts, skips every step, and reports success having done
+nothing; its green check means "not run", not "3.15a passed". On push to `main`
+and on dispatch it runs in full, and on the push it also writes its compiler
+family; a dispatch saves nothing, because every save requires a push.
+`tests/test_ci_experimental_leg.py` holds the flag's exact expression, the flag
+on every step, and the steps' presence, and `tests/helpers/ci_leg_gate.py` lets
+the other contracts read a step's own guard without the flag. Those read text;
+`tests/integration/test_experimental_leg_integration.py`, part of
+`make test-act`, executes it. It projects the job with every step body replaced
+by `true`, runs one leg at a time under `act` in host mode, and asserts which
+steps ran: none for 3.15a on a pull request, the work but no saves for 3.12,
+and the work and the saves for both on a push.
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under

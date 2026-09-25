@@ -23,6 +23,7 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import CACHE_KEYS_ACTION_FILE
 from tests.helpers.ci_workflows import (
     ROOT,
@@ -199,7 +200,10 @@ def test_a_consumer_installs_through_the_action_only_on_a_tool_miss(
     assert step.get("uses") == INSTALL_ACTION, (
         f"{where} must install through {INSTALL_ACTION}, got {step.get('uses')!r}"
     )
-    guard = " ".join(str(step.get("if")).split())
+    # `typecheck-test` also ends every guard with its leg flag; `ungated`
+    # requires that conjunct there and removes it, and leaves other jobs' guards
+    # whole.
+    guard = ungated(workflow_name, job_name, step.get("if"))
     assert guard == MISS_GUARD, f"{where} install must be guarded {MISS_GUARD!r}"
     assert restore < install, f"{where} must restore the tool cache before install"
     assert CARGO_BIN in cache_paths(job_steps[restore], f"{where} tool cache"), (

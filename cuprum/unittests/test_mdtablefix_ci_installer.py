@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import job, steps, workflow_env
 
 _SHARED_ACTION_REVISION = "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
@@ -75,6 +76,7 @@ def test_typecheck_python_suite_installs_mdtablefix_conditionally() -> None:
         if step.get("name") == "Install mdtablefix"
     )
 
-    assert installer.get("if") == "matrix.python-suite", (
+    guard = ungated("ci.yml", "typecheck-test", installer.get("if"))
+    assert guard == "matrix.python-suite", (
         "typecheck-test must install mdtablefix exactly on the Python test legs"
     )

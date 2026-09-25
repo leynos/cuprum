@@ -402,6 +402,14 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     env:
+      # The pre-release leg is not a required check and may fail silently, so
+      # on a pull request it can only spend. GitHub cannot skip one matrix leg
+      # (a job-level `if:` cannot read `matrix`, and `exclude` runs before
+      # `include`), so every step carries this flag instead: on a pull request
+      # the 3.15a leg starts, skips every step, and reports success without
+      # doing anything. It still runs on push to `main` and on dispatch; only
+      # the push writes its compiler family, since the saves need a push.
+      LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}
       MDTABLEFIX_VERSION: '0.6.0'
     strategy:
       fail-fast: false
@@ -432,6 +440,7 @@ jobs:
             python-suite: true
     steps:
       - name: Check out repository
+        if: env.LEG_RUNS == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
@@ -441,11 +450,13 @@ jobs:
       # starts with about 31 GB free, and disk, not memory, is what kills a job
       # on this shape.
       - name: Start resource sampler
+        if: env.LEG_RUNS == 'true'
         uses: ./.github/actions/resource-sampler
         with:
           mode: start
           vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
       - name: Compute cache keys
+        if: env.LEG_RUNS == 'true'
         uses: ./.github/actions/cache-keys
         with:
           python-version: ${{ matrix.python-version }}
@@ -454,6 +465,7 @@ jobs:
           compiler-shape: debug
 
       - name: Restore the Cargo registry
+        if: env.LEG_RUNS == 'true'
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -464,6 +476,7 @@ jobs:
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
 
       - name: Restore the installed tools
+        if: env.LEG_RUNS == 'true'
         id: tool-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -483,7 +496,7 @@ jobs:
       # rather than as a job with nothing to compile.
       - name: Restore the compiler cache
         id: sccache-dir
-        if: matrix.python-suite
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/sccache
@@ -494,7 +507,7 @@ jobs:
       # any miss from the run summary alone rather than by re-deriving the
       # key from the workflow source.
       - name: Record cache observations
-        if: always()
+        if: always() && env.LEG_RUNS == 'true'
         shell: bash
         env:
           CARGO_CACHE_HIT: ${{ steps.cargo-cache.outputs.cache-hit }}
@@ -514,7 +527,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up sccache
-        if: matrix.python-suite
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
         uses: ./.github/actions/setup-sccache
 
       # Immediately after the wrapper exists, so nothing between setup and
@@ -522,21 +535,24 @@ jobs:
       # the cranelift Whitaker suite before this ran, and those requests were
       # zeroed away before the report.
       - name: Reset compiler-cache counters
-        if: matrix.python-suite
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
         run: sccache --zero-stats
 
       - name: Set up Python
+        if: env.LEG_RUNS == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: ${{ matrix.allow-prereleases }}
 
       - name: Install uv
+        if: env.LEG_RUNS == 'true'
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
         with:
           enable-cache: false
 
       - name: Install Rust toolchain
+        if: env.LEG_RUNS == 'true'
         uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           toolchain: '1.85.0'
@@ -549,18 +565,19 @@ jobs:
       # already the pinned build and neither the nightly nor the compile is
       # needed.
       - name: Install Makefile parser
-        if: steps.tool-cache.outputs.cache-hit != 'true'
+        if: steps.tool-cache.outputs.cache-hit != 'true' && env.LEG_RUNS == 'true'
         uses: ./.github/actions/install-makeutil
 
       # The full Python suite exercises the native mdtablefix file selector.
       # Restoring the tool cache is an optimization, not a prerequisite.
       - name: Install mdtablefix
-        if: matrix.python-suite
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
         uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Run typechecker
+        if: env.LEG_RUNS == 'true'
         run: make typecheck
 
       # `make test-python`, not `make test`: the Rust suite runs exactly once
@@ -575,13 +592,13 @@ jobs:
       # Cargo target directory, so xdist workers would contend on one build
       # lock rather than overlap.
       - name: Run tests
-        if: matrix.python-suite
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
         run: |
           make test-python \
             PYTEST_CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}"
 
       - name: Record compiler-cache effectiveness
-        if: always() && matrix.python-suite
+        if: always() && matrix.python-suite && env.LEG_RUNS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -602,7 +619,8 @@ jobs:
       - name: Save the installed tools
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.tool-cache.outputs.cache-hit != 'true'
+          steps.tool-cache.outputs.cache-hit != 'true' &&
+          env.LEG_RUNS == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
@@ -630,7 +648,8 @@ jobs:
         # not trusted to own.
         if: >-
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          matrix.python-suite
+          matrix.python-suite &&
+          env.LEG_RUNS == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/sccache
@@ -639,7 +658,7 @@ jobs:
       # Last, and unconditional, so a job that failed on disk still reports the
       # high-water mark that explains why.
       - name: Report peak resource use
-        if: always()
+        if: always() && env.LEG_RUNS == 'true'
         uses: ./.github/actions/resource-sampler
         with:
           mode: report

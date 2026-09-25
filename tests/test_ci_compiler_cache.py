@@ -17,6 +17,7 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import (
     CACHE_ACTION_PIN,
     CACHE_KEYS_ACTION_FILE,
@@ -108,7 +109,7 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
         "invoke the compiler"
     )
     stats = job_steps[stats_index]
-    assert stats.get("if") == "always()", (
+    assert ungated(workflow_name, job_name, stats.get("if")) == "always()", (
         f"{workflow_name}:{job_name} must report the counters even when the build fails"
     )
     script = stats.get("run")
@@ -263,7 +264,7 @@ def test_the_typecheck_only_leg_installs_no_wrapper() -> None:
         )
         # Compared whole, not by containment: `matrix.python-suite || true`
         # contains the flag and would let the leg install sccache anyway.
-        condition = " ".join(str(matches[0].get("if", "")).split())
+        condition = ungated("ci.yml", "typecheck-test", matches[0].get("if"))
         assert condition == expected, (
             f"ci.yml:typecheck-test step {name!r} must carry if: {expected!r}, "
             f"got {condition!r}"
@@ -299,7 +300,7 @@ def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
     # Compared whole, not by containment: `matrix.python-suite || true`
     # contains the flag and would let the typecheck-only leg publish the
     # `py3.13-debug` family that `extension-tests` owns.
-    condition = " ".join(str(matrix_writers[0].get("if", "")).split())
+    condition = ungated("ci.yml", "typecheck-test", matrix_writers[0].get("if"))
     expected = (
         "github.event_name == 'push' && github.ref == 'refs/heads/main' && "
         "matrix.python-suite"

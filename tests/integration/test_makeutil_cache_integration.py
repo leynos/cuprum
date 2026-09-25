@@ -2,11 +2,14 @@
 
 `tests/test_ci_makeutil_install.py` holds each consumer's guard as text. These
 scenarios evaluate it with the runner's own expression engine. Each projects
-one consumer job into a throwaway workflow: its tool-cache restore becomes a
-step with the same `id` that reports a chosen `cache-hit`, and its real
-"Install Makefile parser" step keeps its `if:` with its body replaced by
-`true`. `act` then runs the job in host mode, with no container and no image,
-and the scenario reads whether the install ran.
+one consumer job into a throwaway workflow: the job keeps its `env`, its
+tool-cache restore becomes a step with the same `id` that reports a chosen
+`cache-hit`, and its real "Install Makefile parser" step keeps its `if:` with
+its body replaced by `true`. The `env` matters because `typecheck-test`'s guard
+also reads its leg flag, which the projection runs outside any matrix leg, so
+the flag renders as it does for a required leg. `act` then runs the job in
+host mode, with no container and no image, and the scenario reads whether the
+install ran.
 
 `actions/cache` reports `true` for an exact hit, `false` for a restore-key hit,
 and nothing on a total miss, so the install must be skipped only for `true`.
@@ -26,7 +29,7 @@ import yaml
 from tests.helpers.act_harness import harness_skip_reason
 from tests.helpers.act_runtime import git, git_commit
 from tests.helpers.act_stream import ActRun
-from tests.helpers.ci_workflows import steps
+from tests.helpers.ci_workflows import job_env, steps
 
 #: The repository under test.
 WORKTREE = pth.Path(__file__).resolve().parents[2]
@@ -49,6 +52,7 @@ OUTCOMES: typ.Final = (("true", False), ("false", True), ("", True))
 def _stage(root: pth.Path, workflow_name: str, job_name: str) -> None:
     """Write the consumer's restore and install, projected, into ``root``."""
     job_steps = steps(workflow_name, job_name)
+    environment = job_env(workflow_name, job_name)
     [install] = [step for step in job_steps if step.get("name") == INSTALL_STEP]
     assert any(step.get("id") == TOOL_CACHE_ID for step in job_steps), (
         f"{workflow_name}:{job_name} must restore the tool cache"
@@ -59,6 +63,7 @@ def _stage(root: pth.Path, workflow_name: str, job_name: str) -> None:
         "jobs": {
             PROBE_JOB: {
                 "runs-on": "ubuntu-latest",
+                "env": environment,
                 "steps": [
                     {
                         "id": TOOL_CACHE_ID,

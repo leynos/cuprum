@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import typing as typ
 
+from tests.helpers.ci_leg_gate import ungated
 from tests.helpers.ci_runners import UBICLOUD_JOBS, expand, step_inputs, steps
 
 RESOURCE_SAMPLER = "./.github/actions/resource-sampler"
@@ -90,7 +91,7 @@ def test_every_ubicloud_job_measures_its_resource_use() -> None:
             f"{workflow_name}:{job_name} must report last, so the peak covers "
             "every build and every cache save"
         )
-        assert report.get("if") == "always()", (
+        assert ungated(workflow_name, job_name, report.get("if")) == "always()", (
             f"{workflow_name}:{job_name} must report the peak even when the "
             "job failed, because disk exhaustion is what the sampler is for"
         )
