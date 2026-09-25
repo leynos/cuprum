@@ -1,45 +1,34 @@
 name: Install the Makefile parser
 description: >-
-  Build and install the pinned `makeutil`, which the Makefile contract tests
-  run, into `~/.cargo/bin`.
+  Download the pinned `makeutil` release, which the Makefile contract tests
+  run, verify it against a digest held here, and install it into
+  `~/.cargo/bin`.
 
   The pin lives here and nowhere else. `.github/actions/cache-keys` hashes
   this file into the tool family's key, and `~/.cargo/bin` is in that family,
-  so an exact tool-cache hit means the restored `makeutil` was built from this
-  revision with this toolchain. Callers therefore run this action only when
-  the tool cache missed: a hit makes the build, and the nightly toolchain it
-  needs, redundant. Changing the pin changes the key, so the first run after a
-  change misses and rebuilds rather than keeping a stale binary.
+  so an exact tool-cache hit means the restored `makeutil` is this release.
+  Callers therefore run this action only when the tool cache missed. Changing
+  the pin changes the key, so the first run after a change misses and
+  downloads rather than keeping a stale binary.
 
 runs:
   using: composite
   steps:
-    - name: Build makeutil at the pinned revision
+    - name: Download the pinned makeutil release
       shell: bash
       env:
-        # makeutil has no release yet, so it is built from a commit, and the
-        # commit must be one makeutil's `main` reaches. A commit no branch
-        # reaches still builds until GitHub garbage-collects it, and then every
-        # run breaks with no change here; the previous pin was such a commit.
-        # The first command refuses a pin `main` does not reach, and since a
-        # pin change changes the tool key, the pull request that makes the
-        # change always runs it. The toolchain is the nightly makeutil's
-        # Polonius borrow checking needs.
-        MAKEUTIL_REVISION: '6e64f4fe84419705badc30baa5649cbb6f69a298'
-        MAKEUTIL_TOOLCHAIN: 'nightly-2026-05-28'
-      # `set` restates what `shell: bash` already implies, so the ancestry
-      # refusal stops the build however the script is invoked.
+        # A static musl build, so it runs on any Linux image. The digest is
+        # pinned here rather than read from the release's own `.sha256` file,
+        # which would come from the same place as the binary it vouches for.
+        MAKEUTIL_VERSION: 'v0.1.0'
+        MAKEUTIL_TARGET: 'x86_64-unknown-linux-musl'
+        MAKEUTIL_SHA256: '99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d'
+      # The binary is checked in a scratch directory and only then installed,
+      # so a failed check leaves nothing on `PATH` for a later step to run.
       run: |
         set -euo pipefail
-        history="$(mktemp -d)"
-        git -C "${history}" init --quiet
-        git -C "${history}" fetch --quiet --filter=tree:0 \
-          https://github.com/leynos/makeutil refs/heads/main
-        git -C "${history}" merge-base --is-ancestor "${MAKEUTIL_REVISION}" FETCH_HEAD
-        rustup toolchain install "${MAKEUTIL_TOOLCHAIN}" --profile minimal
-        RUSTFLAGS="-Zpolonius=next" cargo +"${MAKEUTIL_TOOLCHAIN}" install \
-          --git https://github.com/leynos/makeutil \
-          --rev "${MAKEUTIL_REVISION}" \
-          --locked \
-          --force \
-          makeutil
+        download="$(mktemp -d)/makeutil"
+        curl --fail --location --show-error --silent --output "${download}" \
+          "https://github.com/leynos/makeutil/releases/download/${MAKEUTIL_VERSION}/makeutil-${MAKEUTIL_TARGET}"
+        printf '%s  %s\n' "${MAKEUTIL_SHA256}" "${download}" | sha256sum --check --status
+        install -D --mode=0755 "${download}" "${HOME}/.cargo/bin/makeutil"
