@@ -49,11 +49,10 @@ NEXTEST_CONFIG: typ.Final[Path] = CARGO_WORKSPACE_DIR / ".config" / "nextest.tom
 #: it.
 #:
 #: 300 s is five 60 s periods, sized for the tests bounded by their own work.
-#: The ``compile_tests`` binaries are bounded by cold-build time instead and
-#: carry a separate 600 s override, so the profile's widest healthy occupant is
-#: the 62.484 s ``compile_time_ui`` measured in CI with its scratch directory
-#: and compiler cache already warm -- the allowance is set well above the
-#: cold path because that path belongs to the override, not to this tier.
+#: The ``compile_tests`` binaries are bounded by a cold build instead and
+#: carry a separate 600 s override, so the slowest measurements recorded for
+#: this suite describe that tier rather than this one. This value bounds the
+#: profile's own occupants; it is not a measurement of any of them.
 EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
 
 #: The whole-run budget the default profile must declare, as a duration in
