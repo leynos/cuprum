@@ -208,7 +208,7 @@ working on the Rust portions of the project:
     cd rust && $(LOCAL_TOOL_ENV) \
       RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \
       $(WHITAKER_CARGO_FLAGS)
-    yamllint --config-file .yamllint.yml .github/workflows .github/actions
+    yamllint --strict --config-file .yamllint.yml .github/workflows .github/actions
     actionlint -config-file .github/actionlint.yaml -shellcheck=
     ```
 
