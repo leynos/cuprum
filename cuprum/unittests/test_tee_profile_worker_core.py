@@ -131,3 +131,19 @@ def test_worker_uses_configured_read_size(tmp_path: pth.Path) -> None:
     assert result["read_size"] == 17, (
         f"expected active 17-byte worker read size, got {result}"
     )
+
+
+def test_worker_public_types_resolve_their_type_hints() -> None:
+    """The config and result types resolve their aliases via get_type_hints."""
+    from benchmarks._tee_profile_worker_backend import BackendName
+    from benchmarks.sinks import SinkKind
+    from benchmarks.tee_profile_worker import TeeProfileWorkerResult
+
+    for public_type in (TeeProfileWorkerConfig, TeeProfileWorkerResult):
+        hints = typ.get_type_hints(public_type)
+        assert hints["backend"] is BackendName, (
+            f"{public_type.__name__}.backend must resolve to BackendName"
+        )
+        assert hints["sink_kind"] is SinkKind, (
+            f"{public_type.__name__}.sink_kind must resolve to SinkKind"
+        )

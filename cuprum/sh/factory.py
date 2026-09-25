@@ -5,15 +5,11 @@ returns validates the program against a catalogue once, then coerces each
 call's arguments into an immutable :class:`~cuprum.sh.safe_cmd.SafeCmd`.
 """
 
-from __future__ import annotations
-
+# No ``from __future__ import annotations`` here: ``make``'s public signature is
+# introspected with ``typing.get_type_hints``, so annotations are evaluated
+# eagerly and ``Program`` and ``ProgramCatalogue`` are genuine runtime imports.
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProgramCatalogue
-
-# Public annotations use ``Program``. Keep it in module globals so
-# ``typing.get_type_hints`` can resolve the postponed public annotations.
-from cuprum.program import (
-    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
-)
+from cuprum.program import Program
 from cuprum.sh.argv import _ArgValue, build_argv
 from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
 

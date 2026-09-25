@@ -7,8 +7,11 @@ to avoid a runtime import cycle. The ``cuprum.sh`` package re-exports
 both.
 """
 
-from __future__ import annotations
-
+# No ``from __future__ import annotations`` here: the public signatures are
+# introspected with ``typing.get_type_hints``, so annotations are evaluated
+# eagerly and every name they use is a genuine runtime import. Only the forward
+# references to ``SafeCmd`` and ``Pipeline`` inside their own class bodies are
+# quoted.
 import asyncio
 import collections.abc as cabc
 import dataclasses as dc
@@ -31,22 +34,16 @@ from cuprum._pipeline_internals import (
 )
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
-from cuprum.catalogue import (
-    ProjectSettings,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
-)
+from cuprum.catalogue import ProjectSettings
 from cuprum.context import current_context
-from cuprum.program import (
-    Program,  # ruff: ignore[typing-only-first-party-import] - public annotations must resolve at runtime,
-)
+from cuprum.program import Program
 from cuprum.sh.execution import ExecutionContext, StdinInput
 from cuprum.sh.output import (
     RunOutputOptions,
     _DeprecatedOutputFlags,
     _resolve_pipeline_output,
 )
-
-if typ.TYPE_CHECKING:
-    from cuprum.sh.results import CommandResult, PipelineResult
+from cuprum.sh.results import CommandResult, PipelineResult
 
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 
@@ -85,7 +82,7 @@ class SafeCmd:
         """
         return (str(self.program), *self.argv)
 
-    def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:
+    def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
         """Compose this command with another stage, producing a Pipeline."""
         return Pipeline.concat(self, other)
 
@@ -272,12 +269,16 @@ class Pipeline:
             msg = "Pipeline must contain at least two stages"
             raise ValueError(msg)
 
-    def __or__(self, other: SafeCmd | Pipeline) -> Pipeline:
+    def __or__(self, other: "SafeCmd | Pipeline") -> "Pipeline":
         """Compose pipelines, appending stages in left-to-right order."""
         return Pipeline.concat(self, other)
 
     @classmethod
-    def concat(cls, left: SafeCmd | Pipeline, right: SafeCmd | Pipeline) -> Pipeline:
+    def concat(
+        cls,
+        left: "SafeCmd | Pipeline",
+        right: "SafeCmd | Pipeline",
+    ) -> "Pipeline":
         """Compose a pipeline from two stage operands.
 
         Parameters
