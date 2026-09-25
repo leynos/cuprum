@@ -84,7 +84,7 @@ def build_argv(*args: ArgValue, **kwargs: ArgValue) -> tuple[str, ...]:
     --------
     >>> build_argv("status", porcelain=True, branch="main")
     ('status', '--porcelain=True', '--branch=main')
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - TypeError propagates from _stringify_arg
     positional = tuple(_stringify_arg(arg) for arg in args)
     flags = _serialize_kwargs(kwargs)
     return positional + flags
