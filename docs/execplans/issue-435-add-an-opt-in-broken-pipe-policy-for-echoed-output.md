@@ -115,8 +115,10 @@ escalation, not a workaround.
       (commit `487c4d88`; the export itself rode on `d554596f`).
 - [x] Docs: changelog entry, users' guide, developers' guide (commit
       `53457a7c`).
-- [ ] Commit gates (`make check-fmt`, `make lint`, `make typecheck`,
-      `make test`, `make markdownlint`, `make spelling`) and CodeRabbit.
+- [x] Commit gates: `make check-fmt`, `make lint`, `make typecheck`,
+      `make test` (2489 passed, 63 skipped), `make markdownlint`, and
+      `make spelling` all pass, run with `env -u BASH_ENV`.
+- [ ] CodeRabbit review.
 - [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
@@ -250,8 +252,17 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
-Revision 4: all three tasks committed and documented; the gate run, the
-CodeRabbit review, and the pull request remain. Revision 3 recorded the
+Revision 5: every commit gate passes on the final tree. Two gates failed first
+and both were mine to fix, not the plan's: the spelling gate rejected seven
+British `-ise` spellings (`normalised`, `categorised`) that the project's
+Oxford policy forbids, and `make lint` rejected six findings in the new test
+material — a long literal raised directly from two sink doubles, an unused
+import, a rule *code* where the suppression comment wants the rule name, and
+two step docstrings not in the imperative mood. `make fmt` had not been run on
+the new files either, so six needed reformatting. The CodeRabbit review and the
+pull request remain.
+
+Revision 4 covered all three tasks committed and documented. Revision 3 recorded the
 verification plan table naming the artefacts that actually discharge each
 obligation, and the decision log's four judgement calls. Revision 2 recorded
 the ticked progress list. Revision 1 was written after reconnaissance and the
