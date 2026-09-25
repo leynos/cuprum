@@ -41,6 +41,10 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
+# Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
+# dataclass's own default value, so the name must resolve when the class body
+# executes.
+from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
@@ -76,6 +80,10 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
     on_line: _LineHookFn | None = None
+    # Defaulted for the tests that build this bundle directly, and resolved by
+    # ``RunOutputOptions.__post_init__`` on the production path, so the value
+    # reaching the stream config is always a member, never a raw spelling.
+    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
     # Monotonic reference the per-line ``at`` stamps are measured from; taken
     # once at spawn so every line of a run shares one time base.
     started_at: float = 0.0
