@@ -1,7 +1,8 @@
 """Contracts for the Dependabot update configuration.
 
-``github-actions-lint`` reads ``.github/workflows`` only, so nothing in the
-gate set reads ``.github/dependabot.yml``. A mistake in it is silent rather
+``github-actions-lint`` reads ``.github/workflows`` and ``.github/actions``
+only, so nothing in the gate set reads ``.github/dependabot.yml``. A mistake in
+it is silent rather
 than loud: Dependabot reports nothing at all for a ``directory`` that holds no
 manifest of the declared ecosystem, so a stanza pointed at the wrong path is
 indistinguishable from one that is merely quiet, and a dropped label surfaces
