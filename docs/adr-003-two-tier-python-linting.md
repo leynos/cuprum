@@ -82,9 +82,11 @@ Choose Option C. The root `Makefile` defines the Pylint command in terms of:
 
 - `PYLINT_PYTHON`, defaulting to `pypy`;
 - `PYLINT_TARGETS`, defaulting to `benchmarks conftest.py cuprum tests`;
-- `PYLINT_PYPY_SHIM_REF`, pinned to a specific shim revision;
-- `PYLINT_PYPY_SHIM`, the Git source for the shim; and
+- `PYLINT_VERSION`, pinned to a specific Pylint release; and
 - `PYLINT`, the full `uv tool run` command.
+
+The 2026-09-25 amendment below records that the `pylint-pypy-shim` this
+Makefile once depended on has since been retired.
 
 The `lint` target runs `ruff check` first and the PyPy-backed Pylint tier after
 `interrogate`. It then runs all `df12-python-lints` v0.3.0 messages under
@@ -198,6 +200,25 @@ statement that `make lint` runs only Ruff and Pylint; ADR-004 remains the
 decision record for the `interrogate` gate. The `skylos-allow` target uses an
 ignored lock file and `flock` to serialize its read-modify-write update, so
 concurrent false-positive recordings remain intact.
+
+## Amendment (2026-09-25): the pylint-pypy-shim is retired
+
+CI's `uv` (0.12.19) now resolves `--python pypy` to PyPy 3.12 directly. Pylint
+4.0.9 runs on PyPy 3.12 without the former `leynos/pylint-pypy-shim` patch that
+Option C originally adopted, so the `Makefile` no longer defines
+`PYLINT_PYPY_SHIM_REF` or `PYLINT_PYPY_SHIM`. `PYLINT_VERSION` moved from 4.0.7
+to 4.0.9 as part of the same change.
+
+This closes a real gap rather than only removing a dependency. PyPy 3.11 could
+not parse some Python 3.12 syntax, and `syntax-error` is disabled in
+`pyproject.toml`, so Pylint silently skipped the files it could not parse. PyPy
+3.12 parses them, and the gate now covers the whole configured tree.
+
+The historical rationale for Option C — isolating the second lint tier from the
+project virtual environment and aligning with `leynos/episodic` — still holds;
+only the shim's parser patch is gone. The Known Risks bullet about maintaining
+a pinned shim revision no longer applies: the remaining toolchain pin is
+`PYLINT_VERSION` itself, maintained like any other pinned lint tool.
 
 [ADR-004: Interrogate docstring-coverage gate]:
   adr-004-interrogate-docstring-gate.md

@@ -23,9 +23,6 @@ if typ.TYPE_CHECKING:
     from cuprum.lines import LineEvent
     from cuprum.sh import SafeCmd
 
-# Spelled as a plain alias rather than a PEP 695 ``type`` statement: the lint
-# gate runs pylint on PyPy 3.11, which silently skips any module it cannot
-# parse, so 3.12-only syntax would leave this file unchecked.
 _LineConsumer = cabc.Callable[[str], None]
 
 

@@ -101,7 +101,7 @@ The three tiers now run in this order, each gating the next:
 1. `ruff check` — fast, broad rules including docstring *style*.
 2. `interrogate --fail-under 100 benchmarks conftest.py cuprum scripts tests` —
    docstring *presence* at 100 per cent across every Python scope.
-3. PyPy-backed `pylint-pypy` — focused selected messages (see ADR-003).
+3. PyPy-backed Pylint — focused selected messages (see ADR-003).
 
 ## Known Risks and Limitations
 
