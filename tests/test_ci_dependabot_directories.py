@@ -17,6 +17,8 @@ from tests.helpers.dependabot_directories import (
         (COMPOSITE_ACTIONS, "/.github/actions/cache-keys", True),
         (COMPOSITE_ACTIONS, "/.github/actions/release/sign", False),
         ("/.github/actions/**", "/.github/actions/release/sign", True),
+        ("/.github/actions/**/*", "/.github/actions/lint", True),
+        ("/.github/actions/**/*", "/.github/actions/release/sign", True),
         ("/.github/actions/lint", "/.github/actions/lints", False),
     ],
 )

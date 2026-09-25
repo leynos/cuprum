@@ -43,6 +43,16 @@ def composite_action_directories() -> tuple[str, ...]:
 def directory_glob_matches(glob: str, directory: str) -> bool:
     """Return whether a Dependabot directory glob covers ``directory``.
 
+    Parameters
+    ----------
+    glob:
+        A Dependabot ``directory``/``directories`` pattern, such as
+        ``/.github/actions/*``. ``**/`` also matches zero directory levels,
+        so ``/.github/actions/**/*`` covers ``/.github/actions/lint``.
+    directory:
+        A repository-relative directory path in Dependabot form, with a
+        leading slash, such as ``/.github/actions/cache-keys``.
+
     Returns
     -------
     bool
@@ -56,8 +66,8 @@ def directory_glob_matches(glob: str, directory: str) -> bool:
     >>> directory_glob_matches("/.github/actions/*", "/.github/actions/a/b")
     False
     """
+    tokens = {"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}
     regex = "".join(
-        ".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
-        for part in re.split(r"(\*\*|\*)", glob)
+        tokens.get(part, re.escape(part)) for part in re.split(r"(\*\*/|\*\*|\*)", glob)
     )
     return re.fullmatch(regex, directory) is not None
