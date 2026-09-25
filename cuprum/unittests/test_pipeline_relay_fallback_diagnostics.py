@@ -229,6 +229,5 @@ def test_pipeline_best_effort_tolerates_a_closed_stdout_sink(
         f"{result.stages[-1].relay_fallbacks!r}"
     )
     assert closed.attempts == ["stage one done\n"], (
-        "echo must stop after the first broken write, got "
-        f"attempts={closed.attempts!r}"
+        f"echo must stop after the first broken write, got attempts={closed.attempts!r}"
     )

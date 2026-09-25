@@ -79,8 +79,7 @@ def test_best_effort_returns_a_result_when_stdout_sink_pipe_is_broken(
     result = asyncio.run(run_case())
 
     assert result.stdout == "hello\n", (
-        "capture must be complete and byte-for-byte intact, got "
-        f"{result.stdout!r}"
+        f"capture must be complete and byte-for-byte intact, got {result.stdout!r}"
     )
     assert result.ok, "a tolerated echo failure must not change the exit status"
     assert result.relay_fallbacks == (_EXPECTED_STDOUT_FALLBACK,), (
@@ -88,8 +87,7 @@ def test_best_effort_returns_a_result_when_stdout_sink_pipe_is_broken(
         f"{result.relay_fallbacks!r}"
     )
     assert sink.attempts == ["hello\n"], (
-        "echo must stop after the first broken write, got "
-        f"attempts={sink.attempts!r}"
+        f"echo must stop after the first broken write, got attempts={sink.attempts!r}"
     )
 
 

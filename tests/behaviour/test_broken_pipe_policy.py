@@ -217,7 +217,9 @@ def _assert_propagated(scenario_state: _BrokenPipeFixture) -> None:
     assert isinstance(error, BrokenPipeError), (
         f"the default policy must raise BrokenPipeError, got {error!r}"
     )
-    assert _CLOSED_READER in str(error), f"the sink's own error must surface, got {error!r}"
+    assert _CLOSED_READER in str(error), (
+        f"the sink's own error must surface, got {error!r}"
+    )
 
 
 @then("the observed lines are complete despite the closed sink")

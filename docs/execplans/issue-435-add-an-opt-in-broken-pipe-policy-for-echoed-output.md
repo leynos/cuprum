@@ -9,12 +9,11 @@ change end to end.
 
 ## Purpose / big picture
 
-A presentation sink raising `BrokenPipeError` currently aborts `run_sync()`,
-so callers lose access to the otherwise captured result. A consumer migrating
-from a best-effort console relay — where a closed downstream reader was
-tolerated — has no way to say "stop echoing *that* stream and keep the rest".
-Today the failure propagates out of the drain task and takes the whole run with
-it.
+A presentation sink raising `BrokenPipeError` currently aborts `run_sync()`, so
+callers lose access to the otherwise captured result. A consumer migrating from
+a best-effort console relay — where a closed downstream reader was tolerated —
+has no way to say "stop echoing *that* stream and keep the rest". Today the
+failure propagates out of the drain task and takes the whole run with it.
 
 The reproduction, run against `361887e6`:
 
@@ -22,8 +21,10 @@ The reproduction, run against `361887e6`:
 class BrokenSink:
     def write(self, text):
         raise BrokenPipeError("closed presentation destination")
+
     def flush(self):
         pass
+
 
 with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
     result = sh.make(python, catalogue=catalogue)("-c", "print('hello')").run_sync(
@@ -35,9 +36,10 @@ with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
 Observed: `BrokenPipeError` propagates from `_stream_echo._write_chunk` through
 `_echo_write`, `_echo_chunk`, `_deliver_chunk` and `_drain_chunks`, so the
 caller never sees a `CommandResult`. `_echo_write` already recovers from
-`UnicodeEncodeError` (issue [#348](https://github.com/leynos/cuprum/issues/348),
-exposed on results by [#356](https://github.com/leynos/cuprum/issues/356)); this
-issue asks for the same *opt-in* treatment for a broken pipe.
+`UnicodeEncodeError` (issue
+[#348](https://github.com/leynos/cuprum/issues/348), exposed on results by
+[#356](https://github.com/leynos/cuprum/issues/356)); this issue asks for the
+same *opt-in* treatment for a broken pipe.
 
 After this change, a caller who passes
 `RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` receives a
@@ -100,7 +102,8 @@ escalation, not a workaround.
 
 ## Progress
 
-- [x] Reconnaissance: identified the real definition sites (`cuprum/sh/output.py`
+- [x] Reconnaissance: identified the real definition sites
+      (`cuprum/sh/output.py`
       not `cuprum/sh.py`; `EchoErrorCategory` in `cuprum/echo_events.py`).
 - [x] Red: reproduced the abort with the ticket's exact snippet.
 - [x] Task 1: `BROKEN_PIPE` category, `BrokenPipePolicy`, validation helper,
@@ -128,10 +131,11 @@ escalation, not a workaround.
   text-sink branch inside one `try` in `_echo_write`, and covers `write` and
   `flush` alike, so the single new clause covers every path the ticket lists
   without restructuring.
-- `tests/behaviour/` modules each declare the `a curated Python command for
-  testing` background step locally (`test_telemetry_adapters.py` does), because
-  pytest-bdd resolves step definitions per module. A new behaviour module must
-  redeclare it rather than import it.
+- `tests/behaviour/` modules each declare the
+  `a curated Python command for testing` background step locally
+  (`test_telemetry_adapters.py` does), because pytest-bdd resolves step
+  definitions per module. A new behaviour module must redeclare it rather than
+  import it.
 - `LineEvent` carries the line under `text`, not `line`; the BDD step for line
   observation has to read `event.text`.
 - The `subprocess_teardown_drain_failed` `ERROR` record that the ticket's
@@ -146,12 +150,12 @@ escalation, not a workaround.
   `/home/leynos/.lody/bin` to `PATH` on every non-interactive Bash start. That
   directory holds Lody's own `gh` wrapper, which resolves the repository with
   `git remote get-url origin` — so it shadows the test's `gh` stand-in, which
-  the test puts first in `PATH` precisely so the real `gh` cannot run. The
-  step then fails outside a git repository and the assertion reports the
-  wrapper's stderr. Proven environmental: `env -u BASH_ENV` turns the same
-  module from 6 failed into 6 passed in 0.26s, and the module references no
-  symbol this change touches. No test-side `PATH` change can defend against it,
-  because `BASH_ENV` is sourced after the caller's environment is applied.
+  the test puts first in `PATH` precisely so the real `gh` cannot run. The step
+  then fails outside a git repository and the assertion reports the wrapper's
+  stderr. Proven environmental: `env -u BASH_ENV` turns the same module from 6
+  failed into 6 passed in 0.26s, and the module references no symbol this
+  change touches. No test-side `PATH` change can defend against it, because
+  `BASH_ENV` is sourced after the caller's environment is applied.
 
 ## Decision log
 
@@ -221,16 +225,16 @@ each discharged by the tests named in `Verification plan`.
 The change introduces one narrow behavioural invariant. If it introduced none,
 this would say so; it does, so each obligation is listed with its method.
 
-| # | Obligation | Method | Artefact | Evidence / discharge |
-|---|---|---|---|---|
-| O1 | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain | named pytest example | `cuprum/unittests/test_broken_pipe_echo_guard.py` | negative control: `test_strict_policy_propagates_the_broken_pipe` fails if the recovery is not gated |
-| O2 | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe | named pytest example | same | captured bytes equal the payload; sink sees exactly one attempt |
-| O3 | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT` | named pytest example | same | `test_best_effort_propagates_non_broken_pipe_os_errors` proves the catch is narrow, not `OSError`-wide |
-| O4 | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example | same | `test_best_effort_warns_once_with_structured_extras` asserts record count, `exc_info is None`, the closed-set extras, and the absence of payload extras |
-| O5 | The final decoder flush neither re-attempts the write nor re-raises | named pytest example | same | `test_broken_pipe_on_the_final_decoder_flush_is_recovered` and `test_flush_after_broken_pipe_does_not_reattempt_the_write` |
-| O6 | The policy reaches both the single-run and pipeline `_StreamConfig` builders | named pytest example | `cuprum/unittests/test_broken_pipe_result_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions on both paths |
-| O7 | The metric increments once per affected drain under a distinct series | named pytest example | `cuprum/unittests/test_echo_metrics.py` | `test_broken_pipe_counter_is_distinct_from_the_encoding_counter` asserts counter name, value, and labels; a second test proves nothing is counted under `STRICT` |
-| O8 | The ticket's reproduction returns a result under `BEST_EFFORT` | behavioural test | `tests/behaviour/test_broken_pipe_policy.py` + `tests/features/broken_pipe_policy.feature` | real subprocess, real sink, three scenarios |
+| #   | Obligation                                                                                              | Method               | Artefact                                                                                                                  | Evidence / discharge                                                                                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| O1  | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain                             | named pytest example | `cuprum/unittests/test_broken_pipe_echo_guard.py`                                                                         | negative control: `test_strict_policy_propagates_the_broken_pipe` fails if the recovery is not gated                                                             |
+| O2  | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe                       | named pytest example | same                                                                                                                      | captured bytes equal the payload; sink sees exactly one attempt                                                                                                  |
+| O3  | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT`                                  | named pytest example | same                                                                                                                      | `test_best_effort_propagates_non_broken_pipe_os_errors` proves the catch is narrow, not `OSError`-wide                                                           |
+| O4  | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example | same                                                                                                                      | `test_best_effort_warns_once_with_structured_extras` asserts record count, `exc_info is None`, the closed-set extras, and the absence of payload extras          |
+| O5  | The final decoder flush neither re-attempts the write nor re-raises                                     | named pytest example | same                                                                                                                      | `test_broken_pipe_on_the_final_decoder_flush_is_recovered` and `test_flush_after_broken_pipe_does_not_reattempt_the_write`                                       |
+| O6  | The policy reaches both the single-run and pipeline `_StreamConfig` builders                            | named pytest example | `cuprum/unittests/test_broken_pipe_result_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions on both paths                                                                                                          |
+| O7  | The metric increments once per affected drain under a distinct series                                   | named pytest example | `cuprum/unittests/test_echo_metrics.py`                                                                                   | `test_broken_pipe_counter_is_distinct_from_the_encoding_counter` asserts counter name, value, and labels; a second test proves nothing is counted under `STRICT` |
+| O8  | The ticket's reproduction returns a result under `BEST_EFFORT`                                          | behavioural test     | `tests/behaviour/test_broken_pipe_policy.py` + `tests/features/broken_pipe_policy.feature`                                | real subprocess, real sink, three scenarios                                                                                                                      |
 
 Non-vacuity: O1 is the seeded-fault control for O2 (same fixture, opposite
 policy, opposite outcome), and O3 is the control for the catch width. Every

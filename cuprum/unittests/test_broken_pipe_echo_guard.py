@@ -216,7 +216,9 @@ def test_best_effort_recovers_from_binary_buffer_failures(
     sink = _BrokenBinarySink(mode=mode)
     chunks = (b"payload",)
 
-    captured = asyncio.run(_drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink))))
+    captured = asyncio.run(
+        _drain(_reader(chunks), _config(typ.cast("typ.IO[str]", sink)))
+    )
 
     assert captured == "payload", (
         f"capture must complete for mode={mode!r}, captured={captured!r}"
@@ -294,21 +296,24 @@ def test_strict_policy_propagates_the_broken_pipe() -> None:
 
     with pytest.raises(BrokenPipeError, match=_BROKEN_PIPE):
         asyncio.run(
-            _drain(_reader((b"payload",)), _config(sink, policy=BrokenPipePolicy.STRICT)),
+            _drain(
+                _reader((b"payload",)), _config(sink, policy=BrokenPipePolicy.STRICT)
+            ),
         )
 
 
 def test_strict_is_the_default_policy() -> None:
     """A config that names no policy runs the strict path."""
-    assert _StreamConfig(
-        capture_output=True,
-        echo_output=True,
-        sink=typ.cast("typ.IO[str]", _BrokenPipeSink()),
-        encoding="utf-8",
-        errors="replace",
-    ).broken_pipe_policy is BrokenPipePolicy.STRICT, (
-        "the default must stay strict, so existing callers are unaffected"
-    )
+    assert (
+        _StreamConfig(
+            capture_output=True,
+            echo_output=True,
+            sink=typ.cast("typ.IO[str]", _BrokenPipeSink()),
+            encoding="utf-8",
+            errors="replace",
+        ).broken_pipe_policy
+        is BrokenPipePolicy.STRICT
+    ), "the default must stay strict, so existing callers are unaffected"
 
 
 def test_best_effort_propagates_non_broken_pipe_os_errors() -> None:

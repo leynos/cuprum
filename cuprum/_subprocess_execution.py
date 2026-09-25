@@ -41,6 +41,7 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
+
 # Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
 # dataclass's own default value, so the name must resolve when the class body
 # executes.

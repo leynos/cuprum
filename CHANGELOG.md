@@ -14,9 +14,9 @@
   carrying one `RelayFallback` whose `error_category` is `broken_pipe`. The
   transition is reported once through `CommandResult.relay_fallbacks` /
   `PipelineResult.stages[i].relay_fallbacks`, the echo observation channel, and
-  a structured `cuprum.stream` `WARNING`; `EchoMetricsHook` counts it on its
-  own `cuprum_echo_broken_pipe_total` series, so a sink that cannot encode
-  stays distinguishable from a reader that keeps disconnecting. Only
+  a structured `cuprum.stream` `WARNING`; `EchoMetricsHook` counts it on its own
+  `cuprum_echo_broken_pipe_total` series, so a sink that cannot encode stays
+  distinguishable from a reader that keeps disconnecting. Only
   `BrokenPipeError` is affected — any other sink `OSError` still propagates —
   and `BrokenPipePolicy.STRICT` remains the default, so every caller that does
   not opt in keeps the existing behaviour byte-for-byte [^3].
