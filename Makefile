@@ -508,8 +508,9 @@ boundary-kani: ## Check bounded native ownership and existing policy proofs
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
 
-boundary-miri: ## Interpret isolated native resource and memory paths
+boundary-miri: ## Interpret native resource and Miri-compatible stream paths
 	cd $(RUST_DIR) && $(CARGO) +$(MIRI_TOOLCHAIN) miri test --package cuprum-native-io --lib
+	cd $(RUST_DIR) && $(CARGO) +$(MIRI_TOOLCHAIN) miri test --package cuprum-streams --lib
 
 boundary-test: ## Run isolated native integration and verification-tool contracts
 	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib

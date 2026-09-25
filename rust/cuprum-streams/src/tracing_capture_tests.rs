@@ -81,6 +81,8 @@ fn warn_capture_records_callsite_first_seen_without_subscriber() {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// Preserve every parent warning through generated child registration histories.
     #[test]
     fn generated_registration_histories_preserve_parent_capture(
