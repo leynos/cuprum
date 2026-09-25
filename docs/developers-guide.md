@@ -2484,9 +2484,10 @@ bounded `::warning::` annotation.
 
 #### Repository and PyPI settings for publishing
 
-The upload is guarded to release tags by a GitHub environment, for the same
-reason the CodeScene upload is guarded to `main` as well as by its trigger. A
-trigger restricts only when the checked-in workflow runs: a branch that edits
+The upload is guarded to release tags by a GitHub environment. This mirrors the
+`codescene` environment in `coverage-main.yml`, whose `main`-only deployment
+policy holds the CodeScene token, and it exists for the same reason. A trigger
+restricts only when the checked-in workflow runs: a branch that edits
 `release.yml` to add another trigger would otherwise obtain a token PyPI
 accepts, because PyPI trusts the workflow file rather than the ref. The
 environment's deployment rule is enforced by GitHub, outside anything a branch
