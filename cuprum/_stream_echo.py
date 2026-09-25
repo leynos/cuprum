@@ -9,6 +9,13 @@ caller-owned relay diagnostics, so the owning command can surface it as a
 result record without going through the process-wide echo hook registry. The
 drain loop in ``cuprum._streams`` reads the bytes and owns the state this
 module renders.
+
+A sink whose destination has closed reports ``BrokenPipeError``. That is the
+second recoverable failure, but unlike an unencodable payload it is not always
+the caller's to accept, so it is handled only when the stream config names
+:data:`~cuprum.echo_events.BrokenPipePolicy.BEST_EFFORT`; the default
+propagates it unchanged. Both recoveries share :func:`_disable_echo`, so the
+guard flip and its three bounded projections cannot drift apart.
 """
 
 from __future__ import annotations
@@ -18,7 +25,12 @@ import logging
 import typing as typ
 
 from cuprum._echo_truncation import _split_echo_segments
-from cuprum.echo_events import EchoErrorCategory, EchoEvent, RelayFallback
+from cuprum.echo_events import (
+    BrokenPipePolicy,
+    EchoErrorCategory,
+    EchoEvent,
+    RelayFallback,
+)
 from cuprum.echo_observation import _emit_echo_event
 
 if typ.TYPE_CHECKING:
@@ -149,35 +161,69 @@ def _echo_write(
             # raised left the sink where it was.
             mirror.note(chunk)
     except UnicodeEncodeError:
-        state.echo_guard.disabled = True
-        # The first failure emits both projections; the guard prevents retries.
-        state.relay_diagnostics.fallbacks.append(
-            RelayFallback(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.UNICODE_ENCODE,
-            ),
+        return _disable_echo(
+            state,
+            error_category=EchoErrorCategory.UNICODE_ENCODE,
         )
-        _emit_echo_event(
-            EchoEvent(
-                stream=state.config.stream,
-                error_category=EchoErrorCategory.UNICODE_ENCODE,
-            ),
+    except BrokenPipeError:
+        # A broken pipe is the one sink failure whose meaning depends on the
+        # caller's intent: a destination that went away is worth tolerating, a
+        # genuinely unreachable device is not, and this clause cannot tell them
+        # apart. So the policy decides, and the default keeps propagating.
+        # ``BrokenPipeError`` is caught by name rather than as ``OSError``,
+        # because widening it here would swallow every other device failure.
+        if state.config.broken_pipe_policy is not BrokenPipePolicy.BEST_EFFORT:
+            raise
+        return _disable_echo(
+            state,
+            error_category=EchoErrorCategory.BROKEN_PIPE,
         )
-        # The child's bytes and the sink's identity stay out of the log: the
-        # record names the transition, the stream, and the category, which is
-        # what a caller needs to react, and nothing a caller could not already
-        # see on its own result.
-        _LOGGER.warning(
-            "echo_disabled_stream_rejected_output",
-            extra={
-                "cuprum_operation": "echo_chunk",
-                "cuprum_stream": str(state.config.stream),
-                "cuprum_transition": "echo_disabled",
-                "cuprum_error_category": EchoErrorCategory.UNICODE_ENCODE.value,
-            },
-        )
-        return False
     return True
+
+
+def _disable_echo(state: _DrainState, *, error_category: EchoErrorCategory) -> bool:
+    """Stop echoing for this drain and report the transition once.
+
+    Every recoverable echo failure is handled identically — the guard stops
+    later chunks and the final decoder flush from re-entering the failed write,
+    and the three projections below carry the same bounded vocabulary — so the
+    recovery lives here once rather than beside each ``except`` clause. Only
+    the category differs, and the caller supplies it.
+
+    The child's bytes and the sink's identity stay out of the log: the record
+    names the transition, the stream, and the category, which is what a caller
+    needs to react, and nothing a caller could not already see on its own
+    result.
+
+    Returns
+    -------
+    bool
+        Always ``False``: nothing was accepted by the sink.
+    """
+    state.echo_guard.disabled = True
+    # The first failure emits both projections; the guard prevents retries.
+    state.relay_diagnostics.fallbacks.append(
+        RelayFallback(
+            stream=state.config.stream,
+            error_category=error_category,
+        ),
+    )
+    _emit_echo_event(
+        EchoEvent(
+            stream=state.config.stream,
+            error_category=error_category,
+        ),
+    )
+    _LOGGER.warning(
+        "echo_disabled_stream_rejected_output",
+        extra={
+            "cuprum_operation": "echo_chunk",
+            "cuprum_stream": str(state.config.stream),
+            "cuprum_transition": "echo_disabled",
+            "cuprum_error_category": error_category.value,
+        },
+    )
+    return False
 
 
 def _flush_echo_decoder(state: _DrainState) -> None:

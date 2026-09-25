@@ -1,0 +1,184 @@
+# Add an opt-in broken-pipe policy for echoed output
+
+Status: IN PROGRESS
+
+This living ExecPlan records the implementation of issue
+[#435](https://github.com/leynos/cuprum/issues/435). It is self-contained: a
+reader with only this working tree and this file should be able to deliver the
+change end to end.
+
+## Purpose / big picture
+
+A presentation sink raising `BrokenPipeError` currently aborts `run_sync()`,
+so callers lose access to the otherwise captured result. A consumer migrating
+from a best-effort console relay — where a closed downstream reader was
+tolerated — has no way to say "stop echoing *that* stream and keep the rest".
+Today the failure propagates out of the drain task and takes the whole run with
+it.
+
+The reproduction, run against `361887e6`:
+
+```python
+class BrokenSink:
+    def write(self, text):
+        raise BrokenPipeError("closed presentation destination")
+    def flush(self):
+        pass
+
+with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+    result = sh.make(python, catalogue=catalogue)("-c", "print('hello')").run_sync(
+        output=RunOutputOptions(capture=True, echo_stdout=True),
+        context=ExecutionContext(stdout_sink=BrokenSink()),
+    )
+```
+
+Observed: `BrokenPipeError` propagates from `_stream_echo._write_chunk` through
+`_echo_write`, `_echo_chunk`, `_deliver_chunk` and `_drain_chunks`, so the
+caller never sees a `CommandResult`. `_echo_write` already recovers from
+`UnicodeEncodeError` (issue [#348](https://github.com/leynos/cuprum/issues/348),
+exposed on results by [#356](https://github.com/leynos/cuprum/issues/356)); this
+issue asks for the same *opt-in* treatment for a broken pipe.
+
+After this change, a caller who passes
+`RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` receives a
+`CommandResult` whose `stdout` is intact and whose `relay_fallbacks` carries one
+`RelayFallback(error_category=EchoErrorCategory.BROKEN_PIPE)` on the affected
+stream. The default, `BrokenPipePolicy.STRICT`, preserves today's behaviour
+byte-for-byte: the `BrokenPipeError` still propagates.
+
+The observable success is: `make test` passes, the ticket's reproduction
+returns a result under `BEST_EFFORT`, and the same reproduction still raises
+under the default.
+
+## Constraints
+
+Hard invariants that must hold throughout implementation. Violation requires
+escalation, not a workaround.
+
+- **Strict by default.** `RunOutputOptions()` — and every existing caller — must
+  behave exactly as before. `BrokenPipeError` propagates unless the caller opts
+  in.
+- **Narrow catch.** Only `BrokenPipeError` is recovered. `OSError`,
+  `ConnectionError`, and every other sink failure keep propagating under both
+  policies, so a genuinely unreachable device is never mistaken for a closed
+  reader. (`BrokenPipeError` is a subclass of `ConnectionError`, which is a
+  subclass of `OSError`, so the clause order and specificity matter.)
+- **Capture is never affected.** Drain continues, the capture buffer keeps
+  filling, line observation continues, and the child is still reaped.
+- **One bounded diagnostic per transition.** At most one `RelayFallback`, one
+  `EchoEvent`, and one structured `WARNING` per affected drain — the existing
+  `_EchoGuard` early-return enforces exactly-once across later chunks and the
+  final decoder flush. No payload, exception text, or sink identity reaches any
+  of the three projections.
+- **Inter-stage pump errors are out of scope.** This policy governs the echo
+  sink only. `cuprum._streams_pump` failures are untouched.
+- **No new public surface beyond one enum.** `BrokenPipePolicy` is exported;
+  `RelayFallback`, `EchoEvent`, and `CommandResult` field lists do not change.
+
+## Tolerances (exception triggers)
+
+- If threading the policy requires changing more than the two `_StreamConfig`
+  construction sites, stop: the isolation model is not what this plan assumed.
+- If any existing test needs editing (rather than extending) to pass, stop and
+  record why — a frozen contract test failing means the change is not additive.
+- If the module line ceiling of 400 is breached in any touched production
+  module, stop and extract rather than trim.
+
+## Risks
+
+- `_StreamConfig`, `_SubprocessExecution`, and `_PipelineRunConfig` gain a
+  field. Risk: a test constructing them positionally breaks. Mitigation: all
+  three are `frozen=True, slots=True` dataclasses whose fields after the first
+  few are keyword-only in practice; the field is added with a default and
+  verified against the three known construction sites.
+- `pylint`'s `max-module-lines = 400` applies to production modules.
+  `cuprum/_stream_echo.py` is at 202 lines and `cuprum/echo_events.py` at 143,
+  so both have room.
+- The strict path is a new `except` clause ahead of nothing; a regression there
+  would silently change every existing caller. Mitigation: an explicit
+  negative-control test.
+
+## Progress
+
+- [x] Reconnaissance: identified the real definition sites (`cuprum/sh/output.py`
+      not `cuprum/sh.py`; `EchoErrorCategory` in `cuprum/echo_events.py`).
+- [x] Red: reproduced the abort with the ticket's exact snippet.
+- [x] Task 1: `BROKEN_PIPE` category, `BrokenPipePolicy`, validation helper,
+      `_StreamConfig` field, gated `except BrokenPipeError` in `_echo_write`.
+- [x] Task 2: `RunOutputOptions.broken_pipe_policy`; thread through the
+      single-run and pipeline `_StreamConfig` builders.
+- [x] Task 3: metrics counter, public export, unit and behaviour tests.
+- [x] Docs: changelog entry, users' guide, developers' guide.
+
+## Surprises & discoveries
+
+- The coding plan names `cuprum/sh.py`, but no such module exists: `cuprum.sh`
+  is a package and `RunOutputOptions` lives in `cuprum/sh/output.py`.
+- The plan's follow-up prompt says the recovery should "disable the guard", but
+  `_EchoGuard` has a single `disabled` flag and `_StreamConfig` records the
+  echo gate in `echo_output`. Setting `disabled = True` is the mechanism; the
+  policy is consulted only when deciding whether to set it.
+- `_write_chunk` already wraps both the binary `.buffer` branch and the
+  text-sink branch inside one `try` in `_echo_write`, and covers `write` and
+  `flush` alike, so the single new clause covers every path the ticket lists
+  without restructuring.
+
+## Decision log
+
+- Decision: reuse the existing `_EchoGuard` recovery mechanism rather than
+  adding a second guard. Rationale: the guard is per-drain, so nested and
+  concurrent runs are isolated for free, and pipelines get per-stage isolation
+  from the per-stage `_RelayDiagnostics` collector.
+- Decision: keep the policy on `_StreamConfig` rather than on `_DrainState`.
+  Rationale: `_StreamConfig` is where the other echo-affecting inputs
+  (`echo_output`, `echo_max_line_bytes`) already live, and it is the value both
+  the single-run and pipeline builders already construct.
+- Decision: name the metric `cuprum_echo_broken_pipe_total` and keep
+  `ECHO_ENCODING_FAILURES_TOTAL` unchanged. Rationale: the module comment
+  requires a distinct series per category.
+
+## Outcomes & retrospective
+
+To be completed.
+
+## Conformance basis
+
+No upstream Terms of Reference or technical design revision covers this change;
+the governing artefacts are the issue itself and the completed #348/#356 echo
+guard work it extends. Governing project constraints: `AGENTS.md` (400-line
+modules, NumPy docstrings, tests before commit), ADR-007 (echo boundary
+rationale; the `_subprocess_streams` addendum in `docs/`).
+
+Trace: `issue-435` -> `EP-435-T1` (recovery mechanism) -> `EP-435-T2`
+(configuration threading) -> `EP-435-T3` (observability and public surface),
+each discharged by the tests named in `Verification plan`.
+
+## Verification plan
+
+The change introduces one narrow behavioural invariant. If it introduced none,
+this would say so; it does, so each obligation is listed with its method.
+
+| # | Obligation | Method | Artefact | Evidence / discharge |
+|---|---|---|---|---|
+| O1 | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain | named pytest example | `cuprum/unittests/test_stream_echo_guard.py` | negative control: the test fails if the recovery is not gated |
+| O2 | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe | named pytest example | same | captured bytes equal the payload; sink sees exactly one attempt |
+| O3 | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT` | named pytest example | same | proves the catch is narrow, not `OSError`-wide |
+| O4 | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example + property test | same, and the existing `_echo_guard_case`-style property | count assertions plus `exc_info is None` and absence of payload extras |
+| O5 | The final decoder flush neither re-attempts the write nor re-raises | named pytest example | same | mirrors the existing `test_flush_after_disabled_echo_does_not_raise` |
+| O6 | The policy reaches both the single-run and pipeline `_StreamConfig` builders | named pytest example | `cuprum/unittests/test_relay_fallback_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions |
+| O7 | The metric increments once per affected drain under a distinct series | named pytest example | `cuprum/unittests/test_echo_metrics.py` | counter name, value, and labels asserted |
+| O8 | The ticket's reproduction returns a result under `BEST_EFFORT` | behavioural test | `tests/behaviour/test_broken_pipe_policy_behaviour.py` | real subprocess, real sink |
+
+Non-vacuity: O1 is the seeded-fault control for O2 (same fixture, opposite
+policy, opposite outcome), and O3 is the control for the catch width. Every
+assertion can fail: O2 fails if recovery is unconditional, O1 fails if it is
+absent, O3 fails if the clause was widened to `OSError`.
+
+Axioms: `BrokenPipeError` is a subclass of `ConnectionError` and `OSError` in
+CPython 3.13 (verified by the O3 test, which relies on that relationship to be
+meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
+await path, which the RED reproduction demonstrates.
+
+## Revision note
+
+Initial version, written after reconnaissance and the RED reproduction.

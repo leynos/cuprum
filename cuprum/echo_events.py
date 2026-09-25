@@ -1,8 +1,9 @@
 """Structured stream-echo events for observability integrations.
 
-A text-only echo sink that cannot encode the subprocess output stops the echo
-for its drain while capture continues. The first failure is an observability
-fact — a console has gone quiet — but it is not a command lifecycle event, and
+A text-only echo sink that cannot represent the subprocess output, or whose
+destination has closed under it, stops the echo for its drain while capture
+continues. The first failure is an observability fact — a console has gone
+quiet — but it is not a command lifecycle event, and
 :data:`~cuprum.events.ExecPhase` is a closed set that registered consumers
 match exhaustively. Adding a phase would raise inside consumers that were
 correct when they were written. A dedicated event type on its own hook registry
@@ -12,6 +13,11 @@ consumer that does not is untouched.
 The event carries only bounded values. The stream name is one of ``stdout`` or
 ``stderr`` and the error category is one closed value; a sink's type, its
 encoding, any exception text, and the subprocess payload never reach it.
+
+The two recoverable failures are not equally welcome. An unencodable payload is
+inherent to the sink's configuration and is always handled. A broken pipe may
+instead mean the caller's destination went away, so recovering from it is
+:class:`BrokenPipePolicy` — opt-in, defaulting to today's strict propagation.
 """
 
 from __future__ import annotations
@@ -51,11 +57,82 @@ class EchoErrorCategory(enum.StrEnum):
     The member value is the string operators see::
 
         assert EchoErrorCategory.UNICODE_ENCODE == "unicode_encode"
+        assert EchoErrorCategory.BROKEN_PIPE == "broken_pipe"
 
     """
 
     UNICODE_ENCODE = "unicode_encode"
+    BROKEN_PIPE = "broken_pipe"
     TRUNCATED = "truncated"
+
+
+class BrokenPipePolicy(enum.StrEnum):
+    """How a drain responds when an echo sink reports a broken pipe.
+
+    A presentation sink writes to a destination the parent does not own — a
+    log collector, a console, another process's reader — and that destination
+    can close before the child stops writing. The ``BrokenPipeError`` that
+    follows is indistinguishable, from inside the drain, from any other sink
+    failure, so the caller names the intended response rather than the drain
+    guessing.
+
+    Members
+    -------
+    STRICT
+        Propagate ``BrokenPipeError`` out of the drain. This is the default,
+        and preserves the behaviour every existing caller already has.
+    BEST_EFFORT
+        Disable echoing for the affected stream only, so capture, line
+        observation, and child reaping continue. The transition is reported
+        once through the echo observation channel, the ``cuprum.stream``
+        ``WARNING``, and the command's result diagnostics.
+
+    Only ``BrokenPipeError`` is affected. A sink that fails with any other
+    ``OSError`` still propagates under both members, so a genuinely
+    unreachable device is never mistaken for a closed reader.
+
+    Examples
+    --------
+    The member value is the string operators see::
+
+        assert BrokenPipePolicy.BEST_EFFORT == "best_effort"
+
+    """
+
+    STRICT = "strict"
+    BEST_EFFORT = "best_effort"
+
+
+def _parse_broken_pipe_policy(raw: BrokenPipePolicy | str) -> BrokenPipePolicy:
+    """Coerce a raw policy value to a :class:`BrokenPipePolicy` member.
+
+    This is the pure parsing core behind
+    :meth:`cuprum.sh.output.RunOutputOptions.__post_init__`: it takes the raw
+    value directly, so a caller that passes the string spelling gets the same
+    validation a member does and the failure is raised before a child ever
+    spawns.
+
+    Parameters
+    ----------
+    raw:
+        A :class:`BrokenPipePolicy` member or its string value.
+
+    Returns
+    -------
+    BrokenPipePolicy
+        The parsed policy.
+
+    Raises
+    ------
+    ValueError
+        If ``raw`` is not a known policy value.
+    """
+    try:
+        return BrokenPipePolicy(raw)
+    except ValueError:
+        valid = ", ".join(member.value for member in BrokenPipePolicy)
+        msg = f"invalid broken_pipe_policy {raw!r}; expected one of: {valid}"
+        raise ValueError(msg) from None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -93,11 +170,12 @@ class EchoEvent:
 class RelayFallback:
     """One handled echo-disablement recorded on a command's result.
 
-    A text-only echo sink rejected the subprocess output, so the echo for that
-    stream's drain was disabled while the stream itself kept being consumed
-    and, when enabled, captured. One record describes one handled disablement
-    for one stream: later chunks and the final decoder flush never re-enter
-    the failed write, so a drain contributes at most one record.
+    A text-only echo sink rejected the subprocess output, or reported a broken
+    pipe the caller asked to tolerate, so the echo for that stream's drain was
+    disabled while the stream itself kept being consumed and, when enabled,
+    captured. One record describes one handled disablement for one stream:
+    later chunks and the final decoder flush never re-enter the failed write,
+    so a drain contributes at most one record.
 
     Attributes
     ----------
@@ -135,6 +213,7 @@ which awaiting a hook could be ordered against the chunk being echoed.
 
 
 __all__ = [
+    "BrokenPipePolicy",
     "EchoErrorCategory",
     "EchoEvent",
     "EchoHook",
