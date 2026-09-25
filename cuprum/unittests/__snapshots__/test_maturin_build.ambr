@@ -115,6 +115,7 @@
       'cuprum/rust.py',
       'cuprum/sh/__init__.py',
       'cuprum/sh/argv.py',
+      'cuprum/sh/builder.py',
       'cuprum/sh/execution.py',
       'cuprum/sh/factory.py',
       'cuprum/sh/output.py',
