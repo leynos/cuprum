@@ -261,17 +261,6 @@ SCCACHE_JOBS: typ.Final = (
     ("coverage-main.yml", "coverage-upload"),
     ("loom.yml", "loom"),
 )
-#: Steps in the interpreter matrix that must follow the Python suite, because
-#: without it the job compiles nothing and the wrapper would report zero
-#: requests, which reads as a broken integration rather than as no work.
-#: Each entry pairs a step name with the exact condition it must carry. The
-#: report keeps its `always()` so a failed build still says what it compiled.
-SUITE_GATED_STEPS: typ.Final = (
-    ("Restore the compiler cache", "matrix.python-suite"),
-    ("Set up sccache", "matrix.python-suite"),
-    ("Reset compiler-cache counters", "matrix.python-suite"),
-    ("Record compiler-cache effectiveness", "always() && matrix.python-suite"),
-)
 #: Paths no cache step may ever carry. A `target` tree is invalidated far more
 #: often than the registry beside it, and sccache already holds the objects it
 #: would preserve, keyed by the flags that distinguish the debug, cranelift,
@@ -306,7 +295,9 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
         ("ci.yml", "typecheck-test"),
         ("loom.yml", "loom"),
     ),
-    "TOOL_CACHE_KEY": (("ci.yml", "typecheck-test"),),
+    # The matrix writes its interpreters' archives and `extension-tests` the
+    # 3.13 one, since the matrix has no 3.13 leg.
+    "TOOL_CACHE_KEY": (("ci.yml", "extension-tests"), ("ci.yml", "typecheck-test")),
 }
 #: One writer per rendered family, which is the invariant that actually
 #: matters: five jobs name ``SCCACHE_CACHE_KEY`` and publish five disjoint
@@ -323,15 +314,15 @@ CACHE_WRITERS: typ.Final[cabc.Mapping[str, tuple[tuple[str, str], ...]]] = {
 #: under instrumentation, so neither can share an archive with an unoptimized
 #: build either.
 #:
-#: The typecheck-only leg is absent by construction: it compiles nothing, its
-#: save step is gated on ``matrix.python-suite``, and `extension-tests` owns
-#: the 3.13 unoptimized family instead.
+#: The matrix has no 3.13 leg: the coverage job runs that interpreter's suite
+#: and `extension-tests` its typechecker, so `extension-tests` owns both the
+#: 3.13 unoptimized compiler family and the 3.13 tool family.
 CACHE_FAMILY_WRITERS: typ.Final[
     cabc.Mapping[tuple[str, str, tuple[str, ...]], tuple[str, str]]
 ] = {
     ("CARGO_CACHE_KEY", "self-hosted", ()): ("ci.yml", "extension-tests"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.12",)): ("ci.yml", "typecheck-test"),
-    ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "typecheck-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "extension-tests"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.14",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.15",)): ("ci.yml", "typecheck-test"),
     ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "lint")): (

@@ -12,7 +12,9 @@ pin, and these contracts hold the three things that make it so:
 * the tool family's key hashes that action, so changing the pin misses and
   rebuilds rather than keeping a stale binary; and
 * every consumer restores the tool cache, with `~/.cargo/bin` in it, before an
-  install step that runs through the action and only on a miss.
+  install step that runs through the action and only on a miss; and
+* every job that writes a tool family installs the parser before it saves,
+  so an exact hit never restores an archive that lacks it.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.ci_leg_gate import ungated
-from tests.helpers.ci_runners import CACHE_KEYS_ACTION_FILE
+from tests.helpers.ci_runners import CACHE_FAMILY_WRITERS, CACHE_KEYS_ACTION_FILE
 from tests.helpers.ci_workflows import (
     ROOT,
     cache_paths,
@@ -122,6 +124,18 @@ def _action_step() -> Step:
     return typ.cast("Step", action_steps[0])
 
 
+#: The step that publishes a tool family.
+TOOL_SAVE_STEP: typ.Final = "Save the installed tools"
+#: Every job that writes a Ubicloud tool family, which consumers then restore.
+TOOL_WRITERS: typ.Final = tuple(
+    sorted({
+        writer
+        for (key, lane, _), writer in CACHE_FAMILY_WRITERS.items()
+        if key == "TOOL_CACHE_KEY" and lane == "self-hosted"
+    })
+)
+
+
 def _position(
     job_steps: list[Step], *, what: str, predicate: cabc.Callable[[Step], bool]
 ) -> int:
@@ -216,3 +230,39 @@ def test_no_consumer_restates_the_pin(workflow_name: str, job_name: str) -> None
     """A job-level copy of the pin would read as the pin while pinning nothing."""
     restated = sorted(set(PIN) & set(job_env(workflow_name, job_name)))
     assert restated == [], f"{workflow_name}:{job_name} restates {restated}"
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), TOOL_WRITERS)
+def test_a_tool_family_writer_installs_the_parser_before_saving(
+    workflow_name: str, job_name: str
+) -> None:
+    """A writer that skipped the parser would publish an archive without it.
+
+    Consumers skip their own install on an exact hit, so a family written by a
+    job that never installed makeutil leaves them with no parser at all.
+    """
+    job_steps = steps(workflow_name, job_name)
+    where = f"{workflow_name}:{job_name}"
+    install = _position(
+        job_steps,
+        what=f"{where} {INSTALL_STEP!r} step",
+        predicate=lambda step: step.get("name") == INSTALL_STEP,
+    )
+    save = _position(
+        job_steps,
+        what=f"{where} {TOOL_SAVE_STEP!r} step",
+        predicate=lambda step: step.get("name") == TOOL_SAVE_STEP,
+    )
+    step = job_steps[install]
+    assert step.get("uses") == INSTALL_ACTION, (
+        f"{where} must install through {INSTALL_ACTION}, got {step.get('uses')!r}"
+    )
+    guard = ungated(workflow_name, job_name, step.get("if"))
+    assert guard == MISS_GUARD, f"{where} install must be guarded {MISS_GUARD!r}"
+    assert install < save, f"{where} must install the parser before saving"
+
+
+def test_the_writer_rule_covers_every_tool_family() -> None:
+    """The rule must not pass by finding no writers."""
+    assert ("ci.yml", "extension-tests") in TOOL_WRITERS, TOOL_WRITERS
+    assert ("ci.yml", "typecheck-test") in TOOL_WRITERS, TOOL_WRITERS

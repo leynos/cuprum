@@ -27,7 +27,6 @@ from tests.helpers.ci_runners import (
     SCCACHE_ACTION,
     SCCACHE_JOBS,
     SETUP_RUST,
-    SUITE_GATED_STEPS,
     cache_paths,
     cache_steps,
     expand,
@@ -243,32 +242,21 @@ def test_every_lane_pins_the_intercepted_cache_action() -> None:
         )
 
 
-def test_the_typecheck_only_leg_installs_no_wrapper() -> None:
-    """Skip the compiler cache on the leg that compiles nothing.
+def test_no_matrix_step_reads_a_retired_leg_flag() -> None:
+    """A guard on `matrix.python-suite` would now switch its step off.
 
-    A job that installs sccache and reports zero compile requests is
-    indistinguishable in the log from one whose wrapper never reached the
-    compiler, which is a failure this repository has already had. The leg that
-    only typechecks therefore reports nothing rather than zero.
+    The matrix used to carry `python-suite` so its typecheck-only 3.13 leg
+    could skip the compiler cache. That leg is gone and so is the key, and an
+    expression reading a key no leg declares renders empty, which is falsy: a
+    leftover or re-added guard would silently skip the wrapper, the tests, or
+    the save on every leg while the job stayed green.
     """
-    job_steps = steps("ci.yml", "typecheck-test")
-    for name, expected in SUITE_GATED_STEPS:
-        # Matched as a list, not through a name-indexed mapping: a duplicate
-        # step would be hidden by the later one, and the surviving entry could
-        # carry the condition while the earlier one installed the wrapper
-        # regardless.
-        matches = [step for step in job_steps if str(step.get("name", "")) == name]
-        assert len(matches) == 1, (
-            f"ci.yml:typecheck-test must declare {name!r} exactly once, "
-            f"found {len(matches)}"
-        )
-        # Compared whole, not by containment: `matrix.python-suite || true`
-        # contains the flag and would let the leg install sccache anyway.
-        condition = ungated("ci.yml", "typecheck-test", matches[0].get("if"))
-        assert condition == expected, (
-            f"ci.yml:typecheck-test step {name!r} must carry if: {expected!r}, "
-            f"got {condition!r}"
-        )
+    stale = [
+        str(step.get("name", ""))
+        for step in steps("ci.yml", "typecheck-test")
+        if "python-suite" in str(step.get("if", ""))
+    ]
+    assert not stale, f"ci.yml:typecheck-test steps gated on a retired flag: {stale}"
 
 
 def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
@@ -276,10 +264,8 @@ def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
 
     A leg that compiles nothing would restore the previous generation and
     republish it unchanged for ever, so the cache would never absorb a new
-    object while still reporting hits. The interpreter matrix contains exactly
-    one such leg, the one the coverage job already runs the suite for, and its
-    save must therefore carry the same ``matrix.python-suite`` guard as the
-    rest of its compiler-cache steps.
+    object while still reporting hits. Every remaining matrix leg runs the
+    Python suite and compiles, so its save carries the trunk guard alone.
     """
     writers = [
         step
@@ -297,17 +283,12 @@ def test_the_compiler_cache_is_written_by_a_job_that_compiles() -> None:
         "each interpreter leg owns the compiler-cache family for its own "
         "interpreter, so the matrix declares exactly one save step"
     )
-    # Compared whole, not by containment: `matrix.python-suite || true`
-    # contains the flag and would let the typecheck-only leg publish the
-    # `py3.13-debug` family that `extension-tests` owns.
+    # Compared whole, not by containment, so a widened or narrowed guard
+    # fails either way.
     condition = ungated("ci.yml", "typecheck-test", matrix_writers[0].get("if"))
-    expected = (
-        "github.event_name == 'push' && github.ref == 'refs/heads/main' && "
-        "matrix.python-suite"
-    )
+    expected = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
     assert condition == expected, (
-        "the leg that only typechecks compiles nothing, so it must not "
-        f"republish a generation; must carry if: {expected!r}, got {condition!r}"
+        f"the matrix save must carry if: {expected!r}, got {condition!r}"
     )
 
 

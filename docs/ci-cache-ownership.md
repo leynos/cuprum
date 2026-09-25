@@ -61,6 +61,14 @@ lived anywhere the key does not hash would let a hit skip the rebuild and run a
 stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a second
 copy.
 
+The proof holds only if the archive's writer installed the executable. A hit
+restores what the writer saved, so a writer that never ran the install would
+publish an archive without the parser, and every consumer would skip its own
+install and fail. Every writer of a tool family therefore installs makeutil
+before it saves, including `extension-tests`, which writes the 3.13 family and
+runs no Makefile contract itself. The same test module requires that of every
+writer in the family registry.
+
 ## Why the lane is in every key
 
 `runner.environment` renders to `self-hosted` on Ubicloud and `github-hosted`
@@ -178,12 +186,13 @@ directory nothing saves, as every fork arm already does. Both halves are read
 by position from the same fork expression the runner uses, and a contract
 asserts each.
 
-The interpreter matrix has one leg, 3.13, that only typechecks, because the
-coverage job already runs that interpreter's suite. It compiles nothing, so it
-installs no wrapper and saves no compiler archive; `extension-tests` owns the
-3.13 unoptimized family instead. A writer that compiled nothing would restore
-the previous generation and republish it unchanged for ever, reporting hits
-while absorbing nothing new.
+The interpreter matrix has no 3.13 leg. The coverage job runs that
+interpreter's suite and `extension-tests` runs its typechecker, so a leg would
+only start a runner to repeat one of them. `extension-tests` therefore owns
+both 3.13 families: the unoptimized compiler family, which it compiles, and the
+3.13 tool family, which it saves on `main` after a miss. Every remaining matrix
+leg compiles, so none of them can freeze a rolling generation by republishing
+it unchanged.
 
 `tests/helpers/ci_cache_families.py` resolves the family each save step
 actually publishes, expanding matrix legs and honouring a save condition that
