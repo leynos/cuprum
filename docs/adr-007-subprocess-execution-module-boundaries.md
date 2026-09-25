@@ -410,3 +410,25 @@ exception:
 No public API changes, and the module-size suppression is still unnecessary.
 `_subprocess_wait` continues to own teardown through the unchanged drain
 interface.
+
+## Addendum (2026-09-25): sh.py becomes a thin re-exporting facade
+
+`cuprum/sh.py` grew back over the module-size ceiling as pylint 4.0.9's PyPy
+3.12 run started parsing files PyPy 3.11 had silently skipped. The 2026-09-19
+addendum's claim that `cuprum/sh.py` still holds "the value types it exchanges"
+no longer describes the file: those value types now live in grouped
+`cuprum._sh_*` modules, and `cuprum/sh.py` re-exports every one of them with
+the same object identity.
+
+- `cuprum/_sh_argv.py` — argv construction (`build_argv`, `_ArgValue`,
+  `_stringify_arg`, `_serialize_kwargs`).
+- `cuprum/_sh_context.py` — `ExecutionContext`, `TimeoutExpired`, and
+  `StdinInput`.
+- `cuprum/_sh_results.py` — `CommandResult` and `PipelineResult`.
+- `cuprum/_sh_output.py` — `RunOutputOptions` and `IOOptions`.
+- `cuprum/_sh_safe_cmd.py` — `SafeCmd`, `Pipeline`, and `SafeCmdBuilder`.
+
+`cuprum/sh.py` itself now holds only the `make()` builder and the re-exports
+listed above; it remains the stable public and internal entry point, and
+`cuprum.sh.SafeCmd`, `cuprum.sh.CommandResult`, and the rest of the public
+surface are unchanged for importers.

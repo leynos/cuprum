@@ -18,6 +18,12 @@ annotations. That module mutates ``CUPRUM_STREAM_BACKEND`` under an ``RLock``,
 rejects same-thread nested activation, and clears the ``cuprum._backend``
 caches so backend discovery reflects the active environment.
 
+Configuration and result types live in
+``benchmarks._tee_profile_worker_config``, command construction lives in
+``benchmarks._tee_profile_worker_command``, and execution and result assembly
+live in ``benchmarks._tee_profile_worker_execution``. All are re-exported here
+for existing production imports.
+
 Command output is sent through ``benchmarks.sinks`` to exercise the same sink
 families used by the benchmark suite.
 
@@ -43,6 +49,37 @@ from benchmarks._tee_profile_worker_backend import (
     _EnvBackendSelector,
     _SelectorMetrics,
 )
+from benchmarks._tee_profile_worker_command import (
+    WorkerCommandResult,
+    _build_command,
+    _capture_and_echo_flags,
+    _catalogue_for_worker,
+    _manifest_hash,
+    _passthrough_script,
+    _result_exit_code,
+    _WorkerCommand,
+    _writer_script,
+)
+from benchmarks._tee_profile_worker_config import (
+    _MAX_REPEAT_COUNT,
+    _VALID_BACKENDS,
+    _VALID_MODES,
+    _VALID_SINKS,
+    TeeMode,
+    TeeProfileWorkerConfig,
+    TeeProfileWorkerResult,
+    _validate_repeat_count,
+)
+from benchmarks._tee_profile_worker_execution import (
+    _build_worker_result,
+    _run_command_sync,
+    _run_once,
+    _run_repeat_loop,
+    _RunTotals,
+    _scenario_label,
+    _TimingContext,
+    run_tee_profile_worker,
+)
 from benchmarks.sinks import SinkKind, open_sink
 from cuprum import (
     ExecEvent,
@@ -56,427 +93,59 @@ from cuprum import (
 )
 from cuprum._streams_pump import _READ_SIZE, _current_read_size, _override_read_size
 
-type TeeMode = typ.Literal["echo", "capture", "tee"]
-type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
-
-_VALID_MODES = {"echo", "capture", "tee"}
-_VALID_SINKS = {"devnull", "text_blackhole", "pty_blackhole"}
-_VALID_BACKENDS = {"auto", "python", "rust"}
-_MAX_REPEAT_COUNT = 1000
-
-
-class TeeProfileWorkerResult(typ.TypedDict):
-    """Machine-readable tee profiling worker result payload."""
-
-    scenario: str
-    fixture_path: str
-    fixture_manifest_hash: str | None
-    stages: int
-    mode: TeeMode
-    sink_kind: SinkKind
-    with_line_callbacks: bool
-    backend: BackendName
-    repeat_count: int
-    read_size: int
-    wall_time_seconds: float
-    lock_wait_seconds: float
-    reentrant_rejection_count: int
-    status: typ.Literal["ok", "failed"]
-    exit_code: int
-    captured_output_length: int
-    stdout_line_count: int
-
-
-def _validate_repeat_count(repeat_count: int) -> None:
-    """Validate the bounded worker repeat count."""
-    if repeat_count < 1:
-        msg = f"repeat-count must be >= 1, got {repeat_count}"
-        raise ValueError(msg)
-    if repeat_count > _MAX_REPEAT_COUNT:
-        msg = f"repeat-count must be <= {_MAX_REPEAT_COUNT}, got {repeat_count}"
-        raise ValueError(msg)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class TeeProfileWorkerConfig:
-    """Configuration for one tee profiling worker execution."""
-
-    fixture_path: pth.Path
-    stages: int
-    mode: TeeMode
-    sink_kind: SinkKind
-    with_line_callbacks: bool
-    backend: BackendName
-    repeat_count: int
-    read_size: int = _READ_SIZE
-    encoding: str = "utf-8"
-    errors: str = "replace"
-
-    def __post_init__(self) -> None:
-        """Validate worker configuration."""
-        self._coerce_fixture_path()
-        self._validate_numeric_bounds()
-        self._validate_enum_fields()
-
-    def _coerce_fixture_path(self) -> None:
-        """Coerce and validate the fixture path."""
-        fixture_path = pth.Path(self.fixture_path)
-        object.__setattr__(self, "fixture_path", fixture_path)
-        if not fixture_path.is_file():
-            msg = f"fixture_path must exist and be a file: {fixture_path}"
-            raise ValueError(msg)
-
-    def _validate_numeric_bounds(self) -> None:
-        """Validate numeric worker bounds."""
-        if self.stages < 1:
-            msg = f"stages must be >= 1, got {self.stages}"
-            raise ValueError(msg)
-        _validate_repeat_count(self.repeat_count)
-        if self.read_size < 1:
-            msg = f"read-size must be >= 1, got {self.read_size}"
-            raise ValueError(msg)
-
-    def _validate_enum_fields(self) -> None:
-        """Validate enum-like worker fields."""
-        if self.mode not in _VALID_MODES:
-            msg = f"mode must be one of {sorted(_VALID_MODES)}, got {self.mode!r}"
-            raise ValueError(msg)
-        if self.sink_kind not in _VALID_SINKS:
-            msg = (
-                f"sink-kind must be one of {sorted(_VALID_SINKS)}, "
-                f"got {self.sink_kind!r}"
-            )
-            raise ValueError(msg)
-        if self.backend not in _VALID_BACKENDS:
-            msg = (
-                f"backend must be one of {sorted(_VALID_BACKENDS)}, "
-                f"got {self.backend!r}"
-            )
-            raise ValueError(msg)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _WorkerCommand:
-    """Built command plus allowlist required to execute it."""
-
-    cmd: sh.SafeCmd | sh.Pipeline
-    allowlist: frozenset[Program]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _RunTotals:
-    """Accumulated totals from one worker repeat loop."""
-
-    # Why not inline this into ``_build_worker_result``: this type, together
-    # with ``_TimingContext``, keeps that helper's argument list at four.
-    # Inlining either grouping would re-trigger the PLR0913/CodeScene finding
-    # that this PR already resolved, so this indirection is structural.
-
-    captured_output_length: int
-    stdout_line_count: int
-    exit_code: int
-    status: typ.Literal["ok", "failed"]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _TimingContext:
-    """Wall-clock callable and the timestamp at which the worker run started."""
-
-    # ``timer`` and ``started`` are a single timing concept. The wrapper keeps
-    # that coupling explicit and shares the same "do not inline" rationale as
-    # ``_RunTotals``: suppressing complexity findings for these bounded helper
-    # types is preferable to regressing an already-resolved argument-count
-    # diagnostic or weakening testability.
-
-    timer: Clock
-    started: float
-
-
-def _writer_script() -> str:
-    """Return the fixture replay script."""
-    return "\n".join(
-        [
-            "import sys",
-            "path = sys.argv[1]",
-            "out = sys.stdout.buffer",
-            "with open(path, 'rb') as source:",
-            "    while True:",
-            "        chunk = source.read(65536)",
-            "        if not chunk:",
-            "            break",
-            "        out.write(chunk)",
-            "out.flush()",
-        ],
-    )
-
-
-def _passthrough_script() -> str:
-    """Return the intermediate pass-through script."""
-    return "\n".join(
-        [
-            "import shutil",
-            "import sys",
-            "shutil.copyfileobj(sys.stdin.buffer, sys.stdout.buffer, 65536)",
-            "sys.stdout.buffer.flush()",
-        ],
-    )
-
-
-def _catalogue_for_worker() -> tuple[ProgramCatalogue, Program]:
-    """Create a benchmark-specific catalogue for the current Python executable."""
-    python_program = Program(sys.executable)
-    project = ProjectSettings(
-        name="tee-profile-worker",
-        programs=(python_program,),
-        documentation_locations=("benchmarks/README.md",),
-        noise_rules=(),
-    )
-    return ProgramCatalogue(projects=(project,)), python_program
-
-
-def _build_command(
-    config: TeeProfileWorkerConfig,
-    *,
-    catalogue: ProgramCatalogue | None = None,
-    python_program: Program | None = None,
-) -> _WorkerCommand:
-    """Build a single-stage command or multi-stage pipeline."""
-    if catalogue is None or python_program is None:
-        catalogue, python_program = _catalogue_for_worker()
-    python = sh.make(python_program, catalogue=catalogue)
-    writer = python("-c", _writer_script(), str(config.fixture_path))
-    allowlist = frozenset([python_program])
-    if config.stages == 1:
-        return _WorkerCommand(cmd=writer, allowlist=allowlist)
-
-    command: sh.SafeCmd | sh.Pipeline = writer | python("-c", _passthrough_script())
-    for _ in range(config.stages - 2):
-        command |= python("-c", _passthrough_script())
-    return _WorkerCommand(cmd=command, allowlist=allowlist)
-
-
-def _capture_and_echo_flags(mode: TeeMode) -> tuple[bool, bool]:
-    """Convert worker mode into Cuprum capture and echo flags."""
-    if mode == "echo":
-        return False, True
-    if mode == "capture":
-        return True, False
-    if mode == "tee":
-        return True, True
-    typ.assert_never(mode)
-
-
-def _manifest_hash(fixture_path: pth.Path) -> str | None:
-    """Read a neighbouring manifest hash when one is available."""
-    manifest_path = fixture_path.with_suffix(".json")
-    if not manifest_path.exists():
-        return None
-    try:
-        payload = json.loads(manifest_path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    value = payload.get("sha256")
-    return value if isinstance(value, str) else None
-
-
-def _run_command_sync(
-    config: TeeProfileWorkerConfig,
-    worker_cmd: _WorkerCommand,
-    *,
-    capture: bool,
-    echo: bool,
-) -> tuple[WorkerCommandResult, int]:
-    """Run one configured command synchronously and count stdout line events.
-
-    The ``observe_line`` closure mutates ``line_count`` via ``nonlocal``
-    without a lock. This is safe because ``sh.observe`` calls the callback
-    synchronously in the same thread that calls ``run_sync``; no concurrent
-    access to ``line_count`` is possible.
-
-    Returns
-    -------
-    tuple[WorkerCommandResult, int]
-        The command result and the number of stdout line events observed.
-    """
-    line_count = 0
-
-    def observe_line(event: ExecEvent) -> None:
-        """Count stdout line callback events emitted during command execution."""
-        nonlocal line_count
-        if event.phase == "stdout" and event.line is not None:
-            line_count += 1
-
-    with open_sink(
-        config.sink_kind,
-        encoding=config.encoding,
-        errors=config.errors,
-    ) as sink:
-        context = ExecutionContext(
-            stdout_sink=sink,
-            encoding=config.encoding,
-            errors=config.errors,
-        )
-        output = sh.RunOutputOptions(capture=capture, echo=echo)
-        with scoped(ScopeConfig(allowlist=worker_cmd.allowlist)):
-            # SafeCmd and Pipeline now share the ``output=RunOutputOptions``
-            # calling convention, so only the observe-hook wrapping differs.
-            if config.with_line_callbacks:
-                with sh.observe(observe_line):
-                    result = worker_cmd.cmd.run_sync(output=output, context=context)
-            else:
-                result = worker_cmd.cmd.run_sync(output=output, context=context)
-    return result, line_count
-
-
-def _result_exit_code(result: WorkerCommandResult) -> int:
-    """Return the failing exit code for a command or pipeline result."""
-    if result.ok:
-        return 0
-    if isinstance(result, sh.PipelineResult):
-        failure = result.failure
-        return 0 if failure is None else int(failure.exit_code)
-    return int(result.exit_code)
-
-
-def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
-    """Run one Cuprum command and report its captured output and exit code.
-
-    Returns
-    -------
-    tuple[int, int, int]
-        ``(captured_output_length, exit_code, stdout_line_count)``. The first
-        element is the length of the captured stdout — not a status value —
-        and is ``0`` when nothing was captured.
-    """
-    worker_cmd = _build_command(config)
-    capture, echo = _capture_and_echo_flags(config.mode)
-    result, line_count = _run_command_sync(
-        config,
-        worker_cmd,
-        capture=capture,
-        echo=echo,
-    )
-
-    captured = result.stdout
-    captured_len = len(captured) if captured is not None else 0
-    return captured_len, _result_exit_code(result), line_count
-
-
-def _run_repeat_loop(
-    config: TeeProfileWorkerConfig,
-    selector: BackendSelector,
-) -> _RunTotals:
-    """Execute the configured repeat loop and return accumulated totals."""
-    total_captured_len = 0
-    total_line_count = 0
-    exit_code = 0
-    status: typ.Literal["ok", "failed"] = "ok"
-    with selector(config.backend):
-        for _ in range(config.repeat_count):
-            captured_len, exit_code, line_count = _run_once(config)
-            total_captured_len += captured_len
-            total_line_count += line_count
-            if exit_code != 0:
-                status = "failed"
-                break
-    return _RunTotals(
-        captured_output_length=total_captured_len,
-        stdout_line_count=total_line_count,
-        exit_code=exit_code,
-        status=status,
-    )
-
-
-def _build_worker_result(
-    config: TeeProfileWorkerConfig,
-    *,
-    timing: _TimingContext,
-    totals: _RunTotals,
-    metrics: _SelectorMetrics,
-) -> TeeProfileWorkerResult:
-    """Assemble a ``TeeProfileWorkerResult`` from accumulated run data."""
-    # Capture the elapsed worker-run time before any result-assembly work so
-    # that ``_manifest_hash`` I/O and ``_scenario_label`` do not inflate the
-    # measured ``wall_time_seconds``.
-    wall_time_seconds = timing.timer() - timing.started
-    return {
-        "scenario": _scenario_label(config),
-        "fixture_path": str(config.fixture_path),
-        "fixture_manifest_hash": _manifest_hash(config.fixture_path),
-        "stages": config.stages,
-        "mode": config.mode,
-        "sink_kind": config.sink_kind,
-        "with_line_callbacks": config.with_line_callbacks,
-        "backend": config.backend,
-        "repeat_count": config.repeat_count,
-        "read_size": _current_read_size(),
-        "wall_time_seconds": wall_time_seconds,
-        "lock_wait_seconds": metrics.lock_wait_seconds,
-        "reentrant_rejection_count": metrics.reentrant_rejection_count,
-        "status": totals.status,
-        "exit_code": totals.exit_code,
-        "captured_output_length": totals.captured_output_length,
-        "stdout_line_count": totals.stdout_line_count,
-    }
-
-
-def run_tee_profile_worker(
-    config: TeeProfileWorkerConfig,
-    *,
-    backend_selector: BackendSelector | None = None,
-    clock: Clock | None = None,
-) -> TeeProfileWorkerResult:
-    """Execute a configured tee profiling worker and return a JSON payload.
-
-    Parameters
-    ----------
-    config:
-        Worker execution settings including fixture path, stage count, mode,
-        sink kind, backend, and repeat count.
-    backend_selector:
-        Optional override for backend activation. Defaults to
-        ``_EnvBackendSelector()``, which mutates ``os.environ``. Pass a custom
-        implementation in tests to avoid side-effects.
-    clock:
-        Optional wall-clock callable. Defaults to ``time.perf_counter``. Pass a
-        deterministic stub in tests to avoid timing non-determinism.
-
-    Returns
-    -------
-    TeeProfileWorkerResult
-        Result mapping with keys ``scenario`` (str), ``fixture_path`` (str),
-        ``fixture_manifest_hash`` (str or None), ``stages`` (int), ``mode``
-        (str), ``sink_kind`` (str), ``with_line_callbacks`` (bool),
-        ``backend`` (str), ``repeat_count`` (int), ``wall_time_seconds``
-        (float), ``lock_wait_seconds`` (float),
-        ``reentrant_rejection_count`` (int), ``status`` (``"ok"`` or
-        ``"failed"``), ``exit_code`` (int),
-        ``captured_output_length`` (int), and ``stdout_line_count`` (int).
-    """
-    timer = clock if clock is not None else _default_clock
-    selector = (
-        backend_selector
-        if backend_selector is not None
-        else _EnvBackendSelector(clock=timer)
-    )
-    metrics_state = selector.metrics_state
-    metrics_state.reset()
-    timing = _TimingContext(timer=timer, started=timer())
-    with _override_read_size(config.read_size):
-        totals = _run_repeat_loop(config, selector)
-        metrics = metrics_state.snapshot()
-        return _build_worker_result(
-            config,
-            timing=timing,
-            totals=totals,
-            metrics=metrics,
-        )
-
-
-def _scenario_label(config: TeeProfileWorkerConfig) -> str:
-    """Build a compact label for ad hoc worker runs."""
-    cb = "cb" if config.with_line_callbacks else "nocb"
-    return f"{config.mode}-{config.sink_kind}-{cb}-s{config.stages}-{config.backend}"
+# Private names appear in __all__ alongside the public surface so that
+# attribute access on ``benchmarks.tee_profile_worker`` keeps resolving them
+# after the command/execution/config split, matching their pre-split
+# availability on this module.
+__all__ = [
+    "_MAX_REPEAT_COUNT",
+    "_READ_SIZE",
+    "_VALID_BACKENDS",
+    "_VALID_MODES",
+    "_VALID_SINKS",
+    "BackendName",
+    "BackendSelector",
+    "Clock",
+    "ExecEvent",
+    "ExecutionContext",
+    "Program",
+    "ProgramCatalogue",
+    "ProjectSettings",
+    "ScopeConfig",
+    "SinkKind",
+    "TeeMode",
+    "TeeProfileWorkerConfig",
+    "TeeProfileWorkerResult",
+    "WorkerCommandResult",
+    "_EnvBackendSelector",
+    "_RunTotals",
+    "_SelectorMetrics",
+    "_TimingContext",
+    "_WorkerCommand",
+    "_build_command",
+    "_build_worker_result",
+    "_capture_and_echo_flags",
+    "_catalogue_for_worker",
+    "_current_read_size",
+    "_default_clock",
+    "_manifest_hash",
+    "_override_read_size",
+    "_passthrough_script",
+    "_result_exit_code",
+    "_run_command_sync",
+    "_run_once",
+    "_run_repeat_loop",
+    "_scenario_label",
+    "_validate_repeat_count",
+    "_writer_script",
+    "dc",
+    "main",
+    "open_sink",
+    "run_tee_profile_worker",
+    "scoped",
+    "sh",
+    "typ",
+]
 
 
 def _parse_args() -> argparse.Namespace:

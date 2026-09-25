@@ -26,6 +26,7 @@ from cuprum._echo_truncation import (
     _EchoLineLimiter,
     _validate_bounded_echo_encoding,
 )
+from cuprum._stream_drain_state import _EchoGuard, _MirrorCursor, _RelayDiagnostics
 from cuprum._stream_echo import (
     _echo_chunk,
     _echo_decoder,
@@ -47,7 +48,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoStream, RelayFallback
+from cuprum.echo_events import EchoStream
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
     _complete_stream_operation,
@@ -124,71 +125,6 @@ class _DrainState:
     # registry, which cannot attribute events to nested or concurrent runs.
     relay_diagnostics: _RelayDiagnostics
     echo_limiter: _EchoLineLimiter | None = None
-
-
-@dc.dataclass(slots=True)
-class _RelayDiagnostics:
-    """Per-drain collector for handled echo-disablement records.
-
-    One collector belongs to one command stream. Because the echo guard stops
-    any later echo write after the first handled failure, a drain appends at
-    most one :class:`~cuprum.echo_events.RelayFallback` here.
-    """
-
-    fallbacks: list[RelayFallback] = dc.field(default_factory=list)
-    is_settled: bool = False
-
-    def settle(self) -> None:
-        """Publish the collected records for the owning command's result.
-
-        Idempotent: the reconciliation paths run exactly once per drain, and a
-        second call keeps whichever record list that call captured.
-        """
-        self.is_settled = True
-
-    def snapshot(self) -> tuple[RelayFallback, ...]:
-        """Return the collected records, or ``()`` before the drain settled.
-
-        A drain that never settled — cancelled or abandoned during teardown —
-        leaves its records unread: those diagnostics remain on the echo
-        observation channel, so callers on a non-result path see ``()``.
-
-        Returns
-        -------
-        tuple[RelayFallback, ...]
-            The records collected before settlement, empty when the drain
-            never settled or recorded nothing.
-        """
-        if not self.is_settled:
-            return ()
-        return tuple(self.fallbacks)
-
-
-@dc.dataclass(slots=True)
-class _EchoGuard:
-    """Mutable holder tracking whether echo is disabled for one drain."""
-
-    disabled: bool = False
-
-
-@dc.dataclass(slots=True)
-class _MirrorCursor:
-    """Presentation-only record of whether a mirrored sink is mid-line.
-
-    Shared with the idle heartbeat, which needs to know whether the last bytes
-    echoed to the parent's stderr ended a line: a keepalive written now would
-    otherwise become the tail of an unfinished mirrored line. Recording the
-    position here, on the echo path, keeps the diagnostic free of any
-    knowledge about the child's stream, and nothing in this class can affect
-    what was captured.
-    """
-
-    is_mid_line: bool = False
-
-    def note(self, chunk: bytes) -> None:
-        """Record one written echo chunk; an empty chunk changes nothing."""
-        if chunk:
-            self.is_mid_line = not chunk.endswith(b"\n")
 
 
 async def _consume_stream(

@@ -1,15 +1,16 @@
 """Core execution-context domain types.
 
-Defines the immutable :class:`CuprumContext` and :class:`ScopeConfig`
-dataclasses, the :class:`ForbiddenProgramError` raised by allowlist
-enforcement, and the hook type aliases. ``ContextVar`` plumbing lives in
-:mod:`cuprum.context.state`; registration handles live in
-:mod:`cuprum.context.registration`.
+Defines the immutable :class:`CuprumContext` dataclass. The
+:class:`ScopeConfig` dataclass it consumes when narrowing, the
+:class:`ContextError` and :class:`ForbiddenProgramError` errors raised by
+allowlist enforcement, and the hook type aliases live in
+:mod:`cuprum.context._scope` and are re-exported here for the public API.
+``ContextVar`` plumbing lives in :mod:`cuprum.context.state`; registration
+handles live in :mod:`cuprum.context.registration`.
 """
 
 from __future__ import annotations
 
-import collections.abc as cabc
 import dataclasses as dc
 import logging
 import typing as typ
@@ -21,85 +22,22 @@ from cuprum.context._policy import (
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
+from cuprum.context._scope import (
+    AfterHook,
+    BeforeHook,
+    ContextError,
+    ForbiddenProgramError,
+    ScopeConfig,
+)
 from cuprum.context.env_overlay import _coerce_env_overlay, merge_env_overlays
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum.events import ExecHook
     from cuprum.program import Program
-    from cuprum.sh import CommandResult, SafeCmd
 
 _logger = logging.getLogger("cuprum.context")
-
-
-type BeforeHook = cabc.Callable[[SafeCmd], None]
-type AfterHook = cabc.Callable[[SafeCmd, CommandResult], None]
-
-
-class ContextError(Exception):
-    """Base class for execution-context domain errors."""
-
-
-class ForbiddenProgramError(ContextError, PermissionError):
-    """Raised when attempting to run a program not in the current allowlist.
-
-    Attributes
-    ----------
-    program : Program
-        The program that was denied by the context allowlist.
-    restricted_state : bool
-        Whether the context allowlist was in a restricted state when the
-        program was denied.
-    """
-
-    def __init__(self, program: Program, *, restricted_state: bool) -> None:
-        """Describe the denied program and allowlist restriction state."""
-        self.program = program
-        self.restricted_state = restricted_state
-        msg = f"Program '{program}' is not allowed in the current context"
-        super().__init__(msg)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ScopeConfig:
-    """Configuration object for scoped execution context updates.
-
-    Attributes
-    ----------
-    allowlist:
-        Optional allowlist for the scope. When ``None``, inherit the current
-        allowlist.
-    before_hooks:
-        Hooks invoked before command execution (FIFO order).
-    after_hooks:
-        Hooks invoked after command execution (LIFO order).
-    observe_hooks:
-        Hooks invoked for structured execution events.
-    timeout:
-        Optional default timeout in seconds for calls within the scope.
-    env_overlay:
-        Optional immutable environment overlay layered over the live
-        ``os.environ`` at subprocess spawn time. When ``None``, no overlay
-        is applied within the scope.
-
-    """
-
-    allowlist: frozenset[Program] | None = None
-    before_hooks: tuple[BeforeHook, ...] = ()
-    after_hooks: tuple[AfterHook, ...] = ()
-    observe_hooks: tuple[ExecHook, ...] = ()
-    timeout: float | None = None
-    env_overlay: cabc.Mapping[str, str] | None = None
-
-    def __post_init__(self) -> None:
-        """Validate and coerce timeout after initialization."""
-        validated = _validate_timeout(self.timeout, "ScopeConfig")
-        # Use object.__setattr__ because the dataclass is frozen
-        object.__setattr__(self, "timeout", validated)
-        object.__setattr__(
-            self,
-            "env_overlay",
-            _coerce_env_overlay(self.env_overlay),
-        )
 
 
 @dc.dataclass(frozen=True, slots=True)

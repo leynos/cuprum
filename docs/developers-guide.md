@@ -949,10 +949,14 @@ surface is re-exported from `cuprum/context/__init__.py`:
 - `cuprum/context/env_overlay.py` — pure overlay merging
   (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
   dependency.
-- `cuprum/context/core.py` — the domain dataclasses (`CuprumContext`,
-  `ScopeConfig`), the `ContextError` package-level root of the domain exception
-  hierarchy and its `ForbiddenProgramError` subclass, timeout validation, and
-  the before/after hook type aliases.
+- `cuprum/context/core.py` — the `CuprumContext` domain dataclass and timeout
+  validation. It re-exports `ScopeConfig`, the `ContextError` package-level
+  root of the domain exception hierarchy, its `ForbiddenProgramError` subclass,
+  and the before/after hook type aliases, all now defined in
+  `cuprum/context/_scope.py`.
+- `cuprum/context/_scope.py` — `ContextError`, `ForbiddenProgramError`,
+  `ScopeConfig`, and the `BeforeHook`/`AfterHook` type aliases, split out of
+  `core.py` to keep it under the 400-line ceiling.
 - `cuprum/context/state.py` — the `ContextVar` plumbing (`current_context`,
   `get_context`, and the internal set/reset helpers).
 - `cuprum/context/scoped.py` — `_ScopedContext` and `scoped`, which narrows a
@@ -2791,6 +2795,14 @@ encoded byte length, since PTY line-ending translation would otherwise make the
 result platform-dependent.
 
 ## Worker (`benchmarks/tee_profile_worker.py`)
+
+`benchmarks/tee_profile_worker.py` remains the public module and CLI entry point
+(`main()`), re-exporting the stable API while the implementation is split
+across supporting modules: configuration and result types in
+`benchmarks/_tee_profile_worker_config.py`, command construction in
+`benchmarks/_tee_profile_worker_command.py`, and execution and result assembly
+in `benchmarks/_tee_profile_worker_execution.py`. Backend selection continues
+to live in `benchmarks/_tee_profile_worker_backend.py`.
 
 `TeeProfileWorkerConfig` defines one worker run. It validates that
 `fixture_path` points to an existing file, `stages >= 1`, `repeat_count >= 1`,
@@ -5389,7 +5401,11 @@ Table 1: Line-observation implementation boundaries
 
 | Module                                                               | Responsibility                                                                                                                                          |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cuprum/_line_stream.py`                                             | Owns the line-run queue, queue sink, subprocess start, coordinator, and final result hand-off.                                                          |
+| `cuprum/_line_stream.py`                                             | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; re-exports the queue, spawn, and drain helpers below.                      |
+| `cuprum/_line_stream_telemetry.py`                                   | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                          |
+| `cuprum/_line_stream_queue.py`                                       | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                         |
+| `cuprum/_line_stream_spawn.py`                                       | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                   |
+| `cuprum/_line_stream_drain.py`                                       | Drains a line stream's settled consumers once the child has exited.                                                                                     |
 | `cuprum/_line_iteration.py`                                          | Exposes `LineStream`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
 | `cuprum/_line_callbacks.py`                                          | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                |
 | `cuprum/_subprocess_streams.py`                                      | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                      |

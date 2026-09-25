@@ -33,15 +33,12 @@ class _CompletedPumpFuture(typ.Protocol):
 
     def cancelled(self) -> bool:
         """Report whether the worker finished by cancellation."""
-        ...
 
     def exception(self) -> BaseException | None:
         """Return the worker exception after it settles, if any."""
-        ...
 
     def result(self) -> int:
         """Return the successful native-pump byte total."""
-        ...
 
 
 @dc.dataclass(frozen=True, slots=True)
