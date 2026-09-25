@@ -52,6 +52,10 @@ env:
 jobs:
   coverage-upload:
     runs-on: ubicloud-standard-2
+    # The CodeScene token lives in this environment, whose deployment policy
+    # admits `main` alone; the codescene environment contract holds it to
+    # this job.
+    environment: codescene
     # Kept in step with ci.yml's coverage lane: above the 2,700 s cargo
     # watchdog plus the work either side, and fifteen minutes above that
     # sum rather than equal to it. This job's own worst outside the
