@@ -32,7 +32,29 @@ _ARG_TYPES = typ.get_args(ArgValue.__value__)
 
 
 def _stringify_arg(value: ArgValue) -> str:
-    """Convert values into argv-safe strings."""
+    """Convert a single argument value into an argv-safe string.
+
+    This is the choke point where the annotated ``ArgValue`` domain and the
+    accepted runtime domain are kept identical.
+
+    Parameters
+    ----------
+    value : ArgValue
+        The value to serialize.
+
+    Returns
+    -------
+    str
+        ``str(value)``, so a :class:`pathlib.Path` yields its path text and a
+        boolean yields ``"True"`` or ``"False"``.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is ``None``, or is not a ``str``, ``int``, ``float``,
+        ``bool``, or :class:`pathlib.Path`. ``None`` keeps its own dedicated
+        message; every other rejected type is named in the error.
+    """
     if value is None:
         # None is disallowed because it is almost always a mistake in CLI argv
         # construction; callers must represent missing values themselves (for

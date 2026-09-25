@@ -106,6 +106,7 @@ class _FakePath(os.PathLike[str]):
     """A ``os.PathLike[str]`` that is deliberately not a ``pathlib.Path``."""
 
     def __init__(self, path: str) -> None:
+        """Wrap ``path`` behind the ``os.PathLike`` protocol."""
         self._path = path
 
     def __fspath__(self) -> str:

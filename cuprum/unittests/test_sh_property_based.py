@@ -120,6 +120,7 @@ class _NeverPath(os.PathLike[str]):
     """
 
     def __init__(self, path: str) -> None:
+        """Wrap ``path`` behind the ``os.PathLike`` protocol."""
         self._path = path
 
     def __fspath__(self) -> str:
