@@ -905,11 +905,32 @@ Keep `build_argv` and `sh.make` behaviour aligned:
 - keyword arguments are serialized after positionals as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- `None` raises `TypeError` in positional and keyword positions.
+- `None` raises `TypeError` in positional and keyword positions;
+- any value outside `ArgValue` (`str | int | float | bool | Path`) raises
+  `TypeError` naming the type, in either position. The accepted-type tuple is
+  derived at runtime from `ArgValue` with
+  `typing.get_args(ArgValue.__value__)`, so the validation and the published
+  annotation cannot drift. `ArgValue` is a PEP 695 alias, so the union is
+  reached through `__value__` rather than by calling `typing.get_args` on the
+  alias object directly.
 
 Property coverage for this contract lives in
 `cuprum/unittests/test_sh_property_based.py`. Update those properties whenever
 argv construction semantics change.
+
+The positive half of the static-check contract is the checked-in fixture
+`cuprum/unittests/typing_fixtures/sh_make_valid.py`, which the repository-wide
+`make typecheck` run walks as ordinary source. The negative half is
+`cuprum/unittests/test_sh_typing_contract.py`, which writes each rejected call
+to a temporary directory and requires the pinned `ty` to report
+`invalid-argument-type` with a non-zero exit. Those negative cases stay outside
+the repository-wide check scope deliberately: a file the checker is meant to
+reject cannot be checked in without failing the gate.
+
+The protocol lives in `cuprum/sh/builder.py` and is deliberately not
+`typing.runtime_checkable`. `safe_cmd` must not import it back, because the
+protocol imports `SafeCmd` from `safe_cmd` and the reverse import would close a
+cycle.
 
 ## Program catalogue duplicate diagnostics
 

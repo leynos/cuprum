@@ -461,8 +461,7 @@ The `sh` facade provides the main entry point for safe usage.
 
 #### 6.2.1 Creating commands
 
-The primary constructor is
-`sh.make(program: Program) -> Callable[..., SafeCmd[str]]`:
+The primary constructor is `sh.make(program: Program) -> SafeCmdBuilder`:
 
 ```python
 from cuprum import RunOutputOptions, sh, Program
@@ -476,17 +475,21 @@ result = cmd.run_sync(output=RunOutputOptions(echo=True))
 print(result)  # `result` is text output by default
 ```
 
-`sh.make` returns a callable that accepts positional/keyword arguments to be
-converted into argv strings according to internal rules (e.g. str() with basic
-quoting, or more elaborate conversions later). For more control, projects are
-expected to wrap `sh.make` with **builders** (see below).
+`sh.make` returns a `SafeCmdBuilder`: a callable that accepts positional and
+keyword arguments, each of which must be a `str`, `int`, `float`, `bool`, or
+`Path` (the public `ArgValue` alias), and returns a `SafeCmd`. Values are
+converted into argv strings according to internal rules. The parameter types
+are part of the published contract, so a static checker rejects an unsupported
+argument at the call site rather than letting `str()` render its `repr` onto a
+command line, and the runtime raises `TypeError` for the same values. For more
+control, projects are expected to wrap `sh.make` with **builders** (see below).
 
 `sh.build_argv(*args, **kwargs)` exposes those argv-construction rules as a
 pure helper for tests and wrapper code that need to inspect normalization
 without performing a catalogue lookup. It intentionally shares the same
 coercion path as `sh.make`, so positional ordering, keyword flag formatting,
-underscore-to-hyphen normalization, and `None` rejection stay in lockstep with
-builders.
+underscore-to-hyphen normalization, and rejection of `None` and unsupported
+types stay in lockstep with builders.
 
 #### 6.2.2 Command builders
 
@@ -588,14 +591,19 @@ classDiagram
     }
 
     class SafeCmdBuilder {
-        <<callable>>
-        +__call__(*args: object, **kwargs: object) SafeCmd
+        <<protocol>>
+        +__call__(*args: ArgValue, **kwargs: ArgValue) SafeCmd
+    }
+
+    class ArgValue {
+        <<alias>>
+        str | int | float | bool | Path
     }
 
     class sh_module {
-        +_stringify_arg(value: object) str
-        +_serialize_kwargs(kwargs: dict~str,object~) tuple~str,...~
-        +build_argv(*args: object, **kwargs: object) tuple~str,...~
+        +_stringify_arg(value: ArgValue) str
+        +_serialize_kwargs(kwargs: dict~str,ArgValue~) tuple~str,...~
+        +build_argv(*args: ArgValue, **kwargs: ArgValue) tuple~str,...~
         +make(program: Program, catalogue: ProgramCatalogue) SafeCmdBuilder
     }
 
@@ -607,6 +615,7 @@ classDiagram
     SafeCmd --> ProjectSettings : uses
 
     SafeCmdBuilder --> SafeCmd : builds
+    SafeCmdBuilder --> ArgValue : accepts
 
     sh_module --> ProgramCatalogue : uses
     sh_module --> SafeCmdBuilder : returns
