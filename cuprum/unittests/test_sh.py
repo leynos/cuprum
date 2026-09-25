@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import typing as typ
 
 import pytest
@@ -18,7 +19,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum.sh import SafeCmdBuilder
+    from cuprum.sh import ArgValue, SafeCmdBuilder
 
 
 def test_make_rejects_unknown_program() -> None:
@@ -99,6 +100,114 @@ def test_make_rejects_none_argument(
         invoke(builder)
 
     assert "None" in str(excinfo.value), "None should be explicitly rejected"
+
+
+class _FakePath(os.PathLike[str]):
+    """A ``os.PathLike[str]`` that is deliberately not a ``pathlib.Path``."""
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    def __fspath__(self) -> str:
+        """Return the wrapped path string."""
+        return self._path
+
+
+_UNSUPPORTED_VALUES = [
+    pytest.param(object(), id="object"),
+    pytest.param(b"raw", id="bytes"),
+    pytest.param(["a", "b"], id="list"),
+    pytest.param(_FakePath("example/path"), id="custom-path-like"),
+]
+
+
+@pytest.mark.parametrize("value", _UNSUPPORTED_VALUES)
+@pytest.mark.parametrize(
+    "invoke",
+    [
+        pytest.param(lambda builder, value: builder(value), id="positional"),
+        pytest.param(lambda builder, value: builder(flag=value), id="keyword"),
+    ],
+)
+def test_unsupported_argument_types_are_rejected(
+    invoke: cabc.Callable[[SafeCmdBuilder, ArgValue], object],
+    value: object,
+) -> None:
+    """Unsupported types raise TypeError instead of being stringified."""
+    builder = sh.make(ECHO)
+    # Deliberately defeat static typing: the property under test is the
+    # runtime rejection of the value, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", value)
+
+    with pytest.raises(TypeError) as excinfo:
+        invoke(builder, poisoned)
+
+    assert type(value).__name__ in str(excinfo.value), (
+        "The error must name the offending type"
+    )
+    assert "sh.make" in str(excinfo.value), "The error must name sh.make"
+
+
+def test_none_argument_error_message_is_exact() -> None:
+    """``None`` keeps its dedicated message rather than the generic one."""
+    builder = sh.make(ECHO)
+    # Deliberately defeat static typing: the contract under test is the
+    # runtime rejection of None, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", None)
+
+    with pytest.raises(TypeError) as excinfo:
+        builder(poisoned)
+
+    assert str(excinfo.value) == "None is not a valid argv element for sh.make", (
+        "The historical None message must not drift"
+    )
+
+
+def test_path_arguments_serialize_to_their_as_posix_form(tmp_path: Path) -> None:
+    """``Path`` values serialize through ``str()`` in both positions."""
+    builder = sh.make(ECHO)
+    target = tmp_path / "nested" / "file.txt"
+
+    cmd = builder(target, destination=target)
+
+    assert cmd.argv == (
+        target.as_posix(),
+        f"--destination={target.as_posix()}",
+    ), "Path values must serialize to their string form"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(True, "--porcelain=True", id="true"),
+        pytest.param(False, "--porcelain=False", id="false"),
+    ],
+)
+def test_keyword_booleans_serialize_as_values_not_switches(
+    value: bool,
+    expected: str,
+) -> None:
+    """Booleans become ``--flag=<bool>`` rather than presence switches."""
+    builder = sh.make(ECHO)
+
+    cmd = builder(porcelain=value)
+
+    assert cmd.argv == (expected,), "A boolean flag must carry its value explicitly"
+
+
+def test_mixed_call_preserves_positional_then_keyword_order() -> None:
+    """Positionals keep their order ahead of generated keyword flags."""
+    builder = sh.make(ECHO)
+
+    cmd = builder("first", 2, 3.5, porcelain=True, destination="out")
+
+    assert cmd.argv == (
+        "first",
+        "2",
+        "3.5",
+        "--porcelain=True",
+        "--destination=out",
+    ), "Mixed calls must serialize positionals first, then flags in order"
 
 
 def test_make_supports_custom_catalogue() -> None:

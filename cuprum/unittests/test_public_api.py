@@ -300,6 +300,43 @@ def test_safe_cmd_and_make_type_hints_resolve_at_runtime() -> None:
     assert make_hints["program"] is c.Program, (
         f"make must resolve its Program annotation, got {make_hints['program']!r}"
     )
+    assert make_hints["return"] is sh.SafeCmdBuilder, (
+        f"make must return SafeCmdBuilder, got {make_hints['return']!r}"
+    )
+
+
+def test_arg_value_is_exported_from_its_definition_site() -> None:
+    """``ArgValue`` is one object reachable from both public import paths."""
+    from cuprum.sh import argv
+
+    assert c.ArgValue is argv.ArgValue, "cuprum.ArgValue must be cuprum.sh.argv"
+    assert c.ArgValue is c.sh.ArgValue, "cuprum.sh must re-export the same alias"
+
+
+def test_safe_cmd_builder_is_exported_from_its_definition_site() -> None:
+    """``SafeCmdBuilder`` is one object reachable from both import paths."""
+    from cuprum.sh import builder
+
+    assert c.SafeCmdBuilder is builder.SafeCmdBuilder, (
+        "cuprum.SafeCmdBuilder must be the protocol defined in cuprum.sh.builder"
+    )
+    assert c.SafeCmdBuilder is c.sh.SafeCmdBuilder, (
+        "cuprum.sh must re-export the same protocol object"
+    )
+
+
+def test_argument_contract_names_are_listed_in_both_all_lists() -> None:
+    """Both ``__all__`` lists advertise the argument-contract names."""
+    for name in ("ArgValue", "SafeCmdBuilder"):
+        assert name in c.__all__, f"cuprum.__all__ must export {name}"
+        assert name in c.sh.__all__, f"cuprum.sh.__all__ must export {name}"
+
+
+def test_make_and_build_argv_stay_out_of_the_root_namespace() -> None:
+    """The builder factory and argv helper are not package-root exports."""
+    for name in ("make", "build_argv"):
+        assert name not in c.__all__, f"cuprum.__all__ must not export {name}"
+        assert not hasattr(c, name), f"cuprum must not expose {name}"
 
 
 def test_relay_fallback_is_frozen_with_bounded_fields() -> None:
