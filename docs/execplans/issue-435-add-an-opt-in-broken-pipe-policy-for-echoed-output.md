@@ -262,8 +262,8 @@ two step docstrings not in the imperative mood. `make fmt` had not been run on
 the new files either, so six needed reformatting. The CodeRabbit review and the
 pull request remain.
 
-Revision 4 covered all three tasks committed and documented. Revision 3 recorded the
-verification plan table naming the artefacts that actually discharge each
-obligation, and the decision log's four judgement calls. Revision 2 recorded
-the ticked progress list. Revision 1 was written after reconnaissance and the
-RED reproduction.
+Revision 4 covered all three tasks committed and documented. Revision 3
+recorded the verification plan table naming the artefacts that actually
+discharge each obligation, and the decision log's four judgement calls.
+Revision 2 recorded the ticked progress list. Revision 1 was written after
+reconnaissance and the RED reproduction.
