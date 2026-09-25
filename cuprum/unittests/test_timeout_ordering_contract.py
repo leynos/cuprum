@@ -1,11 +1,17 @@
 """Contract for the timers that can end a coverage run.
 
 Four independent budgets can end a coverage lane, each set somewhere
-different, and they only work if each sits above the one inside it. Two
-of the four apply here: the shared coverage action's wall-clock watchdog
-on the ``cargo`` invocation, and the job's own ``timeout-minutes``. The
-two nextest tiers do not, because there is no ``.config/nextest.toml``
-for anyone to have set them in.
+different, and they only work if each sits above the one inside it:
+nextest's per-test allowance and whole-run budget, the shared coverage
+action's wall-clock watchdog on the ``cargo`` invocation, and the job's
+own ``timeout-minutes``.
+
+This module owns the workflow side of that ordering, and the two
+assertions that span both halves: a nextest tier is measured against the
+cargo watchdog here, because no other module reads both files. Nextest's
+own tiers, read from ``rust/.config/nextest.toml``, are the subject of
+``test_nextest_timeout_tiers``; that the two inner tiers live in the Cargo
+workspace rather than at the repository root is asserted there.
 
 Both coverage lanes ran on the action's 1,800 s default until this
 contract was written, and nothing in this repository mentioned it. A
@@ -17,8 +23,8 @@ assertion can make about the shape it reads, so the shapes below declare
 the keys these tests reach for. Their values stay ``object``, because
 they come from files this suite does not control.
 
-See "Test timeouts: the tiers this repository sets" in
-``docs/developers-guide.md``, and the canonical wording in
+See the coverage timeout tiers in
+``docs/coverage-timeout-tiers.md``, and the canonical wording in
 `leynos/shared-actions`' `generate-coverage` README.
 """
 
@@ -28,8 +34,9 @@ import typing as typ
 
 import pytest
 
-from cuprum.unittests._timeout_lane_support import (
+from cuprum.unittests._coverage_timeout_lane_support import (
     CEILING_MARGIN_SECONDS,
+    COLD_BUILD_ALLOWANCE_SECONDS,
     COVERAGE_ACTION,
     COVERAGE_WORKFLOWS,
     EXPECTED_WATCHDOG_SECONDS,
@@ -43,7 +50,11 @@ from cuprum.unittests._timeout_lane_support import (
     lanes_in,
     required_ceiling,
 )
-from tests.helpers.docs import repo_root
+from cuprum.unittests._timeout_lane_support import (
+    NEXTEST_CONFIG,
+    global_timeout_seconds,
+    termination_allowance_seconds,
+)
 
 REQUIRED_CONDITIONS: typ.Final[dict[tuple[str, str], tuple[object, object]]] = {
     (".github/workflows/ci.yml", "coverage"): (
@@ -140,26 +151,42 @@ def test_the_ceiling_contains_every_watchdog_and_the_work_around_them(
     )
 
 
-def test_the_nextest_tiers_are_absent_rather_than_unset() -> None:
-    """The inner two tiers do not exist here, and their absence is a gap.
+def test_the_nextest_global_timeout_stays_inside_the_cargo_watchdog() -> None:
+    """The watchdog must remain an outer tier rather than pre-empting nextest."""
+    assert global_timeout_seconds() < EXPECTED_WATCHDOG_SECONDS, (
+        f"{NEXTEST_CONFIG}'s global-timeout must stay below the "
+        f"{EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog"
+    )
 
-    The canonical section has four tiers because nextest contributes two
-    of them: a per-test allowance and a whole-run budget. There is no
-    `.config/nextest.toml` in this repository, so neither is set.
 
-    That is recorded rather than asserted away. Adding the file would
-    give a hung test a bound that names the test rather than `cargo`, and
-    this test exists to fail when it appears, so the budgets arrive with
-    the guide updated in the same change rather than unbounded beneath a
-    watchdog sized for neither.
+def test_the_watchdog_contains_the_global_timeout_and_its_termination() -> None:
+    """Tier three must cover everything tier two can spend, and the build.
+
+    The two clocks do not start together and the terms are not the same
+    work. The watchdog starts with `cargo` and covers the build; nextest's
+    global timeout starts only when tests begin, and hitting it starts a
+    termination procedure rather than stopping the run. A watchdog merely
+    above the global timeout therefore still cuts off the run while nextest
+    is terminating it, and the failure it reports names `cargo` rather than
+    the test.
+
+    The cold-build term is the one that makes the watchdog a hang detector
+    rather than a schedule. Making the global timeout and the build share
+    one budget means a branch's first run, which compiles everything the
+    cache cannot serve, can spend the timeout before its tests start and be
+    reported as a hang. The shared action sizes for exactly this, warning
+    that a build which is merely cold must not look like one.
     """
-    config = repo_root() / ".config" / "nextest.toml"
-    assert not config.is_file(), (
-        "a nextest configuration has appeared; set a per-test slow-timeout "
-        "and a global-timeout in it, check the global-timeout sits above the "
-        "largest per-test allowance (period multiplied by terminate-after) "
-        "and inside the cargo watchdog, and update the developers' guide's "
-        "timeout section in the same change"
+    global_timeout = global_timeout_seconds()
+    termination = termination_allowance_seconds()
+    required = global_timeout + termination + COLD_BUILD_ALLOWANCE_SECONDS
+    assert required <= EXPECTED_WATCHDOG_SECONDS, (
+        f"the {EXPECTED_WATCHDOG_SECONDS} s {WATCHDOG_VARIABLE} watchdog must "
+        f"cover {NEXTEST_CONFIG}'s {global_timeout} s global-timeout, the "
+        f"{termination} s termination allowance, and the "
+        f"{COLD_BUILD_ALLOWANCE_SECONDS} s cold-build allowance, {required} s "
+        f"in all; a watchdog that covers only the first two reads a cold "
+        f"compile as a hang and reports it against cargo rather than the test"
     )
 
 

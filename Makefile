@@ -55,7 +55,7 @@ DEVELOP_DEV_FAST_PREREQUISITE = $(if $(DEVELOP_DEV_FAST_ENABLED),dev-fast-check)
 DEVELOP_DEV_FAST_ENV = $(if $(DEVELOP_DEV_FAST_ENABLED),RUSTUP_TOOLCHAIN=$(DEV_FAST_TOOLCHAIN) DEV_FAST_CARGO=$(CARGO) CARGO=$(DEV_FAST_CARGO_BRIDGE))
 DEV_FAST_CHECK_COMMAND = test "$(DEV_FAST_HOST_IS_LINUX)" = yes || { printf '%s\n' 'dev-fast is supported only on Linux; use the stable backend on this host' >&2; exit 1; }; test -f "$(DEV_FAST_CONFIG_RELATIVE)" || { printf 'dev-fast configuration is missing: %s\n' "$(DEV_FAST_CONFIG_RELATIVE)" >&2; exit 1; }; command -v mold >/dev/null 2>&1 || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; mold --version | grep -q '^mold $(DEV_FAST_MOLD_VERSION_PATTERN)\($$\|[[:space:]]\)' || { printf 'mold %s is required for Linux dev-fast builds\n' "$(DEV_FAST_MOLD_VERSION)" >&2; exit 1; }; components="$$(rustup component list --installed --toolchain "$(DEV_FAST_TOOLCHAIN)")" || { printf 'cannot inspect the components installed for %s\n' "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; for component in $(DEV_FAST_REQUIRED_COMPONENTS); do printf '%s\n' "$$components" | grep -q "^$$component" || { printf 'install %s for %s before using dev-fast\n' "$$component" "$(DEV_FAST_TOOLCHAIN)" >&2; exit 1; }; done
 DEV_FAST_TEST_RUSTFLAGS = $(TEST_RUSTFLAGS) $(if $(DEV_FAST_HOST_IS_LINUX),-Clink-arg=-fuse-ld=mold)
-DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
+DEV_FAST_TEST_COMMAND = if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) nextest run $(TEST_FLAGS) $(BUILD_JOBS); else echo "cargo-nextest not found; falling back to cargo test." >&2; cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(DEV_FAST_CARGO_COMMAND) test $(TEST_FLAGS) $(BUILD_JOBS); fi
 RUSTFMT_TOOLCHAIN ?= nightly-2026-05-28
 RUSTFMT_CARGO ?= $(CARGO) +$(RUSTFMT_TOOLCHAIN)
 WHITAKER ?= whitaker
@@ -71,6 +71,31 @@ DOC_FLAGS ?= --jobs 1
 # billed for, and never above it.
 TEST_JOBS ?= 1
 TEST_FLAGS ?= $(CARGO_FLAGS) --jobs $(TEST_JOBS)
+# The oldest nextest that understands `global-timeout`, the whole-run budget
+# `rust/.config/nextest.toml` declares. Nextest warns about keys it does not
+# recognize and keeps going, so an older release drops that tier silently
+# while the suite still passes; rust/.config/nextest.toml declares the same
+# floor for any nextest from 0.9.55, and this check covers the older releases
+# that ignore the declaration too.
+NEXTEST_MIN_VERSION ?= 0.9.100
+# Standard input is the version lines to test, so one awk program serves
+# every tool rather than one sort-and-grep pipeline per site. `sort -V` is
+# not portable, and MSYS sort has no version ordering at all. The version is
+# the first dotted-numeric field, matched by shape rather than by position:
+# `cargo-nextest 0.9.133 (65e806bd5 2026-04-14)` puts it in $2, and a build
+# that omits the parenthesized parts would shift any fixed position.
+#
+# The `END` guard rejects empty input, which is the one input that must not
+# pass: a version check whose subject never arrived has nothing to certify.
+# `command -v` can find a `cargo-nextest` that the subsequent call cannot
+# run -- the probe resolves against LOCAL_TOOL_ENV's PATH, so a tool in
+# ~/.local/bin passes it on a host whose ambient PATH lacks that directory.
+# The call then fails with 127 and prints nothing, and without the guard
+# that empty stream reads as a version above the floor. The call sites
+# therefore carry LOCAL_TOOL_ENV as well, so both see one PATH; the guard
+# keeps the check honest for any other way the output can go missing.
+NEXTEST_VERSION_OK = awk -v min="$(NEXTEST_MIN_VERSION)" 'NR == 1 { for (i = 1; i <= NF; i++) if ($$i ~ /^[0-9]+([.][0-9]+)+$$/) { split($$i, found, "."); split(min, floor, "."); for (j = 1; j <= 3; j++) { if (found[j] + 0 > floor[j] + 0) exit 0; if (found[j] + 0 < floor[j] + 0) exit 1 } exit 0 } exit 1 } END { if (NR == 0) exit 1 }'
+NEXTEST_FLOOR_MESSAGE = printf 'cargo-nextest %s or newer is required: rust/.config/nextest.toml declares a global-timeout that earlier releases ignore without failing\n' "$(NEXTEST_MIN_VERSION)" >&2; exit 1
 DOCTEST_FLAGS ?= --workspace --doc --all-features $(BUILD_JOBS)
 TEST_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
 WHITAKER_RUSTFLAGS ?= $(RUST_FLAGS) -C codegen-units=1
@@ -414,7 +439,8 @@ test-act: build uv $(VENV_TOOLS) ## Run the act workflow integration scenarios, 
 
 test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	@if $(LOCAL_TOOL_ENV) command -v cargo-nextest >/dev/null 2>&1; then \
-	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
+	  $(LOCAL_TOOL_ENV) cargo-nextest --version | head -1 | $(NEXTEST_VERSION_OK) || { $(NEXTEST_FLOOR_MESSAGE); }; \
+	  cd $(RUST_DIR) && $(LOCAL_TOOL_ENV) CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) nextest run $(TEST_FLAGS) $(BUILD_JOBS); \
 	else \
 	  echo "cargo-nextest not found; falling back to cargo test." >&2; \
 	  cd $(RUST_DIR) && CARGO_BUILD_JOBS="$(TEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" $(RUST_DEBUG_CARGO) test $(TEST_FLAGS) $(BUILD_JOBS); \

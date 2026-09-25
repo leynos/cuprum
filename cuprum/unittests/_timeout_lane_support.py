@@ -1,388 +1,396 @@
-"""Reads the coverage lanes and their budgets out of the workflows.
+"""Read nextest's configured timeout tiers for the coverage lanes.
 
-Separated from ``test_timeout_ordering_contract`` so the workflow
+Separated from ``test_timeout_ordering_contract`` so the configuration
 reading and the assertions stay legible apart, and so neither module
 outgrows the 400-line limit ``AGENTS.md`` sets.
+
+This module reads ``rust/.config/nextest.toml`` and nothing else: the
+tiers nextest itself enforces. The workflow-side material -- the
+watchdog, the job ceiling and the readers for them -- belongs to
+``cuprum.unittests._coverage_timeout_lane_support``, which this module
+does not import and which does not import it. Only the contract brings
+the two halves together, because it is the only place a nextest tier is
+compared against the cargo watchdog outside it.
 """
 
 from __future__ import annotations
 
 import functools
+import re
+import tomllib
 import typing as typ
-
-import yaml
+from pathlib import Path
 
 from tests.helpers.docs import repo_root
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+#: The Cargo workspace that nextest reads its repository configuration
+#: for, as a path below the repository root. Cuprum keeps no root
+#: ``Cargo.toml``, so the workspace is the ``rust/`` crate tree rather
+#: than the repository root.
+CARGO_WORKSPACE_DIR: typ.Final[Path] = Path("rust")
 
-#: The workflows carrying a coverage lane. Both are read, so a lane that
-#: gained a budget in one and lost it in the other cannot pass by being
-#: half right.
-COVERAGE_WORKFLOWS: typ.Final[tuple[str, ...]] = (
-    ".github/workflows/ci.yml",
-    ".github/workflows/coverage-main.yml",
+#: The repository configuration carrying nextest's inner timeout tiers.
+#:
+#: Below the Cargo workspace root, not the repository root, because nextest
+#: resolves ``.config/nextest.toml`` from the former and searches no parent
+#: directories. A copy at the repository root is never read, so the tiers it
+#: declares would be inert while every assertion passed. Built by division
+#: so the workspace segment is spelled once, and relative to the repository
+#: root like every other path the contract reads.
+NEXTEST_CONFIG: typ.Final[Path] = CARGO_WORKSPACE_DIR / ".config" / "nextest.toml"
+
+#: The per-test allowance the default profile must grant. Asserted by value
+#: rather than merely as the largest of several, because the ordering
+#: assertions only compare tiers with each other: a profile narrowed to
+#: ``period = "1s"`` with ``terminate-after = 1`` satisfies every one of them
+#: while killing healthy tests, which is the failure this tier exists to
+#: prevent. The issue's first clause is an absolute claim -- large enough
+#: that no healthy test reaches it -- so only an absolute assertion can hold
+#: it.
+#:
+#: 300 s is five 60 s periods, sized for the tests bounded by their own work.
+#: The ``compile_tests`` binaries are bounded by a cold build instead and
+#: carry a separate 600 s override, so the slowest measurements recorded for
+#: this suite describe that tier rather than this one. This value bounds the
+#: profile's own occupants; it is not a measurement of any of them.
+EXPECTED_PER_TEST_ALLOWANCE_SECONDS: typ.Final[int] = 300
+
+#: The whole-run budget the default profile must declare, as a duration in
+#: seconds. Pinned for the same reason as the allowance above: the
+#: containment assertion is satisfied by any pair that merely orders
+#: correctly, so ``global-timeout = "2s"`` would pass it while bounding the
+#: run below a single test's allowance.
+#:
+#: 1200 s is twenty minutes, and sits above the compile-test tier's 600 s so
+#: a single slow ``trybuild`` binary cannot exhaust the whole suite.
+EXPECTED_GLOBAL_TIMEOUT_SECONDS: typ.Final[int] = 20 * 60
+
+#: The oldest nextest that can read every key this configuration sets.
+#:
+#: ``global-timeout`` was added in 0.9.100. Nextest warns about configuration
+#: keys it does not recognize and carries on, so an older release drops the
+#: whole-run budget silently: the run keeps working, the tier is simply
+#: absent, and every assertion here still passes because they read the file
+#: rather than the run. That is the same class of failure as a config in the
+#: wrong directory, which is why the floor is asserted rather than assumed.
+#:
+#: The constant is duplicated in the ``Makefile``'s ``NEXTEST_MIN_VERSION``
+#: and compared against the file here, so the two cannot drift.
+EXPECTED_NEXTEST_MIN_VERSION: typ.Final[str] = "0.9.100"
+
+
+SlowTimeout = typ.TypedDict(
+    "SlowTimeout",
+    {
+        "period": object,
+        "terminate-after": object,
+        "grace-period": object,
+    },
+    total=False,
 )
+"""The nextest slow-timeout fields read by the contract.
 
-#: The environment variable the shared coverage action reads for its
-#: wall-clock cap on one `cargo` invocation.
-WATCHDOG_VARIABLE: typ.Final[str] = "RUN_RUST_CARGO_WAIT_TIMEOUT"
-
-#: The action whose steps run under that watchdog.
-COVERAGE_ACTION: typ.Final[str] = (
-    "leynos/shared-actions/.github/actions/generate-coverage"
+``period`` and ``terminate-after`` together set a test's termination budget;
+``grace-period`` supplies the termination allowance for the outer watchdog.
+"""
+NextestOverride = typ.TypedDict(
+    "NextestOverride",
+    {
+        "filter": object,
+        "slow-timeout": SlowTimeout,
+    },
+    total=False,
 )
+"""A ``[[profile.default.overrides]]`` table read by the contract.
 
-#: The budget those lanes must carry. Asserted by value rather than
-#: merely as present, because the value equals nothing memorable and a
-#: silent drift back towards the action's default would be invisible.
-#:
-#: Sized from run history rather than guessed. The coverage step has
-#: never exceeded 418 s, on run 34071469378, read across roughly fifty
-#: successful runs of both workflows; the trunk lane's worst was 322 s on
-#: run 34062626757. None of those was a genuinely cold compile.
-#: rstest-bdd's cold run took about four times its warm one, which would
-#: put this repository at the old 1,800 s default's shoulder, so the
-#: budget is six times the worst seen and a cold first run on a branch
-#: finishes inside it.
-EXPECTED_WATCHDOG_SECONDS: typ.Final[int] = 2700
+``filter`` is declared because it is what carries an allowance to particular
+binaries: a caller reads it to check the widened tier reaches the tests it was
+written for, and a ``NextestProfile`` without it does not admit the lookup.
+"""
+NextestProfile = typ.TypedDict(
+    "NextestProfile",
+    {
+        "slow-timeout": SlowTimeout,
+        "global-timeout": object,
+        "overrides": list[NextestOverride],
+    },
+    total=False,
+)
+"""The nextest profile fields that define the inner timeout tiers.
 
-#: Everything in a coverage job that is not the `cargo` invocation the
-#: watchdog bounds. The job timer covers it; the watchdog does not.
-#:
-#: Measured per lane from the worst of several runs rather than one: 43 s
-#: on run 34071469378 for the pull-request lane and 51 s on run
-#: 34067223641 for the trunk lane, across twelve successful runs of each.
-#: Five minutes is six times the worse of those, matching the margin the
-#: watchdog itself carries.
-OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS: typ.Final[int] = 5 * 60
-
-#: How far a ceiling must sit above the sum it contains, rather than
-#: merely reaching it. A ceiling equal to that sum cancels the job at
-#: the moment the watchdog would have reported the overrun, and the
-#: report is the only thing that makes an overrun actionable.
-CEILING_MARGIN_SECONDS: typ.Final[int] = 15 * 60
+``overrides`` carries any ``[[profile.default.overrides]]`` tables, because a
+per-test override can raise one test's allowance above the profile's own.
+"""
 
 
-class Step(typ.TypedDict, total=False):
-    """One step of a job, declaring only the keys these tests read.
-
-    Every key is optional: a step that neither uses an action nor sets
-    an environment declares none of them.
+class NextestProfiles(typ.TypedDict, total=False):
+    """The named nextest profiles read by the contract.
 
     Attributes
     ----------
-    name : object
-        The step's declared name, used to locate it in a failure.
-    uses : object
-        The action the step invokes, when it invokes one.
-    env : dict[str, object]
-        The step-level environment, the innermost scope the watchdog is
-        resolved from.
-    with : dict[str, object]
-        The step's inputs, read for the coverage action's
-        ``cargo-manifest``.
-
-    The step's ``if`` is read through a cast rather than declared here:
-    ``if`` is a keyword, so a class-syntax TypedDict cannot carry it as
-    a field.
+    default : NextestProfile
+        The inherited profile that the coverage action selects by default.
     """
 
-    name: object
-    uses: object
-    env: dict[str, object]
+    default: NextestProfile
 
 
-class Job(typ.TypedDict, total=False):
-    """One job of a workflow, declaring only the keys these tests read.
+NextestConfig = typ.TypedDict(
+    "NextestConfig",
+    {
+        # Hyphenated, so the functional form is the only one that can express
+        # it: a class body parses this key as an annotation's illegal target.
+        # Read through `.get` below rather than an attribute.
+        "nextest-version": object,
+        "profile": NextestProfiles,
+    },
+    total=False,
+)
+"""The parsed nextest configuration fields read by the contract.
 
-    Attributes
-    ----------
-    steps : list[Step]
-        The job's steps, in the order it runs them.
-    env : dict[str, object]
-        The job-level environment, consulted for the watchdog when the
-        step names none.
-
-    The job's ``if`` is read through a cast, as on :class:`Step`.
-    """
-
-    steps: list[Step]
-    env: dict[str, object]
-
-
-class Workflow(typ.TypedDict, total=False):
-    """A parsed workflow file, declaring only the keys these tests read.
-
-    Attributes
-    ----------
-    jobs : dict[str, Job]
-        The workflow's jobs, keyed by identifier.
-    env : dict[str, object]
-        The workflow-level environment, the outermost scope the watchdog
-        is resolved from.
-    """
-
-    jobs: dict[str, Job]
-    env: dict[str, object]
+``nextest-version`` is the floor the configuration declares, consulted before
+any tier is read; ``profile`` carries the named profiles, including the
+required ``default`` profile.
+"""
 
 
-#: The condition each coverage lane legitimately carries, keyed by
-#: workflow path and job, as the step's ``if`` and its job's.
-#:
-#: A skipped step runs no `cargo`, so its watchdog never arms and every
-#: assertion below says nothing about it. `if: false` on either would
-#: leave a lane that looks bounded and is not. The values are pinned
-#: rather than merely tolerated, because a lane gaining, losing or
-#: changing a condition changes when it runs at all.
-#:
-#: `ci.yml`'s coverage job runs on pull requests only; the trunk lane
-#: covers pushes and carries no condition.
-class CoverageLane(typ.NamedTuple):
-    """One job that invokes the coverage action, with its budgets.
-
-    Attributes
-    ----------
-    workflow : str
-        The workflow file's path.
-    job : str
-        The job's identifier.
-    watchdogs : tuple[int | None, ...]
-        The budget in force for each coverage step the job runs, in
-        order, or None for a step where no level sets one and it
-        inherits the action's default.
-
-        A tuple rather than one value and a count, because the budgets
-        need not agree: the variable resolves per step, so a job running
-        the action twice can raise it for the feature set that builds
-        more. Multiplying one step's budget by the number of steps
-        describes such a job only when they happen to match.
-    ceiling : int or None
-        The job's ``timeout-minutes``, or None when it declares none.
-    conditions : tuple[tuple[object, object], ...]
-        The ``if`` on each coverage step and on its job, in step order.
-        A skipped step runs no ``cargo``, so its watchdog never arms and
-        every budget above says nothing about it.
-    """
-
-    workflow: str
-    job: str
-    watchdogs: tuple[int | None, ...]
-    ceiling: int | None
-    conditions: tuple[tuple[object, object], ...] = ()
-
-    def __str__(self) -> str:
-        """Return a location suitable for a failure message.
-
-        Returns
-        -------
-        str
-            ``workflow:job`` for this lane.
-        """
-        return f"{self.workflow}:{self.job}"
-
-
-@functools.cache
-def _workflow(path: str) -> Workflow:
-    """Parse one workflow file.
-
-    Parameters
-    ----------
-    path : str
-        The workflow's path below the repository root.
+def nextest_config_path() -> Path:
+    """Return the nextest configuration, below the repository root.
 
     Returns
     -------
-    Workflow
-        The parsed document.
+    Path
+        The configuration nextest itself resolves.
     """
-    parsed = yaml.safe_load((repo_root() / path).read_text(encoding="utf-8"))
-    assert isinstance(parsed, dict), f"{path} must parse to a mapping"
-    return typ.cast("Workflow", parsed)
+    return repo_root() / NEXTEST_CONFIG
 
 
-def required_ceiling(budgets: cabc.Sequence[int]) -> int:
-    """Return the smallest acceptable ceiling for one job, in seconds.
+@functools.cache
+def _nextest_config() -> NextestConfig:
+    """Parse the repository's nextest configuration."""
+    parsed = tomllib.loads(nextest_config_path().read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict), f"{NEXTEST_CONFIG} must parse to a mapping"
+    return typ.cast("NextestConfig", parsed)
 
-    Three terms. Each coverage step may legitimately spend its whole
-    watchdog, so the sum is the floor, and it is a sum rather than a
-    multiple because the budgets need not agree. The measured work
-    outside those windows is added because the job timer covers it and
-    the watchdogs do not. The margin is added because a ceiling equal to
-    that sum cancels the job at the moment the watchdog would have
-    reported the overrun.
+
+def _default_nextest_profile() -> NextestProfile:
+    """Return the default nextest profile the coverage lane uses."""
+    profiles = _nextest_config().get("profile")
+    assert isinstance(profiles, dict), f"{NEXTEST_CONFIG} must declare [profile]"
+    default = profiles.get("default")
+    assert isinstance(default, dict), f"{NEXTEST_CONFIG} must declare [profile.default]"
+    return default
+
+
+def _slow_timeout_of(declaring: NextestProfile | NextestOverride) -> SlowTimeout:
+    """Return an explicit slow-timeout configuration.
+
+    One reader serves the profile and its overrides, because an override's
+    table replaces the profile's for the tests its filter matches rather
+    than merging into it; reading them separately would let one be reported
+    as supplying what the other replaced.
 
     Parameters
     ----------
-    budgets : cabc.Sequence[int]
-        One watchdog budget per coverage step in the job.
+    declaring : NextestProfile | NextestOverride
+        The profile, or one of its overrides, whose table is read.
+
+    Returns
+    -------
+    SlowTimeout
+        The ``slow-timeout`` mapping that table declares; a table declaring
+        none fails the caller's contract assertion rather than being read as
+        a tier of zero.
+    """
+    slow_timeout = declaring.get("slow-timeout")
+    assert isinstance(slow_timeout, dict), (
+        f"{NEXTEST_CONFIG} must declare slow-timeout as a table, in "
+        f"[profile.default] or in an override that widens a tier"
+    )
+    return slow_timeout
+
+
+def _duration_seconds(value: object) -> int:
+    """Parse a nextest duration made from contiguous s, m, and h parts."""
+    text = str(value)
+    position = 0
+    total = 0
+    for match in re.finditer(r"(\d+)([smh])", text):
+        assert match.start() == position, f"unsupported nextest duration {text!r}"
+        amount = int(match.group(1))
+        unit = match.group(2)
+        total += amount * {"s": 1, "m": 60, "h": 60 * 60}[unit]
+        position = match.end()
+    assert position == len(text), f"unsupported nextest duration {text!r}"
+    assert position > 0, f"unsupported nextest duration {text!r}"
+    return total
+
+
+def _allowance_of(slow_timeout: SlowTimeout) -> int:
+    """Return one slow-timeout's termination budget in seconds.
+
+    Parameters
+    ----------
+    slow_timeout : SlowTimeout
+        A profile's or an override's ``slow-timeout`` mapping.
 
     Returns
     -------
     int
-        The smallest acceptable ceiling, in seconds.
+        ``period`` multiplied by ``terminate-after``.
+
+    A missing ``terminate-after`` is refused rather than read as zero. It
+    means nextest warns and never kills the test, so that test's budget is
+    unbounded and no outer tier can be said to contain it. Reading it as
+    zero would let the caller's maximum quietly skip the one declaration
+    that cannot be contained.
     """
-    return sum(budgets) + OUTSIDE_WATCHDOG_ALLOWANCE_SECONDS + CEILING_MARGIN_SECONDS
+    period = slow_timeout.get("period")
+    assert period is not None, f"{NEXTEST_CONFIG} must set slow-timeout.period"
+    terminate_after = slow_timeout.get("terminate-after")
+    assert terminate_after is not None, (
+        f"{NEXTEST_CONFIG} declares a slow-timeout period without "
+        "terminate-after, which reports a test as slow without ever killing "
+        "it; a budget that never terminates cannot be contained by the tiers "
+        "outside it"
+    )
+    return _duration_seconds(period) * int(str(terminate_after))
 
 
-def _watchdog_of(workflow: Workflow, job: Job, step: Step) -> int | None:
-    """Return the watchdog budget in force for one step.
-
-    All three levels are read, innermost first, as GitHub resolves them.
-    Reading only one of them would report a lane that sets the value
-    elsewhere as inheriting the action's default, which is the opposite
-    of what this contract is for.
+def _slow_timeout_overrides(profile: NextestProfile) -> list[NextestOverride]:
+    """Return the profile's overrides that declare a ``slow-timeout``.
 
     Parameters
     ----------
-    workflow : Workflow
-        The whole workflow document.
-    job : Job
-        The enclosing job.
-    step : Step
-        The coverage step.
+    profile : NextestProfile
+        The default profile, whose overrides are read.
 
     Returns
     -------
-    int or None
-        The budget in seconds, or None when no level sets one.
+    list[NextestOverride]
+        One entry per override that sets ``slow-timeout``, whole rather than
+        reduced to the timeout, so a caller can also read the ``filter``
+        granting that allowance to particular tests. An allowance and a
+        filter read from separate lists could report a widened tier
+        alongside a filter that does not carry it.
     """
-    for source in (step.get("env"), job.get("env"), workflow.get("env")):
-        if not isinstance(source, dict):
-            continue
-        raw = source.get(WATCHDOG_VARIABLE)
-        if raw is not None:
-            return int(str(raw))
-    return None
-
-
-def _lanes() -> tuple[CoverageLane, ...]:
-    """Return every job invoking the coverage action, with its budgets.
-
-    Jobs are the unit rather than steps, because the ceiling belongs to a
-    job and has to contain every watchdog inside it. Counting the steps
-    is what would make a second invocation visible to the arithmetic.
-
-    Returns
-    -------
-    tuple[CoverageLane, ...]
-        One entry per coverage-invoking job.
-    """
-    found: list[CoverageLane] = []
-    for path in COVERAGE_WORKFLOWS:
-        workflow = _workflow(path)
-        jobs = workflow.get("jobs")
-        assert isinstance(jobs, dict), f"{path} must declare a jobs mapping"
-        found.extend(lanes_in(path, workflow))
-    return tuple(found)
-
-
-def lanes_in(path: str, workflow: Workflow) -> list[CoverageLane]:
-    """Return one lane per coverage-invoking job in one workflow.
-
-    Separated from :func:`_lanes` so the reading can be driven with a
-    workflow written for a case. Both lanes in this repository run the
-    action once, so a reading that took the first step's budget and
-    repeated it would agree with a correct one against the tree.
-
-    Parameters
-    ----------
-    path : str
-        The workflow file's path, for the failure message.
-    workflow : Workflow
-        The parsed document.
-
-    Returns
-    -------
-    list[CoverageLane]
-        One entry per coverage-invoking job.
-    """
-    found: list[CoverageLane] = []
-    jobs = workflow.get("jobs")
-    if isinstance(jobs, dict):
-        for name, job in jobs.items():
-            steps = [
-                step
-                for step in (job.get("steps") or [])
-                if COVERAGE_ACTION in str(step.get("uses", ""))
-            ]
-            if not steps:
-                continue
-            raw_ceiling = typ.cast("dict[str, object]", job).get("timeout-minutes")
-            found.append(
-                CoverageLane(
-                    workflow=path,
-                    job=str(name),
-                    watchdogs=tuple(
-                        _watchdog_of(workflow, job, step) for step in steps
-                    ),
-                    ceiling=None if raw_ceiling is None else int(str(raw_ceiling)),
-                    conditions=tuple(
-                        (
-                            typ.cast("dict[str, object]", step).get("if"),
-                            typ.cast("dict[str, object]", job).get("if"),
-                        )
-                        for step in steps
-                    ),
-                )
-            )
-    return found
-
-
-def _jobs_of(workflow: Workflow) -> list[tuple[str, Job]]:
-    """Return one workflow's jobs, or nothing when it declares none.
-
-    Parameters
-    ----------
-    workflow : Workflow
-        The parsed document.
-
-    Returns
-    -------
-    list of tuple
-        The job identifier and its body, in file order.
-    """
-    jobs = workflow.get("jobs")
-    if not isinstance(jobs, dict):
+    overrides = profile.get("overrides")
+    if overrides is None:
         return []
-    return [(str(name), job) for name, job in jobs.items()]
+    assert isinstance(overrides, list), (
+        f"{NEXTEST_CONFIG} must declare profile overrides as an array of tables"
+    )
+    declared: list[NextestOverride] = []
+    for override in overrides:
+        assert isinstance(override, dict), (
+            f"{NEXTEST_CONFIG} must declare each profile override as a table"
+        )
+        if "slow-timeout" in override:
+            declared.append(override)
+    return declared
 
 
-def _coverage_steps() -> list[tuple[str, str, int, Step]]:
-    """Return every step that invokes the coverage action.
-
-    Flattened into one comprehension rather than three nested loops, so
-    the assertions below read the steps rather than walking the
-    document to find them.
+def largest_per_test_allowance_seconds() -> int:
+    """Return the largest per-test termination budget a test can reach.
 
     Returns
     -------
-    list of tuple
-        The workflow path, the job identifier, the step's one-based
-        position in its job, and the step.
+    int
+        The largest ``slow-timeout.period`` multiplied by
+        ``terminate-after``, across the default profile and every override
+        it declares.
+
+    An override may grant a test a longer budget than the profile it
+    overrides, so ``profile.default.slow-timeout`` alone does not bound
+    those tests. Reading only the profile would report the allowance as
+    smaller than it is, and the containment assertions would then pass
+    while a test could still outlast the tier meant to contain it. Missing
+    required fields fail the contract assertion that reads them.
     """
-    return [
-        (path, name, index + 1, step)
-        for path in COVERAGE_WORKFLOWS
-        for name, job in _jobs_of(_workflow(path))
-        for index, step in enumerate(job.get("steps") or [])
-        if COVERAGE_ACTION in str(step.get("uses", ""))
+    profile = _default_nextest_profile()
+    overrides = _slow_timeout_overrides(profile)
+    declared = [_slow_timeout_of(profile)]
+    declared.extend(_slow_timeout_of(override) for override in overrides)
+    return max(_allowance_of(slow_timeout) for slow_timeout in declared)
+
+
+def declared_minimum_nextest_version() -> str:
+    """Return the nextest version this configuration declares it needs.
+
+    Returns
+    -------
+    str
+        The ``nextest-version`` the configuration file states, as written.
+
+    Nextest refuses to start below a declared requirement, so this is the
+    one setting that protects the tiers below it. Without it a release that
+    predates ``global-timeout`` parses the file, warns about the key it does
+    not know, and runs the suite with no whole-run budget while every
+    assertion here still passes. A missing declaration fails the caller's
+    contract assertion rather than being read as an unconstrained floor.
+    """
+    declared = _nextest_config().get("nextest-version")
+    assert declared is not None, (
+        f"{NEXTEST_CONFIG} must declare nextest-version; without it a release "
+        f"that predates an option in this file drops that option silently and "
+        f"the run it was meant to bound proceeds unbounded"
+    )
+    return str(declared)
+
+
+def global_timeout_seconds() -> int:
+    """Return the default profile's ``global-timeout`` in seconds.
+
+    Returns
+    -------
+    int
+        The duration configured by ``profile.default.global-timeout``.
+
+    A missing setting fails the contract assertion that reads it.
+    """
+    global_timeout = _default_nextest_profile().get("global-timeout")
+    assert global_timeout is not None, (
+        f"{NEXTEST_CONFIG} must set [profile.default].global-timeout"
+    )
+    return _duration_seconds(global_timeout)
+
+
+def termination_allowance_seconds() -> int:
+    """Return the termination allowance the outer watchdog must cover.
+
+    Returns
+    -------
+    int
+        The largest configured ``slow-timeout.grace-period``, across the
+        default profile and every override that sets a ``slow-timeout``,
+        with a 60-second floor applied to it.
+
+    An allowance rather than a reading of nextest. Nextest's own default is
+    10 seconds, so the floor here is this repository's, not the tool's, and
+    a grace period configured below it is modelled as 60. That can only
+    raise the sum the watchdog must contain, never lower it, which is the
+    safe direction for a budget whose purpose is to avoid reporting a slow
+    build as a hang. Cuprum configures no grace period, so the floor is
+    what this returns today.
+
+    Every override is read, and read whole. An override's ``slow-timeout``
+    replaces the profile's table for the tests its filter matches rather
+    than merging into it — proved by running a binary under an override
+    whose period and multiplier gave 2 s while the profile's gave 300 s,
+    and seeing nextest terminate at 2.014 s — so an override that declares
+    a grace period has replaced whatever the profile declared, and the
+    profile's value cannot speak for those tests. Reading only the profile
+    would let a widened grace period go uncontained by the watchdog, and
+    the failure that produces names ``cargo`` rather than the test.
+    """
+    profile = _default_nextest_profile()
+    declared = [_slow_timeout_of(profile)]
+    declared.extend(
+        _slow_timeout_of(override) for override in _slow_timeout_overrides(profile)
+    )
+    configured = [
+        _duration_seconds(slow_timeout["grace-period"])
+        for slow_timeout in declared
+        if "grace-period" in slow_timeout
     ]
-
-
-def _cargo_manifest_of(step: Step) -> object:
-    """Return the ``cargo-manifest`` input a step passes, or None.
-
-    Parameters
-    ----------
-    step : Step
-        The coverage step.
-
-    Returns
-    -------
-    object
-        The input's value, or None when the step passes none.
-    """
-    inputs = typ.cast("dict[str, object]", step).get("with")
-    return inputs.get("cargo-manifest") if isinstance(inputs, dict) else None
+    return max(60, max(configured, default=0))

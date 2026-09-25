@@ -205,6 +205,46 @@ decision record for the `interrogate` gate. The `skylos-allow` target uses an
 ignored lock file and `flock` to serialize its read-modify-write update, so
 concurrent false-positive recordings remain intact.
 
+## Addendum — 2026-09-21: Skylos documentation liveness has a size ceiling
+
+Skylos treats documentation as a liveness signal: a public method escapes
+`SKY-U001` when its class-qualified name — `_Owner.method` — appears in a `.md`,
+`.rst`, or `.txt` file under the scanned root. That signal has two ceilings,
+both silent, and neither configurable in the pinned release:
+
+- A document larger than 300000 bytes is skipped entirely, without a warning.
+- Reading stops once the accumulated document total passes 2000000 bytes.
+
+Both are engineering boundaries in Skylos rather than decisions taken here, so
+this addendum records them as constraints the repository works within rather
+than as policy it chose.
+
+The practical consequence is that adding prose to a document near the per-file
+ceiling can withdraw liveness credit from symbols that document has named for a
+long time. `docs/developers-guide.md` is not near that ceiling but past it — it
+crossed on 2026-09-21 — so the coverage timeout material this branch needed to
+record lives in [Coverage timeout tiers](coverage-timeout-tiers.md) instead: a
+guide that is skipped documents nothing, and the content is a CI-configuration
+topic that sits naturally beside [CI cache ownership](ci-cache-ownership.md).
+
+A `SKY-U001` reported after a docs-only change is therefore a question about
+the symbol, not a finding to silence. Check which of three cases applies.
+
+If a required runtime caller is missing, a refactor removed it: restore the
+caller. That is a real defect the ceiling has merely exposed.
+
+If the symbol is live but Skylos cannot resolve its caller — a framework
+callback, a protocol implementation, or another implicit caller — verify that
+and record it as an entry point in `[tool.skylos.dead_code]`, naming the caller
+in the reason, as the Skylos dead-code policy in the developers' guide
+describes.
+
+If the symbol is genuinely dead, remove it.
+
+Only a verified false positive that no entry-point record can describe reaches
+`make skylos-allow`, and only once the check above has been made and its
+outcome is worth naming.
+
 ## Amendment (2026-09-25): the pylint-pypy-shim is retired
 
 CI's `uv` (0.12.19) now resolves `--python pypy` to PyPy 3.12 directly. Pylint

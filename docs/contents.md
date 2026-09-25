@@ -33,6 +33,9 @@ open each document.
 - [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md) - the
   benchmark-gate JSONL artefact schema, retention, retrieval, analysis recipe,
   and fail-open delivery contract.
+- [Coverage timeout tiers](coverage-timeout-tiers.md) - the four nested
+  timeouts a coverage run is bounded by, the value each holds, and why the
+  compile-driven `trybuild` tests carry an allowance of their own.
 
 ## Design and decisions
 
