@@ -57,7 +57,7 @@ _GUARDED_COMMANDS: typ.Final[tuple[str, ...]] = (
 )
 
 #: A release below the floor, one at it, and ones above it, plus the shape
-#: a real `cargo-nextest --version` line takes. The last is here because
+#: a real `cargo-nextest --version` line takes. That one is here because
 #: the version is found by shape rather than position: `cargo-nextest
 #: 0.9.133 (65e806bd5 2026-04-14)` puts it in the second field, so a
 #: program reading a fixed position would see the commit hash instead.
@@ -70,6 +70,21 @@ _VERSION_PROBES: typ.Final[tuple[tuple[str, int], ...]] = (
     ("0.10.0", 0),
     ("1.0.0", 0),
     ("cargo-nextest 0.9.133 (65e806bd5 2026-04-14)", 0),
+)
+
+#: Output that carries no version at all, which the check must refuse. The
+#: shape is found by pattern, so anything that does not match one is a
+#: subject the check cannot certify. A program that fell through to a
+#: success on unmatched input would accept every one of these, and the
+#: refusal is what stops a malformed version line from being read as a
+#: release at or above the floor.
+_UNPARSABLE_PROBES: typ.Final[tuple[str, ...]] = (
+    "garbage",
+    "cargo-nextest unknown",
+    "cargo-nextest",
+    "0.9",
+    "v0.9.100",
+    "cargo-nextest 0.9.100-rc1 (abc 2026-01-01)",
 )
 
 
@@ -178,6 +193,25 @@ def test_the_check_refuses_empty_input() -> None:
         "the version check accepted empty input, but an empty stream is what a "
         "version call that could not run produces; accepting it certifies "
         "every release, including the ones the floor exists to refuse"
+    )
+
+
+@pytest.mark.parametrize("output", _UNPARSABLE_PROBES)
+def test_the_check_refuses_output_it_cannot_parse(output: str) -> None:
+    """A version line the check cannot read is refused, not assumed recent.
+
+    The version is matched by shape, so a line carrying no version at all
+    leaves the program with nothing to compare. Reporting that as a pass
+    would turn a malformed `cargo-nextest --version` — a wrapper script, a
+    truncated line, an unrecognized format — into a certified release, and
+    the floor would then be enforced on every host except the ones whose
+    output it could not read.
+    """
+    verdict = _awk_verdict(f"{output}\n")
+    assert verdict == 1, (
+        f"the version check accepted {output!r}, which carries no version it "
+        f"can read; a subject it cannot parse is not a release at or above the "
+        f"floor, and accepting it certifies a version the check never saw"
     )
 
 
