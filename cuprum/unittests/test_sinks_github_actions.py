@@ -496,7 +496,7 @@ def test_emit_group_false_suppresses_group_framing() -> None:
     """
     session, buffer = _open_gha_session(("false",), emit_group=False)
 
-    assert buffer.getvalue() == "", (
+    assert not buffer.getvalue(), (
         f"a group-less session must open nothing; got {buffer.getvalue()!r}"
     )
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=3))
