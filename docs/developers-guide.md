@@ -470,7 +470,8 @@ before `include`, so it cannot remove an include-only leg. Instead the job sets
 and every step carries `env.LEG_RUNS == 'true'` as its last conjunct. On a
 pull request the leg starts, skips every step, and reports success having done
 nothing; its green check means "not run", not "3.15a passed". On push to `main`
-and on dispatch it runs in full and writes its compiler family.
+and on dispatch it runs in full, and on the push it also writes its compiler
+family; a dispatch saves nothing, because every save requires a push.
 `tests/test_ci_experimental_leg.py` holds the flag's exact expression, the flag
 on every step, and the steps' presence, and `tests/helpers/ci_leg_gate.py` lets
 the other contracts read a step's own guard without the flag. Those read text;

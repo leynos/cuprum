@@ -407,8 +407,8 @@ jobs:
       # (a job-level `if:` cannot read `matrix`, and `exclude` runs before
       # `include`), so every step carries this flag instead: on a pull request
       # the 3.15a leg starts, skips every step, and reports success without
-      # doing anything. It still runs on push to `main` and on dispatch, where
-      # it writes its compiler family.
+      # doing anything. It still runs on push to `main` and on dispatch; only
+      # the push writes its compiler family, since the saves need a push.
       LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}
       MDTABLEFIX_VERSION: '0.6.0'
     strategy:

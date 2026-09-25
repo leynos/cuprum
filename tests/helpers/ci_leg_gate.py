@@ -60,6 +60,15 @@ def normalized(condition: object) -> str:
 def ungated(workflow_name: str, job_name: str, condition: object) -> str:
     """Return a step's guard without the leg flag's trailing conjunct.
 
+    Parameters
+    ----------
+    workflow_name : str
+        The workflow file name, such as ``"ci.yml"``.
+    job_name : str
+        The job the step belongs to. Only ``typecheck-test`` carries the flag.
+    condition : object
+        The step's ``if:`` value as parsed, or ``None`` when it has none.
+
     Returns
     -------
     str

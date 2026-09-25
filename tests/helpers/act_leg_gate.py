@@ -147,6 +147,11 @@ def ran_steps(run: ActRun) -> set[str]:
     `act` reports a verdict only for a step it ran, so a skipped step is simply
     absent. The frame every job gets is removed, leaving the job's own steps.
 
+    Parameters
+    ----------
+    run : ActRun
+        The finished `act` run whose step verdicts to read.
+
     Returns
     -------
     set[str]
