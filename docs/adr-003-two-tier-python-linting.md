@@ -221,11 +221,11 @@ than as policy it chose.
 
 The practical consequence is that adding prose to a document near the per-file
 ceiling can withdraw liveness credit from symbols that document has named for a
-long time. `docs/developers-guide.md` sits within a few kilobytes of it, so the
-coverage timeout material this branch needed to record lives in
-[Coverage timeout tiers](coverage-timeout-tiers.md) instead: a guide that is
-skipped documents nothing, and the content is a CI-configuration topic that
-sits naturally beside [CI cache ownership](ci-cache-ownership.md).
+long time. `docs/developers-guide.md` is not near that ceiling but past it — it
+crossed on 2026-09-21 — so the coverage timeout material this branch needed to
+record lives in [Coverage timeout tiers](coverage-timeout-tiers.md) instead: a
+guide that is skipped documents nothing, and the content is a CI-configuration
+topic that sits naturally beside [CI cache ownership](ci-cache-ownership.md).
 
 A `SKY-U001` reported after a docs-only change is therefore a question about
 the symbol, not a finding to silence. Check which of three cases applies.
