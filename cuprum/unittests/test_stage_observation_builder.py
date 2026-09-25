@@ -37,7 +37,7 @@ from cuprum._pipeline_internals import (
 )
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._testing import _prepare_pipeline_config
-from cuprum.context import current_context, env, merge_env_overlays
+from cuprum.context import EnvMode, current_context, env, merge_env_overlays
 from cuprum.sh import ExecutionContext, RunOutputOptions
 
 if typ.TYPE_CHECKING:
@@ -87,10 +87,10 @@ def test_resolve_env_overlay_matches_merge_semantics(
     """
     if scoped_overlay is not None:
         with env(scoped_overlay):
-            resolved = _resolve_env_overlay(extra)
+            resolved, mode = _resolve_env_overlay(extra)
             expected = merge_env_overlays(scoped_overlay, extra)
     else:
-        resolved = _resolve_env_overlay(extra)
+        resolved, mode = _resolve_env_overlay(extra)
         expected = merge_env_overlays(None, extra)
 
     if expected is None:
@@ -103,6 +103,41 @@ def test_resolve_env_overlay_matches_merge_semantics(
         assert isinstance(resolved, types.MappingProxyType), (
             "the resolved overlay must be immutable"
         )
+    assert mode is EnvMode.OVERLAY, "ordinary observation must retain overlay mode"
+
+
+def test_replace_env_policy_is_tagged_for_observers() -> None:
+    """Observers retain the replacement boundary without rendering it live."""
+    command = sh.make(ECHO)("observed")
+    tags = _single_command_tags(
+        command,
+        ExecutionContext(
+            env={"CUPRUM_TEST_OBSERVE_REPLACE": "value"},
+            env_mode=EnvMode.REPLACE,
+        ),
+        capture=True,
+        echo=False,
+    )
+
+    assert tags["env_mode"] is EnvMode.REPLACE, (
+        "replacement-mode observations must expose the replacement tag"
+    )
+
+
+def test_caller_tags_cannot_spoof_the_environment_mode() -> None:
+    """Only replacement policies may publish the reserved mode tag."""
+    command = sh.make(ECHO)("observed")
+    context = ExecutionContext(tags={"env_mode": EnvMode.REPLACE})
+
+    single = _single_command_tags(command, context, capture=True, echo=False)
+    pipeline = _pipeline_tags((command, command), context, capture=True, echo=False)
+
+    assert "env_mode" not in single, (
+        "an overlay command must not publish a caller-supplied replacement tag"
+    )
+    assert all("env_mode" not in tags for tags in pipeline), (
+        "overlay pipeline stages must not publish caller-supplied replacement tags"
+    )
 
 
 def _single_command_tags(

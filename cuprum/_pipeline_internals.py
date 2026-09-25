@@ -31,6 +31,7 @@ from cuprum._observability import (
     _merge_tags,
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
+    _without_env_mode_tag,
 )
 from cuprum._pipeline_collect import (
     _await_pipeline_wait_result,
@@ -57,7 +58,7 @@ from cuprum._pipeline_types import (
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
-from cuprum.context import current_context
+from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -104,7 +105,7 @@ def _build_pipeline_observations(
     ctx = current_context()
     hooks_by_stage = tuple(_collect_hooks(ctx) for _ in parts)
     cwd = None if config.ctx.cwd is None else Path(config.ctx.cwd)
-    env_overlay = _resolve_env_overlay(config.ctx.env)
+    env_overlay, env_mode = _resolve_env_overlay(config.ctx.env, config.ctx.env_mode)
     return tuple(
         _StageObservation(
             cmd=cmd,
@@ -120,7 +121,8 @@ def _build_pipeline_observations(
                     "pipeline_stage_index": idx,
                     "pipeline_stages": len(parts),
                 },
-                config.ctx.tags,
+                _without_env_mode_tag(config.ctx.tags),
+                {"env_mode": env_mode} if env_mode is EnvMode.REPLACE else None,
             ),
             cwd=cwd,
             env_overlay=env_overlay,

@@ -15,7 +15,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum.context._policy import _validate_timeout
-from cuprum.context.env_overlay import _coerce_env_overlay
+from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecHook
@@ -80,6 +80,8 @@ class ScopeConfig:
         Optional immutable environment overlay layered over the live
         ``os.environ`` at subprocess spawn time. When ``None``, no overlay
         is applied within the scope.
+    env_mode:
+        Policy used to render the composed environment for child processes.
 
     """
 
@@ -88,7 +90,8 @@ class ScopeConfig:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
-    env_overlay: cabc.Mapping[str, str] | None = None
+    env_overlay: EnvOverlay | None = None
+    env_mode: EnvMode = EnvMode.OVERLAY
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""

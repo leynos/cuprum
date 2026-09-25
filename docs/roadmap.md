@@ -46,6 +46,9 @@ single-command execution.
 - [x] 1.2.2. Provide `run_sync` that mirrors async behaviour by driving the
   event loop and ensures identical error and result semantics.
   - [x] Cover parity with tests.
+- [x] 1.2.3. Add typed inherited, overlay, and replacement environment
+  policies, including explicit deletion and shared single-command and pipeline
+  rendering ([#434](https://github.com/leynos/cuprum/issues/434)).
 
 ### 1.3. Context and hooks
 

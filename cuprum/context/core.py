@@ -19,6 +19,7 @@ from cuprum.context._policy import (
     _is_narrowed_allowlist_restricted,
     _merge_hooks,
     _narrow_allowlist,
+    _resolve_env_policy,
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
@@ -29,11 +30,9 @@ from cuprum.context._scope import (
     ForbiddenProgramError,
     ScopeConfig,
 )
-from cuprum.context.env_overlay import _coerce_env_overlay, merge_env_overlays
+from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.events import ExecHook
     from cuprum.program import Program
 
@@ -64,6 +63,8 @@ class CuprumContext:
     _allowlist_is_restricted:
         Internal marker distinguishing the permissive empty default allowlist
         from an empty allowlist produced by narrowing a restricted scope.
+    env_mode:
+        Policy used to render the composed environment for child processes.
 
     """
 
@@ -72,8 +73,9 @@ class CuprumContext:
     after_hooks: tuple[AfterHook, ...] = ()
     observe_hooks: tuple[ExecHook, ...] = ()
     timeout: float | None = None
-    env_overlay: cabc.Mapping[str, str] | None = None
+    env_overlay: EnvOverlay | None = None
     _allowlist_is_restricted: bool = False
+    env_mode: EnvMode = EnvMode.OVERLAY
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
@@ -164,6 +166,12 @@ class CuprumContext:
             config.allowlist,
             parent_is_restricted=self._allowlist_is_restricted,
         )
+        env_overlay, env_mode = _resolve_env_policy(
+            self.env_overlay,
+            self.env_mode,
+            config.env_overlay,
+            config.env_mode,
+        )
         return CuprumContext(
             allowlist=_narrow_allowlist(
                 self.allowlist,
@@ -180,7 +188,8 @@ class CuprumContext:
                 self.observe_hooks, config.observe_hooks, scoped_first=False
             ),
             timeout=_resolve_narrowed_timeout(self.timeout, config.timeout),
-            env_overlay=merge_env_overlays(self.env_overlay, config.env_overlay),
+            env_overlay=env_overlay,
+            env_mode=env_mode,
             _allowlist_is_restricted=is_restricted,
         )
 
@@ -333,30 +342,37 @@ class CuprumContext:
 
     def with_env_overlay(
         self,
-        overlay: cabc.Mapping[str, str] | None,
+        overlay: EnvOverlay | None,
+        mode: EnvMode = EnvMode.OVERLAY,
     ) -> CuprumContext:
         """Return a context whose env overlay is layered with ``overlay``.
 
-        Values in ``overlay`` win over earlier overlay entries, but no value
-        ever displaces the live :func:`os.environ`; the live process
-        environment is read at subprocess spawn time. Passing ``None`` returns
-        an unchanged copy.
+        Values in ``overlay`` win over earlier overlay entries. A replacement
+        policy discards earlier layers, while every other policy reads the live
+        :func:`os.environ` at subprocess spawn time. In non-replacement modes,
+        passing ``None`` leaves the effective overlay unchanged; in replacement
+        mode, it creates an empty replacement boundary.
 
         Parameters
         ----------
-        overlay : collections.abc.Mapping[str, str] | None
+        overlay : collections.abc.Mapping[str, str | UnsetType] | None
             Environment variables to layer over the current overlay. ``None``
             leaves the current overlay unchanged.
+        mode : EnvMode
+            Policy contributed by this child layer.
 
         Returns
         -------
         CuprumContext
             A new context with the merged environment overlay.
         """
-        return dc.replace(
-            self,
-            env_overlay=merge_env_overlays(self.env_overlay, overlay),
+        env_overlay, env_mode = _resolve_env_policy(
+            self.env_overlay,
+            self.env_mode,
+            overlay,
+            mode,
         )
+        return dc.replace(self, env_overlay=env_overlay, env_mode=env_mode)
 
 
 __all__ = [

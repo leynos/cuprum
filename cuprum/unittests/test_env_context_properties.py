@@ -27,7 +27,15 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from cuprum.context import merge_env_overlays, resolve_env
+from cuprum.context import (
+    UNSET,
+    EnvMode,
+    UnsetType,
+    merge_env_overlays,
+    resolve_env,
+)
+from cuprum.context._policy import _resolve_env_policy
+from cuprum.context.env_overlay import render_env
 
 # Hypothesis strategy: env-var-style names ("[A-Z_][A-Z0-9_]*") with a small
 # alphabet of values. Keeping the namespace bounded lets layers actually
@@ -40,6 +48,9 @@ _NAMES = st.text(
 _VALUES = st.text(alphabet="xyz0123-", min_size=0, max_size=6)
 _OVERLAYS = st.dictionaries(_NAMES, _VALUES, max_size=6)
 _OPTIONAL_OVERLAYS = st.one_of(st.none(), _OVERLAYS)
+_POLICY_VALUES = st.one_of(_VALUES, st.just(UNSET))
+_POLICY_OVERLAYS = st.dictionaries(_NAMES, _POLICY_VALUES, max_size=6)
+_OPTIONAL_POLICY_OVERLAYS = st.one_of(st.none(), _POLICY_OVERLAYS)
 
 
 @settings(max_examples=200)
@@ -165,3 +176,60 @@ def test_resolve_env_equivalent_to_merge_plus_os_environ(
     direct = resolve_env(parent, child)
     via_merge = resolve_env(merge_env_overlays(parent, child))
     assert direct == via_merge
+
+
+@settings(max_examples=150)
+@given(
+    parent=_OPTIONAL_POLICY_OVERLAYS,
+    child=_OPTIONAL_POLICY_OVERLAYS,
+    parent_mode=st.sampled_from(tuple(EnvMode)),
+    child_mode=st.sampled_from(tuple(EnvMode)),
+)
+def test_resolve_env_policy_composes_modes_and_unset_markers(
+    parent: dict[str, str | UnsetType] | None,
+    child: dict[str, str | UnsetType] | None,
+    parent_mode: EnvMode,
+    child_mode: EnvMode,
+) -> None:
+    """Composition preserves markers and grants replacement its fresh boundary."""
+    overlay, mode = _resolve_env_policy(parent, parent_mode, child, child_mode)
+    if child_mode is EnvMode.REPLACE:
+        assert mode is EnvMode.REPLACE, (
+            "a replacement child must select replacement rendering"
+        )
+        assert dict(overlay or {}) == dict(child or {}), (
+            "a nested replacement must discard its parent overlay"
+        )
+        return
+
+    assert mode is parent_mode, "overlay and inherit children preserve parent mode"
+    expected = dict(parent or {})
+    expected.update(child or {})
+    assert dict(overlay or {}) == expected, (
+        "overlay composition must retain UNSET markers until render time"
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_mode", "child_mode"),
+    [(None, EnvMode.OVERLAY), (EnvMode.OVERLAY, "replace")],
+)
+def test_resolve_env_policy_rejects_invalid_modes(
+    parent_mode: object,
+    child_mode: object,
+) -> None:
+    """Only typed ``EnvMode`` values may control environment rendering."""
+    with pytest.raises(TypeError, match="environment modes must be EnvMode values"):
+        _resolve_env_policy(
+            None,
+            typ.cast("EnvMode", parent_mode),
+            None,
+            typ.cast("EnvMode", child_mode),
+        )
+
+
+@pytest.mark.parametrize("invalid_mode", [None, "replace"])
+def test_render_env_rejects_invalid_modes(invalid_mode: object) -> None:
+    """Rendering accepts only typed ``EnvMode`` policy values."""
+    with pytest.raises(TypeError, match="environment mode must be an EnvMode value"):
+        render_env(None, typ.cast("EnvMode", invalid_mode))

@@ -82,6 +82,9 @@ open each document.
   decision to reconcile PyPI and GitHub Release assets by filename precedence,
   with least-privilege jobs, build provenance and PEP 740 attestations, and
   fail-open telemetry.
+- [ADR-018: Typed environment policies][adr-018] - accepted decision to make
+  environment inheritance, replacement, and deletion explicit at execution
+  boundaries.
 
 ## Planning and validation references
 
@@ -116,6 +119,7 @@ open each document.
 [adr-015]: adr-015-actions-runner-integration-harness.md
 [adr-016]: adr-016-stable-abi-native-wheels.md
 [adr-017]: adr-017-release-pipeline.md
+[adr-018]: adr-018-typed-environment-policies.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md

@@ -1,4 +1,4 @@
-"""Pure environment-overlay merging for scoped execution contexts.
+"""Pure environment-policy composition and rendering.
 
 Overlay mappings are layered on top of the live ``os.environ`` at subprocess
 spawn time. This module owns the overlay-only merge (:func:`merge_env_overlays`)
@@ -8,6 +8,7 @@ and the spawn-time resolution against the live environment
 
 from __future__ import annotations
 
+import enum
 import os
 import typing as typ
 from types import MappingProxyType
@@ -16,9 +17,47 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+class EnvMode(enum.StrEnum):
+    """Choose how a child environment relates to its parent environment.
+
+    ``OVERLAY`` is the default and layers supplied values over the live parent
+    environment. ``INHERIT`` preserves an inherited policy without adding a
+    replacement boundary. ``REPLACE`` starts the child with an empty
+    environment before applying its supplied values.
+    """
+
+    INHERIT = "inherit"
+    OVERLAY = "overlay"
+    REPLACE = "replace"
+
+
+@typ.final
+class UnsetType:
+    """Singleton marker requesting removal of an environment variable."""
+
+    __slots__ = ()
+    _instance: typ.ClassVar[UnsetType | None] = None
+
+    def __new__(cls) -> typ.Self:
+        """Return the one unset marker instance."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return typ.cast("typ.Self", cls._instance)
+
+    def __repr__(self) -> str:
+        """Return the marker's public spelling."""
+        return "UNSET"
+
+
+UNSET = UnsetType()
+
+type EnvOverlayValue = str | UnsetType
+type EnvOverlay = cabc.Mapping[str, EnvOverlayValue]
+
+
 def _coerce_env_overlay(
-    overlay: cabc.Mapping[str, str] | None,
-) -> cabc.Mapping[str, str] | None:
+    overlay: EnvOverlay | None,
+) -> EnvOverlay | None:
     """Return an immutable env-overlay snapshot, or ``None``."""
     if overlay is None:
         return None
@@ -26,9 +65,9 @@ def _coerce_env_overlay(
 
 
 def merge_env_overlays(
-    parent: cabc.Mapping[str, str] | None,
-    child: cabc.Mapping[str, str] | None,
-) -> cabc.Mapping[str, str] | None:
+    parent: EnvOverlay | None,
+    child: EnvOverlay | None,
+) -> EnvOverlay | None:
     """Layer ``child`` over ``parent``; ``None`` means *inherit unchanged*.
 
     Both layers are kept overlay-only — they never include a snapshot of
@@ -43,16 +82,16 @@ def merge_env_overlays(
 
     Parameters
     ----------
-    parent : collections.abc.Mapping[str, str] | None
+    parent : collections.abc.Mapping[str, str | UnsetType] | None
         The base overlay layer. ``None`` means *inherit unchanged* — the
         layer contributes nothing.
-    child : collections.abc.Mapping[str, str] | None
+    child : collections.abc.Mapping[str, str | UnsetType] | None
         The overlay layered on top of ``parent``; its values win on key
         collisions. ``None`` means *inherit unchanged*.
 
     Returns
     -------
-    collections.abc.Mapping[str, str] | None
+    collections.abc.Mapping[str, str | UnsetType] | None
         An immutable snapshot of the merged overlay, or ``None`` when both
         layers are ``None`` (meaning *inherit the environment unchanged*).
     """
@@ -70,8 +109,50 @@ def merge_env_overlays(
     return MappingProxyType(merged)
 
 
+def _render_env_base(
+    overlay: EnvOverlay | None,
+    mode: EnvMode,
+) -> dict[str, str] | None:
+    """Return the rendered environment base for a validated policy."""
+    if not isinstance(mode, EnvMode):
+        msg = "environment mode must be an EnvMode value"
+        raise TypeError(msg)
+    if mode is not EnvMode.REPLACE and not overlay:
+        return None
+    return {} if mode is EnvMode.REPLACE else os.environ.copy()
+
+
+def render_env(
+    overlay: EnvOverlay | None,
+    mode: EnvMode = EnvMode.OVERLAY,
+) -> dict[str, str] | None:
+    """Render a composed environment policy for subprocess spawning.
+
+    ``REPLACE`` starts from an empty environment. Every other mode starts
+    from a live copy of :data:`os.environ`. ``UNSET`` values remove keys only
+    from the rendered child mapping and never mutate process-global state.
+
+    Returns
+    -------
+    dict[str, str] | None
+        The environment mapping to pass to the child, or ``None`` to inherit.
+    """
+    rendered = _render_env_base(overlay, mode)
+    if rendered is None:
+        return None
+    if overlay is None:
+        return rendered
+
+    for key, value in overlay.items():
+        if isinstance(value, UnsetType):
+            rendered.pop(key, None)
+        else:
+            rendered[key] = value
+    return rendered
+
+
 def resolve_env(
-    *layers: cabc.Mapping[str, str] | None,
+    *layers: EnvOverlay | None,
 ) -> dict[str, str] | None:
     """Merge ``os.environ`` (read live) with the supplied overlay layers.
 
@@ -89,7 +170,7 @@ def resolve_env(
 
     Parameters
     ----------
-    *layers : collections.abc.Mapping[str, str] | None
+    *layers : collections.abc.Mapping[str, str | UnsetType] | None
         Overlay layers applied left-to-right over a live copy of
         ``os.environ``; later values win. ``None`` and empty layers are
         skipped.
@@ -101,17 +182,17 @@ def resolve_env(
         ``None`` or empty (meaning *inherit the parent environment
         unchanged*).
     """
-    if all(not layer for layer in layers):
-        return None
-    merged: dict[str, str] = os.environ.copy()
+    overlay: EnvOverlay | None = None
     for layer in layers:
-        if not layer:
-            continue
-        merged.update(layer)
-    return merged
+        overlay = merge_env_overlays(overlay, layer)
+    return render_env(overlay)
 
 
 __all__ = [
+    "UNSET",
+    "EnvMode",
+    "UnsetType",
     "merge_env_overlays",
+    "render_env",
     "resolve_env",
 ]

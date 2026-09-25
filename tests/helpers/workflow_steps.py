@@ -125,15 +125,31 @@ def step_script(
 def run_bash(
     script: str, cwd: pth.Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``script`` under Bash in ``cwd`` with ``env`` layered over ours."""
+    """Run ``script`` under Bash in ``cwd`` with ``env`` layered over ours.
+
+    ``BASH_ENV`` is dropped rather than forwarded. Bash sources the file it
+    names for every non-interactive shell, so a developer's copy would run host
+    setup ahead of the checked-in step and silently change what the step does.
+    GitHub Actions does not set it, so neither does this helper. A caller that
+    passes ``BASH_ENV`` in ``env`` still gets it: explicit intent is respected,
+    ambient leakage is not.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str]
+        The completed process, with standard output and error captured as text.
+    """
     bash = shutil.which("bash", path=os.defpath)
     _require(condition=bash is not None, message="workflow step tests require Bash")
+    environment: dict[str, str] = dict(os.environ)
+    environment.pop("BASH_ENV", None)
+    environment.update(env or {})
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - checked-in workflow code.
         [typ.cast("str", bash), "-c", script],
         capture_output=True,
         check=False,
         cwd=cwd,
-        env={**os.environ, **(env or {})},
+        env=environment,
         text=True,
     )
 
