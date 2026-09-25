@@ -35,6 +35,11 @@ import pathlib as pth
 import sys
 import typing as typ
 
+from benchmarks._tee_profile_stream_telemetry import (
+    StreamTelemetryAccumulator,
+    StreamTelemetryPayload,
+    StreamTelemetrySnapshot,
+)
 from benchmarks._tee_profile_worker_backend import (
     BackendName,
     BackendSelector,
@@ -55,6 +60,7 @@ from cuprum import (
     sh,
 )
 from cuprum._streams_pump import _READ_SIZE, _current_read_size, _override_read_size
+from cuprum.stream_observation import observe_stream_operation
 
 type TeeMode = typ.Literal["echo", "capture", "tee"]
 type WorkerCommandResult = sh.CommandResult | sh.PipelineResult
@@ -85,6 +91,7 @@ class TeeProfileWorkerResult(typ.TypedDict):
     exit_code: int
     captured_output_length: int
     stdout_line_count: int
+    stream_telemetry: StreamTelemetryPayload
 
 
 def _validate_repeat_count(repeat_count: int) -> None:
@@ -190,6 +197,14 @@ class _TimingContext:
 
     timer: Clock
     started: float
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RunObservability:
+    """Bounded selector and stream-operation measurements from one worker run."""
+
+    selector_metrics: _SelectorMetrics
+    stream_telemetry: StreamTelemetrySnapshot
 
 
 def _writer_script() -> str:
@@ -365,13 +380,14 @@ def _run_once(config: TeeProfileWorkerConfig) -> tuple[int, int, int]:
 def _run_repeat_loop(
     config: TeeProfileWorkerConfig,
     selector: BackendSelector,
+    stream_telemetry: StreamTelemetryAccumulator,
 ) -> _RunTotals:
     """Execute the configured repeat loop and return accumulated totals."""
     total_captured_len = 0
     total_line_count = 0
     exit_code = 0
     status: typ.Literal["ok", "failed"] = "ok"
-    with selector(config.backend):
+    with selector(config.backend), observe_stream_operation(stream_telemetry):
         for _ in range(config.repeat_count):
             captured_len, exit_code, line_count = _run_once(config)
             total_captured_len += captured_len
@@ -392,7 +408,7 @@ def _build_worker_result(
     *,
     timing: _TimingContext,
     totals: _RunTotals,
-    metrics: _SelectorMetrics,
+    observability: _RunObservability,
 ) -> TeeProfileWorkerResult:
     """Assemble a ``TeeProfileWorkerResult`` from accumulated run data."""
     # Capture the elapsed worker-run time before any result-assembly work so
@@ -411,12 +427,15 @@ def _build_worker_result(
         "repeat_count": config.repeat_count,
         "read_size": _current_read_size(),
         "wall_time_seconds": wall_time_seconds,
-        "lock_wait_seconds": metrics.lock_wait_seconds,
-        "reentrant_rejection_count": metrics.reentrant_rejection_count,
+        "lock_wait_seconds": observability.selector_metrics.lock_wait_seconds,
+        "reentrant_rejection_count": (
+            observability.selector_metrics.reentrant_rejection_count
+        ),
         "status": totals.status,
         "exit_code": totals.exit_code,
         "captured_output_length": totals.captured_output_length,
         "stdout_line_count": totals.stdout_line_count,
+        "stream_telemetry": observability.stream_telemetry.as_dict(),
     }
 
 
@@ -451,7 +470,9 @@ def run_tee_profile_worker(
         (float), ``lock_wait_seconds`` (float),
         ``reentrant_rejection_count`` (int), ``status`` (``"ok"`` or
         ``"failed"``), ``exit_code`` (int),
-        ``captured_output_length`` (int), and ``stdout_line_count`` (int).
+        ``captured_output_length`` (int), ``stdout_line_count`` (int), and
+        ``stream_telemetry`` (the aggregate pure-Python stream-operation
+        measurements grouped by closed operation and outcome).
     """
     timer = clock if clock is not None else _default_clock
     selector = (
@@ -461,15 +482,20 @@ def run_tee_profile_worker(
     )
     metrics_state = selector.metrics_state
     metrics_state.reset()
+    stream_telemetry = StreamTelemetryAccumulator()
+    stream_telemetry.reset()
     timing = _TimingContext(timer=timer, started=timer())
     with _override_read_size(config.read_size):
-        totals = _run_repeat_loop(config, selector)
-        metrics = metrics_state.snapshot()
+        totals = _run_repeat_loop(config, selector, stream_telemetry)
+        observability = _RunObservability(
+            selector_metrics=metrics_state.snapshot(),
+            stream_telemetry=stream_telemetry.snapshot(),
+        )
         return _build_worker_result(
             config,
             timing=timing,
             totals=totals,
-            metrics=metrics,
+            observability=observability,
         )
 
 
