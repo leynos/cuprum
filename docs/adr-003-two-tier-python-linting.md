@@ -107,8 +107,11 @@ The canonical policy lives in `pyproject.toml`:
 
 ## Known Risks and Limitations
 
-- The second tier requires PyPy to be resolvable by `uv tool run --python pypy`.
-- The shim revision is another toolchain pin that must be maintained.
+- The second tier requires PyPy to be resolvable by `uv tool run --python pypy`;
+  `uv` 0.12.19 and later resolve that to PyPy 3.12.
+- `PYLINT_VERSION` is a toolchain pin that must be maintained. The former
+  `pylint-pypy-shim` revision pin was retired on 2026-09-25 (see the amendment
+  below).
 - The project dependency and standalone `ambrleaks` pins must move together.
   When adopting a new release, resolve its tag to an immutable commit and use
   that revision for both pins.
@@ -135,8 +138,9 @@ The canonical policy lives in `pyproject.toml`:
 
 - The full lint target is slower than Ruff alone.
 - Local machines may need `uv` to download or locate a PyPy interpreter for the
-  shim.
-- Toolchain updates must consider both Ruff and the shim-backed Pylint tier.
+  Pylint tier.
+- Toolchain updates must consider both Ruff and the `PYLINT_VERSION` pin that
+  the PyPy-backed Pylint tier runs directly.
 
 ## Addendum (2026-08-31): Ruff, ty, and df12 toolchain pins
 
@@ -216,8 +220,8 @@ not parse some Python 3.12 syntax, and `syntax-error` is disabled in
 
 The historical rationale for Option C — isolating the second lint tier from the
 project virtual environment and aligning with `leynos/episodic` — still holds;
-only the shim's parser patch is gone. The Known Risks bullet about maintaining
-a pinned shim revision no longer applies: the remaining toolchain pin is
+only the shim's parser patch is gone. The Known Risks and Consequences sections
+above now describe the direct PyPy invocation: the remaining toolchain pin is
 `PYLINT_VERSION` itself, maintained like any other pinned lint tool.
 
 [ADR-004: Interrogate docstring-coverage gate]:
