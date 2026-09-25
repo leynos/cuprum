@@ -28,6 +28,12 @@ _WORKFLOW_DIRECTORY = ".github/workflows"
 _ACTION_DIRECTORY = ".github/actions"
 #: The directories the yamllint-backed half of the target covers, in order.
 _LINTED_DIRECTORIES = (_WORKFLOW_DIRECTORY, _ACTION_DIRECTORY)
+#: The actionlint invocation, which disables shellcheck to dodge the v1.7.12
+#: stdin deadlock (rhysd/actionlint#702, #704, #712) and match CI, which
+#: installs no shellcheck binary.
+_ACTIONLINT_INVOCATION = (
+    "actionlint\t-config-file\t.github/actionlint.yaml\t-shellcheck="
+)
 _RUN_LINT_STEP = "Run lint, including Skylos dead-code detection"
 _ACTIONLINT_INSTALLER_LINES = (
     "readonly ACTIONLINT_VERSION='1.7.12'",
@@ -264,7 +270,7 @@ def test_the_workflow_lint_target_runs_both_linters(tmp_path: pth.Path) -> None:
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
         "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
         + "\t".join(_LINTED_DIRECTORIES),
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        _ACTIONLINT_INVOCATION,
     ]
 
 
@@ -304,7 +310,7 @@ def test_the_lint_target_runs_the_workflow_linters(tmp_path: pth.Path) -> None:
         "rustup\tcomponent\tlist\t--installed\t--toolchain\tnightly-2026-08-23",
         "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
         + "\t".join(_LINTED_DIRECTORIES),
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        _ACTIONLINT_INVOCATION,
     ]
 
 
@@ -337,7 +343,7 @@ def test_the_workflow_lint_target_rejects_actionlint_failure(
     assert invocation_log.read_text(encoding="utf-8").splitlines() == [
         "yamllint\t--strict\t--config-file\t.yamllint.yml\t"
         + "\t".join(_LINTED_DIRECTORIES),
-        "actionlint\t-config-file\t.github/actionlint.yaml",
+        _ACTIONLINT_INVOCATION,
     ]
 
 
