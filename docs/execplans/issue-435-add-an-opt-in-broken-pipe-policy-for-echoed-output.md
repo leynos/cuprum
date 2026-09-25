@@ -118,8 +118,9 @@ escalation, not a workaround.
 - [x] Commit gates: `make check-fmt`, `make lint`, `make typecheck`,
       `make test` (2489 passed, 63 skipped), `make markdownlint`, and
       `make spelling` all pass, run with `env -u BASH_ENV`.
+- [x] Push and open the draft pull request:
+      [cuprum#503](https://github.com/leynos/cuprum/pull/503).
 - [ ] CodeRabbit review.
-- [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
 
@@ -190,9 +191,10 @@ escalation, not a workaround.
 
 ## Outcomes & retrospective
 
-Delivered as three gated commits. All three tasks landed: the recovery
-mechanism and its vocabulary, the configuration threading, and the
-observability with the public export and tests.
+Delivered as three gated commits and opened as draft
+[cuprum#503](https://github.com/leynos/cuprum/pull/503). All three tasks
+landed: the recovery mechanism and its vocabulary, the configuration threading,
+and the observability with the public export and tests.
 
 What worked: gating on a single `try` in `_echo_write` meant the ticket's whole
 matrix — write and flush, text and binary sinks, the final decoder flush,
@@ -209,6 +211,18 @@ Verification that mattered most: running the ticket's own reproduction both
 ways, and the seed control (O1) that fails if the recovery is not gated. The
 drain-level tests pin the mechanism; the behaviour tests prove the policy a
 caller names actually reaches a real subprocess.
+
+Re-gating after the delivery edits surfaced a second local-only stall worth
+recording: `make lint` hangs forever in actionlint, which deadlocks writing the
+`.github/workflows` scripts to shellcheck's stdin. It is a pipe-buffer race,
+not deterministic, and CI installs no shellcheck, so CI never sees it.
+`actionlint -shellcheck=` completes in under a second. The `ACTIONLINT`
+Makefile variable substitutes the whole command word rather than a program
+path, so a wrapper script that appends the flag is the only shape that works:
+
+```plaintext
+env -u BASH_ENV make ACTIONLINT=/tmp/bp435-bin/actionlint-noshellcheck lint
+```
 
 ## Conformance basis
 
@@ -252,6 +266,10 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
+Revision 6: the draft pull request is open as
+[cuprum#503](https://github.com/leynos/cuprum/pull/503), which discharges the
+delivery requirement. Only the CodeRabbit review remains.
+
 Revision 5: every commit gate passes on the final tree. Two gates failed first
 and both were mine to fix, not the plan's: the spelling gate rejected seven
 words where the new prose used the British `-ise` ending that the project's
@@ -261,7 +279,7 @@ and `make lint` rejected six findings in the new test material: a long literal
 raised directly from two sink doubles, an unused import, a rule *code* where
 the suppression comment wants the rule name, and two step docstrings not in the
 imperative mood. `make fmt` had not been run on the new files either, so six
-needed reformatting. The CodeRabbit review and the pull request remain.
+needed reformatting.
 
 Revision 4 covered all three tasks committed and documented. Revision 3
 recorded the verification plan table naming the artefacts that actually
