@@ -257,6 +257,9 @@ artefact.
 
 - [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
   records the superseding storage decision and consequences.
+- [ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+  reuses this same fail-open, bounded-label JSONL pattern for release
+  publication telemetry.
 - [GitHub's artefact storage guidance][github-artefacts] defines the hosted
   retention policy.
 - `tests/test_ci_benchmark_gate_telemetry.py` checks the workflow declaration.

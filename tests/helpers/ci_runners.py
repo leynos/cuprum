@@ -201,7 +201,13 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "loom.yml": ("loom",),
-    "release.yml": ("publish",),
+    "release.yml": (
+        "check-version",
+        "attest",
+        "publish-pypi",
+        "draft-release",
+        "publish-release",
+    ),
     # Issue379 requires verifier schedules on GitHub-hosted Linux.
     "rust-boundaries.yml": ("verus", "extended"),
 }

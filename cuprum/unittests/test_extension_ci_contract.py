@@ -55,6 +55,9 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
     "mutation-testing.yml": {
         ".github/workflows/mutation-mutmut.yml",
     },
+    "release.yml": {
+        ".github/actions/ensure-cargo-version",
+    },
 }
 
 

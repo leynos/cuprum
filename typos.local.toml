@@ -22,6 +22,9 @@ ignore = [
   '\bartifact_dir\b',
   '/artifacts(?:[/?#"`]|$)',
   '--artifact-name(?:[=\s"`]|$)',
+  # The upstream `actions/download-artifact` and `actions/upload-artifact`
+  # action names, matched by prefix in workflow contract tests.
+  'actions/(?:download|upload)-artifact@',
   # Composite-action input key and its `${{ inputs.* }}` reference; renaming it
   # would break every caller in .github/workflows.
   '\bartifact-name\b',

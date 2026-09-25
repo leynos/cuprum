@@ -3276,18 +3276,42 @@ Kani-tractable; the developers' guide records the commands and the bounds.
 ### 13.8 Build and Distribution
 
 The Rust extension is built using maturin and distributed as platform-specific
-wheels:
+wheels, alongside a source distribution (sdist):
 
 - Linux: x86_64 and aarch64;
 - macOS: x86_64 and arm64;
-- Windows: x86_64 and arm64.
+- Windows: x86_64.
+
+Windows arm64 is deferred to a later 0.2.0 beta; see
+[ADR-016](adr-016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
 
 A pure Python wheel is always published alongside native wheels to ensure
 fallback availability on platforms without native wheel support. Cuprum does
 not use cibuildwheel; native wheels are built with `maturin build` in
-manylinux-compatible environments, while pure Python wheels are built with
-`uv_build`. Release workflows collect all wheels into a single directory and
-publish them in one `uv publish` command to keep metadata aligned.
+manylinux-compatible environments, while pure Python wheels and the sdist are
+built with `uv_build`.
+
+`release.yml` collects the sdist and every wheel, attests them as one batch with
+`actions/attest-build-provenance`, and hands the attested files and a
+run-unique Sigstore bundle on to the publishing jobs as a single artefact, so
+every later job ships exactly the bytes this run built and attested. PyPI
+publication uses Trusted Publishing through `pypa/gh-action-pypi-publish`
+rather than `uv publish`, because that action also signs and uploads a PEP 740
+attestation for every file it accepts.
+
+The GitHub Release for the tag is created, or reused, as a draft before
+publication and is only made visible once PyPI and the release agree on every
+artefact's bytes. Because a re-pushed tag rarely rebuilds byte-identical
+wheels, and neither PyPI nor the release may have an artefact silently
+replaced, each filename's canonical bytes are the ones already published:
+PyPI's first, then an existing GitHub Release asset, and this run's freshly
+built file only when neither destination already has the name. Each destination
+then receives only the names it lacks, and a re-run of the same tag is safe to
+repeat because nothing is ever overwritten. A name the two destinations already
+hold with different bytes fails publication and leaves the release a draft
+until an administrator removes the offending asset. See
+[ADR-017](adr-017-release-pipeline.md) for the full job graph, the
+reconciliation algorithm, and its telemetry.
 
 Contributors building from source require a Rust toolchain (rustc 1.85+, cargo)
 in addition to Python. The `maturin develop` command builds and installs the

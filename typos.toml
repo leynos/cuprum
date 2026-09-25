@@ -81,6 +81,7 @@ extend-ignore-re = [
     "_write_mold_metadata",
     "`color`",
     "`mold`",
+    "actions/(?:download|upload)-artifact@",
     "b\"ond\\\\n\"",
     "baseline-artifact",
     "checksum-verified mold binary",

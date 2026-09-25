@@ -234,10 +234,12 @@ jobs:
         if: matrix.check == 'miri'
         run: rustup toolchain install nightly-2026-08-07 --profile minimal --component miri
       - name: Execute extended verification
+        env:
+          BOUNDARY_CHECK: ${{ matrix.check }}
         run: |
           set -o pipefail
           mkdir -p rust/target/boundary-verification
-          make boundary-${{ matrix.check }} 2>&1 | tee rust/target/boundary-verification/${{ matrix.check }}.log
+          make "boundary-${BOUNDARY_CHECK}" 2>&1 | tee "rust/target/boundary-verification/${BOUNDARY_CHECK}.log"
       - name: Exercise deliberate production faults
         if: matrix.check == 'kani'
         run: |

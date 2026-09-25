@@ -86,10 +86,13 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         id: pytag
         shell: bash
+        env:
+          PYTHON_VERSION: ${{ inputs.python-version }}
         run: |
+          set -euo pipefail
           # Convert "3.13" or "3.13.1" to "cp313" format for manylinux /opt/python paths
           # Extract major.minor only, then remove the dot
-          version='${{ inputs.python-version }}'
+          version="${PYTHON_VERSION}"
           major_minor="$(echo "${version}" | cut -d. -f1,2)"
           pytag="cp$(echo "${major_minor}" | tr -d '.')"
           echo "tag=${pytag}" >> "$GITHUB_OUTPUT"
@@ -223,6 +226,13 @@ jobs:
             echo "Expected exactly one pure wheel." >&2
             echo "Matched: ${PURE_WHEEL_GLOB[*]:-<none>}" >&2
             ls -al dist/wheels-pure >&2 || true
+            exit 1
+          fi
+          # The release publishes this sdist, so fail here rather than at tag time.
+          SDIST_GLOB=(dist/wheels-pure/*.tar.gz)
+          if [ "${#SDIST_GLOB[@]}" -ne 1 ]; then
+            echo "Expected exactly one source distribution." >&2
+            echo "Matched: ${SDIST_GLOB[*]:-<none>}" >&2
             exit 1
           fi
           PURE_WHEEL=$(realpath "${PURE_WHEEL_GLOB[0]}")
