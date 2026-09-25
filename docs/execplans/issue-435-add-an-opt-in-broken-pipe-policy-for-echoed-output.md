@@ -104,11 +104,17 @@ escalation, not a workaround.
       not `cuprum/sh.py`; `EchoErrorCategory` in `cuprum/echo_events.py`).
 - [x] Red: reproduced the abort with the ticket's exact snippet.
 - [x] Task 1: `BROKEN_PIPE` category, `BrokenPipePolicy`, validation helper,
-      `_StreamConfig` field, gated `except BrokenPipeError` in `_echo_write`.
+      `_StreamConfig` field, gated `except BrokenPipeError` in `_echo_write`
+      (commit `ce99604d`).
 - [x] Task 2: `RunOutputOptions.broken_pipe_policy`; thread through the
-      single-run and pipeline `_StreamConfig` builders.
-- [x] Task 3: metrics counter, public export, unit and behaviour tests.
-- [x] Docs: changelog entry, users' guide, developers' guide.
+      single-run and pipeline `_StreamConfig` builders (commit `d554596f`).
+- [x] Task 3: metrics counter, public export, unit and behaviour tests
+      (commit `487c4d88`; the export itself rode on `d554596f`).
+- [x] Docs: changelog entry, users' guide, developers' guide (commit
+      `53457a7c`).
+- [ ] Commit gates (`make check-fmt`, `make lint`, `make typecheck`,
+      `make test`, `make markdownlint`, `make spelling`) and CodeRabbit.
+- [ ] Push and open the draft pull request.
 
 ## Surprises & discoveries
 
@@ -122,6 +128,30 @@ escalation, not a workaround.
   text-sink branch inside one `try` in `_echo_write`, and covers `write` and
   `flush` alike, so the single new clause covers every path the ticket lists
   without restructuring.
+- `tests/behaviour/` modules each declare the `a curated Python command for
+  testing` background step locally (`test_telemetry_adapters.py` does), because
+  pytest-bdd resolves step definitions per module. A new behaviour module must
+  redeclare it rather than import it.
+- `LineEvent` carries the line under `text`, not `line`; the BDD step for line
+  observation has to read `event.text`.
+- The `subprocess_teardown_drain_failed` `ERROR` record that the ticket's
+  reproduction emits belongs to the **`STRICT`** run, not the recovered one:
+  teardown drains a consumer that is already unwinding from the propagated
+  error. It is pre-existing behaviour and out of scope for this change; the
+  `BEST_EFFORT` run's only log record is its one categorised `WARNING`.
+- Six `cuprum/unittests/test_release_github_steps.py` tests fail locally with
+  `AssertionError: failed to run git: fatal: not a git repository`. The message
+  appears nowhere in the tracked tree, which is the clue: this host sets
+  `BASH_ENV=/home/leynos/.lody/bashenv`, whose body prepends
+  `/home/leynos/.lody/bin` to `PATH` on every non-interactive Bash start. That
+  directory holds Lody's own `gh` wrapper, which resolves the repository with
+  `git remote get-url origin` — so it shadows the test's `gh` stand-in, which
+  the test puts first in `PATH` precisely so the real `gh` cannot run. The
+  step then fails outside a git repository and the assertion reports the
+  wrapper's stderr. Proven environmental: `env -u BASH_ENV` turns the same
+  module from 6 failed into 6 passed in 0.26s, and the module references no
+  symbol this change touches. No test-side `PATH` change can defend against it,
+  because `BASH_ENV` is sourced after the caller's environment is applied.
 
 ## Decision log
 
@@ -135,11 +165,44 @@ escalation, not a workaround.
   the single-run and pipeline builders already construct.
 - Decision: name the metric `cuprum_echo_broken_pipe_total` and keep
   `ECHO_ENCODING_FAILURES_TOTAL` unchanged. Rationale: the module comment
-  requires a distinct series per category.
+  requires a distinct series per category, and a mis-encoded sink must stay
+  distinguishable from a reader that keeps disconnecting.
+- Decision: extract `_disable_echo` in `cuprum/_stream_echo.py`, so both
+  recoveries share one guard flip and one set of three projections. Rationale:
+  the two `except` clauses would otherwise duplicate the projections verbatim
+  and drift the moment either is edited.
+- Decision: give the new field a declared type of `BrokenPipePolicy | str` on
+  `RunOutputOptions` and expose `resolved_broken_pipe_policy` as the narrow
+  view. Rationale: it mirrors `resolved_echo`, which exists for exactly this
+  reason, and keeps the execution layer from re-parsing a value the options
+  object already normalised.
+- Decision: add the field to `_SubprocessExecution` and `_PipelineRunConfig`
+  with a `STRICT` default rather than without one. Rationale: two test modules
+  build those dataclasses directly, and the plan's tolerance says existing
+  tests must not need editing for the change to be additive. The default is
+  also the honest value: a bundle built without naming a policy is strict.
 
 ## Outcomes & retrospective
 
-To be completed.
+Delivered as three gated commits. All three tasks landed: the recovery
+mechanism and its vocabulary, the configuration threading, and the
+observability with the public export and tests.
+
+What worked: gating on a single `try` in `_echo_write` meant the ticket's whole
+matrix — write and flush, text and binary sinks, the final decoder flush,
+nested and concurrent runs, pipeline stages — fell out of one clause plus the
+existing per-drain guard, with no restructuring. The per-drain `_EchoGuard` and
+per-stage `_RelayDiagnostics` were already the right isolation boundaries, so
+"nested and concurrent runs" needed no new mechanism at all.
+
+What to watch: the plan named `cuprum/sh.py`, which does not exist; the real
+site is `cuprum/sh/output.py`. Reconnaissance before editing caught it, but the
+same mismatch would have cost a wasted cycle if taken on faith.
+
+Verification that mattered most: running the ticket's own reproduction both
+ways, and the seed control (O1) that fails if the recovery is not gated. The
+drain-level tests pin the mechanism; the behaviour tests prove the policy a
+caller names actually reaches a real subprocess.
 
 ## Conformance basis
 
@@ -160,19 +223,21 @@ this would say so; it does, so each obligation is listed with its method.
 
 | # | Obligation | Method | Artefact | Evidence / discharge |
 |---|---|---|---|---|
-| O1 | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain | named pytest example | `cuprum/unittests/test_stream_echo_guard.py` | negative control: the test fails if the recovery is not gated |
+| O1 | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain | named pytest example | `cuprum/unittests/test_broken_pipe_echo_guard.py` | negative control: `test_strict_policy_propagates_the_broken_pipe` fails if the recovery is not gated |
 | O2 | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe | named pytest example | same | captured bytes equal the payload; sink sees exactly one attempt |
-| O3 | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT` | named pytest example | same | proves the catch is narrow, not `OSError`-wide |
-| O4 | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example + property test | same, and the existing `_echo_guard_case`-style property | count assertions plus `exc_info is None` and absence of payload extras |
-| O5 | The final decoder flush neither re-attempts the write nor re-raises | named pytest example | same | mirrors the existing `test_flush_after_disabled_echo_does_not_raise` |
-| O6 | The policy reaches both the single-run and pipeline `_StreamConfig` builders | named pytest example | `cuprum/unittests/test_relay_fallback_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions |
-| O7 | The metric increments once per affected drain under a distinct series | named pytest example | `cuprum/unittests/test_echo_metrics.py` | counter name, value, and labels asserted |
-| O8 | The ticket's reproduction returns a result under `BEST_EFFORT` | behavioural test | `tests/behaviour/test_broken_pipe_policy_behaviour.py` | real subprocess, real sink |
+| O3 | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT` | named pytest example | same | `test_best_effort_propagates_non_broken_pipe_os_errors` proves the catch is narrow, not `OSError`-wide |
+| O4 | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example | same | `test_best_effort_warns_once_with_structured_extras` asserts record count, `exc_info is None`, the closed-set extras, and the absence of payload extras |
+| O5 | The final decoder flush neither re-attempts the write nor re-raises | named pytest example | same | `test_broken_pipe_on_the_final_decoder_flush_is_recovered` and `test_flush_after_broken_pipe_does_not_reattempt_the_write` |
+| O6 | The policy reaches both the single-run and pipeline `_StreamConfig` builders | named pytest example | `cuprum/unittests/test_broken_pipe_result_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions on both paths |
+| O7 | The metric increments once per affected drain under a distinct series | named pytest example | `cuprum/unittests/test_echo_metrics.py` | `test_broken_pipe_counter_is_distinct_from_the_encoding_counter` asserts counter name, value, and labels; a second test proves nothing is counted under `STRICT` |
+| O8 | The ticket's reproduction returns a result under `BEST_EFFORT` | behavioural test | `tests/behaviour/test_broken_pipe_policy.py` + `tests/features/broken_pipe_policy.feature` | real subprocess, real sink, three scenarios |
 
 Non-vacuity: O1 is the seeded-fault control for O2 (same fixture, opposite
 policy, opposite outcome), and O3 is the control for the catch width. Every
 assertion can fail: O2 fails if recovery is unconditional, O1 fails if it is
-absent, O3 fails if the clause was widened to `OSError`.
+absent, O3 fails if the clause was widened to `OSError`. O7 carries its own
+control: the `STRICT` companion test asserts the counter list stays empty, so
+the metric cannot pass by counting every drain.
 
 Axioms: `BrokenPipeError` is a subclass of `ConnectionError` and `OSError` in
 CPython 3.13 (verified by the O3 test, which relies on that relationship to be
@@ -181,4 +246,9 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
-Initial version, written after reconnaissance and the RED reproduction.
+Revision 4: all three tasks committed and documented; the gate run, the
+CodeRabbit review, and the pull request remain. Revision 3 recorded the
+verification plan table naming the artefacts that actually discharge each
+obligation, and the decision log's four judgement calls. Revision 2 recorded
+the ticked progress list. Revision 1 was written after reconnaissance and the
+RED reproduction.
