@@ -9,7 +9,9 @@ The invariants checked here are:
 - ``build_argv``: positional arguments are stringified in order and
   precede keyword flags; keyword flags preserve insertion order and
   normalize underscores in keys to hyphens; ``None`` and ``bytes`` are
-  rejected with ``TypeError`` in both positional and keyword positions.
+  rejected with ``TypeError`` in both positional and keyword positions,
+  and any other unsupported type is rejected with ``TypeError`` naming
+  the type.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
   entry; unknown programs are rejected with ``UnknownProgramError``;
@@ -22,6 +24,7 @@ The invariants checked here are:
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import typing as typ
 from pathlib import Path
 
@@ -36,6 +39,8 @@ from cuprum.sh.factory import _RESERVED_OPTIONS
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.sh import ArgValue
 
 # Bounded alphabets keep examples small and shrinkable while still
 # covering multi-character tokens and key normalization.
@@ -125,6 +130,68 @@ def test_build_argv_rejects_invalid_values_everywhere(
     key = data.draw(_KWARG_KEYS, label="poisoned key")
     with pytest.raises(TypeError, match=specimen.pattern):
         build_argv(*args, **{**kwargs, key: poisoned})
+
+
+_ECHO = DEFAULT_CATALOGUE.lookup(Program("echo")).program
+
+
+class _NeverPath(os.PathLike[str]):
+    """A path-like object that is not a ``pathlib.Path``.
+
+    ``ArgValue`` names the concrete ``pathlib.Path``, so an arbitrary
+    ``os.PathLike`` implementation is outside the contract even though a
+    filesystem API would accept it.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    def __fspath__(self) -> str:
+        """Return the wrapped path string."""
+        return self._path
+
+
+_UNSUPPORTED = st.one_of(
+    st.builds(object),
+    st.binary(max_size=6),
+    st.lists(st.integers(), max_size=3),
+    st.builds(_NeverPath, _TEXT_VALUES),
+)
+
+
+@settings(max_examples=150)
+@given(
+    args=_ARGS,
+    kwargs=_KWARGS,
+    unsupported=_UNSUPPORTED,
+    data=st.data(),
+)
+def test_argv_construction_rejects_unsupported_types(
+    args: list[str | int | bool | Path],
+    kwargs: dict[str, str | int | bool | Path],
+    unsupported: object,
+    data: st.DataObject,
+) -> None:
+    """Every entry point rejects a non-``ArgValue`` in either position."""
+    expected = f"{type(unsupported).__name__} is not a valid argv element"
+    # Deliberately defeat static typing: the property under test is the
+    # runtime rejection of the value, which the annotations forbid.
+    poisoned = typ.cast("ArgValue", unsupported)
+    position = data.draw(
+        st.integers(min_value=0, max_value=len(args)),
+        label="insertion position",
+    )
+    positional = [*args[:position], poisoned, *args[position:]]
+    key = data.draw(_KWARG_KEYS, label="poisoned key")
+    calls = (
+        lambda: build_argv(*positional, **kwargs),
+        lambda: build_argv(*args, **{**kwargs, key: poisoned}),
+        lambda: make(_ECHO)(*positional, **kwargs),
+        lambda: make(_ECHO)(*args, **{**kwargs, key: poisoned}),
+    )
+    for call in calls:
+        with pytest.raises(TypeError, match=expected):
+            call()
 
 
 @settings(max_examples=200)
