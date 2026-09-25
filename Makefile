@@ -123,7 +123,8 @@ PYTEST_WORKERS ?= 0
 # scenarios need a container runtime and a few minutes.
 ACT_PARSER_TARGETS ?= tests/integration/test_act_stream_parsing.py
 # The scenario half, run by `test-act` rather than by `test-python`.
-ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py
+ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py \
+  tests/integration/test_makeutil_cache_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_native_sdist.py \

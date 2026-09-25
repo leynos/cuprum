@@ -4313,8 +4313,21 @@ an alternate lock path. Never use a broad or unreasoned exception.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
-available before running the test suite. CI installs its pinned Makeutil
-revision before running that target.
+available before running the test suite. In CI the pin lives only in
+`.github/actions/install-makeutil`, and a job runs that action only when its
+tool cache missed. The tool family's key hashes the action, and `~/.cargo/bin`
+is in the family, so an exact hit already holds the pinned build and skips the
+nightly toolchain and the compile. Changing the pin changes the key, so the
+next run misses and rebuilds. Before building, the action fetches makeutil's
+`main` history and refuses a pin that `main` does not reach: a commit no branch
+reaches builds only until GitHub garbage-collects it, and the previous pin was
+one. Pin a full 40-hex commit from makeutil's `main`.
+`tests/test_ci_makeutil_install.py` holds the arrangement as text,
+`tests/test_ci_install_makeutil_action.py` runs the action's step against
+stand-in `git`, `rustup` and `cargo`, and
+`tests/integration/test_makeutil_cache_integration.py` (in `make test-act`)
+evaluates each consumer's guard under `act` for an exact hit, a restore-key hit
+and a miss.
 
 For local test runs, install the same pinned parser and toolchain before running
 `make test`:
@@ -4323,7 +4336,7 @@ For local test runs, install the same pinned parser and toolchain before running
 rustup toolchain install nightly-2026-05-28 --profile minimal
 RUSTFLAGS="-Zpolonius=next" cargo +nightly-2026-05-28 install \
   --git https://github.com/leynos/makeutil \
-  --rev 29fc5a1634ffbaa18a773eed9dff1b2838a45d9c \
+  --rev 6e64f4fe84419705badc30baa5649cbb6f69a298 \
   --locked --force makeutil
 make test
 ```

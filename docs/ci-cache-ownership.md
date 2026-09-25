@@ -50,6 +50,17 @@ registers `verus` and `extended` in `GITHUB_HOSTED_JOBS`, and the native matrix
 has an explicit shared-registry test entry. These checks preserve the runner
 placement and cache ownership contract when the workflow changes.
 
+### Executables the tool family implies
+
+The tool family's key hashes the actions that pin what it installs, so a job
+may treat an exact hit as proof that a pinned executable is already present.
+`makeutil` is the one that relies on it: `.github/actions/install-makeutil`
+holds its revision and toolchain, and `typecheck-test`, `coverage` and
+`coverage-upload` run that action only when the tool cache missed. A pin that
+lived anywhere the key does not hash would let a hit skip the rebuild and run a
+stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a second
+copy.
+
 ## Why the lane is in every key
 
 `runner.environment` renders to `self-hosted` on Ubicloud and `github-hosted`
