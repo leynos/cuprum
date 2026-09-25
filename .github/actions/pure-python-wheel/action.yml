@@ -1,3 +1,4 @@
+---
 name: Build Pure Python Wheel and Sdist
 description: >-
   Builds the source distribution and, from it, the pure Python wheel using uv,
@@ -16,16 +17,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
         persist-credentials: false
     - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
       with:
         python-version: ${{ inputs.python-version }}
     - name: Install uv
-      uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
       with:
         enable-cache: false
     # Without --sdist or --wheel, uv builds the sdist first and then the wheel
@@ -38,7 +39,7 @@ runs:
         set -euo pipefail
         uv build --out-dir "${OUT_DIR}"
     - name: Upload sdist and wheel artefact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
         path: |

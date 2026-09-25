@@ -1,3 +1,4 @@
+---
 name: Install the Makefile parser
 description: >-
   Build and install the pinned `makeutil`, which the Makefile contract tests

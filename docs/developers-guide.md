@@ -4467,12 +4467,20 @@ both Markdown structure and en-GB-oxendict spelling.
 ### GitHub Actions workflow linting
 
 `make lint` finishes by running
-`yamllint --strict --config-file .yamllint.yml .github/workflows`, followed by
-`actionlint -config-file .github/actionlint.yaml`. Together they validate YAML
-policy, GitHub Actions expressions, and shell used by workflow `run:` steps.
+`yamllint --strict --config-file .yamllint.yml .github/workflows .github/actions`,
+followed by `actionlint -config-file .github/actionlint.yaml`. Together they
+validate YAML policy, GitHub Actions expressions, and shell used by workflow
+`run:` steps. The yamllint invocation covers the composite actions under
+`.github/actions` as well as the workflows, because a shared step obeys the same
+YAML policy and a style or structural error there would otherwise pass the gate
+silently.
+
 The actionlint command reads `.github/actionlint.yaml` from the repository root.
-`.yamllint.yml` requires each workflow to start with `---`, permits GitHub's
-unquoted `on` trigger key, and requires quoted `'true'` and `'false'` values.
+It stays pointed at `.github/workflows` alone: actionlint parses every path it
+receives as a workflow, so a composite action, which has no `on:` or `jobs:`
+section, would fail its workflow schema. `.yamllint.yml` requires each linted
+file to start with `---`, permits GitHub's unquoted `on` trigger key, and
+requires quoted `'true'` and `'false'` values.
 
 Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
 install actionlint using its

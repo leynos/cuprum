@@ -353,8 +353,8 @@ skylos-allow: ## Document one named Skylos exception, not an entry point
 	@case "$${SKYLOS_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2;; esac
 	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
 
-github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows
-	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows
+github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows and composite actions
+	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows .github/actions
 	$(ACTIONLINT) -config-file .github/actionlint.yaml
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)

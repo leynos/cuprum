@@ -1,3 +1,7 @@
+# actionlint parses every path it is given as a workflow, so it is pointed at
+# `.github/workflows` alone; a composite action under `.github/actions` has no
+# `on:` or `jobs:` section and would fail the workflow schema. Yamllint has no
+# such constraint and covers both directories.
 self-hosted-runner:
   # Labels of self-hosted runner in array of strings.
   labels:

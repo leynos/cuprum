@@ -208,7 +208,7 @@ working on the Rust portions of the project:
     cd rust && $(LOCAL_TOOL_ENV) \
       RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \
       $(WHITAKER_CARGO_FLAGS)
-    yamllint --config-file .yamllint.yml .github/workflows
+    yamllint --config-file .yamllint.yml .github/workflows .github/actions
     actionlint
     ```
 
@@ -217,10 +217,11 @@ working on the Rust portions of the project:
     Cargo route. Whitaker never receives that fragment. The protected coverage,
     release, verification, and MSRV paths also retain their separate toolchain
     and linker policy. The target lints every target with all features enabled,
-    denies all Clippy warnings, and validates GitHub Actions workflows. Keep
+    denies all Clippy warnings, and validates GitHub Actions workflows and the
+    composite actions they call. Keep
     `.yamllint.yml`
     compatible with GitHub's unquoted `on` trigger key and require each
-    workflow to begin with `---`. CI must install
+    workflow and composite action to begin with `---`. CI must install
     yamllint with `uv tool` and use the pinned, checksum-verified actionlint
     binary before invoking `make lint`.
   - `make test` executes `cargo nextest run` when `cargo-nextest` is available,
