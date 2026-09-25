@@ -228,12 +228,22 @@ skipped documents nothing, and the content is a CI-configuration topic that
 sits naturally beside [CI cache ownership](ci-cache-ownership.md).
 
 A `SKY-U001` reported after a docs-only change is therefore a question about
-the symbol, not a finding to silence. Check whether the symbol still has a
-runtime caller. If it does, the caller is what needs repairing — a documented
-symbol whose caller a refactor orphaned is a real defect that the ceiling has
-merely exposed. If it does not, the symbol is dead and the answer is to remove
-it. Record a false positive through `make skylos-allow` only once that check
-has been made and its outcome is worth naming.
+the symbol, not a finding to silence. Check which of three cases applies.
+
+If a required runtime caller is missing, a refactor removed it: restore the
+caller. That is a real defect the ceiling has merely exposed.
+
+If the symbol is live but Skylos cannot resolve its caller — a framework
+callback, a protocol implementation, or another implicit caller — verify that
+and record it as an entry point in `[tool.skylos.dead_code]`, naming the caller
+in the reason, as the Skylos dead-code policy in the developers' guide
+describes.
+
+If the symbol is genuinely dead, remove it.
+
+Only a verified false positive that no entry-point record can describe reaches
+`make skylos-allow`, and only once the check above has been made and its
+outcome is worth naming.
 
 ## Amendment (2026-09-25): the pylint-pypy-shim is retired
 
