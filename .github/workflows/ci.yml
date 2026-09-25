@@ -41,7 +41,7 @@ concurrency:
 env:
   RUFF_VERSION: '0.16.4'
   TY_VERSION: '0.0.74'
-  PYLINT_VERSION: '4.0.8'
+  PYLINT_VERSION: '4.0.9'
   ASTROID_VERSION: '4.0.4'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
