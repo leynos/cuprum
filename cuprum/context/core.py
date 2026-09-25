@@ -33,8 +33,6 @@ from cuprum.context._scope import (
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.events import ExecHook
     from cuprum.program import Program
 
