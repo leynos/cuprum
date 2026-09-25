@@ -2535,6 +2535,40 @@ and a PyPI publisher registered without an environment accepts any. Both work,
 but neither enforces the tag restriction, so complete all three steps before
 the next release.
 
+### The PEP 561 typing marker
+
+`cuprum/py.typed` is an empty marker, which under
+[PEP 561](https://peps.python.org/pep-0561/) declares the package fully typed
+and is what makes a type checker read Cuprum's annotations rather than falling
+back to `Any`. It stays empty deliberately: the only other content PEP 561
+gives a meaning to is the literal `partial`, which would understate a package
+whose public surface is annotated throughout. The optional native extension
+needs no exception to that claim, because `cuprum._rust_backend_native` is
+reached only through `importlib.import_module` behind a `typ.Protocol`, so no
+type checker resolves it statically.
+
+Neither backend needs configuration for the file. Both already treat everything
+under `cuprum/` as package source — `[tool.uv.build-backend]` sets
+`module-root = ""` and `[tool.maturin]` sets `python-source = "."` — so the
+marker is picked up from its position in the tree. Do **not** add it to
+`[tool.uv].source-include` or `[tool.maturin].include`: those lists carry Rust
+workspace files that would otherwise be omitted, and their entries are scoped
+to the sdist.
+
+`tests/test_py_typed_marker.py` holds the contract. It builds all four
+artefacts — a wheel and a source archive from each frontend — and asserts the
+marker is inside each one, because a wheel that loses it still imports and
+still passes every behavioural test. The native wheel is covered a second way:
+`test_maturin_wheel_build_snapshot` compares the packaged file list against a
+syrupy snapshot, so adding `cuprum/py.typed` required regenerating
+`cuprum/unittests/__snapshots__/test_maturin_build.ambr`:
+
+```bash
+uv run pytest \
+  cuprum/unittests/test_maturin_build.py::test_maturin_wheel_build_snapshot \
+  -p no:xdist -q --snapshot-update
+```
+
 ## Running the benchmark suite
 
 The benchmark suite compares the Python and Rust stream backends. Benchmark

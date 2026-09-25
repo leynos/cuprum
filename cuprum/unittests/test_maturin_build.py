@@ -157,6 +157,12 @@ def test_maturin_wheel_build_snapshot(
     assert not any(
         entry.startswith("cuprum/unittests/") for entry in snapshot_payload["entries"]
     ), "distribution wheels must exclude the in-package unittest suite"
+    # PEP 561: the marker must sit beside the modules it types. The snapshot
+    # below would also fail if it disappeared, but only as one unexplained
+    # line in a blob diff; naming it here says why the entry matters.
+    assert "cuprum/py.typed" in snapshot_payload["entries"], (
+        "the native wheel must ship the PEP 561 py.typed marker"
+    )
     # The installed distribution's metadata carries `pyproject.toml`'s version
     # after the build backend's PEP 440 normalization (`0.2.0-beta1` becomes
     # `0.2.0b1`), which is the form a wheel's `Version` header must use.

@@ -59,6 +59,13 @@ never compiles the Rust extension, even when a Rust toolchain is present, so
 `is_rust_available()` then returns `False`. Install a platform wheel for native
 acceleration; see [Optional Rust acceleration](#choosing-a-stream-backend).
 
+Cuprum ships a `py.typed` marker, so type checkers read its annotations under
+[PEP 561](https://peps.python.org/pep-0561/) and infer the real types of the
+symbols it exports. Every distribution carries the marker — the pure Python
+wheel, the native wheel, and both source archives — so a source build keeps the
+same typing support as a binary install. No configuration is needed: a checker
+that resolves the installed package picks the marker up on its own.
+
 ## Run a command
 
 Declare the executable, make a builder, build an argument vector, then run it.
