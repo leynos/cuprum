@@ -343,9 +343,9 @@ def test_the_workflow_lint_target_rejects_actionlint_failure(
 
 def test_all_linted_yaml_declares_document_starts() -> None:
     """The shared YAML policy has a compatible marker in every linted file."""
-    linted_paths = sorted(
-        (repo_root() / _WORKFLOW_DIRECTORY).glob("*.yml")
-    ) + sorted((repo_root() / _ACTION_DIRECTORY).glob("*/action.yml"))
+    linted_paths = sorted((repo_root() / _WORKFLOW_DIRECTORY).glob("*.yml")) + sorted(
+        (repo_root() / _ACTION_DIRECTORY).glob("*/action.yml")
+    )
 
     assert linted_paths, "expected at least one GitHub Actions YAML file"
     assert any(path.parent.parent.name == "actions" for path in linted_paths), (
@@ -369,12 +369,10 @@ def test_yamllint_covers_the_composite_actions(tmp_path: pth.Path) -> None:
     assert completed.returncode == 0, completed.stderr
     invocation = invocation_log.read_text(encoding="utf-8")
     assert f"\t{_ACTION_DIRECTORY}" in invocation, (
-        "the lint gate's yamllint must cover the composite actions; "
-        f"got {invocation!r}"
+        f"the lint gate's yamllint must cover the composite actions; got {invocation!r}"
     )
     assert f"\t{_WORKFLOW_DIRECTORY}" in invocation, (
-        "the lint gate's yamllint must still cover the workflows; "
-        f"got {invocation!r}"
+        f"the lint gate's yamllint must still cover the workflows; got {invocation!r}"
     )
 
 
