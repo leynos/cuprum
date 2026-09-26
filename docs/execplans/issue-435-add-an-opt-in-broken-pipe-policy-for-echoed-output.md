@@ -517,6 +517,30 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
+Revision 15: no code changed — three further docs-only commits, and this is the
+revision that closes the evidence loop at a frozen SHA. The substantive gate
+event is that scrutineer produced a drift-free run at `5f03e0d9`, the first tip
+in this sequence where every gate's `head_before` equalled its `head_after`:
+`check-fmt`, `typecheck`, `test`, `markdownlint` and `nixie` all exit 0 with
+`HEAD_DRIFT: no`. This also makes the earlier Revision 14 claim precise, and
+the precision matters. That note said the earlier runs passed; scrutineer's own
+`head_before`/`head_after` pairs showed instead that a commit of this plan's
+own prose landed *mid-run* three separate times — `12-lint-d4e7371c`,
+`13-lint-final` and `15-lint-be274a60` all carry `HEAD_DRIFT: yes`, each
+because a commit was pushed while a gate was reading the tree. Every one of
+those still exited 0, but a green result whose SHA moved is weaker evidence,
+and the honest description is that three of the earlier runs were invalidated
+as *citations* even though none failed. The correction to `ambrieaks` also
+needed a second pass: the entry first claimed the spelling gate "passed three
+times", when in fact two runs passed a tree containing the misspelling and the
+third aborted on an unrelated token before it could reach it — never once was
+the misspelling reported. Both corrections are in the tree rather than in a
+note about the tree. The remaining lesson is about process, not this plan:
+repeatedly committing prose *about* the gate evidence invalidates the evidence
+being described, so the evidence entry has to be the last write before the
+freeze, not an incremental one. Revision 15 is written under that rule, and the
+gate run and CodeRabbit pass that follow it are the ones this plan cites.
+
 Revision 14: no code changed. Two docs-only commits close the findings the
 earlier gate runs left open and correct one spelling. `7224bcde` records the
 tip's gate evidence: the independent run at `d4e7371c` passed `check-fmt`,
