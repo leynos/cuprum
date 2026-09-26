@@ -229,6 +229,63 @@ There is no time limit. Tool failures do not justify lowering acceptance.
        ancestor of this branch and not on `origin/main`**. Re-running with
        `env -u BASH_ENV make test` is the workaround; no tracked test helper is
        changed for it.
+  - [x] (2026-09-27) Pure-Python gate block green at head `6a28ff95`, tree
+    `bdc25f22` — both identical before and after every gate, and the tree clean
+    when the gates finished (`typos.toml` unchanged, so no Stop-hook churn to
+    commit). **Provenance caveat, raised by the gate runner and correct:** these
+    two ledger entries were written at 01:31:28, *after* the five-gate block
+    ended at 01:24 and *during* the three-gate follow-up, so this document was
+    itself the working-tree dirt visible to the second block. The probe is
+    meaningful and is kept: the modification is docs-only and the affected doc
+    contains zero Mermaid blocks, so neither block's verdict changed and both
+    tree hashes held. But the consequence is that **the logs under
+    `/tmp/gate-611-*.out`, not this document, are the stable citation** for
+    those verdicts. Five of the plan's eight required gates were run; logs under
+    `/tmp/gate-611-*.out`:
+    `make check-fmt` PASS (675 formatted, 78 unchanged by mdtablefix),
+    `make markdownlint` PASS (78 files, 0 errors), `make spelling` PASS (no
+    findings), `env -u BASH_ENV make test` PASS (exit 0), and `make lint`
+    PASS except its last sub-check. `make lint` is
+    `python-lint rust-lint github-actions-lint`; `python-lint` passed in full
+    (ruff, interrogate 100%, pylint 10.00/10, df12 lints, ambrleaks, skylos) and
+    `rust-lint` passed in full (rustdoc, `clippy --all-targets --all-features
+    -D warnings`, **`lint-whitaker`**, yamllint), so the whitaker fix this
+    milestone turns on is green under the repository's own invocation, not only
+    under the scoped probe. The abort is the final `actionlint` step, which
+    deadlocked in the known local shellcheck/stdin race; the bounded read-only
+    diagnostic `timeout 90s actionlint -shellcheck= -config-file
+    .github/actionlint.yaml` returned **exit 0 with zero output**, and `.github`
+    is byte-identical to `origin/main`, so no workflow finding is being masked.
+    Treated as locally unobservable, not failed (see the Surprises entry).
+  - [x] (2026-09-27) Test counts from that run, quoted per toolchain rather than
+    summed: nextest `Summary [ 6.776s] 154 tests run: 154 passed, 0 skipped`,
+    including trybuild's `compile_tests::compile_time_ui`; doctests
+    `0 passed; 0 failed; 3 ignored`; pytest targets `2467 passed, 77 skipped`,
+    `638 passed`, `2 passed`, `116 passed`, `4 passed`, `123 passed`,
+    `12 passed, 7 skipped`, `21 passed, 13 skipped`, `22 passed`. The 77 skips
+    are the parked-extension skips implied by this stage's isolation, 33 of them
+    this branch's own Python boundary tests — which is precisely why the native
+    stage below is required and why those Python-side behaviours are recorded as
+    unobserved in this block.
+  - [x] (2026-09-27) The plan's remaining three pure-Python gates green at the
+    same head and tree, run as a separate block after the two entries above were
+    already on disk: `make typecheck` PASS (`ty 0.0.74`, "All checks passed!",
+    exit 0), `make nixie` PASS ("All diagrams validated successfully!", exit 0,
+    all 78 docs scanned), `make msrv-check` PASS
+    (`RUSTUP_TOOLCHAIN=1.85.0 cargo check --workspace --all-targets
+    --all-features`, exit 0). Logs: `/tmp/gate-611-typecheck.out`,
+    `/tmp/gate-611-nixie.out`, `/tmp/gate-611-msrv-check.out`. That completes
+    all eight gates of the plan's pure-Python sequence at one head.
+    `make msrv-check` returned in 1.26s, which is fast enough to be worth
+    refusing on exit code alone, so the pass was corroborated: the verbose run
+    reports all three workspace crates **`Fresh`** under `RUSTUP_TOOLCHAIN=1.85.0`
+    and `textwrap v0.16.2`, and cargo folds the rustc version into its
+    fingerprints, so a nightly-built artefact could not have been reused here.
+    The preconditions behind the lock decision also still hold — `rustc 1.85.0`
+    installed, workspace `rust-version = "1.85.0"`, zero `icu_*` crates in
+    `rust/Cargo.lock` — so the "requires rustc 1.88" failure mode did not arise
+    and the `textwrap` pin was not disturbed. Diagnostic log:
+    `/tmp/gate-611-msrv-check-verbose-diagnostic.out`.
   - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
@@ -315,6 +372,27 @@ not a design preference.** The four new outline rows pushed
 400-line ceiling in AGENTS.md, so the failure-contract scenario moved to
 `test_rust_streams_errors_behaviour.py`. The split is by subject — transport
 behaviour stays, failure classification moves — rather than by line number.
+
+**A local tool deadlock must be classified, not either retried or believed.**
+`make lint` ends in `github-actions-lint`, and on this host `actionlint 1.7.12`
+invoked without `-shellcheck=` hangs indefinitely in the shellcheck stdin write
+— a pipe-buffer race, not a deterministic failure. The gate therefore *aborts*
+on a step that has nothing to do with the diff. Two pieces of separation
+evidence let it be classified rather than guessed at: the branch touches no
+path under `.github/` (the directory is byte-identical to `origin/main`), and a
+bounded read-only
+`actionlint -shellcheck= -config-file .github/actionlint.yaml` returns exit 0
+with zero output in under a second. The rule this suggests for future runs:
+when a gate aborts in a step outside the change surface, measure the step in
+isolation and record it as *unobserved locally* — do not record it as passed on
+the strength of the diagnostic, and do not re-run the form that hangs. The
+abort also has an ordering consequence worth stating plainly: because
+`github-actions-lint` is the last prerequisite of `lint`, the sub-checks that
+carry this milestone's risk — `lint-whitaker` above all — had already completed
+when the abort happened, so their pass is real evidence rather than something
+the abort left unobserved. The converse is the trap
+`aborting-gate-leaves-later-checks-unobserved` warns about, and it does not
+apply here only because the aborting step is last.
 
 ## Decision log
 
