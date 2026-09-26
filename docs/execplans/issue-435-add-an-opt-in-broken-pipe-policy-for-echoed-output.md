@@ -212,6 +212,22 @@ escalation, not a workaround.
       zero after, with nothing else masked. This is the class of exemption
       `typos.local.toml` exists for: an externally fixed identifier that cannot
       be reworded without becoming wrong.
+- [x] Independent gate run at the current tip `d4e7371c`: `check-fmt`,
+      `markdownlint` (and therefore `spelling`), `nixie`, `typecheck` and
+      `test` all pass. The `test` run is the decisive one, because the earlier
+      masking is now closed on its own evidence: exit 0, `HEAD_DRIFT: no`, and
+      all nine pytest globs ran to completion — 2490, 638, 2, 116, 4, 126, 12,
+      21 and 22 passed with 63 expected skips — followed by `test-rust`'s 125
+      of 125 nextest tests, 0 skipped. The glob list in the log, not the exit
+      code, is what proves no target was masked.
+- [x] `make lint` passes, at `f60f04f2`: exit 0 in 50 s, with ruff clean,
+      interrogate at 100.0%, pylint at 10.00/10 under both the project config
+      and the df12 plugin set, and ambrleaks, skylos, clippy and whitaker
+      clean. This is the gate whose spelling failure opened this thread. The
+      three commits above it are docs-only — `git diff --stat f60f04f2
+      d4e7371c` is one `.md` file, 45 insertions and 10 deletions — so the
+      only lint sub-check those commits could disturb is `typos`, which
+      `markdownlint` re-ran at the tip and which passes.
 - [x] CodeRabbit review: a sixth pass, at `a801de86`, returned zero findings
       across all 21 changed files, and the absence is verified rather than
       assumed. The CLI's own persisted record under
