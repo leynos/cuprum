@@ -204,8 +204,22 @@ the next stage instead.
 Echo normally limits each mirrored line to 64 KiB, including its truncation
 marker and terminator; captured output remains complete. Set
 `max_echo_line_bytes=None` only when unbounded mirroring is appropriate.
-`CommandResult.relay_fallbacks` records handled text-sink encoding failures by
-stream without including output content. Other sink errors may propagate.
+`CommandResult.relay_fallbacks` records handled sink failures by stream without
+including output content: a text-only sink that cannot encode the child's bytes
+is always handled, and a sink whose destination has closed is handled only when
+the run opted in. Pass
+`RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` to stop
+echoing the affected stream when it raises `BrokenPipeError`, so capture, line
+observation, and child reaping continue and `run_sync` still returns a result
+whose `relay_fallbacks` names the `broken_pipe` category. The default,
+`BrokenPipePolicy.STRICT`, propagates the error and aborts the run. Only
+`BrokenPipeError` is affected; any other sink `OSError` propagates under both
+policies.
+
+`BrokenPipePolicy` is exported from the package root next to
+`RunOutputOptions`, so an existing
+`from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
+needs `BrokenPipePolicy` added to it.
 
 ### Quiet children
 
