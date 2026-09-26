@@ -184,9 +184,10 @@ contract module under `tests/` and forgets to name it will be told so by
   proving the fix was measured rather than assumed — and the per-job walk
   became its own function to clear it. The helper has since moved again, to
   `tests/helpers/ci_run_scripts.py`, and both functions went with it; the
-  clean `cs delta` verdict was re-established after that split. The general lesson: a green local gate
-  set and a green `lint-test` do not cover CodeScene's complexity rules, so
-  `cs delta` must be run after adding a nested walk.
+  clean `cs delta` verdict was re-established after that split. The general
+  lesson: a green local gate set and a green `lint-test` do not cover
+  CodeScene's complexity rules, so `cs delta` must be run after adding a
+  nested walk.
 
 - Observation: running a pinned gate run while editing the tree invalidates the
   run, and it is not enough to wait for the *last* gate to finish. In the
