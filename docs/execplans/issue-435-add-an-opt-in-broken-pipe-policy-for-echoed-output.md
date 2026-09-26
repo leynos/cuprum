@@ -241,6 +241,20 @@ escalation, not a workaround.
       d4e7371c` is one `.md` file, 45 insertions and 10 deletions — so the
       only lint sub-check those commits could disturb is `typos`, which
       `markdownlint` re-ran at the tip and which passes.
+- [x] CodeRabbit review: a seventh pass, at the frozen tip `bba918e5`, returned
+      zero findings across 23 changed files, and this one is drift-free where
+      the sixth was not — `exit_code: 0` with `HEAD_DRIFT: no`, so the SHA
+      cited and the SHA reviewed are the same. The CLI's persisted record
+      confirms scope rather than a cached replay: `git.json` names
+      `head: bba918e5` with `base: 991dee6` (`origin/main`),
+      `reviewedCommitIds` lists both `a801de86` and `bba918e5`, and
+      `internalState.json` carries 23 substantive per-file summaries. Those
+      summaries also show the reviewer read the change rather than skimming it:
+      its `_pipeline_config.py` note describes `_PipelineRunConfig` carrying a
+      pipeline-wide policy that `_build_stream_config` forwards to each stream,
+      and its `CHANGELOG.md` note states that other sink `OSError`s still
+      propagate and that strict handling remains the default — which is the
+      narrow-catch constraint this plan's O3 test pins.
 - [x] CodeRabbit review: a sixth pass, at `a801de86`, returned zero findings
       across all 21 changed files, and the absence is verified rather than
       assumed. The CLI's own persisted record under
