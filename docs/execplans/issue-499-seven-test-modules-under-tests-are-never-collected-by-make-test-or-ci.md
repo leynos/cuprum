@@ -5,7 +5,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IMPLEMENTED, awaiting gates and pull request
+Status: IMPLEMENTED, awaiting pull request
 
 ## Purpose / big picture
 
@@ -248,9 +248,13 @@ contract module under `tests/` and forgets to name it will be told so by
   `tests/test_ci_*.py` batch is 747 passed including all seven renamed modules
   and this branch's own guard at 59 tests, with 2 syrupy snapshots passing;
   Rust nextest 125 passed; Rust doctests ok.
-- [ ] Milestone gates at the resulting head.
-- [ ] CodeRabbit review.
+- [x] (2026-09-26 20:45Z) Gate evidence from here on is recorded on the pull
+  request rather than in this document. The loop — edit the plan, run the
+  gates, edit the plan again — invalidates each run as a citation, because a
+  commit after a gate run moves the head the run certified. The plan is frozen
+  at `704a4b03`; anything later belongs on the PR body.
 - [ ] Push and open a draft pull request.
+- [ ] CodeRabbit review on the pushed head.
 
 - Observation: the guard as first written passed every local gate and CI's
   `typecheck-test`, and still failed CodeScene's delta review. The check-run is
