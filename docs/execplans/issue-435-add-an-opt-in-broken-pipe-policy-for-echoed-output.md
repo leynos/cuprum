@@ -246,6 +246,26 @@ escalation, not a workaround.
       `HEAD_DRIFT: no`. That completes the set of Markdown-reading gates at the
       tip corresponding to the frozen SHA, on top of the drift-free
       `typecheck` and `test` recorded below.
+- [x] CodeRabbit review: an eighth pass, at the tip `f4c76c84`, returned one
+      finding where the seventh had returned none. The count is not a
+      regression: the two runs reviewed trees whose `cuprum` and `rust` hashes
+      are identical — `423effbd…` and `7ab953c4…` — differing only in this
+      plan's own prose, so the delta between them is presentation. The finding
+      was real and in the change's scope: two lines of
+      `docs/developers-guide.md` that this change rewrites, which is how they
+      reached the diff at all, said that hook failures are "reported and
+      skipped" without the carve-out `cuprum/echo_observation.py:126`
+      documents, namely that `_emit_echo_event` reports and skips ordinary
+      `Exception` while letting `KeyboardInterrupt`, `SystemExit`, and
+      `asyncio.CancelledError` propagate untouched. The sentence made its own
+      point correctly — a broken metrics backend cannot change what a run
+      captures — while being wrong about the mechanism, and the guide is where
+      a reader goes to *get* the mechanism. The imprecision predates this
+      branch: it arrived with `5bb41ab2` on the sibling unicode-guard change
+      (#348/#350) and sits in `origin/main` at the branch point. It is
+      nonetheless in scope here, because this change re-emits those lines.
+      Corrected, naming `_emit_echo_event` explicitly. The run itself was
+      drift-free: `exit_code: 0`, `head_before` equal to `head_after`.
 - [x] CodeRabbit review: a seventh pass, at the frozen tip `bba918e5`, returned
       zero findings across 23 changed files, and this one is drift-free where
       the sixth was not — `exit_code: 0` with `HEAD_DRIFT: no`, so the SHA
@@ -274,10 +294,14 @@ escalation, not a workaround.
       that R9104 bans.
 - [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
       evidence of a clean review. See the Surprises entry below: the bot
-      declines to review draft PRs, so all six passes have been local CLI
+      declines to review draft PRs, so all eight passes have been local CLI
       invocations and the `Kody Code Review` check-run is `skipped`, not
-      `success`. Un-drafting the PR is expected to produce a first hosted
-      review against the then-current tree.
+      `success`. Re-verified at `f4c76c84`: the pull request carries zero
+      CodeRabbit review comments and the only CodeRabbit-authored artefact on
+      it is a "skip review" notice — a draft-PR notice, not a review. The
+      seventeen PR reviews are all `codescene-access[bot]` approvals, a
+      different service. Un-drafting the PR is expected to produce a first
+      hosted review against the then-current tree.
 
 ## Surprises & discoveries
 
@@ -410,6 +434,47 @@ escalation, not a workaround.
   defect from the flake, and only the per-glob log shows which targets actually
   executed. Treat the tail of a `make test` log as evidence of what ran, never
   the exit code.
+- A review pass returning zero findings is a statement about one sampled reading
+  of a tree, not a property of the tree. The seventh and eighth CodeRabbit
+  passes returned zero and one respectively while reading *byte-identical* code
+  — `git rev-parse <sha>:cuprum` and `<sha>:rust` give `423effbd…` and
+  `7ab953c4…` for both `bba918e5` and `f4c76c84`, so the only difference
+  between the two trees is prose in this plan. The finding that separated them
+  was in `docs/developers-guide.md`, a file the seventh pass had already read
+  and filed a substantive summary for. The consequence for the loop is
+  uncomfortable: "clear all concerns before moving on" cannot be discharged by
+  reaching a zero count, because the next pass over the same code may sample
+  differently and return one. What the instruction can be discharged against is
+  the state of every finding *raised so far* — each either fixed in the tree or
+  dismissed with a reason — and that is what the two passes are evidence for
+  jointly: the eighth raised nothing the seventh had left open.
+- A review finding can be both pre-existing and in scope, and the way to tell
+  is whether the change re-emits the line. The eighth pass flagged two lines of
+  the developers' guide asserting that hook failures are "reported and skipped"
+  with no exception. The code is more careful than that: `_emit_echo_event` at
+  `cuprum/echo_observation.py:126` reports and skips ordinary `Exception` but
+  propagates `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`
+  untouched. The sentence predates this branch — it came in with `5bb41ab2`
+  (the sibling unicode-guard change, #348/#350) and sits in `origin/main` at
+  the branch point `991dee64` — so the reflex of calling it out of scope would
+  have been defensible on provenance alone. But this change rewrites that
+  paragraph, which is precisely *why* the reviewer saw it: a diff hunk is read
+  line by line, and a sentence that was invisible in an unchanged file becomes
+  visible the moment its paragraph is touched. Being wrong about the mechanism
+  is worse than being vague about it when the surrounding section exists to
+  explain the mechanism, so it was corrected rather than left. The general
+  rule: when rewrapping prose drags a pre-existing line into a diff, the line
+  is now yours to get right.
+- The reviewers keep finding the same paragraph, which is a signal about how
+  much prose this change carries rather than about the paragraph. Revision 7
+  already corrected two faults in it — a private `_echo_relay` module that has
+  never existed on any ref, and `_echo_chunk` described as the sole route for
+  every echo write. The eighth pass corrected a third. A paragraph rewritten by
+  the change, describing a mechanism the change alters, is the highest-yield
+  place for an inaccurate claim to hide, because it reads as a summary of work
+  just done rather than as a claim needing checking. Each of the three faults
+  was an accurate description of a *plausible* design that was not the one
+  implemented.
 
 ## Decision log
 
@@ -535,6 +600,26 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 16: no code changed. An eighth CodeRabbit pass at `f4c76c84` returned
+one finding, where the seventh had returned zero, and the two runs are directly
+comparable because they read byte-identical code: `git rev-parse <sha>:cuprum`
+and `<sha>:rust` give the same `423effbd…` and `7ab953c4…` for both `bba918e5`
+and `f4c76c84`, so everything separating them is prose in this file. The
+finding was that two lines of `docs/developers-guide.md` — inside the paragraph
+this change rewrites, which is how they entered the diff at all — described
+hook failures as "reported and skipped" while omitting the carve-out
+`cuprum/echo_observation.py:126` documents: `_emit_echo_event` reports and
+skips ordinary `Exception` but lets `KeyboardInterrupt`, `SystemExit`, and
+`asyncio.CancelledError` propagate untouched. The sentence arrived with
+`5bb41ab2` (the unicode-guard change, #348/#350) and is in `origin/main`, so it
+is pre-existing; it is corrected here because this change re-emits it into a
+diff, not on account of its age. The status stays COMPLETE: the edit changes
+one sentence of prose and no behaviour. The reset of the finding count from
+zero to one is the substantive lesson, and it is recorded in
+`Surprises & discoveries` — a zero is a property of one reading, so what the
+review loop discharges is the state of every finding raised so far, not the
+reaching of a zero.
 
 Revision 15: no code changed — three further docs-only commits, and this is the
 revision that closes the evidence loop at a frozen SHA. The substantive gate

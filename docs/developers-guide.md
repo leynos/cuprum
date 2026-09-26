@@ -1735,8 +1735,10 @@ the final decoder flush. Because `ExecPhase` is a closed set that registered
 consumers match exhaustively, the echo channel carries its own
 `cuprum.echo_events.EchoEvent` type on its own hook registry rather than a new
 phase, so consumers opt in by registering and unregistered callers pay nothing.
-Hook failures are reported and skipped, mirroring `cuprum.pump_observation`, so
-a broken metrics backend cannot change what a run captures.
+`cuprum.echo_observation._emit_echo_event` reports and skips ordinary
+`Exception` failures, mirroring `cuprum.pump_observation`, while
+`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate
+untouched, so a broken metrics backend cannot change what a run captures.
 
 ### Result diagnostics ownership
 
