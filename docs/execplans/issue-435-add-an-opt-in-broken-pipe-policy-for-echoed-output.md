@@ -165,7 +165,7 @@ escalation, not a workaround.
       `BLOCKED` while the run was in flight.
 - [x] Independent gate run by a separate agent at `95b928bd`, confirming every
       deterministic gate: `check-fmt`, `lint` (ruff, interrogate 100%, pylint
-      10.00/10, df12 lints, ambrieaks, skylos, clippy, whitaker, typos,
+      10.00/10, df12 lints, ambrleaks, skylos, clippy, whitaker, typos,
       yamllint, actionlint), `typecheck`, `markdownlint`, `spelling`, `nixie`,
       and `test` (2489 passed / 63 skipped, 125 nextest tests, 175 behaviour
       nodes, all three of this feature's scenarios passing).
