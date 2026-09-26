@@ -105,3 +105,16 @@ The Makefile's `PYTEST_TARGETS` names
 `tests/test_process_state_helper.py`, so `make test-python` runs them directly.
 The coverage job separately invokes `pytest` with no path targets and so
 collects the repository root as well.
+
+A later `make lint` run failed on 15 pylint findings, and only two were real.
+The other 13 sat in `benchmarks/` and `cuprum/` files this branch never edits.
+They were stale-base drift: the branch was nine commits behind `main`, and
+pylint walks the whole working tree rather than the diff, so it judged
+already-superseded files. `cuprum/sh.py` and `cuprum/_line_stream.py` — both
+flagged — do not exist on `main` at all. A pristine `origin/main` checkout
+scores 10.00/10, and the hosted `lint-test` job had passed on this branch
+throughout, because it lints the merge ref, which carries `main`'s commits. Two
+lessons: a local pylint failure on an unrebased branch may be judging `main`'s
+own debt, not the branch's; and a local `--python pypy` had moved from 3.11 to
+3.12, which newly parses PEP 695 `type` aliases that the older interpreter
+silently skipped, surfacing findings lint had never reported before.
