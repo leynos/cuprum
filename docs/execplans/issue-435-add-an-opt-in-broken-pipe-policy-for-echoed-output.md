@@ -367,6 +367,26 @@ escalation, not a workaround.
       `typos.toml:1868` lists with a correction; the same module
       writes `@pytest.mark.parametrize` correctly 44 lines above it. Fixed in
       `b8bcb625`, and the gate re-run against it is the one that counts.
+- [x] Gate run at the frozen tip `ddd8d301` came back red at two CI jobs, and
+      the diagnosis split them. `lint-test` failed on the four spelling sites
+      described in Revision 19, which were *this change's own prose* — Revision
+      18 quoted the flagged token while recording the lesson about the gate.
+      `Typecheck and test (Python 3.14)` failed on a `pytest-timeout` expiry
+      (>30.0 s) in `test_doctest_warning_contract.py`'s Cargo/rustdoc
+      subprocess: `1 failed, 2489 passed, 65 skipped in 179.22s`. The second is
+      the repository's known-flaky doctest-timeout class and touches nothing
+      this change modifies, but that is a claim about the traceback, not a
+      licence to ignore the run — it passed on every earlier tip, so the
+      re-run has to confirm it. The other thirteen jobs passed, including all
+      three remaining `Typecheck and test` legs (3.12, 3.13, 3.15a), both
+      extension-gated jobs, `changes`, all five wheel builds and
+      `verify-wheel-install`.
+- [x] All five correction-table sites fixed in `838c8a58`, with `make spelling`
+      exiting 0 and no residual flagged token in the tracked tree. The two
+      sites CI did not report were fixed too: they are indented as list-item
+      continuations, which `typos` reads as a code block and skips, so they
+      were silent without being correct, and a later reflow would have
+      surfaced them.
 - [x] The `f7eaab76` failure is recorded as a *failed* run rather than a
       superseded one, because the two are different evidence. A gate that
       aborts at its first failure proves nothing about the sub-checks after it,
@@ -641,6 +661,21 @@ escalation, not a workaround.
   one the gate did catch, because it happened to be spelled the way the table
   enumerates. Checking a disputed spelling against the table rather than
   against a sense of what looks British takes one `grep`.
+- Writing *about* the correction table trips the correction table. Revision 18
+  recorded this very lesson and quoted the flagged token four times in doing
+  so, so `ddd8d301` failed CI's `lint-test` on prose that existed only to
+  explain the failure it then caused. The repair is to name the class — "a
+  misspelling the table lists" — and never to reproduce the token, because the
+  table enumerates whole words and a document that spells the form wrongly to
+  explain why that form is wrong is one edit from tripping again. This is
+  cheap to get right and embarrassing to get wrong twice.
+- The gate is quieter than it looks. `typos` parses Markdown and skips what it
+  reads as a fenced or indented code block, so two of the five bad sites sat
+  indented as list-item continuations and were reported by neither the local
+  run nor CI. They were still wrong by the project's own table. A green
+  `spelling` therefore bounds what the gate *read*, not what the tree
+  *contains*, which is why the fix went to all five sites and the verification
+  included a tree-wide `grep` rather than only a passing gate.
 
 ## Decision log
 
@@ -779,6 +814,36 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 19: no production code changed; five prose sites did. Revision 18
+quoted the offending token verbatim while recording the lesson about the
+spelling gate, so the correction table flagged the sentence describing it —
+twice over, in the Progress entry and again in the Revision 18 note. CI's
+`lint-test` job failed on four sites at `ddd8d301`; two further sites carry the
+same class of token but sit indented as list-item continuations, which `typos`
+reads as a code block in the whole-file parse and therefore skips. Both were
+still wrong by the project's convention and would have tripped the moment the
+indentation changed, so all five are fixed. The rule adopted is to *name* the
+class rather than reproduce the token: `typos.toml` enumerates whole words, and
+a plan that spells the form wrongly in order to explain why the form is wrong
+is one edit from tripping the gate again. `838c8a58` carries the repair, and
+`make spelling` exits 0 with no residual flagged token anywhere in the tracked
+tree.
+
+The same revision also records the `ddd8d301` CI outcome in full, because it
+was *not* the single known-flaky doctest timeout it first appeared to be. Two
+jobs failed: `lint-test`, on the four spelling sites above, and `Typecheck and
+test (Python 3.14)`, on a `pytest-timeout` expiry in
+`test_doctest_warning_contract.py`. The second is the repository's known-flaky
+doctest-timeout class — a Cargo/rustdoc subprocess that outran a 30 s bound
+under load, in a test that touches nothing this change modifies — and it passed
+on every earlier tip. The first was real, which is why the run could not simply
+be labelled a flake and retried.
+
+Also carries the queued factual correction from Revision 17: the decorator at
+line 198 sits 44 lines above the error at line 242, not eight. The earlier
+figure was wrong in the direction that flatters the diagnosis, which is worth
+noting; a reader checking it would have found the claim overstated.
 
 Revision 18: one token changed. The gate run at Revision 17's frozen tip came
 back red at two independent detectors on the same defect — `typos` in the local
