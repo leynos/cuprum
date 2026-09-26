@@ -1,6 +1,6 @@
 """Validate the scheduled and smoke Loom workflow contracts.
 
-Run ``pytest tests/test_loom_workflow_contract.py`` to ensure both lanes
+Run ``pytest tests/test_ci_loom_workflow_contract.py`` to ensure both lanes
 invoke the bounded Loom driver with the required execution settings.
 """
 

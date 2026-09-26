@@ -393,7 +393,7 @@ and reports a plausible hit rate either way:
   action fails closed.
 
 An unknown backend fails the step before anything is exported.
-`tests/test_setup_sccache_action.py` runs the step's own shell for each case
+`tests/test_ci_setup_sccache_action.py` runs the step's own shell for each case
 and asserts the exit status and the exported variables.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
@@ -444,6 +444,66 @@ Cuprum's Ubicloud cache listing was empty before this migration, because
 `benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's
 entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
 land in Ubicloud's store rather than GitHub's.
+
+### Test selection
+
+`PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
+`typecheck-test` job collect. It is a list of glob patterns, not a directory
+sweep, so a test module that matches no pattern is simply never named — the
+target loops over the patterns, and `[ -e "$1" ] || continue` skips any whose
+first expansion does not exist. Nothing reports the omission: the loop exits
+zero having run only the modules its patterns named, and the contracts inside
+the module can regress unnoticed.
+
+Absent from this suite is not the same as absent from CI. The `coverage` job
+runs a bare `pytest` from the repository root through an out-of-repo composite
+action, with no path arguments, so it collects essentially the whole tree —
+including modules this selector omits. A module missing from `PYTEST_TARGETS`
+therefore still executes there and still gates the merge. What it loses is the
+fast local loop and the default pull-request suite.
+
+Issue #499 found seven such modules under `tests/` — they matched neither
+`tests/test_ci_*.py` nor the explicitly named `tests/test_native_sdist.py` —
+and pull request #488 hit the same problem with four more. The rule that keeps
+it from recurring is:
+
+**Every root-level `tests/test_*.py` module is named by `PYTEST_TARGETS` or by
+`ACT_SCENARIO_TARGETS`, or is recorded in the exception table of
+`tests/helpers/suite_selection.py` with the target that collects it and the
+reason the exclusion is intended.**
+
+The two fixes, in the order to try them:
+
+1. Rename the module into the `tests/test_ci_*.py` selector. This is what
+   #499 and #488 did, and what the selector's name already promises: it is the
+   CI contract suite.
+2. Add the module to `PYTEST_TARGETS`. Use this when the module is not a CI
+   contract — a module about the Rust build, say — so the `test_ci_` name would
+   misdescribe it.
+
+The exception table starts empty; an entry there is a deliberate decision that
+a module is collected elsewhere, never a way to silence the guard. If a module
+is genuinely collected by another target, name that target and the workflow
+that runs it.
+
+`tests/test_ci_test_selection_contract.py` enforces the rule, and it fails with
+a message naming each uncovered module and both fixes rather than reporting
+only that something is wrong. It also asserts that a workflow step actually
+invokes `make test-python` and that the target's recipe expands
+`$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates — or one
+consumed by a recipe that runs a bare directory — is caught too. The
+enumeration and the exception table live in `tests/helpers/suite_selection.py`,
+which sits beside the code that validates each exemption's claim. Other
+contracts read the Makefile through `tests/helpers/makefile.py`, which parses
+it with the pinned `makeutil` binary: a regex over the source can miss a
+continuation or read a comment as an assignment, and either mistake shrinks the
+selector to a set that makes every coverage assertion pass for the wrong reason.
+
+The exceptions that prove the shape are elsewhere: `ACT_SCENARIO_TARGETS` stays
+out of `PYTEST_TARGETS` because the scenarios need a container runtime, and
+`EXTENSION_TEST_TARGETS` stays out because the compiled extension must be built
+first. Both have their own targets, `make test-act` and `make test-extension`,
+and their own contracts.
 
 ### One execution per suite
 
@@ -5360,21 +5420,24 @@ shape-only rationale).
 ### Workflow contract tests
 
 Because the caller is configuration rather than code,
-`tests/test_workflow_contract.py` pins the shape it must uphold, failing the
-pull request when the caller drifts — repointing the pin at a branch, widening
-the token scope, or dropping a configuration input — rather than letting the
-breakage surface only in a scheduled run. Unlike some sibling repositories,
-this module has no `skipif` guard: `.github/` is listed in
+`tests/test_ci_mutation_workflow_contract.py` pins the shape it must uphold,
+failing the pull request when the caller drifts — repointing the pin at a
+branch, widening the token scope, or dropping a configuration input — rather
+than letting the breakage surface only in a scheduled run. Unlike some sibling
+repositories, this module has no `skipif` guard: `.github/` is listed in
 `[tool.mutmut].also_copy`, so the workflow file is present inside mutmut's
-sandbox and the contract test runs there too. Run it locally with:
+sandbox and the contract test runs there too.
+
+The module carries the `test_ci_` prefix, so the `tests/test_ci_*.py` pattern in
+`PYTEST_TARGETS` collects it and `make test` runs it on every machine. It also
+has no dedicated Makefile target, so the focused local command is:
 
 ```bash
-uv run --with pytest --with pyyaml pytest tests/test_workflow_contract.py -q
+uv run --with pytest --with pyyaml pytest tests/test_ci_mutation_workflow_contract.py -q
 ```
 
-There is no dedicated Makefile target for this test; it also falls outside
-`PYTEST_TARGETS`, the glob list `make test` uses, so it must be run directly
-with the command above (or as part of a full mutmut pass). The test validates:
+A full mutmut pass runs it as well, through the same `also_copy` entry that puts
+`.github/` inside the sandbox. The test validates:
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
   SHA;
