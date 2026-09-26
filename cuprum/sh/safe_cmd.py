@@ -19,8 +19,8 @@ import typing as typ
 
 from cuprum._command_internals import (
     _build_subprocess_execution,
-    _ExecutionState,
     _prepare_execution_observation,
+    _resolve_execution_state,
     _run_prepared_command,
 )
 from cuprum._execution_tracking import _ExecutionTracking
@@ -29,7 +29,6 @@ from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
     _collect_hooks,
-    _enforce_allowlist,
     _run_pipeline,
 )
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
@@ -125,18 +124,14 @@ class SafeCmd:
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through execution helpers
-        out = output or RunOutputOptions()
-        ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return await _run_prepared_command(
             self,
-            _ExecutionState(
-                context=ctx,
-                output=out,
-                stdin_data=stdin_data,
-                timeout=effective_timeout,
+            _resolve_execution_state(
+                self,
+                output=output,
+                timeout=timeout,
+                context=context,
+                stdin=stdin,
             ),
         )
 
@@ -182,11 +177,13 @@ class SafeCmd:
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
-        out = output or RunOutputOptions()
-        ctx = context or ExecutionContext()
-        _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
-        effective_timeout = _resolve_timeout(timeout=timeout, context=context)
+        state = _resolve_execution_state(
+            self,
+            output=output,
+            timeout=timeout,
+            context=context,
+            stdin=stdin,
+        )
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
             pending_tasks=[],
@@ -196,18 +193,18 @@ class SafeCmd:
             # required field satisfied.
             sink_bracket=_SinkBracket(None),
         )
-        observation = _prepare_execution_observation(self, ctx, tracking, out)
+        observation = _prepare_execution_observation(
+            self,
+            state.context,
+            tracking,
+            state.output,
+        )
 
         return LineStream(
             _iter_line_events(
                 _build_subprocess_execution(
                     self,
-                    _ExecutionState(
-                        context=ctx,
-                        output=out,
-                        stdin_data=stdin_data,
-                        timeout=effective_timeout,
-                    ),
+                    state,
                     observation=observation,
                 ),
                 tracking,

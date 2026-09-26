@@ -14,8 +14,6 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
@@ -26,6 +24,7 @@ from cuprum._subprocess_wait import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
 
 
@@ -83,6 +82,37 @@ async def _wait_for_streamed_process_exit(
         raise
 
 
+async def _discard_settled_streams(
+    tasks: _RunTaskOwnership,
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> None:
+    """Drain the run's streams under a shield, discarding what they captured.
+
+    For the failure routes where the stdin writer has already settled, so only
+    the consumers need settling: they are cancelled and drained, and whatever
+    they read is dropped, because another error is propagating and must stay
+    the one that surfaces. Shielding is the point — a caller cancelling during
+    the drain would otherwise abandon readers wedged on a pipe this run owns.
+
+    ``_gather`` hands each failure to ``gather``'s first exception and leaves
+    its sibling running, and a reader that outlived the run it belonged to is
+    exactly what this route exists to prevent, so the drain is what makes the
+    re-raise safe rather than merely tidy.
+    """
+    await _shielded_cleanup(
+        _drain_stream_consumers(
+            tasks.consumers,
+            _DrainContext(
+                capture=False,
+                pid=pid,
+                observation=execution.observation,
+                discard_on_cancel=tasks.discard_on_cancel,
+            ),
+        )
+    )
+
+
 async def _await_stdin_writer_and_reconcile_consumers(
     tasks: _RunTaskOwnership,
     execution: _SubprocessExecution,
@@ -101,17 +131,7 @@ async def _await_stdin_writer_and_reconcile_consumers(
     try:
         await tasks.stdin_task
     except BaseException:
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
+        await _discard_settled_streams(tasks, execution, pid)
         raise
 
 
@@ -137,41 +157,18 @@ async def _run_subprocess_with_streams(
     """
     # Imported here to avoid the orchestration module importing this one at
     # module load time (they reference each other's helpers).
-    from cuprum._subprocess_streams import (
-        _build_stream_config,
-        _spawn_stream_consumers,
-        _StreamConsumerSpawnContext,
-    )
+    from cuprum._subprocess_streams import _build_spawn_context, _spawn_run_tasks
 
     if execution.idle is not None:
         # Armed here, once the child is running: the catalogue checks and the
         # before hooks that preceded this spawn are the parent's work, not the
         # child's silence.
         execution.idle.launch()
-    discard_on_cancel = asyncio.Event()
-    stream_config = _build_stream_config(execution, discard_on_cancel)
-    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
-    # The spawn context is a value snapshot, not an ownership hand-off: the
-    # run keeps retaining the same collector tuple on _RunTaskOwnership so
-    # its single reconciliation point settles them exactly once.
-    spawn_context = _StreamConsumerSpawnContext(
-        stream_config=stream_config,
-        pid=pid,
-        relay_diagnostics=relay_diagnostics,
-    )
-    tasks = _RunTaskOwnership(
-        stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
-        ),
-        consumers=_spawn_stream_consumers(
-            process,
-            execution,
-            spawn_context,
-        ),
-        discard_on_cancel=discard_on_cancel,
-        relay_diagnostics=relay_diagnostics,
-        idle=execution.idle,
-    )
+    # The spawn is a value snapshot, not an ownership hand-off: the run keeps
+    # retaining the same collector tuple on _RunTaskOwnership so its single
+    # reconciliation point settles them exactly once.
+    spawn = _build_spawn_context(execution, pid)
+    tasks = _spawn_run_tasks(process, execution, spawn)
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
         execution,
@@ -188,24 +185,13 @@ async def _run_subprocess_with_streams(
         for diagnostics in tasks.relay_diagnostics:
             diagnostics.settle()
     except BaseException:
-        # `gather` re-raises the first failure and leaves its sibling running,
-        # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
-        # drain absorbs what it finds, which is right while another error is
-        # propagating — and here the consumer failure *is* that error.
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
+        # Reconcile the sibling reader the way every other exit path does,
+        # then re-raise: the drain absorbs what it finds, which is right while
+        # another error is propagating — and here the consumer failure *is*
+        # that error.
+        await _discard_settled_streams(tasks, execution, pid)
         raise
-    return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
+    return exit_code, exited_at, stdout_text, stderr_text, spawn.relay_diagnostics
 
 
 __all__ = [

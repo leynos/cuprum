@@ -5,9 +5,12 @@ is the single-command counterpart of :mod:`cuprum._pipeline_internals`: it
 prepares one validated command's observation, bundles everything that run
 needs before it spawns, drives that bundle through the subprocess layer, and
 finalizes the run's presentation-sink session on every terminal path. The
-public command surface, the value types it exchanges, and pipeline
-orchestration stay in :mod:`cuprum.sh`; this module holds only the sequencing
-that a single command's execution owes.
+public command surface and pipeline orchestration stay in :mod:`cuprum.sh`;
+this module holds only the sequencing that a single command's execution owes.
+It reads the value types that surface exchanges — :class:`~cuprum.sh.execution.
+ExecutionContext`, :class:`~cuprum.sh.output.RunOutputOptions`, and
+:class:`~cuprum.sh.execution.StdinInput` — but never constructs a caller-facing
+entry point.
 
 Finalization is the reason the sequence lives in one place. When execution
 fails or an after-hook raises, the sink session must be closed *before* the
@@ -40,36 +43,36 @@ from cuprum._idle_diagnostic import _idle_subject
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._observability import (
     _base_stage_tags,
-    _drain_tasks_during_cleanup,
     _merge_tags,
     _resolve_env_overlay,
     _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
-from cuprum._pipeline_internals import _collect_hooks
+from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
 from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import (
+    _close_sink_and_drain_after_failure,
     _command_session_start,
-    _outcome_for_error,
     _outcome_for_result,
     _SinkBracket,
 )
+from cuprum._subprocess_context import _resolve_timeout
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode, current_context
+from cuprum.sh.execution import ExecutionContext, StdinInput
+from cuprum.sh.output import RunOutputOptions
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import (
         CommandResult,
-        ExecutionContext,
-        RunOutputOptions,
         SafeCmd,
     )
     from cuprum.sinks import base as sinks
@@ -80,6 +83,7 @@ __all__ = [
     "_build_subprocess_execution",
     "_execute_with_hooks",
     "_prepare_execution_observation",
+    "_resolve_execution_state",
     "_run_prepared_command",
 ]
 
@@ -92,18 +96,68 @@ _COMMAND_FINALIZATION_ERROR = "command finalization failed"
 class _ExecutionState:
     """One run's already-resolved inputs, carried as a unit.
 
-    Every field is resolved by ``SafeCmd.run`` before the sink session opens —
-    the allowlist is enforced, stdin is resolved against the context, and the
-    timeout precedence is settled — so the bundle changes nothing about when
-    those steps happen, only how many names the run's orchestration helpers
-    have to take. ``SafeCmd.run`` builds it and hands it on; nothing here
-    constructs it.
+    Every field is resolved before the sink session opens — the allowlist is
+    enforced, stdin is resolved against the context, and the timeout precedence
+    is settled — so the bundle changes nothing about when those steps happen,
+    only how many names the run's orchestration helpers have to take. It is
+    built by :func:`_resolve_execution_state`, which ``SafeCmd.run`` and
+    ``SafeCmd.lines`` both call, and handed on to whichever dispatch follows.
     """
 
     context: ExecutionContext
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
+
+
+def _resolve_execution_state(  # ruff: ignore[too-many-arguments] - only ``cmd`` is positional; the four public inputs are keyword-only, so there is no positional order to confuse
+    cmd: SafeCmd,
+    *,
+    output: RunOutputOptions | None,
+    timeout: float | None,
+    context: ExecutionContext | None,
+    stdin: StdinInput | None,
+) -> _ExecutionState:
+    """Resolve one public call's inputs into an :class:`_ExecutionState`.
+
+    ``SafeCmd.run`` and ``SafeCmd.lines`` accept the same public inputs, and
+    both must resolve them the same way: the allowlist is enforced, the default
+    output options and execution context are supplied, stdin is encoded against
+    the effective context, and the timeout precedence between the explicit
+    argument and *context* is settled. Only the dispatch that follows — running
+    the command to completion versus streaming its lines — differs between the
+    two, so the resolution lives here and each caller keeps its own tail.
+
+    The parameter list mirrors the public pair it serves, so it is their
+    argument count, not this helper's own complexity, that sets it.
+
+    Parameters
+    ----------
+    cmd : SafeCmd
+        The command to resolve inputs for and to check against the allowlist.
+    output : RunOutputOptions | None
+        Capture and echo settings; the default options are used when omitted.
+    timeout : float | None
+        Explicit wall-clock timeout, overriding any timeout in *context*.
+    context : ExecutionContext | None
+        Execution settings; a default context is used when omitted.
+    stdin : StdinInput | None
+        Optional stdin payload, resolved against the effective context.
+
+    Returns
+    -------
+    _ExecutionState
+        The run's resolved inputs, ready for either dispatch.
+    """
+    out = output or RunOutputOptions()
+    ctx = context or ExecutionContext()
+    _enforce_allowlist(cmd)
+    return _ExecutionState(
+        context=ctx,
+        output=out,
+        stdin_data=stdin.resolve(ctx) if stdin is not None else None,
+        timeout=_resolve_timeout(timeout=timeout, context=context),
+    )
 
 
 def _prepare_execution_observation(
@@ -234,17 +288,16 @@ async def _execute_with_hooks(
         for hook in tracking.execution_hooks.after_hooks:
             hook(cmd, result)
     except BaseException as run_error:
-        # Close before the drain. The drain aggregates a hook failure with the
-        # error that ended the run, so closing afterwards would record the
-        # aggregate — an ``error`` annotation standing in for a timeout — and
-        # a drain that raised would skip the close entirely.
-        tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                run_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
+        # The shared close-then-drain pair, for the reason _sink_lifecycle
+        # gives: the drain aggregates a hook failure with the error that
+        # ended the run, so closing afterwards would record the aggregate —
+        # an ``error`` annotation standing in for a timeout — and a drain
+        # that raised would skip the close entirely.
+        await _close_sink_and_drain_after_failure(
+            tracking.sink_bracket,
+            tracking.pending_tasks,
+            run_error,
+            message=_COMMAND_FINALIZATION_ERROR,
         )
         raise
     tracking.sink_bracket.close(outcome=_outcome_for_result(result))
@@ -313,21 +366,15 @@ async def _run_prepared_command(
             tracking,
         )
     except BaseException as run_error:
-        # Close before the drain, for the reason _execute_with_hooks gives: the
-        # drain aggregates a hook failure with the error that ended the run, so
-        # closing afterwards would record the aggregate — an ``error``
-        # annotation standing in for a timeout.
-        tracking.sink_bracket.close(outcome=_outcome_for_error(run_error))
         # The plan event above can schedule observe tasks before a later
         # observer or before-hook raises, and no downstream helper owns them
-        # yet, so the run owes the drain here. The path that already drained in
-        # _execute_with_hooks finds an empty list and returns immediately, so
-        # this cannot double-drain.
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                run_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
+        # yet, so the run owes the shared close-then-drain pair here. The path
+        # that already drained in _execute_with_hooks finds an empty list and
+        # returns immediately, so this cannot double-drain.
+        await _close_sink_and_drain_after_failure(
+            tracking.sink_bracket,
+            tracking.pending_tasks,
+            run_error,
+            message=_COMMAND_FINALIZATION_ERROR,
         )
         raise

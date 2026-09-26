@@ -14,8 +14,8 @@ import collections.abc as cabc
 import dataclasses as dc
 import typing as typ
 
-from cuprum.context._policy import _validate_timeout
-from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
+from cuprum.context._policy import _normalize_scope_fields
+from cuprum.context.env_overlay import EnvMode, EnvOverlay
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecHook
@@ -95,11 +95,4 @@ class ScopeConfig:
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
-        validated = _validate_timeout(self.timeout, "ScopeConfig")
-        # Use object.__setattr__ because the dataclass is frozen
-        object.__setattr__(self, "timeout", validated)
-        object.__setattr__(
-            self,
-            "env_overlay",
-            _coerce_env_overlay(self.env_overlay),
-        )
+        _normalize_scope_fields(self, "ScopeConfig")

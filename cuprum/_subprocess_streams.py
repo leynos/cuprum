@@ -34,6 +34,8 @@ import typing as typ
 from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_wait import _RunTaskOwnership
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
@@ -104,6 +106,26 @@ class _StreamConsumerSpawnContext:
 
     stream_config: _StreamConfig
     pid: int | None
+    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StreamSpawn:
+    """One spawn's consumer inputs plus the run state the spawn also needs.
+
+    :func:`_build_spawn_context` produces three things, but only *context* is
+    what ``_spawn_stream_consumers`` consumes. The other two are carried here
+    because the run must pass them on separately: ``discard_on_cancel`` is the
+    single flag both drains check before releasing a chunk during cancellation,
+    so it has to be one event per run rather than one per stream, and
+    ``relay_diagnostics`` holds the per-stream collectors the run retains for
+    its one reconciliation point. Returning them alongside the context keeps
+    the two dispatch paths from rebuilding — and so from re-pairing — them
+    differently.
+    """
+
+    context: _StreamConsumerSpawnContext
+    discard_on_cancel: asyncio.Event
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
 
 
@@ -201,10 +223,97 @@ def _build_stream_config(
     )
 
 
+def _build_spawn_context(
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> _StreamSpawn:
+    """Build the spawn inputs for one just-started child process.
+
+    Both dispatches — running to completion and iterating lines — spawn the
+    same pair of stream consumers for a child that is already running, so they
+    must build the same thing or the two would diverge on capture, echo, or
+    sink selection. Only *pid* differs between them, because line iteration
+    already holds the ``Process`` object while the run path threads the pid on
+    its own.
+
+    Parameters
+    ----------
+    execution : _SubprocessExecution
+        The resolved execution bundle for the child that was just spawned.
+    pid : int | None
+        The child's process id, or ``None`` when it is unavailable.
+
+    Returns
+    -------
+    _StreamSpawn
+        The consumer inputs, and the run-scoped state that is not part of
+        them.
+    """
+    discard_on_cancel = asyncio.Event()
+    relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
+    return _StreamSpawn(
+        context=_StreamConsumerSpawnContext(
+            stream_config=_build_stream_config(execution, discard_on_cancel),
+            pid=pid,
+            relay_diagnostics=relay_diagnostics,
+        ),
+        discard_on_cancel=discard_on_cancel,
+        relay_diagnostics=relay_diagnostics,
+    )
+
+
+def _spawn_run_tasks(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    spawn: _StreamSpawn,
+) -> _RunTaskOwnership:
+    """Start every task one run owns and bundle them with their state.
+
+    Both dispatches hand a just-started child the same three tasks — the stdin
+    writer and one consumer per stream — and both must pair them with the same
+    run-scoped state, so the whole hand-off is built here rather than retyped
+    per dispatch. A dropped ``discard_on_cancel`` is the failure this prevents:
+    cancellation is checked per chunk, so losing the pairing would leave a
+    cancelled run draining output it was told to discard.
+
+    Parameters
+    ----------
+    process : asyncio.subprocess.Process
+        The child process that was just started.
+    execution : _SubprocessExecution
+        The resolved execution bundle for that child.
+    spawn : _StreamSpawn
+        The spawn state built for this child by :func:`_build_spawn_context`.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The started tasks and the state the run reconciles them with.
+    """
+    return _RunTaskOwnership(
+        stdin_task=_spawn_stdin_writer(
+            process,
+            execution.stdin_data,
+            execution.observation,
+        ),
+        consumers=_spawn_stream_consumers(
+            process,
+            execution,
+            spawn.context,
+        ),
+        discard_on_cancel=spawn.discard_on_cancel,
+        relay_diagnostics=spawn.relay_diagnostics,
+        idle=execution.idle,
+    )
+
+
 __all__ = [
     "_StreamConsumerSpawnContext",
+    "_StreamSpawn",
+    "_build_spawn_context",
     "_build_stream_config",
     "_create_stream_callback",
     "_resolve_stream_sink",
+    "_spawn_run_tasks",
     "_spawn_stream_consumers",
 ]

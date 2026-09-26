@@ -52,6 +52,7 @@
       'cuprum/_rusage.py',
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.<abi3-extension>',
+      'cuprum/_scope_registration.py',
       'cuprum/_sink_lifecycle.py',
       'cuprum/_stream_drain_state.py',
       'cuprum/_stream_echo.py',

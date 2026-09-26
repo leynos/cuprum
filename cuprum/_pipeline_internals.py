@@ -56,7 +56,11 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
+from cuprum._sink_lifecycle import (
+    _close_sink_and_drain_after_failure,
+    _outcome_for_error,
+    _SinkBracket,
+)
 from cuprum._timeout_reporting import _report_pipeline_timeout_expiry
 from cuprum.context import EnvMode, current_context
 
@@ -171,11 +175,11 @@ async def _finalize_pipeline_execution(
     try:
         _run_pipeline_after_hooks(parts, hooks_by_stage, stage_results)
     except BaseException as after_hook_error:
-        sink_bracket.close(outcome=_outcome_for_error(after_hook_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, after_hook_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
+        await _close_sink_and_drain_after_failure(
+            sink_bracket,
+            pending_tasks,
+            after_hook_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     sink_bracket.close(outcome=_pipeline_result_outcome(stage_results))
@@ -281,17 +285,15 @@ async def _run_spawned_pipeline(
             inputs=inputs,
         )
     except BaseException as result_error:
-        sink_bracket.close(outcome=_outcome_for_error(result_error))
         # The stage-result build sits between the spawn and finalization, so
         # the observe-hook tasks this pipeline owns are nobody else's yet: the
-        # run owes the drain here for the same reason the spawn-failure branch
-        # above does, and for the same reason the close comes first.
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks,
-                result_error,
-                message=_PIPELINE_FINALIZATION_ERROR,
-            )
+        # run owes the same close and drain the spawn-failure branch above and
+        # the after-hook failure in _finalize_pipeline_execution owed.
+        await _close_sink_and_drain_after_failure(
+            sink_bracket,
+            pending_tasks,
+            result_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     # Finalization owns the close, after the after-hooks have run: a failing
@@ -374,11 +376,11 @@ async def _spawn_and_drive_pipeline(
             idle=config.idle,
         )
     except BaseException as spawn_error:
-        config.sink_bracket.close(outcome=_outcome_for_error(spawn_error))
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks, spawn_error, message=_PIPELINE_FINALIZATION_ERROR
-            )
+        await _close_sink_and_drain_after_failure(
+            config.sink_bracket,
+            pending_tasks,
+            spawn_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
         )
         raise
     return await _run_spawned_pipeline(

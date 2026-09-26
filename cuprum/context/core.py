@@ -19,9 +19,9 @@ from cuprum.context._policy import (
     _is_narrowed_allowlist_restricted,
     _merge_hooks,
     _narrow_allowlist,
+    _normalize_scope_fields,
     _resolve_env_policy,
     _resolve_narrowed_timeout,
-    _validate_timeout,
 )
 from cuprum.context._scope import (
     AfterHook,
@@ -30,7 +30,7 @@ from cuprum.context._scope import (
     ForbiddenProgramError,
     ScopeConfig,
 )
-from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
+from cuprum.context.env_overlay import EnvMode, EnvOverlay
 
 if typ.TYPE_CHECKING:
     from cuprum.events import ExecHook
@@ -79,14 +79,7 @@ class CuprumContext:
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
-        validated = _validate_timeout(self.timeout, "CuprumContext")
-        # Use object.__setattr__ because the dataclass is frozen
-        object.__setattr__(self, "timeout", validated)
-        object.__setattr__(
-            self,
-            "env_overlay",
-            _coerce_env_overlay(self.env_overlay),
-        )
+        _normalize_scope_fields(self, "CuprumContext")
 
     def is_allowed(self, program: Program) -> bool:
         """Return True when the program is in the allowlist.
