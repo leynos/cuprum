@@ -854,6 +854,47 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
+Revision 21: the record moved the tip, so the tip was re-gated. Writing
+Revision 20 (`911ef293`) and then correcting its test count (`cabdc317`) both
+touched this file and nothing else, which means the sweep cited *in* Revision
+20 describes `b91e7eee` and no longer the shipped revision. That is the same
+trap Revisions 12 and 13 each hit, and the discipline is the one they settled
+on: finish the document, freeze it, and only then gate. The fresh sweep at
+`cabdc317` ran all six gates to completion — none stopped at a first failure —
+and every one exited 0: `check-fmt` at 04:54:42Z, `lint` at 04:56:27Z,
+`typecheck` at 04:58:05Z, `test` at 05:03:14Z, `markdownlint` at 05:04:46Z, and
+`nixie` at 05:05:54Z. `git rev-parse HEAD` and `git status --porcelain` were
+identical at the start and end of the run, so the verdicts describe a revision
+that did not move while they were being taken.
+
+The numbers confirm rather than restate. Python reported 3433 passed and 79
+skipped across all nine globs, and nextest 125 of 125, which is *identical* to
+the `b91e7eee` run — so the two commits changed prose and nothing else, and the
+count correction published in Revision 20 is now verified against the tip that
+carries it rather than only against the log it was derived from. Three known
+risk classes were checked and stayed silent rather than merely going unobserved:
+`make lint` did not trip the local actionlint shellcheck stall, it did not
+regenerate `typos.toml` (the builder's `current: typos.toml` line is
+informational, and `git diff` confirms the file byte-identical), and the flaky
+`test_doctest_warning_contract.py` timeout did not fire. Those are absences
+produced by looking, not by not looking.
+
+GitHub Actions at `cabdc317` — run `36219046991` — is fully green: 16 jobs
+`success`, 1 `skipped` (`Loom model smoke test`, intentionally), none failed,
+so the two Markdown-only commits pass the full pipeline including `lint-test`
+and all four `Typecheck and test` legs.
+
+This revision is the last one that records a gate, because the record is itself
+the thing that invalidates it. Every sweep cited above moved the tip, and each
+sweep's verdict therefore describes the revision *before* the sentence
+describing it. Left alone that regress never closes: the final gate can never
+be written down without ceasing to apply. The exit is to separate the two
+artefacts. This file is now frozen at the revision that carries it, and the
+gate for *that* revision is reported on the pull request rather than here,
+since the pull request sits outside the tracked tree and recording evidence
+there cannot move what the evidence describes. A reader wanting the shipped
+revision's verdict should read the PR, not append another note here.
+
 Revision 20: no production code changed. This revision records the evidence
 that closes the hole left open at `f7eaab76`, where the delegated gate run
 stopped at its first failure and therefore said nothing about the five gates
