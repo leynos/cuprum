@@ -254,12 +254,13 @@ escalation, not a workaround.
   reads sensibly.
 - A test can pass at runtime and still be wrong. The positional-slot test bound
   `on_line` to `seen.append`, which works because Python does not enforce
-  annotations, so `make test` was green while `make typecheck` rejected the same
-  line as `invalid-argument-type`: the field is `Callable[[LineEvent], None]`,
-  not `Callable[[str], None]`. The nested-callback precedent already existed in
-  `test_stream_drain.py`. A green `make test` is therefore not evidence that a
-  new test's callables are correctly typed, and `make typecheck` must be part of
-  the gate set for any delta that adds one.
+  annotations, so `make test` was green while `make typecheck` rejected the
+  same line as `invalid-argument-type`: the field is
+  `Callable[[LineEvent], None]`, not `Callable[[str], None]`. The
+  nested-callback precedent already existed in `test_stream_drain.py`. A green
+  `make test` is therefore not evidence that a new test's callables are
+  correctly typed, and `make typecheck` must be part of the gate set for any
+  delta that adds one.
 
 ## Decision log
 
