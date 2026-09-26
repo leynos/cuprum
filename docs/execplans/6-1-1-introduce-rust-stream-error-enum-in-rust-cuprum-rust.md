@@ -1,6 +1,7 @@
 # Centralize native stream errors (6.1.1)
 
-Status: DRAFT — awaiting explicit approval before implementation.
+Status: IN PROGRESS — M1 implementation. Approved 2026-09-26; the publishing
+draft-PR and approval checkboxes below are recorded as done by that approval.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -82,13 +83,76 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   community review covering all six Logisphere perspectives.
 - [x] (2026-09-19) Reconciled expert findings on OS codes, validation order,
   native versus shim behaviour, and Rust behavioural-test compatibility.
-- [ ] Validate and publish this plan as a draft pull request.
-- [ ] Obtain explicit implementation approval.
+- [x] (2026-09-26) Rebased onto `main` (`991dee64`); branch head `ab58a3d6`.
+  Zero conflicts — the branch's only file is one `main` never touched. All five
+  referenced Rust files had moved under the rebase, so every plan claim was
+  re-verified at the new base: symbol counts unchanged, `checked_buffer_size`
+  byte-identical, MSRV still 1.85.0, all 22 referenced paths and 10 relative
+  links resolve. `main` bumped `cuprum-streams`'s `rstest` 0.26.1 → 0.27.0, so
+  the integration crate's 0.27.0 is now uniform across the workspace.
+- [x] (2026-09-26) Validated and published this plan as a draft pull request
+  (PR #432).
+- [x] (2026-09-26) Obtained explicit implementation approval, with the
+  `thiserror` dependency authorised (see Decision log).
 - [ ] M1: implement and validate the typed boundary and its tests.
+  - [x] (2026-09-26) Typed boundary implemented across `lib.rs`
+    (`RustStreamError`, typed `validate_buffer_size`/`convert_fd`),
+    `errors.rs` (`impl From<RustStreamError> for PyErr`, old converter demoted),
+    and `stream_pyfunctions.rs` (single-conversion boundary).
+  - [x] (2026-09-26) V1/V2 red evidence captured: `E0432 unresolved import
+    crate::RustStreamError` at three sites.
+  - [x] (2026-09-26) V1/V2 green: `make test-rust TEST_FLAGS='-p cuprum-rust
+    --all-targets --all-features'` → **51 tests run, 51 passed, 0 skipped**,
+    including all four `rstest-bdd` scenarios
+    (`stream_error_behaviour::typed_native_stream_failures` and
+    `accepts_a_valid_buffer_size::case_1`..`case_3`) and clean doctests.
+    Log: `/tmp/611-rust-focused-1.out`.
+  - [x] (2026-09-26) `make msrv-check` equivalent green on Rust 1.85.0
+    (`cargo +1.85.0 check --workspace --all-targets --all-features`, exit 0,
+    warning-free). Logs: `/tmp/611-msrv-check-2.out`.
+  - [x] (2026-09-26) V3: extend the Python unit, behavioural, and Hypothesis
+    suites. Hypothesis negative bound widened to `i64::MIN`; a new
+    `test_buffer_validation_precedes_descriptor_conversion` pins native
+    ordering; `test_out_of_i64_buffer_size_stays_an_extraction_error` pins the
+    extraction boundary; consume gained `empty_input` and
+    `single_byte_minimum_buffer` rows; the new
+    `cuprum/unittests/test_rust_stream_native_order.py` calls
+    `cuprum._rust_backend_native` **directly** (the shim validates first, so it
+    cannot witness native order) and both new modules were added to
+    `EXTENSION_TEST_TARGETS`, which `test_extension_build_contract.py` requires.
+    Green: **50 passed, 1 skipped** (Windows-only). Log:
+    `/tmp/611-v3-green-final.out`.
+  - [x] (2026-09-26) V3 mutation evidence. `InvalidBufferSize` was remapped to
+    `PyOSError` in `errors.rs`, the extension rebuilt via `make develop`, and
+    the suite re-run: **6 tests failed across 4 modules**
+    (`test_rust_stream_native_order.py` ×2, `test_rust_streams_boundary_property.py` ×2,
+    `test_rust_consume_stream.py` ×1,
+    `test_rust_streams_errors_behaviour.py` ×1), all reporting
+    `expected ValueError, found OSError`. The source was then restored to a
+    byte-identical copy and `git diff` confirmed the tree clean. Logs:
+    `/tmp/611-mutation-red.out`, `/tmp/611-restore-build.out`, green re-run
+    `/tmp/611-v3-green-final.out`.
+  - [ ] V4: confirm ownership and non-fatal write policy via native gates.
+  - [ ] Documentation: design guide, developers' guide, users' guide.
+  - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
 ## Surprises & discoveries
+
+**Red evidence was captured after the fact, not before the edit.** The plan
+requires the new Rust tests' *initial failure* to identify the absent enum or
+typed result. The first build attempt was blocked by the lockfile/MSRV problem
+recorded in the Decision log, so the tests were first compiled only once the
+implementation already existed. The red state was therefore reconstructed
+deliberately: HEAD's three production files were restored while keeping the new
+test modules declared, and the failure was captured. It reported exactly
+`error[E0432]: unresolved import crate::RustStreamError` (three sites:
+`stream_error_behaviour.rs:19`, `stream_error_tests.rs:13` and `:243`) — the
+absent typed contract, not a missing dependency. The green files were then
+restored and re-verified. This is recorded as a deviation in method, not in
+outcome: the evidence is real and reproducible, but it does not prove the tests
+were written against a genuinely unimplemented API, because they were not.
 
 The task's original location predates the current three-crate split. At the
 planning revision, `lib.rs` contains argument validation, while
@@ -106,7 +170,97 @@ Two attempts to create a context pack failed because the server rejected an
 existing pack larger than its 524288-byte limit. Planning agents exchanged
 bounded repository paths and evidence instead; no shared pack was deleted.
 
+**A new extension-gated test module is not merely uncovered — the suite fails
+until it is declared.** `cuprum/unittests/test_extension_build_contract.py`
+derives the gated modules from the test tree itself (scanning for the
+`rust_streams` fixture, the shared skip reason, and the literal
+`_rust_backend_native`) and asserts each one appears in the Makefile's
+`EXTENSION_TEST_TARGETS`. Adding the new behaviour module without touching the
+Makefile therefore failed a *pre-existing* gate with "these test modules gate on
+the compiled extension but are not in the Makefile's EXTENSION_TEST_TARGETS".
+This is a useful property and was not anticipated by the plan: it means the
+"skip silently unless the extension is present" hazard the plan warns about is
+already mechanically guarded for any new module, rather than depending on the
+author to remember. Both `test_rust_stream_native_order.py` and
+`test_rust_streams_errors_behaviour.py` were added to that variable.
+
+**Separating the behaviour module was necessary for a line-count constraint,
+not a design preference.** The four new outline rows pushed
+`tests/behaviour/test_rust_streams_behaviour.py` to 411 lines, past the 400-line
+ceiling in AGENTS.md, so the failure-contract scenario moved to
+`test_rust_streams_errors_behaviour.py`. The split is by subject — transport
+behaviour stays, failure classification moves — rather than by line number.
+
 ## Decision log
+
+- (2026-09-26) **The `rstest-bdd` dev-dependency must be locked at
+  `textwrap 0.16.2`, not re-resolved freely.** Adding `rstest-bdd` pulls in
+  `gherkin`, which depends on `textwrap`; `textwrap 0.16.4` newly depends on
+  `icu_segmenter`, whose 2.3.0 release requires Rust 1.88. The workspace
+  declares `resolver = "2"`, which is **not** MSRV-aware, so any re-resolution
+  that is free to move `textwrap` picks `0.16.4` and breaks `make msrv-check`
+  with eleven "requires rustc 1.88" errors (`icu_collections`,
+  `icu_locale_core`, `icu_locale_fallback`, `icu_locale_fallback_data`,
+  `icu_provider`, `icu_segmenter`, `icu_segmenter_data`, `textwrap`, and
+  duplicates). The fix is `cargo +1.85.0 update textwrap --precise 0.16.2`,
+  which cascades the entire `icu_*` subtree back out of the lock. This is not a
+  workaround but the correct resolution: a scratch crate on `edition = "2024"`
+  (which implies resolver 3, MSRV-aware) independently selects
+  `textwrap 0.16.2` for the same edge. Contributors who regenerate the lock for
+  any reason must keep `textwrap` pinned, and `make msrv-check` is the gate
+  that catches it. The verdict on the plan's tolerance clause is that no
+  behavioural-test release is incompatible: `rstest-bdd` 0.5.0 itself compiles
+  and runs on 1.85.0, and the toolchain stays untouched.
+- (2026-09-26) **A single-expression `#[fixture]` body trips
+  `unused_braces` under `-D warnings`; use the multi-line block form.** The
+  `rstest` `#[fixture]` macro re-emits a single-expression function body as a
+  nested block, so `fn context() -> Ctx { Ctx::default() }` becomes redundant
+  inner braces and fails the workspace's `RUST_FLAGS = -D warnings`. Plain
+  `rustc` accepts the same one-liner, so the failure is macro-induced and does
+  not reproduce without `rstest`. Verified minimally: single-expression bodies
+  fail, multi-line blocks pass. The repository's existing fixtures already use
+  the multi-line form (`cuprum-native-io/src/ownership_tests.rs`,
+  `cuprum-streams/src/io_utils/tests.rs`), so this is house style rather than a
+  new constraint. Note that cargo's own suggested fix for this lint is
+  syntactically invalid; ignore it. `#[allow]` would also silence the lint but
+  the plan forbids new suppressions.
+- (2026-09-26) **`thiserror` is an authorised dependency.** The plan's
+  Interfaces section said to "reuse the existing `thiserror = "2.0.18"`
+  requirement in the integration crate's manifest". That requirement does
+  **not** exist: `thiserror` is declared only in `cuprum-streams`, the
+  workspace has no `[workspace.dependencies]` table, and `cuprum-streams` does
+  not re-export it. The inaccuracy is **not** rebase-induced — it is equally
+  false at the plan's own baseline `861fe2f0`. The dependency is therefore
+  **added** to `rust/cuprum-rust/Cargo.toml`, at the same `"2.0.18"` caret
+  requirement the streams crate uses, and the user has authorised it explicitly.
+  `rust/Cargo.lock` already pins `thiserror` 2.0.20, so the new declaration
+  resolves to a version already in the graph and adds no new crate, no new
+  code, and no version change.
+- (2026-09-26) **`rstest-bdd` 0.5.0 is verified compatible with Rust 1.85 and
+  `rstest` 0.27.0, resolving the plan's last stated implementation-time
+  uncertainty.** This was verified by experiment in a scratch crate outside the
+  repository, not inferred: `cargo generate-lockfile` on
+  `RUSTUP_TOOLCHAIN=1.85.0` resolved and locked `rstest-bdd` and
+  `rstest-bdd-macros` at 0.5.0 (reporting 0.6.0 as "requires Rust 1.88"),
+  `cargo build --all-targets` compiled the whole tree in 11.6 s, and a real
+  scenario — an internal `#[cfg(test)]` module driving a `features/*.feature`
+  file via `#[scenario]` — ran green under `rstest` 0.27.0. The compatibility
+  concern in the plan and in the "Expert review reconciliation" section is
+  therefore discharged; the toolchain is not touched.
+- (2026-09-26) **`rstest-bdd` step patterns use brace placeholders.** A step
+  defined as `#[given("a buffer size of <size>")]` compiles but never matches;
+  the correct form is `#[given("a buffer size of {size}")]`. The angle-bracket
+  form is the *feature-file* placeholder, and the value is substituted into the
+  step text before matching, so the pattern must carry the brace form. Verified
+  by experiment: the angle-bracket pattern failed with "Step not found at index
+  0: Given a buffer size of 1".
+- (2026-09-26) **Outline columns bind to the `#[scenario]` function's
+  parameters, not the step functions'.**
+  `#[scenario] fn probe(ctx: Ctx, size: isize)` is what makes an `<size>`
+  column resolvable; declaring it only on the step function fails with
+  "parameter `size` not found for scenario outline column. Available
+  parameters: [ctx]". `isize` is the placeholder type to prefer for buffer
+  sizes, since `1073741824` (the 1 GiB cap) exceeds `i32`.
 
 - (2026-09-19) Place a crate-private integration enum in `lib.rs`, wrapping
   `PumpError` rather than copying its variants. This preserves ADR-011's
@@ -121,6 +275,45 @@ bounded repository paths and evidence instead; no shared pack was deleted.
 - (2026-09-19) Treat this as a behaviour-preserving boundary consolidation.
   Amend the relevant design section during implementation; a new ADR is not
   needed unless evidence changes the accepted architecture.
+- (2026-09-26) **Treat `thiserror` as an authorized dependency for this
+  work.** The user authorized it explicitly, so `cuprum-rust` adds
+  `thiserror = "2.0.18"` rather than hand-writing the `Display` and `Error`
+  impls. This is a scope decision, not a supply-chain one: `thiserror` is
+  already in the workspace via `cuprum-streams`, the lockfile is unchanged by
+  the addition, and no new transitive crate enters the graph. The derived
+  messages are load-bearing — the Python boundary matches on the variant rather
+  than the text, but the text is what a caller reads, and `#[error("{0}")]`
+  keeps the validator's own stable message as the single source.
+- (2026-09-26) **The pump shim, not the native boundary, answers a buffer
+  failure in normal use — and that is correct, not a defect.** `make develop`
+  builds the extension into the dev venv, and `cuprum._streams_rs` validates
+  `buffer_size` before calling Rust precisely so that a writer never reaches the
+  native ownership boundary on a rejected size. The consequence found while
+  writing V3 is that a *pump* mutation remapping `InvalidBufferSize` to
+  `OSError` is invisible through the shim: the shim raises `ValueError` first
+  and the mutated conversion never runs. Only direct native calls and the
+  consume path (which has no writer and so no pre-adoption check) surface it.
+  This is why `cuprum/unittests/test_rust_stream_native_order.py` calls
+  `cuprum._rust_backend_native` directly: the plan requires native-order checks
+  to call the compiled module, and the mutation evidence above confirms the
+  distinction is real rather than stylistic. The shim's check is a
+  resource-ownership guarantee; the native check is the typed-boundary
+  guarantee. Both are wanted, and neither test can stand in for the other.
+- (2026-09-26) **A pre-existing `os.close` overflow hazard was found and left
+  alone.** While adding the precedence property, the pump arm failed with
+  `OverflowError: Python int too large to convert to C int` — not from the
+  boundary, but from `_close_writer_after_pre_native_failure` calling
+  `os.close(writer_fd)` on a descriptor outside the C `int` range. `os.close`
+  raises `OverflowError`, which the helper's `contextlib.suppress(OSError)` does
+  not catch, so the real `ValueError` is masked. The hazard is **pre-existing**:
+  `git show origin/main:cuprum/_streams_rs.py` contains the same helper
+  unchanged, and `git diff origin/main...HEAD -- cuprum/_streams_rs.py` is
+  empty. It is out of 6.1.1's scope — this plan changes the Rust boundary, not
+  the shim's descriptor handling — so it is recorded here rather than fixed
+  here. The test that tripped it was corrected instead: it had passed the
+  out-of-range value as the pump's *writer* as well as its reader, which is not
+  a realistic call shape. It now opens a genuinely valid writer, matching the
+  existing `test_pump_rejects_invalid_reader_descriptor`.
 
 ## Outcomes & retrospective
 

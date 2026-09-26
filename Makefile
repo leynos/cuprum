@@ -172,10 +172,12 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_rust_splice.py \
   cuprum/unittests/test_rust_errno.py \
   cuprum/unittests/test_rust_errno_windows.py \
+  cuprum/unittests/test_rust_stream_native_order.py \
   cuprum/unittests/test_loom_model_conformance.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
   tests/behaviour/test_rust_streams_behaviour.py \
+  tests/behaviour/test_rust_streams_errors_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
