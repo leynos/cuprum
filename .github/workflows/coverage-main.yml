@@ -200,7 +200,7 @@ jobs:
       # Trunk coverage runs the same native selector parity test as PR coverage.
       # The restored tool cache is optional, so provision the pinned binary.
       - name: Install mdtablefix
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@22c1a57865e42ba7e2ca4f88ae49fa6f81f58013
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
