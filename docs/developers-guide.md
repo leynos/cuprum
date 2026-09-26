@@ -447,10 +447,20 @@ land in Ubicloud's store rather than GitHub's.
 
 ### Test selection
 
-`PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's `lint-test` job
-collect. It is a list of glob patterns, not a directory sweep, so a test module
-that matches no pattern runs nowhere: `pytest` exits zero for having collected
-nothing, and the contracts inside the module can regress unnoticed.
+`PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
+`typecheck-test` job collect. It is a list of glob patterns, not a directory
+sweep, so a test module that matches no pattern is simply never named — the
+target loops over the patterns, and `[ -e "$1" ] || continue` skips any whose
+first expansion does not exist. Nothing reports the omission: the loop exits
+zero having run only the modules its patterns named, and the contracts inside
+the module can regress unnoticed.
+
+Absent from this suite is not the same as absent from CI. The `coverage` job
+runs a bare `pytest` from the repository root through an out-of-repo composite
+action, with no path arguments, so it collects essentially the whole tree —
+including modules this selector omits. A module missing from `PYTEST_TARGETS`
+therefore still executes there and still gates the merge. What it loses is the
+fast local loop and the default pull-request suite.
 
 Issue #499 found seven such modules under `tests/` — they matched neither
 `tests/test_ci_*.py` nor the explicitly named `tests/test_native_sdist.py` —
@@ -459,8 +469,8 @@ it from recurring is:
 
 **Every root-level `tests/test_*.py` module is named by `PYTEST_TARGETS` or by
 `ACT_SCENARIO_TARGETS`, or is recorded in the exception table of
-`tests/test_ci_test_selection_contract.py` with the target that collects it and
-the reason the exclusion is intended.**
+`tests/helpers/suite_selection.py` with the target that collects it and the
+reason the exclusion is intended.**
 
 The two fixes, in the order to try them:
 
@@ -481,7 +491,9 @@ a message naming each uncovered module and both fixes rather than reporting
 only that something is wrong. It also asserts that a workflow step actually
 invokes `make test-python` and that the target's recipe expands
 `$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates — or one
-consumed by a recipe that runs a bare directory — is caught too. Other
+consumed by a recipe that runs a bare directory — is caught too. The
+enumeration and the exception table live in `tests/helpers/suite_selection.py`,
+which sits beside the code that validates each exemption's claim. Other
 contracts read the Makefile through `tests/helpers/makefile.py`, which parses
 it with the pinned `makeutil` binary: a regex over the source can miss a
 continuation or read a comment as an assignment, and either mistake shrinks the

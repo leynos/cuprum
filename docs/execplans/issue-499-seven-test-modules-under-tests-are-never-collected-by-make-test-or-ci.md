@@ -9,12 +9,14 @@ Status: IMPLEMENTED, awaiting gates and pull request
 
 ## Purpose / big picture
 
-Seven test modules under `tests/` never run. `PYTEST_TARGETS` in the repository
-`Makefile` collects only `tests/test_ci_*.py` from that directory — plus the
-explicitly named `tests/test_native_sdist.py` — and the seven modules we are
-concerned with match neither. `CI`'s `lint-test` job runs `make test-python`,
-which reads the same variable, so these contract suites can regress without
-anything noticing.
+Seven test modules under `tests/` never run in the default suite.
+`PYTEST_TARGETS` in the repository `Makefile` collects only
+`tests/test_ci_*.py` from that directory — plus the explicitly named
+`tests/test_native_sdist.py` — and the seven modules in question match neither.
+`CI`'s `typecheck-test` job runs `make test-python`, which reads the same
+variable, so these contract suites can regress without anything noticing. (The
+`coverage` job's bare rootdir `pytest` does collect them, so they are not
+unexecuted everywhere; the loss is the fast local loop.)
 
 After this change, running `make test-python` executes all seven modules, and a
 new guard test fails the suite whenever a root-level `tests/test_*.py` module
@@ -31,8 +33,8 @@ contract module under `tests/` and forgets to name it will be told so by
   `ACT_SCENARIO_TARGETS`, `EXTENSION_TEST_TARGETS`, and the `test-extension`
   target, and it keeps the container-bound scenario suite and the
   extension-gated modules out of the default run.
-- `ACT_SCENARIO_TARGETS` must stay out of `PYTEST_TARGETS`. CI's `lint-test`
-  job has no container runtime;
+- `ACT_SCENARIO_TARGETS` must stay out of `PYTEST_TARGETS`. CI's
+  `typecheck-test` job has no container runtime;
   `tests/test_ci_act_harness_contract.py::test_scenario_targets_stay_out_of_the_default_suite`
   pins this, and the guard test added here must not contradict it.
 - Every rename is a `git mv`, so the history of each module survives as a
@@ -166,16 +168,48 @@ contract module under `tests/` and forgets to name it will be told so by
   boundary `workflow_shell`/`workflow_recipe` already document: reading a named
   thing stays in `ci_workflows` (358 lines), sweeping for unnamed things moves
   out. The guard imports from the new module; nothing else referenced it.
+- [x] (2026-09-26 19:10Z) CodeRabbit's first `--agent` pass raised 14 findings,
+  all triaged as real. Addressing them grew both `ci_workflows.py` and the
+  guard past the 400-line C0302 cap again, so two more splits are part of the
+  fix rather than a follow-up:
+  - `tests/helpers/ci_documents.py` (181 lines) takes the parse-and-narrow
+    layer — `parse_document`, `document_jobs`, `narrow_steps`, `mapping`,
+    `step_inputs`, `cache_paths` — leaving `ci_workflows.py` (339 lines) with
+    the resolve-a-named-file layer. `run_scripts` now parses each workflow once
+    in its own sweep, so it narrows from the document it read rather than
+    resolving the file name again through a fixed directory.
+  - `tests/helpers/suite_selection.py` (226 lines) takes the exception table
+    and everything that validates it, leaving the guard
+    (`tests/test_ci_test_selection_contract.py`, 319 lines) with only its
+    assertions. The table now sits beside the code that checks its claims.
+  Three further fixes landed with them: the Makefile reader resolves `?=` by
+  operator rather than position (a later `?=` must not override an earlier
+  assignment, or the guard polices a selector `make` never uses);
+  `narrow_steps` separates a job that declares no `steps:` from one whose
+  `steps:` is malformed, which `run_scripts` had been reading as "no steps";
+  and the guard's original seeded-fault control was replaced by two whose
+  second halves are falsifiable — the first version asserted a module name
+  absent from disk reached `uncovered()`, which it never could.
+- [x] (2026-09-26 19:15Z) Corrected three inherited misattributions, all
+  verified against the tree rather than the issue text: `make test-python` runs
+  in CI's `typecheck-test` job, not `lint-test` (this ExecPlan, the guard's
+  docstring, the developers' guide, and the draft PR body all said the wrong
+  job); the seven modules *are* collected by the `coverage` job's bare rootdir
+  `pytest`, so the loss is the fast local loop rather than all execution; and
+  `pytest` exits 5 on empty collection rather than zero, so the guide's "exits
+  zero for having collected nothing" was wrong about the mechanism — the
+  recipe's `[ -e "$1" ] || continue` guard is what skips a pattern silently.
+  The guide's Test selection section now states all three.
 - [ ] Milestone gates at the resulting head.
 - [ ] CodeRabbit review.
 - [ ] Push and open a draft pull request.
 
 - Observation: the guard as first written passed every local gate and CI's
-  `lint-test`, and still failed CodeScene's delta review. The check-run is not
-  in the branch-protection ruleset, so the pull request is `MERGEABLE` with it
-  red — but it is a real finding, not noise: `cs delta origin/main` reproduces
-  it, naming `test_ci_invokes_the_target_that_consumes_the_selector` with a
-  nested complexity depth of 4 against a threshold of 4. Evidence:
+  `typecheck-test`, and still failed CodeScene's delta review. The check-run is
+  not in the branch-protection ruleset, so the pull request is `MERGEABLE` with
+  it red — but it is a real finding, not noise: `cs delta origin/main`
+  reproduces it, naming `test_ci_invokes_the_target_that_consumes_the_selector`
+  with a nested complexity depth of 4 against a threshold of 4. Evidence:
   `cs delta origin/main` before the fix reports "New issue: Deep, Nested
   Complexity"; after the fix it reports "No issues found!". Impact: the
   three-deep workflow/job/step walk moved into
@@ -185,13 +219,13 @@ contract module under `tests/` and forgets to name it will be told so by
   and the per-job walk became its own function to clear it. The helper has
   since moved again, to `tests/helpers/ci_run_scripts.py`, and both functions
   went with it; the clean `cs delta` verdict was re-established after that
-  split. The general lesson: a green local gate set and a green `lint-test` do
-  not cover CodeScene's complexity rules, so `cs delta` must be run after
-  adding a nested walk.
+  split. The general lesson: a green local gate set and a green
+  `typecheck-test` do not cover CodeScene's complexity rules, so `cs delta`
+  must be run after adding a nested walk.
 
 - Observation: running a pinned gate run while editing the tree invalidates the
   run, and it is not enough to wait for the *last* gate to finish. In the
-  `a4053bd3` run I began editing once `make test` had finished, while
+  `a4053bd3` run, editing began once `make test` had finished, while
   `make markdownlint` — the fifth gate — was still executing. The run reported
   `head_before == head_after` and green throughout, but its cleanliness
   precondition failed mid-run, so the logs cannot certify the following commit.
@@ -406,7 +440,7 @@ line 154 as a `?=` assignment containing nine whitespace-separated shell glob
 patterns. The `test-python` target around line 420 iterates over those patterns
 and runs `pytest` once per pattern, skipping any pattern whose first expanded
 word does not exist on disk. `make test` runs `test-python` and `test-rust`
-together. CI's `lint-test` job in `.github/workflows/ci.yml` runs
+together. CI's `typecheck-test` job in `.github/workflows/ci.yml` runs
 `make test-python`.
 
 Three sibling variables matter and must not change:
