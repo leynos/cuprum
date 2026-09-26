@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import inspect
 
 import pytest
 
@@ -185,6 +186,79 @@ def test_broken_pipe_policy_members_are_the_documented_spellings() -> None:
     )
     assert c.BrokenPipePolicy("strict") is c.BrokenPipePolicy.STRICT, (
         "the string spelling the options field accepts must parse"
+    )
+
+
+def test_broken_pipe_policy_does_not_take_a_positional_slot() -> None:
+    """``broken_pipe_policy`` must stay keyword-only on RunOutputOptions.
+
+    ``RunOutputOptions`` is a public, non-``kw_only`` dataclass, so its earlier
+    fields are positional. The policy was inserted after
+    ``max_echo_line_bytes``, which would otherwise push ``on_line`` and every
+    field after it one slot along: a caller passing ``on_line`` positionally
+    would have it bind to the policy instead, and the policy would be validated
+    as a callback. Declaring the field keyword-only keeps the positional order
+    the existing callers already rely on.
+    """
+    params = inspect.signature(c.RunOutputOptions).parameters
+    positional = [
+        name
+        for name, param in params.items()
+        if param.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert "broken_pipe_policy" not in positional, (
+        "the policy must not occupy a positional slot, got positional order "
+        f"{positional}"
+    )
+    assert positional[:6] == [
+        "capture",
+        "echo",
+        "echo_stdout",
+        "echo_stderr",
+        "max_echo_line_bytes",
+        "on_line",
+    ], (
+        "inserting the policy must not renumber the fields callers already "
+        f"pass positionally, got {positional}"
+    )
+    assert params["broken_pipe_policy"].kind is inspect.Parameter.KEYWORD_ONLY, (
+        "the policy must be reachable by keyword, got "
+        f"{params['broken_pipe_policy'].kind!r}"
+    )
+    # The behaviour that a rebinding would have broken: on_line keeps its slot
+    # and still receives a callable, and the policy keeps its default. The
+    # callback is a nested ``def`` rather than ``seen.append`` because on_line
+    # is typed ``Callable[[LineEvent], None]``: a bound list method binds at
+    # runtime, but the type checker rejects it, and the delivered payload is a
+    # ``LineEvent`` rather than the line text a list of strings would hold.
+    seen: list[c.LineEvent] = []
+
+    def record(event: c.LineEvent) -> None:
+        """Record the delivered line, so the binding can be observed firing."""
+        seen.append(event)
+
+    # Positional order is the contract under test, not an API flag a keyword
+    # would express more clearly.
+    options = c.RunOutputOptions(True, False, None, None, None, record)  # ruff: ignore[boolean-positional-value-in-call] - positional order under test
+    assert options.on_line is record, (
+        f"a positional sixth argument must still bind on_line, got {options.on_line!r}"
+    )
+    assert options.resolved_broken_pipe_policy is c.BrokenPipePolicy.STRICT, (
+        "an unnamed policy must still default to strict, got "
+        f"{options.resolved_broken_pipe_policy!r}"
+    )
+    # Invoke it the way a drain would: a rebinding that left a non-callable in
+    # the slot would pass the identity check above only if it were also this
+    # exact object, so calling through the field is what proves the slot holds
+    # an invocable hook that accepts the real payload type.
+    bound = options.on_line
+    assert bound is not None, (
+        f"the sixth positional argument must bind a hook, got {bound!r}"
+    )
+    line = c.LineEvent(stream="stdout", at=0.0, text="hello")
+    bound(line)
+    assert seen == [line], (
+        f"the bound hook must receive the delivered line, got {seen!r}"
     )
 
 

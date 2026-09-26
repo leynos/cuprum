@@ -99,6 +99,46 @@ def _truncation_labels(event: EchoEvent) -> dict[str, str]:
     return {"stream": stream}
 
 
+def _record_error_metric(collector: MetricsCollector, event: EchoEvent) -> None:
+    """Record *event* on the counter its error category owns.
+
+    The three categories are one dispatch because each owns a distinct series:
+    an operator alerts on an unencodable payload and a closing destination
+    separately, and confining that mapping to one place keeps a new category
+    from silently inheriting another's counter.
+
+    The collector is a parameter rather than the hook's own attribute because a
+    method forwarding ``self._record_error_metric(event)`` is a trivial
+    attribute wrapper, which this repository's ``R9104`` check rejects. Reading
+    the collector through an argument keeps the dispatch callable without a
+    hook and keeps :meth:`EchoMetricsHook.__call__` a real call site.
+
+    Parameters
+    ----------
+    collector:
+        The :class:`~cuprum.adapters.metrics_adapter.MetricsCollector` the
+        counter is incremented on.
+    event:
+        The echo event whose error category selects the counter.
+    """
+    match event.error_category:
+        case EchoErrorCategory.UNICODE_ENCODE:
+            collector.inc_counter(
+                ECHO_ENCODING_FAILURES_TOTAL, 1.0, _event_labels(event)
+            )
+        case EchoErrorCategory.BROKEN_PIPE:
+            # A series of its own, not a relabelling of the encoding counter:
+            # the two faults have different remedies and an operator alerts on
+            # them separately.
+            collector.inc_counter(ECHO_BROKEN_PIPE_TOTAL, 1.0, _event_labels(event))
+        case EchoErrorCategory.TRUNCATED:
+            collector.inc_counter(
+                ECHO_TRUNCATIONS_TOTAL,
+                1.0,
+                _truncation_labels(event),
+            )
+
+
 class EchoMetricsHook:
     """Echo observation hook that records bounded echo outcomes.
 
@@ -152,24 +192,7 @@ class EchoMetricsHook:
         cannot fail a command that would otherwise have captured its output.
         See :func:`cuprum.echo_observation._emit_echo_event`.
         """
-        match event.error_category:
-            case EchoErrorCategory.UNICODE_ENCODE:
-                self._collector.inc_counter(
-                    ECHO_ENCODING_FAILURES_TOTAL, 1.0, _event_labels(event)
-                )
-            case EchoErrorCategory.BROKEN_PIPE:
-                # A series of its own, not a relabelling of the encoding
-                # counter: the two faults have different remedies and an
-                # operator alerts on them separately.
-                self._collector.inc_counter(
-                    ECHO_BROKEN_PIPE_TOTAL, 1.0, _event_labels(event)
-                )
-            case EchoErrorCategory.TRUNCATED:
-                self._collector.inc_counter(
-                    ECHO_TRUNCATIONS_TOTAL,
-                    1.0,
-                    _truncation_labels(event),
-                )
+        _record_error_metric(self._collector, event)
 
 
 def echo_metrics_hook(collector: MetricsCollector) -> EchoHook:

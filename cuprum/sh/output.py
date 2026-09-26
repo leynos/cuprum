@@ -88,7 +88,7 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
-    broken_pipe_policy : BrokenPipePolicy | str, default=BrokenPipePolicy.STRICT
+    broken_pipe_policy : BrokenPipePolicy | str, keyword-only, default=STRICT
         How echoing responds when a presentation sink reports
         ``BrokenPipeError``, which is what a destination that has closed under
         the run looks like from inside the drain. ``STRICT`` propagates the
@@ -101,7 +101,9 @@ class RunOutputOptions:
         Either the member or its string value is accepted, and anything else
         raises ``ValueError``. Only ``BrokenPipeError`` is affected: any other
         sink ``OSError`` propagates under both policies, so an unreachable
-        device is never mistaken for a closed reader.
+        device is never mistaken for a closed reader. The field is keyword-only
+        because it was inserted mid-list: accepting it positionally would have
+        taken ``on_line``'s slot and shifted every field after it.
     on_line : LineHook | None, default=None
         Optional synchronous callback invoked once per decoded output line
         with a ``LineEvent`` carrying the stream name, the monotonic seconds
@@ -194,7 +196,13 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
-    broken_pipe_policy: BrokenPipePolicy | str = BrokenPipePolicy.STRICT
+    # Keyword-only: inserted mid-list, it would otherwise take the position of
+    # ``on_line`` and shift every field after it, silently re-binding the
+    # positional arguments existing callers already pass.
+    broken_pipe_policy: BrokenPipePolicy | str = dc.field(
+        default=BrokenPipePolicy.STRICT,
+        kw_only=True,
+    )
     on_line: LineHook | None = None
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
