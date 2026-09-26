@@ -187,6 +187,31 @@ escalation, not a workaround.
       steps both pass, where `Check formatting` had failed on `a801de86`.
 - [x] `make check-fmt` re-run on `a6b8ba14`: clean (`676 files already
       formatted`, `78 files left unchanged`).
+- [x] `make test` re-run on `a6b8ba14` with the fix in place: exit 0, and this
+      time the loop ran to the end. All nine pytest globs executed — 2490,
+      638, 2, 116, 4, 126, 12, 21 and 22 passed, with the 63 expected skips —
+      including the `tests/behaviour/` globs and
+      `tests/integration/test_act_stream_parsing.py` that the doctest timeout
+      had masked. `test-rust` ran too: 125 of 125 nextest tests passed. The
+      flake that caused the masking did not recur, so the masking finding is
+      closed as an observation about the recipe rather than a live defect.
+- [x] Gate run on Revision 13's tree exposed a third self-inflicted failure,
+      this one in the spelling gate rather than the formatter. The prose cites
+      the commit `a6b8ba14`, and `typos` tokenizes before it applies its
+      ignore list, so the SHA split into letter runs and the two-letter run
+      between the digits was read as a misspelling of "be"/"by" — five errors,
+      all from that one SHA. Fixed in
+      `f60f04f2` by adding `[0-9][0-9a-f]{6,39}` to `typos.local.toml`'s
+      `[patterns] ignore`; the leading digit is what keeps the rule narrow,
+      since no English word begins with a digit, so ordinary prose stays
+      checked. `typos`' regex engine has no lookahead, so a first attempt using
+      one was rejected with "look-around, including look-ahead and
+      look-behind, is not supported" — it reports as a whole-file parse error
+      rather than a pattern error, which would have been easy to misread as a
+      near-miss. The whole tree had exactly five errors before the change and
+      zero after, with nothing else masked. This is the class of exemption
+      `typos.local.toml` exists for: an externally fixed identifier that cannot
+      be reworded without becoming wrong.
 - [x] CodeRabbit review: a sixth pass, at `a801de86`, returned zero findings
       across all 21 changed files, and the absence is verified rather than
       assumed. The CLI's own persisted record under
@@ -450,16 +475,26 @@ rejects; a `+7 -6` rewrap is all it wanted. `make fmt` applied it and it landed
 as `a6b8ba14`, a docs-only commit. GitHub Actions confirms the fix
 independently: on `a801de86` the `lint-test` job died at its `Check formatting`
 step, and on `a6b8ba14` that step passes and the job runs on through
-`Lint Markdown` and skylos to `success`. Two findings from the same run are
-recorded rather than fixed. First, CodeRabbit's hosted review never ran,
-because the bot declines to review drafts — so the six passes behind this plan
-are all local CLI runs, and the hosted surfaces being empty means *not
-reviewed*, not *nothing to report*; un-drafting will elicit a first hosted
-review that no evidence here covers. Second, a known-flaky doctest timeout
-masked eight of nine pytest globs and all of `test-rust`, because `make test`'s
-glob loop exits on the first failure; the glob list in the log, not the exit
-code, is what says which targets ran. The reflow also means the reviewed SHA
-has advanced past the reviewed tree by one docs-only commit.
+`Lint Markdown` and skylos to `success`. The Revision 13 prose then failed the
+*spelling* gate, for a fourth self-inflicted reason and an instructive one:
+citing the commit `a6b8ba14` in prose made `typos` read the SHA's two-letter
+run between the digits as a misspelling of "be"/"by", since it tokenizes before
+applying its ignore list. `f60f04f2` exempts abbreviated SHAs with
+`[0-9][0-9a-f]{6,39}` — narrow because the leading digit means no English word
+can match it. The pattern matches the digit-leading *run*, not the whole SHA,
+which is what lets a letter-leading SHA such as `f60f04f2` qualify through its
+`60f04f2` tail. Two findings from the same gate run are recorded rather than
+fixed. First, CodeRabbit's hosted review never ran, because the bot declines to
+review drafts — so the six passes behind this plan are all local CLI runs, and
+the hosted surfaces being empty means *not reviewed*, not *nothing to report*;
+un-drafting will elicit a first hosted review that no evidence here covers.
+Second, a known-flaky doctest timeout masked eight of nine pytest globs and all
+of `test-rust`, because `make test`'s glob loop exits on the first failure; the
+glob list in the log, not the exit code, is what says which targets ran. That
+one is now closed on its own evidence: a re-run at `a6b8ba14` completed all
+nine globs and all 125 Rust tests with the flake absent. The reviewed SHA has
+therefore advanced past the reviewed tree by three commits, all docs or
+spelling config.
 
 Revision 12: the gate run on Revision 11's tree failed two gates, both on the
 Revision 11 delta itself, and both are now fixed. `make lint` aborted
