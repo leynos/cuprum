@@ -311,24 +311,53 @@ DUPLICATION_PYTHON ?= 3.14
 DUPLICATION_SOURCES = scripts/atomic_write.py scripts/nose_schema.py \
   scripts/nose_detector.py scripts/duplication_allowlist.py \
   scripts/duplication_gate.py
-# `-m` rather than a script path: the modules import each other as
-# `scripts.<name>`, which resolves from the repository root and needs no
-# `PYTHONPATH`.
-DUPLICATION_GATE = $(UV_RUN_ENV) NOSE_BIN=$(call shell_quote,$(NOSE_BIN)) \
-  uv run --no-project --python $(DUPLICATION_PYTHON) -m scripts.duplication_gate
-# The helper tests are 3.14-only tooling tests, so they run isolated from the
-# application suite with the gate's own dependencies and no project install.
-DUPLICATION_TEST_DEPS = --with pytest==9.0.2 --with cyclopts==4.25.2 \
-  --with tomlkit==0.15.1 --with 'hypothesis[asyncio]==6.151.9'
-DUPLICATION_TEST_TARGETS ?= scripts/tests/test_atomic_write.py \
-  scripts/tests/test_duplication_gate.py \
+# The tooling tests ride the same 3.14 interpreter as the modules they cover,
+# so they carry the same floor and the same excluded-from-the-3.12-pass
+# treatment.
+DUPLICATION_TEST_SOURCES = scripts/tests/duplication_gate_test_support.py \
+  scripts/tests/nose_detector_test_support.py \
+  scripts/tests/test_atomic_write.py scripts/tests/test_duplication_gate.py \
+  scripts/tests/test_duplication_gate_blocking.py \
   scripts/tests/test_duplication_gate_commands.py \
   scripts/tests/test_duplication_gate_make.py \
   scripts/tests/test_duplication_gate_persistence.py \
   scripts/tests/test_duplication_gate_properties.py \
+  scripts/tests/test_duplication_gate_seams.py \
+  scripts/tests/test_gate_entrypoint_binding.py \
   scripts/tests/test_make_install_nose.py \
+  scripts/tests/test_nose_binary.py \
   scripts/tests/test_nose_detector.py \
-  scripts/tests/test_nose_scope_contract.py
+  scripts/tests/test_nose_scope_contract.py \
+  scripts/tests/test_nose_settings.py
+# A script path, not `-m`: `uv run` only reads a PEP 723 header from a script
+# named on the command line, so `-m` silently falls back to the ambient
+# environment and resolves the gate's pins from whatever happens to be active
+# instead of from the header. PYTHONPATH supplies the repository root so the
+# modules can still import each other as `scripts.<name>`, which `__package__`
+# and a namespace `scripts/` directory make workable without an `__init__.py`.
+DUPLICATION_GATE = $(UV_RUN_ENV) PYTHONPATH=. \
+  NOSE_BIN=$(call shell_quote,$(NOSE_BIN)) \
+  uv run --no-project --python $(DUPLICATION_PYTHON) \
+  scripts/duplication_gate.py
+# The helper tests are 3.14-only tooling tests, so they run isolated from the
+# application suite with the gate's own dependencies and no project install.
+DUPLICATION_TEST_DEPS = --with pytest==9.0.2 --with cyclopts==4.25.2 \
+  --with tomlkit==0.15.1 --with 'hypothesis[asyncio]==6.151.9' \
+  --with syrupy==6.0.0
+DUPLICATION_TEST_TARGETS ?= scripts/tests/test_atomic_write.py \
+  scripts/tests/test_duplication_gate.py \
+  scripts/tests/test_duplication_gate_blocking.py \
+  scripts/tests/test_duplication_gate_commands.py \
+  scripts/tests/test_duplication_gate_make.py \
+  scripts/tests/test_duplication_gate_persistence.py \
+  scripts/tests/test_duplication_gate_properties.py \
+  scripts/tests/test_duplication_gate_seams.py \
+  scripts/tests/test_gate_entrypoint_binding.py \
+  scripts/tests/test_make_install_nose.py \
+  scripts/tests/test_nose_binary.py \
+  scripts/tests/test_nose_detector.py \
+  scripts/tests/test_nose_scope_contract.py \
+  scripts/tests/test_nose_settings.py
 # `git ls-files` covers tracked files and nonignored untracked files without
 # traversing ignored paths. The shell filter keeps only regular non-symlink
 # files, and prefixes a leading dash so the linter cannot parse it as an option.
@@ -520,14 +549,20 @@ duplication-test: ## Run the duplication-gate helper tests
 	  python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
 	  $(DUPLICATION_TEST_TARGETS)
 
+# `MEMBERS` carries every location past the first as one whitespace-separated
+# value, each forwarded as its own `--second`. GNU Make overwrites a repeated
+# command-line variable with its last occurrence, so `SECOND=a SECOND=b` never
+# reaches the recipe; a single list-valued variable keeps every member
+# addressable. `$(value ...)` yields the list unexpanded, so `$(foreach)` sees
+# the literal entries rather than a shell-quoted single string.
 duplication-allow: export DUPLICATION_FIRST = $(call cli_value,FIRST)
-duplication-allow: export DUPLICATION_SECOND = $(call cli_value,SECOND)
+duplication-allow: export DUPLICATION_MEMBERS = $(call cli_value,MEMBERS)
 duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
 duplication-allow: ## Record one reasoned duplication exception
 	@case "$${DUPLICATION_FIRST}" in *[![:space:]]*) ;; *) printf "Error: FIRST is required (a 'path[::name]' key)\\n" >&2; exit 2;; esac
 	@case "$${DUPLICATION_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2;; esac
 	$(DUPLICATION_GATE) allow --first "$${DUPLICATION_FIRST}" \
-	  $(if $(call cli_value,SECOND),--second "$${DUPLICATION_SECOND}",) \
+	  $(foreach member,$(call cli_value,MEMBERS),--second $(call shell_quote,$(member))) \
 	  --reason "$${DUPLICATION_REASON}"
 
 skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
@@ -554,7 +589,8 @@ typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
 	$(TY) --version
 	$(TY) check --python .venv
-	$(TY) check --python .venv --python-version $(DUPLICATION_PYTHON) $(DUPLICATION_SOURCES)
+	$(TY) check --python .venv --python-version $(DUPLICATION_PYTHON) \
+	  $(DUPLICATION_SOURCES) $(DUPLICATION_TEST_SOURCES)
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	$(call run_markdownlint_files,$(MDLINT_CHECK_COMMAND))

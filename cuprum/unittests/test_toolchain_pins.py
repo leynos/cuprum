@@ -202,6 +202,11 @@ def _read_tool_nose_version(root: pth.Path) -> str:
     ``package==`` line in the dev group for `_read_pyproject_pin` to find. Its
     pyproject site is the ``version`` key of the ``[tool.nose]`` table that the
     gate itself reads, which is the value that would otherwise drift.
+
+    Returns
+    -------
+    str
+        The pinned detector version.
     """
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     nose = pyproject.get("tool", {}).get("nose")
