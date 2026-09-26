@@ -2,10 +2,13 @@
 
 use super::{
     BufferSize,
+    PlatformFd,
     PumpError,
+    PyErr,
     PyResult,
     Python,
     ReaderFd,
+    RustStreamError,
     consume_stream,
     convert_fd,
     pump_stream,
@@ -17,22 +20,31 @@ use super::{
 ///
 /// Keep the common `PyO3` boundary behaviour in one place: validate the
 /// Python argument, prepare descriptor ownership, release the GIL for I/O,
-/// and map `PumpError` back to the exported Python exception type.
+/// and convert the typed boundary error into the exported Python exception.
+///
+/// The inner closure performs the existing sequence and yields the typed
+/// error, so the one conversion below happens exactly once and after the GIL
+/// has been reacquired. The detached operation itself keeps its `PumpError`
+/// result: it outlives the argument checks and has no business knowing about
+/// them, so only its error is classified on the way out.
 fn run_stream_operation<T, Operation>(
     py: Python<'_>,
     reader_fd: i64,
     buffer_size: i64,
-    prepare_operation: impl FnOnce() -> PyResult<Operation>,
+    prepare_operation: impl FnOnce() -> Result<Operation, RustStreamError>,
 ) -> PyResult<T>
 where
     T: Send,
     Operation: FnOnce(ReaderFd, BufferSize) -> Result<T, PumpError> + Send,
 {
-    let validated_buffer_size = validate_buffer_size(buffer_size)?;
-    let reader = ReaderFd(convert_fd(reader_fd)?);
-    let operation = prepare_operation()?;
-    let result = py.detach(move || operation(reader, validated_buffer_size));
-    result.map_err(super::errors::pump_error_to_py_err)
+    let result: Result<T, RustStreamError> = (|| {
+        let validated_buffer_size = validate_buffer_size(buffer_size)?;
+        let reader = ReaderFd(convert_fd(reader_fd)?);
+        let operation = prepare_operation()?;
+        py.detach(move || operation(reader, validated_buffer_size))
+            .map_err(RustStreamError::Stream)
+    })();
+    result.map_err(PyErr::from)
 }
 
 /// Pump bytes between file descriptors outside the GIL.
@@ -54,7 +66,7 @@ pub(super) fn rust_pump_stream(
     buffer_size: i64,
 ) -> PyResult<u64> {
     run_stream_operation(py, reader_fd, buffer_size, || {
-        let writer_raw = convert_fd(writer_fd)?;
+        let writer_raw: PlatformFd = convert_fd(writer_fd)?;
         // SAFETY: `_streams_rs` transfers its duplicate exactly once.
         // Python retains no owner after this hand-off; see the boundary
         // contract for direct native callers and submission rollback.

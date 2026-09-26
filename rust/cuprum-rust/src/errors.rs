@@ -2,9 +2,41 @@
 use std::io;
 
 use cuprum_streams::PumpError;
-use pyo3::{PyErr, exceptions::PyOSError};
+use pyo3::{
+    PyErr,
+    exceptions::{PyOSError, PyValueError},
+};
 
-pub(crate) fn pump_error_to_py_err(err: PumpError) -> PyErr {
+use crate::RustStreamError;
+
+/// Convert the native stream boundary's error into the Python exception
+/// callers see.
+///
+/// This is the boundary's single conversion entry point: the `?` operator and
+/// `map_err(PyErr::from)` both route through it, so the classification a
+/// caller branches on is decided in exactly one place. Argument failures
+/// become `ValueError` and stream failures reuse the OS-code-preserving
+/// helpers below.
+///
+/// Module-initialization and `PyO3` argument-extraction errors are deliberately
+/// outside this conversion: they are not stream-domain failures, and `PyO3`
+/// already maps them to the right classes.
+impl From<RustStreamError> for PyErr {
+    fn from(err: RustStreamError) -> Self {
+        match err {
+            RustStreamError::InvalidBufferSize(message)
+            | RustStreamError::InvalidDescriptor(message) => PyValueError::new_err(message),
+            RustStreamError::Stream(stream_err) => pump_error_to_py_err(stream_err),
+        }
+    }
+}
+
+/// Convert a safe stream failure, preserving the raw OS code when it has one.
+///
+/// Not an entry point: reached only through `From<RustStreamError> for PyErr`.
+/// It stays separate so the `Stream` arm reads as the stream-specific part of
+/// the classification rather than as an arm that happens to be long.
+fn pump_error_to_py_err(err: PumpError) -> PyErr {
     match err {
         PumpError::Io(io_err) => io_error_to_py_err(io_err),
         other @ (PumpError::LengthOverflow

@@ -6,19 +6,48 @@
 
 use cuprum_native_io::PlatformFd;
 use cuprum_streams::{BufferSize, PumpError, consume_stream, pump_stream};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::prelude::*;
+use thiserror::Error;
 mod errors;
 #[cfg(test)]
 mod fd_tests;
 #[cfg(loom)]
 #[doc(hidden)]
 pub mod loom_model;
+#[cfg(test)]
+mod stream_error_behaviour;
+#[cfg(test)]
+mod stream_error_tests;
 
 #[derive(Clone, Copy, Debug)]
 struct ReaderFd(PlatformFd);
 
-fn validate_buffer_size(size: i64) -> PyResult<BufferSize> {
-    BufferSize::new(size).map_err(PyValueError::new_err)
+/// Classify a failure at the native stream boundary.
+///
+/// The two argument variants exist so a caller can distinguish a malformed
+/// request from a failing stream: they become `ValueError` in Python, whilst
+/// [`Self::Stream`] becomes `OSError` carrying the engine's own code. Wrapping
+/// [`PumpError`] rather than copying its variants keeps `cuprum-streams` the
+/// single owner of stream policy and avoids a parallel taxonomy that could
+/// drift from it.
+#[derive(Debug, Error)]
+enum RustStreamError {
+    /// The requested buffer size is not a permitted allocation size.
+    #[error("{0}")]
+    InvalidBufferSize(&'static str),
+    /// A Python descriptor value does not denote a usable native handle.
+    #[error("{0}")]
+    InvalidDescriptor(&'static str),
+    /// The stream engine failed.
+    ///
+    /// Transparent, so the message and, more importantly, the raw OS code
+    /// reach the existing converter unchanged.
+    #[error(transparent)]
+    Stream(#[from] PumpError),
+}
+
+fn validate_buffer_size(size: i64) -> Result<BufferSize, RustStreamError> {
+    BufferSize::new(size).map_err(RustStreamError::InvalidBufferSize)
 }
 
 /// Report whether the Rust extension is available.
@@ -47,8 +76,8 @@ mod stream_pyfunctions;
 use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};
 
 #[cfg(any(unix, windows))]
-fn convert_fd(value: i64) -> PyResult<PlatformFd> {
-    convert_platform_fd(value).map_err(PyValueError::new_err)
+fn convert_fd(value: i64) -> Result<PlatformFd, RustStreamError> {
+    convert_platform_fd(value).map_err(RustStreamError::InvalidDescriptor)
 }
 
 #[cfg(unix)]
