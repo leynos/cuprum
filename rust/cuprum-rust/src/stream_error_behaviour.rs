@@ -11,13 +11,22 @@
 //! classification they assert is the one production callers receive. Nothing
 //! here inspects a `PyErr`: this crate links no interpreter, so the Python
 //! half of the contract is asserted by the extension-required Python suite.
+//!
+//! Every step is fallible and returns a `StepResult`. `rstest-bdd` erases the
+//! step attributes while expanding, so these functions carry no test marker by
+//! the time the house lint sees them, and a `.expect(...)` here would read as
+//! production code. Returning a step error also names the step that failed,
+//! where an `expect` reports only the slot access that came up empty.
 
 use cuprum_streams::PumpError;
 use rstest::fixture;
-use rstest_bdd::Slot;
+use rstest_bdd::{Slot, StepResult};
 use rstest_bdd_macros::{given, scenario, then, when};
 
 use crate::{RustStreamError, convert_fd, validate_buffer_size};
+
+/// The marker the validator steps record when they accept an argument.
+const ACCEPTED: &str = "accepted";
 
 /// Per-scenario state, shared between steps through `rstest-bdd`'s slots.
 #[derive(Default)]
@@ -49,13 +58,20 @@ enum ObservedError {
     },
 }
 
-// `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
-// form that triggers `unused_braces` under Rust 1.85. Remove this skip when
-// that formatter/rstest combination compiles the configured profile cleanly.
-#[rustfmt::skip]
 #[fixture]
 fn context() -> StreamErrorContext {
+    // A fresh context per scenario; steps populate its slots as they run.
     StreamErrorContext::default()
+}
+
+/// Read a scenario value that an earlier step was required to record.
+///
+/// Every step that reads shared state goes through this accessor, so a
+/// scenario whose steps ran out of order fails with the name of the value that
+/// was missing rather than with a bare unwrap.
+fn recorded<T: Clone>(slot: &Slot<T>, label: &str) -> StepResult<T, String> {
+    slot.get()
+        .ok_or_else(|| format!("no {label} was recorded; a Given step must run first"))
 }
 
 #[given("a buffer size of {size}")]
@@ -84,119 +100,138 @@ fn a_semantic_stream_failure(context: &StreamErrorContext) {
 }
 
 #[when("the native buffer validator checks the size")]
-fn the_buffer_validator_checks(context: &StreamErrorContext) {
-    let size = context.buffer_size.get().expect("a buffer size was set");
+fn the_buffer_validator_checks(context: &StreamErrorContext) -> StepResult<(), String> {
+    let size = recorded(&context.buffer_size, "buffer size")?;
     let observed = match validate_buffer_size(size) {
-        Ok(_) => ObservedError::InvalidBufferSize("accepted".to_owned()),
+        Ok(_) => ObservedError::InvalidBufferSize(ACCEPTED.to_owned()),
         Err(error) => observe(error),
     };
     context.error.set(observed);
+    Ok(())
 }
 
 #[when("the native descriptor validator checks the value")]
-fn the_descriptor_validator_checks(context: &StreamErrorContext) {
-    let value = context.descriptor.get().expect("a descriptor was set");
+fn the_descriptor_validator_checks(context: &StreamErrorContext) -> StepResult<(), String> {
+    let value = recorded(&context.descriptor, "descriptor value")?;
     let observed = match convert_fd(value) {
-        Ok(_) => ObservedError::InvalidDescriptor("accepted".to_owned()),
+        Ok(_) => ObservedError::InvalidDescriptor(ACCEPTED.to_owned()),
         Err(error) => observe(error),
     };
     context.error.set(observed);
+    Ok(())
 }
 
 #[when("it becomes a RustStreamError")]
-fn it_becomes_a_rust_stream_error(context: &StreamErrorContext) {
+fn it_becomes_a_rust_stream_error(context: &StreamErrorContext) -> StepResult<(), String> {
     // The `Given` steps above already performed the production conversion and
     // recorded it. This step exists so the scenario reads as the behaviour it
-    // describes, and asserts the recording actually happened rather than
+    // describes, and refuses when the recording never happened rather than
     // silently leaving the slot empty.
-    assert!(
-        context.error.get().is_some(),
-        "the conversion must have been performed before this step",
-    );
+    recorded(&context.error, "converted error").map(|_| ())
 }
 
 #[then("the error is InvalidBufferSize")]
-fn the_error_is_invalid_buffer_size(context: &StreamErrorContext) {
-    let observed = context.error.get().expect("an error was recorded");
-    assert!(
-        matches!(observed, ObservedError::InvalidBufferSize(_)),
-        "expected a buffer-size failure, found {observed:?}",
-    );
+fn the_error_is_invalid_buffer_size(context: &StreamErrorContext) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
+    if !matches!(observed, ObservedError::InvalidBufferSize(_)) {
+        return Err(format!(
+            "expected a buffer-size failure, found {observed:?}"
+        ));
+    }
+    Ok(())
 }
 
 #[then("the error is InvalidDescriptor")]
-fn the_error_is_invalid_descriptor(context: &StreamErrorContext) {
-    let observed = context.error.get().expect("an error was recorded");
-    assert!(
-        matches!(observed, ObservedError::InvalidDescriptor(_)),
-        "expected a descriptor failure, found {observed:?}",
-    );
+fn the_error_is_invalid_descriptor(context: &StreamErrorContext) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
+    if !matches!(observed, ObservedError::InvalidDescriptor(_)) {
+        return Err(format!("expected a descriptor failure, found {observed:?}"));
+    }
+    Ok(())
 }
 
 #[then("the error is Stream")]
-fn the_error_is_stream(context: &StreamErrorContext) {
-    let observed = context.error.get().expect("an error was recorded");
-    assert!(
-        matches!(observed, ObservedError::Stream { .. }),
-        "expected a stream failure, found {observed:?}",
-    );
+fn the_error_is_stream(context: &StreamErrorContext) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
+    if !matches!(observed, ObservedError::Stream { .. }) {
+        return Err(format!("expected a stream failure, found {observed:?}"));
+    }
+    Ok(())
 }
 
 #[then("its message is {expected}")]
-fn its_message_is(context: &StreamErrorContext, expected: String) {
-    let observed = context.error.get().expect("an error was recorded");
+fn its_message_is(context: &StreamErrorContext, expected: String) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
     let message = match observed {
         ObservedError::InvalidBufferSize(message) | ObservedError::InvalidDescriptor(message) => {
             message
         }
         other @ ObservedError::Stream { .. } => {
-            panic!("expected an argument failure, found {other:?}")
+            return Err(format!("expected an argument failure, found {other:?}"));
         }
     };
-    assert_eq!(
-        message, expected,
-        "the message must be the stable contract text"
-    );
+    if message != expected {
+        return Err(format!(
+            "the message must be the stable contract text; expected {expected:?}, found \
+             {message:?}"
+        ));
+    }
+    Ok(())
 }
 
 #[then("the size is accepted as {size}")]
-fn the_size_is_accepted(context: &StreamErrorContext, size: isize) {
+fn the_size_is_accepted(context: &StreamErrorContext, size: isize) -> StepResult<(), String> {
     // The `When` step records an "accepted" marker for a valid size, so an
     // accepted outline row is distinguished from a rejection without needing
     // a second slot.
-    let observed = context.error.get().expect("an outcome was recorded");
-    assert_eq!(
-        observed,
-        ObservedError::InvalidBufferSize("accepted".to_owned()),
-        "buffer size {size} must be accepted",
-    );
+    let observed = recorded(&context.error, "validator outcome")?;
+    if observed != ObservedError::InvalidBufferSize(ACCEPTED.to_owned()) {
+        return Err(format!(
+            "buffer size {size} must be accepted, found {observed:?}"
+        ));
+    }
+    Ok(())
 }
 
 #[then("the stream error retains platform error code {code}")]
-fn the_stream_error_retains_platform_error_code(context: &StreamErrorContext, code: i32) {
-    let observed = context.error.get().expect("an error was recorded");
+fn the_stream_error_retains_platform_error_code(
+    context: &StreamErrorContext,
+    code: i32,
+) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
     let ObservedError::Stream {
         code: Some(actual), ..
     } = observed
     else {
-        panic!("a stream failure carrying an OS code was expected, found {observed:?}");
+        return Err(format!(
+            "a stream failure carrying an OS code was expected, found {observed:?}"
+        ));
     };
-    assert_eq!(
-        actual, code,
-        "the wrapped source must still report the code the syscall returned",
-    );
+    if actual != code {
+        return Err(format!(
+            "the wrapped source must still report the code the syscall returned; expected {code}, \
+             found {actual}"
+        ));
+    }
+    Ok(())
 }
 
 #[then("the stream error retains the semantic message {expected}")]
-fn the_stream_error_retains_the_semantic_message(context: &StreamErrorContext, expected: String) {
-    let observed = context.error.get().expect("an error was recorded");
+fn the_stream_error_retains_the_semantic_message(
+    context: &StreamErrorContext,
+    expected: String,
+) -> StepResult<(), String> {
+    let observed = recorded(&context.error, "converted error")?;
     let ObservedError::Stream { message, .. } = observed else {
-        panic!("a stream failure was expected, found {observed:?}");
+        return Err(format!("a stream failure was expected, found {observed:?}"));
     };
-    assert_eq!(
-        message, expected,
-        "the wrapped source must still render its stable message",
-    );
+    if message != expected {
+        return Err(format!(
+            "the wrapped source must still render its stable message; expected {expected:?}, \
+             found {message:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// Reduce a boundary error to its observable shape.
