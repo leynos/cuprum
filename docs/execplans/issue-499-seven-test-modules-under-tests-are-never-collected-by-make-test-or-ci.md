@@ -148,8 +148,57 @@ contract module under `tests/` and forgets to name it will be told so by
   are rejected. Renaming one module back out of the selector fails four guard
   tests and names the module; removing `tests/test_ci_*.py` from
   `PYTEST_TARGETS` fails 52.
-- [ ] Milestone gates and CodeRabbit review per milestone.
+- [x] (2026-09-26 17:35Z) Pulled the branch forward through two gate failures.
+  `make check-fmt` reformatted three files (two modules and the ExecPlan's own
+  `python`-tagged sketches); `make lint` reported twelve errors across the two
+  new modules. Both fixed and committed.
+- [x] (2026-09-26 17:53Z) Gate run at `a4053bd3` reported all five green with
+  every lint leaf observed. Superseded: the fix that followed landed after
+  gates 1–4, so those logs certify `a4053bd3`, not the branch head.
+- [x] (2026-09-26 18:05Z) CodeScene delta review failed the pull request on a
+  nested-complexity finding against the guard's workflow walk. Fixed by moving
+  the sweep into `tests/helpers/ci_workflows.run_scripts`; `cs delta
+  origin/main` now reports no issues. (That function later moved to
+  `tests/helpers/ci_run_scripts.py` to clear C0302; see the entry below.)
+- [x] (2026-09-26 18:20Z) `make lint` at `dd8dc2df` reported the sweep had
+  pushed `tests/helpers/ci_workflows.py` to 420 lines, over pylint's 400-line
+  C0302 cap. Split into `tests/helpers/ci_run_scripts.py` (97 lines) on the
+  boundary `workflow_shell`/`workflow_recipe` already document: reading a named
+  thing stays in `ci_workflows` (358 lines), sweeping for unnamed things moves
+  out. The guard imports from the new module; nothing else referenced it.
+- [ ] Milestone gates at the resulting head.
+- [ ] CodeRabbit review.
 - [ ] Push and open a draft pull request.
+
+- Observation: the guard as first written passed every local gate and CI's
+  `lint-test`, and still failed CodeScene's delta review. The check-run is not
+  in the branch-protection ruleset, so the pull request is `MERGEABLE` with it
+  red — but it is a real finding, not noise: `cs delta origin/main` reproduces
+  it, naming `test_ci_invokes_the_target_that_consumes_the_selector` with a
+  nested complexity depth of 4 against a threshold of 4. Evidence: `cs delta
+  origin/main` before the fix reports "New issue: Deep, Nested Complexity";
+  after the fix it reports "No issues found!". Impact: the three-deep
+  workflow/job/step walk moved into `tests/helpers/ci_workflows.run_scripts`,
+  where it is reusable and where the guard asks its question in one
+  comprehension. A second finding then appeared against the new helper —
+  proving the fix was measured rather than assumed — and the per-job walk
+  became its own function to clear it. The helper has since moved again, to
+  `tests/helpers/ci_run_scripts.py`, and both functions went with it; the
+  clean `cs delta` verdict was re-established after that split. The general lesson: a green local gate
+  set and a green `lint-test` do not cover CodeScene's complexity rules, so
+  `cs delta` must be run after adding a nested walk.
+
+- Observation: running a pinned gate run while editing the tree invalidates the
+  run, and it is not enough to wait for the *last* gate to finish. In the
+  `a4053bd3` run I began editing once `make test` had finished, while
+  `make markdownlint` — the fifth gate — was still executing. The run reported
+  `head_before == head_after` and green throughout, but its cleanliness
+  precondition failed mid-run, so the logs cannot certify the following commit.
+  Evidence: the gate report's timeline places the first external edit at
+  17:56:12 and gate 5's completion at 17:57:51, with the working-diff
+  fingerprint changing during gate 5. Impact: gates 1–4 certify `a4053bd3`;
+  the fix landed afterwards and needs its own run. The rule to carry forward is
+  to wait for the run's own completion report, not for a marker in one log.
 
 ## Surprises & discoveries
 
@@ -766,10 +815,15 @@ container-bound scenarios the repository deliberately keeps out.
 
 `test_ci_invokes_the_target_that_consumes_the_selector` uses
 `tests.helpers.workflow_shell.script_runs_command` and
-`tests.helpers.ci_workflows.workflow_sources` to prove a workflow `run:` step
+`tests.helpers.ci_run_scripts.run_scripts` to prove a workflow `run:` step
 invokes `make test-python`. Matching the command by its leading shell tokens
 rather than by substring is what keeps a mention in a comment from satisfying
 it.
+
+`tests/helpers/ci_run_scripts.py` is a split of `tests/helpers/ci_workflows.py`
+forced by the 400-line cap, not a new capability: `run_scripts` and its private
+`_job_run_scripts` moved verbatim. `ci_workflows` keeps the named lookups, as
+`workflow_shell`/`workflow_recipe` split on the same boundary.
 
 Dependencies: `makeutil` 0.1.0, already pinned by
 `.github/actions/install-makeutil` and already a prerequisite of `test` and
