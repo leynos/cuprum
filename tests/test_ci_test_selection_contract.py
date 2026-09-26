@@ -29,7 +29,7 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.ci_workflows import run_scripts
+from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
 from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
 from tests.helpers.workflow_shell import script_runs_command
