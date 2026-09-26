@@ -2940,6 +2940,36 @@ after logging a warning. The cached resolver in
 `cuprum.rust.is_rust_available()` and — through the
 `_probe_rust_availability()` seam — `get_stream_backend()`.
 
+#### Native error classification
+
+The two exported stream entry points classify every failure through one
+crate-private enum, `RustStreamError`, in the crate root,
+`rust/cuprum-rust/src/lib.rs`. It has three variants: `InvalidBufferSize` and
+`InvalidDescriptor` carry the argument-validation messages, and
+`Stream(#[from] PumpError)` wraps the stream engine's own error. Unifying the
+two kinds in one type is what lets `stream_pyfunctions::run_stream_operation`
+be a single common boundary for both exports — validate the buffer size,
+convert the reader descriptor, prepare the operation — with one `map_err` at
+the end rather than a conversion at every call site.
+
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs` is the
+boundary's single conversion entry point: every fallible step builds a typed
+`Result`, and `run_stream_operation` converts it once through
+`map_err(PyErr::from)`, so the exception class a caller branches on is decided
+in exactly one place. The two argument variants become `ValueError`; `Stream`
+becomes `OSError` carrying the engine's own code, so callers branch on a number
+— `errno` on POSIX, `winerror` on Windows — rather than parsing English out of
+a message. Where an I/O failure carries no operating-system code, because Rust
+synthesized it rather than receiving it from a syscall, the conversion falls
+back to PyO3's `ErrorKind` mapping rather than fabricating one.
+
+`Stream` wraps `PumpError` rather than copying its variants into the boundary
+enum. That keeps `cuprum-streams` the single owner of the safe stream policy, as
+[ADR-011](adr-011-audited-rust-boundaries.md) requires, and avoids a parallel
+taxonomy that could drift from the engine's. Module-initialization and PyO3
+argument-extraction failures stay outside the conversion: they are not
+stream-domain failures, and PyO3 already maps them to the right classes.
+
 ### 13.4 Fallback Strategy
 
 Cuprum selects the stream backend at runtime using the following precedence:

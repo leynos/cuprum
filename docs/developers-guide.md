@@ -461,8 +461,8 @@ Table 2: CI suite execution by job and interpreter
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
 | `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
 | `typecheck-test` 3.13       | 3.13   | none                           | none, coverage runs it                   | absent    |
-| `extension-tests`           | 3.13   | none                           | 13 gated modules                         | **built** |
-| `extension-tests-windows`   | 3.13   | none                           | 13 gated modules                         | **built** |
+| `extension-tests`           | 3.13   | none                           | 15 gated modules                         | **built** |
+| `extension-tests-windows`   | 3.13   | none                           | 15 gated modules                         | **built** |
 
 The 3.15a leg is experimental: it may fail without failing the run, and its
 check, `Typecheck and test (Python 3.15a)`, is not a required context. On a
@@ -3453,8 +3453,11 @@ with `thiserror`:
 - `Io(io::Error)` — an operating-system I/O failure (transparent wrapper).
 
 Conversion to a Python exception happens in exactly one place,
-`pump_error_to_py_err` in `rust/cuprum-rust/src/errors.rs` (called from
-`stream_pyfunctions.rs`). Every non-`Io` variant surfaces as a plain `OSError`
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs`, which the
+`?` operator and `map_err(PyErr::from)` both reach from
+`stream_pyfunctions.rs`. That impl splits the two error domains — argument
+failures become `ValueError`, and the `Stream` arm delegates to the private
+`pump_error_to_py_err`. Every non-`Io` variant surfaces as a plain `OSError`
 carrying the stable message from `PumpError::py_os_error_message`. The
 non-fatal write classification (broken pipe / connection reset) lives on the
 enum as `PumpError::is_nonfatal_write`, replacing the free function the splice
@@ -4285,6 +4288,38 @@ steps, and a step's `run:` — so a misspelled key is a type error rather than a
 a second one drifts from the first, and then two suites disagree about what the
 same file says.
 
+The gated modules split across two test layers, and the split follows from the
+build rather than from taste. The integration crate is compiled with
+`pyo3/extension-module`, which deliberately leaves the Python symbols to be
+resolved by the host process, so no `cargo test` binary can link an
+interpreter. Rust tests therefore assert typed values — which variant a failure
+classifies as, which code an error retains — and anything asserting a `PyErr`
+or a Python exception class cannot live in them at all; it belongs in the
+extension-required Python suite, which runs against an installed extension and
+a real interpreter.
+
+The two layers also cover different code. `cuprum._streams_rs` is the Python
+shim in front of the native entry points, and its pump path validates
+`buffer_size` itself before delegating, so a writer is never handed to the
+native ownership boundary on a rejected size. One consequence is that a
+mutation in the *native* conversion for the pump path is invisible through the
+shim, which raises first: only a direct call to `cuprum._rust_backend_native`
+observes the native ordering, which is why
+`cuprum/unittests/test_rust_stream_native_order.py` imports the compiled module
+directly rather than going through the shim. The consume path is the other
+witness, because it has no writer to adopt and so no pre-adoption check in
+front of it. The shim's check is a resource-ownership guarantee; the native
+check is the typed-boundary guarantee. Both are wanted, and neither test stands
+in for the other.
+
+A newly gated module is not merely uncovered until it is wired up: the scan in
+`test_extension_build_contract.py` derives the gated modules from the test tree
+and fails until each is declared in `EXTENSION_TEST_TARGETS`, so a module added
+to the suite without a Makefile entry breaks the contract tests rather than
+passing unnoticed. The two properties that pin that list, and what each of them
+does and does not catch, are set out under
+[Shared workflow test support](#shared-workflow-test-support).
+
 ### Shared workflow test support
 
 The session-scoped `workflow_data` fixture parses the checked-in
@@ -4355,27 +4390,33 @@ follow-up once `#124` lands.
 
 Table 1: modules gated on the compiled extension
 
-| Module                                             | Covers                                                                                                                                                               |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_rust_streams.py`                             | the Rust-backed pump entry point                                                                                                                                     |
-| `test_rust_consume_stream.py`                      | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
-| `test_rust_streams_boundary_property.py`           | randomized payloads across the boundary                                                                                                                              |
-| `test_rust_extension.py`                           | extension availability and module surface                                                                                                                            |
-| `test_rust_splice.py`                              | the Linux `splice` fast path                                                                                                                                         |
-| `test_rust_errno.py`                               | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
-| `test_rust_errno_windows.py`                       | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
-| `test_backend.py`                                  | the extension-dependent backend-selection cases                                                                                                                      |
-| `test_loom_model_conformance.py`                   | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
-| `test_extension_requirement_guard.py`              | the fail-loud guard itself                                                                                                                                           |
-| `tests/behaviour/test_rust_streams_behaviour.py`   | the consumer-facing pump and consume scenarios                                                                                                                       |
-| `tests/behaviour/test_rust_extension_behaviour.py` | availability agreeing with the installed native module                                                                                                               |
-| `tests/behaviour/test_stream_backend_pipeline.py`  | pipelines dispatched through the Rust backend                                                                                                                        |
+| Module                                                  | Covers                                                                                                                                                               |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                     |
+| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
+| `test_rust_streams_boundary_property.py`                | randomized payloads across the boundary                                                                                                                              |
+| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                    |
+| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                            |
+| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                         |
+| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
+| `test_rust_errno_windows.py`                            | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
+| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                      |
+| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
+| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                           |
+| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                       |
+| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                   |
+| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                               |
+| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                        |
 
 The behavioural modules are listed for the same reason as the unit ones: their
 extension-dependent scenarios skip in the ordinary test jobs, so they were
 never boundary coverage there either. Confirm with `pytest -rs` against a
-virtual environment that has no extension — four scenarios report
-`Rust extension is not installed`.
+virtual environment that has no extension — ten scenarios report
+`Rust extension is not installed`: three in `test_rust_streams_behaviour.py`,
+four `Examples` rows in `test_rust_streams_errors_behaviour.py`, and three in
+`test_stream_backend_pipeline.py`. `test_rust_extension_availability` is the
+exception, and is listed here because it *asserts* the absent case rather than
+skipping it, so it passes with or without the extension.
 
 Kani harnesses are reserved for bounded verification of small, high-value state
 spaces. Gate Kani-only modules and helpers with `#[cfg(kani)]`, and share pure
@@ -5244,15 +5285,18 @@ uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
 
 `rust/cuprum-rust/src/lib.rs` validates the `buffer_size` argument to
 `rust_pump_stream` / `rust_consume_stream` at the PyO3 boundary through
-`validate_buffer_size(i64) -> PyResult<BufferSize>`, which maps the message to
-`PyValueError`. `BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs`
-owns the validation and returns the validated size used by the stream loops.
-The contract is: reject non-positive values, values that overflow `usize` on
-the target platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) —
-the cap guards against absurd allocations while comfortably exceeding any
-realistic transfer buffer (the default is 64 KiB). The Rust boundary cases are
-property tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the
-Python-side error mapping is exercised in
+`validate_buffer_size(i64) -> Result<BufferSize, RustStreamError>`. The
+validator returns a typed error rather than a `PyErr`, so the message reaches
+`PyValueError` through the boundary's single conversion point,
+`From<RustStreamError> for PyErr` in `rust/cuprum-rust/src/errors.rs`.
+`BufferSize::new(size)` in `rust/cuprum-streams/src/lib.rs` owns the validation
+and returns the validated size used by the stream loops. The contract is:
+reject non-positive values, values that overflow `usize` on the target
+platform, and values above `MAX_BUFFER_SIZE` (1 GiB, `1 << 30`) — the cap
+guards against absurd allocations while comfortably exceeding any realistic
+transfer buffer (the default is 64 KiB). The Rust boundary cases are property
+tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the Python-side error
+mapping is exercised in
 `cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
 `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
 guide aligned with this contract when the cap changes.
