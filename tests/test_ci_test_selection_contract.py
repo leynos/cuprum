@@ -69,14 +69,18 @@ CI_SUITE_TARGET = "make test-python"
 _RECIPE_ENDPOINTS = (
     (
         f"$({SELECTOR})",
-        "the selector is never expanded, so the recipe collects whatever its "
-        "pattern argument happened to be",
+        (
+            "the selector is never expanded, so the recipe collects whatever "
+            "its pattern argument happened to be"
+        ),
     ),
     (
         "$(foreach",
-        "the selector is handed to a single command instead of being "
-        "iterated, so the per-pattern `[ -e ]` guard and the per-pattern exit "
-        "status are lost",
+        (
+            "the selector is handed to a single command instead of being "
+            "iterated, so the per-pattern `[ -e ]` guard and the per-pattern "
+            "exit status are lost"
+        ),
     ),
     (
         "$(PYTEST)",
