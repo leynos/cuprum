@@ -1,0 +1,83 @@
+{
+  "$comment": [
+    "Construction-share classifier rules for roadmap 5.2.1.",
+    "",
+    "The denominator is every py-spy raw stack containing a frame matching",
+    "consume_frames. The numerator is those stacks that also contain a frame",
+    "resolved by one of construction_rules, counted once per stack.",
+    "",
+    "dataclasses.dataclass generates __init__ via exec(), so a generated",
+    "constructor's frame has location '<string>' and carries no class",
+    "identity in a py-spy capture -- every generated constructor in the",
+    "process renders the same way. Each rule therefore pairs its frame",
+    "pattern with the callers that reach it. The frame pattern for a",
+    "generated constructor deliberately leaves 'line' unset: the line number",
+    "shifts whenever the class gains a field, and pinning it would turn a",
+    "harmless field addition into a silently unresolved frame.",
+    "",
+    "Callers name every production site that reaches the constructor, not",
+    "only the immediate one, so initialization moved into a helper still",
+    "resolves. Verified against the 5.2.1 baseline tree; re-verify with",
+    "grep before trusting an edit to the production call paths."
+  ],
+
+  "consume_frames": [
+    {
+      "function": "_consume_stream_with_lines",
+      "location": "cuprum/_stream_line_consumer.py"
+    }
+  ],
+
+  "construction_rules": [
+    {
+      "name": "ExecEvent.__init__ via _StageObservation.emit",
+      "frame": {
+        "function": "__init__",
+        "location": "<string>"
+      },
+      "callers": [
+        {
+          "function": "emit",
+          "location": "cuprum/_pipeline_types.py"
+        },
+        {
+          "function": "emit_fail_fast",
+          "location": "cuprum/_pipeline_types.py"
+        },
+        {
+          "function": "_LineEventEmitter",
+          "location": "cuprum/_line_callbacks.py"
+        },
+        {
+          "function": "_emit_line_event",
+          "location": "cuprum/_line_callbacks.py"
+        },
+        {
+          "function": "emit_line",
+          "location": "cuprum/_line_callbacks.py"
+        }
+      ]
+    },
+    {
+      "name": "_EventDetails.__init__ for the per-line payload",
+      "frame": {
+        "function": "__init__",
+        "location": "<string>"
+      },
+      "callers": [
+        {
+          "function": "_event_details",
+          "location": "cuprum/_line_callbacks.py"
+        },
+        {
+          "function": "emit_line",
+          "location": "cuprum/_line_callbacks.py"
+        },
+        {
+          "function": "_LineEventEmitter",
+          "location": "cuprum/_line_callbacks.py"
+        }
+      ]
+    }
+  ]
+}
