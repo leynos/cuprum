@@ -12,7 +12,7 @@ import typing as typ
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum import ECHO, ScopeConfig, _rust_backend, scoped, sh
+from cuprum import ScopeConfig, _rust_backend, scoped, sh
 from cuprum._backend import StreamBackend, _check_rust_available, get_stream_backend
 from cuprum._testing import (
     force_python_pump_fallback,
@@ -20,6 +20,7 @@ from cuprum._testing import (
     set_rust_availability_for_testing,
 )
 from tests.behaviour._native_pipeline_hand_off import (
+    _make_echo_python_pipeline,
     assert_deep_native_pipeline_completes,
     assert_repeated_native_pipeline_hand_off,
 )
@@ -208,27 +209,6 @@ def given_fd_extraction_fails() -> dict[str, int]:
         Mutable call counter updated when the Python fallback pump executes.
     """
     return force_python_pump_fallback()
-
-
-def _make_echo_python_pipeline(
-    python_code: str,
-) -> tuple[sh.Pipeline, frozenset[Program]]:
-    """Build the shared echo-to-python pipeline for backend selection tests."""
-    _, python_program = python_catalogue()
-    catalogue = combine_programs_into_catalogue(
-        ECHO,
-        python_program,
-        project_name="backend-pipeline-tests",
-    )
-    echo = sh.make(ECHO, catalogue=catalogue)
-    python = sh.make(python_program, catalogue=catalogue)
-
-    pipeline = echo("-n", "hello") | python(
-        "-c",
-        python_code,
-    )
-    allowlist = frozenset([ECHO, python_program])
-    return pipeline, allowlist
 
 
 @given(

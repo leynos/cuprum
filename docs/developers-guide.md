@@ -6066,3 +6066,70 @@ paths that must discard retained output.
 
 Passing no `StdinInput` leaves subprocess stdin inherited from the parent
 process, preserving the pre-feature behaviour.
+
+## Native hand-off stall diagnostics
+
+`test_auto_backend_repeated_native_pipeline_hand_off` repeats a real two-stage
+native pipeline on Linux to catch an intermittent hand-off defect, so it cannot
+bound an attempt on elapsed time: a slow host and a stalled hand-off look
+identical to a wall-clock deadline. It bounds each attempt on *observed
+progress* instead, classifying a stall from evidence captured before the
+pipeline is cancelled.
+
+`tests/behaviour/_native_pipeline_liveness.py` holds the clock arithmetic, and
+`tests/behaviour/_native_pipeline_hand_off.py` the runner that applies it: an
+observe hook refreshes a progress clock on every `start`, `stdout`, `stderr`,
+and `exit` event, and a stall is captured once none arrives for
+`NO_PROGRESS_INTERVAL_S` (0.5 s). The 30 s
+`_REPEATED_NATIVE_PIPELINE_TIMEOUT_S` is a suite-safety backstop for the whole
+16-attempt loop, not a per-attempt bound: `expired` tests the quiet period
+first, so only a run still progressing when it is spent reaches it. A run that
+reaches it before an attempt starts skips unclassified through
+`pre_attempt_backstop_reached` — a plain deadline comparison, with no progress
+clock yet to tie-break on and no child state yet to classify.
+
+`_classify_stall` in `tests/behaviour/_native_pipeline_stall.py` tests every
+`HUNG_HANDOFF` rule before the starvation fallback, so starvation is reported
+only when no positive evidence of a missed close was captured. `HUNG_HANDOFF`
+fails the attempt; `HOST_STARVATION` skips it.
+
+Table 1: stall verdicts and the evidence that selects them
+
+| Evidence at the stall                                                             | Verdict           |
+| --------------------------------------------------------------------------------- | ----------------- |
+| A parent-held write end feeds a `pipe_read` child whose upstream stage has exited | `HUNG_HANDOFF`    |
+| Every tracked child has exited, but a parent read end still holds unread bytes    | `HUNG_HANDOFF`    |
+| Pending tasks outlive every child that is not `R` or `D`                          | `HUNG_HANDOFF`    |
+| A child is present and none of the above applies                                  | `HOST_STARVATION` |
+
+Two details are load-bearing. Rules compare stages by the
+`pipeline_stage_index` tag, which Cuprum attaches to every pipeline event; the
+typed `ExecEvent.stage_index` field is set only on `pipeline_fail_fast`, so
+reading that field would find nothing. And they read the upstream stage's
+*process* state rather than its `exit` event, because a pipeline emits `exit`
+for every stage in one batch once the whole run settles
+(`cuprum/_pipeline_results.py`), so a stalled run never emits one.
+
+`tests/helpers/process_state.py` holds the procfs and pipe probes the snapshot
+is built from: `process_state`, `child_pipes`, `parent_write_fds`,
+`parent_read_fds`, and `read_end_pending_bytes`. Every query degrades rather
+than raising, so one procfs race cannot hide the stall that triggered the
+diagnostic. A child's own descriptors leave `/proc/<pid>/fd` as soon as it
+exits, so bytes it never handed over are observable only on the *parent's* read
+end, which is why the snapshot pairs each child's stdout pipe target with the
+read descriptor this process still holds. The pipe target is therefore recorded
+when the child's `start` event arrives, not at stall time: read any later and
+the child is already gone, which is exactly how that check would fail to fire
+in the situation it exists for. The access mode is masked out of `F_GETFL`
+rather than read from `os.O_ACCMODE`, absent on some runtimes, where naming it
+would escape the helper's `OSError` guard as a traceback.
+
+The Makefile's `PYTEST_TARGETS` names
+`tests/test_native_pipeline_hand_off_support.py`,
+`tests/test_native_pipeline_liveness.py`,
+`tests/test_native_pipeline_stdout_capture.py`, and
+`tests/test_process_state_helper.py`, so `make test-python` runs them; the
+coverage job invokes pytest with no path targets and collects the repository
+root. The full reasoning, including the load evidence against host starvation,
+is in
+`docs/debugging/debugging-plan-2026-09-21-native-pipeline-handoff-stabilize.md`.

@@ -153,7 +153,11 @@ ACT_SCENARIO_TARGETS ?= tests/integration/test_workflow_integration.py \
   tests/integration/test_experimental_leg_integration.py
 PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
+  tests/test_native_pipeline_hand_off_support.py \
+  tests/test_native_pipeline_liveness.py \
+  tests/test_native_pipeline_stdout_capture.py \
   tests/test_native_sdist.py \
+  tests/test_process_state_helper.py \
   scripts/tests/test_boundary_*.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
