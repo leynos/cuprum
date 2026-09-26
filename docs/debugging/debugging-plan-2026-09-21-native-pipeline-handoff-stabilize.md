@@ -39,13 +39,32 @@ before cancelling the pipeline:
 - Parent descriptors that still write to a child's stdin pipe.
 - Names of the live asyncio tasks awaiting completion.
 
-| Evidence at stall                                                                                                                                          | Verdict                 |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Parent writer remains open while a child waits in `pipe_read`; exited children leave unread pipe output; or pending tasks outlive every non-runnable child | `HUNG_HANDOFF`: fail    |
-| A present, non-zombie child is `R` or `D`                                                                                                                  | `HOST_STARVATION`: skip |
+A pipeline emits its `exit` event for every stage only once the whole run has
+settled (`_build_pipeline_stage_results` in `cuprum/_pipeline_results.py`), so
+a stalled run never emits one. The upstream-stage condition in the first
+hand-off rule is therefore evaluated from that stage's process state in
+`/proc`, not from its `exit` event, which would not have arrived in the
+situation the rule exists to catch.
 
-The 30-second aggregate deadline is only a suite-safety backstop. It triggers
-the same evidence capture and classifier; it does not decide the verdict.
+`_classify_stall` evaluates the rules in the order below, and every
+`HUNG_HANDOFF` rule is tested before the host-starvation fallback. A runnable
+child is therefore not evidence in its own right: `HOST_STARVATION` is reported
+only when no positive hand-off evidence was captured.
+
+| Evidence at stall                                                                                                        | Verdict                 |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
+| A parent write end for a child's stdin pipe survives while that child waits in `pipe_read` and its upstream stage exited | `HUNG_HANDOFF`: fail    |
+| Every tracked child has exited and a parent-owned read end still reports queued output bytes                             | `HUNG_HANDOFF`: fail    |
+| Tasks are still pending, children were tracked, and none of them is runnable                                             | `HUNG_HANDOFF`: fail    |
+| No rule above matched                                                                                                    | `HOST_STARVATION`: skip |
+
+A zombie and a reaped pid both count as exited, so the fail rules accept
+either. The 30-second aggregate deadline reached inside `_monitor_progress` is
+only a suite-safety backstop: it triggers the same evidence capture and
+classifier, and it does not decide the verdict. The same deadline reached
+before an attempt starts is a plain comparison with no classifier at all —
+`pre_attempt_backstop_reached` runs before any child exists, so there is no
+state to classify and the attempt is skipped unclassified.
 
 ## Evidence already obtained
 
@@ -79,7 +98,10 @@ hand-off path alone. `ScopeConfig.observe_hooks` and the `start`, `stdout`,
 the rebase required no code change. The rebased tree was verified against the
 `git merge-tree` oracle for the branch.
 
-Neither test module this work adds is named by `PYTEST_TARGETS`; that list is
-deliberately bounded so `make test` needs no container runtime. Both run in the
-coverage job, whose shared action invokes `pytest` with no path targets and so
-collects the repository root.
+The Makefile's `PYTEST_TARGETS` names
+`tests/test_native_pipeline_hand_off_support.py`,
+`tests/test_native_pipeline_liveness.py`,
+`tests/test_native_pipeline_stdout_capture.py`, and
+`tests/test_process_state_helper.py`, so `make test-python` runs them directly.
+The coverage job separately invokes `pytest` with no path targets and so
+collects the repository root as well.
