@@ -315,7 +315,17 @@ There is no time limit. Tool failures do not justify lowering acceptance.
     Windows runtime behaviour, and the winerror case remains skipped. Windows
     runtime evidence is still outstanding and must come from Windows.
     Log: `/tmp/611-lint-windows.out`.
-  - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
+  - [x] (2026-09-27) Full gate sequence plus native extension stage complete at
+    head `6a28ff95` — all eight planned pure-Python gates and all four native
+    gates green, each logged under `/tmp/gate-611-*.out` and `/tmp/611-*.out`.
+    The plateau this milestone targets — a passing implementation, tests, and
+    accurate documentation, each change gated before its commit — is reached.
+    Two qualifications carry forward into M2 rather than being closed here:
+    `actionlint` is locally unobservable (see the Surprises entry), and Windows
+    *runtime* evidence is still outstanding. A draft-PR CodeRabbit app check
+    reports "Review skipped: draft pull request", which is why the plan calls for
+    the `coderabbit review --agent` CLI pass instead; the app's verdict is not a
+    review.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
