@@ -58,6 +58,41 @@ def _exited_stage(stage_index: int) -> _ChildStallSnapshot:
     )
 
 
+def _blocked_on_parent_stdin(stage_index: int) -> _ChildStallSnapshot:
+    """Build a child whose stdin still has a parent-held write end.
+
+    Such a child sleeps in ``pipe_read``: it cannot see EOF for as long as the
+    parent keeps a writer open, whatever the upstream stage is doing.
+
+    Returns
+    -------
+    _ChildStallSnapshot
+        A live child at ``stage_index`` waiting in ``pipe_read``.
+    """
+    return _child(
+        ProcessState(42, "S", exited=False, wchan="pipe_read", available=True),
+        stage_index=stage_index,
+        stdin_parent_writers=(10,),
+    )
+
+
+def _exited_child_with_parent_output(pending_bytes: int | None) -> _ChildStallSnapshot:
+    """Build an exited child whose parent read end reports ``pending_bytes``.
+
+    ``None`` models a host where the byte count is unavailable, ``0`` a read
+    end that has been drained, and a positive count uncollected output.
+
+    Returns
+    -------
+    _ChildStallSnapshot
+        An exited child with a parent-owned read end on its stdout pipe.
+    """
+    return _child(
+        ProcessState(42, None, exited=True, wchan=None, available=True),
+        stdout_parent=_ParentOutput(9, "pipe:[43]", pending_bytes),
+    )
+
+
 def test_pending_tasks_without_a_runnable_child_are_a_hung_hand_off() -> None:
     """A pending task beside a non-runnable child proves the tasks outlived it."""
     snapshot = _snapshot(
@@ -116,12 +151,7 @@ def test_unavailable_process_evidence_is_host_starvation() -> None:
 
 def test_unknown_pending_bytes_are_not_uncollected_output() -> None:
     """An unsupported ioctl leaves the byte count unknown, not non-zero."""
-    snapshot = _snapshot(
-        _child(
-            ProcessState(42, None, exited=True, wchan=None, available=True),
-            stdout_parent=_ParentOutput(9, "pipe:[43]", None),
-        ),
-    )
+    snapshot = _snapshot(_exited_child_with_parent_output(None))
 
     assert _classify_stall(snapshot) is HandOffVerdict.HOST_STARVATION, (
         "an unknown byte count must not be reported as uncollected output"
@@ -141,12 +171,9 @@ def test_running_children_without_a_read_end_are_host_starvation() -> None:
 
 def test_parent_writer_waiting_on_pipe_read_is_a_hung_hand_off() -> None:
     """A parent writer prevents the downstream reader from receiving EOF."""
-    blocked = _child(
-        ProcessState(42, "S", exited=False, wchan="pipe_read", available=True),
-        stage_index=1,
-        stdin_parent_writers=(10,),
+    snapshot = _StallSnapshot(
+        (_blocked_on_parent_stdin(1), _exited_stage(0)), (), "test stall"
     )
-    snapshot = _StallSnapshot((blocked, _exited_stage(0)), (), "test stall")
 
     assert _classify_stall(snapshot) is HandOffVerdict.HUNG_HANDOFF, (
         "a child blocked in pipe_read while its parent holds a writer must fail"
@@ -155,16 +182,13 @@ def test_parent_writer_waiting_on_pipe_read_is_a_hung_hand_off() -> None:
 
 def test_parent_writer_rule_needs_an_exited_upstream_stage() -> None:
     """A writer from a stage that is still running is not a missed close."""
-    blocked = _child(
-        ProcessState(42, "S", exited=False, wchan="pipe_read", available=True),
-        stage_index=1,
-        stdin_parent_writers=(10,),
-    )
     running_upstream = _child(
         ProcessState(900, "S", exited=False, wchan="do_exit", available=True),
         stage_index=0,
     )
-    snapshot = _StallSnapshot((blocked, running_upstream), (), "test stall")
+    snapshot = _StallSnapshot(
+        (_blocked_on_parent_stdin(1), running_upstream), (), "test stall"
+    )
 
     assert _classify_stall(snapshot) is HandOffVerdict.HOST_STARVATION, (
         "an upstream stage that has not exited has not missed its hand-off"
@@ -173,13 +197,9 @@ def test_parent_writer_rule_needs_an_exited_upstream_stage() -> None:
 
 def test_parent_writer_rule_needs_the_immediate_upstream_stage() -> None:
     """An exited stage that does not feed this child cannot justify the rule."""
-    blocked = _child(
-        ProcessState(42, "S", exited=False, wchan="pipe_read", available=True),
-        stage_index=2,
-        stdin_parent_writers=(10,),
+    snapshot = _StallSnapshot(
+        (_blocked_on_parent_stdin(2), _exited_stage(0)), (), "test stall"
     )
-    unrelated = _exited_stage(0)
-    snapshot = _StallSnapshot((blocked, unrelated), (), "test stall")
 
     assert _classify_stall(snapshot) is HandOffVerdict.HOST_STARVATION, (
         "only the edge this child reads from can prove a missed close"
@@ -188,16 +208,13 @@ def test_parent_writer_rule_needs_the_immediate_upstream_stage() -> None:
 
 def test_parent_writer_rule_ignores_an_unrelated_runnable_stage() -> None:
     """A runnable stage elsewhere must not hide a genuine missed hand-off."""
-    blocked = _child(
-        ProcessState(42, "S", exited=False, wchan="pipe_read", available=True),
-        stage_index=1,
-        stdin_parent_writers=(10,),
-    )
     unrelated = _child(
         ProcessState(43, "R", exited=False, wchan=None, available=True),
         stage_index=3,
     )
-    snapshot = _StallSnapshot((blocked, _exited_stage(0), unrelated), (), "test stall")
+    snapshot = _StallSnapshot(
+        (_blocked_on_parent_stdin(1), _exited_stage(0), unrelated), (), "test stall"
+    )
 
     assert _classify_stall(snapshot) is HandOffVerdict.HUNG_HANDOFF, (
         "a runnable stage on another edge must not suppress the verdict"
@@ -217,12 +234,7 @@ def test_runnable_child_is_host_starvation() -> None:
 
 def test_exited_children_with_unread_output_are_a_hung_hand_off() -> None:
     """An exited child and pending parent-held bytes prove lost output."""
-    snapshot = _snapshot(
-        _child(
-            ProcessState(42, None, exited=True, wchan=None, available=True),
-            stdout_parent=_ParentOutput(9, "pipe:[43]", 5),
-        ),
-    )
+    snapshot = _snapshot(_exited_child_with_parent_output(5))
 
     assert _classify_stall(snapshot) is HandOffVerdict.HUNG_HANDOFF, (
         "uncollected output after child exit must fail as a missed hand-off"
@@ -231,12 +243,7 @@ def test_exited_children_with_unread_output_are_a_hung_hand_off() -> None:
 
 def test_exited_child_with_drained_output_is_host_starvation() -> None:
     """A parent read end that has been drained is not evidence of lost output."""
-    snapshot = _snapshot(
-        _child(
-            ProcessState(42, None, exited=True, wchan=None, available=True),
-            stdout_parent=_ParentOutput(9, "pipe:[43]", 0),
-        ),
-    )
+    snapshot = _snapshot(_exited_child_with_parent_output(0))
 
     assert _classify_stall(snapshot) is HandOffVerdict.HOST_STARVATION, (
         "a drained read end must not be reported as uncollected output"
