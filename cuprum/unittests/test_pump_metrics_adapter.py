@@ -297,7 +297,7 @@ def test_declines_reach_no_collector_when_nobody_registers(
         "the hop must actually decline, or the emptiness assertion below holds "
         "even when the channel emits nothing at all"
     )
-    assert unregistered.counters == [], (
+    assert not unregistered.counters, (
         f"an unregistered collector must stay untouched, found {unregistered.counters}"
     )
 
@@ -356,7 +356,7 @@ def test_an_already_registered_metrics_hook_is_untouched_by_a_decline(
             with monkeypatch.context() as patch:
                 trigger(patch)
 
-    assert exec_metrics.counters == {}, (
+    assert not exec_metrics.counters, (
         f"a pump decline must not produce exec metrics, found {exec_metrics.counters}"
     )
     decline_counters = [
@@ -381,7 +381,7 @@ def test_an_unknown_pump_phase_is_ignored_rather_than_raised_on() -> None:
 
     hook(unknown)
 
-    assert collector.counters == [], (
+    assert not collector.counters, (
         f"an unknown phase must record nothing, found {collector.counters}"
     )
 

@@ -170,14 +170,14 @@ def _assert_only_selected_stream_echoed(
         assert "out" in stdout_sink.getvalue(), (
             "stdout echo must follow echo_stdout=True"
         )
-        assert stderr_sink.getvalue() == "", (
+        assert not stderr_sink.getvalue(), (
             "stderr must stay silent while only stdout echoes"
         )
     else:
         assert "err" in stderr_sink.getvalue(), (
             "stderr echo must follow echo_stderr=True"
         )
-        assert stdout_sink.getvalue() == "", (
+        assert not stdout_sink.getvalue(), (
             "stdout must stay silent while only stderr echoes"
         )
 

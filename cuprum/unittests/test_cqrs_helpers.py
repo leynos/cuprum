@@ -99,7 +99,7 @@ def test_enforce_and_collect_are_independent() -> None:
         ctx = current_context()
         # Collecting hooks for a forbidden command does not raise; only the
         # explicit command step enforces the allowlist.
-        assert _collect_hooks(ctx).before_hooks == (), (
+        assert not _collect_hooks(ctx).before_hooks, (
             "collecting hooks should not enforce a forbidden command"
         )
         with pytest.raises(ForbiddenProgramError):
@@ -119,7 +119,7 @@ def test_emit_exec_event_returns_empty_for_sync_hooks() -> None:
 
     scheduled = _emit_exec_event((sync_hook,), _event())
 
-    assert scheduled == [], "synchronous observe hooks should schedule no tasks"
+    assert not scheduled, "synchronous observe hooks should schedule no tasks"
     assert len(calls) == 1, "synchronous observe hook should be called once"
 
 
@@ -233,7 +233,7 @@ def test_stage_observation_preserves_scheduled_tasks_when_later_hook_fails(
         assert len(pending_tasks) == 1, "scheduled tasks must survive hook failure"
         with pytest.raises(_AsyncObserveHookError):
             await _wait_for_exec_hook_tasks(pending_tasks)
-        assert pending_tasks == [], "wait helper should clear completed pending tasks"
+        assert not pending_tasks, "wait helper should clear completed pending tasks"
         assert any(
             "observe_hook_failed" in record.message for record in caplog.records
         ), "synchronous observe hook failures should be logged"

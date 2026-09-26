@@ -312,7 +312,7 @@ def test_a_failing_second_operation_leaves_the_first_applied() -> None:
         "the counter applied before the failure must remain recorded, found "
         f"{collector.counters!r}"
     )
-    assert collector.histograms == {}, (
+    assert not collector.histograms, (
         "the observation that raised must not be recorded, found "
         f"{collector.histograms!r}"
     )

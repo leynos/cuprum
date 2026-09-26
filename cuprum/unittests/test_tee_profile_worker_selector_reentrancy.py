@@ -26,15 +26,20 @@ if typ.TYPE_CHECKING:
 
 def test_backend_lock_is_reentrant() -> None:
     """The backend lock can be acquired twice by the same thread."""
-    with _tee_profile_worker_backend._BACKEND_LOCK:
-        # A plain Lock would deadlock on this same-thread second acquisition;
-        # RLock tracks ownership and recursion depth, so it succeeds here.
-        acquired = _tee_profile_worker_backend._BACKEND_LOCK.acquire(
-            blocking=True,
-            timeout=0.5,
-        )
-        assert acquired, "expected same-thread backend lock acquisition to succeed"
-        _tee_profile_worker_backend._BACKEND_LOCK.release()
+    # A plain Lock would deadlock on the second same-thread acquisition; RLock
+    # tracks ownership and recursion depth, so the nested acquisition succeeds.
+    # The inner acquisition is bounded so a regression to a plain Lock fails
+    # this test promptly instead of hanging the suite until pytest's timeout.
+    lock = _tee_profile_worker_backend._BACKEND_LOCK
+    with lock:
+        reacquired = lock.acquire(timeout=0.5)
+        try:
+            assert reacquired, (
+                "the backend lock must be re-entrant for the owning thread"
+            )
+        finally:
+            if reacquired:
+                lock.release()
 
 
 @settings(

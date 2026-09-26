@@ -310,7 +310,7 @@ def test_unobserved_operations_do_not_emit_events_or_metrics(
 
     assert captured == "payload", "unobserved drain must still capture output"
     assert writer.data == b"pipeline", "unobserved pump must still transfer output"
-    assert collector.calls == [], "no registration must produce no metric calls"
+    assert not collector.calls, "no registration must produce no metric calls"
 
 
 def test_failing_observer_does_not_change_drain_or_pump_success() -> None:

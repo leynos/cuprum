@@ -47,6 +47,8 @@ _VERSION_SHAPE_RE = re.compile(r"\d+(?:\.\d+)+")
 _TOOL_PIN_SITES = (
     ("ruff", "RUFF_VERSION", "Ruff"),
     ("ty", "TY_VERSION", "ty"),
+    ("pylint", "PYLINT_VERSION", "Pylint"),
+    ("astroid", "ASTROID_VERSION", "Astroid"),
 )
 
 _MAKEFILE_PIN_RE_TEMPLATE = r"^{name}\s*\?=\s*(\S+)\s*$"
@@ -397,3 +399,31 @@ def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
         f"{EXPECTED_NEXTEST_MIN_VERSION!r}; a site left behind certifies a "
         "floor the others no longer enforce"
     )
+
+
+def test_pylint_contract_covers_non_package_test_directories() -> None:
+    """The Makefile supplies skipped test directories as direct Pylint targets."""
+    recipes = _expanded_make_recipes(repo_root(), targets=("pylint-classic",))
+    for target in (
+        "cuprum/unittests",
+        "tests/behaviour",
+        "tests/features",
+        "scripts/tests",
+    ):
+        assert target in recipes, f"classic Pylint must inspect {target} directly"
+    assert "pylint-pypy" not in recipes
+    assert "--jobs=1" in recipes
+
+
+def test_df12_retains_its_separate_package_root_target_scope() -> None:
+    """DF12 keeps its existing scope while classic Pylint covers extra roots."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    targets = "benchmarks conftest.py cuprum scripts tests"
+    assert f"DF12_PYLINT_TARGETS ?= {targets}" in makefile
+    assert "$(DF12_PYLINT) $(DF12_PYLINT_TARGETS)" in makefile
+
+
+def test_ambrleaks_runs_in_an_isolated_cpython_environment() -> None:
+    """Snapshot scanning must not recreate the project virtual environment."""
+    makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
+    assert "uv run --isolated --python $(DF12_PYTHON) ambrleaks" in makefile

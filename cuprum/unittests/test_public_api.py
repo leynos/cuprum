@@ -209,7 +209,7 @@ def test_command_result_keeps_relay_fallbacks_as_its_trailing_slot() -> None:
     assert result.stderr == "err", (
         f"stderr must bind positionally, got {result.stderr!r}"
     )
-    assert result.relay_fallbacks == (), (
+    assert not result.relay_fallbacks, (
         f"the defaulted diagnostics must be empty, got {result.relay_fallbacks!r}"
     )
 

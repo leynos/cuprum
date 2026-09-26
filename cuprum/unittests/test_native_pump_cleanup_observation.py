@@ -102,7 +102,7 @@ def test_completed_worker_wins_over_late_grace_expiry() -> None:
             started_at=0.0,
         )
 
-    assert events == [], (
+    assert not events, (
         "worker completion must suppress a grace-expiry event after it wins"
     )
 

@@ -80,7 +80,7 @@ class _BufferSizeEntryPoint(typ.Protocol):
 
     def __call__(self, streams: ModuleType, *, buffer_size: int) -> object:
         """Invoke the entry point with the supplied ``buffer_size``."""
-        ...
+        pass
 
 
 def _consume_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:

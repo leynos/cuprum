@@ -123,7 +123,7 @@ def test_input_feeds_stdin(
     assert result.stdout == case.expected_stdout, (
         "the stdin payload should reach the child and be echoed back unchanged"
     )
-    assert result.stderr == "", "stdin feeding should not emit stderr"
+    assert not result.stderr, "stdin feeding should not emit stderr"
 
 
 def test_input_text_uses_configured_encoding(
@@ -149,7 +149,7 @@ def test_input_text_uses_configured_encoding(
     assert result.stdout == "\u2013", (
         "stdin text should be encoded with the configured cp1252 codec"
     )
-    assert result.stderr == "", "encoded stdin feeding should not emit stderr"
+    assert not result.stderr, "encoded stdin feeding should not emit stderr"
 
 
 def test_input_text_and_input_bytes_conflict() -> None:
@@ -201,7 +201,7 @@ def test_nonzero_exit_code_is_captured_with_input_text(
     assert result.stdout == "failure input", (
         "captured stdout should include the fed stdin echoed back"
     )
-    assert result.stderr == "", "no stderr is expected for this command"
+    assert not result.stderr, "no stderr is expected for this command"
 
 
 def test_process_closing_stdin_early_is_handled(
@@ -216,7 +216,7 @@ def test_process_closing_stdin_early_is_handled(
 
     assert result.exit_code == 0, "a child that ignores stdin should still exit cleanly"
     assert result.stdout == "done\n", "the child's own output should be captured"
-    assert result.stderr == "", "early stdin closure should not surface as stderr"
+    assert not result.stderr, "early stdin closure should not surface as stderr"
 
 
 def test_input_text_encoding_failure_raises(

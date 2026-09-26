@@ -219,7 +219,7 @@ class _BaseBackendSelector(abc.ABC):
         backend: tee_profile_worker.BackendName,
     ) -> cabc.Iterator[None]:
         """Coordinate selector behaviour at backend state-machine boundaries."""
-        ...  # pragma: no cover
+        pass  # pragma: no cover
 
 
 class _CoordinatedBackendSelector(_BaseBackendSelector):

@@ -26,6 +26,11 @@ dev = [
     # The release-version property tests use it as an independent PEP 440
     # oracle, so declare it rather than rely on pytest pulling it in.
     "packaging>=25.0,<26.0",
+    # Keep the isolated classic and DF12 Pylint environments on this released,
+    # mutually compatible pair. Pylint declares Astroid <=4.1.dev0, so the
+    # supported 4.0.4 pin is retained rather than forcing Astroid 4.3.1.
+    "pylint==4.0.9",
+    "astroid==4.0.4",
     # Constrained below pytest 9.1 until pytest-bdd supports its node-based
     # fixture-registration API; 9.1 deprecates the nodeid/baseid path that
     # pytest-bdd 8.1.0 uses, raising PytestRemovedIn10Warning.
@@ -245,11 +250,11 @@ max-positional-arguments = 4
 # Keep this Pylint pass focused on the explicitly selected messages.
 disable = [
     "all",
-    # Managed PyPy can lag the project Python version; keep PyPy-backed Pylint
-    # useful on files it can parse.
-    "syntax-error",
 ]
 enable = [
+    # Syntax errors must fail loudly: otherwise a Pylint 10.00/10 can mean no
+    # module was analysed at all.
+    "syntax-error",
     # Logging format safety.
     "logging-format-interpolation",
     "logging-format-truncated",

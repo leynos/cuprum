@@ -195,7 +195,7 @@ async def _assert_pipeline_finalization_failure_group(
         _AfterHookError,
         task_exception_class,
     ), "finalization should preserve both failures in operation order"
-    assert pending_tasks == [], "finalization should clear failed observe tasks"
+    assert not pending_tasks, "finalization should clear failed observe tasks"
     # The hook failure is the run's terminal error, so it is what the adapter
     # must record: closing with the stage-result outcome first would annotate
     # a crashed run as an ordinary non-zero exit.
@@ -220,7 +220,7 @@ def test_safe_cmd_run_enforces_allowlist_before_before_hooks() -> None:
     ):
         _echo_cmd().run_sync()
 
-    assert calls == [], "before hooks should not run before allowlist enforcement"
+    assert not calls, "before hooks should not run before allowlist enforcement"
 
 
 @settings(deadline=None)
@@ -284,7 +284,7 @@ def test_pipeline_finalization_drains_tasks_after_hook_failure() -> None:
             )
 
         assert completed == [True], "finalization should await scheduled observe tasks"
-        assert pending_tasks == [], "finalization should clear completed observe tasks"
+        assert not pending_tasks, "finalization should clear completed observe tasks"
 
     asyncio.run(run())
 
@@ -343,7 +343,7 @@ def test_pipeline_cleanup_drain_failure_preserves_active_error() -> None:
             sh.TimeoutExpired,
             _ObserveTaskError,
         ), "cleanup should aggregate the active error with the observe-task failure"
-        assert pending_tasks == [], "cleanup should clear drained observe tasks"
+        assert not pending_tasks, "cleanup should clear drained observe tasks"
 
     asyncio.run(run())
 

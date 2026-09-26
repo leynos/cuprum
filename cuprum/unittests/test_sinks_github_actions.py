@@ -217,7 +217,7 @@ def test_sink_activation_follows_environment_and_force(
 
     if not expected_active:
         assert session is None, "a non-enabling configuration must decline"
-        assert buffer.getvalue() == "", "an inactive sink must write nothing"
+        assert not buffer.getvalue(), "an inactive sink must write nothing"
         return
     assert session is not None, "an enabling configuration must return a session"
     written = buffer.getvalue()
@@ -496,7 +496,7 @@ def test_emit_group_false_suppresses_group_framing() -> None:
     """
     session, buffer = _open_gha_session(("false",), emit_group=False)
 
-    assert buffer.getvalue() == "", (
+    assert not buffer.getvalue(), (
         f"a group-less session must open nothing; got {buffer.getvalue()!r}"
     )
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=3))
