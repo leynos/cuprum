@@ -5,14 +5,23 @@ They prove nothing about what it does. This module runs the action's own shell
 bodies, so a sampler that exported no process identifier, sampled nothing, or
 computed its peaks wrongly would fail here rather than quietly reporting
 `unknown` for the life of the estate.
+
+The sampler is a Linux measurement. It reads `free -m` and `df -m .` by column
+position, and these tests run its shell under `/bin/bash`. Where those
+assumptions do not hold the shell tests skip with the reason, so a contributor
+on another platform is told why the question does not apply instead of seeing
+the action reported as broken. On Linux nothing skips: a missing tool is the
+defect this module exists to catch, and a skip there would hide it.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv
+import sys
 import time
 import typing as typ
 
@@ -29,6 +38,59 @@ START_STEP = "Start resource sampler"
 REPORT_STEP = "Report peak resource use"
 #: `free` and `df` must exist for the sampler to sample anything at all.
 REQUIRED_TOOLS = ("free", "df", "du")
+#: The sampler's loop sleeps before its first row, so the first sample lands at
+#: roughly 15 s and the second at 30 s. Allowing 40 s therefore tolerates a
+#: missed interval, which is what keeps the test honest on a loaded runner.
+SAMPLE_DEADLINE_SECONDS = 40
+#: `pyproject.toml` sets a suite-wide `timeout = 30`, which is shorter than
+#: `SAMPLE_DEADLINE_SECONDS`: pytest-timeout would kill this test at 30 s and
+#: the assertion below would never get to report. The per-test marker raises
+#: the ceiling above the wait (40 s) plus the start step's own subprocess limit
+#: (60 s), so the test's own diagnostic always wins the race.
+SAMPLE_TEST_TIMEOUT_SECONDS = 120
+
+
+def _shell_skip_reason() -> str:
+    """Return why the action's shell cannot be exercised here.
+
+    Returns
+    -------
+    str
+        A human-readable blocker, or the empty string when this host can run
+        the action's shell bodies.
+    """
+    if sys.platform != "linux":
+        return (
+            "the sampler reads `free` and `df` by Linux column positions and "
+            f"runs under /bin/bash; this is {sys.platform}"
+        )
+    missing = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
+    if missing:
+        return (
+            f"the sampler shells out to {', '.join(missing)}, which this host "
+            "does not provide"
+        )
+    return ""
+
+
+_SHELL_SKIP_REASON = _shell_skip_reason()
+
+#: For every test that runs the action's shell. The sampler is measured on
+#: Linux runners and those are the only hosts where its output means anything,
+#: so a foreign platform skips rather than failing a question that does not
+#: apply to it.
+requires_the_sampler_toolbox = pytest.mark.skipif(
+    bool(_SHELL_SKIP_REASON),
+    reason=_SHELL_SKIP_REASON or "the sampler's toolbox is present",
+)
+
+#: The toolbox assertion is a contract about the runner, and the runner is
+#: Linux. It deliberately does *not* skip when a tool is missing: that is the
+#: defect it exists to catch, and skipping there would make it a tautology.
+on_linux = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason=f"the sampler's toolbox is a Linux runner contract; this is {sys.platform}",
+)
 
 
 def _process_is_alive(pid: int) -> bool:
@@ -86,6 +148,7 @@ def test_the_action_declares_the_inputs_the_workflows_pass() -> None:
     )
 
 
+@on_linux
 @pytest.mark.parametrize("tool", REQUIRED_TOOLS)
 def test_the_sampling_tools_exist(tool: str) -> None:
     """Fail loudly here rather than silently sampling nothing on the runner."""
@@ -100,6 +163,7 @@ def test_the_sampling_tools_exist(tool: str) -> None:
     ), f"the sampler shells out to {tool!r}"
 
 
+@requires_the_sampler_toolbox
 def test_start_exports_a_live_sampler_process(
     tmp_path: Path, sampler_pid: list[int]
 ) -> None:
@@ -115,6 +179,8 @@ def test_start_exports_a_live_sampler_process(
     assert _process_is_alive(pid), "the exported identifier must name a live process"
 
 
+@requires_the_sampler_toolbox
+@pytest.mark.timeout(SAMPLE_TEST_TIMEOUT_SECONDS)
 def test_the_sampler_writes_three_numbers_per_interval(
     tmp_path: Path, sampler_pid: list[int]
 ) -> None:
@@ -122,22 +188,31 @@ def test_the_sampler_writes_three_numbers_per_interval(
 
     The report step reads these by column position, so a row with a different
     shape would silently produce wrong peaks rather than an error.
+
+    The wait is `SAMPLE_DEADLINE_SECONDS`, which is longer than the suite's own
+    default timeout. Without the marker above, pytest-timeout would kill the
+    test before the loop ended and the diagnostic below would never be
+    reported; the failure would read as an unexplained timeout instead of
+    naming the sampler that produced nothing.
     """
     result = run_step(step_script(ACTION, START_STEP), workdir=tmp_path)
     sampler_pid.append(int(result.exported["RESOURCE_SAMPLER_PID"]))
     log = tmp_path / "resource.log"
-    deadline = time.monotonic() + 40
+    deadline = time.monotonic() + SAMPLE_DEADLINE_SECONDS
     while time.monotonic() < deadline and not log.read_text(encoding="utf-8").strip():
         time.sleep(1)
     rows = [
         line.split() for line in log.read_text(encoding="utf-8").splitlines() if line
     ]
-    assert rows, "the sampler produced no rows within 40 s"
+    assert rows, (
+        f"the sampler produced no rows within {SAMPLE_DEADLINE_SECONDS} s"
+    )
     for row in rows:
         assert len(row) == 3, f"expected memory, used disk, free disk; got {row}"
         assert all(field.isdigit() for field in row), f"non-numeric sample: {row}"
 
 
+@requires_the_sampler_toolbox
 def test_report_publishes_the_peaks_and_stops_the_sampler(tmp_path: Path) -> None:
     """Take the maximum of both used columns and the minimum of free disk."""
     (tmp_path / "resource.log").write_text(
@@ -174,6 +249,7 @@ def test_report_publishes_the_peaks_and_stops_the_sampler(tmp_path: Path) -> Non
                 victim.kill()
 
 
+@requires_the_sampler_toolbox
 def test_report_survives_a_job_that_never_started_the_sampler(tmp_path: Path) -> None:
     """Report `unknown` rather than failing a job that already failed.
 
