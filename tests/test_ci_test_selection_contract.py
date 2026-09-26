@@ -35,6 +35,9 @@ from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
 from tests.helpers.strict_yaml import load
 from tests.helpers.workflow_shell import script_runs_command
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 #: The selector `make test-python` iterates over, and the scenario selector it
 #: deliberately excludes.
 SELECTOR = "PYTEST_TARGETS"
@@ -90,7 +93,7 @@ def _root_modules() -> tuple[str, ...]:
         If the enumeration is empty. An empty population would satisfy every
         "nothing is uncovered" assertion below without reading anything, which
         is the vacuous pass this module exists to prevent.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     tests_dir = repo_root() / "tests"
     found = tuple(
         sorted(f"tests/{path.name}" for path in tests_dir.glob(ROOT_MODULE_GLOB))
@@ -121,7 +124,7 @@ def _covered_modules() -> frozenset[str]:
         root-level module. Each would make the coverage question trivially
         satisfiable, so the resolver is reported as the failure rather than
         the modules it failed to find.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     selected = selected_paths(variable_expansion(SELECTOR))
     scenarios = selected_paths(variable_expansion(SCENARIO_SELECTOR))
     _require(
@@ -151,7 +154,7 @@ def _uncovered() -> tuple[str, ...]:
     return tuple(module for module in _root_modules() if module not in covered)
 
 
-def _remedy(modules: typ.Iterable[str]) -> str:
+def _remedy(modules: cabc.Iterable[str]) -> str:
     """Return the failure message naming each module and both fixes."""
     listing = "\n".join(f"  - {module}" for module in modules)
     return (
@@ -202,9 +205,12 @@ def test_the_exception_mechanism_reports_an_uncovered_module() -> None:
     assert absent in message, (
         f"the failure message must name the uncovered module; got {message!r}"
     )
-    assert "test_ci_" in message and SELECTOR in message, (
-        "the failure message must name both fixes, so a reader is told what to "
-        f"do rather than only what is wrong; got {message!r}"
+    assert "test_ci_" in message, (
+        "the failure message must name the rename fix, so a reader is told "
+        f"what to do rather than only what is wrong; got {message!r}"
+    )
+    assert SELECTOR in message, (
+        f"the failure message must name the {SELECTOR} fix; got {message!r}"
     )
 
 
