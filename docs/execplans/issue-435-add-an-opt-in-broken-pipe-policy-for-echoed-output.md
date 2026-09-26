@@ -353,17 +353,21 @@ escalation, not a workaround.
   scanner `ambrieaks`; the real tool is `ambrleaks`, per Makefile:237 and
   ADR-003. The misspelling entered at `21618328`, when Revision 10 was the
   current note, and left at `e986abf8`, seven commits later. Over that span the
-  spelling gate ran at least three times — inside `make lint` at `a6b8ba14` and
-  again at `f60f04f2`, and via `markdownlint` at `d4e7371c` — and passed each
-  time, because neither spelling is a dictionary word, so `typos` had no
-  opinion either way. No other gate reads prose for correctness. CodeRabbit's
-  sixth pass, at `a801de86`, reviewed a tree containing it and returned zero
-  findings. It surfaced only when a new sentence cited the same tool a second
-  time and the two spellings disagreed with each other; confirming which was
-  right then took one `git grep` against the Makefile. The lesson is that
-  spelling, lint, and type gates give no protection against a *confidently
-  wrong* name for an external tool. Cross-check a cited identifier against its
-  definition the first time it is written down, because nothing downstream will.
+  spelling gate reached the file three times and never once had an opinion
+  about the misspelling. Twice it passed a tree containing `ambrieaks` outright
+  — inside `make lint` at `f60f04f2` and via `markdownlint` at `d4e7371c` —
+  because neither spelling is a dictionary word, so `typos` saw nothing to
+  flag. The third run, `make lint` at `a6b8ba14`, did fail at the spelling
+  step, but on the unrelated `a6b8ba14` commit-SHA token and it aborted there,
+  so it never reported on `ambrieaks` either way. No other gate reads prose for
+  correctness, and CodeRabbit's sixth pass at `a801de86` reviewed a tree
+  containing it and returned zero findings. It surfaced only when a new
+  sentence cited the same tool a second time and the two spellings disagreed
+  with each other; confirming which was right then took one `git grep` against
+  the Makefile. The lesson is that spelling, lint, and type gates give no
+  protection against a *confidently wrong* name for an external tool.
+  Cross-check a cited identifier against its definition the first time it is
+  written down, because nothing downstream will.
 - `make test`'s `test-python` recipe is a `for` loop over the pytest globs with
   `|| exit $$?`, so the first failing glob aborts the loop and silently masks
   every later glob *and* `test-rust`. In this task a single known-flaky doctest
