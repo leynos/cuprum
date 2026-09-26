@@ -1,7 +1,12 @@
 # Centralize native stream errors (6.1.1)
 
-Status: IN PROGRESS — M1 implementation. Approved 2026-09-26; the publishing
+Status: IN PROGRESS — M1 complete, M2 open. Approved 2026-09-26; the publishing
 draft-PR and approval checkboxes below are recorded as done by that approval.
+M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
+and the native extension stage both pass, with `actionlint` locally
+unobservable and Windows runtime evidence outstanding (both recorded in
+Progress and Surprises). M2 closes the platform evidence, reconciles the
+roadmap, and sets this status to COMPLETE.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -94,7 +99,9 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   (PR #432).
 - [x] (2026-09-26) Obtained explicit implementation approval, with the
   `thiserror` dependency authorized (see Decision log).
-- [ ] M1: implement and validate the typed boundary and its tests.
+- [x] M1: implement and validate the typed boundary and its tests. Complete
+  2026-09-27: implementation, tests, and documentation are in and gated, and
+  every child item below is done.
   - [x] (2026-09-26) Typed boundary implemented across `lib.rs`
     (`RustStreamError`, typed `validate_buffer_size`/`convert_fd`),
     `errors.rs` (`impl From<RustStreamError> for PyErr`, old converter demoted),
@@ -560,9 +567,33 @@ apply here only because the aborting step is last.
 
 ## Outcomes & retrospective
 
-Implementation has not begun. The plan targets one focused boundary change; no
-roadmap checkbox is completed by publishing it. Record actual red and green
-test evidence, gate logs, platform results, and deviations here during delivery.
+M1 is complete as of 2026-09-27; M2 is not. The one focused boundary change
+landed as intended: a crate-private `RustStreamError`, typed validators, and a
+single `From<RustStreamError> for PyErr` conversion point reached once through
+`run_stream_operation`'s `map_err(PyErr::from)`. The roadmap checkbox is *not*
+yet ticked — publishing this plan completes nothing, and `docs/roadmap.md` is
+M2's to change.
+
+What the evidence covers, stated at the strength it actually has:
+
+- Error categories and centralization (R1) are observed end-to-end on Linux.
+  The compiled extension is required by `make test-extension` (101 passed, 1
+  skipped) rather than skipped, so the `ValueError`/`OSError` split and the
+  retained `errno`/`winerror` attributes are asserted against the real module.
+- Ownership and native error fidelity (R2) hold on Linux: `make boundary-test`
+  is unchanged from V4 (13 + 116), and the mutation experiment recorded in
+  Progress showed a real-extension assertion failing when the classification
+  was deliberately broken.
+- Scope and documentation accuracy (R3) are recorded in Progress, including two
+  guide counts re-measured against the tree rather than trusted as prose and
+  one users'-guide sentence falsified by measurement and corrected.
+
+Deviations and limits, all recorded rather than smoothed over: red evidence was
+reconstructed after the implementation existed (see Surprises); `actionlint` is
+locally unobservable; and **Windows runtime behaviour is unproven** — only a
+cross-target compile of the `cfg(windows)` branches plus a skipped winerror
+test exist, and the plan is explicit that a cross-target compile is
+supplementary evidence only.
 
 ## Context and orientation
 
