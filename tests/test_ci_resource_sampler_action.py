@@ -204,9 +204,7 @@ def test_the_sampler_writes_three_numbers_per_interval(
     rows = [
         line.split() for line in log.read_text(encoding="utf-8").splitlines() if line
     ]
-    assert rows, (
-        f"the sampler produced no rows within {SAMPLE_DEADLINE_SECONDS} s"
-    )
+    assert rows, f"the sampler produced no rows within {SAMPLE_DEADLINE_SECONDS} s"
     for row in rows:
         assert len(row) == 3, f"expected memory, used disk, free disk; got {row}"
         assert all(field.isdigit() for field in row), f"non-numeric sample: {row}"
