@@ -438,16 +438,17 @@ escalation, not a workaround.
   of a tree, not a property of the tree. The seventh and eighth CodeRabbit
   passes returned zero and one respectively while reading *byte-identical* code
   — `git rev-parse <sha>:cuprum` and `<sha>:rust` give `423effbd…` and
-  `7ab953c4…` for both `bba918e5` and `f4c76c84`, so the only difference
-  between the two trees is prose in this plan. The finding that separated them
-  was in `docs/developers-guide.md`, a file the seventh pass had already read
-  and filed a substantive summary for. The consequence for the loop is
-  uncomfortable: "clear all concerns before moving on" cannot be discharged by
-  reaching a zero count, because the next pass over the same code may sample
-  differently and return one. What the instruction can be discharged against is
-  the state of every finding *raised so far* — each either fixed in the tree or
-  dismissed with a reason — and that is what the two passes are evidence for
-  jointly: the eighth raised nothing the seventh had left open.
+  `7ab953c4…` for both `bba918e5` and `f4c76c84`, and the two commits differ in
+  exactly one file — this plan, 31 insertions and 2 deletions. The finding that
+  separated them was in `docs/developers-guide.md`, which was *also* identical
+  in the two trees: the seventh pass read that file and filed a substantive
+  summary for it. The consequence for the loop is uncomfortable: "clear all
+  concerns before moving on" cannot be discharged by reaching a zero count,
+  because the next pass over the same code may sample differently and return
+  one. What the instruction can be discharged against is the state of every
+  finding *raised so far* — each either fixed in the tree or dismissed with a
+  reason — and that is what the two passes are evidence for jointly: the eighth
+  raised nothing the seventh had left open.
 - A review finding can be both pre-existing and in scope, and the way to tell
   is whether the change re-emits the line. The eighth pass flagged two lines of
   the developers' guide asserting that hook failures are "reported and skipped"
@@ -605,7 +606,16 @@ Revision 16: no code changed. An eighth CodeRabbit pass at `f4c76c84` returned
 one finding, where the seventh had returned zero, and the two runs are directly
 comparable because they read byte-identical code: `git rev-parse <sha>:cuprum`
 and `<sha>:rust` give the same `423effbd…` and `7ab953c4…` for both `bba918e5`
-and `f4c76c84`, so everything separating them is prose in this file. The
+and `f4c76c84`, so everything separating them is prose in this file. That is
+meant literally, and it is narrower than it may read: the two trees differ in
+this ExecPlan and in nothing else. `<sha>:cuprum` and `<sha>:rust` are subtree
+hashes, so they cover Python and Rust code; they say nothing about
+`docs/developers-guide.md`.
+`git diff --stat bba918e5 f4c76c84 -- cuprum rust tests` is empty and the full
+diff is one file, 31 insertions and 2 deletions, all of them here. The guide
+was therefore already identical in both trees, which is the sharper form of the
+next point: the seventh pass read that file and filed a summary for it, and
+returned zero, while the eighth read the same bytes and returned one. The
 finding was that two lines of `docs/developers-guide.md` — inside the paragraph
 this change rewrites, which is how they entered the diff at all — described
 hook failures as "reported and skipped" while omitting the carve-out
