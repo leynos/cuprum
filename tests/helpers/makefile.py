@@ -22,9 +22,12 @@ import json
 import re
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv
 import typing as typ
-from pathlib import Path
 
 from tests.helpers.docs import repo_root
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import pathlib as pth
 
 __all__ = (
     "MAKEFILE",
@@ -68,7 +71,7 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
     AssertionError
         If the document carries no `variables` list, so an unexpected parser
         change fails here rather than silently reading nothing.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     declared = document.get("variables")
     _require(
         condition=isinstance(declared, list),
@@ -109,9 +112,8 @@ def makeutil_document(*, makefile: str = MAKEFILE) -> dict[str, typ.Any]:
         the empty result as "the selector names nothing" would fail a moment
         later with a misleading message.
     """
-    # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no input
-    completed = subprocess.run(
-        ["makeutil", "parse", makefile],
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argument vector.
+        ["makeutil", "parse", makefile],  # ruff: ignore[start-process-with-partial-path] - `makeutil` resolved from PATH.
         capture_output=True,
         text=True,
         cwd=repo_root(),
@@ -137,7 +139,7 @@ def makeutil_document(*, makefile: str = MAKEFILE) -> dict[str, typ.Any]:
 
 
 def _join_continuations(value: str) -> str:
-    """Collapse ``\\``-newline continuations the way `make` does.
+    r"""Collapse ``\\``-newline continuations the way `make` does.
 
     Parameters
     ----------
@@ -159,7 +161,7 @@ def _join_continuations(value: str) -> str:
 
 def _expand(
     value: str,
-    records: typ.Mapping[str, str],
+    records: cabc.Mapping[str, str],
     *,
     seen: frozenset[str] = frozenset(),
 ) -> str:
@@ -186,7 +188,7 @@ def _expand(
         If a reference names a variable the Makefile does not assign, or if a
         reference cycle is found. Neither is recoverable: substituting an
         empty string would shrink the selector and turn the guard vacuous.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     value = _join_continuations(value)
     resolved: list[str] = []
     index = 0
@@ -242,7 +244,7 @@ def variable_expansion(name: str, *, makefile: str = MAKEFILE) -> tuple[str, ...
     AssertionError
         If the variable is not assigned, if it references an undefined
         variable, or if it references itself.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - contract errors propagate from _require()
     records = _variable_records(makeutil_document(makefile=makefile))
     _require(
         condition=name in records,
@@ -252,8 +254,8 @@ def variable_expansion(name: str, *, makefile: str = MAKEFILE) -> tuple[str, ...
 
 
 def selected_paths(
-    patterns: typ.Iterable[str], *, root: Path | None = None
-) -> tuple[Path, ...]:
+    patterns: cabc.Iterable[str], *, root: pth.Path | None = None
+) -> tuple[pth.Path, ...]:
     """Resolve selector patterns against the repository root.
 
     Parameters
@@ -280,7 +282,7 @@ def selected_paths(
     the word appears in the variable rather than expecting a path here.
     """
     base = repo_root() if root is None else root
-    found: set[Path] = set()
+    found: set[pth.Path] = set()
     for pattern in patterns:
         if not pattern.endswith(_PATH_SUFFIX):
             continue
