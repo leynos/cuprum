@@ -1,6 +1,8 @@
 # Hoist invariant execution-event fields (5.2.1)
 
-Status: IN PROGRESS — approval granted 2026-09-26; EP-M1 underway.
+Status: BLOCKED — EP-M2's design cannot reach V5's 10% target. See the
+2026-09-27 feasibility discovery below; a revised design needs approval before
+any runtime change. EP-M1 is complete.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -140,9 +142,18 @@ failure injection at that boundary.
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
-- [ ] EP-M2: implement and validate the bounded stream-factory optimization.
+- [ ] EP-M2: **BLOCKED before implementation.** Pre-implementation feasibility
+  measurement of the committed control capture shows the design's floor is
+  N = 6474 → 21.0045% of D against a budget of N ≤ 3082 for 10%. Every sampled
+  per-line `ExecEvent.__init__` resolves to the `emit` caller in
+  `_pipeline_types.py`, which a hoist in `_line_callbacks.py` cannot move, so
+  only the `_EventDetails` rule is addressable and removing all of it leaves
+  21.00%. No runtime edit was made; the milestone stops here for approval of a
+  revised design. See the 2026-09-27 feasibility discovery below for the
+  mechanism, the measured cost driver, and four consolidated options.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
+  Unreachable until EP-M2's design is revised and approved.
 
 ## Surprises & discoveries
 
@@ -382,12 +393,12 @@ task.** The `lint` recipe is one `$(MAKE)` invocation whose prerequisites are
 attempted in turn; the first failing prerequisite stops the run and the rest
 are never attempted. The recorded `/tmp/521-lint.out` shows exactly that: it
 reached `typos-config-builder gate`, failed on five real spelling errors, and
-ended at `make: *** [Makefile:405: spelling] Error 2` with `EXIT=2
-DURATION=124s`. The two `15 KB` of log before that line is `rust-lint` having
-run to completion, so the trivial spelling failure *masked a full Rust rebuild*.
-Everything that sorts after the abort is **unobserved**, not passing. The plan
-must report three states per gate — passed, failed, unobserved — and a green
-spelling line in the log proves nothing about `github-actions-lint`.
+ended at `make: *** [Makefile:405: spelling] Error 2` with
+`EXIT=2 DURATION=124s`. The two `15 KB` of log before that line is `rust-lint`
+having run to completion, so the trivial spelling failure *masked a full Rust
+rebuild*. Everything that sorts after the abort is **unobserved**, not passing.
+The plan must report three states per gate — passed, failed, unobserved — and a
+green spelling line in the log proves nothing about `github-actions-lint`.
 
 The practical consequence: fix spelling first (`make spelling` alone is
 seconds), because a single misspelling otherwise costs a `cargo doc` plus
@@ -395,16 +406,16 @@ seconds), because a single misspelling otherwise costs a `cargo doc` plus
 
 ### 2026-09-27: V3 disproves the plan's post-spawn ownership claim
 
-V3's last requirement reads: "Inject factory preparation failure after spawn and
-prove the existing owner reaps the child. Inject this in both command and
-pipeline paths." The **pipeline** half is true. The **command** half is not, and
-the gap is pre-existing on `main` — this branch has no production diff, and
+V3's last requirement reads: "Inject factory preparation failure after spawn
+and prove the existing owner reaps the child. Inject this in both command and
+pipeline paths." The **pipeline** half is true. The **command** half is not,
+and the gap is pre-existing on `main` — this branch has no production diff, and
 `cuprum/` is byte-identical to `origin/main`.
 
-A read-only probe replaced the two production factories with a raising stand-in,
-recorded the pid from the spawn call itself (so a path that never reaches
-`start` still yields a subject), and classified the child from `/proc/<pid>/stat`
-after the failure had propagated:
+A read-only probe replaced the two production factories with a raising
+stand-in, recorded the pid from the spawn call itself (so a path that never
+reaches `start` still yields a subject), and classified the child from
+`/proc/<pid>/stat` after the failure had propagated:
 
 | path       | factory that raised           | child after the failure          |
 | ---------- | ----------------------------- | -------------------------------- |
@@ -424,17 +435,18 @@ documents the invariant it means to establish:
 > `create_task` calls, and `_LineStreamRun` is a frozen dataclass, so no
 > exception can escape and leave a child running with half-built ownership.
 
-The premise is false. `_spawn_stream_consumers` calls `_create_stream_callback`
-— which calls the composition factory — *before* it calls `create_task`, so a
-failure there escapes `_build_unstarted_run` into `_start_line_stream_run`
-(`coordinator.py:115-141`), where `process` is a local and `run` has not been
-assigned. The `except BaseException:` that calls `_abandon_unstarted_run`
-guards only the block *after* `run` exists, so nothing reclaims the child. The
-`run()` path is the same shape at `_run_subprocess_with_streams`
-(`_subprocess_stream_run.py:157-171`): the spawn context and the consumer pair
-are built on the line *after* the `_RunTaskOwnership` constructor starts
-evaluating, still inside the `tasks = ...` assignment, so a raising composition
-escapes `_await_direct_completion` with no terminator behind it.
+The premise is false. `_spawn_stream_consumers` calls
+`_create_stream_callback` — which calls the composition factory — *before* it
+calls `create_task`, so a failure there escapes `_build_unstarted_run` into
+`_start_line_stream_run` (`coordinator.py:115-141`), where `process` is a local
+and `run` has not been assigned. The `except BaseException:` that calls
+`_abandon_unstarted_run` guards only the block *after* `run` exists, so nothing
+reclaims the child. The `run()` path is the same shape at
+`_run_subprocess_with_streams` (`_subprocess_stream_run.py:157-171`): the spawn
+context and the consumer pair are built on the line *after* the
+`_RunTaskOwnership` constructor starts evaluating, still inside the
+`tasks = ...` assignment, so a raising composition escapes
+`_await_direct_completion` with no terminator behind it.
 
 **This matters more after EP-M2, not less.** The plan's premise is that the
 failure "occurs before dispatch" — the emission path is fine. But EP-M2 makes
@@ -450,17 +462,17 @@ the seam — `_line_callbacks.py`, `_subprocess_streams.py`, and
 separate edit site: it changes *where ownership of a spawned child begins* on
 both command paths, which is a behavioural change rather than a performance
 one, and it lands in `_line_stream/spawn.py` and `_subprocess_stream_run.py`,
-neither of which EP-M2 otherwise touches. The plan's Tolerances section reserves
-that for its own approval, so the fix is **out of scope for EP-M2** and is
-recorded here as a finding with its own follow-up, rather than being folded
-silently into a performance change.
+neither of which EP-M2 otherwise touches. The plan's Tolerances section
+reserves that for its own approval, so the fix is **out of scope for EP-M2**
+and is recorded here as a finding with its own follow-up, rather than being
+folded silently into a performance change.
 
 V3's actionable remainder, which is in scope: make the *emission path* fail
 before dispatch (clock failure) and add no tasks, assert a later hook's failure
 leaves the earlier scheduled prefix in `pending_tasks`, and pin the pipeline
-path's reaping — which is real and demonstrable. The two command-path
-"proves the existing owner reaps" cases are recorded as **contradicted**, not
-skipped, so a later reader cannot mistake the gap for coverage.
+path's reaping — which is real and demonstrable. The two command-path "proves
+the existing owner reaps" cases are recorded as **contradicted**, not skipped,
+so a later reader cannot mistake the gap for coverage.
 
 ### 2026-09-27: V3 completed — the pipeline reaping case, and why it needed its own
 
@@ -478,8 +490,8 @@ the route a failure in the hoist's own code would take, and the route
 through the same `except BaseException` in `_spawn_pipeline_processes`, so
 before mutation-checking it was not obvious the new case added anything.
 
-It does. Narrowing that guard to `except OSError` kills *only* the new case;
-the `FileNotFoundError` sibling still passes, because its exception is an
+It does. Narrowing that guard to `except OSError` kills *only* the new case; the
+`FileNotFoundError` sibling still passes, because its exception is an
 `OSError`. That mutation is the evidence that the new case covers a region no
 existing test reached, and it is the reason the case is worth its place rather
 than being a restatement. The other three mutations — dropping
@@ -495,36 +507,38 @@ about the first stage alone and read as a pass.
 
 Two corrections found while clearing `python-lint`.
 
-**The ceiling applies here.** `pyproject.toml` sets `max-module-lines = 400`, and
-`PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests` with
-`recursive = true` means `tests/behaviour/` is linted — unlike `cuprum/unittests`,
-which the walk never enters. V4 left `tests/behaviour/test_structured_events.py`
-at 795 lines, so `python-lint` failed on C0302 while the earlier gates had
-passed: `interrogate` and `ruff check` are both green on an over-long file. The
-file was split three ways, following the `test_*_behaviour.py` +
-`_*_support.py` convention already in the directory:
+**The ceiling applies here.** `pyproject.toml` sets `max-module-lines = 400`,
+and `PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests` with
+`recursive = true` means `tests/behaviour/` is linted — unlike
+`cuprum/unittests`, which the walk never enters. V4 left
+`tests/behaviour/test_structured_events.py` at 795 lines, so `python-lint`
+failed on C0302 while the earlier gates had passed: `interrogate` and
+`ruff check` are both green on an over-long file. The file was split three
+ways, following the `test_*_behaviour.py` + `_*_support.py` convention already
+in the directory:
 
-| module | lines | contents |
-| ------ | ----- | -------- |
-| `test_structured_events.py` | 348 | scenario declarations, `behaviour_state`, the `Then` steps |
-| `_structured_events_steps.py` | 277 | the `Given`/`When` decorators |
-| `_structured_events_support.py` | 288 | state keys, the two protocols, the run helpers, normalization |
+| module                          | lines | contents                                                      |
+| ------------------------------- | ----- | ------------------------------------------------------------- |
+| `test_structured_events.py`     | 348   | scenario declarations, `behaviour_state`, the `Then` steps    |
+| `_structured_events_steps.py`   | 277   | the `Given`/`When` decorators                                 |
+| `_structured_events_support.py` | 288   | state keys, the two protocols, the run helpers, normalization |
 
 **Where the assertions had to go.** Ruff's `S` rules ban bare `assert` outside
-`test_*.py`, and every `_*_support.py` in the directory has zero asserts. So the
-assertion-carrying helpers could not move to the support module: `retained_events`
-and `normalize_event` have no asserts, but the "fail loudly when empty" guard had
-to become a raised `AssertionError` to survive the move. The `Then` steps stayed
-in the `test_*.py` module for the same reason.
+`test_*.py`, and every `_*_support.py` in the directory has zero asserts. So
+the assertion-carrying helpers could not move to the support module:
+`retained_events` and `normalize_event` have no asserts, but the "fail loudly
+when empty" guard had to become a raised `AssertionError` to survive the move.
+The `Then` steps stayed in the `test_*.py` module for the same reason.
 
-**pytest-bdd 8 scopes a step to the module that defines it.** `given`/`when`/`then`
-do not register into a global registry: each writes a *pytest fixture* into the
-**calling module's** `f_locals` (`get_caller_module_locals` in `pytest_bdd.utils`,
-consumed by `StepFunctionContext`), and resolution goes through
-`request.getfixturevalue`. A plain `from ... import given_x` therefore registers
-nothing — all seven scenarios failed with `StepDefinitionNotFoundError`. The
-existing precedent (`test_telemetry_adapters.py`) works around this by
-re-registering each step with its literal text,
+**pytest-bdd 8 scopes a step to the module that defines it.** `given`/`when`/
+`then` do not register into a global registry: each writes a *pytest fixture*
+into the **calling module's** `f_locals` (`get_caller_module_locals` in
+`pytest_bdd.utils`, consumed by `StepFunctionContext`), and resolution goes
+through `request.getfixturevalue`. A plain `from ... import given_x` therefore
+registers nothing — all seven scenarios failed with
+`StepDefinitionNotFoundError`. The existing precedent
+(`test_telemetry_adapters.py`) works around this by re-registering each step
+with its literal text,
 `then("the span records output as events")(_tracing_steps.assert_span_events)`;
 that duplicates the step text, and duplicating it also changes the Gherkin
 snapshot counts and the `.feature` coverage. The split instead loads the step
@@ -536,22 +550,22 @@ pytest_plugins = ("tests.behaviour._structured_events_steps",)
 
 so pytest collects the step module's fixtures and the steps resolve with no
 restated text. Verified: 9 passed, 1 snapshot passed — identical to the
-pre-split module — and the full `tests/behaviour` suite is 164 passed,
-16 skipped, 5 snapshots passed.
+pre-split module — and the full `tests/behaviour` suite is 164 passed, 16
+skipped, 5 snapshots passed.
 
 ### 2026-09-27: `ambrleaks` reads a doubled backslash in snapshot text as a UNC path
 
-Clearing `python-lint` past pylint exposed two checks the earlier C0302 abort had
-left unobserved. One was a real defect in the V4 snapshot:
+Clearing `python-lint` past pylint exposed two checks the earlier C0302 abort
+had left unobserved. One was a real defect in the V4 snapshot:
 
 ```text
 ambrleaks: 3 finding(s)
 tests/behaviour/__snapshots__/test_structured_events.ambr:8: [snapshot-windows-path] ...
 ```
 
-The rule is `\b[A-Za-z]:\\[^\s"']+|\\\\[\w.$-]+\\[^\s"']+` — an absolute Windows
-or UNC path. The offender was the probe's own `-c` argument, which the snapshot
-normalizes only its first element of, leaving the script text in place:
+The rule is `\b[A-Za-z]:\\[^\s"']+|\\\\[\w.$-]+\\[^\s"']+` — an absolute
+Windows or UNC path. The offender was the probe's own `-c` argument, which the
+snapshot normalizes only its first element of, leaving the script text in place:
 
 ```text
 "import sys; sys.stdout.write('beta\\nalpha\\n');sys.stderr.write('gamma\\n')"
@@ -559,12 +573,12 @@ normalizes only its first element of, leaving the script text in place:
 
 The scanner masks the matched text before reporting, so the value had to be
 recovered by re-running the rule by hand. `\\nalpha\\n` matches the UNC
-alternative: `\\` + `nalpha` + `\` + `n`. It is a false positive in intent — the
-text is Python escape syntax, not a path — but the committed snapshot is what
-`ambrleaks` gates, so the probe now writes newlines with `chr(10)`, matching the
-spelling `given_observed_pipeline` already uses. Regenerating the snapshot
-cleared all three findings, and the probe still delivers `beta`, `alpha`, and
-`gamma` in order.
+alternative: `\\` + `nalpha` + `\` + `n`. It is a false positive in intent —
+the text is Python escape syntax, not a path — but the committed snapshot is
+what `ambrleaks` gates, so the probe now writes newlines with `chr(10)`,
+matching the spelling `given_observed_pipeline` already uses. Regenerating the
+snapshot cleared all three findings, and the probe still delivers `beta`,
+`alpha`, and `gamma` in order.
 
 The other previously unobserved check, df12-python-lints, found one real
 `C9102` (an assert without a failure message) on the anti-vacuity witness in
@@ -587,34 +601,159 @@ kill says nothing about the assertions. Four independent lines of evidence
 place the cause outside this branch.
 
 1. **The Rust diff is empty.** `git diff --stat origin/main HEAD -- rust/`
-   produces no output, and the whole-branch diff against `origin/main` is
-   three documentation files. There is no Rust change for the suite to
-   regress on.
+   produces no output, and the whole-branch diff against `origin/main` is three
+   documentation files. There is no Rust change for the suite to regress on.
 2. **Its sibling passed in the same run**, from the same override and
    allowance: `cuprum-rust::compile_tests compile_time_ui` PASSed at
    `102.761s`. A shared-tier problem would have shown up in both.
 3. **The two suites are not comparable by case count.** `cuprum-streams` has
    two `compile_fail` cases and no pass cases; the killed scratch directory
-   held only `Cargo.lock`, `Cargo.toml`, and `main.rs`, that is, it was
-   stopped while still compiling a dependency rather than while running a
-   case.
+   held only `Cargo.lock`, `Cargo.toml`, and `main.rs`, that is, it was stopped
+   while still compiling a dependency rather than while running a case.
 4. **The host was oversubscribed.** Load average was 11.18/13.05/13.56 on a
    6-core box, with other agents' `rustc` processes observed at 94–107% CPU in
    the `netsuke` and `axinite` worktrees.
 
 `gh run list --branch main` reports both CI and Coverage as **success on
 `991dee64`**, which is this branch's own base commit, so the same suite passes
-on the same tree in CI. `docs/coverage-timeout-tiers.md` already documents
-this exact failure class, describing a gate that killed trybuild "while it was
-still compiling a dependency, that is, **while it was healthy**", and notes a
-277 s versus 124.884 s spread that "is `sccache` and machine load, not the
-test".
+on the same tree in CI. `docs/coverage-timeout-tiers.md` already documents this
+exact failure class, describing a gate that killed trybuild "while it was still
+compiling a dependency, that is, **while it was healthy**", and notes a 277 s
+versus 124.884 s spread that "is `sccache` and machine load, not the test".
 
 The timeout occurred in a `scrutineer` run, not in a run of this branch's own
-gates, and is recorded here rather than in the code because there is nothing
-in the code to change. The residual risk is that a `make test` run under the
-same load reports it again; the disposition is to re-read the tier's log
-rather than rebuild anything.
+gates, and is recorded here rather than in the code because there is nothing in
+the code to change. The residual risk is that a `make test` run under the same
+load reports it again; the disposition is to re-read the tier's log rather than
+rebuild anything.
+
+### 2026-09-27: EP-M2 is BLOCKED — the hoist as designed cannot reach 10%
+
+This is the Tolerances stop condition, reached *before* any runtime edit. It
+was measured from the committed control capture, not estimated.
+
+**The mechanism.** The classifier's nearest-caller resolution is the whole
+argument, so it is worth stating exactly. Each matched generated constructor
+gets its rule from the *closest* matching caller frame. In the control capture
+both rules resolve like this:
+
+```text
+ 6474  ExecEvent.__init__ via _StageObservation.emit
+         nearest caller pattern: emit (cuprum/_pipeline_types.py)
+ 4230  _EventDetails.__init__ for the per-line payload
+         nearest caller pattern: _event_details (cuprum/_line_callbacks.py)
+```
+
+`ExecEvent.__init__` is reached through `_StageObservation.emit`, which lives in
+`cuprum/_pipeline_types.py`. The rules file lists `emit_line` and
+`_LineEventEmitter` as *callers*, and proximity picks the nearest — but `emit`
+sits closer to the constructor than either, and it is not something a hoist in
+`_line_callbacks.py` can move. Hoisting therefore leaves **every one of the
+6474 `ExecEvent.__init__` samples in the numerator**. Only the `_EventDetails`
+rule is actually addressable by this design.
+
+**The arithmetic.** D = 30822, and the 10% threshold is
+`100·N/D ≤ 10` ⇒ `N ≤ 3082`. Removing the entire `_EventDetails` rule leaves
+
+```text
+ N = 6474   share = 21.0045%   (one ExecEvent.__init__ per delivered line)
+```
+
+against a budget of 3082. That is 2.1x over, with 100% of executable
+construction removed and none of the retained kind. No local refinement within
+this design can close it, because the plan explicitly *retains* the ordinary
+per-line `ExecEvent` constructor and forbids the alternatives that would remove
+it.
+
+**Why the refinements are both already ruled out.** The Tolerances section
+allows "argument-passing and local-binding variants of ordinary `ExecEvent`
+construction". Both were priced:
+
+- *Argument passing.* `ExecEvent(**kw)` measured 2735 ns against 2431 ns for
+  positional — 11% better, nowhere near the 2.1x needed.
+- *Local binding.* The 16 optional fields are what cost, and they are passed
+  explicitly by `emit`; hoisting the values cannot avoid re-passing them.
+
+**The real cost driver — measured, and not what the plan assumed.** The Risks
+section predicted failure "because a fresh `ExecEvent` still initializes 23
+slots". Slot initialization is not the driver. Isolating the variables:
+
+| variant (all `frozen=True, slots=True` unless noted) | ns | vs 2-field |
+| --- | --- | --- |
+| 2 fields | 239 | 1.00x |
+| 2 required + 15 defaulted | 1238 | 5.20x |
+| 0 fields | 68 | 0.28x |
+| `frozen=False`, 2 fields | 89 | 0.38x |
+| handwritten `__slots__` class | 90 | 0.38x |
+
+The cost tracks the **count of defaulted fields**, at roughly 70 ns each, and
+`frozen=True` multiplies the floor by ~2.7x on top. `ExecEvent` has 16 defaulted
+fields of 27, and `_EventDetails` has 15 of 16. The retained constructor is
+expensive because of its 16 defaults, not because it is frozen or slotted.
+
+A field-count sweep confirms the shape. Positional construction, single
+process:
+
+| fields | ns | of 27-field |
+| --- | --- | --- |
+| 11 | 1435 | 46.2% |
+| 16 | 2046 | 65.9% |
+| 27 | 3106 | 100% |
+
+So consolidating `ExecEvent`'s 16 optionals into one sub-record would remove
+about 54% of constructor cost — large, but still not enough on its own, since
+`6474 · 0.46 ≈ 2978` only skirts the 3082 budget and would be measured against
+an unchanged D while adding the sub-record's own construction.
+
+**What this means for the milestone.** R3 cannot be discharged by the planned
+hoist, and EP-M2 must not be implemented as written. Per the plan's own
+instruction, this is recorded as BLOCKED with measurements and options rather
+than worked around by weakening acceptance — 21.00% is not 10%. Consolidated
+options for the required design revision:
+
+1. **Consolidate the defaulted fields.** Collapse `ExecEvent`'s 16 optionals
+   into one sub-record so a per-line construction brings fewer defaults.
+   Largest measured lever (~54% of ctor cost), but changes the public event
+   representation, which the Tolerances section marks as a stop-for-approval
+   change. Fails R2's payload-parity reading unless parity is redefined to the
+   flattened view.
+2. **Re-scope the measurement.** Split the gate's input so the *lifecycle*
+   events and the per-line events are reported separately, and hold only the
+   per-line share to 10%. This is arguably what the roadmap meant — the
+   numerator was never meant to include lifecycle construction — but it is a
+   change to acceptance, so it needs approval, not assertion.
+3. **Change the callback's shape.** Drop the per-line event emission in favour
+   of one event per run carrying a line sequence. This removes the per-line
+   construction outright, at the cost of the observation contract V2 and V4
+   currently pin, so it is a design change well beyond 5.2.1's scope.
+4. **Accept the floor and close 5.2.1 as partial.** Record 21.00% as the
+   measured floor, mark R3 unmet, and leave the roadmap item unchecked so the
+   remaining work is visible rather than absorbed.
+
+Options 1 and 2 are the only ones that keep the current observation contract;
+option 1 is measured, option 2 is a re-scoping argument that needs the
+roadmap's intent checked against 5.2.2 and 5.2.3 before it is claimed.
+
+**Independent corroboration that the samples are real constructor time.** The
+capture's own arithmetic and the microbenchmarks agree without being fitted to
+each other. One repeat delivers 28,256,364 lines in 316.24 s; the consume
+subtree holds 94.9% of parent samples, so roughly 10.6 µs of parent time per
+line, of which the two constructors take 34.7% — about 3.7 µs. The standalone
+cost of the same two constructors is 3.25 µs + 2.25 µs ≈ 5.5 µs. Same order,
+same two constructors, derived independently. Separately, every one of the 6474
+`ExecEvent.__init__` samples carries `emit_line` on its stack, so the per-line
+population is exactly the whole match total — there is no lifecycle residue to
+exclude.
+
+**Evidence reproduction.** Parsing and classification both ran through the
+gate's own code (`_line_event_profile_model.parse_capture` /
+`load_rules`, `summarize_line_event_profile.classify_capture`), not a
+re-implementation, and reproduced the committed artefact exactly —
+`parent_samples 32468`, `consume_samples 30822`, `construction_samples 10704`,
+`share 34.7284%`, matching `dist/profiles/5-2-1-event-details/control-1/` field
+for field. The microbenchmarks are `timeit` in a single process on this host
+and are comparative only; they are not capture-derived and are not offered as
+gate evidence.
 
 ### Earlier discoveries
 
@@ -1184,11 +1323,12 @@ Python symbols, skipped callback work, changed line counts, or a moved
 constructor cost do not pass. Record exact gate commands, exit statuses, and
 source revisions; a queued hosted check is not a passing result.
 
-Report each gate as **passed**, **failed**, or **unobserved**, and never collapse
-unobserved into passed. `make lint` aborts at its first failing prerequisite, so
-sub-checks that sort after the failure did not run at all (see the 2026-09-27
-discovery above); a gate that stopped early proves nothing about what follows
-it. Run `make spelling` alone before `make lint` for exactly this reason.
+Report each gate as **passed**, **failed**, or **unobserved**, and never
+collapse unobserved into passed. `make lint` aborts at its first failing
+prerequisite, so sub-checks that sort after the failure did not run at all (see
+the 2026-09-27 discovery above); a gate that stopped early proves nothing about
+what follows it. Run `make spelling` alone before `make lint` for exactly this
+reason.
 
 ## Idempotence and recovery
 
