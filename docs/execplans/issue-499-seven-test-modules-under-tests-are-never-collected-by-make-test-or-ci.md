@@ -157,8 +157,8 @@ contract module under `tests/` and forgets to name it will be told so by
   gates 1–4, so those logs certify `a4053bd3`, not the branch head.
 - [x] (2026-09-26 18:05Z) CodeScene delta review failed the pull request on a
   nested-complexity finding against the guard's workflow walk. Fixed by moving
-  the sweep into `tests/helpers/ci_workflows.run_scripts`; `cs delta
-  origin/main` now reports no issues. (That function later moved to
+  the sweep into `tests/helpers/ci_workflows.run_scripts`;
+  `cs delta origin/main` now reports no issues. (That function later moved to
   `tests/helpers/ci_run_scripts.py` to clear C0302; see the entry below.)
 - [x] (2026-09-26 18:20Z) `make lint` at `dd8dc2df` reported the sweep had
   pushed `tests/helpers/ci_workflows.py` to 420 lines, over pylint's 400-line
@@ -175,19 +175,19 @@ contract module under `tests/` and forgets to name it will be told so by
   in the branch-protection ruleset, so the pull request is `MERGEABLE` with it
   red — but it is a real finding, not noise: `cs delta origin/main` reproduces
   it, naming `test_ci_invokes_the_target_that_consumes_the_selector` with a
-  nested complexity depth of 4 against a threshold of 4. Evidence: `cs delta
-  origin/main` before the fix reports "New issue: Deep, Nested Complexity";
-  after the fix it reports "No issues found!". Impact: the three-deep
-  workflow/job/step walk moved into `tests/helpers/ci_workflows.run_scripts`,
-  where it is reusable and where the guard asks its question in one
-  comprehension. A second finding then appeared against the new helper —
-  proving the fix was measured rather than assumed — and the per-job walk
-  became its own function to clear it. The helper has since moved again, to
-  `tests/helpers/ci_run_scripts.py`, and both functions went with it; the
-  clean `cs delta` verdict was re-established after that split. The general
-  lesson: a green local gate set and a green `lint-test` do not cover
-  CodeScene's complexity rules, so `cs delta` must be run after adding a
-  nested walk.
+  nested complexity depth of 4 against a threshold of 4. Evidence:
+  `cs delta origin/main` before the fix reports "New issue: Deep, Nested
+  Complexity"; after the fix it reports "No issues found!". Impact: the
+  three-deep workflow/job/step walk moved into
+  `tests/helpers/ci_workflows.run_scripts`, where it is reusable and where the
+  guard asks its question in one comprehension. A second finding then appeared
+  against the new helper — proving the fix was measured rather than assumed —
+  and the per-job walk became its own function to clear it. The helper has
+  since moved again, to `tests/helpers/ci_run_scripts.py`, and both functions
+  went with it; the clean `cs delta` verdict was re-established after that
+  split. The general lesson: a green local gate set and a green `lint-test` do
+  not cover CodeScene's complexity rules, so `cs delta` must be run after
+  adding a nested walk.
 
 - Observation: running a pinned gate run while editing the tree invalidates the
   run, and it is not enough to wait for the *last* gate to finish. In the
@@ -197,9 +197,9 @@ contract module under `tests/` and forgets to name it will be told so by
   precondition failed mid-run, so the logs cannot certify the following commit.
   Evidence: the gate report's timeline places the first external edit at
   17:56:12 and gate 5's completion at 17:57:51, with the working-diff
-  fingerprint changing during gate 5. Impact: gates 1–4 certify `a4053bd3`;
-  the fix landed afterwards and needs its own run. The rule to carry forward is
-  to wait for the run's own completion report, not for a marker in one log.
+  fingerprint changing during gate 5. Impact: gates 1–4 certify `a4053bd3`; the
+  fix landed afterwards and needs its own run. The rule to carry forward is to
+  wait for the run's own completion report, not for a marker in one log.
 
 ## Surprises & discoveries
 
