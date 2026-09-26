@@ -13,7 +13,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+import typing as typ
 
+from cuprum.events import ExecEvent
+from cuprum.program import Program
 from tests.behaviour._native_pipeline_hand_off import (
     _capture_stall,
     _monitor_progress,
@@ -28,25 +31,46 @@ from tests.behaviour._native_pipeline_liveness import (
     quiet_for_s,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum.events import ExecPhase
+
 #: Far enough past the interval that no sampling delay can close the gap, so a
 #: test asserting "quiet" cannot fail for want of elapsed time.
 _QUIET = NO_PROGRESS_INTERVAL_S * 10
 
 
-class _LifecycleEvent:
-    """The subset of ``ExecEvent`` the progress tracker reads."""
+def _lifecycle_event(
+    phase: str,
+    *,
+    pid: int | None = None,
+    tags: cabc.Mapping[str, object] | None = None,
+) -> ExecEvent:
+    """Build a real ``ExecEvent`` carrying the fields the tracker reads.
 
-    def __init__(
-        self,
-        phase: str,
-        *,
-        pid: int | None = None,
-        tags: dict[str, object] | None = None,
-    ) -> None:
-        """Record the phase, optional pid, and optional tags."""
-        self.phase = phase
-        self.pid = pid
-        self.tags = {} if tags is None else tags
+    The tracker consumes genuine events on the public observe-hook seam, so its
+    tests feed it the real type rather than a stand-in: a stub free to drift
+    from ``ExecEvent`` would let a change to the field set pass unnoticed.
+
+    Returns
+    -------
+    ExecEvent
+        An event whose phase, pid, and tags are those the tracker inspects.
+    """
+    return ExecEvent(
+        phase=typ.cast("ExecPhase", phase),
+        program=Program("cat"),
+        argv=("cat",),
+        cwd=None,
+        env=None,
+        pid=pid,
+        timestamp=0.0,
+        line=None,
+        exit_code=None,
+        duration_s=None,
+        tags={} if tags is None else tags,
+    )
 
 
 def _quiet_tracker() -> _ProgressTracker:
@@ -185,7 +209,7 @@ def test_an_event_advances_the_progress_clock() -> None:
     """The observe hook is what advances the tracked clock."""
     tracker = _quiet_tracker()
 
-    tracker.observe(_LifecycleEvent("stdout"))  # type: ignore[arg-type]
+    tracker.observe(_lifecycle_event("stdout"))
 
     assert quiet_for_s(tracker.last_progress_at) < NO_PROGRESS_INTERVAL_S, (
         "a lifecycle event must advance the progress clock"
@@ -196,7 +220,7 @@ def test_a_non_lifecycle_event_does_not_advance_the_clock() -> None:
     """An ancillary diagnostic is not evidence of pipeline progress."""
     tracker = _quiet_tracker()
 
-    tracker.observe(_LifecycleEvent("timeout"))  # type: ignore[arg-type]
+    tracker.observe(_lifecycle_event("timeout"))
 
     assert quiet_for_s(tracker.last_progress_at) >= NO_PROGRESS_INTERVAL_S, (
         "an ancillary diagnostic must not be read as pipeline progress"
@@ -207,9 +231,7 @@ def test_the_observe_hook_records_the_stage_of_each_started_child() -> None:
     """A started child's tagged stage position is what the stall rules compare."""
     tracker = _ProgressTracker()
 
-    tracker.observe(  # type: ignore[arg-type]
-        _LifecycleEvent("start", pid=4242, tags={STAGE_INDEX_TAG: 3})
-    )
+    tracker.observe(_lifecycle_event("start", pid=4242, tags={STAGE_INDEX_TAG: 3}))
 
     assert tracker.pids == {4242}, "a started child must be tracked by pid"
     assert tracker.stage_by_pid == {4242: 3}, (

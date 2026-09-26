@@ -14,6 +14,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     from cuprum._backend import StreamBackend
     from cuprum.sh import Pipeline
+    from tests.behaviour._native_pipeline_liveness import LivenessProgress
     from tests.helpers.process_state import ChildPipe, ProcessState
 
 
@@ -59,20 +60,6 @@ class _StallSnapshot:
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _LivenessProgress:
-    """Where the progress clock stood when a stall was captured.
-
-    The liveness policy is otherwise unobservable from outside the runner: the
-    snapshot says what the children were doing, and these two numbers say how
-    long the observation stream had been quiet and how much of the suite-safety
-    backstop had been consumed.
-    """
-
-    quiet_for_s: float
-    deadline_remaining_s: float
-
-
-@dc.dataclass(frozen=True, slots=True)
 class _StallReport:
     """A classified stall paired with the attempt it interrupted.
 
@@ -88,7 +75,7 @@ class _StallReport:
     thread_delta: int
     verdict: HandOffVerdict
     snapshot: _StallSnapshot
-    progress: _LivenessProgress
+    progress: LivenessProgress
 
 
 def _is_runnable(child: _ChildStallSnapshot) -> bool:
