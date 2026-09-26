@@ -125,6 +125,38 @@ class TestGateCommands:
             "The report must direct the maintainer to widen, not delete."
         )
 
+    def test_check_does_not_call_a_coincidental_match_growth(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A single-key entry still touching another family is not "grown".
+
+        A one-key entry offers no evidence that the family it covered is the
+        family still being reported: its key is a path glob, and a glob is
+        exactly what makes a coincidental overlap possible. Telling the
+        maintainer to widen the entry here would instruct them to re-authorise
+        duplication the entry never described.
+        """
+        monkeypatch.chdir(tmp_path)
+        entry = allowlist.AllowEntry(keys=("cuprum/one.py",), reason="a variant")
+        monkeypatch.setattr(gate, "load_allowlist", lambda _path: (entry,))
+        monkeypatch.setattr(gate, "detect_findings", lambda: [_grown_finding()])
+        with pytest.raises(SystemExit) as error:
+            gate.check()
+        assert error.value.code == 1, "The un-covered family must still block."
+        output = capsys.readouterr().out
+        assert "widen it to match" not in output, (
+            "A single-key entry cannot show that its own family grew."
+        )
+        assert "path-glob coincidence" in output, (
+            "The overlap must be named as a coincidence, not as growth."
+        )
+        assert "remove it" in output, (
+            "A coincidental overlap still leaves the entry covering nothing."
+        )
+
     def test_check_reports_detector_schema_errors(
         self,
         tmp_path: Path,

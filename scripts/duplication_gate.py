@@ -23,15 +23,31 @@ ISC terms in ``LICENSE``.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Pin ``scripts`` to this file's own directory *before* importing from it.
+#
+# ``scripts`` has no ``__init__.py``, so it is a namespace package and CPython
+# builds its search path from every ``sys.path`` entry holding a ``scripts``
+# directory. A development install of the application contributes the checkout
+# root, so a gate launched from an out-of-tree workspace still resolved
+# ``scripts.<name>`` — and with it ``PYPROJECT``, the detector location, and the
+# allow list — to the application checkout, then reported the result as if it
+# had read the workspace. Handling the entry point's own directory first makes
+# an out-of-tree gate read its own tree or fail to import at all; both are
+# visible, and silently reading another tree is not. This statement is exempt
+# from the import-order rules precisely because it is a ``sys.path`` change.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import tomllib
 from collections import abc as cabc
-from pathlib import Path
 
 import cyclopts
 
 from scripts.duplication_allowlist import (
     AllowEntry,
     append_allow_entry,
+    key_matches,
     load_allowlist,
     validate_key,
 )
@@ -93,13 +109,63 @@ def detect_findings() -> list[Finding]:
     return run_detector(load_settings(PYPROJECT))
 
 
+def _stale_line(entry: AllowEntry, findings: cabc.Sequence[Finding]) -> str:
+    """Explain why an entry covers nothing, without asserting more than it can.
+
+    An entry that covered a family which has since grown a location still
+    matches nothing, but the duplication is emphatically not gone. The
+    distinction that matters to whoever reads the line is whether to widen the
+    entry or delete it, so it is drawn from evidence rather than guessed at.
+    Growth is only readable when the entry named more than one location: only
+    then does the surviving family have to match *every* key to show the entry
+    was superseded. A single-key entry has no such evidence available — its key
+    is a glob, so any family it still touches may equally be one the entry
+    never named — and it is reported as a coincidence rather than as growth.
+    Claiming growth on a coincidental match would be a confident instruction to
+    widen an entry for duplication that is not the entry's subject.
+
+    Returns
+    -------
+    str
+        The report line for *entry*.
+    """
+    joined = " ~ ".join(entry.keys)
+    coincidental: Finding | None = None
+    for finding in findings:
+        matched = [
+            key
+            for key in entry.keys
+            if any(key_matches(key, location) for location in finding.locations)
+        ]
+        if len(matched) == len(entry.keys) and len(entry.keys) > 1:
+            return (
+                f"stale allow entry ({joined}): the family it covered has grown "
+                f"to {len(finding.locations)} locations, so the entry no longer "
+                f"covers all of them; widen it to match {finding.label}"
+            )
+        if matched:
+            coincidental = coincidental or finding
+    if coincidental is not None:
+        return (
+            f"stale allow entry ({joined}): remove it; no family in this scan "
+            f"matches the entry, and the overlap at {coincidental.label} is a "
+            f"path-glob coincidence rather than the family it covered"
+        )
+    return (
+        f"stale allow entry ({joined}): remove it; no family in this scan "
+        f"reports any of its locations"
+    )
+
+
 def _report(
-    blocking: list[Finding], allowed: list[Finding], stale: list[AllowEntry]
+    blocking: list[Finding],
+    allowed: list[Finding],
+    stale: list[AllowEntry],
+    findings: cabc.Sequence[Finding],
 ) -> None:
     """Print the gate outcome in a concise, actionable form."""
     for entry in stale:
-        joined = " ~ ".join(entry.keys)
-        print(f"stale allow entry ({joined}): remove it; the duplication is gone")
+        print(_stale_line(entry, findings))
     if not blocking:
         suffix = f"; {len(allowed)} allowed by reasoned exceptions" if allowed else ""
         print(f"duplication gate passed{suffix}")
@@ -110,7 +176,9 @@ def _report(
     print(
         "Extract the shared logic into one helper, or record a considered "
         "exception:\n  make duplication-allow FIRST='<path[::name]>' "
-        "[SECOND='<path[::name]>'] REASON='<why this stays>'"
+        "[MEMBERS='<path[::name]> ...'] REASON='<why this stays>'\n"
+        "MEMBERS carries every location past the first, space-separated; "
+        "`unit` entries need only FIRST."
     )
 
 
@@ -170,7 +238,7 @@ def check() -> None:
         print(f"configuration error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
     blocking, allowed, stale = partition_findings(findings, allowlist)
-    _report(blocking, allowed, stale)
+    _report(blocking, allowed, stale, findings)
     if blocking:
         raise SystemExit(1)
 
