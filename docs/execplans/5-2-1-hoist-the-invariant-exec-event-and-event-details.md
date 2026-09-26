@@ -122,10 +122,11 @@ failure injection at that boundary.
     21 tests) written against the generic `emit` oracle at a pinned clock. The
     plan's two required mutations are confirmed detected; see the 2026-09-27
     discovery below.
-  - [~] V3 scheduling/failure-contract cases. The plan's command-path
-    "existing owner reaps the child" cases are **contradicted** by measurement
-    and are out of scope; the pipeline case, the clock-failure case, and the
-    pending-prefix cases are in scope. See the 2026-09-27 V3 discovery below.
+  - [x] V3 scheduling/failure-contract cases. Five hook-contract cases plus
+    the pipeline reaping case, each mutation-checked (see the two V3 entries
+    below). The plan's command-path "existing owner reaps the child" cases are
+    **contradicted** by measurement and are out of scope, recorded as such
+    rather than weakened to pass. See the 2026-09-27 V3 discoveries below.
   - [x] V4 seven pytest-bdd scenarios in `structured_events.feature`, the
     pipeline and concurrent cases among them, plus a Syrupy snapshot of the
     normalized lifecycle triple. Two of the plan's V4 assertions were wrong
@@ -137,6 +138,8 @@ failure injection at that boundary.
     step to its defining module. See the 2026-09-27 "the 400-line cap applies
     to `tests/`" discovery below.
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
+    Gated on EP-M2 by construction: the *candidate* is the post-hoist
+    implementation, so there is nothing to pair until the hoist exists.
 - [ ] EP-M2: implement and validate the bounded stream-factory optimization.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
@@ -458,6 +461,35 @@ leaves the earlier scheduled prefix in `pending_tasks`, and pin the pipeline
 path's reaping — which is real and demonstrable. The two command-path
 "proves the existing owner reaps" cases are recorded as **contradicted**, not
 skipped, so a later reader cannot mistake the gap for coverage.
+
+### 2026-09-27: V3 completed — the pipeline reaping case, and why it needed its own
+
+The hook-contract half of V3 landed first (five cases in
+`test_line_event_emission.py`), and the reaping half went to
+`test_pipeline_process_lifecycle.py`, which already owned that seam and carried
+the one existing sibling case. The split is not cosmetic: the sibling asserts
+the same cleanup for the *same* reason but reaches it by a different route.
+
+The existing case fails the *spawn* (`create_subprocess_exec` raises
+`FileNotFoundError`) on stage two. The new case fails the *preparation* — the
+stage spawns successfully, then `_create_stage_capture_tasks` raises — which is
+the route a failure in the hoist's own code would take, and the route
+`_spawn_pipeline_stages` reaches only after appending the process. Both run
+through the same `except BaseException` in `_spawn_pipeline_processes`, so
+before mutation-checking it was not obvious the new case added anything.
+
+It does. Narrowing that guard to `except OSError` kills *only* the new case;
+the `FileNotFoundError` sibling still passes, because its exception is an
+`OSError`. That mutation is the evidence that the new case covers a region no
+existing test reached, and it is the reason the case is worth its place rather
+than being a restatement. The other three mutations — dropping
+`_terminate_all_shielded`, leaving the capture tasks uncancelled, and starting
+teardown without awaiting it — kill it too, and the second hangs it to the 30s
+`pytest-timeout` rather than failing a comparison.
+
+The anti-vacuity assertion is `len(spawned) == len(stages)`: a run that never
+got as far as the second stage's factory would satisfy every other assertion
+about the first stage alone and read as a pass.
 
 ### 2026-09-27: the 400-line cap applies to `tests/`, and pytest-bdd 8 scopes steps per module
 
