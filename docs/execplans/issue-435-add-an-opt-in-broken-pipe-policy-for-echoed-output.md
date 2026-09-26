@@ -348,6 +348,22 @@ escalation, not a workaround.
   easily mistaken for the app being absent. Consequence: un-drafting the PR is
   expected to produce a *first* hosted review, which is not scoped by any
   evidence gathered so far.
+- A wrong identifier survives every gate, because the failure mode is a valid
+  token rather than an invalid one. Revision 9's Progress entry named the
+  scanner `ambrieaks`; the real tool is `ambrleaks`, per Makefile:237 and
+  ADR-003. The misspelling entered at `21618328`, when Revision 10 was the
+  current note, and left at `e986abf8`, seven commits later. Over that span the
+  spelling gate ran at least three times — inside `make lint` at `a6b8ba14` and
+  again at `f60f04f2`, and via `markdownlint` at `d4e7371c` — and passed each
+  time, because neither spelling is a dictionary word, so `typos` had no
+  opinion either way. No other gate reads prose for correctness. CodeRabbit's
+  sixth pass, at `a801de86`, reviewed a tree containing it and returned zero
+  findings. It surfaced only when a new sentence cited the same tool a second
+  time and the two spellings disagreed with each other; confirming which was
+  right then took one `git grep` against the Makefile. The lesson is that
+  spelling, lint, and type gates give no protection against a *confidently
+  wrong* name for an external tool. Cross-check a cited identifier against its
+  definition the first time it is written down, because nothing downstream will.
 - `make test`'s `test-python` recipe is a `for` loop over the pytest globs with
   `|| exit $$?`, so the first failing glob aborts the loop and silently masks
   every later glob *and* `test-rust`. In this task a single known-flaky doctest
@@ -483,6 +499,24 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 14: no code changed. Two docs-only commits close the findings the
+earlier gate runs left open and correct one spelling. `7224bcde` records the
+tip's gate evidence: the independent run at `d4e7371c` passed `check-fmt`,
+`markdownlint` (and therefore `spelling`), `nixie`, `typecheck` and `test`, with
+`make test` exiting 0 at `HEAD_DRIFT: no` after all nine pytest globs ran to
+completion — 2490, 638, 2, 116, 4, 126, 12, 21 and 22 passed with 63 expected
+skips — followed by 125 of 125 nextest tests. That closes the masking finding
+on its own evidence, since the glob list rather than the exit code is what
+proves no target was skipped. The same entry records `make lint` passing at
+`f60f04f2` in 50 s; the three commits above it are docs-only, so `typos` is the
+only lint sub-check they could disturb, and `markdownlint` re-ran it at the tip.
+`e986abf8` then corrects `ambrieaks` to `ambrleaks` in the Revision 9 evidence
+entry, matching Makefile:237 and ADR-003. The misspelling had survived every
+gate and six CodeRabbit passes because `ambrleaks` is not a dictionary word in
+either direction, so no checker had an opinion about it; it was found by
+grepping the tree for the real target's name while adding a second citation of
+it, not by any gate.
 
 Revision 13: no code changed. The gate run on Revision 12's tree failed
 `make check-fmt` because the prose Revision 12 added to this file — the
