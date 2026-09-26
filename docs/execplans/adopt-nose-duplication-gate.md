@@ -117,6 +117,37 @@ repository rather than re-derived here.
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
 - [ ] Run the gates and open the draft pull request.
 
+### Gate remediation (2026-09-27)
+
+The first full gate run failed four checks. Each is fixed; the fixes are commits
+`a3405c28` (code) and `a497eb8b` (docs and manifest).
+
+- **`ty` invalid-argument-type, twice.** `_lookup_active_span` was annotated
+  `ExecEvent`, but the line-stream and native-pump-cleanup mixins pass their
+  own event families. The helper only ever read `event.exec_id`, so the
+  parameter is now the token and all four call sites pass `event.exec_id`. This
+  is the fourth fix rather than the first because the obvious repair — a
+  `runtime_checkable` protocol for the single shared attribute — type-checked
+  but pushed the module to 416 lines against the enforced 400 ceiling.
+- **`pylint` C0302 (`too-many-lines`) on `tracing_adapter.py`.** Not reported
+  by the first gate run and not caused by this branch's own edits: the Protocol
+  fix above is what breached the ceiling. Passing the token removed the
+  construct entirely and took the module to 396. Three docstring trims along
+  the way recovered only nine of sixteen lines, which is why the fix is
+  structural. `pylint` is silent at 407, which reads as a pass; it is not one,
+  because `too-many-lines` fires only *above* the ceiling. A forced probe
+  (`--max-module-lines=1`) reports `407/1` and is what exposes the asymmetry.
+- **`pylint` C1803** in `test_duplication_gate.py` (comparison to an empty
+  tuple) and **R1710** in `test_gate_entrypoint_binding.py` (a `return` in
+  `try` beside a `skip` in `except`). The latter is resolved with the
+  `-> typ.NoReturn` helper idiom `test_duplication_gate_blocking.py` already
+  documents for exactly this case.
+- **Spelling.** Two non-Oxford spellings in `docs/adr-018` were reported and
+  corrected. Four more in `pyproject.toml` allow reasons were *not* reported,
+  because the spelling gate never reads a file named `pyproject.toml`. They
+  were corrected anyway, as genuine ADR-009 violations that the gate has a
+  blind spot for, and the gap is now documented where allow reasons are written.
+
 ## Surprises & Discoveries
 
 - **`--exclude` globs are matched relative to each configured root, not to the
