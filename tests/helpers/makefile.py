@@ -62,6 +62,32 @@ def _require(*, condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _assignments(document: dict[str, typ.Any]) -> cabc.Iterator[tuple[str, str, str]]:
+    """Yield each usable ``(name, raw_value, operator)`` triple in file order.
+
+    `makeutil`'s JSON is foreign data, so a record missing a field, or carrying
+    one that is not a string, is skipped rather than trusted. Filtering here
+    keeps the narrowing out of the caller, which then holds only `make`'s own
+    assignment rules.
+
+    Parameters
+    ----------
+    document : dict
+        The `makeutil` JSON document.
+
+    Yields
+    ------
+    tuple of str
+        The name, raw value, and operator of one assignment.
+    """
+    declared = typ.cast("list[object]", document.get("variables") or [])
+    for record in declared:
+        entry = typ.cast("dict[str, object]", record)
+        fields = tuple(entry.get(field) for field in ("name", "raw_value", "operator"))
+        if all(isinstance(field, str) for field in fields):
+            yield typ.cast("tuple[str, str, str]", fields)
+
+
 def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
     """Return every assignment's ``name`` to ``raw_value`` mapping.
 
@@ -107,17 +133,7 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
         message="the makeutil document must carry a `variables` list",
     )
     records: dict[str, str] = {}
-    for record in typ.cast("list[object]", declared):
-        entry = typ.cast("dict[str, object]", record)
-        name = entry.get("name")
-        raw_value = entry.get("raw_value")
-        operator = entry.get("operator")
-        if not (
-            isinstance(name, str)
-            and isinstance(raw_value, str)
-            and isinstance(operator, str)
-        ):
-            continue
+    for name, raw_value, operator in _assignments(document):
         if operator == _CONDITIONAL_OPERATOR:
             records.setdefault(name, raw_value)
         else:
