@@ -136,7 +136,7 @@ class TestGateCommands:
         A one-key entry offers no evidence that the family it covered is the
         family still being reported: its key is a path glob, and a glob is
         exactly what makes a coincidental overlap possible. Telling the
-        maintainer to widen the entry here would instruct them to re-authorise
+        maintainer to widen the entry here would instruct them to re-authorize
         duplication the entry never described.
         """
         monkeypatch.chdir(tmp_path)

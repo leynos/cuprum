@@ -134,9 +134,9 @@ class TestEntrypointBinding:
 
         combined = f"{result.stdout}{result.stderr}"
         assert result.returncode == 1, (
-            "A workspace with an unexcepted duplicate must fail the gate; a "
-            "pass here means the checkout's manifest decided the outcome.\n"
-            f"{combined}"
+            "A workspace whose duplicate no exception covers must fail the "
+            "gate; a pass here means the checkout's manifest decided the "
+            f"outcome.\n{combined}"
         )
         assert "duplication gate passed" not in combined, (
             "The checkout's passing verdict must not describe a workspace "
