@@ -181,6 +181,54 @@ There is no time limit. Tool failures do not justify lowering acceptance.
          already wrong before this branch — six skipped at the merge-base —
          and `test_rust_extension_availability` deliberately *passes* either
          way, since it asserts the absent case rather than skipping.
+  - [x] (2026-09-27) Post-documentation gate run surfaced two defects of mine,
+    both introduced by `727484e2` and both traced to
+    `rust/cuprum-rust/src/stream_error_behaviour.rs`. `make test-rust` had been
+    run after that commit but `make lint` and the Python formatter ratchet had
+    not, so neither defect had been observed. Both are fixed:
+    1. **`lint-whitaker` denied 9 × `no_expect_outside_tests`.** The nine
+       `.expect(...)` calls were all on `Slot::get()`. Diagnosed against the
+       installed lint rather than by inference:
+       `crates/no_expect_outside_tests/src/driver/mod.rs` gates
+       `is_in_cfg_test_module` behind `is_test_harness`, and whitaker runs
+       `cargo check --all-targets`, so the file-backed
+       `#[cfg(test)] mod stream_error_behaviour;` declaration never supplies the
+       ancestry. `collect_context` reaches only ancestors that are `Node::Item`
+       and re-parses the declaration as its own `Mod` item, so the steps read as
+       production code. This contradicts the lint's own
+       `ui/pass_expect_in_file_backed_test_module.rs`. The skill at
+       `whitaker/skills/addressing-whitaker-findings/SKILL.md` names the
+       category ("cucumber step functions … `additional_test_attributes` cannot
+       help because the macros consume their attributes") and prescribes making
+       the function fallible rather than suppressing it. Every step now returns
+       `StepResult<(), String>` and the nine `expect` calls are gone; the
+       `assert!`/`assert_eq!` in the `Then` steps became `Err` returns because
+       `panic_in_result_fn` is denied workspace-wide. A single `recorded`
+       accessor replaced the repeated slot read, so an out-of-order scenario
+       names the missing value. Same as the sibling `stream_error_tests.rs`,
+       which passes this lint with zero `expect` calls.
+    2. **The formatter ratchet.** `test_formatter_skips_are_limited_to_known_rstest_fixtures`
+       found a fourth `#[rustfmt::skip]` and asserts the set is exactly three,
+       with the message "add a mutation proof before extending the formatter
+       exception set". The skip was load-bearing, measured rather than assumed:
+       removing it makes the pinned formatter collapse the fixture to
+       `fn context() -> StreamErrorContext { StreamErrorContext::default() }`,
+       and `cargo +1.85.0 check` on that exact form emits
+       `unused_braces` at 53:36, which `-D warnings` turns into an error. The
+       skip was removed **without extending the ratchet**: giving the fixture
+       body a line comment of its own keeps it multi-line, so the formatter and
+       Rust 1.85 are both satisfied and the exception set stays at three. This
+       is the outcome the ratchet's assertion message is asking for — the
+       preferred fix is not to grow the set.
+    3. **`make test`'s 13 failures are environmental, not mine.** They come from
+       Lody's `BASH_ENV=/home/leynos/.lody/bashenv`, which re-prepends
+       `~/.lody/bin` inside every `bash -c`, so the fake `gh` stand-in in
+       `tmp_path/tools` is shadowed by the real `gh` and the release tests fail
+       with `failed to run git: fatal: not a git repository`. The fix
+       (`ccd9d1df`, "Scrub BASH_ENV from the workflow-step helpers") is **not an
+       ancestor of this branch and not on `origin/main`**. Re-running with
+       `env -u BASH_ENV make test` is the workaround; no tracked test helper is
+       changed for it.
   - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
