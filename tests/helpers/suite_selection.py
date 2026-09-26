@@ -25,7 +25,7 @@ import typing as typ
 
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
-from tests.helpers.makefile import selected_paths, variable_expansion
+from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
@@ -36,6 +36,7 @@ __all__ = (
     "ROOT_MODULE_GLOB",
     "SCENARIO_SELECTOR",
     "SELECTOR",
+    "Exemption",
     "covered_modules",
     "exceptions_verified",
     "remedy",
@@ -49,20 +50,43 @@ __all__ = (
 SELECTOR = "PYTEST_TARGETS"
 SCENARIO_SELECTOR = "ACT_SCENARIO_TARGETS"
 
+
+#: An exemption's three claims: the Makefile variable whose expansion collects
+#: the module, the `make` target that expands it, and why the exclusion is
+#: intended. The selector and the target are separate fields because they are
+#: separate namespaces — `ACT_SCENARIO_TARGETS` is a variable and `test-act` is
+#: the target that consumes it — and a single string cannot be looked up in
+#: both. Conflating them made the real case unrepresentable: an entry for a
+#: scenario module would have had to name a variable that no `make` invocation
+#: runs, or a target that is not a variable to expand.
+class Exemption(typ.NamedTuple):
+    """One documented reason a root-level module sits outside both selectors."""
+
+    selector: str
+    """The Makefile variable whose expansion must resolve to the module."""
+
+    target: str
+    """The `make` target that must expand ``selector``; a workflow must run it."""
+
+    reason: str
+    """Why this module is deliberately collected somewhere else."""
+
+
 #: Root-level modules allowed to sit outside both selectors, mapped to the
-#: target that does collect them and the reason the exclusion is intended.
+#: exemption recording where they are collected instead.
 #:
 #: It is empty, and that is the contract: issue #499 removed the last seven
 #: entries by renaming those modules into the `test_ci_` selector instead. An
 #: entry here is a deliberate decision that a module runs *somewhere else* —
 #: never a way to silence the guard. If a module is genuinely collected by
-#: another target, name that target and the workflow that runs it; if it is
-#: not collected anywhere, rename it or add it to `PYTEST_TARGETS`.
+#: another target, name that target's selector, the target, and the workflow
+#: that runs it; if it is not collected anywhere, rename it or add it to
+#: `PYTEST_TARGETS`.
 #:
 #: The machinery is exercised regardless of the table being empty: see
 #: `test_the_exception_mechanism_reports_an_uncovered_module`, which drives it
 #: with a module that is not on disk.
-EXCEPTIONS: typ.Final[dict[str, tuple[str, str]]] = {}
+EXCEPTIONS: typ.Final[dict[str, Exemption]] = {}
 
 #: The glob whose match set must be exactly the module population. Kept as a
 #: single pattern so the enumeration and the selector agree by construction:
@@ -158,48 +182,67 @@ def exceptions_verified() -> frozenset[str]:
     An entry in `EXCEPTIONS` exempts a module from the coverage rule, so an
     unchecked entry is a way to silence the guard rather than a record of a
     decision — exactly what the table is documented not to be. Each entry is
-    therefore held to the two claims it makes: the named target's own selector
-    must resolve to that module, and a workflow `run:` step must invoke the
-    named target. An entry failing either claim is reported by name and never
-    subtracted from the uncovered set, so the module it was hiding returns to
-    the failure list.
+    therefore held to the three claims it makes: the named selector must
+    resolve to that module, the named target's recipe must expand that very
+    selector, and a workflow `run:` step must invoke the target. An entry
+    failing any claim is reported by name and never subtracted from the
+    uncovered set, so the module it was hiding returns to the failure list.
+
+    The selector and the target are checked together because either alone is
+    satisfiable without collecting anything: a target whose recipe ignores the
+    selector runs some other suite, and a selector no target expands names
+    modules nothing executes. Looking the pair up is also why the two are
+    separate fields — they are different namespaces, and one string cannot be
+    both a variable to expand and a target to invoke.
 
     Returns
     -------
     frozenset of str
-        Modules whose exception entry was verified on both counts.
+        Modules whose exception entry was verified on all three counts.
 
     Raises
     ------
     AssertionError
-        If an entry names a target that is not a Makefile variable, if that
-        target's expansion does not resolve to the entry's module, or if no
-        workflow step runs the target. Reporting the entry as the failure
-        keeps a bad exemption from passing silently.
+        If the selector is not a Makefile variable, if its expansion does not
+        resolve to the entry's module, if the target's recipe does not expand
+        the selector, or if no workflow step runs the target. Reporting the
+        entry as the failure keeps a bad exemption from passing silently.
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     verified: set[str] = set()
-    for module, (target, reason) in EXCEPTIONS.items():
-        resolved = selected_paths(variable_expansion(target))
+    for module, entry in EXCEPTIONS.items():
+        resolved = selected_paths(variable_expansion(entry.selector))
         require(
             condition=module in {str(path) for path in resolved},
             message=(
                 f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                f"`make {target}`, but {target} does not resolve to it. "
-                f"Recorded reason: {reason!r}. An exemption whose target does "
-                "not collect the module is not an exemption, it is a gap."
+                f"`make {entry.target}` through {entry.selector}, but "
+                f"{entry.selector} does not resolve to it. Recorded reason: "
+                f"{entry.reason!r}. An exemption whose selector does not "
+                "collect the module is not an exemption, it is a gap."
+            ),
+        )
+        require(
+            condition=f"$({entry.selector})" in recipe_of(entry.target),
+            message=(
+                f"{__name__}.EXCEPTIONS exempts {module} as collected by "
+                f"`make {entry.target}` through {entry.selector}, but that "
+                f"target's recipe does not expand {entry.selector}, so the "
+                f"selector names nothing the target runs. Recorded reason: "
+                f"{entry.reason!r}."
             ),
         )
         runners = [
             f"{workflow_name}:{job_name}"
             for workflow_name, job_name, _index, script in run_scripts()
-            if script_runs_command(script, f"make {target}")
+            if script_runs_command(script, f"make {entry.target}")
         ]
         require(
             condition=bool(runners),
             message=(
                 f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                f"`make {target}`, but no workflow step runs that target, so "
-                f"nothing in CI collects it. Recorded reason: {reason!r}."
+                f"`make {entry.target}`, but no workflow step runs that "
+                f"target, so nothing in CI collects it. Recorded reason: "
+                f"{entry.reason!r}."
             ),
         )
         verified.add(module)
@@ -222,5 +265,6 @@ def remedy(modules: cabc.Iterable[str]) -> str:
         "Fix by either renaming each module to `tests/test_ci_*.py`, which "
         f"{SELECTOR} already collects, or adding it to {SELECTOR} in the "
         "Makefile. A module that is deliberately collected elsewhere can be "
-        f"listed in {__name__}.EXCEPTIONS with its target and reason instead."
+        f"listed in {__name__}.EXCEPTIONS as an Exemption naming its selector, "
+        "target, and reason instead."
     )

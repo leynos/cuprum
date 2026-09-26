@@ -755,7 +755,8 @@ tree is the stronger artefact, because a reader can re-run them.
   Fix by either renaming each module to `tests/test_ci_*.py`, which
   PYTEST_TARGETS already collects, or adding it to PYTEST_TARGETS in the
   Makefile. A module that is deliberately collected elsewhere can be listed in
-  test_ci_test_selection_contract.EXCEPTIONS with its target and reason instead.
+  tests.helpers.suite_selection.EXCEPTIONS as an Exemption naming its selector,
+  target, and reason instead.
   ```
 
 - Red, control B: delete the `tests/test_ci_*.py` pattern from
@@ -879,7 +880,8 @@ one command from the next.
 In `tests/test_ci_test_selection_contract.py`, the guard as built:
 
 ```python
-EXCEPTIONS: Final[dict[str, tuple[str, str]]] = {}  # module -> (target, reason)
+# In tests/helpers/suite_selection.py:
+EXCEPTIONS: Final[dict[str, Exemption]] = {}  # module -> (selector, target, reason)
 
 
 def test_every_root_level_module_has_a_ci_route() -> None: ...

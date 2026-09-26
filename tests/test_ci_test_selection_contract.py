@@ -19,9 +19,10 @@ tree and the selector rather than the test results. Two rules pin the
 selection:
 
 - every root-level `tests/test_*.py` module is named by `PYTEST_TARGETS` or by
-  `ACT_SCENARIO_TARGETS`, or appears in `EXCEPTIONS` with a target and a reason
-  (see "Exception table" below for why that list is empty and how to add to
-  it);
+  `ACT_SCENARIO_TARGETS`, or appears in `EXCEPTIONS` as an `Exemption` naming
+  the selector that collects it, the target that expands that selector, and a
+  reason (see `tests/helpers/suite_selection.py` for why that table is empty
+  and how to add to it);
 
 - the `typecheck-test` job of `ci.yml` invokes `make test-python`, the target
   that consumes the selector, so the guard connects the selector to the job
@@ -38,10 +39,12 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers.ci_run_scripts import run_scripts
-from tests.helpers.makefile import recipe_of
+from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
 from tests.helpers.suite_selection import (
     EXCEPTIONS,
+    SCENARIO_SELECTOR,
     SELECTOR,
+    Exemption,
     covered_modules,
     exceptions_verified,
     remedy,
@@ -147,13 +150,13 @@ def test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard(
     `EXCEPTIONS` is empty on this tree, so nothing exercises the verification
     that makes an entry trustworthy — and an unverified entry would be a way
     to hide an uncollected module. The seeded fault exempts a real module
-    while naming a target that does not resolve to it, which is exactly the
+    while naming a selector that does not resolve to it, which is exactly the
     claim `exceptions_verified` exists to refuse.
 
     The module named is one this tree really has, so the check cannot pass
-    because the name was unknown; the target named is a real Makefile variable
-    that resolves to a different file, so it cannot pass by being undefined
-    either.
+    because the name was unknown; the selector named is a real Makefile
+    variable that resolves to a different file, so it cannot pass by being
+    undefined either.
     """
     module = root_modules()[0]
     assert module in covered_modules(), (
@@ -161,9 +164,53 @@ def test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard(
         "fault under test"
     )
     monkeypatch.setitem(
-        EXCEPTIONS, module, ("ACT_PARSER_TARGETS", "seeded fault: wrong target")
+        EXCEPTIONS,
+        module,
+        Exemption(
+            selector="ACT_PARSER_TARGETS",
+            target="test-python",
+            reason="seeded fault: wrong selector",
+        ),
     )
     with pytest.raises(AssertionError, match=r"does not resolve to it"):
+        exceptions_verified()
+
+
+def test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show a target that does not expand its selector cannot exempt a module.
+
+    A selector and the target that runs it are two claims, and satisfying one
+    proves nothing about the other: a target whose recipe never expands the
+    named selector runs some *other* suite, so an exemption pairing them would
+    record a route that does not exist. The seeded fault does exactly that —
+    it names a selector that genuinely collects the module, and a real target
+    that genuinely runs in CI, but a target whose recipe does not expand that
+    selector.
+
+    Both halves are real, so the entry cannot fail for being unknown; only the
+    pairing is wrong. This is the claim the two-field `Exemption` exists to
+    make checkable: with the selector and the target collapsed into one
+    string, this fault could not be expressed, let alone detected.
+    """
+    scenario = "tests/integration/test_workflow_integration.py"
+    assert scenario in {
+        str(path) for path in selected_paths(variable_expansion(SCENARIO_SELECTOR))
+    }, (
+        f"{scenario} must be collected by {SCENARIO_SELECTOR}, or the seeded "
+        "entry is not the fault under test"
+    )
+    monkeypatch.setitem(
+        EXCEPTIONS,
+        scenario,
+        Exemption(
+            selector=SCENARIO_SELECTOR,
+            target="test-python",
+            reason="seeded fault: target ignores the selector",
+        ),
+    )
+    with pytest.raises(AssertionError, match=r"does not expand"):
         exceptions_verified()
 
 
