@@ -1230,6 +1230,15 @@ The following design decisions were made during implementation:
 
 ### 8.1.3 Structured execution events (observe hooks)
 
+Roadmap item 5.2.1 has a
+[draft implementation plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
+for hoisting invariant line-event metadata into a private callback factory
+shared by single-command and pipeline streams. The proposal binds metadata
+after spawn, preserves a fresh frozen `ExecEvent` and clock read per line, and
+retains the existing hook dispatcher. It is awaiting approval and has not been
+implemented. Acceptance requires a committed profile showing at most 10%
+construction share; caching metadata alone does not establish that result.
+
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
