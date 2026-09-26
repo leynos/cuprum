@@ -286,6 +286,35 @@ There is no time limit. Tool failures do not justify lowering acceptance.
     `rust/Cargo.lock` — so the "requires rustc 1.88" failure mode did not arise
     and the `textwrap` pin was not disturbed. Diagnostic log:
     `/tmp/gate-611-msrv-check-verbose-diagnostic.out`.
+  - [x] (2026-09-27) Native extension stage green, at head `6a28ff95` (ledger
+    commit `9e01003c` adds no code, so the head that matters is unchanged).
+    `make develop` exit 0 — rebuilt rather than reinstated, because a stale
+    fallback is the hazard the milestone exists to remove. The build reports
+    `abi3-py3.12` and installs `cuprum._rust_backend_native`; the import check
+    resolves to `cuprum/_rust_backend_native.abi3.so` in the worktree and the
+    module exports exactly `is_available`, `rust_consume_stream`, and
+    `rust_pump_stream`. The parked copy was provably the same production code
+    (only the `#[cfg(test)]` behaviour module changed after it was built), but
+    it is now superseded and is retained only as the pre-build fallback.
+    `make test-extension` exit 0 — **101 passed, 1 skipped** (the Windows-only
+    winerror case), which is V4's recorded native-boundary result and, crucially,
+    the moment the 33 Python tests skipped in the pure-Python block actually
+    execute: the four new outline rows and
+    `cuprum/unittests/test_rust_stream_native_order.py` are no longer unobserved.
+    `make boundary-test` exit 0 — **13 passed** in `cuprum-native-io --lib` plus
+    **116 passed** in `scripts/tests/test_boundary_*.py`, both unchanged from
+    V4, so the diff did not disturb ownership or the native boundary. Logs:
+    `/tmp/611-develop.out`, `/tmp/611-test-extension.out`,
+    `/tmp/611-boundary-test.out`.
+  - [x] (2026-09-27) `make lint-windows` exit 0 — the Windows `cfg` branches of
+    the typed boundary compile for `x86_64-pc-windows-msvc` (`PYO3_CROSS_PYTHON_VERSION=3.13`,
+    4m25s, "Finished dev profile"). Recorded with the plan's own qualifier
+    attached: this is a cross-target **compile** and counts as supplementary
+    evidence only. It proves the `InvalidDescriptor` path and the Windows
+    descriptor conversion compile under `cfg(windows)`; it does **not** prove
+    Windows runtime behaviour, and the winerror case remains skipped. Windows
+    runtime evidence is still outstanding and must come from Windows.
+    Log: `/tmp/611-lint-windows.out`.
   - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
