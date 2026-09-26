@@ -54,6 +54,22 @@ dev = [
     "cyclopts>=4.0",
 ]
 
+[tool.ty.src]
+# The duplication gate is isolated tooling, not application code. Its modules
+# are declared for `>=3.14` in their PEP 723 headers and use `typing.TypeIs`
+# and `PurePosixPath.full_match`, which do not exist at this project's 3.12
+# floor. Already-excluded files stay checked when named explicitly, so
+# `make typecheck` runs them in their own pass at the interpreter they
+# actually target; excluding them here only keeps the application pass honest
+# about the floor the application itself supports.
+exclude = [
+    "scripts/atomic_write.py",
+    "scripts/duplication_allowlist.py",
+    "scripts/duplication_gate.py",
+    "scripts/nose_detector.py",
+    "scripts/nose_schema.py",
+]
+
 [tool.ruff]
 line-length = 88
 preview = true
@@ -496,6 +512,63 @@ full_name = [
 ]
 reason = "Called by TracingHook.record_line_stream_event, which callers register through observe_line_stream."
 
+# The code-duplication gate. `make duplication` and `make lint` run the pinned
+# `nose` binary through `scripts/duplication_gate.py` with these settings.
+#
+# `roots` is the shipped production package. Cuprum has no `src/` layout, so
+# `cuprum/` is the import package itself; `tests/`, `benchmarks/` and
+# `scripts/` are maintained but are not shipped, and are deliberately outside
+# this first gate.
+#
+# `exclude` is matched relative to each configured root, *not* to the
+# repository root: `unittests/**` excludes `cuprum/unittests`, while
+# `cuprum/unittests/**` would silently match nothing and leave those files in
+# the scan. See "Configuring the scan" in docs/developers-guide.md.
+#
+# Every channel is named in `mode` so a change to nose's own defaults cannot
+# widen or narrow what this gate checks. `min-size` counts nose IL tokens, not
+# Python lines or AST nodes. `surface = "all"` reports the hidden-surface
+# families as well as the curated dashboard; `top = 30` then adjudicates the
+# 30 highest-ranked families *before* the allow entries below are applied, so
+# an allowed family still occupies a place in that surface.
+[tool.nose]
+version = "0.20.0"
+roots = ["cuprum"]
+mode = "syntax,semantic,near"
+min-size = 24
+surface = "all"
+top = 30
+exclude = ["unittests/**"]
+
+# Reasoned exceptions to the duplication gate, applied after ranking.
+#
+# Each entry names locations by key, never by source line, so code moving above
+# a finding does not invalidate the entry. A key is a repository-relative glob
+# (`path`), optionally suffixed with `::name` to require nose's unit name as
+# well. An entry sets exactly one of:
+#
+#   unit = "path[::name]"      one location
+#   members = ["...", "..."]   two or more locations
+#
+# and silences a family only when EVERY reported location matches one of its
+# keys. A family that grows a member outside the entry's keys blocks again, and
+# a `::name` key never matches a fragment-level finding, which nose reports
+# without a name. Every entry needs a non-empty `reason`.
+#
+# Entries that match no finding are reported by the gate. That report is not
+# proof the duplication is gone: the ranking bound above caps what the gate
+# observes, so confirm with source inspection before deleting an entry.
+[tool.duplication_gate]
+
+[[tool.duplication_gate.allow]]
+unit = "cuprum/a.py"
+reason = "first writer"
+[[tool.duplication_gate.allow]]
+members = ["cuprum/a.py", "cuprum/b.py::beta"]
+reason = "kept literally: \"$(touch /tmp/pytest-of-leynos/pytest-79588/test_make_duplication_allow_ro1/injected-command)\"; $HOME"
+[[tool.duplication_gate.allow]]
+unit = "cuprum/b.py"
+reason = "second writer"
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

@@ -36,6 +36,15 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Repository-local tool binaries, such as the pinned `nose` duplication
+# detector that `make install-nose` downloads. The directory holds released
+# executables, not first-party source; `scripts/` beside it stays tracked.
+.tools/
+
+# The advisory sidecar lock `make duplication-allow` takes around its
+# read-modify-write of pyproject.toml. It carries no content of its own.
+.*.duplication-gate.lock
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
