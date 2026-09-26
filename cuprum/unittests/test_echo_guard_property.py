@@ -239,7 +239,7 @@ def test_echo_guard_stops_after_the_first_write_failure(
     attempt, and exactly one wired diagnostic must describe the transition —
     one structured warning, and one result record naming the category.
 
-    The two parametrisations are the claim above: the encode guard recovers
+    The two parametrizations are the claim above: the encode guard recovers
     under the default ``STRICT`` policy because it is not opt-in, and the
     broken-pipe guard recovers under ``BEST_EFFORT``. Everything else in the
     body is shared, so a divergence in either guard's behaviour shows up as
