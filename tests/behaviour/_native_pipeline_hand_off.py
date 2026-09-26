@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
-import enum
 import pathlib
 import threading
 import time
@@ -14,13 +13,27 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, ScopeConfig, TimeoutExpired, scoped, sh
+from tests.behaviour._native_pipeline_liveness import (
+    PROGRESS_PHASES,
+    STAGE_INDEX_TAG,
+    LivenessBound,
+)
+from tests.behaviour._native_pipeline_stall import (
+    HandOffVerdict,
+    _ChildStallSnapshot,
+    _classify_stall,
+    _format_stall,
+    _ParentOutput,
+    _StallReport,
+    _StallSnapshot,
+)
 from tests.helpers.catalogue import combine_programs_into_catalogue, python_catalogue
 from tests.helpers.process_state import (
-    ChildPipe,
-    ProcessState,
     child_pipes,
+    parent_read_fds,
     parent_write_fds,
     process_state,
+    read_end_pending_bytes,
 )
 from tests.helpers.timeouts import pending_tasks
 
@@ -32,71 +45,81 @@ if typ.TYPE_CHECKING:
     from cuprum.program import Program
     from cuprum.sh import Pipeline, PipelineResult
 
+__all__ = [
+    "HandOffVerdict",
+    "LivenessBound",
+    "_ChildStallSnapshot",
+    "_StallSnapshot",
+    "_classify_stall",
+    "assert_deep_native_pipeline_completes",
+    "assert_repeated_native_pipeline_hand_off",
+]
+
 
 _REPEATED_NATIVE_PIPELINE_ATTEMPTS = 16
 _REPEATED_NATIVE_PIPELINE_TIMEOUT_S = 30.0
 _REPEATED_NATIVE_PIPELINE_FD_TOLERANCE = 4
-_NO_PROGRESS_INTERVAL_S = 0.5
-_PROGRESS_PROBE_INTERVAL_S = 0.05
 
 
 def _open_fd_count() -> int:
-    """Count the descriptors currently open in this process."""
+    """Count the descriptors currently open in this process.
+
+    Returns
+    -------
+    int
+        The number of entries in this process's descriptor directory.
+    """
     return sum(1 for _ in pathlib.Path("/proc/self/fd").iterdir())
 
 
-class HandOffVerdict(enum.StrEnum):
-    """The evidence-based outcome for a stalled native pipeline attempt."""
+def _loop_int_tag(event: ExecEvent, key: str) -> int | None:
+    """Read an integer position out of an event's ``tags`` mapping.
 
-    HUNG_HANDOFF = "HUNG_HANDOFF"
-    HOST_STARVATION = "HOST_STARVATION"
+    Returns
+    -------
+    int | None
+        The tagged position, or ``None`` when it is absent or not an integer.
+    """
+    value = event.tags.get(key)
+    return value if isinstance(value, int) else None
 
 
 @dc.dataclass(slots=True)
 class _ProgressTracker:
-    """Track stage PIDs and the most recent observable pipeline activity."""
+    """Track stage positions and the most recent observable pipeline activity."""
 
     pids: set[int] = dc.field(default_factory=set)
+    stage_by_pid: dict[int, int] = dc.field(default_factory=dict)
+    stdout_target_by_pid: dict[int, str] = dc.field(default_factory=dict)
     last_progress_at: float = dc.field(default_factory=time.monotonic)
 
     def observe(self, event: ExecEvent) -> None:
         """Record lifecycle events that prove the pipeline is still progressing."""
-        if event.phase not in {"start", "stdout", "stderr", "exit"}:
+        if event.phase not in PROGRESS_PHASES:
             return
         if event.phase == "start" and event.pid is not None:
             self.pids.add(event.pid)
+            stage = _loop_int_tag(event, STAGE_INDEX_TAG)
+            if stage is not None:
+                self.stage_by_pid[event.pid] = stage
+            self._remember_stdout_target(event.pid)
         self.last_progress_at = time.monotonic()
 
+    def _remember_stdout_target(self, pid: int) -> None:
+        """Record a child's stdout pipe name while the child can still be read.
 
-@dc.dataclass(frozen=True, slots=True)
-class _ChildStallSnapshot:
-    """A child's live process and stdin-pipe evidence at a pipeline stall."""
-
-    process: ProcessState
-    pipes: tuple[ChildPipe, ...]
-    stdin_parent_writers: tuple[int, ...]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StallSnapshot:
-    """All evidence captured before cancelling a stalled pipeline task."""
-
-    children: tuple[_ChildStallSnapshot, ...]
-    task_names: tuple[str, ...]
-    reason: str
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StallReport:
-    """A classified stall paired with the attempt it interrupted."""
-
-    attempt: int
-    active_backend: StreamBackend
-    pipeline: Pipeline
-    fd_delta: int
-    thread_delta: int
-    verdict: HandOffVerdict
-    snapshot: _StallSnapshot
+        The name is captured on ``start`` because it is only observable for as
+        long as the child is alive: the kernel releases a process's descriptors
+        at exit, so ``/proc/<pid>/fd`` is already empty by the time a zombie can
+        be sampled. The parent's matching read end outlives the child, and the
+        pipe name is what lets the stall capture find it again.
+        """
+        target = next(
+            (pipe.target for pipe in child_pipes(pid) if pipe.fd == 1),
+            None,
+        )
+        if target is not None:
+            self.stdout_target_by_pid[pid] = target
 
 
 def _make_echo_python_pipeline(
@@ -117,12 +140,41 @@ def _make_echo_python_pipeline(
     )
 
 
-def _snapshot_child(pid: int) -> _ChildStallSnapshot:
-    """Capture the state and stdin writer ownership for one tracked child."""
+def _stdout_parent_output(target: str | None) -> _ParentOutput | None:
+    """Find the parent read end that drains a child's stdout pipe.
+
+    The pipe name is supplied by the tracker, which records it while the child
+    is still alive: the child's own descriptors vanish at exit, so a stall
+    capture that looked them up here would find nothing exactly when it needs
+    them. Only the parent's end survives that transition.
+
+    Returns
+    -------
+    _ParentOutput | None
+        The parent's read end and its queued bytes, or ``None`` when no name
+        was recorded or this process no longer holds a readable end.
+    """
+    if target is None:
+        return None
+    read_fds = parent_read_fds(target)
+    if not read_fds:
+        return None
+    reader = read_fds[0]
+    return _ParentOutput(reader, target, read_end_pending_bytes(reader))
+
+
+def _snapshot_child(pid: int, tracker: _ProgressTracker) -> _ChildStallSnapshot:
+    """Capture the state and pipe ownership for one tracked child."""
     pipes = child_pipes(pid)
     stdin_pipe = next((pipe for pipe in pipes if pipe.fd == 0), None)
     writers = () if stdin_pipe is None else parent_write_fds(stdin_pipe.target)
-    return _ChildStallSnapshot(process_state(pid), pipes, writers)
+    return _ChildStallSnapshot(
+        process_state(pid),
+        pipes,
+        writers,
+        tracker.stage_by_pid.get(pid),
+        _stdout_parent_output(tracker.stdout_target_by_pid.get(pid)),
+    )
 
 
 def _task_name(task: asyncio.Task[object]) -> str:
@@ -135,7 +187,7 @@ def _task_name(task: asyncio.Task[object]) -> str:
 def _capture_stall(tracker: _ProgressTracker, reason: str) -> _StallSnapshot:
     """Collect discriminator evidence before cancellation changes child state."""
     return _StallSnapshot(
-        children=tuple(_snapshot_child(pid) for pid in sorted(tracker.pids)),
+        children=tuple(_snapshot_child(pid, tracker) for pid in sorted(tracker.pids)),
         task_names=tuple(sorted(_task_name(task) for task in pending_tasks())),
         reason=reason,
     )
@@ -143,28 +195,31 @@ def _capture_stall(tracker: _ProgressTracker, reason: str) -> _StallSnapshot:
 
 async def _monitor_progress(
     tracker: _ProgressTracker,
-    aggregate_deadline: float,
+    bound: LivenessBound,
 ) -> _StallSnapshot:
-    """Wait until observation ceases or the suite-safety backstop is reached."""
+    """Wait until observation ceases or the suite-safety backstop is reached.
+
+    The progress it watches is the same progress the test consumes: every
+    sample reads the clock the public ``ExecEvent`` observation seam advances,
+    rather than a parallel notion of liveness maintained beside it.
+
+    Returns
+    -------
+    _StallSnapshot
+        The evidence captured under whichever bound was reached.
+    """
     while True:
-        now = time.monotonic()
-        quiet_for_s = now - tracker.last_progress_at
-        if quiet_for_s >= _NO_PROGRESS_INTERVAL_S:
+        if bound.settled(tracker.last_progress_at):
             return _capture_stall(tracker, "no observable pipeline progress")
-        if now >= aggregate_deadline:
+        if bound.expired(tracker.last_progress_at):
             return _capture_stall(tracker, "aggregate suite-safety backstop")
-        pause_s = min(
-            _PROGRESS_PROBE_INTERVAL_S,
-            _NO_PROGRESS_INTERVAL_S - quiet_for_s,
-            aggregate_deadline - now,
-        )
-        await asyncio.sleep(max(0.0, pause_s))
+        await asyncio.sleep(bound.pause_s(tracker.last_progress_at))
 
 
 async def _run_liveness_bounded(
     pipeline: Pipeline,
     tracker: _ProgressTracker,
-    aggregate_deadline: float,
+    bound: LivenessBound,
 ) -> PipelineResult | _StallSnapshot:
     """Run a pipeline until it settles or its observation stream goes quiet."""
     pipeline_task = asyncio.create_task(
@@ -172,7 +227,7 @@ async def _run_liveness_bounded(
         name="native-pipeline-hand-off",
     )
     monitor_task = asyncio.create_task(
-        _monitor_progress(tracker, aggregate_deadline),
+        _monitor_progress(tracker, bound),
         name="native-pipeline-progress-monitor",
     )
     done, _ = await asyncio.wait(
@@ -189,75 +244,6 @@ async def _run_liveness_bounded(
     with contextlib.suppress(asyncio.CancelledError):
         await pipeline_task
     return snapshot
-
-
-def _is_runnable(child: _ChildStallSnapshot) -> bool:
-    """Return whether a live child could be awaiting host CPU or I/O service."""
-    process = child.process
-    return process.available and not process.exited and process.state in {"R", "D"}
-
-
-def _exited_children_left_output(snapshot: _StallSnapshot) -> bool:
-    """Return whether exited children left output waiting in a pipe."""
-    children = snapshot.children
-    return (
-        bool(children)
-        and all(child.process.exited for child in children)
-        and any(
-            pipe.pending_bytes not in {None, 0}
-            for child in children
-            for pipe in child.pipes
-        )
-    )
-
-
-def _quiet_tasks_have_no_runnable_child(snapshot: _StallSnapshot) -> bool:
-    """Return whether pending tasks outlived every runnable child process."""
-    if not snapshot.task_names or not snapshot.children:
-        return False
-    return not any(_is_runnable(child) for child in snapshot.children)
-
-
-def _classify_stall(snapshot: _StallSnapshot) -> HandOffVerdict:
-    """Classify a stall from child liveness and pipe-ownership evidence."""
-    has_parent_writer_pipe_read = any(
-        child.stdin_parent_writers and child.process.wchan == "pipe_read"
-        for child in snapshot.children
-    )
-    if has_parent_writer_pipe_read:
-        return HandOffVerdict.HUNG_HANDOFF
-    if _exited_children_left_output(snapshot):
-        return HandOffVerdict.HUNG_HANDOFF
-    if _quiet_tasks_have_no_runnable_child(snapshot):
-        return HandOffVerdict.HUNG_HANDOFF
-    return HandOffVerdict.HOST_STARVATION
-
-
-def _format_child(child: _ChildStallSnapshot) -> str:
-    """Format all discriminator fields for one child process."""
-    process = child.process
-    pipe_details = (
-        f"{pipe.fd}:{pipe.target}:{pipe.pending_bytes!r}" for pipe in child.pipes
-    )
-    pipes = ", ".join(pipe_details)
-    return (
-        f"pid={process.pid},state={process.state!r},wchan={process.wchan!r},"
-        f"exited={process.exited},available={process.available},"
-        f"stdin_parent_writers={child.stdin_parent_writers!r},pipes=[{pipes}]"
-    )
-
-
-def _format_stall(report: _StallReport) -> str:
-    """Format the full evidence needed to diagnose a native hand-off stall."""
-    children = "; ".join(_format_child(child) for child in report.snapshot.children)
-    return (
-        "AUTO native pipeline hand-off stalled without observable progress "
-        f"(attempt={report.attempt}, backend={report.active_backend.value}, "
-        f"fd_delta={report.fd_delta}, thread_delta={report.thread_delta}, "
-        f"task={report.pipeline!r}, verdict={report.verdict.value}, "
-        f"reason={report.snapshot.reason!r}, children=[{children}], "
-        f"pending_tasks={report.snapshot.task_names!r})"
-    )
 
 
 _DEEP_NATIVE_PIPELINE_HOPS = 6
@@ -328,7 +314,7 @@ class _NativePipelineHandOff:
 
     active_backend: StreamBackend
     make_pipeline: cabc.Callable[[str], tuple[Pipeline, frozenset[Program]]]
-    aggregate_deadline: float
+    bound: LivenessBound
     initial_thread_count: int
 
     def run_attempt(self, attempt: int, fd_delta: int) -> None:
@@ -339,10 +325,12 @@ class _NativePipelineHandOff:
         tracker = _ProgressTracker()
         with scoped(ScopeConfig(allowlist=allowlist, observe_hooks=(tracker.observe,))):
             outcome = asyncio.run(
-                _run_liveness_bounded(pipeline, tracker, self.aggregate_deadline),
+                _run_liveness_bounded(pipeline, tracker, self.bound),
             )
         thread_delta = threading.active_count() - self.initial_thread_count
         if isinstance(outcome, _StallSnapshot):
+            # The default liveness policy runs this as a real test and expects
+            # nothing to fail: a stall is the whole reason the support exists.
             report = _StallReport(
                 attempt=attempt,
                 active_backend=self.active_backend,
@@ -351,6 +339,7 @@ class _NativePipelineHandOff:
                 thread_delta=thread_delta,
                 verdict=_classify_stall(outcome),
                 snapshot=outcome,
+                progress=self.bound.progress(tracker.last_progress_at),
             )
             message = _format_stall(report)
             if report.verdict is HandOffVerdict.HUNG_HANDOFF:
@@ -372,13 +361,20 @@ def assert_repeated_native_pipeline_hand_off(
     active_backend: StreamBackend,
     make_pipeline: cabc.Callable[[str], tuple[Pipeline, frozenset[Program]]],
 ) -> None:
-    """Exercise repeated native hand-offs using progress as the liveness bound."""
-    aggregate_deadline = time.monotonic() + _REPEATED_NATIVE_PIPELINE_TIMEOUT_S
-    initial_fd_count = _open_fd_count()
-    initial_thread_count = threading.active_count()
+    """Exercise repeated native hand-offs using progress as the liveness bound.
+
+    The liveness bound here is the shipped policy: the constants the runner
+    declares, not a test-local copy of them.
+    """
     hand_off = _NativePipelineHandOff(
-        active_backend, make_pipeline, aggregate_deadline, initial_thread_count
+        active_backend,
+        make_pipeline,
+        LivenessBound(
+            aggregate_deadline=time.monotonic() + _REPEATED_NATIVE_PIPELINE_TIMEOUT_S
+        ),
+        threading.active_count(),
     )
+    initial_fd_count = _open_fd_count()
     for attempt in range(_REPEATED_NATIVE_PIPELINE_ATTEMPTS):
         fd_count = _open_fd_count()
         fd_delta = fd_count - initial_fd_count
@@ -388,11 +384,12 @@ def assert_repeated_native_pipeline_hand_off(
                 f"(attempt={attempt}, initial_fd_count={initial_fd_count}, "
                 f"fd_count={fd_count}, fd_delta={fd_delta})",
             )
-        if time.monotonic() >= aggregate_deadline:
+        if hand_off.bound.pre_attempt_backstop_reached():
             pytest.skip(
-                "host starvation consumed the native pipeline hand-off "
-                f"suite-safety backstop before attempt {attempt} "
+                "the native pipeline hand-off suite-safety backstop expired "
+                f"before attempt {attempt} could start; this attempt is "
+                "unclassified because no child state is observable yet "
                 f"(fd_delta={fd_delta}, thread_delta="
-                f"{threading.active_count() - initial_thread_count})",
+                f"{threading.active_count() - hand_off.initial_thread_count})",
             )
         hand_off.run_attempt(attempt, fd_delta)
