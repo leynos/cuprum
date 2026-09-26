@@ -118,3 +118,31 @@ lessons: a local pylint failure on an unrebased branch may be judging `main`'s
 own debt, not the branch's; and a local `--python pypy` had moved from 3.11 to
 3.12, which newly parses PEP 695 `type` aliases that the older interpreter
 silently skipped, surfacing findings lint had never reported before.
+
+## Two local-only gate traps
+
+Neither of the next two failures is a defect in this branch, and both are worth
+recognizing again rather than re-diagnosing.
+
+The release-workflow tests (`test_release_github_steps.py`,
+`test_release_reconciliation.py`) fail 13 times locally while the same files
+pass in CI. The tests install a fake `gh` on a `PATH` they control, but this
+host exports `BASH_ENV=/home/leynos/.lody/bashenv`, which prepends
+`/home/leynos/.lody/bin` to `PATH` in every non-interactive bash. That
+directory holds Lody's own `gh` wrapper, which runs `git` and so reports
+`fatal: not a git repository` from the test's scratch directory. Running
+`env -u BASH_ENV make test` gives `3644 passed` with the 13 included; the fix
+properly belongs to [#434](https://github.com/leynos/cuprum/issues/434), whose
+branch scrubs `BASH_ENV` from these helpers but is not yet merged.
+
+The `typecheck` and `lint` gates failed on the same four lines, for opposite
+reasons. `ty` 0.0.74 does not honour a code-specific
+`# type: ignore[arg-type]` — a bare `# type: ignore` or a `# ty: ignore[...]`
+is honoured, the coded `type:` form is not — while df12-python-lints C9107
+requires every suppression to carry an explanation. A suppression that
+satisfies one gate therefore fails the other. The resolution was to remove the
+suppressions instead of explaining them: the liveness and stdout-capture tests
+now build real `ExecEvent` values through small factories, so the tracker is
+fed the genuine type its hook receives. The stall module's private
+`_LivenessProgress` copy was dropped in favour of the `LivenessProgress` the
+liveness module already defines.
