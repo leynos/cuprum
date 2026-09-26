@@ -1,11 +1,12 @@
 # Hoist invariant execution-event fields (5.2.1)
 
-Status: DRAFT — awaiting explicit approval before implementation.
+Status: IN PROGRESS — approval granted 2026-09-26; EP-M1 underway.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
-Conformance basis, and Verification plan current throughout implementation.
-This pull request publishes planning documents only.
+Conformance basis, and Verification plan current throughout implementation. The
+planning-only pull request has been rebased onto `991dee64` and now carries
+implementation.
 
 ## Purpose / big picture
 
@@ -100,13 +101,82 @@ failure injection at that boundary.
 - [x] (2026-09-19) Pass formatting, Markdown/spelling, and Mermaid gates;
   publish [draft PR #433](https://github.com/leynos/cuprum/pull/433) with the
   requested upstream tracking and Lody session reference.
-- [ ] Obtain explicit user approval before starting EP-M1.
+- [x] (2026-09-26) Obtain explicit user approval before starting EP-M1;
+  granted, with instruction to implement the plan in full.
 - [ ] EP-M1: establish current control and contract characterization.
+- [ ] EP-M1b: re-baseline the plan against the current tree (see 2026-09-26
+  discoveries) before writing any characterization test.
 - [ ] EP-M2: implement and validate the bounded stream-factory optimization.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
 
 ## Surprises & discoveries
+
+### 2026-09-26: implementation-target re-baseline (EP-M1b)
+
+A read-only survey of the rebased tree at `db1902db` (main `991dee64`) found
+the plan's **Context and orientation** section stale in three ways. These
+change *where* the hoist lands; they do not change what it must achieve.
+
+1. **The shared factory already exists.** The plan's design goal — "a private
+   callback factory shared by single-command and pipeline streams" — is now
+   `cuprum/_line_callbacks.py::_compose_line_callbacks`, introduced since the
+   planning baseline. `_subprocess_streams.py:88` and
+   `_pipeline_stage_streams.py:110,139` are its only production callers; both
+   delegate to it. The plan's named entry points (`_create_stream_callback`,
+   `_create_stage_line_observer`) are therefore no longer where the per-line
+   construction happens, and `_create_stage_line_observer` **does not exist
+   anywhere in the tree** — it is referenced only by the plan itself.
+
+2. **The per-line `_EventDetails` construction is now in that one seam.**
+   `cuprum/_line_callbacks.py:58` is the *sole* per-output-line construction
+   site repo-wide; every other `_EventDetails(` site is lifecycle (plan, start,
+   exit, timeout, stdin, fail-fast). `_event_details` has no callers outside
+   its own module.
+
+3. **The argv cost is a plain `@property`, not the pipeline's.**
+   `cuprum/sh/safe_cmd.py:74-83` builds `(str(self.program), *self.argv)` on
+   every access with no memoization. Note `cuprum/sh.py` is now the package
+   `cuprum/sh/`; the plan's ``cuprum/sh.py::SafeCmd.argv_with_program`` path is
+   stale. The design document's own hot-path note already lists this at ~3%
+   (`docs/tee-hotpath-profiling-baseline-2026-06-12.md:151`).
+
+**Consequence for scope.** The hoist lands in one production module, not two.
+This *narrows* the change: it is well inside the four-module exception bound,
+so the "revisit the plan" clause at Constraints does not require fresh
+approval. It also means both existing callback factories reach the optimization
+by construction, so the plan's requirement that both paths use the factory is
+satisfied structurally rather than by two parallel edits.
+
+**Consequence for the red test (V1).** The plan asks that V1 exercise "both
+existing production callback factories … not the proposed method", so that a
+missing-method error is not mistaken for the performance bug. With one shared
+seam, the honest red test drives the real production consumers —
+`_create_stream_callback` and `_create_stage_capture_tasks` — through a real
+observed stream and counts per-line `_EventDetails` constructions and argv
+reads. Driving `_compose_line_callbacks` directly would measure the seam, not
+the production path.
+
+**Consequence for the event count.** The plan's risk section says a fresh
+`ExecEvent` "still initializes 23 slots". The dataclass now has **27** fields:
+main added `max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
+`resource_usage_mode` between the planning baseline and the rebase (verified by
+diffing `cuprum/events.py` across `861fe2f0..HEAD`; the four are the only field
+additions). The per-line construction cost is therefore ~17% higher than the
+plan assumed. This makes the 10% gate *harder*, not easier, and it is recorded
+because the plan's stated difficulty estimate is now materially optimistic.
+
+**Verified still accurate.** The plan's claim that `_StageObservation.emit`
+constructs the `ExecEvent` is correct (`cuprum/_pipeline_types.py:120-149`), and
+`_emit_event`/`_emit_exec_event` remain the dispatch path
+(`cuprum/_pipeline_types.py:200-207`, `cuprum/_observability.py:64`). Both
+`SafeCmd.run()`/`lines()` style consumers reach the seam through
+`_LineEmissionContext`, which carries `stream`, `pid`, `on_line`, and
+`started_at`. `_StageObservation` is a `frozen=True, slots=True` dataclass with
+fields `cmd`, `hooks`, `tags`, `cwd`, `env_overlay`, `pending_tasks`,
+`wall_clock`, `exec_id`.
+
+### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
 below rather than those numbers. The read-size plateau has already landed;
@@ -149,6 +219,33 @@ require checking the explicit callback factory bodies as well.
   tuning within the existing observation architecture. Record its scope and
   lifetime in the design document. A representation or dispatch change would
   need separate approval and an architectural decision record if substantive.
+- 2026-09-26: Retarget the hoist to `_compose_line_callbacks` in
+  `cuprum/_line_callbacks.py`, the shared seam that now owns per-line
+  observation for both paths. Add a private `_LineEventEmitter` there — a
+  frozen slotted dataclass holding the per-stream stable metadata and the bound
+  `_StageObservation`, with a `__call__(line)` that reads the clock once and
+  constructs one fresh ordinary `ExecEvent` per line — and have composition
+  return an instance of it instead of the current closure. This keeps the
+  plan's stated design ("the ordinary `ExecEvent` constructor per line", one
+  metadata bind per stream, no template event, no `replace`, no
+  `object.__new__`, no slot mutation) while removing the per-line
+  `_EventDetails` allocation and the per-line `argv_with_program` rebuild.
+- 2026-09-26: The plan's proposed `_StageObservation.make_line_emitter` method
+  is **not** adopted. Two reasons: `_StageObservation` is frozen with
+  `slots=True` in a module already at 299 of the 400-line ceiling, and adding a
+  line-emission method there would couple the stage-observation type to
+  `LineStreamName` and to the composition seam for no benefit. A private
+  emitter owned by `_line_callbacks.py` keeps the same binding semantics with a
+  smaller blast radius. The `Literal["stdout", "stderr"]` phase type in the
+  signature is preserved exactly as proposed. This is a target-site adjustment
+  within the same approved design, not a representation or dispatch change.
+- 2026-09-26: Do **not** turn `SafeCmd.argv_with_program` into a
+  `cached_property`. Caching it on the command object would freeze the tuple
+  for the object's lifetime, so a caller mutating the argv input list after
+  constructing the command would keep getting the pre-mutation tuple — a
+  semantic change to a public property, which the tolerances forbid without
+  approval. The hoist solves the same cost by reading the property once at
+  per-stream preparation instead of once per line.
 
 ## Outcomes & retrospective
 
@@ -238,7 +335,16 @@ introduced unless a separately approved Rust change creates such obligations.
 
 ## Proposed implementation and interfaces
 
-Add one private `_StageObservation.make_line_emitter` method, taking a
+**Revised 2026-09-26 (see Surprises & discoveries).** Add one private
+`_LineEventEmitter` to `cuprum/_line_callbacks.py`, and have
+`_compose_line_callbacks` return it in place of the current closure. Its
+conceptual interface is unchanged from the original proposal — a
+`Literal["stdout", "stderr"]` phase and a post-spawn `int | None` PID, returning
+`Callable[[str], None] | None` — but it is a frozen slotted dataclass rather
+than a `_StageObservation` method, for the reasons recorded in the decision log.
+
+The original proposal, retained for traceability: add one private
+`_StageObservation.make_line_emitter` method, taking a
 `Literal["stdout", "stderr"]` phase and a post-spawn `int | None` PID, returning
 `Callable[[str], None] | None`. The name is proposed, not an existing API.
 Preserve the current callback factories' optional PID contract, including test
