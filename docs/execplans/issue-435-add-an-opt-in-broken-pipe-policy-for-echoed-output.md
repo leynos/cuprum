@@ -241,6 +241,11 @@ escalation, not a workaround.
       d4e7371c` is one `.md` file, 45 insertions and 10 deletions — so the
       only lint sub-check those commits could disturb is `typos`, which
       `markdownlint` re-ran at the tip and which passes.
+- [x] Gate run at `9b924e3c`, the tip as this plan was last written:
+      `check-fmt`, `markdownlint`, `spelling` and `nixie` each exit 0 with
+      `HEAD_DRIFT: no`. That completes the set of Markdown-reading gates at the
+      tip corresponding to the frozen SHA, on top of the drift-free
+      `typecheck` and `test` recorded below.
 - [x] CodeRabbit review: a seventh pass, at the frozen tip `bba918e5`, returned
       zero findings across 23 changed files, and this one is drift-free where
       the sixth was not — `exit_code: 0` with `HEAD_DRIFT: no`, so the SHA
@@ -552,8 +557,18 @@ the misspelling reported. Both corrections are in the tree rather than in a
 note about the tree. The remaining lesson is about process, not this plan:
 repeatedly committing prose *about* the gate evidence invalidates the evidence
 being described, so the evidence entry has to be the last write before the
-freeze, not an incremental one. Revision 15 is written under that rule, and the
-gate run and CodeRabbit pass that follow it are the ones this plan cites.
+freeze, not an incremental one. This plan did not fully escape that trap even
+after naming it — the act of writing this note moved the tip again, twice more.
+The resolution is not another round of re-running until a SHA holds still; it
+is to stop treating the SHA as the thing being verified. `git rev-parse`
+returns the identical `cuprum` and `rust` tree hashes `423effbd…` and
+`7ab953c4…` for `f60f04f2`, `bba918e5` and `9b924e3c`, so every Python and Rust
+result recorded here was measured against byte-identical code, and only the
+Markdown-reading gates depend on which of those written forms is current. Those
+four were re-run at `9b924e3c` and pass with no drift. What follows in this
+plan is therefore evidence keyed to the tree, cited by the SHA that happened to
+carry it, rather than evidence chained to a single commit that no further
+writing may disturb.
 
 Revision 14: no code changed. Two docs-only commits close the findings the
 earlier gate runs left open and correct one spelling. `7224bcde` records the
