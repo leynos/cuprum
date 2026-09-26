@@ -200,6 +200,28 @@ contract module under `tests/` and forgets to name it will be told so by
   zero for having collected nothing" was wrong about the mechanism — the
   recipe's `[ -e "$1" ] || continue` guard is what skips a pattern silently.
   The guide's Test selection section now states all three.
+- [x] (2026-09-26 19:25Z) Gate run at `6dbee0cd`: `check-fmt`, `typecheck`,
+  `test`, `markdownlint`, and `nixie` green, but `make lint` red at
+  `python-lint` → `df12-pylint`, which reported R9109 against the guard. That
+  leaf aborts the recipe, so `ambrleaks`, `skylos`, `lint-clippy`,
+  `lint-whitaker`, `yamllint`, and `actionlint` never ran and remain unobserved.
+  `make test` itself was green: 2467 passed / 63 skipped in the Python suite,
+  125 passed in Rust nextest, doctests ok.
+- [x] (2026-09-26 19:40Z) Cleared R9109 by folding four
+      `assert "<literal>" in recipe` probes into one `_RECIPE_ENDPOINTS` table.
+      The rule's own suggestion — a syrupy snapshot of the recipe — was
+      declined on evidence, not on preference:
+      `tests/test_ci_act_harness_contract.py` documents this repository's
+      recipe assertions as "structural rather than byte-exact, so reordering
+      prerequisites or adding a flag does not fail the test", `AGENTS.md` warns
+      against blob comparisons that legitimate formatting turns brittle, and
+      `recipe_of` returns one joined line whose layout `make fmt` can reflow.
+      The rewrite is strictly stronger than the probes it replaces: a recipe
+      missing two endpoints now reports both rather than failing on the first
+      and hiding the second. Verified non-vacuous by mutating each endpoint in
+      turn — each mutation is reported by name, and the unmutated recipe
+      reports nothing. Recorded here rather than silently: a future reader will
+      see R9109 and wonder why the recipe is not snapshot-pinned.
 - [ ] Milestone gates at the resulting head.
 - [ ] CodeRabbit review.
 - [ ] Push and open a draft pull request.
