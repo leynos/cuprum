@@ -195,6 +195,49 @@ def _read_pin_sites(root: pth.Path, tool: str, env_name: str) -> dict[str, str]:
     }
 
 
+def _read_tool_nose_version(root: pth.Path) -> str:
+    """Read the `[tool.nose] version` pin from pyproject.toml.
+
+    The duplication detector is not a Python dependency, so it has no
+    ``package==`` line in the dev group for `_read_pyproject_pin` to find. Its
+    pyproject site is the ``version`` key of the ``[tool.nose]`` table that the
+    gate itself reads, which is the value that would otherwise drift.
+    """
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    nose = pyproject.get("tool", {}).get("nose")
+    assert isinstance(nose, dict), "pyproject.toml must declare a [tool.nose] table"
+    version = nose.get("version")
+    assert isinstance(version, str), "[tool.nose] must pin version as a string"
+    return version
+
+
+def _read_nose_pin_sites(root: pth.Path) -> dict[str, str]:
+    """Read the nose pin from every synchronized location."""
+    return {
+        "Makefile": _read_makefile_pin(root, "NOSE_VERSION"),
+        "ci.yml": _read_workflow_env(root, "NOSE_VERSION"),
+        "pyproject.toml": _read_tool_nose_version(root),
+    }
+
+
+def test_nose_pin_is_synchronized() -> None:
+    """The detector pin matches in the Makefile, ci.yml, and pyproject."""
+    _assert_pins_agree(_read_nose_pin_sites(repo_root()), "nose")
+
+
+def test_nose_pin_is_a_release_version() -> None:
+    """The detector pin is an exact release, not a range or wildcard.
+
+    An unpinned or ranged detector would let a new upstream release change the
+    gate's findings without a repository change, so the pin must stay exact.
+    """
+    for site, value in _read_nose_pin_sites(repo_root()).items():
+        assert _VERSION_SHAPE_RE.fullmatch(value), (
+            f"{site} pins nose as {value!r}, which is not an exact dotted "
+            "release version"
+        )
+
+
 def _expanded_make_recipes(
     root: pth.Path,
     *,

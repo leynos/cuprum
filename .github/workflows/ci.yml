@@ -43,6 +43,12 @@ env:
   TY_VERSION: '0.0.74'
   PYLINT_VERSION: '4.0.9'
   ASTROID_VERSION: '4.0.4'
+  # The pinned nose duplication detector. Keep in sync with the NOSE_VERSION
+  # default in the Makefile and `[tool.nose] version` in pyproject.toml; the
+  # pin-parity contract test above enforces the match. The same value keys the
+  # binary cache below, so a bump misses and reinstalls rather than reusing a
+  # detector that no longer matches the pin.
+  NOSE_VERSION: '0.20.0'
   # Every Ubicloud job in this workflow runs on `ubicloud-standard-2`, so one
   # constant sizes nextest's test threads and Cargo's build jobs to the vCPUs
   # the job is actually billed for. Raising the label means raising this too.
@@ -315,6 +321,53 @@ jobs:
       - name: Install code
         run: make build
 
+      # `make lint` runs the duplication gate, and the gate provisions the
+      # detector first, so `make install-nose` below must be a no-op by the
+      # time lint reaches it. The key carries the version and the release, so a
+      # bump or a base-image change misses instead of reusing a detector that
+      # no longer matches the pin. Only the owned arm saves, as with every
+      # other cache here, so a fork's pull request restores nothing and takes
+      # the install path.
+      - name: Cache the pinned nose duplication detector
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .tools/nose
+          key: nose-${{ runner.os }}-${{ runner.arch }}-${{ env.UBUNTU_RELEASE }}-${{ env.NOSE_VERSION }}
+
+      # cargo-binstall clones the nose repository before it downloads the
+      # release artefact, so verify the installer itself rather than trusting
+      # the clone. The archive is fetched over TLS, checked against a pinned
+      # digest, and only then run; no strategy may fall back to compiling nose
+      # from source, which would turn a missing release asset into a long
+      # source build instead of a visible provisioning failure.
+      - name: Install nose duplication detector
+        env:
+          BINSTALL_VERSION: 'v1.22.0'
+          # sha256 of cargo-binstall-x86_64-unknown-linux-musl.tgz for that
+          # release. The archive name below is x86_64-specific, so this digest
+          # is valid only for that selection; another platform needs its own
+          # artefact and its own digest.
+          BINSTALL_SHA256: 'df2921254924066627685ee09f6c8b9acd7acef68a338668f879d2b033c09458'
+        run: |
+          set -euo pipefail
+          if [ "$(.tools/nose/nose --version 2>/dev/null)" = "nose ${NOSE_VERSION}" ]; then
+            printf 'nose %s restored from cache\n' "${NOSE_VERSION}"
+            exit 0
+          fi
+          binstall_archive="$(mktemp)"
+          binstall_directory="$(mktemp -d)"
+          trap 'rm -f "${binstall_archive}"; rm -rf "${binstall_directory}"' EXIT
+          curl -fsSL --proto '=https' --tlsv1.2 -o "${binstall_archive}" \
+            "https://github.com/cargo-bins/cargo-binstall/releases/download/${BINSTALL_VERSION}/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+          printf '%s  %s\n' "${BINSTALL_SHA256}" "${binstall_archive}" | sha256sum --check --
+          tar -xzf "${binstall_archive}" -C "${binstall_directory}"
+          mkdir -p .tools/nose
+          "${binstall_directory}/cargo-binstall" --no-confirm \
+            --disable-strategies compile,quick-install \
+            --install-path .tools/nose \
+            --git https://github.com/corca-ai/nose "nose-cli@${NOSE_VERSION}"
+          .tools/nose/nose --version
+
       - name: Markdown formatter checker tests
         run: make test-markdown-format
 
@@ -333,6 +386,13 @@ jobs:
             **/*.md
             **/*.markdown
             **/*.mdx
+
+      # The gate's own tests, before the gate they cover. They are 3.14-only
+      # tooling tests run isolated from the application suite, so they exercise
+      # the detector's error and matching behaviour here rather than merely
+      # being collected by the interpreter matrix.
+      - name: Duplication gate helper tests
+        run: make duplication-test
 
       - name: Run lint, including Skylos dead-code detection
         run: /usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint
