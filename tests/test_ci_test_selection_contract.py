@@ -61,6 +61,33 @@ CI_SUITE_WORKFLOW = "ci.yml"
 CI_SUITE_JOB = "typecheck-test"
 CI_SUITE_TARGET = "make test-python"
 
+#: Every endpoint the `test-python` recipe must wire together, paired with what
+#: breaks when it is dropped. Held as one table because the claims are read
+#: together: a recipe satisfying three of the four still discards the selector,
+#: and a reader fixing a broken recipe should see every missing endpoint at
+#: once rather than rediscovering the next one on the following run.
+_RECIPE_ENDPOINTS = (
+    (
+        f"$({SELECTOR})",
+        "the selector is never expanded, so the recipe collects whatever its "
+        "pattern argument happened to be",
+    ),
+    (
+        "$(foreach",
+        "the selector is handed to a single command instead of being "
+        "iterated, so the per-pattern `[ -e ]` guard and the per-pattern exit "
+        "status are lost",
+    ),
+    (
+        "$(PYTEST)",
+        "the loop's arguments never reach the configured pytest invocation",
+    ),
+    (
+        "$$@",
+        "the loop's arguments are expanded and then discarded",
+    ),
+)
+
 
 def test_every_root_level_module_has_a_ci_route() -> None:
     """Fail when a module under `tests/` matches no pattern the suite runs.
@@ -259,37 +286,30 @@ def test_the_suite_target_recipe_consumes_the_selector() -> None:
     container-bound scenarios this repository keeps out of the default suite.
     So the check pins the data flow, not the presence of a name: the recipe
     iterates `$(foreach ... $(PYTEST_TARGETS) ...)`, and each iteration runs
-    `$(PYTEST)` over the loop variable. Asserting both endpoints — the selector
-    supplies the loop, and the shell variable the loop sets reaches pytest —
-    is what ties the workflow check to the selector the checks above read. A
-    recipe that merely mentioned `$(PYTEST_TARGETS)` somewhere would pass a
-    substring test and fail this one.
+    `$(PYTEST)` over the loop variable. Asserting every endpoint of that path —
+    the selector supplies the loop, the loop sets a shell variable, and that
+    variable reaches pytest — is what ties the workflow check to the selector
+    the checks above read. A recipe that merely mentioned `$(PYTEST_TARGETS)`
+    somewhere would pass a substring test and fail this one.
+
+    The endpoints are read as one table rather than as a probe apiece, so a
+    recipe missing two of them reports both, and a reviewer reads the required
+    data flow in one place instead of reconstructing it from four assertions.
     """
     recipe = recipe_of("test-python")
-    assert f"$({SELECTOR})" in recipe, (
-        f"the `test-python` recipe must expand $({SELECTOR}); a recipe that "
-        f"runs a directory would collect the excluded scenario modules. "
-        f"Recipe: {recipe!r}"
+    absent = [
+        f"  {endpoint!r} is missing: {consequence}"
+        for endpoint, consequence in _RECIPE_ENDPOINTS
+        if endpoint not in recipe
+    ]
+    assert not absent, (
+        "the `test-python` recipe must wire every endpoint of the selection "
+        "into the pytest invocation:\n" + "\n".join(absent) + f"\nRecipe: {recipe!r}"
     )
-    assert "$(foreach" in recipe, (
-        f"the `test-python` recipe must iterate the selector with `$(foreach` "
-        f"rather than passing it to a single command, or the per-pattern "
-        f"`[ -e ]` guard and the per-pattern exit status are lost. "
-        f"Recipe: {recipe!r}"
-    )
-    assert f"$({SELECTOR})" in recipe.split("$(foreach", 1)[1].split(";", 1)[0], (
+    iterated = recipe.split("$(foreach", 1)[1].split(";", 1)[0]
+    assert f"$({SELECTOR})" in iterated, (
         f"the selector must be the list `$(foreach` iterates, not merely a "
         f"variable the recipe mentions. Recipe: {recipe!r}"
-    )
-    assert "$(PYTEST)" in recipe, (
-        f"the `test-python` recipe must run the suite through $(PYTEST), so "
-        f"the loop variable reaches the configured pytest invocation. "
-        f"Recipe: {recipe!r}"
-    )
-    assert "$$@" in recipe, (
-        f"the `test-python` recipe must pass the loop's arguments to pytest "
-        f"through `$$@`, or the selector is expanded and then discarded. "
-        f"Recipe: {recipe!r}"
     )
 
 
