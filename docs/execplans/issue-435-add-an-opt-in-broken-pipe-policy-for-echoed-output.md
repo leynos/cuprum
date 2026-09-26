@@ -399,6 +399,30 @@ escalation, not a workaround.
       left the usual ambiguity about whether the tree was dirty when the gate
       read it, and scrutineer's `TREE_STABLE=yes` with `dirty_files=0`
       independently rules that out here.
+- [x] Gate run at the frozen tip `b91e7eee` came back **green on all six
+      gates**, run sequentially and to completion by a separate agent so that a
+      single failure could not hide the rest. This is the run that closes the
+      hole left at `f7eaab76`, where the delegated run stopped at its first
+      failure and left five gates unobserved. `check-fmt` exited 0 at
+      04:22:19Z, `lint` at 04:25:20Z, `typecheck` at 04:27:55Z, `test` at
+      04:33:51Z, `markdownlint` at 04:42:19Z and `nixie` at 04:44:34Z, each
+      with the tree clean and `typos.toml` unmodified before, during and after.
+      `markdownlint` reported `Summary: 0 error(s)` over 78 files and then
+      chained into `spelling`, which reported `current: typos.toml` without
+      rewriting it; `nixie` closed with "All diagrams validated successfully".
+      `test` reached `[100%]` with 3558 passed and 79 skipped across the
+      Python suites, and `test-rust`'s doctests finished `ok`.
+- [x] GitHub Actions at `b91e7eee` — run `36217572192` — is **fully green**:
+      16 jobs `success`, 1 `skipped` (`Loom model smoke test`, intentionally),
+      and none failed. Both jobs that failed at `ddd8d301` pass here at their
+      decisive steps, verified at step level rather than from the job
+      conclusion alone: `lint-test` → "Run lint, including Skylos dead-code
+      detection" → `success`, and `Typecheck and test (Python 3.14)` → "Run
+      tests" → `success`. That confirms the earlier reading of the second
+      failure as the repository's known-flaky doctest-timeout class rather than
+      anything this change introduced, and it is the last of the four Python
+      legs to do so. The `coverage` job, still in flight when the gate sweep
+      began, finished `success`.
 - [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
       evidence of a clean review. See the Surprises entry below: the bot
       declines to review draft PRs, so all nine passes have been local CLI
@@ -814,6 +838,40 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 20: no production code changed. This revision records the evidence
+that closes the hole left open at `f7eaab76`, where the delegated gate run
+stopped at its first failure and therefore said nothing about the five gates
+after it. A run that aborts early is not a weak pass; it is five absences, and
+the distinction only matters if someone goes back and fills them. All six gates
+now have an independent verdict at the frozen tip `b91e7eee`, run sequentially
+by a separate agent so that no single failure could mask the rest: `check-fmt`
+exited 0 at 04:22:19Z, `lint` at 04:25:20Z, `typecheck` at 04:27:55Z, `test` at
+04:33:51Z, `markdownlint` at 04:42:19Z, and `nixie` at 04:44:34Z. The tree was
+clean and `typos.toml` unmodified before, during and after the sweep, so the
+results describe the committed revision rather than a tree that drifted under
+the gates.
+
+Two details in that sweep are worth keeping. `markdownlint` chained into
+`spelling`, which printed `current: typos.toml` — the same line that on earlier
+occasions accompanied a rewrite of that file. Here it did not rewrite it, and
+`git diff -- typos.toml` was empty afterwards, so the line is a report of what
+the builder examined rather than a claim that it changed something. `nixie`
+closed with "All diagrams validated successfully". Treating an unfamiliar
+success line as a warning would have cost a re-run.
+
+GitHub Actions on the same SHA — run `36217572192` — is fully green: 16 jobs
+`success`, 1 `skipped` (`Loom model smoke test`, intentionally), none failed.
+Both jobs that failed at `ddd8d301` pass here, and the verification is at step
+level rather than the job conclusion, because a green job can hide a skipped
+step: `lint-test`'s "Run lint, including Skylos dead-code detection" is
+`success`, and `Typecheck and test (Python 3.14)`'s "Run tests" is `success`.
+The second is the confirmation that was outstanding — that failure was read as
+the repository's known-flaky doctest-timeout class, which is a claim about a
+traceback and not a licence to ignore a red run, so it needed a passing run at
+a later tip to hold. It now has one, on the last of the four Python legs to
+report. The `coverage` job, still in flight when the sweep started, ended
+`success`.
 
 Revision 19: no production code changed; five prose sites did. Revision 18
 quoted the offending token verbatim while recording the lesson about the
