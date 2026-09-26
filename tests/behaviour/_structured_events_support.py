@@ -57,6 +57,10 @@ class Runnable(typ.Protocol):
         """Execute the command synchronously."""
         ...
 
+    def __or__(self, other: Runnable, /) -> Runnable:
+        """Pipe this command's stdout into ``other``, returning the pipeline."""
+        ...
+
 
 def join_script(*lines: str) -> str:
     """Join source lines into the single ``-c`` argument Python expects."""

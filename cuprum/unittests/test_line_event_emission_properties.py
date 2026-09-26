@@ -144,7 +144,7 @@ _LINE = st.text(max_size=40)
 # ``allow_nan=False`` keeps the comparison exact; ``allow_infinity=False``
 # avoids a JSON round-trip difference that has nothing to do with the hoist.
 _TIMESTAMP = st.floats(allow_nan=False, allow_infinity=False, width=32)
-_PHASES = st.sampled_from(["stdout", "stderr"])
+_PHASES = st.sampled_from(typ.cast("tuple[LineStreamName, ...]", ("stdout", "stderr")))
 _PIDS = st.one_of(st.none(), st.integers(min_value=0, max_value=2**31 - 1))
 _ARGS = st.lists(st.text(max_size=12), min_size=0, max_size=4).map(tuple)
 

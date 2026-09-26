@@ -41,13 +41,14 @@ import pytest
 from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._observability import _wait_for_exec_hook_tasks
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
+from cuprum._streams import _StreamConfig
 from cuprum.echo_events import EchoStream
 from cuprum.events import ExecEvent, ExecId
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.lines import LineStreamName
+    from cuprum.lines import LineStreamName, _LineHookOutcome
     from cuprum.sh import SafeCmd
 
 # Removed in EP-M2, when the hoist makes these assertions true. ``strict=True``
@@ -418,10 +419,8 @@ class _PipelineConfigStub:
     consumes_stderr = True
 
     @property
-    def stream_config(self) -> object:
+    def stream_config(self) -> _StreamConfig:
         """A minimal stdout stream config for the consumer."""
-        from cuprum._streams import _StreamConfig
-
         return _StreamConfig(
             capture_output=True,
             echo_output=False,
@@ -431,10 +430,8 @@ class _PipelineConfigStub:
         )
 
     @property
-    def stderr_stream_config(self) -> object:
+    def stderr_stream_config(self) -> _StreamConfig:
         """A minimal stderr stream config for the consumer."""
-        from cuprum._streams import _StreamConfig
-
         return _StreamConfig(
             capture_output=True,
             echo_output=False,
@@ -497,22 +494,25 @@ class TestPipelinePreparationCost:
 
         real_compose = stage_streams._compose_line_callbacks
 
-        def compose_spy(observation: object, context: object) -> object:
+        def compose_spy(
+            observation: _StageObservation,
+            context: _LineEmissionContext,
+        ) -> cabc.Callable[[str], _LineHookOutcome] | None:
             """Record the composed callback, then build the real one."""
             callback = real_compose(observation, context)
             rig.composed.append((context.stream, callback))
             return callback
 
         async def consume_spy(
-            stream: object,
-            config: object,
+            stream: asyncio.StreamReader | None,
+            config: _StreamConfig,
             *,
             on_line: object = None,
             relay_diagnostics: object = None,
         ) -> None:
             """Record the ``on_line`` the consumer would use, then drain nothing."""
             _ = (stream, relay_diagnostics)
-            rig.consumed.append((typ.cast("LineStreamName", config.stream), on_line))
+            rig.consumed.append((config.stream.value, on_line))
             # The real consumer suspends on its first read; yielding once keeps
             # this stand-in a genuine coroutine and lets the stage's tasks
             # settle through the ordinary await below.
