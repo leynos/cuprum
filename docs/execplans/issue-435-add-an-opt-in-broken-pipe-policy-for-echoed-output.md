@@ -354,6 +354,31 @@ escalation, not a workaround.
       `verify-wheel-install`; `Loom model smoke test` skipped as intended.
       `9e848e74` is docs-only relative to the gate set below it, so this carries
       the Python and Rust results forward rather than re-testing them.
+- [x] Gate run at the frozen tip `f7eaab76` came back **red**, on the same
+      one-token spelling defect at two independent detectors. Locally,
+      `make check-fmt` passed (677 files, exit 0) and `make lint` aborted in
+      its `spelling` sub-step after 50 s, so `github-actions-lint`, `typecheck`,
+      `test`, `markdownlint` and `nixie` were never reached — the run stopped at
+      the first failure by instruction, and those five remain unobserved at this
+      revision rather than passing. Separately, GitHub Actions on the same SHA
+      failed the `lint-test` job at its "Run lint, including Skylos dead-code
+      detection" step, while all fifteen other jobs passed. The defect was
+      `parametrisations` in the new property module's docstring, which
+      `typos.toml:1868` already corrects to `parametrizations`; the same module
+      writes `@pytest.mark.parametrize` correctly eight lines above it. Fixed in
+      `b8bcb625`, and the gate re-run against it is the one that counts.
+- [x] The `f7eaab76` failure is recorded as a *failed* run rather than a
+      superseded one, because the two are different evidence. A gate that
+      aborts at its first failure proves nothing about the sub-checks after it,
+      so the honest reading of that revision is one gate passed, one failed, and
+      five unobserved — not "five gates were fine, one flake". The same
+      distinction applies to the CI run: `lint-test` failed on a tree whose
+      `Typecheck and test` legs all passed, which localises the defect to the
+      lint chain rather than to behaviour. Both detectors agreeing on the same
+      token is what made the diagnosis immediate; a single detector would have
+      left the usual ambiguity about whether the tree was dirty when the gate
+      read it, and scrutineer's `TREE_STABLE=yes` with `dirty_files=0`
+      independently rules that out here.
 - [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
       evidence of a clean review. See the Surprises entry below: the bot
       declines to review draft PRs, so all nine passes have been local CLI
@@ -363,7 +388,11 @@ escalation, not a workaround.
       it is a "skip review" notice — a draft-PR notice, not a review. The
       seventeen PR reviews are all `codescene-access[bot]` approvals, a
       different service. Un-drafting the PR is expected to produce a first
-      hosted review against the then-current tree.
+      hosted review against the then-current tree. The `CodeRabbit` *status*
+      context on the tip says the same thing in its own words:
+      `success  CodeRabbit  Review skipped: draft pull request`. It is a
+      success state carrying a skip description, which is precisely how a
+      pass-looking green check can mean the opposite of a review.
 
 ## Surprises & discoveries
 
@@ -586,6 +615,32 @@ escalation, not a workaround.
   state machine. Running the real test took one command and gave an unambiguous
   answer. Where a repository ships a parser for a format, the parser is the
   arbiter and a reimplementation of it is a second thing to debug.
+- A gate that aborts at its first failure leaves the sub-checks after it
+  *unobserved*, which is not the same as passing, and the difference decides
+  what the next run must cover. `make lint` at `f7eaab76` failed in `spelling`
+  and therefore never reached `github-actions-lint`, while the delegated run
+  stopped before `typecheck`, `test`, `markdownlint` and `nixie` entirely.
+  Reading that as "one gate failed, the rest were fine" would have skipped a
+  `markdownlint` chain that itself runs `spelling`, over a tree that had just
+  tripped the speller once, and a `typecheck` over a new test module whose
+  callables no gate had yet checked. The repository's own `test-python` recipe
+  has the identical hazard in a different costume: a `for` loop with
+  `|| exit $$?`, where the first failing glob masks every later glob *and*
+  `test-rust`, so the exit code is silent about what ran. In both cases the
+  log's per-step lines, not the exit code, are what establish coverage.
+- The spelling gate is a *correction table*, not a dictionary, and that is why
+  one author's `-ise` endings pass while another's fail. `parametrisations` was
+  rejected while `behaviour` — used throughout the same change, in a repository
+  with a tracked `tests/behaviour/` directory — passed untouched, because
+  `typos.toml` lists the former with a correction and does not list the latter.
+  The reflex to add an allow-list entry would have been actively wrong: the
+  config already encoded the intended spelling, so the right reading was that
+  the token was a typo by the project's own definition, not that the gate was
+  over-eager. This has the shape of the `ambrieaks` case recorded earlier — a
+  confident wrong token no lint, type, or review gate caught — except that this
+  one the gate did catch, because it happened to be spelled the way the table
+  enumerates. Checking a disputed spelling against the table rather than
+  against a sense of what looks British takes one `grep`.
 
 ## Decision log
 
@@ -724,6 +779,23 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 18: one token changed. The gate run at Revision 17's frozen tip came
+back red at two independent detectors on the same defect — `typos` in the local
+set, and CI's `lint-test` job — which was a mis-spelled `parametrisations` in
+the new property module's docstring, a token `typos.toml:1868` corrects to
+`parametrizations`. `b8bcb625` fixes it, and `make spelling` then exits 0 with
+the file tracked. The important part of this revision is the shape of the
+repair: the failed run is recorded as *failed*, not superseded. It proves one
+gate passed, one failed, and four never ran, because the delegated run stopped
+at the first failure by instruction — so `typecheck`, `test`, `markdownlint` and
+`nixie` are unobserved at `f7eaab76`, not passing, and the re-run must cover
+them rather than inherit them. `markdownlint` deserves that care specifically,
+since its chain re-runs `spelling` over a tree that has already tripped it
+once. CI agrees on the localisation without being asked: on the same SHA the
+`lint-test` job failed while all four `Typecheck and test` legs and every wheel
+build passed, which places the fault in the lint chain rather than in
+behaviour. No production code changed, so the status stays COMPLETE.
 
 Revision 17: code changed, in two commits, and both changes answer the ninth
 CodeRabbit pass's distinct findings. `254a306c` adds
