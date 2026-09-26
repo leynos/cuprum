@@ -103,10 +103,11 @@ def run_captured_and_echoed(
     catalogue: CommandCatalogue,
     cmd: Runnable,
 ) -> None:
-    """Run ``cmd`` with capture on, so the streams are drained and echoed.
+    """Run ``cmd`` with capture on, so the streams are drained and retained.
 
-    Echo is routed to sink objects so the scenario does not write to the test
-    process's own stdout, which would corrupt pytest's captured output.
+    Echo is what the scenario text adds on top, and it is routed to sink
+    objects so the mirrored lines do not reach the test process's own stdout,
+    which would corrupt pytest's captured output.
     """
     context = ExecutionContext(
         tags={"run_id": RUN_TAG},

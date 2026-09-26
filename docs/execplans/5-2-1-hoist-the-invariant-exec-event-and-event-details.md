@@ -103,9 +103,40 @@ failure injection at that boundary.
   requested upstream tracking and Lody session reference.
 - [x] (2026-09-26) Obtain explicit user approval before starting EP-M1;
   granted, with instruction to implement the plan in full.
-- [ ] EP-M1: establish current control and contract characterization.
-- [ ] EP-M1b: re-baseline the plan against the current tree (see 2026-09-26
-  discoveries) before writing any characterization test.
+- [x] (2026-09-26) EP-M1b: re-baseline the plan against the current tree
+  before writing any characterization test (see 2026-09-26 discoveries).
+- [~] EP-M1: establish current control and contract characterization.
+  - [x] V1 red test written and recorded through *both* existing production
+    factories; `strict=True` xfail keeps the committed suite green, and a
+    `0`-line case carries no marker because it passes either way. The pipeline
+    factory's cases pin *routing* rather than restating the per-line cost: a
+    mutation that gives the pipeline its own inline closure fails 2 of them.
+  - [x] V2 field-for-field parity characterization against generic `emit`.
+  - [x] V5 classifier implemented, unit-tested (33 tests), split to satisfy
+    C0302, and verified against a real py-spy capture of both production
+    factories.
+  - [x] Control profile captured; D = 30822 ≥ 10000; share 34.7284%;
+    `construction-share.json` reproduced byte-identically on re-run.
+  - [x] `classifier-rules.json` committed with caller-scoped rules.
+  - [x] V2 Hypothesis property module (`test_line_event_emission_properties.py`,
+    21 tests) written against the generic `emit` oracle at a pinned clock. The
+    plan's two required mutations are confirmed detected; see the 2026-09-27
+    discovery below.
+  - [~] V3 scheduling/failure-contract cases. The plan's command-path
+    "existing owner reaps the child" cases are **contradicted** by measurement
+    and are out of scope; the pipeline case, the clock-failure case, and the
+    pending-prefix cases are in scope. See the 2026-09-27 V3 discovery below.
+  - [x] V4 seven pytest-bdd scenarios in `structured_events.feature`, the
+    pipeline and concurrent cases among them, plus a Syrupy snapshot of the
+    normalized lifecycle triple. Two of the plan's V4 assertions were wrong
+    against the real tree and are corrected in the scenarios; see the
+    2026-09-27 V4 discovery below.
+  - [x] V4's step module split three ways to satisfy the 400-line
+    `max-module-lines` cap, which `python-lint` enforces on `tests/`; the step
+    module is loaded as a `pytest_plugins` entry because pytest-bdd 8 scopes a
+    step to its defining module. See the 2026-09-27 "the 400-line cap applies
+    to `tests/`" discovery below.
+  - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
 - [ ] EP-M2: implement and validate the bounded stream-factory optimization.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
@@ -175,6 +206,383 @@ constructs the `ExecEvent` is correct (`cuprum/_pipeline_types.py:120-149`), and
 `started_at`. `_StageObservation` is a `frozen=True, slots=True` dataclass with
 fields `cmd`, `hooks`, `tags`, `cwd`, `env_overlay`, `pending_tasks`,
 `wall_clock`, `exec_id`.
+
+### 2026-09-27: EP-M1 characterization and the classifier's real-data convergence
+
+EP-M1 is in progress. What follows is measured, not proposed.
+
+**py-spy renders every generated constructor identically.** A control capture
+of the real workload contains the frame `__init__ (<string>:N)` for
+`_FinishedEchoLine`, `_EchoEncoding`, `_LineFinalization`, and both event
+types, and *nothing in the frame text distinguishes them*. `dataclasses` builds
+`__init__` with `exec`, so `co_filename` is the literal `<string>`. This is
+stronger than the plan's "do not blanket-match `__init__`" warning: a
+frame-text match is not merely risky, it is **impossible**. Every rule that
+names a generated constructor must be resolved through its callers. The shipped
+rules file records this and leaves `line` unset, because the generated line
+number shifts whenever the class gains a field.
+
+**Caller *proximity*, not declaration order, must pick the rule.** Two rules
+both matching `__init__ (<string>)` — one for the per-line `_EventDetails`, one
+for the full `ExecEvent` — both saw every construction sample on the real
+capture, and declaration order alone attributed all 134 of them to the
+`ExecEvent` rule. The fix is to prefer the rule whose nearest matching caller
+sits closest to the frame. Re-classified, the real capture then split correctly
+(89 `_EventDetails` + 45 `ExecEvent` in the probe capture; 6474 + 4230 in the
+control). Resolution by order would have let a broadly-called rule silently
+absorb a narrower one's frames.
+
+**Drift detection converged over three designs, the first two rejected on real
+data.** The plan requires that unresolved frames, a zero D, or missing expected
+constructor callers make a run inconclusive. How to *detect* that was not
+obvious:
+
+1. *Frame-anchored* — a frame is unresolved when no rule claims it. Rejected:
+   on the control capture this flagged 1412 samples of
+   `__init__ (<string>:2/3/4/5)`, all of which trace to
+   `finish_line (cuprum/_echo_truncation.py)`. Those are the echo-truncation
+   limiter's own records, a different cost centre, not rule drift.
+2. *Stack-anchored* — a stack is unresolved when a caller appears without its
+   frame below it. Rejected: this flags ordinary sampling. A sample landing
+   anywhere inside `emit_line` before it reaches the constructor has exactly
+   that shape, and it is the common case.
+3. *Capture-wide, per-rule* — a rule is drifted when its callers carry real
+   weight inside the consume subtree but the rule matched nothing at all. This
+   is the shipped semantics. A rule whose callers never appear is merely
+   *absent* from this workload and is left alone, so one capture does not
+   report every unrelated rule as broken. The control capture then reported
+   `unresolved_frames: {}`.
+
+**The classifier was verified against real production code, not only synthetic
+stacks.** A scratch probe drove both production factories — `SafeCmd.run()`
+with an observe hook and an `on_line` hook, then a two-stage `sh.Pipeline` with
+the same — over a chatty child process, and was captured under py-spy. The real
+frames match the rules exactly:
+`emit_line → _event_details → __init__ (<string>)` and
+`emit_line → emit (cuprum/_pipeline_types.py) → __init__ (<string>)`. Both
+production callback factories construct `_EventDetails` per line, confirming
+V1's premise against the tree rather than against the plan.
+
+**Control baseline (untouched implementation).** One `py-spy record` capture of
+the plan's worker invocation on the full wrap-76 fixture:
+
+| Quantity                     | Value                                                                                                          |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `parent_samples`             | 32468                                                                                                          |
+| `consume_samples` (D)        | 30822                                                                                                          |
+| `construction_samples` (N)   | 10704                                                                                                          |
+| `construction_share_percent` | 34.7284                                                                                                        |
+| share of all parent samples  | 32.9678                                                                                                        |
+| `matched_frames`             | `ExecEvent.__init__ via _StageObservation.emit`: 6474, `_EventDetails.__init__ for the per-line payload`: 4230 |
+| `unresolved_frames`          | `{}`                                                                                                           |
+| classifier `status` / exit   | `fail_above_limit` / 1                                                                                         |
+
+D = 30822 clears the plan's 10000 floor by 3×. The control exits 1, which the
+plan anticipates and requires be retained rather than treated as an error. The
+run's recorded artefacts are `worker-result.json` (worker `status: ok`,
+`wall_time_seconds` 316.24, 28256364 lines) and `construction-share.json`,
+which a re-run of the committed classifier reproduces byte-identically.
+
+**A supporting-module split was forced by the repo's own lint.** The first
+draft of `benchmarks/summarize_line_event_profile.py` was 651 lines, tripping
+`too-many-lines` (C0302) at the configured 400-line ceiling. `benchmarks/` *is*
+walked by pylint, unlike `cuprum/unittests/`, where the two new test modules
+sit at 459 and 596 lines without complaint. The parse/model half moved to
+`benchmarks/_line_event_profile_model.py`; the gate (387 lines) keeps the
+classification, reporting, and CLI, and re-exports the model's names so the
+entry point is unchanged. The line-splitting is delegated to the existing
+`benchmarks.summarize_folded._parse_folded_line`, as the plan asks.
+
+**V2's property module is written and its required mutations are confirmed
+detected.** `cuprum/unittests/test_line_event_emission_properties.py` (21
+tests) asserts four invariants per generated case: payload identity against the
+generic `emit` oracle, one clock read per delivered line in order, distinct
+object identities, and unchanged earlier payloads. Three design points were
+settled by failure, and each is worth keeping:
+
+1. *The clock is pinned, not scripted.* An earlier draft shared a scripted
+   iterator between the line path and the oracle, and the two silently
+   desynchronized, reporting a `timestamp` divergence that was an artefact of
+   the test. `_SetClock` instead holds one value the test sets before each
+   path, so "the same clock value" is literal rather than index-arithmetic.
+2. *`@example` kwargs must match `@given` exactly.* Hypothesis rejects
+   per-argument `@example` rows beside a `@given` that names other arguments,
+   so the module uses the repo's existing composite-`case` idiom
+   (`@given(case=_emission_case())` + `@example(case=...)`), as in
+   `test_stream_property_based.py`.
+3. *Zero-line cases are excluded from the generators and named explicitly
+   instead.* With no lines, every property is true without anything having
+   happened; `min_lines=1` is the anti-vacuity default, and the zero-line
+   boundary is a named case in `test_line_event_emission` where it asserts
+   something concrete.
+
+**The plan's two required mutations were applied and both are detected.** In
+the final module shape, reusing one event object across lines fails 7 tests and
+fixing the timestamp to a constant fails 2. The production files were restored
+afterwards, confirmed by an empty `git diff --stat HEAD`.
+
+### 2026-09-27: V4 — the plan's pipeline model of execution identity was wrong
+
+V4 is written: seven scenarios in `tests/features/structured_events.feature`
+with bindings in `tests/behaviour/test_structured_events.py` (9 tests, one
+Syrupy snapshot). Two of the plan's own V4 assertions did not survive contact
+with a real pipeline, and both were corrected against observed output rather
+than reasoned about.
+
+**A pipeline emits one plan/start/exit triple *per stage*, not per run.** The
+plan's scenario text reads "plan has no process identifier and exit retains the
+execution token" — singular, one pair for the run. A scratch probe printing
+every event for a two-stage pipeline shows two `plan` events, two `start`
+events, and two `exit` events, each `start` with its own `exec_id`. The step is
+therefore named `then_every_stage_has_its_own_plan_and_exit_token` and asserts,
+per stage, that `plan` carries no PID while its `exit` carries the token its own
+`start` reported.
+
+**A line event carries its *stage's* PID and execution token.** The natural
+inference from the above — that a line event correlates to the run — is also
+false. For every retained line event the binding asserts
+`event.exec_id == starts[event.pid]`, where `starts` maps each observed `start`
+PID to its own token. One run-wide pair would satisfy this only by accident,
+and would be wrong the moment the pipeline spawns a second stage.
+
+Both bindings were wrong in the same direction on first write, and both were
+corrected only after dumping the real event stream. This is the EP-M1b lesson
+repeating: the plan is a hypothesis about the tree, not a description of it.
+
+**V4's per-stream ordering assertion must not be widened into a global one.**
+An intermediate snapshot asserted a single interleaved stdout/stderr sequence
+and failed, because stdout `beta` and stderr `gamma` were observed in the
+opposite order to the child's write order. The two readers are independent
+tasks; there is no cross-stream ordering guarantee anywhere in the design, and
+the plan's V4 text says as much ("without inventing global stdout/stderr
+ordering"). The snapshot was narrowed to the normalized lifecycle triple, and
+per-stream order is asserted separately. Retaining the wrong assertion would
+have made the suite flake, or worse, pinned a guarantee the library does not
+offer.
+
+### 2026-09-27: what `make lint` actually runs — two corrections to the plan
+
+The plan's Validation section treats `make lint` as one gate. It is a make
+target with prerequisites, and reading the Makefile changes which sub-checks
+this task may claim. Both facts below were read off `Makefile:359-384`, not
+inferred.
+
+**`make lint` does not run the spelling check.** The target is
+`lint: python-lint rust-lint github-actions-lint`. Spelling is reached only as
+`rust-lint: lint-clippy lint-whitaker spelling`, and GNU make is free to build
+the three lint prerequisites in any order. A run that stops at a spelling
+failure may therefore have run `rust-lint` entirely, `github-actions-lint`
+entirely, or neither. The failure ordering in a log is not a run order.
+
+**This matters because of an abort-at-first-failure trap that already bit this
+task.** The `lint` recipe is one `$(MAKE)` invocation whose prerequisites are
+attempted in turn; the first failing prerequisite stops the run and the rest
+are never attempted. The recorded `/tmp/521-lint.out` shows exactly that: it
+reached `typos-config-builder gate`, failed on five real spelling errors, and
+ended at `make: *** [Makefile:405: spelling] Error 2` with `EXIT=2
+DURATION=124s`. The two `15 KB` of log before that line is `rust-lint` having
+run to completion, so the trivial spelling failure *masked a full Rust rebuild*.
+Everything that sorts after the abort is **unobserved**, not passing. The plan
+must report three states per gate — passed, failed, unobserved — and a green
+spelling line in the log proves nothing about `github-actions-lint`.
+
+The practical consequence: fix spelling first (`make spelling` alone is
+seconds), because a single misspelling otherwise costs a `cargo doc` plus
+`clippy` cycle in wall-clock time and hides whichever gate had not yet run.
+
+### 2026-09-27: V3 disproves the plan's post-spawn ownership claim
+
+V3's last requirement reads: "Inject factory preparation failure after spawn and
+prove the existing owner reaps the child. Inject this in both command and
+pipeline paths." The **pipeline** half is true. The **command** half is not, and
+the gap is pre-existing on `main` — this branch has no production diff, and
+`cuprum/` is byte-identical to `origin/main`.
+
+A read-only probe replaced the two production factories with a raising stand-in,
+recorded the pid from the spawn call itself (so a path that never reaches
+`start` still yields a subject), and classified the child from `/proc/<pid>/stat`
+after the failure had propagated:
+
+| path       | factory that raised           | child after the failure          |
+| ---------- | ----------------------------- | -------------------------------- |
+| `run()`    | `_compose_line_callbacks`     | **leaked**, state `S` (sleeping) |
+| `lines()`  | `_spawn_stream_consumers`     | **leaked**, state `S` (sleeping) |
+| `pipeline` | `_create_stage_capture_tasks` | reaped                           |
+
+The pipeline is safe because `_spawn_pipeline_processes` owns the stages it has
+already created and tears them down on its own failure path. Neither command
+path has an equivalent for the stream-factory region.
+
+**Why, structurally.** `_build_unstarted_run` (`_line_stream/spawn.py:97`)
+documents the invariant it means to establish:
+
+> Nothing here suspends or fails. `_build_stream_config` only reads the
+> execution, `_spawn_stdin_writer` and `_spawn_stream_consumers` are plain
+> `create_task` calls, and `_LineStreamRun` is a frozen dataclass, so no
+> exception can escape and leave a child running with half-built ownership.
+
+The premise is false. `_spawn_stream_consumers` calls `_create_stream_callback`
+— which calls the composition factory — *before* it calls `create_task`, so a
+failure there escapes `_build_unstarted_run` into `_start_line_stream_run`
+(`coordinator.py:115-141`), where `process` is a local and `run` has not been
+assigned. The `except BaseException:` that calls `_abandon_unstarted_run`
+guards only the block *after* `run` exists, so nothing reclaims the child. The
+`run()` path is the same shape at `_run_subprocess_with_streams`
+(`_subprocess_stream_run.py:157-171`): the spawn context and the consumer pair
+are built on the line *after* the `_RunTaskOwnership` constructor starts
+evaluating, still inside the `tasks = ...` assignment, so a raising composition
+escapes `_await_direct_completion` with no terminator behind it.
+
+**This matters more after EP-M2, not less.** The plan's premise is that the
+failure "occurs before dispatch" — the emission path is fine. But EP-M2 makes
+the factory build the emitter by *binding argv, cwd, env, project, and the
+execution id*, which is strictly more work at exactly the point where a failure
+is unrecoverable. The hoist therefore widens a pre-existing leak window rather
+than narrowing it, and V3 cannot honestly be marked satisfied for the command
+paths without deciding what to do about that.
+
+**Scope decision, per the plan's own bounds.** Three production modules touch
+the seam — `_line_callbacks.py`, `_subprocess_streams.py`, and
+`_pipeline_stage_streams.py` — and EP-M2 edits two of them. A fix is a third,
+separate edit site: it changes *where ownership of a spawned child begins* on
+both command paths, which is a behavioural change rather than a performance
+one, and it lands in `_line_stream/spawn.py` and `_subprocess_stream_run.py`,
+neither of which EP-M2 otherwise touches. The plan's Tolerances section reserves
+that for its own approval, so the fix is **out of scope for EP-M2** and is
+recorded here as a finding with its own follow-up, rather than being folded
+silently into a performance change.
+
+V3's actionable remainder, which is in scope: make the *emission path* fail
+before dispatch (clock failure) and add no tasks, assert a later hook's failure
+leaves the earlier scheduled prefix in `pending_tasks`, and pin the pipeline
+path's reaping — which is real and demonstrable. The two command-path
+"proves the existing owner reaps" cases are recorded as **contradicted**, not
+skipped, so a later reader cannot mistake the gap for coverage.
+
+### 2026-09-27: the 400-line cap applies to `tests/`, and pytest-bdd 8 scopes steps per module
+
+Two corrections found while clearing `python-lint`.
+
+**The ceiling applies here.** `pyproject.toml` sets `max-module-lines = 400`, and
+`PYLINT_TARGETS ?= benchmarks conftest.py cuprum scripts tests` with
+`recursive = true` means `tests/behaviour/` is linted — unlike `cuprum/unittests`,
+which the walk never enters. V4 left `tests/behaviour/test_structured_events.py`
+at 795 lines, so `python-lint` failed on C0302 while the earlier gates had
+passed: `interrogate` and `ruff check` are both green on an over-long file. The
+file was split three ways, following the `test_*_behaviour.py` +
+`_*_support.py` convention already in the directory:
+
+| module | lines | contents |
+| ------ | ----- | -------- |
+| `test_structured_events.py` | 348 | scenario declarations, `behaviour_state`, the `Then` steps |
+| `_structured_events_steps.py` | 277 | the `Given`/`When` decorators |
+| `_structured_events_support.py` | 288 | state keys, the two protocols, the run helpers, normalization |
+
+**Where the assertions had to go.** Ruff's `S` rules ban bare `assert` outside
+`test_*.py`, and every `_*_support.py` in the directory has zero asserts. So the
+assertion-carrying helpers could not move to the support module: `retained_events`
+and `normalize_event` have no asserts, but the "fail loudly when empty" guard had
+to become a raised `AssertionError` to survive the move. The `Then` steps stayed
+in the `test_*.py` module for the same reason.
+
+**pytest-bdd 8 scopes a step to the module that defines it.** `given`/`when`/`then`
+do not register into a global registry: each writes a *pytest fixture* into the
+**calling module's** `f_locals` (`get_caller_module_locals` in `pytest_bdd.utils`,
+consumed by `StepFunctionContext`), and resolution goes through
+`request.getfixturevalue`. A plain `from ... import given_x` therefore registers
+nothing — all seven scenarios failed with `StepDefinitionNotFoundError`. The
+existing precedent (`test_telemetry_adapters.py`) works around this by
+re-registering each step with its literal text,
+`then("the span records output as events")(_tracing_steps.assert_span_events)`;
+that duplicates the step text, and duplicating it also changes the Gherkin
+snapshot counts and the `.feature` coverage. The split instead loads the step
+module as a plugin:
+
+```python
+pytest_plugins = ("tests.behaviour._structured_events_steps",)
+```
+
+so pytest collects the step module's fixtures and the steps resolve with no
+restated text. Verified: 9 passed, 1 snapshot passed — identical to the
+pre-split module — and the full `tests/behaviour` suite is 164 passed,
+16 skipped, 5 snapshots passed.
+
+### 2026-09-27: `ambrleaks` reads a doubled backslash in snapshot text as a UNC path
+
+Clearing `python-lint` past pylint exposed two checks the earlier C0302 abort had
+left unobserved. One was a real defect in the V4 snapshot:
+
+```text
+ambrleaks: 3 finding(s)
+tests/behaviour/__snapshots__/test_structured_events.ambr:8: [snapshot-windows-path] ...
+```
+
+The rule is `\b[A-Za-z]:\\[^\s"']+|\\\\[\w.$-]+\\[^\s"']+` — an absolute Windows
+or UNC path. The offender was the probe's own `-c` argument, which the snapshot
+normalizes only its first element of, leaving the script text in place:
+
+```text
+"import sys; sys.stdout.write('beta\\nalpha\\n');sys.stderr.write('gamma\\n')"
+```
+
+The scanner masks the matched text before reporting, so the value had to be
+recovered by re-running the rule by hand. `\\nalpha\\n` matches the UNC
+alternative: `\\` + `nalpha` + `\` + `n`. It is a false positive in intent — the
+text is Python escape syntax, not a path — but the committed snapshot is what
+`ambrleaks` gates, so the probe now writes newlines with `chr(10)`, matching the
+spelling `given_observed_pipeline` already uses. Regenerating the snapshot
+cleared all three findings, and the probe still delivers `beta`, `alpha`, and
+`gamma` in order.
+
+The other previously unobserved check, df12-python-lints, found one real
+`C9102` (an assert without a failure message) on the anti-vacuity witness in
+`test_the_probe_run_preserves_per_stream_line_order`; it now carries one. Both
+findings are recorded because neither is visible from the gate that aborted:
+`ruff check`, `interrogate`, and a 10.00/10 pylint rating were all green while
+both were outstanding.
+
+### 2026-09-27: the `transition_privacy` trybuild timeout is environmental
+
+The EP-M1 gate run reported `cuprum-streams`'s `transition_privacy` trybuild
+suite as a timeout at the 600 s allowance:
+
+```text
+TIMEOUT [ 600.034s] cuprum-streams::compile_tests transition_privacy
+```
+
+The suite is *build*-bound: trybuild compiles a scratch crate, so an allowance
+kill says nothing about the assertions. Four independent lines of evidence
+place the cause outside this branch.
+
+1. **The Rust diff is empty.** `git diff --stat origin/main HEAD -- rust/`
+   produces no output, and the whole-branch diff against `origin/main` is
+   three documentation files. There is no Rust change for the suite to
+   regress on.
+2. **Its sibling passed in the same run**, from the same override and
+   allowance: `cuprum-rust::compile_tests compile_time_ui` PASSed at
+   `102.761s`. A shared-tier problem would have shown up in both.
+3. **The two suites are not comparable by case count.** `cuprum-streams` has
+   two `compile_fail` cases and no pass cases; the killed scratch directory
+   held only `Cargo.lock`, `Cargo.toml`, and `main.rs`, that is, it was
+   stopped while still compiling a dependency rather than while running a
+   case.
+4. **The host was oversubscribed.** Load average was 11.18/13.05/13.56 on a
+   6-core box, with other agents' `rustc` processes observed at 94–107% CPU in
+   the `netsuke` and `axinite` worktrees.
+
+`gh run list --branch main` reports both CI and Coverage as **success on
+`991dee64`**, which is this branch's own base commit, so the same suite passes
+on the same tree in CI. `docs/coverage-timeout-tiers.md` already documents
+this exact failure class, describing a gate that killed trybuild "while it was
+still compiling a dependency, that is, **while it was healthy**", and notes a
+277 s versus 124.884 s spread that "is `sccache` and machine load, not the
+test".
+
+The timeout occurred in a `scrutineer` run, not in a run of this branch's own
+gates, and is recorded here rather than in the code because there is nothing
+in the code to change. The residual risk is that a `make test` run under the
+same load reports it again; the disposition is to re-read the tier's log
+rather than rebuild anything.
 
 ### Earlier discoveries
 
@@ -246,6 +654,27 @@ require checking the explicit callback factory bodies as well.
   semantic change to a public property, which the tolerances forbid without
   approval. The hoist solves the same cost by reading the property once at
   per-stream preparation instead of once per line.
+- 2026-09-27: Resolve overlapping construction rules by **caller proximity**
+  (nearest matching caller wins, ties on rule order), not by declaration order.
+  Measured: declaration order alone attributed all 134 construction samples of
+  a real probe capture to the broader `ExecEvent` rule, leaving the
+  `_EventDetails` rule empty. Proximity is what the stack actually encodes —
+  the nearest caller is the one invoking the constructor — so it survives a
+  rules file being reordered.
+- 2026-09-27: Drift is judged **capture-wide and per rule**, not per frame or
+  per stack. A rule is drifted when its callers carry real weight inside the
+  consume subtree but it matched nothing. The two rejected alternatives and
+  their concrete false positives on the control capture are recorded in
+  Surprises & discoveries; they are rejected on evidence, not on taste.
+- 2026-09-27: Criteria are counts, never keywords. The V1 red test asserts
+  zero `_EventDetails` constructions and zero `argv_with_program` reads while
+  delivering lines, and the V5 classifier asserts weighted sample fractions.
+  Neither greps source text, so neither can be satisfied by a rename.
+- 2026-09-27: Split the classifier at the parse/classify seam to satisfy the
+  repo's own 400-line pylint ceiling, rather than asking for a suppression.
+  Model and parsers move to `benchmarks/_line_event_profile_model.py`; the gate
+  re-exports them so its entry point is unchanged, and a test pins the
+  re-export surface to the model's own objects so the two cannot drift.
 
 ## Outcomes & retrospective
 
@@ -343,6 +772,14 @@ conceptual interface is unchanged from the original proposal — a
 `Callable[[str], None] | None` — but it is a frozen slotted dataclass rather
 than a `_StageObservation` method, for the reasons recorded in the decision log.
 
+**Revised 2026-09-27 (EP-M1, see Surprises & discoveries).** This is the only
+production edit EP-M2 makes. Both existing callback factories reach it
+structurally, because both already call `_compose_line_callbacks`; no second
+edit site exists. The classifier is split across
+`benchmarks/_line_event_profile_model.py` (shapes and parsers) and
+`benchmarks/summarize_line_event_profile.py` (classification, reporting, CLI),
+which keeps each under the repo's 400-line pylint ceiling.
+
 The original proposal, retained for traceability: add one private
 `_StageObservation.make_line_emitter` method, taking a
 `Literal["stdout", "stderr"]` phase and a post-spawn `int | None` PID, returning
@@ -414,18 +851,35 @@ are not exhaustive proofs of the interpreter.
 
 ### V3: hooks retain their scheduling and failure contract
 
+**Amended 2026-09-27 after measurement (see Surprises & discoveries).** The
+post-spawn injection below is split by path, because the two command paths do
+not share the property the plan assumed they did.
+
 Add focused cases alongside V1, reusing existing asynchronous fixtures. Test
 synchronous hooks, async hooks, synchronous callables returning awaitables, and
 multiple ordered hooks. Retain events across an asynchronous yield and check
 earlier lines and timestamps after later events have been emitted. A later hook
 raising or cancelling must leave the previously scheduled tasks in the
 observation's pending list; they must settle during existing cleanup. A clock
-failure must occur before dispatch and add no tasks. Inject factory preparation
-failure after spawn and prove the existing owner reaps the child. Inject this
-in both command and pipeline paths; all existing reader and observer tasks must
-settle, and the pipeline must also clean up earlier stages. The tests must fail
-if the new path bypasses `_emit_event` or discards the scheduled prefix. Keep
+failure must occur before dispatch and add no tasks. The tests must fail if the
+new path bypasses `_emit_event` or discards the scheduled prefix. Keep
 unrelated exception-policy changes out of scope.
+
+For the post-spawn injection, split as follows:
+
+- **Pipeline path — in scope.** Inject a factory-preparation failure after the
+  stages exist and assert every stage child is reaped and earlier stages are
+  cleaned up. Measurement confirms the pipeline owner does cleanup on this
+  path, so the case pins existing behaviour that EP-M2 must not break.
+- **Command paths (`run()` and `lines()`) — out of scope, recorded as
+  contradicted.** Measurement shows both currently leak the child when the
+  composition factory raises during consumer preparation: the raising call sits
+  before the first `create_task`, outside the region either path guards. The
+  plan's requirement cannot be satisfied without an ownership change spanning
+  at least `_line_stream/spawn.py` and `_subprocess_stream_run.py`, which the
+  plan's own scope bounds reserve for separate approval. **Do not report these
+  as passing, and do not weaken the assertion to make them pass** — record the
+  gap, and let EP-M2's review decide whether to schedule the fix.
 
 ### V4: real streams preserve the externally visible sequence
 
@@ -697,6 +1151,12 @@ classification, and unprofiled runs must meet the regression tolerance. Missing
 Python symbols, skipped callback work, changed line counts, or a moved
 constructor cost do not pass. Record exact gate commands, exit statuses, and
 source revisions; a queued hosted check is not a passing result.
+
+Report each gate as **passed**, **failed**, or **unobserved**, and never collapse
+unobserved into passed. `make lint` aborts at its first failing prerequisite, so
+sub-checks that sort after the failure did not run at all (see the 2026-09-27
+discovery above); a gate that stopped early proves nothing about what follows
+it. Run `make spelling` alone before `make lint` for exactly this reason.
 
 ## Idempotence and recovery
 
