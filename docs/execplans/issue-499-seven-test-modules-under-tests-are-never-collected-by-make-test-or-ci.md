@@ -222,6 +222,32 @@ contract module under `tests/` and forgets to name it will be told so by
       turn — each mutation is reported by name, and the unmutated recipe
       reports nothing. Recorded here rather than silently: a future reader will
       see R9109 and wonder why the recipe is not snapshot-pinned.
+- [x] (2026-09-26 20:15Z) Second gate run at `87e2dde7`: red again, at a
+  *different* leaf — `ruff check` ISC004
+  (`implicit-string-concatenation-in-collection-literal`) on the two
+  concatenated prose strings the R9109 fix had just introduced into
+  `_RECIPE_ENDPOINTS`. Fixing one finding created a blocking finding beside it
+  in the same file; the two should have been pre-checked together rather than
+  discovered one gate run at a time. Leaves two through eleven were unobserved
+  again.
+- [x] (2026-09-26 20:20Z) Cleared ISC004 by parenthesizing each concatenated
+  pair, the shape `tests/helpers/parity.py` and
+  `tests/behaviour/test_documentation_examples_behaviour.py` already use for
+  the same construct. Before requesting the next gate run, both rule families
+  were run directly against every changed Python file: `ruff check` over all
+  eighteen changed paths exits 0, and df12-pylint with all thirteen rules
+  enabled over the same set reports 10.00/10. The gate run should not be the
+  discovery mechanism for a finding a one-file pre-check would have caught.
+- [x] (2026-09-26 20:30Z) Third gate run at `5ccb4701`: **all six gates
+  green**, and all eleven `make lint` leaves observed — ruff check,
+  interrogate, pylint, df12-pylint, ambrleaks, skylos, lint-clippy,
+  lint-whitaker, spelling, yamllint, actionlint. Logs are under
+  `/tmp/R3-*-issue-499.out`, deliberately distinct from the two earlier runs'
+  log paths so those findings' logs were not overwritten. `make test` green in
+  all three suites: Python 2467 passed / 63 skipped, of which the
+  `tests/test_ci_*.py` batch is 747 passed including all seven renamed modules
+  and this branch's own guard at 59 tests, with 2 syrupy snapshots passing;
+  Rust nextest 125 passed; Rust doctests ok.
 - [ ] Milestone gates at the resulting head.
 - [ ] CodeRabbit review.
 - [ ] Push and open a draft pull request.
