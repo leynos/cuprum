@@ -30,18 +30,18 @@ dev = [
     # fixture-registration API; 9.1 deprecates the nodeid/baseid path that
     # pytest-bdd 8.1.0 uses, raising PytestRemovedIn10Warning.
     # Track: https://github.com/pytest-dev/pytest-bdd/issues/823
-    "pytest<9.1",
+    "pytest<9.2",
     "pytest-benchmark",
     "pytest-bdd",
     # Keep the ruff and ty pins in step with RUFF_VERSION and TY_VERSION in
     # the Makefile and .github/workflows/ci.yml; the pin-parity contract test
     # in cuprum/unittests/test_toolchain_pins.py enforces the parity.
-    "ruff==0.16.4",
+    "ruff==0.16.8",
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
     "syrupy",
-    "ty==0.0.74",
+    "ty==0.0.82",
     # Keep in sync with .github/workflows/build-wheels.yml and
     # .github/actions/build-wheels/action.yml.
     "maturin==1.15.0",
