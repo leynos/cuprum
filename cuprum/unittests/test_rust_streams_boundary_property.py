@@ -36,6 +36,7 @@ _MAX_BUFFER_SIZE = 1 << 30
 _DEFAULT_BUFFER_SIZE = 65536
 _I32_MAX = (1 << 31) - 1
 _I64_MAX = (1 << 63) - 1
+_I64_MIN = -(1 << 63)
 # A descriptor value that is deterministically invalid, used only where
 # validation fails before the descriptor is dereferenced. -1 never names an
 # open descriptor, so a validation-order regression fails loudly instead of
@@ -93,10 +94,13 @@ def _pump_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:
     return streams.rust_pump_stream(_UNUSED_FD, _UNUSED_FD, buffer_size=buffer_size)
 
 
-# Both bounds stay inside ``i64`` so the failure is the documented buffer-size
-# rejection rather than an integer-conversion overflow.
+# Both bounds span the whole signed 64-bit range, so the failure is the
+# documented buffer-size rejection rather than an integer-conversion overflow.
+# The negative bound reaches ``i64::MIN``: PyO3 extracts ``buffer_size`` as an
+# ``i64``, so every value in this range is a well-formed argument that the
+# native validator must classify itself rather than reject at extraction.
 _OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
-    st.integers(min_value=-(1 << 62), max_value=0),
+    st.integers(min_value=_I64_MIN, max_value=0),
     st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=_I64_MAX),
 )
 
@@ -125,11 +129,104 @@ def test_rejects_out_of_range_buffer(
         entry_point(rust_streams, buffer_size=bad_size)
 
 
+def _consume_with_reader_and_buffer(
+    streams: ModuleType, *, reader_fd: int, buffer_size: int
+) -> object:
+    """Call ``rust_consume_stream`` with the supplied reader and buffer size."""
+    return streams.rust_consume_stream(reader_fd, buffer_size=buffer_size)
+
+
+def _pump_with_reader_and_buffer(
+    streams: ModuleType, *, reader_fd: int, buffer_size: int
+) -> object:
+    """Call ``rust_pump_stream`` with the invalid reader and a valid writer.
+
+    The writer must be a genuinely open descriptor rather than a second copy of
+    the invalid value. The wrapper closes a writer that has not yet reached the
+    native ownership boundary when pre-native validation fails, and ``os.close``
+    raises ``OverflowError`` — not the ``OSError`` that close suppresses — for a
+    value outside the C ``int`` range. Reusing these descriptors as the writer
+    would therefore surface that error instead of the buffer-size
+    ``ValueError`` this property pins.
+
+    Parameters
+    ----------
+    streams : ModuleType
+        The Rust streams module fixture.
+    reader_fd : int
+        The invalid reader descriptor to pass through.
+    buffer_size : int
+        The ``buffer_size`` to supply.
+
+    Returns
+    -------
+    object
+        Whatever the entry point returns; the property expects it to raise
+        instead.
+    """
+    with contextlib.ExitStack() as stack:
+        writer_fd = os.open(os.devnull, os.O_WRONLY)
+        stack.callback(_safe_close, writer_fd)
+        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+
+
+class _ReaderAndBufferEntryPoint(typ.Protocol):
+    """An entry point invoked with both a reader descriptor and a buffer size."""
+
+    def __call__(
+        self, streams: ModuleType, *, reader_fd: int, buffer_size: int
+    ) -> object:
+        """Invoke the entry point with the supplied reader and buffer size."""
+        ...
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    [
+        pytest.param(_consume_with_reader_and_buffer, id="consume"),
+        pytest.param(_pump_with_reader_and_buffer, id="pump"),
+    ],
+)
+@_buffer_validation_before_descriptor
+@_SUPPRESS_FIXTURE
+@given(
+    bad_size=_OUT_OF_RANGE_BUFFER_SIZES,
+    bad_fd=st.one_of(
+        st.integers(min_value=_I64_MIN, max_value=-1),
+        st.integers(min_value=_I32_MAX + 1, max_value=_I64_MAX),
+    ),
+)
+def test_buffer_validation_precedes_descriptor_conversion(
+    rust_streams: ModuleType,
+    entry_point: _ReaderAndBufferEntryPoint,
+    bad_size: int,
+    bad_fd: int,
+) -> None:
+    """An invalid buffer is reported even when the descriptor is also invalid.
+
+    The native order is buffer, reader, writer, adoption. Both arguments are
+    invalid here, so the message proves which check ran first: only the buffer
+    validator can produce it. Reporting ``file descriptor`` instead would mean
+    the order had been reversed, and on the pump path would mean the writer had
+    been adopted before the reader was validated — the ownership regression
+    this pins. Both values are deliberately interior ``i64``, so PyO3 extracts
+    them successfully and the classification is the boundary's own rather than
+    an extraction error.
+    """
+    with pytest.raises(ValueError, match="buffer_size") as excinfo:
+        entry_point(rust_streams, reader_fd=bad_fd, buffer_size=bad_size)
+
+    assert "file descriptor" not in str(excinfo.value), (
+        "buffer validation must run before descriptor conversion; found "
+        f"{str(excinfo.value)!r}"
+    )
+
+
 @_unix_only
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
-        st.integers(min_value=-(1 << 62), max_value=-1),
+        st.integers(min_value=_I64_MIN, max_value=-1),
         st.integers(min_value=_I32_MAX + 1, max_value=_I64_MAX),
     ),
 )
@@ -146,7 +243,7 @@ def test_consume_rejects_invalid_descriptor(
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
-        st.integers(min_value=-(1 << 62), max_value=-1),
+        st.integers(min_value=_I64_MIN, max_value=-1),
         st.integers(min_value=_I32_MAX + 1, max_value=_I64_MAX),
     ),
 )
@@ -244,3 +341,36 @@ def test_pump_default_buffer_matches_explicit(
         "omitting buffer_size must equal the explicit 65536 default"
     )
     assert default == len(payload), "the pump must transfer every payload byte"
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    [
+        pytest.param(_consume_with_buffer_size, id="consume"),
+        pytest.param(_pump_with_buffer_size, id="pump"),
+    ],
+)
+@_SUPPRESS_FIXTURE
+@given(
+    beyond_i64=st.one_of(
+        st.integers(min_value=1 << 63), st.integers(max_value=-((1 << 63) + 1))
+    )
+)
+def test_out_of_i64_buffer_size_stays_an_extraction_error(
+    rust_streams: ModuleType,
+    entry_point: _BufferSizeEntryPoint,
+    beyond_i64: int,
+) -> None:
+    """Values outside ``i64`` keep PyO3's ``OverflowError``, not ``ValueError``.
+
+    The typed boundary classifies what PyO3 successfully extracted. An
+    out-of-range integer never reaches it, so this stays an extraction error:
+    reclassifying it as a stream-validation failure would claim the boundary
+    saw an argument it never received.
+
+    ``OverflowError`` is a subclass of ``ArithmeticError``, not of
+    ``ValueError``, so ``pytest.raises(ValueError)`` would not mask a
+    regression here.
+    """
+    with pytest.raises(OverflowError):
+        entry_point(rust_streams, buffer_size=beyond_i64)
