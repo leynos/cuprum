@@ -292,9 +292,71 @@ escalation, not a workaround.
       `__call__` as delegating to the dispatch, i.e. it accepted the
       module-level extraction rather than re-proposing the bound-method form
       that R9104 bans.
+- [x] CodeRabbit review: a ninth pass, over the byte-identical tree that the
+      eighth reviewed, returned three findings where the eighth had returned
+      one. Two of the three are duplicates of each other, so the distinct work
+      list was two items, and the count discrepancy is the known
+      concurrent-invocation fork rather than a change in the tree — a second
+      reviewer ran against the same frozen SHA at the same time, hitting the
+      primary rate limit, and the two runs sampled different readings. Both
+      distinct findings turned out to be real. The first, `minor`, said the
+      example in the users' guide would raise `NameError` because
+      `BrokenPipePolicy` is never imported. The premise was wrong — the cited
+      line is twelve fences deep, i.e. ordinary prose, so no example names that
+      symbol — but the gap it pointed at was real: `BrokenPipePolicy` appeared
+      in no import line anywhere in the guide, so a reader following the prose
+      had no way to obtain it. Fixed by documenting the import. The second,
+      `major`, said the broken-pipe guard had example coverage where the encode
+      guard had a property test. That one was exactly right: the encode guard
+      has had `test_stream_echo_guard.py::test_echo_guard_preserves_capture_across_arbitrary_chunks`
+      since it landed, and the opt-in guard added here had none. Addressed by a
+      new module holding both guards' properties over one shared body; the
+      approach and its non-vacuity evidence have their own Progress entry
+      below.
+- [x] The ninth pass's `minor` fix was itself defective when first written, and
+      the defect was caught by running the gate rather than by reading the
+      diff. The fix documented the import inside a bare ```python fence, which
+      the published-example extractor rejects: every fence must be introduced
+      by a marker matching its language, and an unmarked one aborts collection
+      of the whole behavioural suite with
+      `AssertionError: docs/users-guide.md:220: unmarked fence`. The first
+      attempt to confirm this by script produced "28 unmarked fences" and did
+      not settle it, because the script counted closing fences (which never
+      carry a marker) and so diverged from the extractor's state machine. The
+      extractor's own logic was the arbiter: `_parse_examples` asserts
+      `pending is not None` on every fence-delimiter line, and `_consume_fence`
+      consumes the closer. Running the real test confirmed the failure and,
+      after the fix, confirmed its absence — 41 passed. The guidance is a note
+      about an import line rather than a runnable example, so it belongs in
+      prose; no example in the guide uses `BEST_EFFORT`, so nothing was lost.
+      Committed as `6b1bbfd1`.
+- [x] Property coverage for both echo guards, added as
+      `cuprum/unittests/test_echo_guard_property.py` and committed as
+      `254a306c`. Both guards are decided per *write*, so examples cannot reach
+      every payload, every byte partition, and every write position that can
+      fail — the region where a recovery one write too late, or one write too
+      eager, would hide. The module holds both properties over one shared body
+      parametrized by the exception the sink raises, so the two guards are read
+      side by side and a divergence in either fails one arm while the other
+      passes. Non-vacuity was established before the pass was trusted: sampling
+      the strategy gives 72% multi-chunk partitions, 38% failures after the
+      first write, 28% on the final write, and 52 distinct partitions across
+      200 examples. Two seeded mutations were then rejected for the intended
+      reason — removing the guard's stickiness trips "the echo guard must stop
+      further writes", and reporting the wrong category fails only the
+      `best-effort-broken-pipe` arm while `encode-guard-always-armed` passes,
+      which is the arm-isolation claim in the module docstring. The source was
+      restored afterwards and `git diff --stat` over the mutated file is empty.
+- [x] GitHub Actions on the tip `9e848e74`: every job green and none failed —
+      16 jobs `success` including `lint-test`, all four `Typecheck and test`
+      matrix legs (3.12 through 3.15a), `coverage`, `benchmark-ratchet`, both
+      extension-gated test jobs, `changes`, and all five wheel builds plus
+      `verify-wheel-install`; `Loom model smoke test` skipped as intended.
+      `9e848e74` is docs-only relative to the gate set below it, so this carries
+      the Python and Rust results forward rather than re-testing them.
 - [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
       evidence of a clean review. See the Surprises entry below: the bot
-      declines to review draft PRs, so all eight passes have been local CLI
+      declines to review draft PRs, so all nine passes have been local CLI
       invocations and the `Kody Code Review` check-run is `skipped`, not
       `success`. Re-verified at `f4c76c84`: the pull request carries zero
       CodeRabbit review comments and the only CodeRabbit-authored artefact on
@@ -476,6 +538,54 @@ escalation, not a workaround.
   just done rather than as a claim needing checking. Each of the three faults
   was an accurate description of a *plausible* design that was not the one
   implemented.
+- A seeded mutation is the cheapest way to tell a property test that checks
+  something from one that merely runs. The new module's two arms both passed on
+  the first correct run, which establishes nothing on its own — a property
+  whose generator cannot reach the interesting states, or whose assertions are
+  tautological, passes just as greenly. Two mutations settled it: deleting the
+  guard's `disabled = True` assignment (the recovery is one write too eager)
+  trips the sentinel assertion inside the fake sink with "the echo guard must
+  stop further writes", and relabelling the broken-pipe recovery as
+  `UNICODE_ENCODE` fails `best-effort-broken-pipe` while
+  `encode-guard-always-armed` still passes. The second mutation is the sharper
+  of the two, because it demonstrates the arm isolation the module's docstring
+  claims: the two guards share one body, so a fault in one must not be masked
+  by the other's success. Non-vacuity was checked separately, by sampling the
+  strategy rather than reasoning about it — 72% multi-chunk partitions, 38%
+  failures after the first write, 28% on the final write, 52 distinct
+  partitions.
+- A strategy whose element bound is derived from a generated length can be
+  unconstructible for the shortest input, and Hypothesis reports it as an error
+  rather than skipping those examples. `_write_counting_case` draws a payload
+  of at least one byte and then an interior cut point bounded by
+  `len(payload) - 1`, so a one-byte payload asks for
+  `st.integers(min_value=1, max_value=0)`:
+  `InvalidArgument: Cannot have max_value=0 < min_value=1`. The worked example
+  this module was modelled on cannot reach that state, because its payload is
+  always at least two bytes — a `safe` run of `min_size=1` plus a mandatory
+  rejected character — so it never needed the guard. The remedy is to clamp the
+  element bound rather than to raise the payload's minimum: the empty list the
+  clamp admits *is* the single-chunk partition, a real case worth covering, and
+  raising the floor would have quietly excluded it. Reading the failure as a
+  generation bug rather than an assertion failure is what pointed at the fix;
+  the two look different in the traceback, and only one of them means the code
+  under test is wrong.
+- The published-documentation example extractor treats an unmarked fence as a
+  hard error, and the error lands at *collection* time, so it takes the whole
+  behavioural suite with it rather than failing one test. Writing import
+  guidance inside a bare ```python fence produced
+  `AssertionError: docs/users-guide.md:220: unmarked fence` from
+  `_parse_examples`, and pytest reported `no tests collected, 1 error`. The
+  extractor's strictness is deliberate — `_consume_fence` also requires the
+  marker's kind to match the fence language and the code to contain an
+  `ast.Assert` — so the lesson is not that the rule is too tight but that a
+  fence in a published guide is a *claim that this code runs*, and prose about
+  an import is not. A first attempt to check this by script was worse than
+  useless: it reported 28 unmarked fences, because it counted closing
+  delimiters (which never carry a marker) and so diverged from the extractor's
+  state machine. Running the real test took one command and gave an unambiguous
+  answer. Where a repository ships a parser for a format, the parser is the
+  arbiter and a reimplementation of it is a second thing to debug.
 
 ## Decision log
 
@@ -577,23 +687,36 @@ each discharged by the tests named in `Verification plan`.
 The change introduces one narrow behavioural invariant. If it introduced none,
 this would say so; it does, so each obligation is listed with its method.
 
-| #   | Obligation                                                                                              | Method               | Artefact                                                                                                                  | Evidence / discharge                                                                                                                                             |
-| --- | ------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| O1  | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain                             | named pytest example | `cuprum/unittests/test_broken_pipe_echo_guard.py`                                                                         | negative control: `test_strict_policy_propagates_the_broken_pipe` fails if the recovery is not gated                                                             |
-| O2  | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe                       | named pytest example | same                                                                                                                      | captured bytes equal the payload; sink sees exactly one attempt                                                                                                  |
-| O3  | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT`                                  | named pytest example | same                                                                                                                      | `test_best_effort_propagates_non_broken_pipe_os_errors` proves the catch is narrow, not `OSError`-wide                                                           |
-| O4  | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only | named pytest example | same                                                                                                                      | `test_best_effort_warns_once_with_structured_extras` asserts record count, `exc_info is None`, the closed-set extras, and the absence of payload extras          |
-| O5  | The final decoder flush neither re-attempts the write nor re-raises                                     | named pytest example | same                                                                                                                      | `test_broken_pipe_on_the_final_decoder_flush_is_recovered` and `test_flush_after_broken_pipe_does_not_reattempt_the_write`                                       |
-| O6  | The policy reaches both the single-run and pipeline `_StreamConfig` builders                            | named pytest example | `cuprum/unittests/test_broken_pipe_result_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions on both paths                                                                                                          |
-| O7  | The metric increments once per affected drain under a distinct series                                   | named pytest example | `cuprum/unittests/test_echo_metrics.py`                                                                                   | `test_broken_pipe_counter_is_distinct_from_the_encoding_counter` asserts counter name, value, and labels; a second test proves nothing is counted under `STRICT` |
-| O8  | The ticket's reproduction returns a result under `BEST_EFFORT`                                          | behavioural test     | `tests/behaviour/test_broken_pipe_policy.py` + `tests/features/broken_pipe_policy.feature`                                | real subprocess, real sink, three scenarios                                                                                                                      |
+| #   | Obligation                                                                                                     | Method               | Artefact                                                                                                                  | Evidence / discharge                                                                                                                                                                                           |
+| --- | -------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| O1  | Under `STRICT` (default), `BrokenPipeError` propagates and aborts the drain                                    | named pytest example | `cuprum/unittests/test_broken_pipe_echo_guard.py`                                                                         | negative control: `test_strict_policy_propagates_the_broken_pipe` fails if the recovery is not gated                                                                                                           |
+| O2  | Under `BEST_EFFORT`, capture completes and echo stops after the first broken pipe                              | named pytest example | same                                                                                                                      | captured bytes equal the payload; sink sees exactly one attempt                                                                                                                                                |
+| O3  | A non-`BrokenPipeError` `OSError` still propagates under `BEST_EFFORT`                                         | named pytest example | same                                                                                                                      | `test_best_effort_propagates_non_broken_pipe_os_errors` proves the catch is narrow, not `OSError`-wide                                                                                                         |
+| O4  | Exactly one `WARNING`, one `EchoEvent`, one `RelayFallback` per transition, with closed-set extras only        | named pytest example | same                                                                                                                      | `test_best_effort_warns_once_with_structured_extras` asserts record count, `exc_info is None`, the closed-set extras, and the absence of payload extras                                                        |
+| O5  | The final decoder flush neither re-attempts the write nor re-raises                                            | named pytest example | same                                                                                                                      | `test_broken_pipe_on_the_final_decoder_flush_is_recovered` and `test_flush_after_broken_pipe_does_not_reattempt_the_write`                                                                                     |
+| O6  | The policy reaches both the single-run and pipeline `_StreamConfig` builders                                   | named pytest example | `cuprum/unittests/test_broken_pipe_result_diagnostics.py`, `cuprum/unittests/test_pipeline_relay_fallback_diagnostics.py` | result-level `relay_fallbacks` assertions on both paths                                                                                                                                                        |
+| O7  | The metric increments once per affected drain under a distinct series                                          | named pytest example | `cuprum/unittests/test_echo_metrics.py`                                                                                   | `test_broken_pipe_counter_is_distinct_from_the_encoding_counter` asserts counter name, value, and labels; a second test proves nothing is counted under `STRICT`                                               |
+| O8  | The ticket's reproduction returns a result under `BEST_EFFORT`                                                 | behavioural test     | `tests/behaviour/test_broken_pipe_policy.py` + `tests/features/broken_pipe_policy.feature`                                | real subprocess, real sink, three scenarios                                                                                                                                                                    |
+| O9  | O2 and O4's invariant holds for *every* payload, byte partition, and failing write position, under both guards | property test        | `cuprum/unittests/test_echo_guard_property.py`                                                                            | one shared body parametrized by the raising exception; both arms assert complete capture, no write after the rejection, one warning with the closed-set extras, and the matching category in `relay_fallbacks` |
 
 Non-vacuity: O1 is the seeded-fault control for O2 (same fixture, opposite
 policy, opposite outcome), and O3 is the control for the catch width. Every
 assertion can fail: O2 fails if recovery is unconditional, O1 fails if it is
 absent, O3 fails if the clause was widened to `OSError`. O7 carries its own
 control: the `STRICT` companion test asserts the counter list stays empty, so
-the metric cannot pass by counting every drain.
+the metric cannot pass by counting every drain. O9's non-vacuity was
+established twice over, because a property that passes proves nothing until it
+can fail: first by sampling its own generator — 72% multi-chunk partitions, 38%
+of failures after the first write and 28% on the final write, 52 distinct
+partitions across 200 examples, so the interesting states are genuinely
+reachable rather than excluded by the bounds — and then by two seeded
+mutations, both rejected for the intended reason. Deleting the guard's
+`disabled = True` assignment trips the fake sink's sentinel ("the echo guard
+must stop further writes"); relabelling the broken-pipe recovery as
+`UNICODE_ENCODE` fails only the `best-effort-broken-pipe` arm while
+`encode-guard-always-armed` passes, which is what demonstrates the arm
+isolation the module claims. O9 therefore also carries the negative control for
+O2 and O4 across the whole input space rather than the single fixture they use.
 
 Axioms: `BrokenPipeError` is a subclass of `ConnectionError` and `OSError` in
 CPython 3.13 (verified by the O3 test, which relies on that relationship to be
@@ -601,6 +724,35 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 17: code changed, in two commits, and both changes answer the ninth
+CodeRabbit pass's distinct findings. `254a306c` adds
+`cuprum/unittests/test_echo_guard_property.py`, closing the `major` finding
+that the broken-pipe guard had only example coverage where the encode guard has
+had a property test since it landed. The new module holds both guards'
+properties over one shared body parametrized by the exception the sink raises,
+so the two are read side by side and a fault in one fails one arm while the
+other passes. The pass is not evidence until the property can fail, so
+non-vacuity was established first (72% multi-chunk partitions, 38% failures
+after the first write, 28% on the final write, 52 distinct partitions across
+200 samples) and two seeded mutations were rejected for the intended reason.
+`6b1bbfd1` answers the `minor` finding, whose premise was wrong but whose
+substance was right: the cited users' guide line is prose twelve fences deep,
+so no example raises `NameError`, but `BrokenPipePolicy` genuinely appeared in
+no import line in that guide, and a reader following the prose had no way to
+obtain it. The import is now documented. The first spelling of that fix put the
+guidance inside a bare
+
+```python fence and was itself defective — the published-example extractor
+rejects an unmarked fence at collection time, taking the whole behavioural suite
+with it (`docs/users-guide.md:220: unmarked fence`) — so the guidance moved into
+prose, where it belongs, since no example in the guide uses `BEST_EFFORT`. That
+defect and the property module's own generation bug both have Surprises
+entries. The status stays COMPLETE: the property module is test material and the
+guide edit is prose about an import, so no production behaviour changed. The
+gate set for this revision is the first that must include `typecheck` and the
+Python gates on their own merits since the earliest revisions, because the
+`cuprum` tree is no longer byte-identical to the one the last full run read.
 
 Revision 16: no code changed. An eighth CodeRabbit pass at `f4c76c84` returned
 one finding, where the seventh had returned zero, and the two runs are directly
