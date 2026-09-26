@@ -236,8 +236,8 @@ unsupported-representation test and must not disable undefined-behaviour checks.
 Issue #427 extends the pinned Miri command to two separately logged invocations:
 
 ```bash
-cargo +nightly-2026-08-07 miri test --package cuprum-native-io --lib
-cargo +nightly-2026-08-07 miri test --package cuprum-streams --lib
+cargo +nightly-2026-08-07 miri test --manifest-path rust/Cargo.toml --package cuprum-native-io --lib
+cargo +nightly-2026-08-07 miri test --manifest-path rust/Cargo.toml --package cuprum-streams --lib
 ```
 
 The observed result was 13 native tests passed with 0 ignored and 67 stream
