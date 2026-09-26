@@ -55,8 +55,8 @@ only when no positive hand-off evidence was captured.
 | ------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
 | A parent write end for a child's stdin pipe survives while that child waits in `pipe_read` and its upstream stage exited | `HUNG_HANDOFF`: fail    |
 | Every tracked child has exited and a parent-owned read end still reports queued output bytes                             | `HUNG_HANDOFF`: fail    |
-| Tasks are still pending, children were tracked, and none of them is runnable                                             | `HUNG_HANDOFF`: fail    |
-| No rule above matched                                                                                                    | `HOST_STARVATION`: skip |
+| Pending tasks remain while children were tracked and no tracked child is `R` or `D`                                      | `HUNG_HANDOFF`: fail    |
+| No `HUNG_HANDOFF` evidence applies, and a present non-zombie child is `R` or `D`                                         | `HOST_STARVATION`: skip |
 
 A zombie and a reaped pid both count as exited, so the fail rules accept
 either. The 30-second aggregate deadline reached inside `_monitor_progress` is
