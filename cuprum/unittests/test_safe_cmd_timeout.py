@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import contextlib
 import sys
 import typing as typ
 
@@ -111,12 +112,14 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
                 "import pathlib",
                 "import signal",
                 "import time",
-                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
-                "pid_file.write_text(str(os.getpid()))",
                 "def _ignore(_signum, _frame):",
                 "    pass",
                 "signal.signal(signal.SIGTERM, _ignore)",
                 "signal.signal(signal.SIGINT, _ignore)",
+                "pid_file = pathlib.Path(os.environ['CUPRUM_PID_FILE'])",
+                "pid_tmp = pid_file.with_name(pid_file.name + '.tmp')",
+                "pid_tmp.write_text(str(os.getpid()))",
+                "pid_tmp.replace(pid_file)",
                 "while True:",
                 "    time.sleep(0.1)",
             ),
@@ -139,16 +142,26 @@ def test_non_cooperative_subprocess_is_escalated_and_killed(
         )
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 5.0
-        while loop.time() < deadline:
-            if pid_file.exists():
-                break
-            await asyncio.sleep(0.05)
-        else:  # pragma: no cover - defensive guard for CI slowness
-            pytest.fail("PID file was not created within 5s")
+        try:
+            while loop.time() < deadline:
+                if pid_file.exists():
+                    break
+                await asyncio.sleep(0.05)
+            else:  # pragma: no cover - defensive guard for CI slowness
+                pytest.fail("PID file was not created within 5s")
+            # The child publishes by renaming a fully written temporary file
+            # onto ``pid_file``, so the file's existence proves the PID is
+            # complete; nothing here can read a partially written value.
+            pid = int(pid_file.read_text())
+        except BaseException:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        return int(pid_file.read_text())
+        return pid
 
     pid = asyncio.run(orchestrate())
     wait_for_process_death(pid, seconds=1.0, context="cancellation")
