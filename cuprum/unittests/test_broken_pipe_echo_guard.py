@@ -253,17 +253,30 @@ def test_best_effort_warns_once_with_structured_extras(
         f"exactly one disable warning must be logged for records={caplog.records!r}"
     )
     record = warnings[0]
-    assert record.levelno == logging.WARNING
-    assert record.getMessage() == "echo_disabled_stream_rejected_output"
+    assert record.levelno == logging.WARNING, (
+        f"the disable event must log at WARNING, got levelno={record.levelno!r}"
+    )
+    assert record.getMessage() == "echo_disabled_stream_rejected_output", (
+        f"the record must carry the stable event name, got {record.getMessage()!r}"
+    )
     assert record.exc_info is None, (
         "the handled sink failure must not carry the original exception: "
         f"exc_info={record.exc_info!r}"
     )
     fields = vars(record)
-    assert fields["cuprum_operation"] == "echo_chunk"
-    assert fields["cuprum_stream"] == "stdout"
-    assert fields["cuprum_transition"] == "echo_disabled"
-    assert fields["cuprum_error_category"] == "broken_pipe"
+    assert fields["cuprum_operation"] == "echo_chunk", (
+        f"the operation extra must name the write path, got {fields!r}"
+    )
+    assert fields["cuprum_stream"] == "stdout", (
+        f"the stream extra must name the disabled stream, got {fields!r}"
+    )
+    assert fields["cuprum_transition"] == "echo_disabled", (
+        f"the transition extra must name the state change, got {fields!r}"
+    )
+    assert fields["cuprum_error_category"] == "broken_pipe", (
+        "the category extra must distinguish this transition from an "
+        f"encoding failure, got {fields!r}"
+    )
     assert "cuprum_encoding" not in fields, (
         "the sink encoding must not reach the warning record"
     )

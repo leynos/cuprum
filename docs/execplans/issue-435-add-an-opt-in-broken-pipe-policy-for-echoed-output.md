@@ -74,8 +74,14 @@ escalation, not a workaround.
   of the three projections.
 - **Inter-stage pump errors are out of scope.** This policy governs the echo
   sink only. `cuprum._streams_pump` failures are untouched.
-- **No new public surface beyond one enum.** `BrokenPipePolicy` is exported;
-  `RelayFallback`, `EchoEvent`, and `CommandResult` field lists do not change.
+- **The new public surface is additive and enumerable.** It comprises the
+  exported `BrokenPipePolicy` enum, its `RunOutputOptions.broken_pipe_policy`
+  field and matching `resolved_broken_pipe_policy` property, the
+  `EchoErrorCategory.BROKEN_PIPE` member, and the exported
+  `ECHO_BROKEN_PIPE_TOTAL` metrics constant. Everything is additive: nothing
+  existing is renamed, re-typed, or removed. Separately, the *record* shapes
+  are frozen — `RelayFallback`, `EchoEvent`, and `CommandResult` field lists do
+  not change, so the policy adds no new projection payload.
 
 ## Tolerances (exception triggers)
 
@@ -127,6 +133,12 @@ escalation, not a workaround.
       line, which the COMPLETE edit above discharges.
 - [x] GitHub Actions at `b6577081`: every non-skipped check passes, and
       `mergeStateStatus` is `CLEAN`.
+- [x] CodeRabbit review: a third pass at `41770cb4` returned four non-blocking
+      findings, all presentational — a missing `Returns` section on
+      `resolved_broken_pipe_policy`, six unnamed expected values in the guard
+      test's assertions, the under-described public surface above, and a
+      first-person pronoun in the Revision 5 note. All four are addressed in
+      this revision, which is the ninth.
 
 ## Surprises & discoveries
 
@@ -280,6 +292,23 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
+Revision 9: a third CodeRabbit pass at `41770cb4` returned four non-blocking
+findings, again all presentational rather than behavioural. Two were on the new
+test material and the public surface: the `resolved_broken_pipe_policy`
+docstring lacked the NumPy-style `Returns` section that every sibling property
+in this repository carries, and six assertions in the drain-level guard test
+stated a comparison without naming the expected value, so a failure would
+report a mismatch rather than an intent. The other two were consistency faults
+in this plan itself: the public-surface constraint under-described the
+additions — listing only the enum, when the shipped change also adds the
+options field, its resolving property, the error category member, and the
+metrics constant — and the Revision 5 note below used a first-person pronoun
+where the rest of the document is impersonal. Revision 5's substance is
+unchanged: both failed gates were implementation faults, not plan faults, and
+this revision only rewrites how that is phrased. The status remains COMPLETE,
+since these findings change prose, docstrings, and assertion messages only,
+never behaviour.
+
 Revision 8: the plan is COMPLETE. A second CodeRabbit pass at `b6577081`
 returned one finding only — that the status line still said it was in progress
 — and every required CI check on that head passes, so the claim is now true
@@ -305,16 +334,16 @@ Revision 6: the draft pull request is open as
 [cuprum#503](https://github.com/leynos/cuprum/pull/503), which discharges the
 delivery requirement.
 
-Revision 5: every commit gate passes on the final tree. Two gates failed first
-and both were mine to fix, not the plan's: the spelling gate rejected seven
-words where the new prose used the British `-ise` ending that the project's
-Oxford policy forbids — the gate also rejects those very spellings when they
-appear here inside backticks, so this note deliberately does not quote them —
-and `make lint` rejected six findings in the new test material: a long literal
-raised directly from two sink doubles, an unused import, a rule *code* where
-the suppression comment wants the rule name, and two step docstrings not in the
-imperative mood. `make fmt` had not been run on the new files either, so six
-needed reformatting.
+Revision 5: every commit gate passes on the final tree. Two gates failed first,
+and both failures lay in the implementation rather than in the plan: the
+spelling gate rejected seven words where the new prose used the British `-ise`
+ending that the project's Oxford policy forbids — the gate also rejects those
+very spellings when they appear here inside backticks, so this note
+deliberately does not quote them — and `make lint` rejected six findings in the
+new test material: a long literal raised directly from two sink doubles, an
+unused import, a rule *code* where the suppression comment wants the rule name,
+and two step docstrings not in the imperative mood. `make fmt` had not been run
+on the new files either, so six needed reformatting.
 
 Revision 4 covered all three tasks committed and documented. Revision 3
 recorded the verification plan table naming the artefacts that actually

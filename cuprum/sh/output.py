@@ -291,6 +291,11 @@ class RunOutputOptions:
         ``__post_init__`` normalizes the field, but the declared type stays
         wide because a caller may spell the policy as a string. This is the
         narrow view the execution layer reads, so it never has to parse.
+
+        Returns
+        -------
+        BrokenPipePolicy
+            The normalized policy member, never a string and never ``None``.
         """
         return _parse_broken_pipe_policy(self.broken_pipe_policy)
 
