@@ -246,7 +246,9 @@ def test_the_selector_resolves_the_whole_root_module_population() -> None:
     modules = _root_modules()
     covered = _covered_modules()
     unresolved = sorted(
-        module for module in modules if module not in covered and module not in EXCEPTIONS
+        module
+        for module in modules
+        if module not in covered and module not in EXCEPTIONS
     )
     assert not unresolved, _remedy(unresolved)
     assert len(covered) > 1, (
