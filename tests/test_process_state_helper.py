@@ -63,14 +63,21 @@ def _fork_immediately_exiting_child() -> int:
 
 
 def _wait_for_exit(pid: int) -> None:
-    """Reap ``pid``, waiting for it to exit if it has not already.
+    """Reap ``pid``, blocking until it exits if it has not already.
 
-    Reaping is best effort: the test's assertions are about the observations
-    taken around this call, so a child that has already been collected -- or a
-    pid this process no longer owns -- must not turn that into an error.
+    The wait blocks on purpose. ``WNOHANG`` would return without reaping a
+    child that was still live -- the case when the caller's own ``waitid``
+    raised first -- leaving a zombie behind for the rest of the session. The
+    child under test calls ``os._exit(0)`` immediately, so the block is
+    bounded.
+
+    Reaping is still best effort: the test's assertions are about the
+    observations taken around this call, so a child that has already been
+    collected -- or a pid this process no longer owns -- must not turn that
+    into an error.
     """
     with contextlib.suppress(ChildProcessError, OSError):
-        os.waitpid(pid, os.WNOHANG)
+        os.waitpid(pid, 0)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="requires Linux procfs")
