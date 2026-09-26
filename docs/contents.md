@@ -39,6 +39,10 @@ open each document.
 
 ## Design and decisions
 
+- [Terms of reference](terms-of-reference.md) - reconstructed product charter,
+  stakeholders, goals, constraints, success criteria, and open scope decisions.
+- [Domain context and design gaps](context.md) - shared terminology, system
+  boundaries, assessed baseline, requirement-linked gaps, and closure evidence.
 - [Cuprum design](cuprum-design.md) - system architecture, command model,
   pipeline design, Rust extension strategy, and benchmark policy.
 - [ADR-001: Rust extension](adr-001-rust-extension.md) - accepted decision to
