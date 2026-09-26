@@ -178,6 +178,33 @@ escalation, not a workaround.
       the test's callback replaced with a nested `def`). Re-verified in
       isolation: df12 lints clean, `ruff check` clean, `ruff format` clean,
       `ty check --python .venv` clean, and 45 focused tests pass.
+- [x] Gate run on Revision 12's tree exposed one further failure, again created
+      by the Revision 12 prose itself: `make check-fmt` reported
+      `mdtablefix` wanting a `+7 -6` rewrap of the Surprises bullet that records
+      the typecheck fix. Fixed by `make fmt` and committed as `a6b8ba14` — a
+      pure line rewrap, no content change. GitHub Actions agreed: on
+      `a6b8ba14` the `lint-test` job's `Check formatting` and `Lint Markdown`
+      steps both pass, where `Check formatting` had failed on `a801de86`.
+- [x] `make check-fmt` re-run on `a6b8ba14`: clean (`676 files already
+      formatted`, `78 files left unchanged`).
+- [x] CodeRabbit review: a sixth pass, at `a801de86`, returned zero findings
+      across all 21 changed files, and the absence is verified rather than
+      assumed. The CLI's own persisted record under
+      `~/.coderabbit/reviews/` names the reviewed identity
+      (`head: a801de86`, `base: 991dee6` = `origin/main`), and its
+      `internalState.json` shows the evaluated diff contained both Revision 12
+      fixes — `kw_only=True` present and `_record_error_metric` present three
+      times — so the zero is an evaluation of the current tree, not a cached
+      replay of an earlier pass. CodeRabbit's own file summary describes
+      `__call__` as delegating to the dispatch, i.e. it accepted the
+      module-level extraction rather than re-proposing the bound-method form
+      that R9104 bans.
+- [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
+      evidence of a clean review. See the Surprises entry below: the bot
+      declines to review draft PRs, so all six passes have been local CLI
+      invocations and the `Kody Code Review` check-run is `skipped`, not
+      `success`. Un-drafting the PR is expected to produce a first hosted
+      review against the then-current tree.
 
 ## Surprises & discoveries
 
@@ -261,6 +288,35 @@ escalation, not a workaround.
   `make test` is therefore not evidence that a new test's callables are
   correctly typed, and `make typecheck` must be part of the gate set for any
   delta that adds one.
+- CodeRabbit's GitHub app never reviewed this pull request, and the reason is
+  this task's own delivery requirement. The bot skips draft PRs: the
+  `Kody Code Review` check-run reads `skipped` with
+  `output_summary: "Prerequisites validation failed."`, and its only artefact
+  on the PR is a boilerplate notice reading "Draft PR not reviewed — Draft PRs
+  are not automatically reviewed by default." All six passes have therefore
+  been local `coderabbit review --agent` invocations, and the two hosted
+  surfaces — inline threads and walkthrough rows — have never held a CodeRabbit
+  object. The trap is that every web search of those surfaces returns *clean*:
+  zero inline comments, zero `CHANGES_REQUESTED`, so a checker that reads
+  absence as approval would conclude the review loop had converged six times
+  when in fact the hosted reviewer has never run. This is the same class of
+  error as the `isResolved` row above and the `.gitignore` gap in
+  `find_dead_imports`: a query that cannot distinguish "nothing found" from
+  "nothing looked at". The tell is that the check-run name is
+  `Kody Code Review`, so a name search for `coderabbit` finds nothing and is
+  easily mistaken for the app being absent. Consequence: un-drafting the PR is
+  expected to produce a *first* hosted review, which is not scoped by any
+  evidence gathered so far.
+- `make test`'s `test-python` recipe is a `for` loop over the pytest globs with
+  `|| exit $$?`, so the first failing glob aborts the loop and silently masks
+  every later glob *and* `test-rust`. In this task a single known-flaky doctest
+  timeout masked eight of nine globs — including the whole of
+  `tests/behaviour/` — while the run still looked like "one flake". The
+  isolation evidence was sound (0.82 s against a 30 s bound, a 36× margin, in a
+  module importing none of the changed symbols), but the masking is a separate
+  defect from the flake, and only the per-glob log shows which targets actually
+  executed. Treat the tail of a `make test` log as evidence of what ran, never
+  the exit code.
 
 ## Decision log
 
@@ -290,6 +346,18 @@ escalation, not a workaround.
   build those dataclasses directly, and the plan's tolerance says existing
   tests must not need editing for the change to be additive. The default is
   also the honest value: a bundle built without naming a policy is strict.
+- Decision: do **not** split `cuprum/unittests/test_public_api.py`, now 415
+  lines, despite the `Tolerances` trigger naming the 400-line ceiling. The
+  tolerance is scoped to "any touched production module", and this is a test
+  module that `pylint` does not walk at all — `cuprum/unittests` has no
+  `__init__.py`, so the recursive walk never descends into it, which is why the
+  file has sat above the ceiling without failing `make lint`. Thirty-three test
+  modules already exceed 400 lines, the largest at 993. Splitting it would
+  contradict the local convention to satisfy a rule that does not apply, so the
+  trigger is judged not to fire. Recorded rather than left implicit because the
+  FileLength check is a live question on every future touch of this file; if
+  the project ever adds `__init__.py` under `cuprum/unittests` or widens
+  pylint's walk, this decision must be revisited.
 
 ## Outcomes & retrospective
 
@@ -374,6 +442,24 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 13: no code changed. The gate run on Revision 12's tree failed
+`make check-fmt` because the prose Revision 12 added to this file — the
+Surprises bullet about the typecheck fix — was wrapped at a width `mdtablefix`
+rejects; a `+7 -6` rewrap is all it wanted. `make fmt` applied it and it landed
+as `a6b8ba14`, a docs-only commit. GitHub Actions confirms the fix
+independently: on `a801de86` the `lint-test` job died at its `Check formatting`
+step, and on `a6b8ba14` that step passes and the job runs on through
+`Lint Markdown` and skylos to `success`. Two findings from the same run are
+recorded rather than fixed. First, CodeRabbit's hosted review never ran,
+because the bot declines to review drafts — so the six passes behind this plan
+are all local CLI runs, and the hosted surfaces being empty means *not
+reviewed*, not *nothing to report*; un-drafting will elicit a first hosted
+review that no evidence here covers. Second, a known-flaky doctest timeout
+masked eight of nine pytest globs and all of `test-rust`, because `make test`'s
+glob loop exits on the first failure; the glob list in the log, not the exit
+code, is what says which targets ran. The reflow also means the reviewed SHA
+has advanced past the reviewed tree by one docs-only commit.
 
 Revision 12: the gate run on Revision 11's tree failed two gates, both on the
 Revision 11 delta itself, and both are now fixed. `make lint` aborted
