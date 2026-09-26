@@ -29,10 +29,9 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.ci_workflows import workflow_sources
+from tests.helpers.ci_workflows import run_scripts
 from tests.helpers.docs import repo_root
 from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
-from tests.helpers.strict_yaml import load
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
@@ -286,16 +285,11 @@ def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
     the command by its leading tokens, rather than by substring, keeps a
     mention in a comment from satisfying it.
     """
-    callers: list[str] = []
-    for workflow_name, source in workflow_sources():
-        document = typ.cast("dict[str, typ.Any]", load(source, workflow_name))
-        for job_name, job in (document.get("jobs") or {}).items():
-            for step in typ.cast("dict[str, typ.Any]", job).get("steps") or []:
-                script = typ.cast("dict[str, typ.Any]", step).get("run")
-                if isinstance(script, str) and script_runs_command(
-                    script, CI_SUITE_TARGET
-                ):
-                    callers.append(f"{workflow_name}:{job_name}")
+    callers = [
+        f"{workflow_name}:{job_name}"
+        for workflow_name, job_name, _index, script in run_scripts()
+        if script_runs_command(script, CI_SUITE_TARGET)
+    ]
     assert callers, (
         f"no workflow step runs `{CI_SUITE_TARGET}`, so {SELECTOR} is never "
         "evaluated in CI and every coverage assertion above is moot"
