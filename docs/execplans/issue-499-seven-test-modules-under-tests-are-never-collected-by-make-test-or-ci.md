@@ -5,7 +5,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: IMPLEMENTED, awaiting gates and pull request
 
 ## Purpose / big picture
 
@@ -131,9 +131,23 @@ contract module under `tests/` and forgets to name it will be told so by
   by the task brief does not exist; the four `#488` step-execution modules
   carry no `skipif`, no `sys.platform` check, and no platform guard of any
   kind. The conditional instruction therefore does not apply.
-- [ ] Task 2: rename the seven modules to `tests/test_ci_*.py`.
-- [ ] Task 3: add `tests/helpers/makefile.py` and
-  `tests/test_ci_test_selection_contract.py`, and document the rule.
+- [x] (2026-09-26 16:30Z) Task 1 completed: resolved the sampler's 40 s bound /
+  30 s suite timeout conflict with a per-test `@pytest.mark.timeout(120)`
+  marker rather than by shortening the wait or loosening the suite default, and
+  added skip reasons for non-Linux hosts and for a missing `free`/`df`/`du`.
+  The toolbox assertion deliberately does not skip on a missing tool.
+- [x] (2026-09-26 16:45Z) Task 2: renamed the seven modules and the syrupy
+  snapshot with `git mv`; updated the `test-dev-fast-contract` recipe, the loom
+  module docstring, the `ci_runners.py` comment, and two developers'-guide
+  references. `make test-python` collects and passes all seven.
+- [x] (2026-09-26 17:15Z) Task 3: added `tests/helpers/makefile.py` (makeutil
+  JSON reader with recursive expansion) and
+  `tests/test_ci_test_selection_contract.py`, and documented the rule under
+  "Test selection" in the developers' guide.
+- [x] (2026-09-26 17:30Z) Guard non-vacuity discharged: both negative controls
+  are rejected. Renaming one module back out of the selector fails four guard
+  tests and names the module; removing `tests/test_ci_*.py` from
+  `PYTEST_TARGETS` fails 52.
 - [ ] Milestone gates and CodeRabbit review per milestone.
 - [ ] Push and open a draft pull request.
 
@@ -190,6 +204,39 @@ contract module under `tests/` and forgets to name it will be told so by
   `timeout`. Impact: the guard enumerates `tests/test_*.py` positively, which
   is the same set the issue names.
 
+- Observation: `makeutil`'s `raw_value` preserves the source's
+  backslash-newline continuations verbatim, so a naive `.split()` on the
+  expanded value yields a literal `\` word between every pair of patterns.
+  Worse, it is a *silent* defect: `selected_paths` skips a pattern that does
+  not end in `.py`, so the stray backslashes were discarded and the resolved
+  file set looked correct. The helper now collapses continuations the way
+  `make` does before splitting. Evidence: the first smoke test printed
+  `PYTEST_TARGETS` as nine alternating path/`\` tokens; the resolved set was
+  nonetheless 344 files and included all seven. Impact: only the returned tuple
+  was wrong, but any future caller comparing words would have been misled. This
+  is why `variable_expansion` joins continuations rather than splitting the raw
+  text.
+
+- Observation: `Path("tests") == "tests"` is `False`. The guard's first version
+  filtered selector results with `path.parent == "tests"`, which excluded every
+  module; 54 of 56 guard tests failed reporting modules as uncovered that the
+  selector plainly names. Evidence: the first Green run of
+  `tests/test_ci_test_selection_contract.py` reported 54 failures naming all 49
+  root modules. Impact: the comparison now uses a module-level
+  `_TESTS = Path ("tests")`, and the constant's comment records why a string
+  comparison cannot be used here.
+
+- Observation: the guard's own name puts it inside the selector it polices.
+  `tests/test_ci_test_selection_contract.py` matches `tests/test_ci_*.py`, so
+  removing that pattern also removes the guard. Evidence: negative control B,
+  which deleted the pattern, failed 52 of the 56 tests rather than all of them
+  — the four that survived include the seeded-fault control, which needs no
+  selector. Impact: accepted and recorded in `Context and orientation` as a
+  residual gap. The alternative — putting the guard outside the selector — is
+  not collected either, so it would guard nothing. The `test_ci_` family is the
+  right home; a repository-wide selector rewrite is a bigger change than issue
+  #499 asks for.
+
 ## Decision log
 
 - Decision: rename the seven modules into the existing `tests/test_ci_*.py`
@@ -206,16 +253,33 @@ contract module under `tests/` and forgets to name it will be told so by
   those exclusions auditable at a glance. Date/Author: 2026-09-26, agent.
 
 - Decision: resolve the `tests/test_resource_sampler_action.py` 40 s bound /
-  30 s timeout conflict by keeping the assertion meaningful and making the wait
-  bounded by the suite timeout rather than exceeding it. Rationale: the
-  40-second bound was presumably chosen to tolerate a slow sampler start, but
-  it is unreachable — pytest-timeout kills the test at 30 s first, so on a slow
-  host the test fails with a bare timeout and loses the module's own
-  diagnostic. Raising the suite timeout for the whole repository to accommodate
-  one module would relax every other test's protection, and the module does not
-  need 40 s: triage shows the first row arriving in well under a second. The
-  resolution keeps a real bound, keeps the diagnostic, and adds the
-  prerequisite skip the brief asks for. Date/Author: 2026-09-26, agent.
+  30 s timeout conflict by keeping the 40 s wait and raising *that one test's*
+  ceiling with `@pytest.mark.timeout(120)`. The constants are named
+  `SAMPLE_DEADLINE_SECONDS = 40` and `SAMPLE_TEST_TIMEOUT_SECONDS = 120`, and
+  the marker is sized above the wait (40 s) plus the start step's own
+  subprocess limit (60 s). Rationale: the wait is meaningful — the sampler's
+  loop is `while sleep 15`, so its first row lands near 15 s and its second
+  near 30 s, and 40 s is what tolerates one missed interval on a loaded runner.
+  Shortening it to fit under 30 s would remove exactly that tolerance, and
+  truncating the wait at the suite ceiling would make the test's own "produced
+  no rows within N s" message unreachable, so a slow host would see an
+  unexplained timeout instead of the diagnostic naming the sampler. Raising the
+  suite-wide default in `pyproject.toml` to accommodate one module would relax
+  every other test's protection. Narrowing it to one test costs nothing and
+  keeps both the real bound and the diagnostic. The brief also asked for a skip
+  on non-Linux hosts and on a missing `free`/`df`/`du`: both are implemented,
+  and the toolbox assertion itself deliberately does *not* skip on a missing
+  tool, because that is the defect it exists to catch and a skip there would
+  make it a tautology. Date/Author: 2026-09-26, agent.
+
+- Decision: name the mutation-workflow contract
+  `tests/test_ci_mutation_workflow_contract.py` rather than
+  `tests/test_ci_workflow_contract.py`. Rationale: its subject is the
+  mutation-mutmut caller workflow specifically, and the shorter name would read
+  as if it owned every workflow contract, which
+  `tests/test_ci_test_selection_contract.py` and the other workflow contracts
+  would then appear to contradict. The brief named this module explicitly, so
+  the choice is recorded rather than assumed. Date/Author: 2026-09-26, agent.
 
 - Decision: read the Makefile through `makeutil parse Makefile`, the pinned
   parser the repository already depends on, rather than through a local regex.
@@ -230,9 +294,57 @@ contract module under `tests/` and forgets to name it will be told so by
   the general one, and the guard test uses the general one. Date/Author:
   2026-09-26, agent.
 
+- Decision: leave `tests/test_ci_act_harness_contract.py`'s private
+  `_directives`/`_variable`/`_target` readers in place rather than re-pointing
+  that module at `tests/helpers/makefile.py`. Rationale: `AGENTS.md` requires
+  sweeping for an existing equivalent before adding an abstraction, and that
+  module does contain one — so the choice is deliberate, not an oversight. Its
+  reader answers a different question: it asserts *textual* properties of a
+  recipe (that the literal `$(ACT_SCENARIO_TARGETS)` appears in `test-act`'s
+  argv, that `CUPRUM_REQUIRE_ACT` appears in exactly one directive across the
+  whole file). Neither is an expansion, and the second is a census over the
+  source that a parsed variable table cannot answer. Re-pointing it would lose
+  the cross-file directive count and the literal-token assertions. The two
+  readers coexist with documented scopes: the private one reads this Makefile's
+  text for byte-level contracts, the shared one reads the parsed selector for
+  set-membership contracts. Date/Author: 2026-09-26, agent.
+
 ## Outcomes & retrospective
 
-Not yet complete. To be written at each milestone boundary.
+`EP-M1` through `EP-M3` are complete; the gates and the pull request remain.
+
+What was achieved. All seven modules issue #499 named now run under
+`make test-python`: `env -u BASH_ENV make test-python` passes with the
+`tests /test_ci_*.py` pattern collecting 688 tests, and each of the seven
+appears in the collected set by name. `make test-dev-fast-contract` collects
+the renamed dev-fast module and its two snapshots. The guard,
+`tests/test_ci_test_selection_contract.py`, passes 56 tests and rejects both
+negative controls: renaming one module back out of the selector fails four of
+its tests naming that module, and deleting `tests/test_ci_*.py` from
+`PYTEST_TARGETS` fails 52. The rule is documented under "Test selection" in the
+developers' guide.
+
+What went differently from the plan. Task 1 was expected to need repairs;
+triage found none, so the only Task 1 work was the sampler's latent timeout
+conflict. The plan anticipated that the makefile helper would be a fresh
+abstraction over a tree with no equivalent; in fact
+`tests/test_ci_act_harness_contract.py` already held a private reader, and the
+decision log now records why the two coexist rather than one replacing the
+other. The plan expected the guard could be written and observed Red *before*
+the rename; because the rename was already applied by the time the helper was
+finished, the Red evidence is the two negative controls instead, which is the
+stronger artefact — they are reproducible on the final tree rather than being a
+transcript of a state that no longer exists.
+
+Lessons. Three defects surfaced during Task 3 that examples alone would not
+have caught, and each is recorded in `Surprises & discoveries`: `makeutil`'s
+raw values carry continuation backslashes that `.split()` turns into spurious
+words; `Path("tests") == "tests"` is `False`, so a string comparison silently
+excluded every module; and the guard's own name places it inside the selector
+it polices. The first two are invisible in a passing run — the resolved set was
+correct in both cases despite the bugs — which is the argument for reading the
+selector structurally and asserting non-vacuity rather than trusting a green
+result.
 
 ## Context and orientation
 
@@ -483,43 +595,66 @@ uv run pytest tests/test_ci_test_selection_contract.py -v
 
 ## Validation and acceptance
 
-Red-Green-Refactor evidence:
+Red-Green-Refactor evidence. The order the work actually ran in differs from
+the plan: the rename landed before the guard was finished, so the Red stage is
+reproduced as two negative controls applied to the finished tree rather than as
+a transcript of a state that no longer exists. Reproducing them on the final
+tree is the stronger artefact, because a reader can re-run them.
 
-- Red: with the guard and helper written but the renames not yet applied,
+- Red, control A: rename one module back out of the selector, then
 
   ```bash
-  uv run pytest tests/test_ci_test_selection_contract.py -v
+  git mv tests/test_ci_setup_sccache_action.py tests/test_setup_sccache_action.py
+  uv run pytest tests/test_ci_test_selection_contract.py -q
+  git mv tests/test_setup_sccache_action.py tests/test_ci_setup_sccache_action.py
   ```
 
-  must fail, and the failure message must name all seven uncollected modules.
-  Expected shape:
+  fails four tests. The named check and the per-module check both report, and
+  the message names the module and both fixes:
 
   ```plaintext
-  AssertionError: these root-level modules no target in PYTEST_TARGETS or
-  ACT_SCENARIO_TARGETS collects: tests/test_codescene_environment_contract.py,
-  tests/test_coverage_scratch_discard.py, tests/test_loom_workflow_contract.py,
-  tests/test_resource_sampler_action.py, tests/test_setup_sccache_action.py,
-  tests/test_workflow_contract.py, tests/test_dev_fast_action.py. Fix by
-  renaming to tests/test_ci_*.py or adding the module to PYTEST_TARGETS.
+  AssertionError: these root-level modules are collected by no target the suite
+  runs, so nothing executes them:
+    - tests/test_setup_sccache_action.py
+  Fix by either renaming each module to `tests/test_ci_*.py`, which
+  PYTEST_TARGETS already collects, or adding it to PYTEST_TARGETS in the
+  Makefile. A module that is deliberately collected elsewhere can be listed in
+  test_ci_test_selection_contract.EXCEPTIONS with its target and reason instead.
   ```
 
-- Green: after the renames, the same command passes, and
-  `make test-python` collects and passes all seven.
+- Red, control B: delete the `tests/test_ci_*.py` pattern from
+  `PYTEST_TARGETS` and run the same command. It fails 52 of 56 tests. This is
+  the control that proves the covered set is not satisfied by some other
+  pattern, and it also demonstrates the residual gap recorded above: the guard
+  lives inside the selector it polices, so removing the pattern removes it too.
+  The four survivors are the controls that need no selector.
 
-- Refactor: the helper is tidied for line count and docstring form; the guard
-  and the full `make test-python` are re-run.
+- Green: on the final tree,
+
+  ```bash
+  uv run pytest tests/test_ci_test_selection_contract.py -q
+  env -u BASH_ENV make test-python
+  make test-dev-fast-contract
+  ```
+
+  report 56 passed; a full pass collecting 688 tests under `tests/test_ci_*.py`
+  with all seven modules present by name; and 47 passed with 2 snapshots.
+
+- Refactor: the helper was tidied after the first smoke test — continuation
+  joining added, the `@` marker stripped from recipes, and the `Path`-versus-
+  `str` comparison fixed. The guard and `make test-python` were re-run after
+  each change.
 
 Quality criteria:
 
 - Tests: `make test-python` passes, collecting the seven renamed modules. The
   guard passes. `make test-dev-fast-contract` passes and collects
-  `tests/test_ci_dev_fast_action.py`.
+  `tests/test_ci_dev_fast_action.py`. `make markdownlint` passes after the
+  developers'-guide edits.
 - Verification: `SELECT-1` and `RESOLVE-1` discharged with the non-vacuity
   evidence above.
 - Lint/typecheck: `make lint`, `make check-fmt`, and `make typecheck` pass,
   run sequentially by `scrutineer`.
-- Markdown: `make markdownlint` passes after the `docs/developers-guide.md`
-  edits.
 - Performance: not applicable; no production path changes.
 
 Quality method: the full commit gate set, run sequentially via `scrutineer`,
@@ -572,41 +707,79 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 
 ## Interfaces and dependencies
 
-In `tests/helpers/makefile.py`, define a small reader over the `makeutil` JSON:
+`tests/helpers/makefile.py` exports four names; these are the signatures as
+built, which differ from the plan's first sketch and are recorded here so a
+reader is not misled by the earlier version:
 
 ```python
-def makefile_variables(path: Path) -> dict[str, str]: ...
-def variable_expansion(name: str) -> str: ...
-def selected_paths(patterns: str) -> tuple[Path, ...]: ...
-def target_recipe(name: str) -> str: ...
+def makeutil_document(*, makefile: str = "Makefile") -> dict[str, Any]: ...
+def variable_expansion(name: str, *, makefile: str = "Makefile") -> tuple[str, ...]: ...
+def selected_paths(patterns: Iterable[str], *, root: Path | None = None) -> tuple[Path, ...]: ...
+def recipe_of(name: str, *, makefile: str = "Makefile") -> str: ...
 ```
 
-`variable_expansion` returns the whitespace-split patterns of a named Makefile
-variable with `$(VAR)` references expanded recursively, raising
-`AssertionError` on an undefined reference. `selected_paths` resolves one
-pattern against the repository root and returns the files it names, returning
-an empty tuple for a non-path pattern that is not a selector entry — the rule
-documented in the module docstring, and the reason a bare `pytest`-level marker
-cannot silently appear in the selector.
+`variable_expansion` returns the *words* of a named Makefile variable — a
+tuple, not one string — after collapsing `\`-newline continuations the way
+`make` does and expanding `$(VAR)` references recursively. It raises
+`AssertionError` on an undefined reference or a cycle rather than substituting
+an empty string. The `makefile` keyword exists so the helper's own tests can
+parse a temporary Makefile; the guard never passes it.
 
-In `tests/test_ci_test_selection_contract.py`, define the guard:
+`selected_paths` resolves patterns against the repository root and returns the
+files they name, sorted and deduplicated. A pattern without a `.py` suffix
+contributes nothing, and a pattern matching nothing contributes nothing — the
+same behaviour as `make test-python`, whose loop skips a pattern whose first
+expansion does not exist. A bare word in the selector is therefore a mistake
+rather than a file, and the guard's
+`test_the_selector_resolves_the_whole_root_module_population` is what makes
+that visible.
+
+`recipe_of` returns one target's recipe with `make`'s leading `@` stripped and
+continuations collapsed, preserving line structure so a caller can still tell
+one command from the next.
+
+In `tests/test_ci_test_selection_contract.py`, the guard as built:
 
 ```python
-EXCEPTIONS: dict[str, str] = {}  # module path -> target and reason
+EXCEPTIONS: Final[dict[str, tuple[str, str]]] = {}  # module -> (target, reason)
 
 def test_every_root_level_module_has_a_ci_route() -> None: ...
-def test_the_selector_resolves_to_the_renamed_contract_modules() -> None: ...
-def test_ci_runs_the_selector() -> None: ...
+def test_the_exception_mechanism_reports_an_uncovered_module() -> None: ...
+def test_the_seven_reported_modules_are_now_collected() -> None: ...
+def test_the_selector_resolves_the_whole_root_module_population() -> None: ...
+def test_each_root_module_matches_a_selector_pattern(module: str) -> None: ...
+def test_ci_invokes_the_target_that_consumes_the_selector() -> None: ...
+def test_the_suite_target_recipe_consumes_the_selector() -> None: ...
 ```
 
-`test_ci_runs_the_selector` uses
+Two tests beyond the plan's sketch are worth naming.
+`test_the_exception_mechanism_reports_an_uncovered_module` is the seeded-fault
+control: it drives `_remedy` with a module that cannot exist so the empty
+exception table is exercised rather than assumed.
+`test_the_suite_target_recipe_consumes_the_selector` closes the gap between the
+Makefile and the workflow from the other side: a target named `test-python`
+that ran a bare directory would satisfy the workflow check while collecting the
+container-bound scenarios the repository deliberately keeps out.
+
+`test_ci_invokes_the_target_that_consumes_the_selector` uses
 `tests.helpers.workflow_shell.script_runs_command` and
 `tests.helpers.ci_workflows.workflow_sources` to prove a workflow `run:` step
-invokes `make test-python`, so the guard connects the selector to the workflow
-that consumes it rather than stopping at the Makefile.
+invokes `make test-python`. Matching the command by its leading shell tokens
+rather than by substring is what keeps a mention in a comment from satisfying
+it.
+
+Dependencies: `makeutil` 0.1.0, already pinned by
+`.github/actions/install-makeutil` and already a prerequisite of `test` and
+`test-python`; no new dependency is introduced.
 
 ## Revision note
 
-2026-09-26, initial draft. Records the completed triage, the rename route
+2026-09-26, second revision. `EP-M1` through `EP-M3` are complete. This
+revision records the Task 2 and Task 3 outcomes, the three defects found during
+implementation (`makeutil` continuation backslashes, the `Path`/`str`
+comparison, and the guard's placement inside its own selector), the corrected
+`Interfaces` signatures, and the replaced Red-stage evidence.
+
+2026-09-26, first revision. Records the completed triage, the rename route
 decision, the discovery that the `#488` platform gate does not exist, and the
 latent sampler timeout conflict that Task 1 must resolve.
