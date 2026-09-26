@@ -1,6 +1,6 @@
 # Add an opt-in broken-pipe policy for echoed output
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 This living ExecPlan records the implementation of issue
 [#435](https://github.com/leynos/cuprum/issues/435). It is self-contained: a
@@ -122,7 +122,11 @@ escalation, not a workaround.
       [cuprum#503](https://github.com/leynos/cuprum/pull/503).
 - [x] CodeRabbit review: completed at `b55cb0e6` with four non-blocking
       findings (two minor on the developers' guide, one minor on this plan's
-      absolute paths, one trivial unused fixture parameter), all addressed.
+      absolute paths, one trivial unused fixture parameter), all addressed in
+      `b6577081`. A re-review at `b6577081` returned one finding, the status
+      line, which the COMPLETE edit above discharges.
+- [x] GitHub Actions at `b6577081`: every non-skipped check passes, and
+      `mergeStateStatus` is `CLEAN`.
 
 ## Surprises & discoveries
 
@@ -275,6 +279,14 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 8: the plan is COMPLETE. A second CodeRabbit pass at `b6577081`
+returned one finding only — that the status line still said it was in progress
+— and every required CI check on that head passes, so the claim is now true
+rather than aspirational. No upstream artefact needed amending: the governing
+constraints are `AGENTS.md` and ADR-007, neither of which this change alters,
+and the deviations this work surfaced are recorded in the decision log and the
+surprises section.
 
 Revision 7: the CodeRabbit review ran at `b55cb0e6` and returned four
 non-blocking findings, none of which contradicted the design. Two were stale
