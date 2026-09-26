@@ -19,12 +19,13 @@ import typing as typ
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.events import ExecEvent
-from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
+from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmdBuilder, StdinInput
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.catalogue import ProgramCatalogue
     from cuprum.program import Program
 
 # A fixed, JSON-like tag every scenario sets so correlation is checkable.
@@ -45,7 +46,15 @@ class CommandCatalogue(typ.Protocol):
 
 
 class Runnable(typ.Protocol):
-    """The surface the steps use to execute a command or pipeline."""
+    """The surface the run helpers need from a command or a pipeline.
+
+    Both ``SafeCmd`` and ``Pipeline`` satisfy it. It deliberately declares
+    neither ``__or__`` nor the concrete stage types: the two real ``__or__``
+    operators accept exactly ``SafeCmd | Pipeline``, so a protocol restating
+    them as ``Runnable | Runnable`` would be satisfied by neither operand —
+    which is why the pipeline step pipes concretely typed stages and only
+    widens afterwards.
+    """
 
     def run_sync(
         self,
@@ -57,17 +66,13 @@ class Runnable(typ.Protocol):
         """Execute the command synchronously."""
         ...
 
-    def __or__(self, other: Runnable, /) -> Runnable:
-        """Pipe this command's stdout into ``other``, returning the pipeline."""
-        ...
-
 
 def join_script(*lines: str) -> str:
     """Join source lines into the single ``-c`` argument Python expects."""
     return "\n".join(lines)
 
 
-def catalogue_and_builder() -> tuple[CommandCatalogue, cabc.Callable[..., Runnable]]:
+def catalogue_and_builder() -> tuple[ProgramCatalogue, SafeCmdBuilder]:
     """Build the interpreter catalogue and a command builder bound to it."""
     catalogue, python_program = python_catalogue()
     return catalogue, sh.make(python_program, catalogue=catalogue)

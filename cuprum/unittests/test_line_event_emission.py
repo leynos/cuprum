@@ -43,7 +43,7 @@ from cuprum._observability import _wait_for_exec_hook_tasks
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum._streams import _StreamConfig
 from cuprum.echo_events import EchoStream
-from cuprum.events import ExecEvent, ExecId
+from cuprum.events import ExecEvent, ExecHook, ExecId
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -124,7 +124,7 @@ class _ExecutionStub:
 
 
 def _make_observation(
-    observe_hooks: tuple[cabc.Callable[[ExecEvent], None], ...] = (),
+    observe_hooks: tuple[ExecHook, ...] = (),
     *,
     cmd: object | None = None,
     clock: cabc.Callable[[], float] | None = None,
