@@ -15,6 +15,8 @@ import os
 import pathlib
 import time
 
+from cuprum.events import ExecEvent
+from cuprum.program import Program
 from tests.behaviour._native_pipeline_hand_off import (
     _ProgressTracker,
     _snapshot_child,
@@ -23,14 +25,27 @@ from tests.behaviour._native_pipeline_hand_off import (
 from tests.helpers.process_state import child_pipes, process_state
 
 
-class _StartEvent:
-    """The subset of ``ExecEvent`` a ``start`` observation carries."""
+def _start_event(pid: int | None) -> ExecEvent:
+    """Build the real ``start`` event the tracker's capture hook observes.
 
-    def __init__(self, pid: int | None) -> None:
-        """Record the phase and the child's pid."""
-        self.phase = "start"
-        self.pid = pid
-        self.tags: dict[str, object] = {}
+    Returns
+    -------
+    ExecEvent
+        A ``start`` event carrying the child's pid and no tags.
+    """
+    return ExecEvent(
+        phase="start",
+        program=Program("cat"),
+        argv=("cat",),
+        cwd=None,
+        env=None,
+        pid=pid,
+        timestamp=0.0,
+        line=None,
+        exit_code=None,
+        duration_s=None,
+        tags={},
+    )
 
 
 def _pipe_name(fd: int) -> str:
@@ -78,7 +93,7 @@ def test_the_tracker_records_the_stdout_pipe_of_a_started_child() -> None:
     try:
         os.read(ready_r, 1)  # the child's stdout is only now in place
         tracker = _ProgressTracker()
-        tracker.observe(_StartEvent(pid))  # type: ignore[arg-type]
+        tracker.observe(_start_event(pid))
 
         assert pid in tracker.pids, "a started child must be tracked by pid"
         assert tracker.stdout_target_by_pid.get(pid) == _pipe_name(read_fd), (
