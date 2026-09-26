@@ -141,6 +141,16 @@ escalation, not a workaround.
       this revision, which is the ninth.
 - [x] CodeRabbit review: a fourth pass, at `95b928bd`, returned zero findings
       across all twenty-one changed files, converging the review loop.
+- [x] GitHub Actions at `7fc31a26`: every one of the 21 check runs is green or
+      intentionally skipped, and all 12 required status contexts for `main`
+      are present and successful. `mergeStateStatus` is `CLEAN`, down from
+      `BLOCKED` while the run was in flight.
+- [x] Independent gate run by a separate agent at `95b928bd`, confirming every
+      deterministic gate: `check-fmt`, `lint` (ruff, interrogate 100%, pylint
+      10.00/10, df12 lints, ambrieaks, skylos, clippy, whitaker, typos,
+      yamllint, actionlint), `typecheck`, `markdownlint`, `spelling`, `nixie`,
+      and `test` (2489 passed / 63 skipped, 125 nextest tests, 175 behaviour
+      nodes, all three of this feature's scenarios passing).
 
 ## Surprises & discoveries
 
