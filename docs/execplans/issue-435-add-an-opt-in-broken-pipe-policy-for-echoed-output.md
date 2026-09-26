@@ -667,8 +667,8 @@ escalation, not a workaround.
   explain the failure it then caused. The repair is to name the class — "a
   misspelling the table lists" — and never to reproduce the token, because the
   table enumerates whole words and a document that spells the form wrongly to
-  explain why that form is wrong is one edit from tripping again. This is
-  cheap to get right and embarrassing to get wrong twice.
+  explain why that form is wrong is one edit from tripping again. This is cheap
+  to get right and embarrassing to get wrong twice.
 - The gate is quieter than it looks. `typos` parses Markdown and skips what it
   reads as a fenced or indented code block, so two of the five bad sites sat
   indented as list-item continuations and were reported by neither the local
@@ -832,8 +832,8 @@ tree.
 
 The same revision also records the `ddd8d301` CI outcome in full, because it
 was *not* the single known-flaky doctest timeout it first appeared to be. Two
-jobs failed: `lint-test`, on the four spelling sites above, and `Typecheck and
-test (Python 3.14)`, on a `pytest-timeout` expiry in
+jobs failed: `lint-test`, on the four spelling sites above, and
+`Typecheck and test (Python 3.14)`, on a `pytest-timeout` expiry in
 `test_doctest_warning_contract.py`. The second is the repository's known-flaky
 doctest-timeout class — a Cargo/rustdoc subprocess that outran a 30 s bound
 under load, in a test that touches nothing this change modifies — and it passed
@@ -847,20 +847,20 @@ noting; a reader checking it would have found the claim overstated.
 
 Revision 18: one token changed. The gate run at Revision 17's frozen tip came
 back red at two independent detectors on the same defect — `typos` in the local
-set, and CI's `lint-test` job — which was a misspelled token in
-the new property module's docstring, one `typos.toml:1868` lists with a
-correction. `b8bcb625` fixes it, and `make spelling` then exits 0 with
-the file tracked. The important part of this revision is the shape of the
-repair: the failed run is recorded as *failed*, not superseded. It proves one
-gate passed, one failed, and four never ran, because the delegated run stopped
-at the first failure by instruction — so `typecheck`, `test`, `markdownlint` and
-`nixie` are unobserved at `f7eaab76`, not passing, and the re-run must cover
-them rather than inherit them. `markdownlint` deserves that care specifically,
-since its chain re-runs `spelling` over a tree that has already tripped it
-once. CI agrees on the location without being asked: on the same SHA the
-`lint-test` job failed while all four `Typecheck and test` legs and every wheel
-build passed, which places the fault in the lint chain rather than in
-behaviour. No production code changed, so the status stays COMPLETE.
+set, and CI's `lint-test` job — which was a misspelled token in the new
+property module's docstring, one `typos.toml:1868` lists with a correction.
+`b8bcb625` fixes it, and `make spelling` then exits 0 with the file tracked.
+The important part of this revision is the shape of the repair: the failed run
+is recorded as *failed*, not superseded. It proves one gate passed, one failed,
+and four never ran, because the delegated run stopped at the first failure by
+instruction — so `typecheck`, `test`, `markdownlint` and `nixie` are unobserved
+at `f7eaab76`, not passing, and the re-run must cover them rather than inherit
+them. `markdownlint` deserves that care specifically, since its chain re-runs
+`spelling` over a tree that has already tripped it once. CI agrees on the
+location without being asked: on the same SHA the `lint-test` job failed while
+all four `Typecheck and test` legs and every wheel build passed, which places
+the fault in the lint chain rather than in behaviour. No production code
+changed, so the status stays COMPLETE.
 
 Revision 17: code changed, in two commits, and both changes answer the ninth
 CodeRabbit pass's distinct findings. `254a306c` adds
