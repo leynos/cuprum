@@ -135,9 +135,7 @@ def test_default_policy_still_raises_when_the_stdout_sink_pipe_is_broken(
         asyncio.run(run_case())
 
 
-def test_rejected_policy_value_fails_before_the_child_spawns(
-    python_builder: cabc.Callable[..., SafeCmd],
-) -> None:
+def test_rejected_policy_value_fails_at_options_construction() -> None:
     """An unknown policy is a configuration error, not a runtime one."""
     with pytest.raises(ValueError, match="invalid broken_pipe_policy"):
         RunOutputOptions(broken_pipe_policy="wishful_thinking")

@@ -120,7 +120,9 @@ escalation, not a workaround.
       `make spelling` all pass, run with `env -u BASH_ENV`.
 - [x] Push and open the draft pull request:
       [cuprum#503](https://github.com/leynos/cuprum/pull/503).
-- [ ] CodeRabbit review.
+- [x] CodeRabbit review: completed at `b55cb0e6` with four non-blocking
+      findings (two minor on the developers' guide, one minor on this plan's
+      absolute paths, one trivial unused fixture parameter), all addressed.
 
 ## Surprises & discoveries
 
@@ -148,17 +150,18 @@ escalation, not a workaround.
   `BEST_EFFORT` run's only log record is its one categorized `WARNING`.
 - Six `cuprum/unittests/test_release_github_steps.py` tests fail locally with
   `AssertionError: failed to run git: fatal: not a git repository`. The message
-  appears nowhere in the tracked tree, which is the clue: this host sets
-  `BASH_ENV=/home/leynos/.lody/bashenv`, whose body prepends
-  `/home/leynos/.lody/bin` to `PATH` on every non-interactive Bash start. That
-  directory holds Lody's own `gh` wrapper, which resolves the repository with
+  appears nowhere in the tracked tree, which is the clue: the agent harness
+  exports `BASH_ENV`, and its script prepends the harness's own `bin` directory
+  to `PATH` on every non-interactive Bash start. That directory holds the
+  harness's `gh` wrapper, which resolves the repository with
   `git remote get-url origin` — so it shadows the test's `gh` stand-in, which
   the test puts first in `PATH` precisely so the real `gh` cannot run. The step
   then fails outside a git repository and the assertion reports the wrapper's
-  stderr. Proven environmental: `env -u BASH_ENV` turns the same module from 6
-  failed into 6 passed in 0.26s, and the module references no symbol this
-  change touches. No test-side `PATH` change can defend against it, because
-  `BASH_ENV` is sourced after the caller's environment is applied.
+  stderr. Proven environmental: unsetting `BASH_ENV` (`env -u BASH_ENV`) turns
+  the same module from 6 failed into 6 passed in 0.26s, and the module
+  references no symbol this change touches. No test-side `PATH` change can
+  defend against it, because `BASH_ENV` is sourced after the caller's
+  environment is applied.
 
 ## Decision log
 
@@ -220,8 +223,15 @@ not deterministic, and CI installs no shellcheck, so CI never sees it.
 Makefile variable substitutes the whole command word rather than a program
 path, so a wrapper script that appends the flag is the only shape that works:
 
+```sh
+#!/bin/sh
+# Local gate shim: actionlint v1.7.12 deadlocks writing to shellcheck's stdin on
+# this host. CI installs no shellcheck, so disabling it matches CI exactly.
+exec actionlint -shellcheck= "$@"
+```
+
 ```plaintext
-env -u BASH_ENV make ACTIONLINT=/tmp/bp435-bin/actionlint-noshellcheck lint
+env -u BASH_ENV make ACTIONLINT=/path/to/actionlint-noshellcheck lint
 ```
 
 ## Conformance basis
@@ -266,9 +276,22 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
+Revision 7: the CodeRabbit review ran at `b55cb0e6` and returned four
+non-blocking findings, none of which contradicted the design. Two were stale
+prose the review caught in the developers' guide: that paragraph still named a
+private `_echo_relay` module that has never existed on any ref, and described
+`_echo_chunk` as the sole route for every echo write when the bounded-line
+writer and the final decoder flush call `_echo_write` directly. Because this
+change rewrites that same paragraph, correcting it is part of the change rather
+than unrelated drift. The other two were a leftover fixture parameter on a test
+that never spawns a child, and absolute host paths in this plan's environment
+note, both now edited out. The plan's own gate run stands: `make test` passes at
+`b55cb0e6` with 2489 passed and 63 skipped, the 175 behaviour nodes including
+this change's three scenarios, and 125 nextest tests.
+
 Revision 6: the draft pull request is open as
 [cuprum#503](https://github.com/leynos/cuprum/pull/503), which discharges the
-delivery requirement. Only the CodeRabbit review remains.
+delivery requirement.
 
 Revision 5: every commit gate passes on the final tree. Two gates failed first
 and both were mine to fix, not the plan's: the spelling gate rejected seven

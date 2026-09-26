@@ -1710,21 +1710,22 @@ it renders.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
-independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
-module owns this write-side policy; `_streams` retains the drain lifecycle and
-re-exports `_write_chunk` for existing internal callers. Its `_echo_write`
-helper catches `UnicodeEncodeError` unconditionally and `BrokenPipeError` only
-under `BrokenPipePolicy.BEST_EFFORT`: the first failure of either kind disables
-echo for the rest of that drain, logs one `WARNING` on the `cuprum.stream`
-logger with structured `cuprum_*` extras, and lets every other error propagate
-unchanged. The two recoveries share `_disable_echo`, so the guard flip and its
-three bounded projections cannot drift apart; only the `cuprum_error_category`
-differs. Capture (`buffer.extend`) always runs before the echo step, so a
-rejected echo write never loses captured bytes, and the binary `.buffer` fast
-path inside `_write_chunk` is unchanged. The catch is by `BrokenPipeError` name
-rather than `OSError`, which is what keeps a genuinely unreachable device
-propagating under both policies.
+independently. The drain loop sends ordinary chunks through `_echo_chunk`,
+which applies the per-line byte bound; the bounded-line writer and the final
+decoder flush through `_flush_echo_decoder` call `_echo_write` directly.
+`_echo_write` in `cuprum/_stream_echo.py` owns this write-side policy;
+`_streams` retains the drain lifecycle and re-exports `_write_chunk` for
+existing internal callers. It catches `UnicodeEncodeError` unconditionally and
+`BrokenPipeError` only under `BrokenPipePolicy.BEST_EFFORT`: the first failure
+of either kind disables echo for the rest of that drain, logs one `WARNING` on
+the `cuprum.stream` logger with structured `cuprum_*` extras, and lets every
+other error propagate unchanged. The two recoveries share `_disable_echo`, so
+the guard flip and its three bounded projections cannot drift apart; only the
+`cuprum_error_category` differs. Capture (`buffer.extend`) always runs before
+the echo step, so a rejected echo write never loses captured bytes, and the
+binary `.buffer` fast path inside `_write_chunk` is unchanged. The catch is by
+`BrokenPipeError` name rather than `OSError`, which is what keeps a genuinely
+unreachable device propagating under both policies.
 
 The first failure is owned entirely by that one `_echo_write` transition: the
 `cuprum.stream` `WARNING`, the opt-in `cuprum.echo_observation.observe_echo`
