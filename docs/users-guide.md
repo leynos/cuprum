@@ -216,6 +216,11 @@ whose `relay_fallbacks` names the `broken_pipe` category. The default,
 `BrokenPipeError` is affected; any other sink `OSError` propagates under both
 policies.
 
+`BrokenPipePolicy` is exported from the package root next to
+`RunOutputOptions`, so an existing
+`from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` line only
+needs `BrokenPipePolicy` added to it.
+
 ### Quiet children
 
 `RunOutputOptions(idle_after=30.0)` enables an optional heartbeat after 30
