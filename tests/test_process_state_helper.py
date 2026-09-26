@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
-import time
 
 import pytest
 
@@ -78,21 +77,24 @@ def _wait_for_exit(pid: int) -> None:
 def test_process_state_distinguishes_zombie_from_reaped_child() -> None:
     """A zombie stays observable; a reaped pid is reported as exited and gone."""
     pid = _fork_immediately_exiting_child()
-    deadline = time.monotonic() + 5.0
-    zombie = process_state(pid)
     try:
-        while zombie.state != "Z" and time.monotonic() < deadline:
-            time.sleep(0.01)
-            zombie = process_state(pid)
+        # ``WNOWAIT`` reaps nothing: it blocks until the child has exited, then
+        # returns and leaves the zombie in place to be observed. The kernel
+        # publishes the zombie state before it wakes this waiter, so the
+        # unreaped observation is deterministic -- where polling for ``"Z"``
+        # would make the assertion depend on winning a race on a loaded host.
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
 
-        # Deliberately do not assert on ``zombie.state``: the wait loop above
-        # can time out on a loaded host, and the contract under test is that
-        # either observation is well formed, not that this process won a race.
+        zombie = process_state(pid)
         assert zombie.available, (
             f"an unreaped child must stay observable, got {zombie!r}"
         )
-        assert zombie.exited, (
-            "a child that has exited but not been reaped must report exited"
+        assert zombie.state == "Z", (
+            f"an unreaped child must report the zombie state, got {zombie!r}"
+        )
+        assert zombie.exited, "a zombie must be reported as exited"
+        assert not child_pipes(pid), (
+            f"a zombie holds no descriptors to report, got {child_pipes(pid)!r}"
         )
     finally:
         _wait_for_exit(pid)
@@ -101,4 +103,10 @@ def test_process_state_distinguishes_zombie_from_reaped_child() -> None:
     assert reaped.available, (
         f"a reaped pid must still report an available observation, got {reaped!r}"
     )
+    assert reaped.state is None, (
+        f"a reaped pid has no procfs record, so it must report no state, got {reaped!r}"
+    )
     assert reaped.exited, "a reaped pid has no procfs record and must report exited"
+    assert not child_pipes(pid), (
+        f"a reaped pid holds no descriptors, got {child_pipes(pid)!r}"
+    )
