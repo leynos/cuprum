@@ -93,7 +93,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 - [x] (2026-09-26) Validated and published this plan as a draft pull request
   (PR #432).
 - [x] (2026-09-26) Obtained explicit implementation approval, with the
-  `thiserror` dependency authorised (see Decision log).
+  `thiserror` dependency authorized (see Decision log).
 - [ ] M1: implement and validate the typed boundary and its tests.
   - [x] (2026-09-26) Typed boundary implemented across `lib.rs`
     (`RustStreamError`, typed `validate_buffer_size`/`convert_fd`),
@@ -125,15 +125,62 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   - [x] (2026-09-26) V3 mutation evidence. `InvalidBufferSize` was remapped to
     `PyOSError` in `errors.rs`, the extension rebuilt via `make develop`, and
     the suite re-run: **6 tests failed across 4 modules**
-    (`test_rust_stream_native_order.py` ×2, `test_rust_streams_boundary_property.py` ×2,
+    (`test_rust_stream_native_order.py` ×2,
+    `test_rust_streams_boundary_property.py` ×2,
     `test_rust_consume_stream.py` ×1,
     `test_rust_streams_errors_behaviour.py` ×1), all reporting
     `expected ValueError, found OSError`. The source was then restored to a
     byte-identical copy and `git diff` confirmed the tree clean. Logs:
     `/tmp/611-mutation-red.out`, `/tmp/611-restore-build.out`, green re-run
     `/tmp/611-v3-green-final.out`.
-  - [ ] V4: confirm ownership and non-fatal write policy via native gates.
-  - [ ] Documentation: design guide, developers' guide, users' guide.
+  - [x] (2026-09-26) V4: ownership and non-fatal write policy confirmed via the
+    native gates. `make boundary-test` green — **13 passed** in
+    `cuprum-native-io --lib` (including
+    `ownership_tests::transferred_writer_closes_and_delivers_eof::case_3_real_unwind`)
+    and **116 passed** in `scripts/tests/test_boundary_*.py`. Log:
+    `/tmp/611-boundary-test.out`. `make test-extension` green — **101 passed,
+    1 skipped** (the Windows-only winerror case), covering the whole
+    `EXTENSION_TEST_TARGETS` list including all four new outline rows and the
+    new native-order module. Log: `/tmp/611-test-extension.out`. Direct
+    ownership witnesses were also observed while probing the compiled module:
+    a rejected buffer size leaves the writer **open**, a completed pump leaves
+    it **closed**. Windows runtime evidence is still outstanding and must come
+    from Windows; `make lint-windows` is a cross-target compile and counts as
+    supplementary only.
+  - [x] (2026-09-27) Documentation: design guide, developers' guide, users'
+    guide. Four edits, each verified against the tree rather than against the
+    prose it replaced:
+    1. `docs/cuprum-design.md` — new `#### Native error classification`
+       subsection closing 13.3, covering the enum's three variants, the single
+       `From<RustStreamError> for PyErr` conversion point reached once through
+       `run_stream_operation`'s `map_err(PyErr::from)`, and why `Stream` wraps
+       `PumpError` rather than copying its variants.
+    2. `docs/developers-guide.md` — three paragraphs closing "Building the
+       extension for tests", giving the complementary-covers rationale and the
+       shim's resource-ownership guarantee.
+    3. `docs/users-guide.md` — the buffer/error contract under "Checking the
+       native extension", keeping consume described as not integrated.
+    4. `docs/developers-guide.md` — five stale references corrected, four of
+       which this milestone made stale:
+       - `validate_buffer_size(i64) -> PyResult<BufferSize>` "which maps the
+         message to `PyValueError`" → it returns
+         `Result<BufferSize, RustStreamError>` and the mapping happens in the
+         `From` impl (verified at `rust/cuprum-rust/src/lib.rs:49`).
+       - "conversion happens in exactly one place, `pump_error_to_py_err`
+         … (called from `stream_pyfunctions.rs`)" → the one place is now the
+         `From` impl; `pump_error_to_py_err` is private and reached only from
+         its `Stream` arm (verified: only two hits repo-wide, both in
+         `errors.rs`).
+       - Both CI job rows "13 gated modules" → **15**, matching
+         `EXTENSION_TEST_TARGETS` exactly (counted, not estimated).
+       - Table 1 gained the two new modules.
+       - "four scenarios report `Rust extension is not installed`" → **ten**.
+         Measured by moving `cuprum/_rust_backend_native.abi3.so` aside and
+         running the four gated behaviour modules: 10 skipped, 5 passed, and
+         the sha256 was confirmed identical after restoring. The old "four" was
+         already wrong before this branch — six skipped at the merge-base —
+         and `test_rust_extension_availability` deliberately *passes* either
+         way, since it asserts the absent case rather than skipping.
   - [ ] Full gate sequence plus native extension stage; one gated atomic commit.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
@@ -176,18 +223,48 @@ derives the gated modules from the test tree itself (scanning for the
 `rust_streams` fixture, the shared skip reason, and the literal
 `_rust_backend_native`) and asserts each one appears in the Makefile's
 `EXTENSION_TEST_TARGETS`. Adding the new behaviour module without touching the
-Makefile therefore failed a *pre-existing* gate with "these test modules gate on
-the compiled extension but are not in the Makefile's EXTENSION_TEST_TARGETS".
-This is a useful property and was not anticipated by the plan: it means the
-"skip silently unless the extension is present" hazard the plan warns about is
-already mechanically guarded for any new module, rather than depending on the
-author to remember. Both `test_rust_stream_native_order.py` and
-`test_rust_streams_errors_behaviour.py` were added to that variable.
+Makefile therefore failed a *pre-existing* gate with "these test modules gate
+on the compiled extension but are not in the Makefile's
+EXTENSION_TEST_TARGETS". This is a useful property and was not anticipated by
+the plan: it means the "skip silently unless the extension is present" hazard
+the plan warns about is already mechanically guarded for any new module, rather
+than depending on the author to remember. Both
+`test_rust_stream_native_order.py` and `test_rust_streams_errors_behaviour.py`
+were added to that variable.
+
+**Prose counts decay, and two of the guide's were not merely stale but wrong
+about a claim they were supposed to make checkable.** The plan requires
+"accurate documentation", which for a numeric claim means re-measuring it. Two
+were corrected against the tree: the gated-module count (13 → 15, matching
+`EXTENSION_TEST_TARGETS`) and the absent-extension scenario count, which the
+guide offers as a verification recipe — "confirm with `pytest -rs` … four
+scenarios report `Rust extension is not installed`". That recipe reported ten.
+The old figure was already wrong at the merge-base, where six skip, so this was
+a pre-existing documentation defect rather than drift this branch introduced.
+`test_rust_extension_availability` is the interesting case: it *passes* without
+the extension, because its `Then` step returns early on a missing module
+instead of skipping, so a naive grep of skip output undercounts the modules
+that genuinely exercise the absent path.
+
+**The users' guide's own buffer-size sentence was falsified by measurement.**
+The first draft read "anything outside that window raises `ValueError`". A
+probe of the public shim across the domain shows that is false at the
+boundaries: `i64::MAX + 1` and `2**64` raise `OverflowError`, because
+`_validate_buffer_size_before_writer_transfer` checks the `i64` range *before*
+the positivity and cap checks, and those values never reach the size window at
+all. The measured table is: `0` and `-1` → `ValueError`; `1` and `1 GiB` →
+accepted; `cap + 1` and `i64::MAX` → `ValueError`; `i64::MAX + 1` and `2**64` →
+`OverflowError`. The guide now states the `i64` boundary separately. This
+matches the two tests added in V3
+(`test_out_of_i64_buffer_size_stays_an_extraction_error` in the boundary
+property and `test_out_of_i64_buffer_keeps_pyo3_overflow_error` in the
+native-order module), so the prose and the pinned contract now agree at all
+four edges rather than only the interior ones.
 
 **Separating the behaviour module was necessary for a line-count constraint,
 not a design preference.** The four new outline rows pushed
-`tests/behaviour/test_rust_streams_behaviour.py` to 411 lines, past the 400-line
-ceiling in AGENTS.md, so the failure-contract scenario moved to
+`tests/behaviour/test_rust_streams_behaviour.py` to 411 lines, past the
+400-line ceiling in AGENTS.md, so the failure-contract scenario moved to
 `test_rust_streams_errors_behaviour.py`. The split is by subject — transport
 behaviour stays, failure classification moves — rather than by line number.
 
@@ -224,7 +301,7 @@ behaviour stays, failure classification moves — rather than by line number.
   new constraint. Note that cargo's own suggested fix for this lint is
   syntactically invalid; ignore it. `#[allow]` would also silence the lint but
   the plan forbids new suppressions.
-- (2026-09-26) **`thiserror` is an authorised dependency.** The plan's
+- (2026-09-26) **`thiserror` is an authorized dependency.** The plan's
   Interfaces section said to "reuse the existing `thiserror = "2.0.18"`
   requirement in the integration crate's manifest". That requirement does
   **not** exist: `thiserror` is declared only in `cuprum-streams`, the
@@ -232,7 +309,7 @@ behaviour stays, failure classification moves — rather than by line number.
   not re-export it. The inaccuracy is **not** rebase-induced — it is equally
   false at the plan's own baseline `861fe2f0`. The dependency is therefore
   **added** to `rust/cuprum-rust/Cargo.toml`, at the same `"2.0.18"` caret
-  requirement the streams crate uses, and the user has authorised it explicitly.
+  requirement the streams crate uses, and the user has authorized it explicitly.
   `rust/Cargo.lock` already pins `thiserror` 2.0.20, so the new declaration
   resolves to a version already in the graph and adds no new crate, no new
   code, and no version change.
@@ -287,8 +364,8 @@ behaviour stays, failure classification moves — rather than by line number.
 - (2026-09-26) **The pump shim, not the native boundary, answers a buffer
   failure in normal use — and that is correct, not a defect.** `make develop`
   builds the extension into the dev venv, and `cuprum._streams_rs` validates
-  `buffer_size` before calling Rust precisely so that a writer never reaches the
-  native ownership boundary on a rejected size. The consequence found while
+  `buffer_size` before calling Rust precisely so that a writer never reaches
+  the native ownership boundary on a rejected size. The consequence found while
   writing V3 is that a *pump* mutation remapping `InvalidBufferSize` to
   `OSError` is invisible through the shim: the shim raises `ValueError` first
   and the mutated conversion never runs. Only direct native calls and the
@@ -304,16 +381,17 @@ behaviour stays, failure classification moves — rather than by line number.
   `OverflowError: Python int too large to convert to C int` — not from the
   boundary, but from `_close_writer_after_pre_native_failure` calling
   `os.close(writer_fd)` on a descriptor outside the C `int` range. `os.close`
-  raises `OverflowError`, which the helper's `contextlib.suppress(OSError)` does
-  not catch, so the real `ValueError` is masked. The hazard is **pre-existing**:
-  `git show origin/main:cuprum/_streams_rs.py` contains the same helper
-  unchanged, and `git diff origin/main...HEAD -- cuprum/_streams_rs.py` is
-  empty. It is out of 6.1.1's scope — this plan changes the Rust boundary, not
-  the shim's descriptor handling — so it is recorded here rather than fixed
-  here. The test that tripped it was corrected instead: it had passed the
-  out-of-range value as the pump's *writer* as well as its reader, which is not
-  a realistic call shape. It now opens a genuinely valid writer, matching the
-  existing `test_pump_rejects_invalid_reader_descriptor`.
+  raises `OverflowError`, which the helper's `contextlib.suppress(OSError)`
+  does not catch, so the real `ValueError` is masked. The hazard is
+  **pre-existing**: `git show origin/main:cuprum/_streams_rs.py` contains the
+  same helper unchanged, and
+  `git diff origin/main...HEAD -- cuprum/_streams_rs.py` is empty. It is out of
+  6.1.1's scope — this plan changes the Rust boundary, not the shim's
+  descriptor handling — so it is recorded here rather than fixed here. The test
+  that tripped it was corrected instead: it had passed the out-of-range value
+  as the pump's *writer* as well as its reader, which is not a realistic call
+  shape. It now opens a genuinely valid writer, matching the existing
+  `test_pump_rejects_invalid_reader_descriptor`.
 
 ## Outcomes & retrospective
 
