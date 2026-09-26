@@ -143,14 +143,18 @@ failure injection at that boundary.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
 - [ ] EP-M2: **BLOCKED before implementation.** Pre-implementation feasibility
-  measurement of the committed control capture shows the design's floor is
-  N = 6474 → 21.0045% of D against a budget of N ≤ 3082 for 10%. Every sampled
-  per-line `ExecEvent.__init__` resolves to the `emit` caller in
-  `_pipeline_types.py`, which a hoist in `_line_callbacks.py` cannot move, so
-  only the `_EventDetails` rule is addressable and removing all of it leaves
-  21.00%. No runtime edit was made; the milestone stops here for approval of a
-  revised design. See the 2026-09-27 feasibility discovery below for the
-  mechanism, the measured cost driver, and four consolidated options.
+  measurement of the committed control capture shows the hoist as designed
+  cannot reach V5. Every sampled per-line `ExecEvent.__init__` resolves to the
+  `emit` caller in `_pipeline_types.py`, which a hoist in `_line_callbacks.py`
+  cannot move, so only the `_EventDetails` rule is addressable. Removing all of
+  it is not enough: because the gate is a *share of consume-subtree time*,
+  removing 13.7% of the subtree pushes the ratio from 21.00% to **24.35%**. The
+  retained per-line construction must be at least **2.90x faster** (`r* =
+  0.3453`) for the ratio to reach 10%, and the flat 27-field dataclass
+  constructor cannot be made to clear that by field consolidation alone. No
+  runtime edit was made; the milestone stops here for approval of a revised
+  design. See the 2026-09-27 feasibility discovery below for the mechanism, the
+  corrected cost driver, and four consolidated options.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
   Unreachable until EP-M2's design is revised and approved.
@@ -665,6 +669,45 @@ this design can close it, because the plan explicitly *retains* the ordinary
 per-line `ExecEvent` constructor and forbids the alternatives that would remove
 it.
 
+**The share is a ratio of times, and removing work pushes it the wrong way.**
+This is the part that is easy to get backwards, and an earlier draft of this
+entry did. The 10% is a *share of consume-subtree time*, so making the retained
+constructor faster does not shrink the numerator alone — it also shrinks the
+denominator, because the samples it frees stop being charged to the subtree. The
+numerator stays pinned at one construction per delivered line, so the ratio
+improves more slowly than the raw speedup suggests.
+
+Modelling this exactly on the capture-derived fractions
+(`f_ev = 6474/30822 = 0.210045`, `f_ed = 4230/30822 = 0.137240`), with `r` the
+fraction of constructor cost the retained per-line construction keeps:
+
+```text
+ share(r) = f_ev·r / (1 − f_ed − f_ev·(1 − r))
+```
+
+| retained cost `r` | share after hoisting | |
+| --- | --- | --- |
+| 1.00 (hoist alone) | 24.35% | |
+| 0.719 | 18.79% | |
+| 0.500 | 13.86% | |
+| 0.431 | 12.18% | |
+| **0.3453** | **10.00%** | ← the bar |
+| 0.206 | 6.22% | |
+
+Solving gives a closed form:
+
+```text
+ r* = 0.10·(1 − f_ed − f_ev) / (f_ev·(1 − 0.10)) = 0.3453
+```
+
+So the retained per-line construction must keep **at most 34.5%** of today's
+cost — it has to be **at least 2.90x faster**. Hoisting alone *raises* the share
+from 21.00% to 24.35%, because `_EventDetails` was 13.7% of the subtree and
+removing it shrinks the denominator faster than the numerator. The plan's
+framing of this as "reduce the numerator to ≤10% of a fixed D" is therefore
+wrong in direction, and that correction matters for whoever revises the design:
+every option must be judged on the ratio, not on raw construction time.
+
 **Why the refinements are both already ruled out.** The Tolerances section
 allows "argument-passing and local-binding variants of ordinary `ExecEvent`
 construction". Both were priced:
@@ -676,34 +719,54 @@ construction". Both were priced:
 
 **The real cost driver — measured, and not what the plan assumed.** The Risks
 section predicted failure "because a fresh `ExecEvent` still initializes 23
-slots". Slot initialization is not the driver. Isolating the variables:
+slots". Both available readings of that are wrong, so the distinction is worth
+drawing precisely.
 
-| variant (all `frozen=True, slots=True` unless noted) | ns | vs 2-field |
+*Slots are not the cost.* A 2-field `frozen+slots` dataclass constructs in
+239 ns; the same shape without `frozen` takes 89 ns, and a handwritten
+`__slots__` class 90 ns. Slot *allocation* is the cheap part.
+
+*Defaults are not the cost either* — and this is the trap. An earlier draft of
+this entry claimed cost "tracks the count of defaulted fields, at roughly 70 ns
+each". That was an artefact of the measurement: the field-count variants were
+built with `exec`-generated source, which does not use the same construction
+path as the generated `__init__` that real dataclasses get, so the comparison
+confounded field count with constructor mechanism. Rebuilding the same variants
+with `dataclasses.make_dataclass`, which generates the constructor the way a
+real class does:
+
+| fields | defaulted | ns |
 | --- | --- | --- |
-| 2 fields | 239 | 1.00x |
-| 2 required + 15 defaulted | 1238 | 5.20x |
-| 0 fields | 68 | 0.28x |
-| `frozen=False`, 2 fields | 89 | 0.38x |
-| handwritten `__slots__` class | 90 | 0.38x |
+| 27 | 0 | 2968 |
+| 27 | 16 | 3035 |
+| 16 | 0 | 1835 |
+| 16 | 15 | 1875 |
+| 12 | 0 | 1406 |
+| 11 | 0 | 1305 |
 
-The cost tracks the **count of defaulted fields**, at roughly 70 ns each, and
-`frozen=True` multiplies the floor by ~2.7x on top. `ExecEvent` has 16 defaulted
-fields of 27, and `_EventDetails` has 15 of 16. The retained constructor is
-expensive because of its 16 defaults, not because it is frozen or slotted.
+Defaults are worth under 3% (2968 → 3035 ns with 16 added). Cost tracks **field
+count**, at roughly 110 ns per field, because the generated `__init__` performs
+one `object.__setattr__` per field when `frozen=True`. `ExecEvent` has 27.
 
-A field-count sweep confirms the shape. Positional construction, single
-process:
+*Two further levers, both measured and both insufficient.* A handwritten
+`__init__` on the same 27 fields — `init=False` plus explicit
+`object.__setattr__` calls, which leaves the dataclass's fields, `repr`,
+equality, and public shape unchanged — runs at 2287 ns against 3367 ns
+generated, a 0.68x ratio, projecting 14.27%. Consolidating the 16 optionals
+into one nested record time-shares at 0.52–0.65x depending on noise, projecting
+10.2–13.6%. Against the `r* = 0.3453` bar, neither clears it: the handwritten
+constructor is ruled out anyway, since the plan forbids slot mutation, and
+field consolidation changes the public event representation, which the
+Tolerances section marks as a stop-for-approval change.
 
-| fields | ns | of 27-field |
-| --- | --- | --- |
-| 11 | 1435 | 46.2% |
-| 16 | 2046 | 65.9% |
-| 27 | 3106 | 100% |
-
-So consolidating `ExecEvent`'s 16 optionals into one sub-record would remove
-about 54% of constructor cost — large, but still not enough on its own, since
-`6474 · 0.46 ≈ 2978` only skirts the 3082 budget and would be measured against
-an unchanged D while adding the sub-record's own construction.
+Every benchmark above is comparative, single-process, on a host that was
+running the gate suite concurrently: run-to-run spread was large enough to move
+`t_gen` between 3.2 µs and 9.4 µs for the same class, and the field-count curve
+went non-monotonic under load. The *ratios* are the stable signal and the
+ordering is consistent, but these figures are not gate evidence and a revision
+should re-measure them on an idle host before committing to a design. The
+algebra in the previous section uses only capture-derived sample fractions and
+is unaffected by that noise.
 
 **What this means for the milestone.** R3 cannot be discharged by the planned
 hoist, and EP-M2 must not be implemented as written. Per the plan's own
@@ -711,12 +774,22 @@ instruction, this is recorded as BLOCKED with measurements and options rather
 than worked around by weakening acceptance — 21.00% is not 10%. Consolidated
 options for the required design revision:
 
-1. **Consolidate the defaulted fields.** Collapse `ExecEvent`'s 16 optionals
-   into one sub-record so a per-line construction brings fewer defaults.
-   Largest measured lever (~54% of ctor cost), but changes the public event
+Nothing here reaches `r* = 0.3453` on its own by a measured margin, so a
+revision likely needs to combine a construction-cost lever with a re-scoping of
+what the ratio charges to the subtree.
+
+1. **Consolidate the fields, possibly combined with a cheaper constructor.**
+   Collapse `ExecEvent`'s 16 optionals into one nested record so a per-line
+   construction sets 11–12 fields instead of 27. Field count is the driver
+   (~110 ns each), so this is the largest lever: a 12-field shape time-shares at
+   0.484x, projecting 10.17%, and 11 fields at 0.451x, projecting 9.47%. 11
+   fields is *exactly* `r*`-adjacent, which makes this the only option measured
+   within reach — but it lands on the bar rather than under it, and the whole
+   plan's margin then rests on benchmark noise. It also changes the public event
    representation, which the Tolerances section marks as a stop-for-approval
-   change. Fails R2's payload-parity reading unless parity is redefined to the
-   flattened view.
+   change, and fails R2's payload-parity reading unless parity is redefined to
+   the flattened view. Treat as necessary-but-likely-insufficient, not a
+   solution.
 2. **Re-scope the measurement.** Split the gate's input so the *lifecycle*
    events and the per-line events are reported separately, and hold only the
    per-line share to 10%. This is arguably what the roadmap meant — the
