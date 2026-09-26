@@ -2,8 +2,11 @@
 
 The manifests that say which jobs and caches are intended live in
 ``tests/helpers/ci_runners.py``; this module only reads the workflows back.
-Every accessor validates the shape it narrows, so a malformed workflow fails
-with a named diagnostic rather than an opaque ``TypeError`` deep in a test.
+Every accessor here resolves a repository workflow by name and answers a
+question about it. The layer underneath — parsing source text and narrowing a
+parsed document, with no file name involved — lives in
+``tests/helpers/ci_documents.py``, and this module blocks re-export it so a
+caller still has one import for the whole vocabulary.
 
 Reading and parsing are fallible too, and every query in the contract helpers
 reaches the filesystem through the two readers here, ``read_workflow`` and
@@ -18,12 +21,48 @@ from __future__ import annotations
 import typing as typ
 from pathlib import Path
 
-from tests.helpers import strict_yaml
+from tests.helpers import ci_documents
+from tests.helpers.ci_documents import (
+    cache_paths,
+    document_jobs,
+    narrow_steps,
+    parse_document,
+    step_inputs,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from tests.helpers.workflow_types import Job, Step
+
+__all__ = (
+    "CACHE_ACTION_PIN",
+    "CACHE_PLAIN",
+    "CACHE_RESTORE",
+    "CACHE_SAVE",
+    "ROOT",
+    "WORKFLOW_DIR",
+    "cache_paths",
+    "cache_steps",
+    "document_jobs",
+    "expand",
+    "job",
+    "job_env",
+    "jobs",
+    "narrow_steps",
+    "parse_document",
+    "read_source",
+    "read_workflow",
+    "restore_steps",
+    "save_steps",
+    "single_step_position_using",
+    "single_step_using",
+    "step_inputs",
+    "steps",
+    "workflow_document",
+    "workflow_env",
+    "workflow_sources",
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -43,16 +82,6 @@ def _require(*, condition: bool, message: str) -> None:
     """Raise a contract failure when ``condition`` does not hold."""
     if not condition:
         raise AssertionError(message)
-
-
-def _mapping(value: object, message: str) -> dict[str, object]:
-    """Narrow a parsed YAML value to a string-keyed mapping."""
-    _require(
-        condition=isinstance(value, dict)
-        and all(isinstance(key, str) for key in value),
-        message=message,
-    )
-    return typ.cast("dict[str, object]", value)
 
 
 def read_source(path: Path) -> str:
@@ -109,17 +138,7 @@ def read_workflow(path: Path) -> dict[object, object]:
     >>> "jobs" in read_workflow(WORKFLOW_DIR / "ci.yml")
     True
     """
-    document = strict_yaml.load(read_source(path), path.name)
-    # YAML 1.1 reads the `on:` trigger key as the boolean `True`, so the
-    # document is genuinely not string-keyed and the return type says so.
-    # Claiming `dict[str, object]` here would be a false contract that hides
-    # the one key a caller cannot reach by name. Callers that need a
-    # string-keyed mapping narrow one of its values through `_mapping`.
-    _require(
-        condition=isinstance(document, dict),
-        message=f"{path.name} must parse to a mapping",
-    )
-    return typ.cast("dict[object, object]", document)
+    return parse_document(read_source(path), path.name)
 
 
 def workflow_document(workflow_name: str) -> dict[object, object]:
@@ -129,7 +148,7 @@ def workflow_document(workflow_name: str) -> dict[object, object]:
 
 def workflow_env(workflow_name: str) -> dict[str, object]:
     """Return the workflow-level ``env`` mapping."""
-    return _mapping(
+    return ci_documents.mapping(
         workflow_document(workflow_name).get("env"),
         f"{workflow_name} must declare workflow-level env",
     )
@@ -137,15 +156,12 @@ def workflow_env(workflow_name: str) -> dict[str, object]:
 
 def jobs(workflow_name: str) -> dict[str, object]:
     """Load the jobs mapping from one repository workflow."""
-    return _mapping(
-        workflow_document(workflow_name).get("jobs"),
-        f"{workflow_name} must declare jobs",
-    )
+    return document_jobs(workflow_document(workflow_name), workflow_name)
 
 
 def job(workflow_name: str, job_name: str) -> Job:
     """Return one named job from a repository workflow."""
-    payload = _mapping(
+    payload = ci_documents.mapping(
         jobs(workflow_name).get(job_name),
         f"{workflow_name} must define {job_name}",
     )
@@ -154,7 +170,7 @@ def job(workflow_name: str, job_name: str) -> Job:
 
 def job_env(workflow_name: str, job_name: str) -> dict[str, object]:
     """Return the ``env`` mapping one job declares for all of its steps."""
-    return _mapping(
+    return ci_documents.mapping(
         job(workflow_name, job_name).get("env"),
         f"{workflow_name}:{job_name} must declare job-level env",
     )
@@ -162,42 +178,7 @@ def job_env(workflow_name: str, job_name: str) -> dict[str, object]:
 
 def steps(workflow_name: str, job_name: str) -> list[Step]:
     """Return the validated steps for one workflow job."""
-    declared = job(workflow_name, job_name).get("steps")
-    _require(
-        condition=isinstance(declared, list),
-        message=f"{workflow_name}:{job_name} must declare steps",
-    )
-    return [
-        typ.cast(
-            "Step",
-            _mapping(
-                step, f"{workflow_name}:{job_name} step {index} must be a mapping"
-            ),
-        )
-        for index, step in enumerate(typ.cast("list[object]", declared))
-    ]
-
-
-def step_inputs(step: Step, message: str) -> dict[str, object]:
-    """Return the ``with`` mapping declared by one workflow step."""
-    return _mapping(step.get("with"), message)
-
-
-def cache_paths(step: Step, message: str) -> list[str]:
-    """Return the paths a cache step owns, one per line."""
-    declared = step_inputs(step, message).get("path")
-    _require(
-        condition=isinstance(declared, str),
-        message=f"{message}: paths must be a newline-delimited string",
-    )
-    paths = [line.strip() for line in str(declared).splitlines() if line.strip()]
-    # A cache step with no paths owns nothing, so every ownership assertion
-    # over it would hold vacuously. Fail here instead of reporting a clean run.
-    _require(
-        condition=bool(paths),
-        message=f"{message}: a cache step must declare at least one path",
-    )
-    return paths
+    return narrow_steps(job(workflow_name, job_name), f"{workflow_name}:{job_name}")
 
 
 def _steps_using(

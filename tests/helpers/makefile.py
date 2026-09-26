@@ -45,6 +45,16 @@ MAKEFILE = "Makefile"
 #: bare word". A `pytest` argument with no `.py` in it is not a path.
 _PATH_SUFFIX = ".py"
 
+#: Operators that always take effect, so the last of them wins. The empty
+#: string is a recipe-line assignment: `makeutil` reports the bodies of
+#: `define` blocks and of recipes under the name they are attached to.
+_PLAIN_OPERATORS = frozenset({"", "=", ":=", "::="})
+
+#: The conditional operator, which assigns only if the variable is not already
+#: defined by that point in the file. A `?=` below an earlier assignment to the
+#: same name therefore changes nothing.
+_CONDITIONAL_OPERATOR = "?="
+
 
 def _require(*, condition: bool, message: str) -> None:
     """Raise a contract failure when ``condition`` does not hold."""
@@ -55,6 +65,14 @@ def _require(*, condition: bool, message: str) -> None:
 def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
     """Return every assignment's ``name`` to ``raw_value`` mapping.
 
+    Each assignment is applied in file order under `make`'s own rules, because
+    the operator decides whether an assignment takes effect. Only ``=``,
+    ``:=``, and ``::=`` replace an earlier definition unconditionally; ``?=``
+    only assigns where the variable is still undefined. Applying every
+    assignment in order would resolve `PYTEST_TARGETS` to a later ``?=`` that
+    `make` ignores, so the guard would police a selector `make test-python`
+    never consumes.
+
     Parameters
     ----------
     document : dict
@@ -63,14 +81,25 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
     Returns
     -------
     dict of str to str
-        One entry per assignment, later assignments winning, which matches
-        `make`'s own last-definition-wins rule.
+        The value `make` ends up with for each assigned name.
 
     Raises
     ------
     AssertionError
         If the document carries no `variables` list, so an unexpected parser
-        change fails here rather than silently reading nothing.
+        change fails here rather than silently reading nothing, or if an
+        assignment uses an operator this module does not implement. An
+        unimplemented operator cannot be folded in as though it were `=`
+        without risking the same wrong value.
+
+    Notes
+    -----
+    This reads the file, not an invocation. A variable passed on `make`'s own
+    command line, or present in the environment, is defined before the
+    Makefile is read, so a ``?=`` for it does nothing — and a caller that
+    relied on such an override would see the file's value here. The guard
+    asks what the repository declares and CI invokes no overrides, so that
+    gap is out of scope rather than unconsidered.
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     declared = document.get("variables")
     _require(
@@ -82,7 +111,24 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
         entry = typ.cast("dict[str, object]", record)
         name = entry.get("name")
         raw_value = entry.get("raw_value")
-        if isinstance(name, str) and isinstance(raw_value, str):
+        operator = entry.get("operator")
+        if not (
+            isinstance(name, str)
+            and isinstance(raw_value, str)
+            and isinstance(operator, str)
+        ):
+            continue
+        if operator == _CONDITIONAL_OPERATOR:
+            records.setdefault(name, raw_value)
+        else:
+            _require(
+                condition=operator in _PLAIN_OPERATORS,
+                message=(
+                    f"the Makefile assigns {name} with {operator!r}, which this "
+                    "reader does not implement; add it to _PLAIN_OPERATORS or "
+                    f"handle it as {_CONDITIONAL_OPERATOR} is handled"
+                ),
+            )
             records[name] = raw_value
     _require(
         condition=bool(records),
