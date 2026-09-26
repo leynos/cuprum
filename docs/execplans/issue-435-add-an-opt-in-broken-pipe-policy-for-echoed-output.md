@@ -410,8 +410,11 @@ escalation, not a workaround.
       `markdownlint` reported `Summary: 0 error(s)` over 78 files and then
       chained into `spelling`, which reported `current: typos.toml` without
       rewriting it; `nixie` closed with "All diagrams validated successfully".
-      `test` reached `[100%]` with 3558 passed and 79 skipped across the
-      Python suites, and `test-rust`'s doctests finished `ok`.
+      `test` reached `[100%]` with 3433 passed and 79 skipped across the nine
+      Python globs, and `test-rust`'s doctests finished `ok`. All nine globs
+      ran rather than stopping at the first failure, so the total is a sum over
+      the whole suite and not over however far the loop happened to get. The
+      per-glob counts are 2492 + 638 + 2 + 116 + 4 + 126 + 12 + 21 + 22.
 - [x] GitHub Actions at `b91e7eee` — run `36217572192` — is **fully green**:
       16 jobs `success`, 1 `skipped` (`Loom model smoke test`, intentionally),
       and none failed. Both jobs that failed at `ddd8d301` pass here at their
@@ -700,6 +703,18 @@ escalation, not a workaround.
   `spelling` therefore bounds what the gate *read*, not what the tree
   *contains*, which is why the fix went to all five sites and the verification
   included a tree-wide `grep` rather than only a passing gate.
+- A plausible total is not a measured one. Revision 20 was first committed with
+  `3558 passed` attributed to the Python suites. The true figure is 3433, and
+  the difference is exactly nextest's 125 Rust tests: the number had been
+  assembled by adding a per-glob Python tally to the Rust count and labelling
+  the sum "Python". Nothing in the log prints `3558` — `grep` for it returns
+  zero hits — so the figure was unfalsifiable as written and would have
+  survived indefinitely, because it was close enough to the real total to look
+  checked. It was caught only when the delegated gate run independently
+  reported 3433 and the two numbers disagreed. The lesson is to sum from the
+  summary lines a single command emitted and to quote the count that command
+  printed, rather than to compose a total by hand across two toolchains that
+  report separately.
 
 ## Decision log
 
@@ -850,7 +865,17 @@ exited 0 at 04:22:19Z, `lint` at 04:25:20Z, `typecheck` at 04:27:55Z, `test` at
 04:33:51Z, `markdownlint` at 04:42:19Z, and `nixie` at 04:44:34Z. The tree was
 clean and `typos.toml` unmodified before, during and after the sweep, so the
 results describe the committed revision rather than a tree that drifted under
-the gates.
+the gates. `test` ran all nine Python globs to completion — 3433 passed, 79
+skipped — and then `test-rust`, where nextest reported 125 of 125 passed and
+the doctests finished `ok`.
+
+This revision also corrects a figure it first published. The count was written
+as `3558 passed` for the Python suites; the true number is 3433, and the gap is
+exactly nextest's 125 Rust tests, folded into a total labelled "Python" by
+hand. The log prints `3558` nowhere, so the claim was unfalsifiable as written
+and was caught only because the delegated run reported the per-glob breakdown
+independently. The correct figures and the arithmetic that settles them are
+recorded here so the next reader can check them rather than trust them.
 
 Two details in that sweep are worth keeping. `markdownlint` chained into
 `spelling`, which printed `current: typos.toml` — the same line that on earlier
