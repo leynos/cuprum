@@ -468,7 +468,7 @@ test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiri
 	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
 
 test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
-	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_dev_fast_action.py
+	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_ci_dev_fast_action.py
 
 benchmark-micro: build uv ## Run pytest-benchmark microbenchmarks
 	mkdir -p dist/benchmarks

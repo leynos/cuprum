@@ -393,7 +393,7 @@ and reports a plausible hit rate either way:
   action fails closed.
 
 An unknown backend fails the step before anything is exported.
-`tests/test_setup_sccache_action.py` runs the step's own shell for each case
+`tests/test_ci_setup_sccache_action.py` runs the step's own shell for each case
 and asserts the exit status and the exported variables.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
@@ -5360,21 +5360,24 @@ shape-only rationale).
 ### Workflow contract tests
 
 Because the caller is configuration rather than code,
-`tests/test_workflow_contract.py` pins the shape it must uphold, failing the
-pull request when the caller drifts — repointing the pin at a branch, widening
-the token scope, or dropping a configuration input — rather than letting the
-breakage surface only in a scheduled run. Unlike some sibling repositories,
-this module has no `skipif` guard: `.github/` is listed in
+`tests/test_ci_mutation_workflow_contract.py` pins the shape it must uphold,
+failing the pull request when the caller drifts — repointing the pin at a
+branch, widening the token scope, or dropping a configuration input — rather
+than letting the breakage surface only in a scheduled run. Unlike some sibling
+repositories, this module has no `skipif` guard: `.github/` is listed in
 `[tool.mutmut].also_copy`, so the workflow file is present inside mutmut's
-sandbox and the contract test runs there too. Run it locally with:
+sandbox and the contract test runs there too.
+
+The module carries the `test_ci_` prefix, so the `tests/test_ci_*.py` pattern
+in `PYTEST_TARGETS` collects it and `make test` runs it on every machine. It
+also has no dedicated Makefile target, so the focused local command is:
 
 ```bash
-uv run --with pytest --with pyyaml pytest tests/test_workflow_contract.py -q
+uv run --with pytest --with pyyaml pytest tests/test_ci_mutation_workflow_contract.py -q
 ```
 
-There is no dedicated Makefile target for this test; it also falls outside
-`PYTEST_TARGETS`, the glob list `make test` uses, so it must be run directly
-with the command above (or as part of a full mutmut pass). The test validates:
+A full mutmut pass runs it as well, through the same `also_copy` entry that
+puts `.github/` inside the sandbox. The test validates:
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
   SHA;

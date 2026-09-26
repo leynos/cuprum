@@ -137,9 +137,9 @@ SETUP_RUST = (
 #: bring `SETUP_RUST` up to meet this one rather than pulling this one back.
 #:
 #: Asserted by value rather than by shape, unlike the Dependabot-owned pins in
-#: `test_workflow_contract.py`. A bump has to update this constant, which is
-#: the point: it makes someone confirm the new revision still keeps a pull
-#: request from publishing.
+#: `test_ci_mutation_workflow_contract.py`. A bump has to update this constant,
+#: which is the point: it makes someone confirm the new revision still keeps a
+#: pull request from publishing.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
     "77ea10341249024e22ec5d9069e3caa7596e0d4f"
