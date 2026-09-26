@@ -91,13 +91,25 @@ def _planted_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+def _skip_without_the_detector(error: detector.GateExecutionError) -> typ.NoReturn:
+    """Skip the probe when the pinned detector is not provisioned.
+
+    ``NoReturn`` is load-bearing rather than decorative, for the reason
+    ``test_duplication_gate_blocking`` records: without it a
+    ``return``-in-``try`` beside a ``skip``-in-``except`` reads as a function
+    that can also fall off the end of the ``except`` branch, which is an
+    inconsistent return.
+    """
+    pytest.skip(str(error))
+
+
 def _pinned_binary() -> str:
     """Return the pinned detector, skipping when it is not provisioned."""
     settings = detector.load_settings(REPOSITORY_ROOT / "pyproject.toml")
     try:
         return detector.resolve_binary(settings)
     except detector.GateExecutionError as error:  # pragma: no cover
-        pytest.skip(str(error))
+        _skip_without_the_detector(error)
 
 
 class TestEntrypointBinding:

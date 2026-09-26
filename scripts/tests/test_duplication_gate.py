@@ -188,7 +188,7 @@ class TestLoadAllowlist:
     def test_missing_gate_table_yields_empty_allowlist(self, tmp_path: Path) -> None:
         """A pyproject without the gate table produces no entries."""
         pyproject = self._write(tmp_path, "[project]\nname = 'x'\nversion = '0'\n")
-        assert allowlist.load_allowlist(pyproject) == (), (
+        assert not allowlist.load_allowlist(pyproject), (
             "Missing gate table must mean no allow entries."
         )
 

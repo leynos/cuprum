@@ -255,7 +255,7 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
 
     def _record_span_event(self, event: ExecEvent) -> None:
         """Record ``event``'s diagnostic fields as a span event, keyed by exec_id."""
-        active = self._lookup_active_span(event, touch=True)
+        active = self._lookup_active_span(event.exec_id, touch=True)
         if active is None:
             return
 
@@ -297,7 +297,7 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
 
     def _record_fail_fast(self, event: ExecEvent) -> None:
         """Note a pipeline fail-fast decision on the failing stage's span."""
-        active = self._lookup_active_span(event, touch=True)
+        active = self._lookup_active_span(event.exec_id, touch=True)
         if active is None:
             return
 
@@ -311,20 +311,23 @@ class TracingHook(_LineStreamTracingMixin, _NativePumpCleanupTracingMixin):
                 active.span.add_event("cuprum.pipeline_fail_fast", attrs)
 
     def _lookup_active_span(
-        self, event: ExecEvent, *, touch: bool = False
+        self, exec_id: ExecId | None, *, touch: bool = False
     ) -> _ActiveSpan | None:
-        """Return the active span state for ``event``, when its token is known.
+        """Return the active span state for a correlation token, when one is open.
 
-        ``touch`` moves the span to the recently-active end of the registry, so
-        activity defers eviction; see ``_evict_overflow_locked``.
+        The lookup takes the token rather than the event, so it serves every
+        event family carrying one, not the execution events alone: the
+        line-stream and native-pump-cleanup mixins record onto the span an
+        ``ExecEvent`` opened and share its token. ``touch`` moves the span to
+        the recently-active end of the registry, so activity defers eviction;
+        see ``_evict_overflow_locked``.
 
         Returns
         -------
         _ActiveSpan or None
-            The open span for the event's token, or ``None`` when the event
-            carries no token or no span is registered for it.
+            The open span for the token, or ``None`` when the token is absent
+            or no span is registered for it.
         """
-        exec_id = event.exec_id
         if exec_id is None:
             return None
         with self._lock:

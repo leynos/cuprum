@@ -43,10 +43,10 @@ class _NativePumpCleanupTracingMixin:
         }:
             return
 
-        # The lookup returns ``None`` for an untokened event too, so it covers
-        # the ``exec_id`` check this used to make separately.
+        # The lookup returns ``None`` for an absent token too, so it covers the
+        # ``exec_id`` check this used to make separately.
         hook = typ.cast("TracingHook", self)
-        active = hook._lookup_active_span(event, touch=True)
+        active = hook._lookup_active_span(event.exec_id, touch=True)
         if active is None:
             return
 
