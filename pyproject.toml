@@ -648,7 +648,7 @@ members = [
     "cuprum/context/registration.py::after",
     "cuprum/context/registration.py::observe",
 ]
-reason = "Three registration factories whose one-line bodies call the same handle constructor. Each carries a distinct hook type and a distinct documented signature, and each is a public API entry point; a parameterised factory would erase the signatures the public API documents."
+reason = "Three registration factories whose one-line bodies call the same handle constructor. Each carries a distinct hook type and a distinct documented signature, and each is a public API entry point; a parameterized factory would erase the signatures the public API documents."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -680,7 +680,7 @@ members = [
     "cuprum/builders/tar.py::tar_create",
     "cuprum/builders/tar.py::tar_extract",
 ]
-reason = "Two tar builders that share a docstring skeleton and a boolean-flag normalisation. Their argv, option schemas (`TarCreateOptions` against `destination`/`allow_relative`) and return contracts differ; the visible overlap is the numpydoc shape every builder in the package uses."
+reason = "Two tar builders that share a docstring skeleton and a boolean-flag normalization. Their argv, option schemas (`TarCreateOptions` against `destination`/`allow_relative`) and return contracts differ; the visible overlap is the numpydoc shape every builder in the package uses."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -711,7 +711,7 @@ members = [
     "cuprum/_pipeline_stream_fds.py::_close_rust_state_fd",
     "cuprum/_streams_rs.py::_close_writer_after_pre_native_failure",
 ]
-reason = "Five one-line fd closers. Each names one descriptor's ownership boundary in its name and docstring, and four of the five are monkeypatch seams that the cleanup tests patch by name. A single closer parameterised by descriptor would delete the names the tests target."
+reason = "Five one-line fd closers. Each names one descriptor's ownership boundary in its name and docstring, and four of the five are monkeypatch seams that the cleanup tests patch by name. A single closer parameterized by descriptor would delete the names the tests target."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -744,7 +744,7 @@ reason = "Three modules that each repeat one two-line early return twice within 
 # entry is a `unit` even though the family has two members.
 [[tool.duplication_gate.allow]]
 unit = "cuprum/_pipeline_native_pump_types.py::__init__"
-reason = "Two exception constructors in one module that store the original error and pass its text to `super()`. Each is the initialiser of a distinct exception type with a distinct docstring naming a distinct failure (descriptor duplication against blocking-mode refusal); a shared base class would make two unrelated errors related to save one line."
+reason = "Two exception constructors in one module that store the original error and pass its text to `super()`. Each is the initializer of a distinct exception type with a distinct docstring naming a distinct failure (descriptor duplication against blocking-mode refusal); a shared base class would make two unrelated errors related to save one line."
 
 [[tool.duplication_gate.allow]]
 unit = "cuprum/sh/safe_cmd.py::__or__"

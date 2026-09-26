@@ -4718,10 +4718,10 @@ intermediate-language tokens, `surface = "all"` so families nose hides behind
 its dashboard ranking are still adjudicated, and `top = 30` ranked families. At
 introduction the full surface above the floor was 26 families, falling to 25
 once the first extraction landed, so `top = 30` was not binding; that is a
-measurement, not a guarantee. The semantic channel
-reports only exact intermediate-language equivalence, so the gate blocks on a
-narrow, witness-backed subset of semantic duplication; broader Type-4
-duplication remains a review concern.
+measurement, not a guarantee. The semantic channel reports only exact
+intermediate-language equivalence, so the gate blocks on a narrow,
+witness-backed subset of semantic duplication; broader Type-4 duplication
+remains a review concern.
 
 Treat every new finding as copy-paste until proven otherwise: prefer extracting
 the shared logic over suppressing the report. When the parallel structure is
@@ -4755,19 +4755,36 @@ with another tool, call `scripts/duplication_gate.py allow` directly and repeat
 `--second`.
 
 The target refuses empty keys or reasons and stores entries under
-`[tool.duplication_gate]`. The gate reports entries that no longer cover any
-finding as stale, and distinguishes an entry whose family has *grown* a
-location (widen the entry) from one that no family matches (remove the entry).
-Growth is only claimed when the entry named more than one location and the
-surviving family matches every one of its keys: a one-key entry's key is a path
-glob, so any family it still touches may equally be one the entry never
-described, and reporting that as growth would confidently instruct you to
-re-authorize duplication the entry never covered. A partial overlap on a
-multi-key entry is reported as a path-glob coincidence for the same reason.
-Because the gate adjudicates a ranked surface, absence from the report
-means "unmatched in this scan", not proof that the duplication is gone: never
-delete an entry merely because its family fell below the ranking cutoff, and
-never lower the enforced surface to obtain a green run.
+`[tool.duplication_gate]`.
+
+The spelling gate does not read a file named `pyproject.toml`. Typos excludes
+that basename at any depth, and neither the shared dictionary nor the
+`typos.local.toml` overlay lists it, so a misspelling inside a `reason` string
+is reported nowhere. This is easy to satisfy by accident: an identically spelled
+`reason` in `control.toml` fails the gate while the same line in
+`pyproject.toml` passes, which reads as a licence to use the non-Oxford form
+rather than as a hole in the check. Keeping reasons in Oxford `-ize` spelling
+is therefore on the author, not on the gate. Adjudicating this repository's
+cohort turned up four such spellings across the entries here — the agents of
+two verbs ending in `-ise`, and one noun for an assignment performed by a
+constructor — none of which the gate reported. They were corrected by hand.
+Note that this gap is narrow: it covers `pyproject.toml` alone, so prose
+*about* those spellings is checked like any other Markdown, and a guide cannot
+quote them without tripping the gate it is describing.
+
+The gate reports entries that no longer cover any finding as stale, and
+distinguishes an entry whose family has *grown* a location (widen the entry)
+from one that no family matches (remove the entry). Growth is only claimed when
+the entry named more than one location and the surviving family matches every
+one of its keys: a one-key entry's key is a path glob, so any family it still
+touches may equally be one the entry never described, and reporting that as
+growth would confidently instruct you to re-authorize duplication the entry
+never covered. A partial overlap on a multi-key entry is reported as a
+path-glob coincidence for the same reason. Because the gate adjudicates a
+ranked surface, absence from the report means "unmatched in this scan", not
+proof that the duplication is gone: never delete an entry merely because its
+family fell below the ranking cutoff, and never lower the enforced surface to
+obtain a green run.
 
 Allowlist updates take an advisory cross-process lock, so a concurrent writer
 waits until the current update completes. The lock coordinates processes that
@@ -6166,13 +6183,12 @@ It also holds `_close_sink_and_drain_after_failure`, the pair every failure
 branch that ends a run before finalization owes: close the bracket with the
 error outcome, then drain the observe-hook tasks. The ordering is the whole
 point of the helper — `_SinkBracket.close` clears its session on the first
-call, so an error close issued after some other close would silently do
-nothing — and it is the caller's shape, not the helper's, that decides the
-finalization label passed in.
-`cuprum/_pipeline_sink.py` keeps only the pipeline's own result mapping,
-`_pipeline_result_outcome`, which reports the first failing stage's exit code;
-the command-versus-pipeline split there is the shape of the run, not of the
-session.
+call, so an error close issued after some other close would silently do nothing
+— and it is the caller's shape, not the helper's, that decides the finalization
+label passed in. `cuprum/_pipeline_sink.py` keeps only the pipeline's own
+result mapping, `_pipeline_result_outcome`, which reports the first failing
+stage's exit code; the command-versus-pipeline split there is the shape of the
+run, not of the session.
 
 ### CommandResult timing and child-resource accounting
 

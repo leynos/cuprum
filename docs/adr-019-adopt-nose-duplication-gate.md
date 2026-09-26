@@ -157,7 +157,7 @@ families rather than every reported one.
   ranking cutoff.
 - Adjudicating Cuprum's own cohort extracted genuine shared implementations
   and left 23 reasoned entries covering the remaining 25 families. The
-  extracted units include the shared post-initialisation normalisation of the
+  extracted units include the shared post-initialization normalization of the
   scope dataclasses (`cuprum/context/_policy.py`), which had been retyped per
   type; the shared scope-registration handle base
   (`cuprum/_scope_registration.py`), which had been retyped per registration
