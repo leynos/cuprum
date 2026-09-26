@@ -212,6 +212,19 @@ escalation, not a workaround.
       zero after, with nothing else masked. This is the class of exemption
       `typos.local.toml` exists for: an externally fixed identifier that cannot
       be reworded without becoming wrong.
+- [x] Independent drift-free gate run at the true tip `5f03e0d9`:
+      `check-fmt`, `typecheck`, `test`, `markdownlint` and `nixie` each exit 0
+      with `HEAD_DRIFT: no`, and `lint` exits 0. `make test` again ran all nine
+      pytest globs — the same 2490, 638, 2, 116, 4, 126, 12, 21 and 22 passed
+      with 63 expected skips — and 125 of 125 nextest tests. The `lint` result
+      is the one caveat: that run spanned the `be274a60` to `5f03e0d9`
+      transition, so it carries `HEAD_DRIFT: yes`, and it is admitted here on
+      tree-identity rather than on the recorded SHA. `git rev-parse
+      <sha>:cuprum` and `<sha>:rust` return the identical pair
+      `423effbd…`/`7ab953c4…` for `f60f04f2`, `be274a60` and `5f03e0d9`, so the
+      Python and Rust trees those lint checks read are byte-for-byte the same
+      under all three. It is recorded with that qualification rather than
+      presented as drift-free.
 - [x] Independent gate run at the current tip `d4e7371c`: `check-fmt`,
       `markdownlint` (and therefore `spelling`), `nixie`, `typecheck` and
       `test` all pass. The `test` run is the decisive one, because the earlier
