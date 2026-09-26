@@ -139,6 +139,8 @@ escalation, not a workaround.
       test's assertions, the under-described public surface above, and a
       first-person pronoun in the Revision 5 note. All four are addressed in
       this revision, which is the ninth.
+- [x] CodeRabbit review: a fourth pass, at `95b928bd`, returned zero findings
+      across all twenty-one changed files, converging the review loop.
 
 ## Surprises & discoveries
 
@@ -291,6 +293,14 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 10: the fourth CodeRabbit pass, at `95b928bd`, returned zero findings
+across all twenty-one changed files. The review requirement is therefore
+discharged: three consecutive passes produced progressively narrower findings
+(four behavioural-adjacent, then one, then four presentational, then none), and
+every concern raised along the way has been addressed rather than argued away.
+No further revision is expected; the plan stays COMPLETE and the only remaining
+step is the pull request's own CI and merge.
 
 Revision 9: a third CodeRabbit pass at `41770cb4` returned four non-blocking
 findings, again all presentational rather than behavioural. Two were on the new
