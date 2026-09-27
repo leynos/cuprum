@@ -148,6 +148,49 @@ The first full gate run failed four checks. Each is fixed; the fixes are commits
   were corrected anyway, as genuine ADR-009 violations that the gate has a
   blind spot for, and the gap is now documented where allow reasons are written.
 
+### Two further findings (2026-09-27)
+
+Both surfaced after the remediation above, and both are recorded rather than
+merely fixed.
+
+**A family the token refactor introduced.** Running the gate on the real
+checkout returned exit 1 for
+`cuprum/_subprocess_stdin.py:103-104 ~
+cuprum/adapters/tracing_adapter.py:331-332`.
+The same gate passes on the pre-fix revision extracted to a scratch tree, so
+the refactor introduced it. Removing `exec_id = event.exec_id` left the
+`if exec_id is None: return None` guard as `_lookup_active_span`'s opening
+statements, making a two-line window byte-identical to an unrelated guard in a
+module this branch never touches. Entry 16 of the allow list already
+adjudicates that idiom across five modules.
+
+Deleting the guard is not available: `ty` rejects the body without it, because
+`OrderedDict.move_to_end` needs the narrowing — probed directly, and it fails
+with `Expected ExecId, found ExecId | None`. Extracting a helper that returns
+`None` when handed `None` is the meaningless indirection the neighbouring
+entries reject and that the adoption plan forbids. The exception is therefore
+recorded, naming the comparison honestly: this is the same idiom, not one
+shared operation. The lesson worth keeping is that a passing gate means a tree
+is adjudicated, not that a refactor introduced nothing reportable — a
+token-window detector can pair up two windows that were previously distinct.
+
+**An empty scope passed as clean.** The adoption plan requires that a mistyped
+or empty scope must not masquerade as a clean result. It did. nose answers a
+root holding no supported source file with exit 0 and
+`{'families': 0, 'shown': 0, 'widened': True}` — byte-identical to a genuinely
+clean scan — and the gate read stdout alone, so `roots = ["docs"]` reported
+"duplication gate passed". Only the stderr warning
+`no supported source files found under: <root>` separates the two.
+`_run_command` now raises `GateExecutionError` on that marker, which the CLI
+maps to exit 2, and `test_nose_detector.py` covers it. Verified against the
+real pinned binary: `docs` and a nonexistent root both exit 2, while
+`roots = ["cuprum"]` still returns its 26 findings.
+
+The count in this plan's own risk section and in ADR-018 moved with these two
+changes: the surface is 26 families covered by 24 reasoned entries, up from the
+23 entries / 25 families recorded at adjudication time. `top = 30` remains
+non-binding.
+
 ## Surprises & Discoveries
 
 - **`--exclude` globs are matched relative to each configured root, not to the

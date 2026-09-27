@@ -156,7 +156,7 @@ families rather than every reported one.
   gone; an entry is not deleted merely because its family fell below the
   ranking cutoff.
 - Adjudicating Cuprum's own cohort extracted genuine shared implementations
-  and left 23 reasoned entries covering the remaining 25 families. The
+  and left 24 reasoned entries covering the remaining 26 families. The
   extracted units include the shared post-initialization normalization of the
   scope dataclasses (`cuprum/context/_policy.py`), which had been retyped per
   type; the shared scope-registration handle base
@@ -166,7 +166,8 @@ families rather than every reported one.
   restated. Removing one entry is part of that count: the extraction that
   collapsed those five branches also shortened an import prologue below the
   configured floor, so the entry covering it stopped matching anything and the
-  gate reported it stale.
+  gate reported it stale. A later refactor added one back — see the
+  window-matching trade-off above — for a net 24 entries over 26 families.
 - `scripts/atomic_write.py` provides `atomic_write` for replacing generated
   files through a temporary sibling and `Path.replace`. It is a neutral
   persistence helper belonging to neither caller's domain; today its live
@@ -242,3 +243,22 @@ families rather than every reported one.
 - The benchmark corpus, tuning sweeps, and adjudication evidence behind the
   tool choice remain in `leynos/episodic` and are not carried here. Cuprum
   keeps only small synthetic report fixtures and its own gate tests.
+- An empty scope is indistinguishable from a clean tree in nose's own output.
+  A root holding no supported source file yields exit 0 and a summary of
+  `families: 0, shown: 0` — the same summary a genuinely clean scan produces.
+  Only the stderr warning `no supported source files found under: <root>`
+  separates them, so the detector wrapper reads stderr as well as stdout and
+  raises a configuration error, which the CLI maps to exit 2. Without that, a
+  mistyped `roots` entry would report success while scanning nothing. The check
+  rejects only the empty scope: a root that does contain sources still returns
+  its findings.
+- A family can appear or vanish on a refactor that does not itself duplicate
+  anything, because the detector matches windows of tokens rather than
+  intentional units. Removing a three-line preamble from one function left a
+  two-line None guard byte-identical to an unrelated guard in a module the same
+  change never touched, and the gate reported the pair. The exception records
+  that comparison rather than hiding it: the guard is the None-tolerance idiom
+  the neighbouring entries already adjudicate, and it is load-bearing for
+  typing there, so neither extraction nor deletion is available. The general
+  lesson is that a passing gate says a tree is adjudicated, not that a change
+  introduced no new reported pair.

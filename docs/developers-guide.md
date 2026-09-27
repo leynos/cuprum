@@ -4711,6 +4711,14 @@ scanning and refuses to run on a mismatch, pointing at `make install-nose`; set
 repository root when relative. `cuprum/unittests/test_toolchain_pins.py`
 asserts that the Makefile pin, the CI pin, and `[tool.nose] version` agree.
 
+A scan that finds no source files is a configuration error, not a pass. nose
+reports an empty scope with exit 0 and a summary of `families: 0, shown: 0` —
+identical to a genuinely clean tree — so the wrapper also reads stderr for the
+warning `no supported source files found under: <root>` and exits 2. This is
+what stops a mistyped `roots` entry, or a directory that exists but holds no
+Python, from reporting success while scanning nothing. The check keys on the
+empty scope alone: a root that does contain sources still returns its findings.
+
 `[tool.nose]` pins what is scanned and how: the `cuprum` package as the root,
 with `cuprum/unittests` excluded, `mode = "syntax,semantic,near"` so a change
 to nose's defaults cannot widen or narrow the gate silently, a floor of 24
@@ -4718,10 +4726,12 @@ intermediate-language tokens, `surface = "all"` so families nose hides behind
 its dashboard ranking are still adjudicated, and `top = 30` ranked families. At
 introduction the full surface above the floor was 26 families, falling to 25
 once the first extraction landed, so `top = 30` was not binding; that is a
-measurement, not a guarantee. The semantic channel reports only exact
-intermediate-language equivalence, so the gate blocks on a narrow,
-witness-backed subset of semantic duplication; broader Type-4 duplication
-remains a review concern.
+measurement, not a guarantee. The count moves in both directions: a refactor
+can pair up two windows that were previously distinct without duplicating
+anything on purpose, and it can equally drop a pair below the floor. The
+semantic channel reports only exact intermediate-language equivalence, so the
+gate blocks on a narrow, witness-backed subset of semantic duplication; broader
+Type-4 duplication remains a review concern.
 
 Treat every new finding as copy-paste until proven otherwise: prefer extracting
 the shared logic over suppressing the report. When the parallel structure is
