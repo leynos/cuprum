@@ -149,13 +149,17 @@ _Table 1: Per-capture counts and shares, in collection order._
 _Table 2: Dispersion. The candidate's range is roughly 1/47 of the two-point
 tolerance._
 
-Ranges in this report are computed from the shares as tabulated, i.e. rounded
+Both ranges in Table 2 are computed from the shares as tabulated, i.e. rounded
 to four decimal places, which is what the collector does when it prints them
-(`verdict.txt`). The exact candidate spread is 0.0423528 points, from
-5317/17758 − 5244/17539 as shares; the tabulated 0.0423 comes from subtracting
-the rounded figures instead. Nothing here turns on the difference — the pass
-margin of 0.0585651 points exceeds either — but a reader re-deriving the spread
-from the raw counts should expect 0.0424 and not conclude the table is wrong.
+(`verdict.txt`). Subtracting from the raw counts instead gives the candidate
+0.0423528 points (5317/17758 − 5244/17539) and the control 1.314580 points,
+against the tabulated 0.0423 and 1.3145. So the candidate's re-derived value
+rounds to 0.0424, and a reader who checks either column against the counts can
+land a digit away from what is printed. Nothing here turns on the difference —
+the pass margin of 0.0585651 points exceeds either candidate spread, and the
+control's separation from the bar is 4.04 to 5.35 points against a spread of
+about 1.31 — but the table is not wrong, and it is worth knowing which
+arithmetic produced it.
 
 All six captures report `stdout_line_count` of exactly **28256364** with
 `exit_code` 0 and `read_size` 65536, so every run performed identical work.
