@@ -75,7 +75,7 @@
     "   `_LineEventEmitter.emit_line`. Caller patterns must match that",
     "   rendering, and the line number in any example is illustrative only:",
     "   generated-constructor frames deliberately omit it because it shifts,",
-    "   and the same caution applies to a hand-written frame.",
+    "   and the same caution applies to a handwritten frame.",
     "",
     "The hoist's success is measured as: the per-line construction still",
     "matches through `emit_line`, and its share falls. That no _EventDetails is",

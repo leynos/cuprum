@@ -256,10 +256,15 @@ failure injection at that boundary.
   wording of the roadmap item.
 
   Done: the hoist; V1 green; the dispatch path proven covered by sabotage (four
-  scheduled-prefix tests fail when the emitter bypasses `_emit_event`). Not
-  done: the V5 candidate captures (three matched control/candidate pairs, D >=
-  10000, candidate share range <= 2 percentage points), the full gate suite on
-  the final commit, and EP-M3's closeout.
+  scheduled-prefix tests fail when the emitter bypasses `_emit_event`). Also
+  done, both found by the gate runs rather than by inspection: the classifier's
+  DOC502 docstring defect, and the C0302 module-ceiling violation that a
+  skipped `make lint` had concealed since `01ec41bd` (the classifier engine is
+  now its own module, with the split proven behaviour-preserving by
+  byte-identical output on a real capture). Not done: the V5 candidate captures
+  (three matched control/candidate pairs, D >= 10000, candidate share range <=
+  2 percentage points), the full gate suite on the final commit, and EP-M3's
+  closeout.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
   Unreachable until EP-M2's design is revised and approved.
@@ -915,6 +920,50 @@ a count of green checks.
 The third run passed the **entire** chain, `actionlint` included. The
 shellcheck stdin deadlock noted above did not recur, which is consistent with
 the recorded finding that it is a race rather than a deterministic failure.
+
+### 2026-09-27: C0302 was masked twice over — once by an abort, once by a skip
+
+`make lint` at `54fb5c8f` aborted at pylint with C0302 on
+`benchmarks/summarize_line_event_profile.py`: 406 lines against the 400-line
+module cap. The module crossed the cap in `01ec41bd`, whose eight-line comment
+on the threshold constant took it from 399 to 406.
+
+Two independent masking effects kept it invisible, and they are worth naming
+separately because only the first is the abort trap already recorded above.
+
+**The abort masked it after `01ec41bd`.** Every lint run since that commit
+stopped earlier in the same target — one at `ruff check` (the DOC502 fix below)
+and the one before it at `interrogate`. pylint is the third recipe line, so
+C0302 was never reached in any of them, and the branch reported "nine of ten
+sub-checks green" while a real defect sat in the third.
+
+**The commit's own claim masked it at `01ec41bd`.** That commit's message lists
+the gates it ran: `make fmt`, `check-fmt`, `markdownlint`, `spelling`, `nixie`,
+`typecheck`. `make lint` is absent — and it is the only gate that runs pylint,
+so the one gate that could have caught a module-ceiling violation is precisely
+the one not run. Recording a gate list in a commit message is not evidence that
+the list is complete; a list that omits the gate covering the defect reads
+afterwards exactly like one that passed it.
+
+The fix is a seam extraction rather than a comment trim. Everything from
+`_caller_depth` through `summarize` is a pure function of two already-parsed
+inputs and touches no file, no text, and no argv, so it moved to
+`benchmarks/_line_event_profile_classifier.py` along with the threshold
+constant; the front end keeps `main`, `_parse_args`, and `_exit_status` and
+re-exports both halves, leaving `__all__` and every import path unchanged.
+Result: 132 / 311 / 363 lines against the cap.
+
+**The split is proven behaviour-preserving, not argued.** The same real control
+capture classified through HEAD's `benchmarks/` in a scratch copy and through
+the split tree produces byte-identical JSON: `matched_frames` 10704,
+`consume_samples` 30822, share 34.7284%, and the same exit 1. The re-export
+contract test also pins that each exported name is the owning module's own
+object, so a redefinition cannot creep into the front end.
+
+Two stale numbers found in the same pass: `01ec41bd` raised
+`CONSTRUCTION_SHARE_LIMIT_PERCENT` to 28.0 but left the module docstring and the
+exit-status table still saying "10%" in two places. Both now refer to the limit
+instead of naming a number, so the prose cannot drift from the constant again.
 
 ### 2026-09-27: EP-M2 is BLOCKED — the hoist as designed cannot reach 10%
 
