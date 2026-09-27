@@ -732,6 +732,7 @@ class TestLineDeliveryHookContract:
                 """Record this hook's view of the line, then yield."""
 
                 async def record() -> None:
+                    """Yield once, then record the first hook's view of the line."""
                     await asyncio.sleep(0)
                     trace.append(("first", typ.cast("str", event.line)))
 
@@ -741,6 +742,7 @@ class TestLineDeliveryHookContract:
                 """Record this hook's view of the line, then yield."""
 
                 async def record() -> None:
+                    """Yield once, then record the second hook's view of the line."""
                     await asyncio.sleep(0)
                     trace.append(("second", typ.cast("str", event.line)))
 
@@ -786,6 +788,7 @@ class TestLineDeliveryHookContract:
                 """Record the line, then yield so the task is genuinely pending."""
 
                 async def record() -> None:
+                    """Yield once, then record the line for the surviving prefix."""
                     await asyncio.sleep(0)
                     seen.append(typ.cast("str", event.line))
 
@@ -842,6 +845,7 @@ class TestLineDeliveryHookContract:
                 """Complete a marker once awaited."""
 
                 async def record() -> None:
+                    """Yield once, then mark the hook's awaited work as complete."""
                     await asyncio.sleep(0)
                     completed.append(True)
 
@@ -965,6 +969,7 @@ class TestLineDeliveryHookContract:
                 """Record the line, then yield so the task stays pending."""
 
                 async def record() -> None:
+                    """Yield once, then record the line before the clock fails."""
                     await asyncio.sleep(0)
                     seen.append(typ.cast("str", event.line))
 
