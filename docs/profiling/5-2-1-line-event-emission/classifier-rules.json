@@ -18,7 +18,57 @@
     "Callers name every production site that reaches the constructor, not",
     "only the immediate one, so initialization moved into a helper still",
     "resolves. Verified against the 5.2.1 baseline tree; re-verify with",
-    "grep before trusting an edit to the production call paths."
+    "grep before trusting an edit to the production call paths.",
+    "",
+    "RE-BASELINED for EP-M2 (the hoist itself). What changed and why:",
+    "",
+    "1. There is now ONE construction rule, not two. Before the hoist the",
+    "   two rules split by caller: the per-line ExecEvent came through `emit`",
+    "   and the per-line _EventDetails came through the `_event_details`",
+    "   helper. The hoist deletes that helper, so the rule naming it can",
+    "   never match again, and a rule whose callers still run while it matches",
+    "   nothing is exactly what _drifted_rules reports -- the whole run would",
+    "   exit 2 as inconclusive_drifted_rules.",
+    "",
+    "   The replacement cannot simply be a differently-named second rule.",
+    "   _matching_rule gives a generated-constructor frame to the rule whose",
+    "   nearest matching caller is closest to it, so two rules over the frame",
+    "   `__init__ (<string>)` do not partition the samples by caller set: the",
+    "   one with the nearer caller takes every frame both could claim. A rule",
+    "   that therefore matches nothing while its callers still run is exactly",
+    "   what _drifted_rules reports, and the run exits 2.",
+    "",
+    "   This was measured, not reasoned: a two-rule split over a stack of the",
+    "   post-hoist shape (`emit_line` at _line_callbacks.py, then at",
+    "   _pipeline_types.py, then `__init__`) gives the nearer-caller rule all",
+    "   100 samples and reports the other as drifted with 100 caller samples.",
+    "   The pre-hoist split only worked because `_event_details` was genuinely",
+    "   the nearest caller for its own 4230 frames; the hoist removes it, and",
+    "   with it any per-frame population the second rule could still win.",
+    "",
+    "   Merging them is also the stricter option, since N is meant to count",
+    "   every constructor the emission path performs, whether or not it is per",
+    "   line.",
+    "",
+    "2. The surviving rule's callers were corrected. `_LineEventEmitter` and",
+    "   `_emit_line_event` named nothing that exists in the production tree",
+    "   and were dropped; `emit_line` at `cuprum/_pipeline_types.py` is the",
+    "   hoisted emitter, which is where the per-line construction now happens.",
+    "   `emit_line` at `cuprum/_line_callbacks.py` is retained deliberately: it",
+    "   is the composed closure that survives inlining or reverting the",
+    "   emitter, so the construction is still counted if the hoist is undone",
+    "   rather than silently scoring as absent work.",
+    "",
+    "   py-spy renders these frames with bare function names and a file",
+    "   location -- `emit_line (cuprum/_pipeline_types.py:285)`, never",
+    "   `_LineEmitter.emit_line`. Caller patterns must match that rendering.",
+    "",
+    "The hoist's success is measured as: the per-line construction still",
+    "matches through `emit_line`, and its share falls. That no _EventDetails is",
+    "constructed per line is not provable from a capture at all -- the frame is",
+    "indistinguishable from every other generated constructor -- so it is",
+    "asserted directly by the tests that patch the constructor. See the",
+    "execplan's EP-M2 entry."
   ],
 
   "consume_frames": [
@@ -30,7 +80,7 @@
 
   "construction_rules": [
     {
-      "name": "ExecEvent.__init__ via _StageObservation.emit",
+      "name": "ExecEvent.__init__ reachable from the event-emission path",
       "frame": {
         "function": "__init__",
         "location": "<string>"
@@ -45,36 +95,11 @@
           "location": "cuprum/_pipeline_types.py"
         },
         {
-          "function": "_LineEventEmitter",
-          "location": "cuprum/_line_callbacks.py"
-        },
-        {
-          "function": "_emit_line_event",
-          "location": "cuprum/_line_callbacks.py"
+          "function": "emit_line",
+          "location": "cuprum/_pipeline_types.py"
         },
         {
           "function": "emit_line",
-          "location": "cuprum/_line_callbacks.py"
-        }
-      ]
-    },
-    {
-      "name": "_EventDetails.__init__ for the per-line payload",
-      "frame": {
-        "function": "__init__",
-        "location": "<string>"
-      },
-      "callers": [
-        {
-          "function": "_event_details",
-          "location": "cuprum/_line_callbacks.py"
-        },
-        {
-          "function": "emit_line",
-          "location": "cuprum/_line_callbacks.py"
-        },
-        {
-          "function": "_LineEventEmitter",
           "location": "cuprum/_line_callbacks.py"
         }
       ]

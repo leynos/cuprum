@@ -12,10 +12,11 @@ class gives ``exec_id`` a default factory, so this helper passes it only when a
 case pins a token, and the metadata fields stay ``None`` exactly as a
 non-observed run leaves them.
 
-``_record_event_details`` patches ``_EventDetails`` where ``_line_callbacks``
-resolves it. That module defers its import to call time, so patching the
-defining module's attribute catches the production path without the test
-reaching into the callback's internals.
+``_record_event_details`` patches ``_EventDetails.__init__`` so it catches every
+construction regardless of how the calling module bound the name, and
+``_prove_recorder_is_live`` asserts that recorder can still see a construction
+at all. The second helper is what keeps the hoist's zero-count assertions from
+passing vacuously once nothing on the per-line path constructs the payload.
 """
 
 from __future__ import annotations
@@ -163,9 +164,17 @@ def _fields(event: ExecEvent) -> dict[str, object]:
 def _record_event_details(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
     """Record every ``_EventDetails`` construction for the test's duration.
 
-    ``_line_callbacks`` defers its import of ``_EventDetails`` to call time, so
-    patching the defining module's attribute catches the production path
-    without the test reaching into the callback's internals.
+    The spy replaces the class's ``__init__`` rather than the defining module's
+    attribute. Attribute patching only intercepts callers that resolve the name
+    through the module at call time — ``_line_callbacks`` used to do that, which
+    is how the original red test saw the per-line construction. Every remaining
+    production site imports the name eagerly at module level, so those sites
+    hold their own reference and an attribute patch would miss them, silently
+    reporting zero constructions whether or not any happened.
+
+    Patching the method catches every caller regardless of how it bound the
+    name, and leaves the real payload type in place so an intercepted call
+    still returns a faithful object.
 
     Returns
     -------
@@ -175,23 +184,43 @@ def _record_event_details(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, obj
     constructed: list[dict[str, object]] = []
     import cuprum._pipeline_types as pipeline_types
 
-    real = pipeline_types._EventDetails
+    original = pipeline_types._EventDetails.__init__
 
-    def spy(**kwargs: object) -> object:
+    def spy(self: object, **kwargs: object) -> None:
         """Record one construction's keywords, then build the real payload."""
         constructed.append(kwargs)
-        return real(**typ.cast("typ.Any", kwargs))
+        original(typ.cast("typ.Any", self), **typ.cast("typ.Any", kwargs))
 
-    monkeypatch.setattr(pipeline_types, "_EventDetails", spy)
+    monkeypatch.setattr(pipeline_types._EventDetails, "__init__", spy)
     return constructed
 
 
-# Removed in EP-M2, when the hoist makes these assertions true. ``strict=True``
-# turns the leftover marker into a failure the moment they start passing.
-RED_REASON = (
-    "5.2.1 red test: the un-hoisted callback rebuilds argv and _EventDetails "
-    "on every line; EP-M2 removes this marker"
-)
+def _prove_recorder_is_live(
+    constructed: list[dict[str, object]],
+) -> None:
+    """Fail unless the recorder can still observe a real construction.
+
+    ``_record_event_details`` reports zero for the per-line path once the hoist
+    is in place, and that zero is the whole assertion. A recorder that had gone
+    blind would report the same zero, so every test that asserts on the count
+    calls this first and requires the spy to catch a construction it makes
+    itself.
+
+    Raises
+    ------
+    AssertionError
+        When the recorder observed nothing, which means the assertion that
+        follows it would pass regardless of the production code.
+    """
+    from cuprum._pipeline_types import _EventDetails
+
+    before = len(constructed)
+    _EventDetails(pid=None, line="recorder-liveness-probe")
+    assert len(constructed) == before + 1, (
+        "the _EventDetails recorder is not intercepting constructions, so any "
+        "zero it reports below is vacuous rather than evidence"
+    )
+    del constructed[-1]
 
 
 def _deliver(callback: cabc.Callable[[str], object], line_count: int) -> None:

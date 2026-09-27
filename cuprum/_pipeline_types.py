@@ -42,6 +42,7 @@ if typ.TYPE_CHECKING:
     from cuprum.context import AfterHook, BeforeHook
     from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
+    from cuprum.program import Program
     from cuprum.sh import SafeCmd
 
 
@@ -197,6 +198,25 @@ class _StageObservation:
             if isinstance(hook, _PipelineWaitReporter):
                 hook.report_pipeline_wait(message, args, extra)
 
+    def line_emitter(self, stream: ExecPhase, pid: int | None) -> _LineEmitter:
+        """Bind one stream's invariant payload, ready for per-line emission.
+
+        ``emit`` resolves the command's program, argv, project name, cwd, env,
+        tags, and execution token on every call, and builds an ``_EventDetails``
+        for every line. For a line-observing stream those values are fixed once
+        the process is spawned, so the per-line path only has to supply the two
+        that actually vary — the line text and the clock reading.
+
+        The returned emitter holds the resolved values; it is created once per
+        observed stream, after spawn, so the PID it binds is that stream's own.
+
+        Returns
+        -------
+        _LineEmitter
+            A prepared emitter for ``stream``, bound to ``pid``.
+        """
+        return _LineEmitter(observation=self, stream=stream, pid=pid)
+
     def _emit_event(self, event: ExecEvent) -> None:
         """Dispatch one event and retain scheduled observe-hook tasks."""
         try:
@@ -205,6 +225,102 @@ class _StageObservation:
             self.pending_tasks.extend(exc.scheduled_tasks)
             raise exc.error from exc
         self.pending_tasks.extend(scheduled_tasks)
+
+
+class _LineEmitter:
+    """A stream's observe-event payload, resolved once and reused per line.
+
+    ``_StageObservation.emit`` rebuilds an ``_EventDetails`` and re-reads every
+    invariant off the command for each line. Both are avoidable: once the
+    process is spawned, only ``line`` and the clock reading differ between one
+    line and the next, so everything else is bound here at preparation time.
+
+    The emitter deliberately still constructs a fresh ``ExecEvent`` per line.
+    That is the observation contract, not an oversight: a retained or reused
+    event would let a later line rewrite the payload an asynchronous hook had
+    already kept, which the behavioural scenarios assert against. What is
+    hoisted is the *input* to that construction, not the construction itself.
+
+    Fields are declared but deliberately not dataclass fields: the resolved
+    values are derived in :meth:`__init__` and must not appear in a
+    constructor signature, a ``repr``, or an equality comparison, none of which
+    this internal helper has any use for.
+    """
+
+    __slots__ = (
+        "observation",
+        "stream",
+        "pid",
+        "program",
+        "argv",
+        "project",
+    )
+
+    observation: _StageObservation
+    stream: ExecPhase
+    pid: int | None
+    program: Program
+    argv: tuple[str, ...]
+    project: str
+
+    def __init__(
+        self,
+        observation: _StageObservation,
+        *,
+        stream: ExecPhase,
+        pid: int | None,
+    ) -> None:
+        """Resolve this stream's invariant fields once, for every line."""
+        self.observation = observation
+        self.stream = stream
+        self.pid = pid
+        # These four are the per-line reads this class exists to remove.
+        # ``argv_with_program`` allocates a fresh tuple on each access and
+        # ``project.name`` reads through the command, so both are resolved
+        # here rather than in the emission path.
+        self.program = observation.cmd.program
+        self.argv = observation.cmd.argv_with_program
+        self.project = observation.cmd.project.name
+
+    def emit_line(self, line: str) -> None:
+        """Emit one observe event for ``line``, reading the clock once.
+
+        A line event carries no lifecycle values, so the fields ``emit`` would
+        have read off an ``_EventDetails`` for this phase are the constants
+        ``None`` (or ``line`` itself) that are passed literally below. The
+        single staged value is the clock reading, which must be taken per line.
+        """
+        observation = self.observation
+        event = ExecEvent(
+            phase=self.stream,
+            program=self.program,
+            argv=self.argv,
+            cwd=observation.cwd,
+            env=observation.env_overlay,
+            pid=self.pid,
+            timestamp=observation.wall_clock(),
+            line=line,
+            exit_code=None,
+            duration_s=None,
+            tags=observation.tags,
+            project=self.project,
+            note=None,
+            byte_count=None,
+            operation=None,
+            error_type=None,
+            timeout_s=None,
+            timeout_mode=None,
+            exec_id=observation.exec_id,
+            stage_index=None,
+            stage_count=None,
+            eof_grace_s=None,
+            pending_readers=None,
+            max_rss_bytes=None,
+            user_cpu_seconds=None,
+            system_cpu_seconds=None,
+            resource_usage_mode=None,
+        )
+        observation._emit_event(event)  # noqa: SLF001 - same-module collaborator
 
 
 @dc.dataclass(frozen=True, slots=True)

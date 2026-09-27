@@ -34,7 +34,7 @@ from cuprum.lines import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._pipeline_types import _EventDetails, _StageObservation
+    from cuprum._pipeline_types import _StageObservation
 
 
 def _stamp_line(
@@ -49,13 +49,6 @@ def _stamp_line(
         at=max(0.0, perf_counter() - started_at),
         text=line,
     )
-
-
-def _event_details(*, pid: int | None, line: str) -> _EventDetails:
-    """Build one deferred-import observe-event payload."""
-    from cuprum._pipeline_types import _EventDetails
-
-    return _EventDetails(pid=pid, line=line)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -101,13 +94,15 @@ def _compose_line_callbacks(
     if not has_observe_hooks and context.on_line is None:
         return None
 
+    # Bound once per observed stream, not per line: the emitter resolves the
+    # command's program, argv, and project name here, where ``emit`` would have
+    # re-read all three for every line.
+    emitter = observation.line_emitter(context.stream, context.pid)
+
     def emit_line(line: str) -> _LineHookOutcome:
         """Fan one line out, returning the hook's awaitable when it has one."""
         if has_observe_hooks:
-            observation.emit(
-                context.stream,
-                _event_details(pid=context.pid, line=line),
-            )
+            emitter.emit_line(line)
         if context.on_line is None:
             return None
         return context.on_line(

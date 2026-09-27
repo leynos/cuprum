@@ -1,20 +1,25 @@
 """Preparation-cost tests for per-line observe-event emission.
 
-This is the red test for roadmap item 5.2.1. It asserts that preparing to
-observe a stream does not rebuild stable metadata per line, which fails against
-the un-hoisted implementation. Each case carries a strict ``xfail`` so the
-committed suite stays green while the failure stays recorded; the strictness
-makes the marker impossible to leave behind once the hoist lands.
+These are roadmap item 5.2.1's assertions that preparing to observe a stream
+does not rebuild stable metadata per line. They began as a red test carrying
+strict ``xfail`` markers, which flipped to ``XPASS`` and were removed when the
+hoist landed; ``test_no_event_details_construction_per_line`` and
+``test_argv_is_not_rebuilt_per_line`` are now ordinary passing tests, and the
+strictness is what forced the markers out rather than letting them linger.
+
+A zero count is a weak assertion on its own, because a recorder that had gone
+blind would report the same zero. Every case that asserts a zero calls
+``_prove_recorder_is_live`` first, so the recorder has to demonstrate it can
+still see a construction before its silence is treated as evidence.
 
 The cases drive the *existing production callback factories* —
 ``_create_stream_callback`` for single commands and
-``_create_stage_capture_tasks`` for pipelines — rather than the proposed
-factory. A missing-method error would not be evidence of the performance bug,
-so the red test must reach the bug through code that already exists. The
-single-command factory carries the per-line red assertions, since it is the
-shared seam's direct consumer; the pipeline factory's cases pin that it
-composes at most one stdout callback per stage and constructs nothing while
-preparing.
+``_create_stage_capture_tasks`` for pipelines — rather than a proposed factory.
+A missing-method error would not be evidence of the performance bug, so the
+tests must reach the bug through code that already exists. The single-command
+factory carries the per-line assertions, since it is the shared seam's direct
+consumer; the pipeline factory's cases pin that it composes at most one stdout
+callback per stage and constructs nothing while preparing.
 """
 
 from __future__ import annotations
@@ -28,11 +33,11 @@ import pytest
 from cuprum._streams import _StreamConfig
 from cuprum.echo_events import EchoStream
 from cuprum.unittests.test_line_event_emission_support import (
-    RED_REASON,
     _CountingCmd,
     _deliver,
     _ExecutionStub,
     _make_observation,
+    _prove_recorder_is_live,
     _record_event_details,
 )
 
@@ -225,9 +230,10 @@ class TestPipelinePreparationCost:
         """Composing a pipeline stage's callbacks constructs no payload.
 
         Preparation is constant in the number of lines: this pins the zero
-        end, and the delivery end is the single-command red test's job.
+        end, and the delivery end is the single-command test's job.
         """
         constructed = _record_event_details(monkeypatch)
+        _prove_recorder_is_live(constructed)
         self._drive_stage(monkeypatch, _StageRig(), is_last_stage=True)
 
         assert constructed == [], (
@@ -259,7 +265,6 @@ class TestSingleCommandPreparationCost:
     consumers.
     """
 
-    @pytest.mark.xfail(strict=True, reason=RED_REASON)
     @pytest.mark.parametrize("line_count", [1, 100])
     @pytest.mark.parametrize("stream", ["stdout", "stderr"])
     def test_no_event_details_construction_per_line(
@@ -272,6 +277,7 @@ class TestSingleCommandPreparationCost:
         from cuprum._subprocess_streams import _create_stream_callback
 
         constructed = _record_event_details(monkeypatch)
+        _prove_recorder_is_live(constructed)
         execution = _ExecutionStub(_make_observation((lambda event: None,)))
 
         callback = _create_stream_callback(typ.cast("typ.Any", execution), stream, 99)
@@ -292,13 +298,14 @@ class TestSingleCommandPreparationCost:
         """Delivering nothing constructs nothing, hoisted or not.
 
         This is the zero end of V1's 0/1/100 parametrization. It holds
-        before and after the hoist, so it carries no expected-failure
+        before and after the hoist, so it never carried an expected-failure
         marker; it pins that the cost is proportional to delivered lines
         rather than to preparation alone.
         """
         from cuprum._subprocess_streams import _create_stream_callback
 
         constructed = _record_event_details(monkeypatch)
+        _prove_recorder_is_live(constructed)
         execution = _ExecutionStub(_make_observation((lambda event: None,)))
 
         callback = _create_stream_callback(typ.cast("typ.Any", execution), "stdout", 99)
@@ -309,7 +316,6 @@ class TestSingleCommandPreparationCost:
             "preparing and delivering nothing must construct nothing"
         )
 
-    @pytest.mark.xfail(strict=True, reason=RED_REASON)
     @pytest.mark.parametrize("line_count", [1, 100])
     def test_argv_is_not_rebuilt_per_line(self, line_count: int) -> None:
         """The full argv tuple is resolved during preparation, not per line."""

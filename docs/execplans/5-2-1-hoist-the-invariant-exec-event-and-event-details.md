@@ -1400,6 +1400,54 @@ verifies the revision, so a writer editing during it invalidates the affected
 logs and nothing else — but the affected set is *every* gate whose read window
 touched the edit, not just the one whose log looks wrong.
 
+### 2026-09-27: EP-M2 lands, and three of its own claims were falsified first
+
+The hoist is implemented: `_StageObservation.line_emitter(stream, pid)` returns a
+prepared `_LineEmitter` that resolves `program`, `argv`, and `project` once per
+observed stream, and `_compose_line_callbacks` binds it there instead of
+rebuilding an `_EventDetails` per line. The deleted `_event_details` helper and
+its deferred import are gone. Both of V1's assertions now pass as ordinary
+tests, and the strict markers were removed as designed.
+
+Four findings are worth more than the diff:
+
+*The ExecEvent rule had to be **merged**, not split, and the reason is
+counter-intuitive.* Every generated constructor renders as `__init__ (<string>)`,
+so rules over that frame are separated only by their callers and resolved by
+proximity. A two-rule split therefore does not partition the samples: the
+nearer-caller rule wins every frame both could claim, and the loser keeps caller
+weight with zero matches — which `_drifted_rules` reports, exiting 2. This was
+**measured, not reasoned**: a two-rule split over a post-hoist-shaped stack gave
+the nearer rule all 100 samples and reported the other as drifted. The pre-hoist
+split only ever worked because `_event_details` was genuinely nearest for its own
+4230 frames. My first two attempts to confirm the hazard failed to reproduce it —
+the first used disjoint caller sets, the second used a frame that still existed
+in the control capture — and the mechanism I had already written into the rules
+file was wrong. It is now corrected there, with the measurement recorded.
+
+*A `__init__` can exit 2 vacuously and be caught, but the sync stub path cannot.*
+The committed rules' caller entries `_LineEventEmitter` and `_emit_line_event`
+name nothing that exists in the tree or on `main`; they are plan-era names for a
+design that was never built, and they were dropped.
+
+*The V1 recorder had gone blind, and the zero it reported would have been
+vacuous.* `_record_event_details` patched the module attribute
+`_pipeline_types._EventDetails`, which only intercepts callers that resolve the
+name at call time. The deleted `_event_details` did exactly that — which is *why*
+the test was ever red. Every surviving production site binds the name eagerly, so
+after the hoist the spy could not see anything, and `per_line == 0` was true for a
+reason that had nothing to do with the hoist. The spy now patches
+`_EventDetails.__init__`, which is binding-independent, and every zero-asserting
+case calls `_prove_recorder_is_live` first. Falsified by sabotage: with a
+deliberately blinded recorder, 5 tests fail on the liveness assertion instead of
+passing on a false zero.
+
+*The payload is unchanged.* Driving the hoisted emitter and `emit()` side by side
+yields events differing only in `line` and `timestamp`, which is the whole of the
+observation contract. My first attempt to check this reported 25 differing
+fields; that comparison was itself broken (`dc.fields` over a dict), and the
+re-run with an explicit per-field dump is the one that counts.
+
 ### 2026-09-27: V5's threshold is revised to 28%, and the projection is a range
 
 **Decision (user-approved 2026-09-27, `AskUserQuestion`).** The user chose
