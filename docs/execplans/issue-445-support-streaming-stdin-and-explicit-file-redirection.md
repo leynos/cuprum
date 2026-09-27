@@ -83,12 +83,13 @@ additive widening, not a replacement.
 
 Success is observable three ways. A child that reads 64 MiB slowly while our
 producer yields 4 KiB chunks completes without the producer ever getting far
-ahead of it, and cuprum's own peak resident set stays flat. A run whose stdout
-is redirected to a file leaves that file with the child's exact bytes and the
-file descriptor closed, both on `exit_code == 0` and on a non-zero exit. And a
-producer that raises mid-stream terminates the child, surfaces a
-`StdinSourceError`, and leaves no writer task, no pipe, and no orphan process
-behind.
+ahead of it: what the test measures is that lookahead — the pulls the writer
+has taken ahead of the child's reads — and not cuprum's peak resident set,
+which nothing measures. A run whose stdout is redirected to a file leaves that
+file with the child's exact bytes and the file descriptor closed, both on
+`exit_code == 0` and on a non-zero exit. And a producer that raises mid-stream
+terminates the child, surfaces a `StdinSourceError`, and leaves no writer task,
+no pipe, and no orphan process behind.
 
 ## Constraints
 
@@ -531,6 +532,42 @@ likelihood, and mitigation.
   description, and four places that cited the old flush location or a
   planned-but-unbuilt state shape; the roadmap rename finding was declined
   because the field it calls removed still exists.
+- [x] (2026-09-27 18:40Z) Round-5 and round-6 review rounds, then round 7, which
+      re-opened the memory claim for the second time — and found it reached
+      production docstrings no round had named. Round 7 returned 7 findings from
+      the `review --agent` pass on `8aefbbcf`; two pairs share a subject, so
+      they reduce to 4 distinct issues, all correct. Three were documentation
+      accuracy and one, the memory claim, was substantive: the round-6 wording
+      bounded retention by "the pipe, not one chunk", which still drops the
+      chunk — `_write_chunk` binds `chunk` and encodes `payload` and both stay
+      live across `await sink.stdin.drain()`. Applying the round-5 lesson (grep
+      the *concept* after falsifying a premise, rather than the sentence the
+      reviewer quoted) surfaced two production docstrings that carried the
+      *original* single-chunk claim and that neither the reviewer nor round 6
+      had flagged: `cuprum/sh/execution.py` (`StdinStream`) and
+      `cuprum/sh/safe_cmd.py` (`SafeCmd.run`'s `stdin` parameter), both
+      introduced by `19938020b` on this branch. The mechanism is measured, not
+      narrated: at `8aefbbcf` the round-6 replacement pattern `bounded by the
+      pipe` occurs 0 times in both files while `peak memory` occurs once in
+      each, so a search for a claim's *replacement* is structurally incapable
+      of finding its predecessors. Also corrected: the users-guide event
+      reference (per-chunk `stdin` events and the `early_close` operation
+      value) and the developers-guide stdin narration (`_write_stdin_stream`
+      dispatch via `_spawn_stdin_writer`, and `_await_exit_or_writer_failure`
+      on the non-streaming path). All three Python edits were proved
+      docstring-only by stripping docstrings with `ast` and comparing dumps.
+- [x] (2026-09-27 18:40Z) The `594a0fee` sweep came back red on one gate, and
+      the red is worth keeping. Six of seven gates passed; `make markdownlint`
+      failed with exactly 2 `MD049/emphasis-style` errors at
+      `docs/users-guide.md:310`, both from my own new text: `*ahead*` written
+      into a file that uses underscore emphasis throughout — measured over the
+      whole file, single-asterisk emphasis spans number 0. The commit was never
+      pushed; the whole of the delta to `ac2b8c29` is that one line, `*ahead*`
+      to `_ahead_`, and re-measured at the new head the same count is still 0.
+      The lesson: `make markdownlint` is not run by local `check-fmt` or
+      `lint`, so a Markdown emphasis mistake reaches a full sweep only if the
+      sweep includes it — which is why every sweep in this plan runs all seven
+      rather than the formats the diff "should" touch.
 
 ## Surprises & discoveries
 
