@@ -1,11 +1,11 @@
 # Hoist invariant execution-event fields (5.2.1)
 
 Status: **BLOCKED** — EP-M2 is implemented and its gates are green, but the
-completed hoist measures **29.91%** against V5's revised **28%** bar, missing by
-1.90 points reproducibly (three matched pairs, candidate range 0.0423 points).
-R3 is therefore not met and the measurement is presented for design revision.
-EP-M1 is complete; EP-M3 has not started. The blocked state is *not* a
-correctness or performance failure: the same collection shows the candidate
+completed hoist measures **29.91%** against V5's revised **28%** bar, missing
+by 1.90 points reproducibly (three matched pairs, candidate range 0.0423
+points). R3 is therefore not met and the measurement is presented for design
+revision. EP-M1 is complete; EP-M3 has not started. The blocked state is *not*
+a correctness or performance failure: the same collection shows the candidate
 30.96% faster in median wall time, and V1–V4 pass. It is a failure of a
 threshold that was derived from a projection rather than a measurement — see
 "V5 measured — 29.91%, and the 28% bar is not met" below.
@@ -262,13 +262,12 @@ failure injection at that boundary.
   Done: the hoist; V1 green; the dispatch path proven covered by sabotage (four
   scheduled-prefix tests fail when the emitter bypasses `_emit_event`). Also
   done, both found by the gate runs rather than by inspection: the classifier's
-  DOC502 docstring defect, and the C0302 module-ceiling violation that a
-  skipped `make lint` had concealed since `01ec41bd` (the classifier engine is
-  now its own module, with the split proven behaviour-preserving by
-  byte-identical output on a real capture). Not done: the V5 candidate captures
-  (three matched control/candidate pairs, D >= 10000, candidate share range <=
-  2 percentage points), the full gate suite on the final commit, and EP-M3's
-  closeout.
+  DOC502 docstring defect, and the C0302 module-ceiling violation that a skipped
+  `make lint` had concealed since `01ec41bd` (the classifier engine is now its
+  own module, with the split proven behaviour-preserving by byte-identical
+  output on a real capture). Not done: the V5 candidate captures (three matched
+  control/candidate pairs, D >= 10000, candidate share range <= 2 percentage
+  points), the full gate suite on the final commit, and EP-M3's closeout.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
   Unreachable until EP-M2's design is revised and approved.
@@ -965,9 +964,10 @@ contract test also pins that each exported name is the owning module's own
 object, so a redefinition cannot creep into the front end.
 
 Two stale numbers found in the same pass: `01ec41bd` raised
-`CONSTRUCTION_SHARE_LIMIT_PERCENT` to 28.0 but left the module docstring and the
-exit-status table still saying "10%" in two places. Both now refer to the limit
-instead of naming a number, so the prose cannot drift from the constant again.
+`CONSTRUCTION_SHARE_LIMIT_PERCENT` to 28.0 but left the module docstring and
+the exit-status table still saying "10%" in two places. Both now refer to the
+limit instead of naming a number, so the prose cannot drift from the constant
+again.
 
 ### 2026-09-27: EP-M2 is BLOCKED — the hoist as designed cannot reach 10%
 
@@ -1639,9 +1639,9 @@ in the closeout report.
 **1. The no-callback controls need the unwrapped fixture, which did not exist.**
 `benchmarks/tee_profile_scenarios.py` pairs `seed12345-nowrap.b64` with every
 `with_line_callbacks=False` scenario and reserves `seed12345-wrap76.b64` for
-`echo-devnull-cb-s1` alone. The wrapped fixture is line-oriented (76 columns, so
-a newline every 76 bytes); feeding it to a no-callback control would measure a
-differently-shaped workload from the suite's own definition of that scenario.
+`echo-devnull-cb-s1` alone. The wrapped fixture is line-oriented (76 columns,
+so a newline every 76 bytes); feeding it to a no-callback control would measure
+a differently-shaped workload from the suite's own definition of that scenario.
 Only the wrapped fixture was present in `dist/`, so the echo/tee no-callback
 controls V5 requires for its 5% wall-time tolerance had nothing to run against.
 
@@ -1649,9 +1649,9 @@ Generated 2026-09-27 with the documented command from `benchmarks/README.md`
 (`--seed 12345 --raw-bytes 1610612736 --wrap 0`), outside the measurement
 window, while another session's `make test` was running on the host: 2147483648
 bytes, manifest `dist/fixtures/seed12345-nowrap.json`, SHA-256
-`15e4356ae06fa10a81a3b4ba9e7b0e4437961a21752f982582371aa88389f914`.
-`dist/` is gitignored, so the fixture is a local artefact and cannot be
-committed as evidence; the manifest content is recorded here instead.
+`15e4356ae06fa10a81a3b4ba9e7b0e4437961a21752f982582371aa88389f914`. `dist/` is
+gitignored, so the fixture is a local artefact and cannot be committed as
+evidence; the manifest content is recorded here instead.
 
 Verified rather than assumed: the two fixtures share a seed, so their decoded
 content must agree. Decoding the first 1048575 bytes of each gives one SHA-256
@@ -1678,11 +1678,11 @@ the share and looked like a performance result.
 reproducible by the current classifier, and should not be.** It reports
 `limit_percent: 10.0`, two `ExecEvent.__init__ via _StageObservation.emit` /
 `_EventDetails.__init__ for the per-line payload` rules, and
-`construction_share_percent: 34.7284`. The rules have since been re-baselined to
-the single merged rule and the limit to 28.0, so a fresh run necessarily
-differs in `limit_percent`, rule names, and `matched_frames` keys. The
-fidelity test that *is* meaningful — pre-split code vs post-split code on one
-capture — was run separately and produced byte-identical JSON.
+`construction_share_percent: 34.7284`. The rules have since been re-baselined
+to the single merged rule and the limit to 28.0, so a fresh run necessarily
+differs in `limit_percent`, rule names, and `matched_frames` keys. The fidelity
+test that *is* meaningful — pre-split code vs post-split code on one capture —
+was run separately and produced byte-identical JSON.
 
 ### 2026-09-27: the completed hoist measures 30.20% — above the revised 28% bar
 
@@ -1693,29 +1693,30 @@ any code was written.
 
 Probe: one control/candidate pair, full wrap-76 fixture, `--backend python`,
 `--stages 1 --mode echo --sink-kind devnull --line-callbacks --read-size 65536
---repeat-count 1`, py-spy raw at 100 Hz. Control = `01ec41bd` (pre-hoist),
-candidate = `18083334` (post-hoist). Both captured `stdout_line_count =
-28256364` and `exit_code = 0`, so the same workload ran on both sides.
+--repeat-count 1`,
+py-spy raw at 100 Hz. Control = `01ec41bd` (pre-hoist), candidate = `18083334`
+(post-hoist). Both captured `stdout_line_count = 28256364` and `exit_code = 0`,
+so the same workload ran on both sides.
 
-| | control | candidate | delta |
-| --- | --- | --- | --- |
-| D (consume samples) | 26469 | 21832 | −4637 (−17.5%) |
-| N (construction samples) | 9106 | 6594 | −2512 (−27.6%) |
-| **share N/D** | **34.4025%** | **30.2034%** | **−4.20 points** |
-| share of all parent samples | 33.6387% | 28.0012% | −5.64 points |
-| parent samples | 27070 | 23549 | −3521 |
-| wall time | 271.32 s | 228.11 s | **−43.20 s (−15.92%)** |
+|                             | control      | candidate    | delta                  |
+| --------------------------- | ------------ | ------------ | ---------------------- |
+| D (consume samples)         | 26469        | 21832        | −4637 (−17.5%)         |
+| N (construction samples)    | 9106         | 6594         | −2512 (−27.6%)         |
+| **share N/D**               | **34.4025%** | **30.2034%** | **−4.20 points**       |
+| share of all parent samples | 33.6387%     | 28.0012%     | −5.64 points           |
+| parent samples              | 27070        | 23549        | −3521                  |
+| wall time                   | 271.32 s     | 228.11 s     | **−43.20 s (−15.92%)** |
 
 **The hoist demonstrably works; the gate's metric does not register it.** The
-candidate is 15.92% faster end to end on a 2 GiB workload, and the
-construction work it removed fell 27.6% against a denominator that fell only
-17.5%. But because the share is `N/D` and the removed work leaves both, the
-ratio improves by 4.20 points where a naive reading of a 15.92% speedup would
-suggest far more. The candidate would need N ≤ 6113, i.e. **481 fewer samples
-out of 6594**, to clear 28%.
+candidate is 15.92% faster end to end on a 2 GiB workload, and the construction
+work it removed fell 27.6% against a denominator that fell only 17.5%. But
+because the share is `N/D` and the removed work leaves both, the ratio improves
+by 4.20 points where a naive reading of a 15.92% speedup would suggest far
+more. The candidate would need N ≤ 6113, i.e. **481 fewer samples out of
+6594**, to clear 28%.
 
-**Those 481 samples are not addressable by this design.** Every one of the
-6594 matched samples is a leaf inside `ExecEvent.__init__` itself — the
+**Those 481 samples are not addressable by this design.** Every one of the 6594
+matched samples is a leaf inside `ExecEvent.__init__` itself — the
 decomposition finds no sub-frame work under the constructor to shave. So the
 remaining numerator is not overhead around the retained construction; it *is*
 the retained construction, which EP-M2 was explicitly scoped to keep and which
@@ -1751,16 +1752,16 @@ and a smaller denominator with a roughly fixed numerator gives a larger share
 than either figure. Two limits on how far this should be pressed: the observed
 N (6594) is not the projected 6474 measured again, because the rule set was
 merged in the same change — under the pre-hoist split the 6474 counted only the
-frames resolving through `emit` in `_pipeline_types.py`, whereas the merged rule
-also matches `emit_line` in `_line_callbacks.py`, which is where the hoist put
-the construction. So "N rose by 120" is not a like-for-like claim and is not
-made here; what is defensible is that N did **not** fall to the projected value
-while D fell further than projected, and the ratio followed.
+frames resolving through `emit` in `_pipeline_types.py`, whereas the merged
+rule also matches `emit_line` in `_line_callbacks.py`, which is where the hoist
+put the construction. So "N rose by 120" is not a like-for-like claim and is
+not made here; what is defensible is that N did **not** fall to the projected
+value while D fell further than projected, and the ratio followed.
 
 **What this does and does not settle.** It settles that the design as approved
 and implemented lands around 30%, not under 28%. It does not settle the
-three-pair dispersion question, so a BLOCKED decision should rest on a completed
-V5 collection rather than on this probe alone.
+three-pair dispersion question, so a BLOCKED decision should rest on a
+completed V5 collection rather than on this probe alone.
 
 ### 2026-09-27: two liveness traps in the V5 collection script
 
@@ -1803,18 +1804,18 @@ The script's uses of it are limited to exercising the plumbing.
 
 **Three matched pairs, collected per V5's own protocol.** Full wrap-76 fixture,
 `--backend python --stages 1 --mode echo --sink-kind devnull --line-callbacks
---read-size 65536 --repeat-count 1`, py-spy raw at 100 Hz, one unprofiled
-warm-up per variant before collection, control/candidate order alternated per
-round. Control = `01ec41bd` (pre-hoist); candidate = `f4d1010a`, whose
-`cuprum/` and `benchmarks/` trees are byte-identical to the `18083334` probe
-tree (only plan text changed in between).
+--read-size 65536 --repeat-count 1`,
+py-spy raw at 100 Hz, one unprofiled warm-up per variant before collection,
+control/candidate order alternated per round. Control = `01ec41bd` (pre-hoist);
+candidate = `f4d1010a`, whose `cuprum/` and `benchmarks/` trees are
+byte-identical to the `18083334` probe tree (only plan text changed in between).
 
-| pair | control D | control share | candidate D | candidate share | candidate wall |
-| --- | --- | --- | --- | --- | --- |
-| r1 | 25726 | 35.3533% | 17539 | 29.8991% | 180.16 s |
-| r2 | 25743 | 34.2928% | 17758 | 29.9414% | 181.18 s |
-| r3 | 29722 | 34.0388% | 17413 | 29.9087% | 175.41 s |
-| **median** | | **34.2928%** | | **29.9087%** | **180.16 s** |
+| pair       | control D | control share | candidate D | candidate share | candidate wall |
+| ---------- | --------- | ------------- | ----------- | --------------- | -------------- |
+| r1         | 25726     | 35.3533%      | 17539       | 29.8991%        | 180.16 s       |
+| r2         | 25743     | 34.2928%      | 17758       | 29.9414%        | 181.18 s       |
+| r3         | 29722     | 34.0388%      | 17413       | 29.9087%        | 175.41 s       |
+| **median** |           | **34.2928%**  |             | **29.9087%**    | **180.16 s**   |
 
 **Tolerances.** D ≥ 10000: **met** (min 17413). Candidate range ≤ 2 points:
 **met, and by a wide margin** — 0.0423 points (29.8991 → 29.9414), where the
@@ -1836,28 +1837,28 @@ unstable results are inconclusive" escape hatch could cover.
 **Interference was present and is recorded, but does not explain the gap.**
 Other sessions ran full gates and `cargo` jobs throughout, so per-run load
 varied from 2.77 to 35.41. That variability shows up where it should — in the
-denominators and wall times (control D ranges 25726–29722, wall 259–306 s) — and
-*none of it* moves the candidate share, which stays inside 0.05 points. Load
-affects the total work measured, not the fraction of the consume subtree spent
-constructing. A quieter host would not close a 1.9-point gap that is stable to
-0.04 points under load.
+denominators and wall times (control D ranges 25726–29722, wall 259–306 s) —
+and *none of it* moves the candidate share, which stays inside 0.05 points.
+Load affects the total work measured, not the fraction of the consume subtree
+spent constructing. A quieter host would not close a 1.9-point gap that is
+stable to 0.04 points under load.
 
-**Collection parameters and the raw capture record.** Raw folded captures are
-at `/tmp/smoke521/v5/r{1,2,3}-{control,candidate}/`: control
+**Collection parameters and the raw capture record.** Raw folded captures are at
+`/tmp/smoke521/v5/r{1,2,3}-{control,candidate}/`: control
 `01ec41bd56b5968e7b9b5ec205ba82ffdbe55724`, candidate
 `f4d1010aaf352a4dd6f549f6f602dd29bc329c4d`, both resolved per run and written to
 `revision.txt`. Every capture has `unresolved_frames: {}` and
 `status: fail_above_limit`, so no rule drifted and every failure is a genuine
 over-limit share rather than an inconclusive result misread as one.
 
-| capture | py-spy samples | parent | D | N | share % | wall s | py-spy rc | load at start |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| r1-control | 26185 | 26184 | 25726 | 9095 | 35.3533 | 260.97 | 0 | 11.40 21.09 21.91 |
-| r1-candidate | 17912 | 17911 | 17539 | 5244 | 29.8991 | 180.16 | 0 | 5.59 12.31 18.02 |
-| r2-control | 26224 | 26223 | 25743 | 8828 | 34.2928 | 259.22 | 1 | 5.70 7.88 14.14 |
-| r2-candidate | 18145 | 18141 | 17758 | 5317 | 29.9414 | 181.18 | 0 | 5.59 12.31 18.02 |
-| r3-control | 31311 | 31310 | 29722 | 10117 | 34.0388 | 306.38 | 0 | 4.11 5.72 11.70 |
-| r3-candidate | 17740 | 17737 | 17413 | 5208 | 29.9087 | 175.41 | 1 | 8.25 16.96 15.89 |
+| capture      | py-spy samples | parent | D     | N     | share % | wall s | py-spy rc | load at start     |
+| ------------ | -------------- | ------ | ----- | ----- | ------- | ------ | --------- | ----------------- |
+| r1-control   | 26185          | 26184  | 25726 | 9095  | 35.3533 | 260.97 | 0         | 11.40 21.09 21.91 |
+| r1-candidate | 17912          | 17911  | 17539 | 5244  | 29.8991 | 180.16 | 0         | 5.59 12.31 18.02  |
+| r2-control   | 26224          | 26223  | 25743 | 8828  | 34.2928 | 259.22 | 1         | 5.70 7.88 14.14   |
+| r2-candidate | 18145          | 18141  | 17758 | 5317  | 29.9414 | 181.18 | 0         | 5.59 12.31 18.02  |
+| r3-control   | 31311          | 31310  | 29722 | 10117 | 34.0388 | 306.38 | 0         | 4.11 5.72 11.70   |
+| r3-candidate | 17740          | 17737  | 17413 | 5208  | 29.9087 | 175.41 | 1         | 8.25 16.96 15.89  |
 
 **Two captures carry a non-zero py-spy exit, and both are benign — checked, not
 assumed.** r2-control and r3-candidate report `py-spy=1` with the log ending
@@ -1870,12 +1871,12 @@ alone as "capture failed" would have discarded two of the six valid captures,
 including one of the three controls. It is recorded here rather than silently
 tolerated so a future reader of `pyspy-exit.txt` does not re-open it.
 
-**Liveness is established on the work done, not on a wall-time heuristic.**
-All six captures report `stdout_line_count` of exactly **28256364** with
+**Liveness is established on the work done, not on a wall-time heuristic.** All
+six captures report `stdout_line_count` of exactly **28256364** with
 `exit_code` 0 and `read_size` 65536, so every run did identical work. (This is
 the check the collection script *should* have used from the start; its first
-version asserted capture size, which is structurally zero for `--mode echo`, and
-its fallback asserted a wall-time floor. See the liveness-traps entry.)
+version asserted capture size, which is structurally zero for `--mode echo`,
+and its fallback asserted a wall-time floor. See the liveness-traps entry.)
 
 **Mechanism of the miss: the projection subtracted equal weights from N and D;
 the implementation removed far more from D.** The threshold-revision entry
@@ -1883,10 +1884,10 @@ projected a post-hoist share by subtracting the same absolute frame weights
 from numerator and denominator — `N` 10704 → 6474 and `D` 30822 → 26592, giving
 24.35%. Measured on one rule set (r2, the middle pair), the hoist removed:
 
-| | control | candidate | removed | share of control |
-| --- | --- | --- | --- | --- |
-| N (numerator) | 8828 | 5317 | **3511** | 39.8% |
-| D (denominator) | 25743 | 17758 | **7985** | 31.0% |
+|                 | control | candidate | removed  | share of control |
+| --------------- | ------- | --------- | -------- | ---------------- |
+| N (numerator)   | 8828    | 5317      | **3511** | 39.8%            |
+| D (denominator) | 25743   | 17758     | **7985** | 31.0%            |
 
 So 7985 samples of denominator work disappeared, but only 3511 of them were in
 stacks the numerator counted. The other **4474 samples were pure denominator**:
@@ -1894,18 +1895,18 @@ stacks inside the consume subtree that carried a hoisted frame but never had a
 generated constructor on the stack at the moment they were sampled. Removing
 work that only D was counting necessarily *raises* the share, and it is the
 whole of the 5.6-point gap between the 24.35% projection and the 29.91%
-measurement. N fell by a larger *fraction* than D (39.8% vs 31.0%), which is why
-the share still moved the right way; it did not fall far enough to clear a bar
-that had been sited on the assumption that the two removals were equal.
+measurement. N fell by a larger *fraction* than D (39.8% vs 31.0%), which is
+why the share still moved the right way; it did not fall far enough to clear a
+bar that had been sited on the assumption that the two removals were equal.
 
 **This is the same trap the threshold entry named, one level up.** That entry
 correctly diagnosed that a post-hoist projection must use the post-hoist
 denominator, and correctly refused a 25% bar computed from the control's
 denominator. What it did not do was measure *which* frames the hoist removes
 from D — it estimated that the removals were equal because they were the same
-frames. They are the same frames, but D and N count them differently: N counts a
-stack once however many matching frames it holds, while D counts every stack the
-frames appear in. The revision's own lesson — "which frames a given
+frames. They are the same frames, but D and N count them differently: N counts
+a stack once however many matching frames it holds, while D counts every stack
+the frames appear in. The revision's own lesson — "which frames a given
 implementation actually removes is not knowable before it is written" — was
 applied to the numerator and not to the denominator.
 
@@ -1915,8 +1916,8 @@ compared against a *post-re-baseline* measurement; re-baselining the rules to
 the single merged construction rule moved the control's own accounting (the
 control capture reads 34.73% / N 10704 / D 30822 before, and 34.29% / N 8828 /
 D 25743 after). The 34%-to-29.9% movement is therefore not attributable to the
-hoist alone across that boundary. The r2 control-vs-candidate table above is the
-clean comparison: both sides measured with the identical rule set at the
+hoist alone across that boundary. The r2 control-vs-candidate table above is
+the clean comparison: both sides measured with the identical rule set at the
 identical revision of the classifier, so the 3511/7985 decomposition is
 unconfounded.
 
@@ -1935,43 +1936,44 @@ revision", so this characterizes *what* the remaining 29.91% is before anyone
 proposes a replacement bar. The answer is narrower than expected and it is the
 single most useful input to that decision.
 
-**Every numerator sample is inside the constructor, not around it.** Decomposing
-the r2 pair's numerator by innermost executing frame gives, under both variants,
-**100.00% in a frame whose leaf is `__init__ (<string>:N)`** — the generated
-`ExecEvent.__init__` itself. Zero numerator samples are attributed to a caller
-that merely has the constructor on its stack (`emit_line`, `emit`,
-`emit_fail_fast`). The recount reproduces the classifier exactly (control
-D=25743/N=8828/34.2928%, candidate D=17758/N=5317/29.9414%), so this is the third
-independent confirmation of the same numbers and the first with attribution.
-The consequence is that the numerator is not "event-emission overhead" in
-general; it is the cost of one generated `__init__` per line, measured.
+**Every numerator sample is inside the constructor, not around it.**
+Decomposing the r2 pair's numerator by innermost executing frame gives, under
+both variants, **100.00% in a frame whose leaf is `__init__ (<string>:N)`** —
+the generated `ExecEvent.__init__` itself. Zero numerator samples are
+attributed to a caller that merely has the constructor on its stack
+(`emit_line`, `emit`, `emit_fail_fast`). The recount reproduces the classifier
+exactly (control D=25743/N=8828/34.2928%, candidate D=17758/N=5317/29.9414%),
+so this is the third independent confirmation of the same numbers and the first
+with attribution. The consequence is that the numerator is not "event-emission
+overhead" in general; it is the cost of one generated `__init__` per line,
+measured.
 
 **That cost is dominated by `frozen=True`.** Microbenchmarked on this host's
 interpreter (3.14.4, 300k reps, 27 fields, defaults included), constructing the
 shipped type and three comparisons:
 
-| construction | ns/ctor | ratio to shipped |
-| --- | --- | --- |
-| **shipped** — `@dc.dataclass(frozen=True, slots=True)` | 1890.3 | 1.0000 |
-| control — `@dc.dataclass(slots=True)`, `frozen=False` | 341.6 | **0.18×** |
-| frozen, hand-written `object.__setattr__` `__init__`, 27 named params | 1765.8 | 0.9342 |
-| **frozen, hand-written descriptor `__init__`, 27 named params** | **1278.3** | **0.6763** |
+| construction                                                         | ns/ctor    | ratio to shipped |
+| -------------------------------------------------------------------- | ---------- | ---------------- |
+| **shipped** — `@dc.dataclass(frozen=True, slots=True)`               | 1890.3     | 1.0000           |
+| control — `@dc.dataclass(slots=True)`, `frozen=False`                | 341.6      | **0.18×**        |
+| frozen, handwritten `object.__setattr__` `__init__`, 27 named params | 1765.8     | 0.9342           |
+| **frozen, handwritten descriptor `__init__`, 27 named params**       | **1278.3** | **0.6763**       |
 
 **Why.** `dataclasses` implements `frozen=True` by emitting, per field, a full
-`CALL` to `object.__setattr__` — 27 load-attr/call/pop sequences in one function
-body (disassembled from the shipped type; `co_names` is `('__setattr__',)` and
-the body is 27 uniform 30-byte blocks). So the frozen guard costs roughly 5.5×
-the entire construction of the same 27 fields without it. Dropping
-`frozen=True` is by far the largest lever measured here, and it is a 5.5×
-reduction — with the descriptor route below recovering 0.68× of it while
+`CALL` to `object.__setattr__` — 27 load-attr/call/pop sequences in one
+function body (disassembled from the shipped type; `co_names` is
+`('__setattr__',)` and the body is 27 uniform 30-byte blocks). So the frozen
+guard costs roughly 5.5× the entire construction of the same 27 fields without
+it. Dropping `frozen=True` is by far the largest lever measured here, and it is
+a 5.5× reduction — with the descriptor route below recovering 0.68× of it while
 keeping every invariant.
 
 **An invariant-preserving lever also exists, and it is larger than first
 measured.** A named-parameter `__init__` that hoists the slot-descriptor
 setters out of the loop measures **0.6763×** the shipped constructor and passes
 the full dataclass protocol surface, not merely the three properties an earlier
-draft of this entry checked. **This supersedes a 0.88× figure recorded earlier in
-this same entry**: that measurement used an `*args` `__init__`, which cannot
+draft of this entry checked. **This supersedes a 0.88× figure recorded earlier
+in this same entry**: that measurement used an `*args` `__init__`, which cannot
 accept keywords, so `dc.replace` and keyword construction break and the variant
 is not a drop-in — see the entry below for the correction and the protocol
 matrix that caught it. The corrected 0.68× is a 32% reduction in constructor
@@ -1987,50 +1989,50 @@ superseding entry below does before quoting 22.42%. Even then it is arithmetic
 on a microbenchmark, and the same three-pair protocol that produced the 29.91%
 is what confirms it.
 
-**One implementation consequence worth flagging now.** A hand-written
-`__init__` in `cuprum/events.py` renders as `__init__ (cuprum/events.py:N)`,
-whereas the generated one renders as `__init__ (<string>:N)`. The classifier's
-construction rule matches on the `<string>` location specifically, so adopting
-this lever requires re-baselining `classifier-rules.json` and re-verifying the
-control capture with it — the same re-baseline discipline the merged rule
-already went through, not a one-line edit.
+**One implementation consequence worth flagging now.** A handwritten `__init__`
+in `cuprum/events.py` renders as `__init__ (cuprum/events.py:N)`, whereas the
+generated one renders as `__init__ (<string>:N)`. The classifier's construction
+rule matches on the `<string>` location specifically, so adopting this lever
+requires re-baselining `classifier-rules.json` and re-verifying the control
+capture with it — the same re-baseline discipline the merged rule already went
+through, not a one-line edit.
 
 **This is not a licence to drop `frozen=True`, and the plan does not propose
 doing so.** Three things hold it in place: it is *pre-existing public API* —
-`@dc.dataclass(frozen=True, slots=True)` on `ExecEvent` dates to
-`2aa9b2c1` ("Implement structured pipeline events and telemetry", PR #16) and
-this branch does not touch `cuprum/events.py` at all; the type is hashable as a
-result, so immutability is part of its contract rather than an internal detail;
-and three suites assert `FrozenInstanceError` on event writes
-(`test_line_events.py`, `test_line_event_emission_parity.py`,
-`test_line_event_emission_properties.py`), one of them a property test. Weakening
-it is a public-API change that the tolerances require be approved separately, not
-a tuning move inside 5.2.1.
+`@dc.dataclass(frozen=True, slots=True)` on `ExecEvent` dates to `2aa9b2c1`
+("Implement structured pipeline events and telemetry", PR #16) and this branch
+does not touch `cuprum/events.py` at all; the type is hashable as a result, so
+immutability is part of its contract rather than an internal detail; and three
+suites assert `FrozenInstanceError` on event writes (`test_line_events.py`,
+`test_line_event_emission_parity.py`,
+`test_line_event_emission_properties.py`), one of them a property test.
+Weakening it is a public-API change that the tolerances require be approved
+separately, not a tuning move inside 5.2.1.
 
-**What this means for the threshold decision, stated plainly.** If `frozen=True`
-is held fixed and the generated constructor stays, the floor for any design that
-constructs a fresh 27-field `ExecEvent` per line — which V2/V4 require — is this
-constructor, and the measured 29.91% sits about 1.9 points above a bar that no
-further hoisting can move. Three routes exist and they are not equivalent:
-re-site the threshold on the measured artefact; keep the bar and take the 0.68×
-descriptor lever, measuring the result; or reopen `frozen=True` itself, a
-public-API change worth 5.5× and therefore a roadmap-level decision rather than
-tuning. The one thing this entry rules out is a third threshold revision derived
-from another projection.
+**What this means for the threshold decision, stated plainly.** If
+`frozen=True` is held fixed and the generated constructor stays, the floor for
+any design that constructs a fresh 27-field `ExecEvent` per line — which V2/V4
+require — is this constructor, and the measured 29.91% sits about 1.9 points
+above a bar that no further hoisting can move. Three routes exist and they are
+not equivalent: re-site the threshold on the measured artefact; keep the bar
+and take the 0.68× descriptor lever, measuring the result; or reopen
+`frozen=True` itself, a public-API change worth 5.5× and therefore a
+roadmap-level decision rather than tuning. The one thing this entry rules out
+is a third threshold revision derived from another projection.
 
 ### 2026-09-27: the hoist removed denominator-only work — the mechanism, at source level
 
 The reason the share did not fall as projected is now fully traceable, and the
-trace is the most direct answer to "why did a correct implementation miss?" that
-this plan can give.
+trace is the most direct answer to "why did a correct implementation miss?"
+that this plan can give.
 
 **Split D by leaf frame class on the r2 pair** (stacks in the consume subtree,
 partitioned by whether a generated constructor is also on the stack):
 
-| | control | candidate | removed |
-| --- | --- | --- | --- |
-| D (consume subtree) | 25743 | 17758 | 7985 |
-| N (has the constructor on the stack) | 8828 | 5317 | 3511 |
+|                                          | control   | candidate | removed  |
+| ---------------------------------------- | --------- | --------- | -------- |
+| D (consume subtree)                      | 25743     | 17758     | 7985     |
+| N (has the constructor on the stack)     | 8828      | 5317      | 3511     |
 | **D-only** (no constructor on the stack) | **16915** | **12441** | **4474** |
 
 Of the 7985 samples the hoist removed from the denominator, only 3511 were in
@@ -2038,25 +2040,27 @@ stacks the numerator counts. The other **4474 were denominator-only** — and th
 twelve largest sources of that removal are *exactly the three things EP-M2 was
 scoped to remove*:
 
-| leaf frame | control | candidate | removed |
-| --- | --- | --- | --- |
-| `emit (cuprum/_pipeline_types.py)` | 4471 | 0 | **4471** |
-| `_event_details (cuprum/_line_callbacks.py)` | 1212 | 0 | **1212** |
-| `argv_with_program (cuprum/sh/safe_cmd.py)` | 337 | 0 | **337** |
-| all other leaves combined | 10895 | 12441 | −1546 (noise, both directions) |
+| leaf frame                                   | control | candidate | removed                        |
+| -------------------------------------------- | ------- | --------- | ------------------------------ |
+| `emit (cuprum/_pipeline_types.py)`           | 4471    | 0         | **4471**                       |
+| `_event_details (cuprum/_line_callbacks.py)` | 1212    | 0         | **1212**                       |
+| `argv_with_program (cuprum/sh/safe_cmd.py)`  | 337     | 0         | **337**                        |
+| all other leaves combined                    | 10895   | 12441     | −1546 (noise, both directions) |
 
 Those three sum to **6020 of the 4474** — they do not merely dominate the
 removal, they over-explain it, and the excess is offset by ordinary sampling
 noise in the unchanged leaves (some, like `bound_line`, actually *rose*). Zero
-samples remain in any of the three under the candidate: every call site is gone,
-which is the signature of a hoist that removed the work rather than moving it.
+samples remain in any of the three under the candidate: every call site is
+gone, which is the signature of a hoist that removed the work rather than
+moving it.
 
 **Why they were D-only, verified rather than inferred.** A representative
 control stack for the largest source ends
-`emit_line (cuprum/_line_callbacks.py:109)` → `emit (cuprum/_pipeline_types.py:135)`.
-The sample lands *inside* `emit` while it is assembling the per-line payload —
-before the constructor is reached — so the stack has no generated frame and the
-numerator cannot count it. The candidate's `_LineEventEmitter.emit_line` calls
+`emit_line (cuprum/_line_callbacks.py:109)` →
+`emit (cuprum/_pipeline_types.py:135)`. The sample lands *inside* `emit` while
+it is assembling the per-line payload — before the constructor is reached — so
+the stack has no generated frame and the numerator cannot count it. The
+candidate's `_LineEventEmitter.emit_line` calls
 `self.emit_event(ExecEvent(...))` directly, so the `emit` hop does not exist at
 all. Removing a frame that only ever appeared below the numerator is
 arithmetically guaranteed to raise `N/D`, because it subtracts from D alone.
@@ -2065,112 +2069,114 @@ arithmetically guaranteed to raise `N/D`, because it subtracts from D alone.
 projection assumed — that was 1212 samples here — but the 4471 samples spent in
 the *hop* that built the payload before constructing the event. The projection
 priced the constructor and the helper; it could not price the frame the helper
-was reached through, because that frame's weight only appears in a real capture.
-This is precisely the plan's own recorded lesson — "which frames a given
-implementation actually removes is not knowable before it is written" — and it
-turned out to bind hardest on the term the projection treated as unchanged.
+was reached through, because that frame's weight only appears in a real
+capture. This is precisely the plan's own recorded lesson — "which frames a
+given implementation actually removes is not knowable before it is written" —
+and it turned out to bind hardest on the term the projection treated as
+unchanged.
 
-**A consequence that generalises beyond this gate.** Because 100% of the
+**A consequence that generalizes beyond this gate.** Because 100% of the
 numerator is inside the constructor (previous entry), *any* optimization that
-removes sample weight from the consume subtree participates in the numerator only
-if the sampled frame happens to sit inside the constructor. Work eliminated
-before the constructor call lands in D alone and raises the share. So on this
-classifier, a strictly faster emission path can score *worse* than a slower one,
-which is exactly what happened: 30.96% less wall time, 1.9 points more share.
-That property, not the 29.91% itself, is what a design revision needs to weigh —
-a percentage-of-total-work gate measures how the total is spent, and this work
-was spent so that the total shrank.
+removes sample weight from the consume subtree participates in the numerator
+only if the sampled frame happens to sit inside the constructor. Work
+eliminated before the constructor call lands in D alone and raises the share.
+So on this classifier, a strictly faster emission path can score *worse* than a
+slower one, which is exactly what happened: 30.96% less wall time, 1.9 points
+more share. That property, not the 29.91% itself, is what a design revision
+needs to weigh — a percentage-of-total-work gate measures how the total is
+spent, and this work was spent so that the total shrank.
 
 ### 2026-09-27: the next roadmap item will raise this same number (5.2.2)
 
-The decomposition generalises further than this gate, and the consequence lands
+The decomposition generalizes further than this gate, and the consequence lands
 on the next item in the phase, so it is recorded here rather than left for that
 item's own plan to rediscover.
 
 Roadmap **5.2.2** — "Remove the per-hook `inspect.isawaitable` call from the
 per-line path" — depends on 5.2.1 and is scoped against the same kind of
-evidence: "a committed profiler artefact shows `inspect.isawaitable` contributes
-0 sampled frames in the per-line hot path". In the *candidate* capture that
-symbol is **589 samples, every one of them D-only**, with the stack ending
+evidence: "a committed profiler artefact shows `inspect.isawaitable`
+contributes 0 sampled frames in the per-line hot path". In the *candidate*
+capture that symbol is **589 samples, every one of them D-only**, with the
+stack ending
 
 `emit_line (_line_callbacks.py:216)` → `emit_line (_line_callbacks.py:135)` →
-`_emit_event (_pipeline_types.py:203)` → `_emit_exec_event (_observability.py:108)`
-→ `isawaitable (inspect.py:371)`
+`_emit_event (_pipeline_types.py:203)` →
+`_emit_exec_event (_observability.py:108)` → `isawaitable (inspect.py:371)`
 
 so it is genuinely per-line work of exactly the kind 5.2.2 targets, reached
 through the hook dispatcher rather than through the constructor.
 
 **Removing it subtracts 589 from D and 0 from N.** At the r2 candidate's
 D=17758 and N=5317, that moves the share from 29.9414% to **30.9686%**, a rise
-of **+1.03 points** — a *worse* number on
-this gate than the one 5.2.1 is currently blocked on, from work the roadmap
-explicitly wants done. That is not an argument against 5.2.2; the work is worth
-doing and the 0-frame goal in its own success criterion is stated on the frame
-count, which 5.2.2 will meet cleanly. It is an argument that **5.2.1's
-construction-share gate cannot be the acceptance instrument for 5.2.2**, and
-more sharply, that a threshold sited just above a predecessor's measured result
-is a threshold the next optimization will breach by succeeding.
+of **+1.03 points** — a *worse* number on this gate than the one 5.2.1 is
+currently blocked on, from work the roadmap explicitly wants done. That is not
+an argument against 5.2.2; the work is worth doing and the 0-frame goal in its
+own success criterion is stated on the frame count, which 5.2.2 will meet
+cleanly. It is an argument that **5.2.1's construction-share gate cannot be the
+acceptance instrument for 5.2.2**, and more sharply, that a threshold sited
+just above a predecessor's measured result is a threshold the next optimization
+will breach by succeeding.
 
 **The structural reason, restated once more in its most general form.** The
 numerator counts samples *inside* `ExecEvent.__init__` and nothing else
-(measured: 100%, previous entry). D counts all work in the consume subtree.
-Any change that reduces consume-subtree work without reducing the number of
+(measured: 100%, previous entry). D counts all work in the consume subtree. Any
+change that reduces consume-subtree work without reducing the number of
 constructor calls lowers the denominator while holding the numerator, so it
 raises the ratio. Every optimization in this phase has that shape. A
 percentage-of-total gate therefore cannot express "the hot path got faster"
 across a series of such changes, however well it discriminates the first one.
 
-**Recommended for whoever re-sites the threshold.** Either (a) state the gate as
-an absolute numerator rate — constructor samples per emitted line, which is what
-"per-line emission no longer reconstructs invariant fields" actually claims and
-which is invariant under unrelated work being removed — or (b) keep the share
-form and re-measure the bar per item against its own predecessor, accepting that
-the number is a description of the current workload rather than a target. What
-this plan can supply for either route is a measured, reproducible artefact and
-the decomposition above, which separates the constructor's contribution from
-everything else.
+**Recommended for whoever re-sites the threshold.** Either (a) state the gate
+as an absolute numerator rate — constructor samples per emitted line, which is
+what "per-line emission no longer reconstructs invariant fields" actually
+claims and which is invariant under unrelated work being removed — or (b) keep
+the share form and re-measure the bar per item against its own predecessor,
+accepting that the number is a description of the current workload rather than
+a target. What this plan can supply for either route is a measured,
+reproducible artefact and the decomposition above, which separates the
+constructor's contribution from everything else.
 
 ### 2026-09-27: the bar is clearable — the descriptor lever, at 0.68× (superseding entry)
 
 **An earlier version of this entry is superseded and its numbers were wrong.**
-It reported a 0.8770 descriptor ratio clearing 28% by 0.74 points, measured on a
-candidate whose `__init__` took `*args`. That candidate is not a drop-in
+It reported a 0.8770 descriptor ratio clearing 28% by 0.74 points, measured on
+a candidate whose `__init__` took `*args`. That candidate is not a drop-in
 replacement: `*args` rejects keywords, so `dc.replace(inst, phase=...)` and
 ordinary keyword construction both raise `TypeError`. The protocol-equivalence
 check that caught it also showed the same candidate failing `pickle` and
 `copy` — and both earlier measurements were blind to this because each verified
-only the three properties named in the entry text (slots, `FrozenInstanceError`,
-equality) rather than the protocol surface. Recorded rather than quietly
-replaced, because "I verified the invariants I thought to name" is how a 0.88
-became a recommendation.
+only the three properties named in the entry text (slots,
+`FrozenInstanceError`, equality) rather than the protocol surface. Recorded
+rather than quietly replaced, because "I verified the invariants I thought to
+name" is how a 0.88 became a recommendation.
 
 **The corrected result is better, not worse.** Generating a *named-parameter*
 `__init__` that hoists the slot-descriptor setters out of the loop, and
-reproducing by hand the `__getstate__`/`__setstate__` hooks dataclasses installs
-alongside `slots=`, gives a full protocol-equivalent drop-in:
+reproducing by hand the `__getstate__`/`__setstate__` hooks dataclasses
+installs alongside `slots=`, gives a full protocol-equivalent drop-in:
 
-| construction | ns/ctor | ratio to shipped |
-| --- | --- | --- |
-| shipped — generated `frozen=True, slots=True` | 1890.3 | 1.0000 |
-| descriptor `__init__`, 27 named params, hoisted setters | **1278.3** | **0.6763** |
-| `object.__setattr__` `__init__`, 27 named params | 1765.8 | 0.9342 |
+| construction                                            | ns/ctor    | ratio to shipped |
+| ------------------------------------------------------- | ---------- | ---------------- |
+| shipped — generated `frozen=True, slots=True`           | 1890.3     | 1.0000           |
+| descriptor `__init__`, 27 named params, hoisted setters | **1278.3** | **0.6763**       |
+| `object.__setattr__` `__init__`, 27 named params        | 1765.8     | 0.9342           |
 
-Checked against the shipped type on the full surface, each comparison running on
-both: `dc.fields` (27), `dc.replace`, `dc.asdict`, `dc.astuple`, keyword
+Checked against the shipped type on the full surface, each comparison running
+on both: `dc.fields` (27), `dc.replace`, `dc.asdict`, `dc.astuple`, keyword
 construction, `pickle` round-trip, `copy.copy`, `copy.deepcopy`, `hash`/set
 membership, `repr`, `FrozenInstanceError` on write, and 27 slots. **All twelve
 pass on all three classes**, and the shipped and descriptor rows agree in every
-column. The `object.__setattr__` variant is also equivalent, which is what makes
-it a useful control: the win is the descriptor dispatch, not the named
+column. The `object.__setattr__` variant is also equivalent, which is what
+makes it a useful control: the win is the descriptor dispatch, not the named
 parameters.
 
 **Share model at r2 (D=17758, N=5317):**
 
-| construction | ratio | numerator | denominator | share | against 28% |
-| --- | --- | --- | --- | --- | --- |
-| shipped | 1.0000 | 5317 | 17758 | 29.9414% | fail, +1.94 |
-| `object.__setattr__` named-param | 0.9342 | 4967 | 17408 | 28.5329% | fail, +0.53 |
-| **descriptor named-param** | **0.6763** | **3596** | **16037** | **22.4231%** | **pass, −5.58** |
+| construction                     | ratio      | numerator | denominator | share        | against 28%     |
+| -------------------------------- | ---------- | --------- | ----------- | ------------ | --------------- |
+| shipped                          | 1.0000     | 5317      | 17758       | 29.9414%     | fail, +1.94     |
+| `object.__setattr__` named-param | 0.9342     | 4967      | 17408       | 28.5329%     | fail, +0.53     |
+| **descriptor named-param**       | **0.6763** | **3596**  | **16037**   | **22.4231%** | **pass, −5.58** |
 
 The model is the one the decomposition licenses: samples inside the constructor
 scale with its cost, and what leaves the numerator leaves the denominator with
@@ -2179,22 +2185,23 @@ here with a measured ratio for the constructor rather than an assumed frame set.
 
 **Why this margin is credible where the superseded 0.74 was not.** −5.58 points
 against a control between-pair spread of 1.31 and a candidate spread of 0.0423
-is a gap no plausible load effect closes, and unlike the earlier figure it comes
-from a candidate that passes the protocol surface the shipped type defines. It
-is still a model, not a capture: no three-pair V5 collection has been run
-against a descriptor-based constructor, and two projections in this plan have
-already been falsified by measurement, so confirmation by the same protocol that
-produced the 29.91% remains required before any number here is citable.
+is a gap no plausible load effect closes, and unlike the earlier figure it
+comes from a candidate that passes the protocol surface the shipped type
+defines. It is still a model, not a capture: no three-pair V5 collection has
+been run against a descriptor-based constructor, and two projections in this
+plan have already been falsified by measurement, so confirmation by the same
+protocol that produced the 29.91% remains required before any number here is
+citable.
 
 **Two implementation facts a future implementer needs, both verified.**
 *Defaults:* 16 of the 27 fields carry defaults, all exact literals — no
 `default_factory` anywhere in the type — so a generated `__init__` reproduces
 them by binding `field.default` into the generated code's globals, with no
-sentinel and no `_MISSING` handling. *Drift:* a hand-written `__init__`
+sentinel and no `_MISSING` handling. *Drift:* a handwritten `__init__`
 duplicates the signature, so a field added to the class would leave
-`dc.replace`/`asdict` inconsistent with the constructor. Generating the
-`__init__` *from* `dc.fields(cls)` removes that risk — tested by rebuilding with
-an extra field, where the signature grew to match (9 params, 9 fields),
+`dc.replace` /`asdict` inconsistent with the constructor. Generating the
+`__init__` *from* `dc.fields(cls)` removes that risk — tested by rebuilding
+with an extra field, where the signature grew to match (9 params, 9 fields),
 `dc.replace` worked on the new field, and `asdict` keys stayed equal to the
 field set. A class whose `__init__` is written by hand rather than generated
 fails `dc.replace` on an added field with `TypeError`, which is the drift the
@@ -2202,20 +2209,20 @@ generation exists to prevent.
 
 **Recommendation, now with a number behind it.** Take the descriptor lever (or
 re-site the threshold, or reopen `frozen=True` for 5.8×) — but if the lever is
-taken, budget for the re-baseline it requires: a hand-written `__init__` renders
+taken, budget for the re-baseline it requires: a handwritten `__init__` renders
 as `__init__ (cuprum/events.py:N)`, so the classifier's `<string>` construction
 rule stops matching and `classifier-rules.json`, the control capture, and the
-three-pair collection all have to be redone before any number from it is citable.
-That is a milestone of work, not a commit, and it is the real cost of route 2
-compared with the other two.
+three-pair collection all have to be redone before any number from it is
+citable. That is a milestone of work, not a commit, and it is the real cost of
+route 2 compared with the other two.
 
 ### 2026-09-27: V5 collection complete — verdict FAIL; two timings re-measured
 
-**The collection finished with all 30 unprofiled rounds and no liveness failure.**
-`/tmp/smoke521/v5-verdict.py` derives the verdict from the directory rather than
-from hand arithmetic:
+**The collection finished with all 30 unprofiled rounds and no liveness
+failure.** `/tmp/smoke521/v5-verdict.py` derives the verdict from the directory
+rather than from hand arithmetic:
 
-```
+```text
 PROFILED FAIL: r1-candidate: candidate share 29.8991 > 28.0
 PROFILED FAIL: r2-candidate: candidate share 29.9414 > 28.0
 PROFILED FAIL: r3-candidate: candidate share 29.9087 > 28.0
@@ -2238,7 +2245,7 @@ for liveness under the corrected rules: 30/30 rc=0, `tee-nocb` capturing
 2147483648 bytes each time, `echo-nocb` and `cb` clearing the wall-time floor
 that substitutes for capture size in echo mode.
 
-**`tee-nocb`'s −29.49% is a host artifact, and this was tested rather than
+**`tee-nocb`'s −29.49% is a host artefact, and this was tested rather than
 excused.** It is the one timing that did not make sense: `tee-nocb` runs
 `with_line_callbacks=False`, and both the control and the candidate return
 `None` from `_compose_line_callbacks` before the hoisted code is reached
@@ -2247,20 +2254,20 @@ and candidate `_line_callbacks.py:208`), so the production diff of 119 lines in
 that one file cannot reach it. Re-measured alone on a quieter host (8
 alternating rounds, load 2.7–3.2 against the collection's 5.95–7.64):
 
-| | median | min | max |
-| --- | --- | --- | --- |
-| control | 4.574 s | 4.517 s | 4.665 s |
-| candidate | 4.582 s | 4.497 s | 4.668 s |
-| **delta** | **+0.18%** | | |
+|           | median     | min     | max     |
+| --------- | ---------- | ------- | ------- |
+| control   | 4.574 s    | 4.517 s | 4.665 s |
+| candidate | 4.582 s    | 4.497 s | 4.668 s |
+| **delta** | **+0.18%** |         |         |
 
 The distributions overlap completely (candidate min 4.497 below control min
 4.517; candidate max 4.668 above control max 4.665) where the collection's two
 sets were disjoint (control min 4.462 above candidate max 4.171). The
-collection's apparent separation was load, not code. This is recorded because it
-is the one place where the collection produced a *large favourable* result in a
-scenario the change cannot touch — the direction that invites being reported
-without checking — and because it is a concrete demonstration of why V5's
-"documenting the interference" clause needs the load numbers it already
+collection's apparent separation was load, not code. This is recorded because
+it is the one place where the collection produced a *large favourable* result
+in a scenario the change cannot touch — the direction that invites being
+reported without checking — and because it is a concrete demonstration of why
+V5's "documenting the interference" clause needs the load numbers it already
 requires.
 
 **`echo-nocb`'s −0.70% is the honest null**, and its consistency with the
@@ -2376,8 +2383,8 @@ require checking the explicit callback factory bodies as well.
   *threshold derivation* that the measurement falsifies. The miss is fully
   decomposed — 7985 samples of D removed against 3511 of N, with the 4474
   difference being pure-denominator stacks — so a revision can be derived from
-  a real capture instead of a projection. **No threshold is proposed here**: the
-  previous revision was approved on a projection and this plan has now
+  a real capture instead of a projection. **No threshold is proposed here**:
+  the previous revision was approved on a projection and this plan has now
   falsified two of them, so the next one should be a design decision taken on
   the committed artefact, not another estimate from the plan.
 - 2026-09-27: Record the two **corrected projections** in the BLOCKED entry
@@ -2854,12 +2861,12 @@ in 53 s with **all 13 sub-checks reached and none never-reached**, so the chain
 that had been unobserved since `01ec41bd` is now observed end to end. Both
 defects it had been masking are cleared — `pylint` walked the tree at
 `10.00/10` with no `C0302` (the 406-line module is now 132 lines plus a
-311-line engine), and the `hand-written` spelling finding is gone.
-`make test` (7 pytest groups plus nextest `125 passed`), `typecheck`,
-`check-fmt`, `markdownlint`, and `nixie` all passed against `54fb5c8f`, the
-commit before the two fixes; they are **not yet re-run against `42b19f85`**,
-which moved production code after that pass. Re-run them before any CodeRabbit
-request, since a commit after a gate run invalidates that run as a citation.
+311-line engine), and the `handwritten` spelling finding is gone. `make test`
+(7 pytest groups plus nextest `125 passed`), `typecheck`, `check-fmt`,
+`markdownlint`, and `nixie` all passed against `54fb5c8f`, the commit before
+the two fixes; they are **not yet re-run against `42b19f85`**, which moved
+production code after that pass. Re-run them before any CodeRabbit request,
+since a commit after a gate run invalidates that run as a citation.
 
 Two caveats recorded with the lint result rather than glossed. First, five
 sub-checks (`ambrleaks`, `skylos`, `yamllint`, `actionlint`, and `spelling`'s
