@@ -771,6 +771,9 @@ members = [
 ]
 reason = "Two tracing mixins that cast `self` to `TracingHook` and look up the active span before recording. The lookup is the already-shared helper; what remains is the per-channel guard that decides whether this event is worth recording at all, which differs between the two."
 
+[[tool.duplication_gate.allow]]
+members = ["cuprum/_subprocess_stdin.py", "cuprum/adapters/tracing_adapter.py"]
+reason = "The `if <field> is None: return None` guard idiom over two more optional boundaries: a stdin payload a spawn either has or does not, and an execution correlation token. The token guard is also the type narrowing that `OrderedDict.move_to_end` requires, so it cannot be dropped to break the match. Same idiom as the two entries above for this shape, not one shared operation; a helper that returns None when handed None would be the meaningless indirection those entries reject."
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"
