@@ -16,6 +16,7 @@ against the child's raw stdin bytes rather than against a decoded string.
 from __future__ import annotations
 
 import asyncio
+import time
 import typing as typ
 
 import pytest
@@ -241,3 +242,155 @@ def test_stream_text_chunks_honour_strict_errors(
     assert isinstance(info.value.__cause__, UnicodeEncodeError), (
         "the encoder failure should be chained as the cause"
     )
+
+
+# A child that never reads its stdin and outlives the test's deadline. Nothing
+# drains the pipe, so a producer failure cannot be mistaken for a child that
+# consumed the input and exited.
+_NEVER_READS = "import time; time.sleep(30)"
+
+# A child that reads one byte and exits, so a producer failing after its first
+# chunk fails against a child that is already gone.
+_READS_ONE_BYTE = "import sys; sys.stdin.buffer.read(1)"
+
+
+async def _raising_after(
+    count: int,
+    *,
+    exc: BaseException | None = None,
+) -> cabc.AsyncIterator[bytes]:
+    """Yield *count* chunks, then raise the producer's own failure.
+
+    Parameters
+    ----------
+    count : int
+        How many chunks to yield before failing. Zero fails on the first pull.
+    exc : BaseException | None
+        The failure to raise. Defaults to a ``RuntimeError``.
+
+    Yields
+    ------
+    bytes
+        One filler chunk per iteration before the failure.
+    """
+    for index in range(count):
+        await asyncio.sleep(0)
+        yield f"chunk-{index}\n".encode()
+    msg = "producer exploded"
+    raise exc if exc is not None else RuntimeError(msg)
+
+
+def test_producer_failure_beats_the_timeout(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A dead producer is reported as such, not as a slow child.
+
+    The child never reads and outlives the deadline, so a run that merely
+    awaits the exit can only learn about the producer failure after the
+    deadline expires. Reporting ``TimeoutError`` there blames the child for a
+    failure that was already known the moment it happened.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _NEVER_READS)
+    stream = StdinStream(chunks=_raising_after(0))
+
+    started = time.perf_counter()
+    with pytest.raises(StdinSourceError) as info:
+        execute(command, {"stdin": stream, "timeout": 5})
+    elapsed = time.perf_counter() - started
+
+    assert isinstance(info.value.__cause__, RuntimeError), (
+        "the producer's own exception must be chained as the cause"
+    )
+    assert elapsed < 2.0, (
+        "the failure must be raised when it happens, not after the deadline; "
+        f"took {elapsed:.2f}s against a 5s timeout"
+    )
+
+
+def test_producer_failure_after_a_chunk_still_reaches_the_caller(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A producer failing mid-stream is an error even when the child exits first.
+
+    This is the late half of the same contract: the child reads its byte and
+    goes, so the failure arrives after the exit has already settled. The run
+    must not report the child's clean exit as if the input had completed.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _READS_ONE_BYTE)
+    stream = StdinStream(chunks=_raising_after(1))
+
+    with pytest.raises(StdinSourceError) as info:
+        execute(command, {"stdin": stream, "timeout": 5})
+
+    assert isinstance(info.value.__cause__, RuntimeError), (
+        "a late producer failure must keep its cause too"
+    )
+
+
+def test_no_producer_failure_is_invented_when_the_child_exits_early(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """The negative control: an early child-side close is not a producer failure.
+
+    A producer that keeps yielding into a closed pipe is behaving normally for
+    a child like ``head``. If the rendezvous treated the writer's early
+    completion as a failure, every such run would raise — so this case asserts
+    the opposite, and is what keeps the failure assertions above from being
+    satisfied by an implementation that raises indiscriminately.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _READS_ONE_BYTE)
+
+    async def endless() -> cabc.AsyncIterator[bytes]:
+        """Yield far more than the child will read."""
+        for index in range(10_000):
+            await asyncio.sleep(0)
+            yield f"{index}\n".encode()
+
+    result = execute(command, {"stdin": StdinStream(chunks=endless()), "timeout": 10})
+
+    assert result.exit_code == 0, "an early child-side close is a clean exit"
+
+
+def test_timeout_leaves_no_stdin_writer_behind(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A timed-out run reclaims its writer rather than leaking the task.
+
+    Only the asynchronous strategy is exercised, and it is driven by hand
+    rather than through the fixture: ``asyncio.all_tasks()`` needs a running
+    loop, so the pending-task census has to happen *inside* the coroutine. By
+    the time ``asyncio.run`` returns, the loop it built is closed and the
+    census would be empty whatever the implementation did.
+    """
+    command = python_builder("-c", _NEVER_READS)
+
+    async def blocking() -> cabc.AsyncIterator[bytes]:
+        """Yield one chunk, then park forever like a stalled producer."""
+        yield b"first\n"
+        # ASYNC110: parking is the fixture. An ``asyncio.Event`` would need a
+        # setter and a lifetime, and the writer's cancellation is what ends
+        # this — so there is nothing for an event to signal.
+        while True:  # ruff: ignore[async-busy-wait] - deliberate stall.
+            await asyncio.sleep(10)
+
+    async def census_after_timeout() -> list[asyncio.Task[object]]:
+        """Time the run out, then report what is still pending."""
+        with pytest.raises(TimeoutError):
+            await command.run(stdin=StdinStream(chunks=blocking()), timeout=0.2)
+        # Teardown is several continuations deep (cancel, drain, reconcile), so
+        # one bare ``sleep(0)`` may not be enough turns to see them settle.
+        await asyncio.sleep(0.1)
+        return [
+            task
+            for task in asyncio.all_tasks()
+            if not task.done() and task is not asyncio.current_task()
+        ]
+
+    leaked = asyncio.run(census_after_timeout())
+    assert not leaked, f"a timed-out run must leave no pending task; got {leaked}"

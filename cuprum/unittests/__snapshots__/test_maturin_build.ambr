@@ -65,6 +65,7 @@
       'cuprum/_subprocess_context.py',
       'cuprum/_subprocess_deadline.py',
       'cuprum/_subprocess_execution.py',
+      'cuprum/_subprocess_rendezvous.py',
       'cuprum/_subprocess_spawn.py',
       'cuprum/_subprocess_stdin.py',
       'cuprum/_subprocess_stdin_stream.py',
