@@ -784,6 +784,26 @@ apply here only because the aborting step is last.
   target and prints `154 tests run: 154 passed, 0 skipped`. Report passed,
   failed, and *unobserved* separately; an unobserved check is neither, and it
   is the one that propagates silently.
+- (2026-09-27) **`CHANGELOG.md` is deliberately not touched by this branch, and
+  the precedent is a real one rather than an omission.** Nothing in the repo
+  enforces a changelog entry (`grep -i changelog` finds no CI workflow and no
+  Makefile target naming it), so this is a judgement call, and the comparable
+  landed work is the evidence for it. `5.1.1` (`b84a30b5`) did add entries,
+  because it changed a *default* users can observe — the pure-Python read size
+  — so the entry answered "why did my throughput change". `6.1.1` changes no
+  default, no public signature, and no documented input. Its user-visible
+  surface is a restatement of the contract the branch tested rather than a new
+  contract: `rust_pump_stream`'s docstring in `cuprum/_streams_rs.py` (the
+  `buffer_size` parameter section, and the `Raises` section that names
+  `ValueError` for "not positive or exceeds 1 GiB") already documents rejection
+  above `1 << 30`, and the wrapper validates `buffer_size` before the native
+  call, so a refusal of `0` or `-1` is a shape the code already had. The one
+  genuinely new observable — that an out-of-`i64` size raises `OverflowError`,
+  not `ValueError` — is written into the users' guide instead, where a caller
+  checking the exception contract will look. Revisit at release time if
+  `0.2.0-beta1` ships without 6.1.2: a release note is the right home for
+  "errors are now classified at one boundary point", which is an internal
+  statement with no user-visible consequence today.
 
 ## Outcomes & retrospective
 
@@ -831,6 +851,41 @@ reconstructed after the implementation existed (see Surprises); and
 by its sub-checks plus a bounded diagnostic rather than by the aggregate target
 (see Surprises). A cross-target compile of the `cfg(windows)` branches
 supplements — and does not replace — the Windows runtime job.
+
+### Remaining phase-6 scope
+
+What 6.1.1 hands forward, stated so the next item does not have to re-derive it:
+
+- **6.1.2 (proptest decoding parity)** is unblocked and is the next item. It
+  needs what this branch did not build: proptest coverage of Rust-versus-Python
+  *consume* parity — empty, ASCII, 2/3/4-byte UTF-8, invalid bytes replaced
+  with U+FFFD, payloads around 1 MiB — with shrinking enabled and regression
+  seeds committed. 6.1.1's properties cover the argument-validation window, not
+  the decoding domain, so nothing here is a substitute. The
+  `#[error(transparent)]` on `Stream` and the single conversion point are what
+  make a parity failure legible when it arrives: the exception class is now
+  decided in one place.
+- **6.2.1 (the 20% wall-time gate)** remains entirely future work. 6.1.1 makes
+  no performance claim and changed no hot path — the diff touches validation
+  and error conversion, both off the transfer loop. The tuned phase-5 baseline
+  is untouched.
+- **`rust_consume_stream` is still implemented but not integrated**, including
+  its production-use guards, as the Constraints require. 6.1.1 pins its error
+  classification at the boundary without changing where it is called from; the
+  capture-only dispatcher still awaits 6.1.2 and 6.2.1.
+- **A shim asymmetry is recorded but deliberately unfixed.**
+  `cuprum/_streams_rs.py` is byte-identical to `main` on this branch, and its
+  consume path has no `buffer_size` pre-validation where its pump path does, so
+  the two entry points prepare descriptors in different orders before the
+  native call. The plan forbids reordering the shim, and 6.1.1's scope is the
+  Rust boundary. The consequence is now observed rather than theoretical: the
+  two Windows failures were exactly this asymmetry, on the consume side. Fixing
+  it would be a shim behaviour change and belongs to its own item, not to a
+  boundary refactor.
+- **The `-1`-throwaway window property is gone**, replaced by an open-reader
+  form that runs on both platforms. If a future change reinstates a `-1`
+  throwaway to avoid opening a descriptor, it will silently re-skip the Windows
+  job — which is the trap recorded in Surprises, not a hypothetical.
 
 ## Context and orientation
 
