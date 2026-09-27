@@ -123,25 +123,32 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts strings, numbers, booleans, and
-paths as positional arguments. Keyword arguments become `--name=value`;
-underscores in names become hyphens. This suits tools that actually accept that
-form. For flags such as `--check`, pass a positional argument: `check=True`
-would produce `--check=True`. `None` raises `TypeError` in either position, so
-decide whether to omit or substitute an optional flag before building. An
-argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts text (`str`), `int`, `float`,
+`bool`, and `Path` values as positional and keyword arguments. Keyword
+arguments become `--name=value`; underscores in names become hyphens. This
+suits tools that actually accept that form. For flags such as `--check`, pass a
+positional argument: `check=True` would produce `--check=True`. `bytes` values
+raise `TypeError`, as `None` does, so decode bytes before passing them to the
+builder. An argument containing spaces remains one argument.
+
+Use `os.fsdecode()` when you need to pass caller-held filesystem bytes. It uses
+the filesystem encoding with the `surrogateescape` error handler. On POSIX,
+undecodable bytes become surrogate code points and round-trip unchanged when
+Python encodes the argument for the child process.
 
 <!-- tested-example: arguments -->
 
 ```python
+import os
 import sys
 
 from cuprum import Program, ProgramCatalogue, sh
 
 catalogue = ProgramCatalogue.from_programs(sys.executable, name="arguments")
 python = sh.make(Program(sys.executable), catalogue=catalogue)
-command = python("-c", "print('two words')")
-assert command.argv == ("-c", "print('two words')")
+filesystem_argument = os.fsdecode(b"v\xff")
+command = python("-c", "print('two words')", filesystem_argument)
+assert command.argv == ("-c", "print('two words')", filesystem_argument)
 assert command.argv_with_program == (sys.executable, *command.argv)
 ```
 

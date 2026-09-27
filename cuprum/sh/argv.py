@@ -18,12 +18,15 @@ __all__ = [
 
 
 def _stringify_arg(value: _ArgValue) -> str:
-    """Convert values into argv-safe strings."""
+    """Stringify supported argv values and reject ``bytes`` with TypeError."""
     if value is None:
         # None is disallowed because it is almost always a mistake in CLI argv
         # construction; callers must represent missing values themselves (for
         # example, by omitting the flag) before invoking sh.make.
         msg = "None is not a valid argv element for sh.make"
+        raise TypeError(msg)
+    if isinstance(value, bytes):
+        msg = f"bytes is not a valid argv element for sh.make: {value!r}"
         raise TypeError(msg)
     return str(value)
 
@@ -43,12 +46,14 @@ def build_argv(*args: _ArgValue, **kwargs: _ArgValue) -> tuple[str, ...]:
     Parameters
     ----------
     *args
-        Positional argument values. Values are stringified with ``str()`` in
-        the order supplied and appear before generated keyword flags.
-    **kwargs
-        Keyword flag values. Each key is normalized by replacing underscores
-        with hyphens, then serialized as ``--flag=value`` in insertion order.
-        ``None`` is rejected in positional and keyword positions.
+        Positional text, integer, float, boolean, or path values. They are
+        stringified in the order supplied and appear before generated keyword
+        flags.
+        **kwargs
+        Keyword text, integer, float, boolean, or path values. Each key is
+        normalized by replacing underscores with hyphens, then serialized as
+        ``--flag=value`` in insertion order. ``None`` and ``bytes`` values
+        raise ``TypeError`` in positional and keyword positions.
 
     Returns
     -------
