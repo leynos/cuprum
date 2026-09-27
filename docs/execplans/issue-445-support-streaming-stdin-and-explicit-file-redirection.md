@@ -294,7 +294,7 @@ likelihood, and mitigation.
   Evidence: the first attempt at the split. Impact: bottom placement is load
   bearing, not stylistic.
 - Observation (gates): local `actionlint` (v1.7.12) stalls at the
-  `github-actions-lint` recipe line because of an stdin pipe-buffer race in its
+  `github-actions-lint` recipe line because of a stdin pipe-buffer race in its
   shellcheck integration; this branch touches no `.github/` file. Evidence:
   `make github-actions-lint` exited 0 and printed both recipe echoes when the
   local shellcheck was absent from `PATH`, while the aggregate `make lint` run
