@@ -382,17 +382,18 @@ child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
 
 For input too large to hold in memory, `StdinStream(chunks=...)` takes an async
-iterable and is pulled one chunk at a time: each chunk is written and drained
-before the next is requested, so the parent never retains more than one chunk
-however large the child's input is. A chunk may be `str` (encoded with the
-context's `encoding` and `errors`) or `bytes` (written verbatim). A slow reader
-therefore applies backpressure to the producer rather than growing a buffer. If
-the producer raises, the child is terminated and the failure surfaces as
-`StdinSourceError` with the producer's exception chained, even when the child
-would otherwise have run to its deadline. A child that closes stdin early is
-normal, not an error: the partial write is recorded as a `stdin_error`
-observation with `operation="early_close"` and the run continues to the child's
-exit code.
+iterable and is pulled one chunk at a time: each chunk is written and `drain()`
+awaited before the next is requested, so a slow reader applies backpressure to
+the producer rather than letting it run to completion. Retention is bounded by
+the pipe rather than by the input, though not by a single chunk — the
+transport's write buffer and the OS pipe each hold bytes while `drain()` waits.
+A chunk may be `str` (encoded with the context's `encoding` and `errors`) or
+`bytes` (written verbatim). If the producer raises, the child is terminated and
+the failure surfaces as `StdinSourceError` with the producer's exception
+chained, even when the child would otherwise have run to its deadline. A child
+that closes stdin early is normal, not an error: the partial write is recorded
+as a `stdin_error` observation with `operation="early_close"` and the run
+continues to the child's exit code.
 
 ## Connect a pipeline
 

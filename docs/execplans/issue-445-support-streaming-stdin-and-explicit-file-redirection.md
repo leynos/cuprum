@@ -66,21 +66,24 @@ asyncio.run(main())
 
 and mean two new things. First, the producer's chunks are pulled one at a time,
 written to the child's stdin, and drained before the next chunk is pulled, so
-peak memory is bounded by one chunk rather than by the payload. Second, the
-child's stdout is bound to a file cuprum opened for the run and closed as soon
-as the child was spawned — the child keeps the descriptor for its lifetime,
-cuprum keeps ownership of closing it, and the caller never sees a leak.
+the writer cannot outrun the child; peak memory is bounded by the pipe rather
+than by the payload, though not by a single chunk, since `drain()` returns at
+the transport's low-water mark and the OS pipe holds bytes of its own. Second,
+the child's stdout is bound to a file cuprum opened for the run and closed as
+soon as the child was spawned — the child keeps the descriptor for its
+lifetime, cuprum keeps ownership of closing it, and the caller never sees a
+leak.
 
 The existing `stdin=StdinInput(...)` payload API and the inherited-stdin
 default (the current `stdin=None`) behave exactly as they do today; this is an
 additive widening, not a replacement.
 
 Success is observable three ways. A child that reads 64 MiB slowly while our
-producer yields 4 KiB chunks completes without the parent ever holding more
-than one chunk, and cuprum's own peak resident set stays flat. A run whose
-stdout is redirected to a file leaves that file with the child's exact bytes
-and the file descriptor closed, both on `exit_code == 0` and on a non-zero
-exit. And a producer that raises mid-stream terminates the child, surfaces a
+producer yields 4 KiB chunks completes without the producer ever getting far
+ahead of it, and cuprum's own peak resident set stays flat. A run whose stdout
+is redirected to a file leaves that file with the child's exact bytes and the
+file descriptor closed, both on `exit_code == 0` and on a non-zero exit. And a
+producer that raises mid-stream terminates the child, surfaces a
 `StdinSourceError`, and leaves no writer task, no pipe, and no orphan process
 behind.
 
@@ -1022,6 +1025,33 @@ likelihood, and mitigation.
   case again. The note now names the one-step-past behaviour so the control
   cannot be built from the wrong fixture. Date/Author: 2026-09-27,
   implementation agent.
+- Decision: replace the "parent never retains more than one chunk" memory claim
+  wherever it appears. Rationale: a round-6 finding questioned it, and the
+  source settles it. `_write_stdin_stream` awaits `sink.stdin.drain()` per
+  chunk, and `StreamWriter.drain()` returns once the transport's write buffer
+  has fallen to its low-water mark (`asyncio.streams._DEFAULT_LIMIT`, 64 KiB),
+  not once the child has read — and beneath it the OS pipe holds bytes of its
+  own (64 KiB by default on Linux). Several chunks are therefore legitimately
+  in flight, and the plan's own test module had already said so: the negative
+  control's docstring calls the cap "deliberately loose" and attributes it to
+  "the pipe capacity … a property of the host rather than of cuprum". The prose
+  asserted a bound the tests were explicitly written to avoid pinning. The
+  claim is now "bounded by the pipe, not by the input, and not by one chunk" in
+  each site that made it. Applying the lesson recorded for round 5, I grepped
+  the concept rather than the flagged sentence, which is how two unflagged
+  sites came to light. Date/Author: 2026-09-27, implementation agent.
+- Decision: rewrite `INV-1` and strike two overclaims from it that the round-6
+  finding did not name. Rationale: the obligation promised (a) a "configured
+  buffering bound" that exists nowhere in the tree — the cap is a test constant,
+  `_READ_AHEAD_CAP = _CHUNK_COUNT // 4` — and (b) a "peak-RSS check via the
+  run's own resource measurement on the `wait4` path" that no test performs;
+  `grep` for `resource_usage`/`rss`/`peak` in the stdin-stream suite returns
+  nothing. Both would have read as evidence for properties nothing measures.
+  `INV-1` now describes the delivered artefact: the pacing child's marker, the
+  pull counter at first read, and a one-sided assertion against a pipe-derived
+  cap — plus a closing paragraph stating plainly that there is no RSS
+  measurement and no hard sub-pipe memory guarantee. Date/Author: 2026-09-27,
+  implementation agent.
 
 ## Outcomes & retrospective
 
@@ -1049,6 +1079,8 @@ non-zero exit, borrowed descriptors shown to survive the run, a Hypothesis
 property over generated `str`/`bytes` chunk lists with the child hexing its
 stdin, and an INV-1 pull counter that measured 33 pulls of 256 read ahead of
 the child against a cap of 64, with the eager negative control reading all 256.
+That gap is the bound's whole content: 33 chunks were in flight together, which
+is a pipe's worth of data rather than one chunk's.
 
 Three lessons are worth carrying forward. First, a *cleared* ceiling is not a
 stable state: the module-size plateau was re-crossed three separate times, each
@@ -1190,23 +1222,32 @@ the four modules above came to exist.
 Each invariant names the artefact that discharges it, the command that runs it,
 and why a passing result cannot be vacuous.
 
-- Obligation: `INV-1 — bounded memory`. A run whose producer yields more bytes
-  than the configured buffering bound completes without the parent retaining
-  more than one chunk at a time, while the child consumes slowly. Method:
-  integration test with a slow-reading child (a Python child that reads a fixed
-  number of bytes per iteration after a short sleep) and a producer that
-  records how many chunks it has yielded at each moment; plus a peak-RSS check
-  via the run's own resource measurement on the `wait4` path. Rationale: the
+- Obligation: `INV-1 — bounded retention`. A run whose producer yields far more
+  than a pipe can absorb completes without the producer being drained ahead of
+  the child, while the child consumes slowly. Method: integration test with a
+  pacing child (a Python child that creates a marker once its first `read`
+  returns) and a producer that counts how many chunks it has yielded by that
+  moment; the cap is a quarter of the payload and roughly four times the Linux
+  pipe capacity, and the assertion is one-sided against it. Rationale: the
   property is about retained state over time, which no single assertion
-  captures; the chunk-yield counter is the observable proxy. Domain: payloads
-  of 1 chunk, exactly the bound, bound + 1, and 64 MiB across 4 KiB chunks;
-  reader delays of 0 s and 50 ms. Artefact:
+  captures; the pull counter at the child's first read is the observable proxy.
+  Domain: 1 MiB of 4 KiB chunks. Artefact:
   `cuprum/unittests/test_safe_cmd_stdin_stream.py`. Evidence: `make test`; the
   test fails before EP-M3 with the producer fully consumed before the child
   read anything, and passes after. Non-vacuity: a deliberately eager
-  implementation (collect the iterable into a list first) must fail the counter
-  assertion; the test module includes that variant as a negative control so the
+  implementation (collect the iterable into a list first) must cross the cap,
+  and the test module includes that variant as a negative control so the
   assertion is shown to bite.
+
+  Two limits of this obligation, stated so the evidence is not read as stronger
+  than it is. The bound is the *pipe*, not one chunk: `drain()` returns once
+  the transport's write buffer falls below its low-water mark, and the OS pipe
+  holds bytes of its own, so several chunks are legitimately in flight — the
+  test's cap is deliberately loose for exactly this reason. And there is no
+  peak-RSS measurement, on the `wait4` path or anywhere else: retained memory
+  cannot be read off a finished run, so the counter stands in for it. A caller
+  who needs a hard memory guarantee smaller than the pipe capacity does not
+  have one.
 
 - Obligation: `INV-2 — byte-exact delivery`. For a producer yielding a
   generated list of `bytes` and `str` chunks, the child receives exactly the
@@ -1584,9 +1625,10 @@ chunk-counter or exception-type assertion for EP-M3.
 
 Acceptance as behaviour:
 
-- Streaming a payload larger than the buffering bound while the child consumes
-  slowly completes, and the producer's yield counter shows at most one
-  outstanding chunk.
+- Streaming a payload larger than a pipe can absorb while the child consumes
+  slowly completes, and the producer's yield counter at the child's first read
+  stays under a quarter of the payload — a bound of the pipe's making, not a
+  one-chunk guarantee.
 - Early pipe closure, producer failure, cancellation, and timeout each complete
   with no leaked writer task and no live child.
 - A file target receives the child's exact bytes, and its descriptor is closed
