@@ -149,8 +149,8 @@ failure injection at that boundary.
   cannot move, so only the `_EventDetails` rule is addressable. Removing all of
   it is not enough: because the gate is a *share of consume-subtree time*,
   removing 13.7% of the subtree pushes the ratio from 21.00% to **24.35%**. The
-  retained per-line construction must be at least **2.90x faster** (`r* =
-  0.3453`) for the ratio to reach 10%, and the flat 27-field dataclass
+  retained per-line construction must be at least **2.90x faster**
+  (`r* = 0.3453`) for the ratio to reach 10%, and the flat 27-field dataclass
   constructor cannot be made to clear that by field consolidation alone. No
   runtime edit was made; the milestone stops here for approval of a revised
   design. See the 2026-09-27 feasibility discovery below for the mechanism, the
@@ -652,12 +652,12 @@ both rules resolve like this:
 `cuprum/_pipeline_types.py`. The rules file lists `emit_line` and
 `_LineEventEmitter` as *callers*, and proximity picks the nearest — but `emit`
 sits closer to the constructor than either, and it is not something a hoist in
-`_line_callbacks.py` can move. Hoisting therefore leaves **every one of the
-6474 `ExecEvent.__init__` samples in the numerator**. Only the `_EventDetails`
-rule is actually addressable by this design.
+`_line_callbacks.py` can move. Hoisting therefore leaves **every one of the 6474
+`ExecEvent.__init__` samples in the numerator**. Only the `_EventDetails` rule
+is actually addressable by this design.
 
-**The arithmetic.** D = 30822, and the 10% threshold is
-`100·N/D ≤ 10` ⇒ `N ≤ 3082`. Removing the entire `_EventDetails` rule leaves
+**The arithmetic.** D = 30822, and the 10% threshold is `100·N/D ≤ 10` ⇒
+`N ≤ 3082`. Removing the entire `_EventDetails` rule leaves
 
 ```text
  N = 6474   share = 21.0045%   (one ExecEvent.__init__ per delivered line)
@@ -673,8 +673,8 @@ it.
 This is the part that is easy to get backwards, and an earlier draft of this
 entry did. The 10% is a *share of consume-subtree time*, so making the retained
 constructor faster does not shrink the numerator alone — it also shrinks the
-denominator, because the samples it frees stop being charged to the subtree. The
-numerator stays pinned at one construction per delivered line, so the ratio
+denominator, because the samples it frees stop being charged to the subtree.
+The numerator stays pinned at one construction per delivered line, so the ratio
 improves more slowly than the raw speedup suggests.
 
 Modelling this exactly on the capture-derived fractions
@@ -685,14 +685,14 @@ fraction of constructor cost the retained per-line construction keeps:
  share(r) = f_ev·r / (1 − f_ed − f_ev·(1 − r))
 ```
 
-| retained cost `r` | share after hoisting | |
-| --- | --- | --- |
-| 1.00 (hoist alone) | 24.35% | |
-| 0.719 | 18.79% | |
-| 0.500 | 13.86% | |
-| 0.431 | 12.18% | |
-| **0.3453** | **10.00%** | ← the bar |
-| 0.206 | 6.22% | |
+| retained cost `r`  | share after hoisting |           |
+| ------------------ | -------------------- | --------- |
+| 1.00 (hoist alone) | 24.35%               |           |
+| 0.719              | 18.79%               |           |
+| 0.500              | 13.86%               |           |
+| 0.431              | 12.18%               |           |
+| **0.3453**         | **10.00%**           | ← the bar |
+| 0.206              | 6.22%                |           |
 
 Solving gives a closed form:
 
@@ -701,9 +701,9 @@ Solving gives a closed form:
 ```
 
 So the retained per-line construction must keep **at most 34.5%** of today's
-cost — it has to be **at least 2.90x faster**. Hoisting alone *raises* the share
-from 21.00% to 24.35%, because `_EventDetails` was 13.7% of the subtree and
-removing it shrinks the denominator faster than the numerator. The plan's
+cost — it has to be **at least 2.90x faster**. Hoisting alone *raises* the
+share from 21.00% to 24.35%, because `_EventDetails` was 13.7% of the subtree
+and removing it shrinks the denominator faster than the numerator. The plan's
 framing of this as "reduce the numerator to ≤10% of a fixed D" is therefore
 wrong in direction, and that correction matters for whoever revises the design:
 every option must be judged on the ratio, not on raw construction time.
@@ -722,9 +722,9 @@ section predicted failure "because a fresh `ExecEvent` still initializes 23
 slots". Both available readings of that are wrong, so the distinction is worth
 drawing precisely.
 
-*Slots are not the cost.* A 2-field `frozen+slots` dataclass constructs in
-239 ns; the same shape without `frozen` takes 89 ns, and a handwritten
-`__slots__` class 90 ns. Slot *allocation* is the cheap part.
+*Slots are not the cost.* A 2-field `frozen+slots` dataclass constructs in 239
+ns; the same shape without `frozen` takes 89 ns, and a handwritten `__slots__`
+class 90 ns. Slot *allocation* is the cheap part.
 
 *Defaults are not the cost either* — and this is the trap. An earlier draft of
 this entry claimed cost "tracks the count of defaulted fields, at roughly 70 ns
@@ -735,14 +735,14 @@ confounded field count with constructor mechanism. Rebuilding the same variants
 with `dataclasses.make_dataclass`, which generates the constructor the way a
 real class does:
 
-| fields | defaulted | ns |
-| --- | --- | --- |
-| 27 | 0 | 2968 |
-| 27 | 16 | 3035 |
-| 16 | 0 | 1835 |
-| 16 | 15 | 1875 |
-| 12 | 0 | 1406 |
-| 11 | 0 | 1305 |
+| fields | defaulted | ns   |
+| ------ | --------- | ---- |
+| 27     | 0         | 2968 |
+| 27     | 16        | 3035 |
+| 16     | 0         | 1835 |
+| 16     | 15        | 1875 |
+| 12     | 0         | 1406 |
+| 11     | 0         | 1305 |
 
 Defaults are worth under 3% (2968 → 3035 ns with 16 added). Cost tracks **field
 count**, at roughly 110 ns per field, because the generated `__init__` performs
@@ -781,15 +781,15 @@ what the ratio charges to the subtree.
 1. **Consolidate the fields, possibly combined with a cheaper constructor.**
    Collapse `ExecEvent`'s 16 optionals into one nested record so a per-line
    construction sets 11–12 fields instead of 27. Field count is the driver
-   (~110 ns each), so this is the largest lever: a 12-field shape time-shares at
-   0.484x, projecting 10.17%, and 11 fields at 0.451x, projecting 9.47%. 11
+   (~110 ns each), so this is the largest lever: a 12-field shape time-shares
+   at 0.484x, projecting 10.17%, and 11 fields at 0.451x, projecting 9.47%. 11
    fields is *exactly* `r*`-adjacent, which makes this the only option measured
    within reach — but it lands on the bar rather than under it, and the whole
-   plan's margin then rests on benchmark noise. It also changes the public event
-   representation, which the Tolerances section marks as a stop-for-approval
-   change, and fails R2's payload-parity reading unless parity is redefined to
-   the flattened view. Treat as necessary-but-likely-insufficient, not a
-   solution.
+   plan's margin then rests on benchmark noise. It also changes the public
+   event representation, which the Tolerances section marks as a
+   stop-for-approval change, and fails R2's payload-parity reading unless
+   parity is redefined to the flattened view. Treat as
+   necessary-but-likely-insufficient, not a solution.
 2. **Re-scope the measurement.** Split the gate's input so the *lifecycle*
    events and the per-line events are reported separately, and hold only the
    per-line share to 10%. This is arguably what the roadmap meant — the
@@ -819,14 +819,14 @@ population is exactly the whole match total — there is no lifecycle residue to
 exclude.
 
 **Evidence reproduction.** Parsing and classification both ran through the
-gate's own code (`_line_event_profile_model.parse_capture` /
-`load_rules`, `summarize_line_event_profile.classify_capture`), not a
-re-implementation, and reproduced the committed artefact exactly —
-`parent_samples 32468`, `consume_samples 30822`, `construction_samples 10704`,
-`share 34.7284%`, matching `dist/profiles/5-2-1-event-details/control-1/` field
-for field. The microbenchmarks are `timeit` in a single process on this host
-and are comparative only; they are not capture-derived and are not offered as
-gate evidence.
+gate's own code (`_line_event_profile_model.parse_capture` / `load_rules`,
+`summarize_line_event_profile.classify_capture`), not a re-implementation, and
+reproduced the committed artefact exactly — `parent_samples 32468`,
+`consume_samples 30822`, `construction_samples 10704`, `share 34.7284%`,
+matching `dist/profiles/5-2-1-event-details/control-1/` field for field. The
+microbenchmarks are `timeit` in a single process on this host and are
+comparative only; they are not capture-derived and are not offered as gate
+evidence.
 
 ### Earlier discoveries
 
