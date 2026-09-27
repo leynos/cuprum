@@ -117,6 +117,14 @@ _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum._pipeline_native_pump_runtime._settle_native_pump_future",
     "cuprum._pipeline_stream_fds._restore_stream_fd_blocking",
     "cuprum._streams_pump._override_read_size",
+    # The three stdio-target guards are reached only from
+    # ``StdioTarget.__post_init__``, which the dataclass machinery calls after
+    # ``__init__``. No source line names the method and it is never re-exported,
+    # so the reference graph sees the callees as unreachable; the caller is real
+    # and implicit rather than absent.
+    "cuprum.sh.stdio._normalize_payload",
+    "cuprum.sh.stdio._reject_unknown_kind",
+    "cuprum.sh.stdio._reject_unexpected_payload",
 })
 
 
