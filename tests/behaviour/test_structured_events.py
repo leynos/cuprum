@@ -237,6 +237,9 @@ def then_plan_and_exit_share_the_token(behaviour_state: dict[str, object]) -> No
     assert plans, "every observed stage must emit a plan event"
     for plan in plans:
         assert plan.pid is None, "a plan event fires before the process is spawned"
+    assert len(exits) == len(plans), (
+        "each observed stage emits exactly one exit for its one plan"
+    )
     assert {ev.exec_id for ev in exits} == {ev.exec_id for ev in plans}, (
         "each stage's exit must retain its own plan's execution token"
     )

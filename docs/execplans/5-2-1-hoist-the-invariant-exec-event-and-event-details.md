@@ -711,11 +711,11 @@ round up to 100.0% — so this gate has no headroom, and any branch that adds
 even one miss fails it. Those 2 are not branch-attributable and were left alone.
 
 **A concurrent writer invalidates a run even when the gates pass.** HEAD moved
-from `807cf62c` to `859f6489` mid-run — my own commits, landed while the gate
-suite was executing — and two of them touched the very `.md` file `make fmt`
-had just repaired. So the run's docs-axis verdict describes a revision that no
-longer exists. The mitigation for this plan is to freeze the tree for the
-duration of a gate run and to state the tested revision explicitly.
+from `807cf62c` to `859f6489` mid-run — this plan's own commits, landed while
+the gate suite was executing — and two of them touched the very `.md` file
+`make fmt` had just repaired. So the run's docs-axis verdict describes a
+revision that no longer exists. The mitigation for this plan is to freeze the
+tree for the duration of a gate run and to state the tested revision explicitly.
 
 **The re-run: green, with the freeze honoured.** After both fixes, all seven
 gates pass at `902b05fb` with the tree clean before, during, and after, and
@@ -895,14 +895,14 @@ fraction of constructor cost the retained per-line construction keeps:
  share(r) = f_ev·r / (1 − f_ed − f_ev·(1 − r))
 ```
 
-| retained cost `r`  | share after hoisting |           |
-| ------------------ | -------------------- | --------- |
-| 1.00 (hoist alone) | 24.35%               |           |
-| 0.719              | 18.79%               |           |
-| 0.500              | 13.86%               |           |
-| 0.431              | 12.18%               |           |
-| **0.3453**         | **10.00%**           | ← the bar |
-| 0.206              | 6.22%                |           |
+| retained cost `r`  | share after hoisting |
+| ------------------ | -------------------- |
+| 1.00 (hoist alone) | 24.35%               |
+| 0.719              | 18.79%               |
+| 0.500              | 13.86%               |
+| 0.431              | 12.18%               |
+| **0.3453**         | **10.00%** (the bar) |
+| 0.206              | 6.22%                |
 
 Solving gives a closed form:
 

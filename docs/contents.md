@@ -93,8 +93,10 @@ open each document.
 - [Execution plans](execplans/) - task-specific implementation plans created
   when substantial work needs a durable plan.
   - [Line-event field hoisting plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
-    - proposed implementation and validation for roadmap item 5.2.1;
-      awaiting approval.
+    - implementation and validation for roadmap item 5.2.1. **BLOCKED**: the
+      characterization milestone (EP-M1) is complete and its measurements show
+      the planned hoist cannot reach the 10% target, so no runtime change has
+      been made and a revised design needs approval.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 - [Tee hot-path read-size sweep (2026-08-29)][tee-read-size-sweep] - the

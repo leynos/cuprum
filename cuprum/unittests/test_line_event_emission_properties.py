@@ -49,6 +49,11 @@ from hypothesis import strategies as st
 from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._pipeline_types import _EventDetails, _ExecutionHooks, _StageObservation
 from cuprum.events import ExecEvent, ExecId, new_exec_id
+from cuprum.unittests.test_line_event_emission_support import (
+    _fields,
+    _NullCmd,
+    _NullProgram,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -56,38 +61,17 @@ if typ.TYPE_CHECKING:
     from cuprum.lines import LineStreamName
 
 
-class _NullProgram:
-    """Program stand-in whose ``str`` form is the event's program name."""
+class _PropCmd(_NullCmd):
+    """Command stand-in whose sentinels are distinct from the shared ones.
 
-    def __str__(self) -> str:
-        """Return the program name."""
-        return "prop-program"
+    The property tests assert against the emitted strings, so their stand-in
+    must not be interchangeable with ``_NullCmd``'s: substituting one for the
+    other would change what these tests assert without failing them.
+    """
 
-
-class _NullProject:
-    """Project stand-in carrying a name."""
-
-    name = "prop-project"
-
-
-class _NullCmd:
-    """Command stand-in exposing only what observation emission reads."""
-
-    program = _NullProgram()
-
-    def __init__(self, argv: tuple[str, ...] = ()) -> None:
-        """Store the argv this stand-in reports."""
-        self.argv = argv
-
-    @property
-    def argv_with_program(self) -> tuple[str, ...]:
-        """The full argv, program name first."""
-        return (str(self.program), *self.argv)
-
-    @property
-    def project(self) -> _NullProject:
-        """The project stand-in."""
-        return _NullProject()
+    program = _NullProgram("prop-program")
+    _project_name = "prop-project"
+    _default_argv: tuple[str, ...] = ()
 
 
 class _SetClock:
@@ -260,7 +244,7 @@ _EXAMPLE_TWO_STREAMS = example(
 
 
 def _observation(
-    cmd: _NullCmd,
+    cmd: _PropCmd,
     clock: cabc.Callable[[], float],
     captured: list[ExecEvent],
     *,
@@ -285,11 +269,6 @@ def _observation(
         wall_clock=clock,
         **typ.cast("typ.Any", kwargs),
     )
-
-
-def _fields(event: ExecEvent) -> dict[str, object]:
-    """Return every declared field of ``event`` by name."""
-    return {field.name: getattr(event, field.name) for field in dc.fields(ExecEvent)}
 
 
 def _emitter(
@@ -359,7 +338,7 @@ class TestPayloadPreservationProperties:
         """
         clock = _SetClock()
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(case.argv), clock, captured)
+        observation = _observation(_PropCmd(case.argv), clock, captured)
         callback = _emitter(observation, stream=case.stream, pid=case.pid)
 
         for line, stamp in zip(case.lines, case.timestamps, strict=True):
@@ -383,7 +362,7 @@ class TestPayloadPreservationProperties:
         """The bound clock is invoked once per line, in delivery order."""
         clock = _SetClock()
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(case.argv), clock, captured)
+        observation = _observation(_PropCmd(case.argv), clock, captured)
         callback = _emitter(observation, stream=case.stream, pid=case.pid)
 
         # Preparation binds the clock but must not read it: a preparation-time
@@ -420,7 +399,7 @@ class TestPayloadPreservationProperties:
         """
         clock = _SetClock()
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(case.argv), clock, captured)
+        observation = _observation(_PropCmd(case.argv), clock, captured)
         callback = _emitter(observation, stream=case.stream, pid=case.pid)
 
         snapshots: list[dict[str, object]] = []
@@ -467,7 +446,7 @@ class TestBoundaryExamples:
     def test_boundary_lines_round_trip(self, line: str, description: str) -> None:
         """Boundary line text reaches the event unchanged."""
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(), _SetClock(1.0), captured)
+        observation = _observation(_PropCmd(), _SetClock(1.0), captured)
         callback = _emitter(observation, stream="stdout", pid=1)
         callback(line)
 
@@ -477,7 +456,7 @@ class TestBoundaryExamples:
     def test_boundary_timestamps_are_carried_exactly(self, timestamp: float) -> None:
         """A clock reading is stored as-is, including zero and negatives."""
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(), _SetClock(timestamp), captured)
+        observation = _observation(_PropCmd(), _SetClock(timestamp), captured)
         callback = _emitter(observation, stream="stdout", pid=1)
         callback("line")
 
@@ -490,7 +469,7 @@ class TestBoundaryExamples:
     def test_boundary_pids_are_carried_exactly(self, pid: int | None) -> None:
         """Absent, zero, and large PIDs are all preserved without coercion."""
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(), _SetClock(1.0), captured)
+        observation = _observation(_PropCmd(), _SetClock(1.0), captured)
         callback = _emitter(observation, stream="stdout", pid=pid)
         callback("line")
 
@@ -510,7 +489,7 @@ class TestBoundaryExamples:
     ) -> None:
         """The observation's argv reaches the event unchanged."""
         captured: list[ExecEvent] = []
-        observation = _observation(_NullCmd(argv), _SetClock(1.0), captured)
+        observation = _observation(_PropCmd(argv), _SetClock(1.0), captured)
         callback = _emitter(observation, stream="stdout", pid=1)
         callback("line")
 
@@ -534,7 +513,7 @@ class TestInterleavedEmitters:
         """Interleaved stdout and stderr emitters never cross their metadata."""
         captured: list[ExecEvent] = []
         token = new_exec_id()
-        observation = _observation(_NullCmd(), _SetClock(5.0), captured, exec_id=token)
+        observation = _observation(_PropCmd(), _SetClock(5.0), captured, exec_id=token)
         stdout = _emitter(observation, stream="stdout", pid=case.out_pid)
         stderr = _emitter(observation, stream="stderr", pid=case.err_pid)
 

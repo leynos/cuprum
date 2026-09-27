@@ -37,25 +37,44 @@ if typ.TYPE_CHECKING:
 class _NullProject:
     """Project stand-in carrying a name."""
 
-    name = "test-project"
+    def __init__(self, name: str = "test-project") -> None:
+        """Record the name this stand-in reports."""
+        self.name = name
 
 
 class _NullProgram:
     """Program stand-in whose ``str`` form is the event's program name."""
 
+    def __init__(self, name: str = "test-program") -> None:
+        """Record the name this stand-in reports."""
+        self.name = name
+
     def __str__(self) -> str:
         """Return the program name."""
-        return "test-program"
+        return self.name
 
 
 class _NullCmd:
-    """Command stand-in exposing only what observation emission reads."""
+    """Command stand-in exposing only what observation emission reads.
 
-    program = _NullProgram()
+    Subclasses override the declared sentinels rather than redeclaring the
+    shape. A module that needs its own sentinels therefore keeps one definition
+    of what emission reads, and its distinguishing values stay visible at the
+    top of its own file instead of hidden in a copy of the whole class.
 
-    def __init__(self, argv: tuple[str, ...] = ("arg",)) -> None:
-        """Store the argv this stand-in reports."""
-        self.argv = argv
+    ``program`` is one instance per class, not one per read: a real command
+    reports the same program object every time, and the parity tests compare
+    the emitted field for equality, so a fresh instance per read would look
+    like a divergence production cannot produce.
+    """
+
+    program = _NullProgram("test-program")
+    _project_name = "test-project"
+    _default_argv: tuple[str, ...] = ("arg",)
+
+    def __init__(self, argv: tuple[str, ...] | None = None) -> None:
+        """Store the argv this stand-in reports, or the subclass default."""
+        self.argv = self._default_argv if argv is None else argv
 
     @property
     def argv_with_program(self) -> tuple[str, ...]:
@@ -64,8 +83,8 @@ class _NullCmd:
 
     @property
     def project(self) -> _NullProject:
-        """The project stand-in."""
-        return _NullProject()
+        """The project stand-in named for this command's subclass."""
+        return _NullProject(self._project_name)
 
 
 class _CountingCmd(_NullCmd):

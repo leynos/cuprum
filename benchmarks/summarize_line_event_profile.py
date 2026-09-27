@@ -192,7 +192,14 @@ def _record_caller_weight(
 def _record_matches(
     accumulated: _Accumulator, stack: Stack, rules: ClassifierRules
 ) -> bool:
-    """Attribute ``stack`` to each matching rule, at most once overall.
+    """Attribute ``stack`` to each matching rule that owns one of its frames.
+
+    Each matching frame contributes the stack's full ``samples`` weight to its
+    winning rule, so a stack matching ``k`` rules adds its weight ``k`` times
+    across ``matched_frames`` and the per-rule counts may sum to more than the
+    capture's ``construction_samples``. The numerator is not inflated with it:
+    ``classify_capture`` counts a stack at most once, so a stack counts toward
+    ``construction_samples`` once however many of its frames resolve.
 
     Returns
     -------

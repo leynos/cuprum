@@ -1230,14 +1230,27 @@ The following design decisions were made during implementation:
 
 ### 8.1.3 Structured execution events (observe hooks)
 
-Roadmap item 5.2.1 has a
-[draft implementation plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
+Roadmap item 5.2.1 has an
+[implementation plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
 for hoisting invariant line-event metadata into a private callback factory
 shared by single-command and pipeline streams. The proposal binds metadata
 after spawn, preserves a fresh frozen `ExecEvent` and clock read per line, and
-retains the existing hook dispatcher. It is awaiting approval and has not been
-implemented. Acceptance requires a committed profile showing at most 10%
-construction share; caching metadata alone does not establish that result.
+retains the existing hook dispatcher.
+
+**The plan is BLOCKED at `21.00%`, and that is a measured result, not a
+status.** Its characterization milestone is complete and its measurements show
+the hoist as designed cannot reach the 10% acceptance target. The two
+constructors in the per-line path are `ExecEvent.__init__` and
+`_EventDetails.__init__`; every sampled `ExecEvent.__init__` resolves to the
+`emit` caller in `_pipeline_types.py`, which a hoist inside
+`_line_callbacks.py` cannot move, so only the `_EventDetails` rule is
+addressable. Because the acceptance gate is a *share of consume-subtree time*,
+removing that rule shrinks the denominator faster than the numerator and pushes
+the share from `21.00%` to `24.35%`. Caching metadata alone therefore does not
+establish the result — it makes the reported share worse. No runtime change has
+been made, and a revised design needs approval before one is. The plan records
+four options with measured projections and the reason each is presently
+rejected.
 
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
