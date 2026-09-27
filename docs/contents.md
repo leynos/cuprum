@@ -83,6 +83,12 @@ open each document.
   with least-privilege jobs, build provenance and PEP 740 attestations, and
   fail-open telemetry.
 
+## Requests for comments
+
+- [RFC 0001: Execution interception][rfc-0001] - proposed backend seam so
+  callers can be tested without a process, with a recording double and a
+  passthrough path for executable-level mocking frameworks.
+
 ## Planning and validation references
 
 - [Roadmap](roadmap.md) - phased delivery plan and implementation task
@@ -121,3 +127,4 @@ open each document.
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
+[rfc-0001]: rfcs/0001-execution-interception.md
