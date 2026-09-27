@@ -1971,17 +1971,30 @@ preserving the `SafeCmd.run()` execution contract:
   coordinator, and the timeout test modules keep one import path. See the
   [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
   2026-09-27.
+- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
+  failure rather than on the child's exit: `_await_exit_or_writer_failure`
+  waits on the exit wait and the stdin writer together and returns the exit
+  only once it is the sole survivor, so a producer that dies while the child
+  would still be running surfaces as `StdinSourceError` instead of being
+  reported as `TimeoutExpired`. The exit wait is passed in already constructed,
+  so each caller resolves `_wait_for_exit_code_within_timeout` from its own
+  module namespace. It was split out of `_subprocess_wait`, which re-exports
+  the name, so the single-command run, the line-stream coordinator, and the
+  timeout test modules keep one import path. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside
   `_reconcile_run_tasks`, its only consumer, because the context exists to
   serve that one reconciliation and reads its cancellation policy from the
   tasks it is given, and it re-exports the deadline names so callers keep one
-  import path. `cuprum/_stream_drain.py` owns the drain rules that
-  reconciliation runs: draining the stream consumers exactly once. Its explicit
-  drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
-  task with the stdout and stderr consumer tasks, `_DrainContext` to carry
-  capture and observability settings, and
+  import path. The race that decides *which* of the two ends the run lives in is
+  `_subprocess_rendezvous.py`. `cuprum/_stream_drain.py` owns the drain rules
+  that reconciliation runs: draining the stream consumers exactly once. Its
+  explicit drain interface uses `_RunTaskOwnership` to bundle the optional
+  stdin-writer task with the stdout and stderr consumer tasks, `_DrainContext`
+  to carry capture and observability settings, and
   `_reconcile_run_tasks(tasks, context)` to cancel stdin before settling both
   consumers as one shielded cleanup unit. The two shared types live in
   `cuprum/_subprocess_wait_types.py`, which is what lets the wait module import
