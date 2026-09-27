@@ -18,6 +18,12 @@ The distinction matters because the fallback is mode-dependent. A cancelled,
 failed, or never-started reader still owes its caller the empty value of the
 mode the run is in — ``b""`` for a byte-exact run, ``""`` for a text one —
 and getting that wrong would hand a ``bytes``-typed result field a ``str``.
+
+A slot in the consumers pair may also be ``None``, for a stream cuprum holds
+no pipe for because the caller redirected it to a file or a borrowed
+descriptor. Those slots are absent readers rather than missing ones: every
+helper here keeps them in place and settles them to an absent result, so a
+redirected stdout cannot shift stderr's payload into its position.
 """
 
 from __future__ import annotations
@@ -34,8 +40,9 @@ from cuprum._timeout_reporting import (
 
 if typ.TYPE_CHECKING:
     from cuprum._subprocess_wait_types import (
+        _Consumer,
+        _ConsumerPair,
         _DrainContext,
-        _StreamConsumerTask,
         _StreamPayload,
     )
 
@@ -49,8 +56,37 @@ _CAPTURE_EOF_GRACE_S = 0.25
 _DRAIN_LOGGER = logging.getLogger("cuprum._subprocess_wait")
 
 
+def _consumer_awaitable(
+    task: _Consumer,
+) -> asyncio.Task[_StreamPayload | None] | asyncio.Future[_StreamPayload | None]:
+    """Return a settled stand-in for a stream that has no consumer task.
+
+    :func:`_settle_consumers` gathers its inputs positionally — index ``0`` is
+    stdout's result, index ``1`` is stderr's — so a stream cuprum holds no pipe
+    for must still contribute a slot rather than being filtered out, which
+    would shift the stderr result into stdout's place. A future resolved to
+    ``None`` is indistinguishable from a consumer that captured nothing, which
+    is what such a stream reports anyway: :func:`_decode_consumer_result` maps
+    ``None`` to the empty value of the run's mode for a capturing drain and to
+    ``None`` for a drain that discards output.
+
+    Returns
+    -------
+    asyncio.Task[_StreamPayload | None] | asyncio.Future[_StreamPayload | None]
+        The task itself when there is one, otherwise a future already settled
+        to ``None`` so the gather still sees a slot for this stream.
+    """
+    if task is not None:
+        return task
+    future: asyncio.Future[_StreamPayload | None] = (
+        asyncio.get_running_loop().create_future()
+    )
+    future.set_result(None)
+    return future
+
+
 async def _drain_stream_consumers(
-    consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
+    consumers: _ConsumerPair,
     context: _DrainContext,
 ) -> tuple[_StreamPayload | None, _StreamPayload | None]:
     """Cancel pending consumers, drain them once, and report their output.
@@ -88,7 +124,7 @@ async def _drain_stream_consumers(
 
 
 async def _await_capture_eof_grace(
-    consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
+    consumers: _ConsumerPair,
     context: _DrainContext,
 ) -> None:
     """Give capturing consumers their bounded opportunity to reach EOF."""
@@ -100,7 +136,7 @@ async def _await_capture_eof_grace(
                 consumers, discard_on_cancel=context.discard_on_cancel
             )
         raise
-    pending_count = sum(not task.done() for task in consumers)
+    pending_count = sum(task is not None and not task.done() for task in consumers)
     if pending_count:
         _DRAIN_LOGGER.debug(
             "capture_eof_grace_expired pending_readers=%s",
@@ -176,33 +212,45 @@ def _decode_consumer_result(
 
 
 async def _settle_consumers(
-    consumers: tuple[_StreamConsumerTask, ...],
+    consumers: tuple[_Consumer, ...],
     *,
     discard_on_cancel: asyncio.Event | None = None,
 ) -> list[_StreamPayload | BaseException | None]:
-    """Cancel unfinished consumers and drain every result once."""
+    """Cancel unfinished consumers and drain every result once.
+
+    A stream cuprum holds no pipe for contributes a settled ``None`` rather
+    than being skipped, which keeps each result in its own stream's position.
+
+    Returns
+    -------
+    list[_StreamPayload | BaseException | None]
+        One settled entry per input, in input order: the captured payload, the
+        exception a consumer raised, or ``None`` for a stream with no consumer.
+    """
     if discard_on_cancel is not None:
         discard_on_cancel.set()
     _cancel_pending_consumers(consumers)
-    return await asyncio.gather(*consumers, return_exceptions=True)
+    return await asyncio.gather(
+        *(_consumer_awaitable(task) for task in consumers),
+        return_exceptions=True,
+    )
 
 
-async def _await_eof_grace(
-    consumers: tuple[_StreamConsumerTask, _StreamConsumerTask],
-) -> None:
+async def _await_eof_grace(consumers: _ConsumerPair) -> None:
     """Give readers the production-bounded opportunity to observe EOF."""
-    await asyncio.wait(consumers, timeout=_CAPTURE_EOF_GRACE_S)
+    await asyncio.wait(
+        [task for task in consumers if task is not None],
+        timeout=_CAPTURE_EOF_GRACE_S,
+    )
 
 
-def _cancel_pending_consumers(
-    consumers: tuple[_StreamConsumerTask, ...],
-) -> None:
+def _cancel_pending_consumers(consumers: tuple[_Consumer, ...]) -> None:
     """Cancel each consumer task that has not already completed."""
     # Finished readers keep their captured output; only tasks still blocked
     # after process termination (or on cancellation) are cancelled, so cleanup
     # cannot hang on a reader wedged on a pipe that never reached EOF.
     for task in consumers:
-        if not task.done():
+        if task is not None and not task.done():
             task.cancel()
 
 
@@ -210,6 +258,7 @@ __all__ = [
     "_await_capture_eof_grace",
     "_await_eof_grace",
     "_cancel_pending_consumers",
+    "_consumer_awaitable",
     "_decode_consumer_result",
     "_drain_stream_consumers",
     "_report_drain_failures",

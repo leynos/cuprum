@@ -259,7 +259,7 @@ async def _attach_run_tasks(
     try:
         stdin_task = _spawn_stdin_writer(
             process,
-            execution.stdin_data,
+            execution.stdio.stdin,
             _stdin_codec(execution.ctx),
             execution.observation,
         )

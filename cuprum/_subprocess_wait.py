@@ -11,6 +11,12 @@ period cannot skip the ``SIGKILL`` escalation and strand a child. The task
 reconciliation a run ends with is likewise owned by ``_reconcile_run_tasks``
 so its callers can run it under ``_shielded_cleanup`` as one unit.
 
+The drain rules a teardown runs are ``cuprum._stream_drain``'s, and the types
+this module and that one exchange are ``cuprum._subprocess_wait_types``'s.
+This module imports both and re-exports them, so the splits stay an internal
+arrangement: ``cuprum._subprocess_wait`` remains the one import path for every
+caller and for the test suite's monkeypatch seams.
+
 Teardown routes the termination through the run's *owns_group* flag, so a
 caller that omits it silently reduces an owning run to the direct-child signal
 and lets the group survive. Requiring the keyword makes an omitted ownership
@@ -30,11 +36,12 @@ from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._stream_drain import (
     _CAPTURE_EOF_GRACE_S,
     _await_eof_grace,
+    _consumer_awaitable,
     _drain_stream_consumers,
 )
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_timeout import _require_timeout
-from cuprum._subprocess_wait_types import _DrainContext
+from cuprum._subprocess_wait_types import _ConsumerPair, _DrainContext
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum._timeout_reporting import _report_timeout_expiry
 
@@ -324,8 +331,15 @@ async def _reconcile_run_tasks(
 
 __all__ = [
     "_CAPTURE_EOF_GRACE_S",
+    "_ConsumerPair",
     "_DrainContext",
     "_await_eof_grace",
+    # Re-exported from ``cuprum._stream_drain``, which owns the drain rules a
+    # teardown runs, for the same one-import-path reason as ``_DrainContext``:
+    # the drain once lived here and callers still reach for it by this path.
+    # Sorted into place, not grouped, because the repository's linter requires
+    # this list to stay isort-ordered.
+    "_consumer_awaitable",
     "_deadline_for_collection",
     "_drain_context",
     "_drain_stream_consumers",

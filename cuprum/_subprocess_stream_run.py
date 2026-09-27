@@ -51,6 +51,7 @@ from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
     _reconcile_run_tasks,
@@ -181,7 +182,7 @@ async def _run_subprocess_without_streams(
     """
     stdin_task = _spawn_stdin_writer(
         process,
-        execution.stdin_data,
+        execution.stdio.stdin,
         _stdin_codec(execution.ctx),
         execution.observation,
     )
@@ -305,7 +306,9 @@ async def _collect_stream_output(
         async with asyncio.timeout(_deadline_for_collection(execution)):
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
-            stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+            stdout_text, stderr_text = await asyncio.gather(
+                *(_consumer_awaitable(task) for task in tasks.consumers)
+            )
     except TimeoutError as exc:
         # Capture-aware, matching the exit-wait route: a capturing run's text
         # is what the resulting ``TimeoutExpired`` reports, so discarding it
