@@ -16,6 +16,7 @@ from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
 from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _drain_stream_consumers,
@@ -161,7 +162,10 @@ async def _run_subprocess_with_streams(
     )
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
+            process,
+            execution.stdin_data,
+            _stdin_codec(execution.ctx),
+            execution.observation,
         ),
         consumers=_spawn_stream_consumers(
             process,

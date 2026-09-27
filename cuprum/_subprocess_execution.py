@@ -26,6 +26,7 @@ from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 from cuprum._subprocess_streams import (
     _build_stream_config,
@@ -210,7 +211,10 @@ async def _run_subprocess_without_streams(
         The process exit code and the ``perf_counter`` timestamp of exit.
     """
     stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
+        process,
+        execution.stdin_data,
+        _stdin_codec(execution.ctx),
+        execution.observation,
     )
     try:
         exit_code, exited_at = await _wait_for_exit_code_within_timeout(

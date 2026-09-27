@@ -6165,31 +6165,34 @@ are kept, and `verdict.txt` carries a header saying which is standing. Because
 The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
 `cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, and `cuprum/_subprocess_wait.py`. Pipeline
-startup has its own boundary in `cuprum/_pipeline_spawn.py`, which starts the
-stages and tears down a partial spawn; `cuprum/_process_lifecycle.py` keeps
-termination and the shared `_shielded_cleanup` primitive. The two
-idle-heartbeat modules, `cuprum/_idle_heartbeat.py` and
-`cuprum/_idle_diagnostic.py`, are private to the same seam. See
-[Cuprum design](cuprum-design.md) §8.1.5 and
+`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_timeout.py`, and
+`cuprum/_subprocess_wait.py`. Pipeline startup has its own boundary in
+`cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
+spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
+`_shielded_cleanup` primitive. The two idle-heartbeat modules,
+`cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
+the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
 rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
-`_subprocess_stdin`; timeout or exit-event policy belongs in
-`_subprocess_timeout`; the rules for *ending* a run — applying the deadline,
-terminating the process, and draining the stream consumers exactly once —
-belong in `_subprocess_wait`; choosing each mirrored stream's destination and
-single-command stream-consumer construction — the stdout `_StreamConfig`, the
-stderr config derived from it, and the consumer tasks that drain into it —
-belong in `_subprocess_streams`; orchestration that coordinates them —
-spawning, deciding which streams are consumed, and assembling the result —
-belongs in `_subprocess_execution`. On the pipeline side, starting stages — and
-cleaning up whatever a failed startup left running — belongs in
-`_pipeline_spawn`, while terminating stages that are already running belongs in
-`_process_lifecycle` alongside `_shielded_cleanup`. The idle heartbeat's timing
-belongs in `_idle_heartbeat` and its rendering and write-failure policy in
-`_idle_diagnostic`.
+`_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
+incremental encoder, and the `StdinSourceError` build — belongs in
+`_subprocess_stdin_stream`, whose dispatcher stays the
+`_subprocess_stdin._spawn_stdin_writer` entry point; timeout or exit-event
+policy belongs in `_subprocess_timeout`; the rules for *ending* a run —
+applying the deadline, terminating the process, and draining the stream
+consumers exactly once — belong in `_subprocess_wait`; choosing each mirrored
+stream's destination and single-command stream-consumer construction — the
+stdout `_StreamConfig`, the stderr config derived from it, and the consumer
+tasks that drain into it — belong in `_subprocess_streams`; orchestration that
+coordinates them — spawning, deciding which streams are consumed, and
+assembling the result — belongs in `_subprocess_execution`. On the pipeline
+side, starting stages — and cleaning up whatever a failed startup left running
+— belongs in `_pipeline_spawn`, while terminating stages that are already
+running belongs in `_process_lifecycle` alongside `_shielded_cleanup`. The idle
+heartbeat's timing belongs in `_idle_heartbeat` and its rendering and
+write-failure policy in `_idle_diagnostic`.
 
 `cuprum/_subprocess_execution.py` stays the composition root. It is what calls
 `_spawn_subprocess`, `_build_stream_config`, and `_spawn_stream_consumers`, so
