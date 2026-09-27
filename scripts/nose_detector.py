@@ -41,6 +41,12 @@ DEFAULT_NOSE_BIN = REPO_ROOT / ".tools" / "nose" / "nose"
 INSTALL_HINT = "run `make install-nose` to install the pinned detector"
 COMMAND_TIMEOUT_SECONDS = 120
 
+# nose reports a scope containing no supported source file as a *successful*
+# scan of zero families: exit 0, and a JSON summary indistinguishable from a
+# genuinely clean tree. Only this stderr warning separates the two, so a
+# mistyped or empty root would otherwise pass the gate while proving nothing.
+_EMPTY_SCOPE_MARKER = "no supported source files found under:"
+
 type CommandRunner = cabc.Callable[[cabc.Sequence[str]], str]
 
 __all__ = [
@@ -280,5 +286,12 @@ def _run_command(command: cabc.Sequence[str]) -> str:
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         msg = f"{command[0]} exited with status {result.returncode}: {detail}"
+        raise GateExecutionError(msg)
+    if _EMPTY_SCOPE_MARKER in result.stderr:
+        msg = (
+            f"{command[0]} found no supported source files under every "
+            f"configured root, so this scan proves nothing about the tree: "
+            f"{result.stderr.strip()}"
+        )
         raise GateExecutionError(msg)
     return result.stdout

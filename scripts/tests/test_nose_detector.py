@@ -320,3 +320,32 @@ class TestRunDetector:
             match=r"cannot run nose: .*Permission denied.*make install-nose",
         ):
             detector._run_command(("nose", "query"))
+
+    def test_run_command_rejects_an_empty_scope(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A root holding no source files is a provisioning error, not a pass.
+
+        nose answers an empty scope with exit 0 and a summary that matches a
+        clean tree, so without this the gate would report success for a
+        mistyped or empty ``roots`` entry.
+        """
+
+        def empty_scope(
+            *_args: object, **_kwargs: object
+        ) -> detector.subprocess.CompletedProcess[str]:
+            """Return nose's successful-but-empty answer to an empty scope."""
+            return detector.subprocess.CompletedProcess(
+                args=["nose", "query"],
+                returncode=0,
+                stdout='{"summary": {"families": 0, "shown": 0}}',
+                stderr="warning: no supported source files found under: docs\n",
+            )
+
+        monkeypatch.setattr(detector.subprocess, "run", empty_scope)
+
+        with pytest.raises(
+            detector.GateExecutionError,
+            match=r"proves nothing about the tree.*no supported source files",
+        ):
+            detector._run_command(("nose", "query"))
