@@ -5,8 +5,11 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE (one recorded deviation — the scope tolerance in `Tolerances`
-was breached; see the entry in `Decision log` and `Outcomes & retrospective`)
+Status: COMPLETE (one deviation pending owner acceptance — the scope tolerance
+in `Tolerances` was breached, and the breach was recorded after the fact rather
+than escalated at the trigger. The work is delivered and verified; the
+deviation's disposition is **pending**. See the paired entries in
+`Decision log` and `Outcomes & retrospective`.)
 
 ## Purpose / big picture
 
@@ -81,7 +84,7 @@ The existing `stdin=StdinInput(...)` payload API and the inherited-stdin
 default (the current `stdin=None`) behave exactly as they do today; this is an
 additive widening, not a replacement.
 
-Success is observable three ways. A child that reads 64 MiB slowly while our
+Success is observable three ways. A child that reads 64 MiB slowly while the
 producer yields 4 KiB chunks completes without the producer ever getting far
 ahead of it: what the test measures is that lookahead — the pulls the writer
 has taken ahead of the child's reads — and not cuprum's peak resident set,
@@ -561,15 +564,15 @@ likelihood, and mitigation.
 - [x] (2026-09-27 18:40Z) The `594a0fee` sweep came back red on one gate, and
       the red is worth keeping. Six of seven gates passed; `make markdownlint`
       failed with exactly 2 `MD049/emphasis-style` errors at
-      `docs/users-guide.md:310`, both from my own new text: `*ahead*` written
-      into a file that uses underscore emphasis throughout. Measured with a
-      grep for an asterisk-delimited span whose neighbouring characters are not
-      asterisks, `docs/users-guide.md` carries 1 such span at `594a0fee` — the
-      offending line — and 0 at `ac2b8c29`, against 164 underscore-delimited
-      spans there. The commit was never pushed; the whole of the delta to
-      `ac2b8c29` is that one line, `*ahead*` to `_ahead_` (`git diff --stat
-      594a0fee ac2b8c29` reports `1 file changed, 1 insertion(+), 1
-      deletion(-)`).
+      `docs/users-guide.md:310`, both from this branch's new text: `*ahead*`
+      written into a file that uses underscore emphasis throughout. Measured
+      with a grep for an asterisk-delimited span whose neighbouring
+      characters are not asterisks, `docs/users-guide.md` carries 1 such span
+      at `594a0fee` — the offending line — and 0 at `ac2b8c29`, against 164
+      underscore-delimited spans there. The commit was never pushed; the
+      whole of the delta to `ac2b8c29` is that one line, `*ahead*` to
+      `_ahead_` (`git diff --stat 594a0fee ac2b8c29` reports `1 file changed,
+      1 insertion(+), 1 deletion(-)`).
       The lesson: `make markdownlint` is not run by local `check-fmt` or
       `lint`, so a Markdown emphasis mistake reaches a full sweep only if the
       sweep includes it — which is why every sweep in this plan runs all seven
@@ -585,7 +588,7 @@ likelihood, and mitigation.
       the frozen tree. All seven exited 0; pytest's main session read `2545
       passed, 63 skipped in 172.87s` and nextest `125 tests run: 125 passed, 0
       skipped`, both identical to the reviewed head.
-- [x] (2026-09-27 17:05Z) Two numbers in my own prose were wrong and were
+- [x] (2026-09-27 17:05Z) Two numbers in the round-7 reply were wrong and were
       caught by re-measuring rather than by re-reading. (a) The reply's table
       first quoted the reviewed head's `test` duration as `159.60s`; that
       figure belongs to the `bd7297e4` sweep, and `ac2b8c29`'s archived log
@@ -1012,6 +1015,17 @@ likelihood, and mitigation.
   editing more than 24 tracked files" — was in fact met early and repeatedly.
   It is recorded here as a deviation for review rather than retroactively
   rewritten to fit the outcome. Date/Author: 2026-09-27, implementation agent.
+- Escalation outcome and disposition (the second half of the deviation entry
+  above, kept separate so the two are not confused). Outcome: the trigger was
+  met repeatedly and the work was **not** escalated at the moment it was met;
+  it proceeded and the breach was recorded afterwards, which is a departure
+  from what `Tolerances` prescribes and is stated as one. The plan owner did
+  not issue a disposition at the trigger because none was sought, and none is
+  invented here retroactively. Disposition: **pending**. The rationale above is
+  the implementation agent's; it is presented for owner acceptance rather than
+  recorded as an accepted deviation, and the plan's completion is qualified
+  accordingly in the `Status` line. Date/Author: 2026-09-27, implementation
+  agent.
 - Decision: delete `_pipe_or` rather than keep it in the narrowed form the
   reviewing agent asked for. Rationale: the narrow form is an identity function
   on every input its single call site can produce — proven by enumerating the
@@ -1146,8 +1160,8 @@ likelihood, and mitigation.
   `_write_chunk` holds as both `chunk` and `payload` until `drain()` returns.
   The claim is now "the bound is on input pulled ahead, not on retained bytes:
   the largest chunk yielded, plus the transport buffer, plus the pipe" — see
-  the entry below. Applying the lesson recorded for round 5, I grepped the
-  concept rather than the flagged sentence, which is how two unflagged sites
+  the entry below. Applying the lesson recorded for round 5, the concept was
+  grepped rather than the flagged sentence, which is how two unflagged sites
   came to light. Date/Author: 2026-09-27, implementation agent.
 - Decision: rewrite `INV-1` and strike two overclaims from it that the round-6
   finding did not name. Rationale: the obligation promised (a) a "configured
@@ -1846,7 +1860,7 @@ relocation, which re-exports it), and be re-exported from `cuprum.sh` and
 ```python
 @dc.dataclass(frozen=True, slots=True)
 class StdinStream:
-    """A library-owned, bounded, pull-after-drain producer for a child's stdin."""
+    """A library-owned, pull-after-drain producer for a child's stdin."""
 
     chunks: cabc.AsyncIterable[str | bytes] | cabc.AsyncIterator[str | bytes]
 
