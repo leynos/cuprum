@@ -232,8 +232,8 @@ failure injection at that boundary.
     `check-fmt`, `typecheck`, `lint`, `markdownlint`, `nixie` all pass;
     `make lint` passed **unbounded** (exit 0, 52 s), so the narrowed path was
     not needed at all. `make test` went red on a single host-load flake
-    (`test_a_shared_sink_keeps_the_keepalive_on_its_own_line`, a file this
-    branch never touches); a bounded re-run at 04:56 passed clean with
+    (`test_idle_heartbeat_coordination.py::test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line`,
+    a file this branch never touches); a bounded re-run at 04:56 passed clean with
     `2543 passed, 63 skipped, 6 xfailed in 145.85s` and nextest
     `125 tests run: 125 passed`, exit 0, tree unchanged. The flake test passed
     3/3 in isolation, and system load fell from 22.2 to 9.1 between the two
@@ -2317,6 +2317,78 @@ argument that *sounds* structural ("cwd beats site-packages") deserves the same
 empirical check as a number, because here the superficially-similar true
 statement and the false one differ by one path index.
 
+### 2026-09-27: the gate suite is green at `6da258a6`, and `test-rust` needed covering
+
+All six deterministic gates now pass at `6da258a6` with HEAD unmoved
+(`head_before = head_after` on every run, tree clean throughout): `check-fmt`,
+`markdownlint` (chaining `spelling`), `typecheck`, `test`, `lint` (all ten
+sub-checks reached, so none was left unobserved), and `nixie`. The `actionlint`/
+`shellcheck` deadlock did not reproduce under the `</dev/null` redirect.
+
+The first `make test` observation **failed**, and the way it failed is the part
+worth recording. It exited 2 on
+
+```text
+cuprum/unittests/test_idle_heartbeat_coordination.py::test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line
+```
+
+a known load-induced flake inherited from `main`, carrying a recorded symptom
+(keepalives preceding the consumer's own first bytes, `_INTERVAL = 0.2`,
+interpreter boot exceeding two intervals) that matched this failure exactly.
+`make test`'s prerequisite order is `test: makeutil test-python test-rust`; the
+abort at `test-python` meant **`test-rust` was never invoked**. That is an
+unobserved check, not a passing one, and it is the reason a "5 of 6 passed"
+headline would have been wrong: the suite's Rust half — the nextest run and the
+doctest pass — had not run at all.
+
+Both gaps are now closed. `test-rust` was run on its own
+(`125 tests run: 125 passed, 0 skipped`, doctests `ok`), and the full suite was
+re-run to exit 0 with `2549 passed, 63 skipped`, reaching `test-rust` this time
+and seeing the previously-failing keepalive test **pass**. The two full-suite
+observations reconcile exactly: both collected 2612 items, with one flipping
+from failed to passed and nothing else changing.
+
+**Two earlier citations in this plan named the wrong test, and the near-miss is
+worth recording.** The plan twice recorded the flake as
+`test_a_shared_sink_keeps_the_keepalive_on_its_own_line` — the name used by
+`cuprum/unittests/test_idle_heartbeat_execution.py`. The failing test above is
+`cuprum/unittests/test_idle_heartbeat_coordination.py::test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line`.
+Two real tests, in two files, differing by the single word `pipeline_`, and
+both present in every full-suite log — so grepping a log for either name finds
+both and cannot disambiguate. `coordination.py` has carried `pipeline_` since
+the file was added in `b63a0f21`, so no version of the tree ever supported the
+short name in that file.
+
+The recorded symptom does disambiguate, and it identifies the coordination test:
+`partial-final` and the assertion text "the stage's own bytes must be
+unchanged" belong to it, while the execution test writes `partial\n`, sleeps
+0.45 s, and has no such assertion. Both older entries are corrected above. What
+is *not* established is which test actually failed on 2026-09-19 — that log has
+since been removed from `/tmp`, so "the citation was wrong then" and "the
+citation was right then about a genuinely different test" cannot be
+distinguished from the surviving evidence. It is recorded as unresolved rather
+than assumed either way.
+
+The generalizable part: when two identifiers differ by one word and both appear
+in the same logs, a prose citation of either is unverifiable except against the
+tree, and a gate will not catch it — no linter resolves prose identifiers. Cite
+the file alongside the test name.
+
+**A prediction of mine failed here, and the measurement is stronger for it.**
+Before dispatching the second run I read `uptime`, saw the 1-minute load fall
+from 16–27 to 3.08, and told the gate runner that this was "the condition under
+which the flake was predicted not to fire" — framing the re-run as a valid
+observation rather than a retry. That premise did not hold: load was back to
+**17.53** by the time the full suite ran, and the pass came at essentially the
+load that produced the failure. So the result is *not* explained by "the host
+got quieter". The flake conclusion survives on the change-surface evidence and
+on the recorded symptom, both of which were already independent of load — and
+it is now better supported, because a passing run at the failing load rules out
+load as a sufficient explanation for the failure. The lesson is narrow and
+worth keeping: `uptime` read at dispatch time does not predict host load for
+the duration of a four-minute suite, so a load-based prediction about a gate
+outcome is not something to assert in advance.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -2497,13 +2569,13 @@ require checking the explicit callback factory bodies as well.
   beats accumulating circumstantial cases.
 - 2026-09-27: **A red gate in an untouched file is a load hypothesis to test,
   not a conclusion to assert.** `make test` went red on
-  `test_a_shared_sink_keeps_the_keepalive_on_its_own_line` while the tree was
-  frozen and the file byte-identical across the range. The response was to
-  check load (22.2 falling to 9.1), run the test in isolation (3/3 pass), and
-  re-run the suite bounded (exit 0, `2543 passed`), rather than either
-  dismissing it or chasing a fix. The flake has no `/tmp` precedent, so "there
-  is no earlier instance" is recorded as the actual state of the evidence
-  rather than upgraded to "known flake".
+  `test_idle_heartbeat_coordination.py::test_a_shared_sink_keeps_the_pipeline_keepalive_on_its_own_line`
+  while the tree was frozen and the file byte-identical across the range. The
+  response was to check load (22.2 falling to 9.1), run the test in isolation
+  (3/3 pass), and re-run the suite bounded (exit 0, `2543 passed`), rather than
+  either dismissing it or chasing a fix. The flake has no `/tmp` precedent, so
+  "there is no earlier instance" is recorded as the actual state of the
+  evidence rather than upgraded to "known flake".
 
 ## Outcomes & retrospective
 
