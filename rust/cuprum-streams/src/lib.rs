@@ -201,6 +201,8 @@ fn pump_stream_files_readwrite(
     )
 }
 
+// @codescene(disable:"Code Duplication") This Windows adapter mirrors the Unix adapter to preserve
+// its capability-typed stream contract; both forward to the shared executable loop.
 #[cfg(windows)]
 fn pump_stream_files_readwrite(
     reader: SynchronousBorrowedStream<'_>,
