@@ -59,12 +59,15 @@ class DirectProcessConfig:
     carried separately from the three stdio values because that value cannot
     express it. ``Popen`` leaves ``stdout`` and ``stderr`` as ``None`` for
     anything that is not a pipe, so the ``wait4`` path could infer pipe-ness
-    from the absence of a child-side object; ``asyncio.create_subprocess_exec``
-    would instead attach a reader to whatever non-``None`` value it was handed,
-    including a borrowed descriptor the caller owns. Funding both paths from
-    this set is what keeps them agreeing on which streams cuprum owns a reader
-    for. The default covers every stream, which is what a caller who omits the
+    from the absence of a child-side object. Funding that path from this set is
+    what keeps it from attaching a reader to a borrowed descriptor the caller
+    owns. The default covers every stream, which is what a caller who omits the
     field and passes real ``PIPE`` sentinels means.
+
+    The fallback backend does not consult *pipes*: ``create_subprocess_exec``
+    attaches a reader only to the ``PIPE`` sentinel, and a raw descriptor
+    reaches the child with ``Process.stdout`` left ``None``, so the computed
+    stdio values already say everything it needs.
     """
 
     argv: tuple[str, ...]
@@ -271,40 +274,34 @@ async def spawn_wait4_process(
     return process
 
 
-def _pipe_or(
-    value: int | None, name: PipeStream, pipes: frozenset[PipeStream]
-) -> int | None:
-    """Return ``PIPE`` for a stream cuprum owns, else the value unchanged.
-
-    The fallback backend has no way to learn pipe-ness from the value itself.
-    ``create_subprocess_exec`` takes the sentinel as the literal int it is, but
-    it also accepts a raw descriptor and will wrap whatever non-``None`` value
-    it is given in a pipe object — which for a redirected stream would mean
-    attaching a reader to the caller's file. Restoring the sentinel only where
-    the stream really is cuprum's pipe keeps the two backends equivalent.
-
-    Returns
-    -------
-    int | None
-        The pipe sentinel for a stream cuprum owns, otherwise *value*
-        unchanged, which may itself be ``None`` for an inherited stream.
-    """
-    if name in pipes:
-        return asyncio.subprocess.PIPE
-    return value
-
-
 async def spawn_direct_process(
     config: DirectProcessConfig,
 ) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
+    """Spawn a direct process using ``wait4`` where it can own the reap.
+
+    The three stdio values reach the fallback exactly as the spawn layer
+    computed them. They must not be rewritten here: ``DEVNULL`` is what an
+    unread pipe target resolves to, and promoting it back to ``PIPE`` — because
+    the stream appears in *pipes* — would leave the parent holding a pipe
+    nobody reads, so a child writing past the buffer would hang in ``write``
+    instead of discarding its output. ``create_subprocess_exec`` attaches a
+    reader only to the ``PIPE`` sentinel itself; a raw descriptor passes
+    through to the child and leaves ``Process.stdout`` ``None``, exactly as
+    ``Popen`` does, so no value here needs translating for either backend.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The spawned child, wrapped by :class:`_Wait4Process` when ``wait4``
+        can own its reap and by asyncio's own transport otherwise.
+    """
     if wait4_resource_measurement_available():
         return await spawn_wait4_process(config)
     return await asyncio.create_subprocess_exec(
         *config.argv,
-        stdin=_pipe_or(config.stdin, STDIN_STREAM, config.pipes),
-        stdout=_pipe_or(config.stdout, STDOUT_STREAM, config.pipes),
-        stderr=_pipe_or(config.stderr, STDERR_STREAM, config.pipes),
+        stdin=config.stdin,
+        stdout=config.stdout,
+        stderr=config.stderr,
         env=config.env,
         cwd=config.cwd,
     )
