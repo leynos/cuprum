@@ -1,30 +1,39 @@
 """Internal subprocess execution machinery for ``SafeCmd.run()``.
 
-Orchestration for ``SafeCmd.run()``: spawning the subprocess, wiring its
-stream consumers, and assembling the ``CommandResult``. The rules for ending a
-run — applying the deadline, terminating the process, and draining the stream
-consumers exactly once — live in ``cuprum._subprocess_wait``. The streamed
-run loop that waits for exit and reconciles the consumer tasks lives in
-``cuprum._subprocess_stream_run``, and the consumer construction those two
-drive lives in ``cuprum._subprocess_streams``; both are re-exported here so
-importers of this module keep working unchanged. Timing and child resource
-usage are measured here, with ``cuprum._wait4_process`` owning the direct
-child's ``wait4`` reap and the aggregate fallback; ``_DirectRunStart`` keeps
-the three pre-spawn readings together so their shared ordering cannot drift.
+The top of the direct-run orchestration: this module assembles the bundle one
+run is described by, sets the stdin writer going, decides between the direct
+and streamed completion paths, and builds the ``CommandResult`` the caller
+receives. Timing and child resource usage are measured here, with
+``cuprum._wait4_process`` owning the direct child's ``wait4`` reap and the
+aggregate fallback; ``_DirectRunStart`` keeps the three pre-spawn readings
+together so their shared ordering cannot drift.
+
+Everything below the orchestration lives in its own module, and each is
+re-exported here for importers that still name this one:
+
+* ``cuprum._subprocess_spawn`` maps the resolved stdio onto the spawn call and
+  owns the lifetime of every descriptor cuprum opened for it.
+* ``cuprum._subprocess_deadline`` bounds the wait for the child's exit.
+* ``cuprum._subprocess_wait`` cancels the stdin writer and drains the stream
+  consumers exactly once, whatever ended the run.
+* ``cuprum._subprocess_stream_run`` is the streamed loop that waits for exit
+  and reconciles its consumer tasks, built on ``cuprum._subprocess_streams``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses as dc
+import logging
 import time
 import typing as typ
 
 from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
-from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._stdio_plan import _NoStdin, _ResolvedStdio
+from cuprum._subprocess_context import _sh_module
+from cuprum._subprocess_spawn import _spawn_subprocess
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
@@ -49,13 +58,18 @@ from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
 from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
+    import asyncio
+
+    from cuprum._constants import PipeStream
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, StdinStream
+    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -80,7 +94,7 @@ class _SubprocessExecution:
 
     observation: _StageObservation
 
-    stdin_data: bytes | StdinStream | None
+    stdio: _ResolvedStdio
     on_line: _LineHookFn | None = None
     # Defaulted for the tests that build this bundle directly, and resolved by
     # ``RunOutputOptions.__post_init__`` on the production path, so the value
@@ -99,8 +113,14 @@ class _SubprocessExecution:
         open and the consumer running even when capture and echo are both off.
         Without that, ``run(output=RunOutputOptions(on_line=...))`` would attach
         stdout to ``DEVNULL`` and silently deliver nothing.
+
+        A redirected stdout is consumed by nobody, whatever these gates say.
+        ``RunOutputOptions`` already refuses that combination at construction,
+        so this is the second of the two places the contradiction is caught —
+        and the one that holds for a bundle assembled by something other than
+        the public constructor.
         """
-        return (
+        return self.stdio.stdout.is_pipe and (
             self.capture
             or self.echo_stdout
             or self.idle is not None
@@ -110,12 +130,24 @@ class _SubprocessExecution:
     @property
     def consumes_stderr(self) -> bool:
         """Whether the parent must consume stderr, rather than discard it."""
-        return (
+        return self.stdio.stderr.is_pipe and (
             self.capture
             or self.echo_stderr
             or self.idle is not None
             or self.on_line is not None
         )
+
+    @property
+    def pipes(self) -> frozenset[PipeStream]:
+        """The child's streams cuprum holds a parent-side pipe for."""
+        names: set[PipeStream] = set()
+        if self.stdio.stdout.is_pipe:
+            names.add("stdout")
+        if self.stdio.stderr.is_pipe:
+            names.add("stderr")
+        if not isinstance(self.stdio.stdin, _NoStdin):
+            names.add("stdin")
+        return frozenset(names)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -163,32 +195,6 @@ class _DirectCompletion:
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
 
 
-async def _spawn_subprocess(
-    execution: _SubprocessExecution,
-) -> asyncio.subprocess.Process:
-    """Spawn an async subprocess with configured I/O and environment."""
-    # ``consumes_stdout``/``consumes_stderr`` fold in the idle monitor as well as
-    # capture and echo, so a run the watchdog narrates keeps its pipes.
-    return await _wait4_process.spawn_direct_process(
-        _wait4_process.DirectProcessConfig(
-            argv=execution.cmd.argv_with_program,
-            stdout=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stdout
-                else asyncio.subprocess.DEVNULL
-            ),
-            stderr=(
-                asyncio.subprocess.PIPE
-                if execution.consumes_stderr
-                else asyncio.subprocess.DEVNULL
-            ),
-            stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
-            env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
-            cwd=_cwd_arg(execution.ctx.cwd),
-        )
-    )
-
-
 async def _run_subprocess_without_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -212,7 +218,7 @@ async def _run_subprocess_without_streams(
     """
     stdin_task = _spawn_stdin_writer(
         process,
-        execution.stdin_data,
+        execution.stdio.stdin,
         _stdin_codec(execution.ctx),
         execution.observation,
     )
@@ -361,6 +367,11 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
     )
 
 
+# ``_spawn_subprocess`` and the stream-consumer trio are re-exported from
+# ``cuprum._subprocess_spawn`` and ``cuprum._subprocess_streams``. They stay in
+# this module's namespace because the single-command run, the line-stream
+# coordinator, and the test modules that replace them all reach for the
+# orchestration module's own name.
 __all__ = [
     "_DirectCompletion",
     "_DirectRunStart",

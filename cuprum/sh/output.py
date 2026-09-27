@@ -134,6 +134,16 @@ class RunOutputOptions:
         invoked once per idle interval in place of the built-in stderr
         keepalive. It must not block for long: it runs on the run's own event
         loop. Requires ``idle_after``.
+    stdin : StdioTarget | None, default=None
+        Where the child's standard input is bound, for the two variants that
+        describe the stream itself. ``StdioTarget.pipe()`` asks for a
+        library-owned pipe that nothing writes to, so a child reading stdin
+        sees EOF instead of the parent's terminal; ``StdioTarget.inherit()``
+        asks for the parent's stdin, which is the default. The actual input is
+        supplied through ``SafeCmd.run``'s ``stdin=`` argument --- a
+        ``StdinInput`` payload or a ``StdinStream`` producer --- and either
+        form implies a pipe. A ``path`` or ``fd`` target is rejected here: an
+        input descriptor belongs to the source, not to these options.
     sink : sinks.OutputSink | None, default=None
         Optional presentation adapter (:mod:`cuprum.sinks` protocol). When
         given, it may reframe the parent-facing output of this run (for
@@ -220,9 +230,13 @@ class RunOutputOptions:
     sink: sinks.OutputSink | None = None
     group: bool = False
     annotate_failure: bool = False
-    # ``stdout``/``stderr`` default to ``None``, which resolves to "pipe when
-    # something needs to read the stream, otherwise inherit". Naming a target
-    # explicitly overrides that choice; see ``StdioTarget``.
+    # The three standard streams default to ``None``, which resolves to "pipe
+    # when something needs the stream, otherwise inherit". Naming a target
+    # explicitly overrides that choice; see ``StdioTarget``. ``stdin`` accepts
+    # only the two variants that describe the *pipe* itself --- ``pipe()`` and
+    # ``inherit()`` --- because a file or a borrowed descriptor for stdin
+    # belongs in a ``StdinInput``/``StdinStream`` source, not here.
+    stdin: StdioTarget | None = None
     stdout: StdioTarget | None = None
     stderr: StdioTarget | None = None
     # `dataclasses.replace` forwards init fields. Keep the generated identity

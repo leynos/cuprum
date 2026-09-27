@@ -19,6 +19,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated 
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
+from cuprum._constants import STDERR_STREAM, STDIN_STREAM, STDOUT_STREAM, PipeStream
 from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._rusage import (
     ChildResourceUsage,
@@ -52,7 +53,19 @@ class _Wait4InvariantError(_ExecutionInvariantError):
 
 @dc.dataclass(frozen=True, slots=True)
 class DirectProcessConfig:
-    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths."""
+    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths.
+
+    *pipes* names the streams cuprum holds a parent-side pipe for, and it is
+    carried separately from the three stdio values because that value cannot
+    express it. ``Popen`` leaves ``stdout`` and ``stderr`` as ``None`` for
+    anything that is not a pipe, so the ``wait4`` path could infer pipe-ness
+    from the absence of a child-side object; ``asyncio.create_subprocess_exec``
+    would instead attach a reader to whatever non-``None`` value it was handed,
+    including a borrowed descriptor the caller owns. Funding both paths from
+    this set is what keeps them agreeing on which streams cuprum owns a reader
+    for. The default covers every stream, which is what a caller who omits the
+    field and passes real ``PIPE`` sentinels means.
+    """
 
     argv: tuple[str, ...]
     stdin: int | None
@@ -60,6 +73,11 @@ class DirectProcessConfig:
     stderr: int | None
     env: cabc.Mapping[str, str] | None
     cwd: str | None
+    pipes: frozenset[PipeStream] = frozenset({
+        STDIN_STREAM,
+        STDOUT_STREAM,
+        STDERR_STREAM,
+    })
 
 
 def _close_waiter(
@@ -98,13 +116,21 @@ class _Wait4Process(asyncio.subprocess.Process):
         self,
         popen: subprocess.Popen[bytes],
         loop: asyncio.AbstractEventLoop,
+        pipes: frozenset[PipeStream],
     ) -> None:
-        """Wrap a spawned child before attaching its pipes to ``loop``."""
+        """Wrap a spawned child before attaching its pipes to ``loop``.
+
+        ``pipes`` is the set the spawn config named, and it is recorded rather
+        than re-derived: ``Popen`` makes ``stdout``/``stderr`` non-``None`` for
+        any object it was handed, but only a pipe is something cuprum may
+        attach a reader to.
+        """
         self._popen = popen
         # The inherited signal methods delegate to this transport. Popen offers
         # the same signalling interface, while this class keeps reaping local.
         self._transport = popen
         self._loop = loop
+        self._pipes = pipes
         self._returncode: int | None = None
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
@@ -126,12 +152,19 @@ class _Wait4Process(asyncio.subprocess.Process):
         return self._resource_usage
 
     async def connect_pipes(self) -> None:
-        """Attach the Popen pipes to asyncio readers and writers."""
-        if self._popen.stdout is not None:
+        """Attach the pipes cuprum owns to asyncio readers and writers.
+
+        Both conditions are required. ``Popen`` exposes a stream object for
+        anything it was handed, including a caller's borrowed file, and
+        attaching an ``asyncio`` reader to one of those would take over a
+        descriptor that is not cuprum's to drive. A stream named in ``pipes``
+        but absent from the ``Popen`` is the mirror image: nothing to connect.
+        """
+        if STDOUT_STREAM in self._pipes and self._popen.stdout is not None:
             self.stdout = await self._connect_reader(self._popen.stdout)
-        if self._popen.stderr is not None:
+        if STDERR_STREAM in self._pipes and self._popen.stderr is not None:
             self.stderr = await self._connect_reader(self._popen.stderr)
-        if self._popen.stdin is not None:
+        if STDIN_STREAM in self._pipes and self._popen.stdin is not None:
             self.stdin = await self._connect_writer(self._popen.stdin)
 
     async def _connect_reader(self, pipe: typ.IO[bytes]) -> asyncio.StreamReader:
@@ -228,7 +261,7 @@ async def spawn_wait4_process(
 ) -> asyncio.subprocess.Process:
     """Spawn a direct POSIX child that owns its ``wait4`` resource usage."""
     loop = asyncio.get_running_loop()
-    process = _Wait4Process(_spawn_popen(config), loop)
+    process = _Wait4Process(_spawn_popen(config), loop, config.pipes)
     try:
         await process.connect_pipes()
     except BaseException:
@@ -236,6 +269,29 @@ async def spawn_wait4_process(
         await process.wait()
         raise
     return process
+
+
+def _pipe_or(
+    value: int | None, name: PipeStream, pipes: frozenset[PipeStream]
+) -> int | None:
+    """Return ``PIPE`` for a stream cuprum owns, else the value unchanged.
+
+    The fallback backend has no way to learn pipe-ness from the value itself.
+    ``create_subprocess_exec`` takes the sentinel as the literal int it is, but
+    it also accepts a raw descriptor and will wrap whatever non-``None`` value
+    it is given in a pipe object — which for a redirected stream would mean
+    attaching a reader to the caller's file. Restoring the sentinel only where
+    the stream really is cuprum's pipe keeps the two backends equivalent.
+
+    Returns
+    -------
+    int | None
+        The pipe sentinel for a stream cuprum owns, otherwise *value*
+        unchanged, which may itself be ``None`` for an inherited stream.
+    """
+    if name in pipes:
+        return asyncio.subprocess.PIPE
+    return value
 
 
 async def spawn_direct_process(
@@ -246,9 +302,9 @@ async def spawn_direct_process(
         return await spawn_wait4_process(config)
     return await asyncio.create_subprocess_exec(
         *config.argv,
-        stdin=config.stdin,
-        stdout=config.stdout,
-        stderr=config.stderr,
+        stdin=_pipe_or(config.stdin, STDIN_STREAM, config.pipes),
+        stdout=_pipe_or(config.stdout, STDOUT_STREAM, config.pipes),
+        stderr=_pipe_or(config.stderr, STDERR_STREAM, config.pipes),
         env=config.env,
         cwd=config.cwd,
     )

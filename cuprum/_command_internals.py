@@ -42,6 +42,7 @@ from cuprum._sink_lifecycle import (
     _outcome_for_result,
     _SinkBracket,
 )
+from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
@@ -89,10 +90,12 @@ class _ExecutionState:
 
     context: ExecutionContext
     output: RunOutputOptions
-    # Either a payload already resolved against the context's encoding, or a
-    # producer the writer pulls during the run. ``SafeCmd.run``/``lines``
-    # resolve the payload half before constructing this bundle, so nothing
-    # downstream re-encodes a ``StdinInput``.
+    # A payload already resolved against the context's encoding, a producer the
+    # writer pulls during the run, or ``None`` for the parent's own stdin.
+    # ``SafeCmd.run``/``lines`` resolve the payload half before constructing
+    # this bundle, so nothing downstream re-encodes a ``StdinInput``; the stdio
+    # plan and the stream bindings are resolved from it, together with
+    # ``output``'s targets, in ``_build_subprocess_execution``.
     stdin_data: bytes | StdinStream | None
     timeout: float | None
 
@@ -151,6 +154,13 @@ def _build_subprocess_execution(
     session's log, so it has to be part of the bundle before the consumers
     are built.
 
+    Stdio is resolved here rather than in the state, because this is the first
+    point at which the run's *output options* and its *stdin source* are both
+    in hand: ``_ExecutionState`` carries the source and the options but was
+    built by ``SafeCmd.run`` before the idle monitor and the sink session
+    existed, and a redirected stream has to be resolved against whether
+    anything still needs to read it.
+
     Returns
     -------
     _SubprocessExecution
@@ -167,7 +177,7 @@ def _build_subprocess_execution(
         sink_session=sink_session,
         timeout=state.timeout,
         observation=observation,
-        stdin_data=state.stdin_data,
+        stdio=_resolve_stdio(state.stdin_data, state.output),
         on_line=state.output.on_line,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes

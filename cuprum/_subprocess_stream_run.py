@@ -19,6 +19,7 @@ from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _consumer_awaitable,
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
@@ -163,7 +164,7 @@ async def _run_subprocess_with_streams(
     tasks = _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
             process,
-            execution.stdin_data,
+            execution.stdio.stdin,
             _stdin_codec(execution.ctx),
             execution.observation,
         ),
@@ -188,7 +189,9 @@ async def _run_subprocess_with_streams(
     await _stop_idle_monitor(execution.idle)
     await _await_stdin_writer_and_reconcile_consumers(tasks, execution, pid)
     try:
-        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+        stdout_text, stderr_text = await asyncio.gather(
+            *(_consumer_awaitable(task) for task in tasks.consumers)
+        )
         for diagnostics in tasks.relay_diagnostics:
             diagnostics.settle()
     except BaseException:

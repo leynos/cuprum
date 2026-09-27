@@ -111,18 +111,28 @@ def _spawn_stream_consumers(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
     spawn_context: _StreamConsumerSpawnContext,
-) -> tuple[asyncio.Task[str | None], asyncio.Task[str | None]]:
-    """Spawn stdout and stderr stream consumer tasks.
+) -> tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]:
+    """Spawn a consumer for each stream cuprum holds a pipe for.
 
     Each consumer drains into its collector from ``spawn_context``:
     index ``0`` is stdout's, index ``1`` is stderr's. The caller retains the
     pair on its ``_RunTaskOwnership`` so its single reconciliation point can
     settle and read them exactly once.
 
+    The gate is whether cuprum owns a pipe, not whether anything reads it. A
+    stream that is piped but unread still gets its consumer, exactly as it did
+    before redirectable streams existed: the task settles immediately against a
+    ``None`` reader and reports the empty capture the run's result already
+    carries. A stream bound to a file, a borrowed descriptor, or the parent's
+    own stream is a different matter — attaching a ``StreamReader`` to a
+    descriptor cuprum does not own is the one thing this must never do, so
+    those streams get no task at all and a ``None`` in their slot.
+
     Returns
     -------
-    tuple[asyncio.Task[str | None], asyncio.Task[str | None]]
-        The stdout and stderr consumer tasks, in that order.
+    tuple[asyncio.Task[str | None] | None, asyncio.Task[str | None] | None]
+        The stdout and stderr consumer tasks, in that order, with ``None`` for
+        a stream cuprum holds no pipe for.
     """
     pid = spawn_context.pid
     stream_config = spawn_context.stream_config
@@ -146,21 +156,74 @@ def _spawn_stream_consumers(
     if stream_config.sink is stderr_config.sink:
         stream_config = dc.replace(stream_config, mirror=stderr_config.mirror)
     return (
-        asyncio.create_task(
-            _consume_stream(
-                process.stdout,
-                stream_config,
+        _spawn_consumer(
+            _ConsumerWiring(
+                stream=process.stdout,
+                is_pipe=execution.stdio.stdout.is_pipe,
+                config=stream_config,
                 on_line=stdout_on_line,
                 relay_diagnostics=relay_diagnostics[0],
-            ),
+            )
         ),
-        asyncio.create_task(
-            _consume_stream(
-                process.stderr,
-                stderr_config,
+        _spawn_consumer(
+            _ConsumerWiring(
+                stream=process.stderr,
+                is_pipe=execution.stdio.stderr.is_pipe,
+                config=stderr_config,
                 on_line=stderr_on_line,
                 relay_diagnostics=relay_diagnostics[1],
-            ),
+            )
+        ),
+    )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ConsumerWiring:
+    """Everything one stream's consumer needs to be constructed.
+
+    Bundled rather than passed as five arguments, and bundled *here* rather
+    than in the spawn helper's signature for a reason the ``is_pipe`` field
+    makes concrete: whether cuprum owns a pipe is a property of the stream
+    being wired, so it belongs beside that stream's reader and that stream's
+    config. A bare boolean in a positional list would be a trap; a field named
+    ``is_pipe`` on the record it describes is not.
+
+    The values are read from the execution and the spawn context by
+    :func:`_spawn_stream_consumers`, which is the only place that knows which
+    stream is being wired, so a caller cannot pair a reader with a config
+    belonging to the other stream.
+    """
+
+    stream: asyncio.StreamReader | None
+    is_pipe: bool
+    config: _StreamConfig
+    on_line: cabc.Callable[[str], _LineHookOutcome] | None
+    relay_diagnostics: _RelayDiagnostics
+
+
+def _spawn_consumer(wiring: _ConsumerWiring) -> asyncio.Task[str | None] | None:
+    """Spawn one stream's consumer, or return ``None`` when there is no pipe.
+
+    Parameters
+    ----------
+    wiring : _ConsumerWiring
+        The reader, pipe flag, drain config, per-line callback, and
+        echo-disablement collector for this one stream.
+
+    Returns
+    -------
+    asyncio.Task[str | None] | None
+        The consumer task, or ``None`` for a stream cuprum does not pipe, since
+        the wiring named no library-owned pipe to attach a reader to.
+    """
+    if not wiring.is_pipe:
+        return None
+    return asyncio.create_task(
+        _consume_stream(
+            wiring.stream,
+            wiring.config,
+            on_line=wiring.on_line,
+            relay_diagnostics=wiring.relay_diagnostics,
         ),
     )
 

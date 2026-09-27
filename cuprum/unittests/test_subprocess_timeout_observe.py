@@ -15,6 +15,7 @@ import pytest
 
 from cuprum._subprocess_wait import (
     _CAPTURE_EOF_GRACE_S,
+    _ConsumerPair,
     _drain_stream_consumers,
     _DrainContext,
     _wait_for_exit_code_within_timeout,
@@ -187,9 +188,7 @@ def test_capture_eof_grace_expiry_emits_observe_event() -> None:
         """Block until the capture drain cancels the reader."""
         await asyncio.Event().wait()
 
-    async def expire_immediately(
-        _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    ) -> None:
+    async def expire_immediately(_consumers: _ConsumerPair) -> None:
         """Close the test grace window without elapsed wall-clock time."""
 
     async def run_case() -> _RecordingObservation:
@@ -231,11 +230,12 @@ def test_capture_eof_grace_expiry_emits_observe_event() -> None:
 def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
     """Readers that reach EOF before the grace closes emit no expiry event."""
 
-    async def wait_for_readers(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    ) -> None:
+    async def wait_for_readers(consumers: _ConsumerPair) -> None:
         """Let both readers complete deterministically inside the grace window."""
-        await asyncio.gather(*consumers)
+        # A stream cuprum holds no pipe for contributes a settled ``None``
+        # rather than a task, exactly as the real grace waiter sees it; such a
+        # slot has nothing to await.
+        await asyncio.gather(*(task for task in consumers if task is not None))
 
     async def run_case() -> _RecordingObservation:
         """Drain two readers that complete before the injected grace returns."""
@@ -294,9 +294,7 @@ def test_failing_grace_observer_cannot_replace_cancellation() -> None:
         """Block until the capture drain settles the reader."""
         await asyncio.Event().wait()
 
-    async def expire_immediately(
-        _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-    ) -> None:
+    async def expire_immediately(_consumers: _ConsumerPair) -> None:
         """Close the grace window before the observer requests cancellation."""
 
     class _CancellingObservation:

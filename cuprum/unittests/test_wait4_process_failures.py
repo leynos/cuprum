@@ -68,6 +68,7 @@ def _sleep_config() -> _wait4_process.DirectProcessConfig:
         stderr=None,
         env=None,
         cwd=None,
+        pipes=frozenset(),
     )
 
 
