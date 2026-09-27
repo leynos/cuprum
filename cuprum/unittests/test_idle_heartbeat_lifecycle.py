@@ -389,7 +389,9 @@ def test_a_grandchilds_pipe_does_not_extend_the_heartbeat(
 ) -> None:
     """Silence reporting stops with the child, not with its stream's EOF."""
     sink = io.StringIO()
-    grandchild = "import time; time.sleep(1.2)"
+    # Allow slower child startup while leaving enough time to expose a wait for
+    # the grandchild's pipe EOF.
+    grandchild = "import time; time.sleep(2.0)"
     source = (
         "import subprocess, sys; "
         f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
@@ -398,7 +400,7 @@ def test_a_grandchilds_pipe_does_not_extend_the_heartbeat(
 
     result = asyncio.run(
         python_builder("-c", source).run(
-            output=RunOutputOptions(idle_after=0.05),
+            output=RunOutputOptions(idle_after=0.2),
             context=ExecutionContext(stderr_sink=sink),
         ),
     )

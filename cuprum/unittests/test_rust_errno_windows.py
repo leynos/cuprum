@@ -36,7 +36,10 @@ _ERROR_INVALID_HANDLE = 6
 
 
 def _assert_invalid_windows_handle(raw_handle: int) -> None:
-    """Check a handle without acquiring ownership or blocking."""
+    """Check closure without ownership or blocking.
+
+    Concurrent reuse of the same process-local handle value can race this probe.
+    """
     kernel32 = ctypes.WinDLL(  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
         "kernel32", use_last_error=True
     )
@@ -47,6 +50,7 @@ def _assert_invalid_windows_handle(raw_handle: int) -> None:
     )
     get_handle_information.restype = ctypes.c_int
     flags = ctypes.c_ulong()
+    ctypes.set_last_error(0)  # ty: ignore[unresolved-attribute]  # Windows API.
     handle_is_open = get_handle_information(
         ctypes.c_void_p(raw_handle), ctypes.byref(flags)
     )
@@ -88,8 +92,13 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
             _streams_rs._convert_fd_for_platform(writer_fd)
         )
 
-        # Calling the native function transfers ownership before its Rust-side
-        # buffer and reader validation can fail.
+        # PyO3 converts both handles to i64 before Rust can adopt the writer.
+        i64_max = (1 << 63) - 1
+        if not (0 <= reader_handle <= i64_max and 0 <= writer_handle <= i64_max):
+            pytest.skip("Windows handle is outside the native PyO3 i64 range")
+
+        # Rust then adopts and closes the transferred writer before rejecting
+        # this raw-handle call.
         writer_transferred = True
         with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
             native.rust_pump_stream(reader_handle, writer_handle)
@@ -120,7 +129,7 @@ def test_pump_closes_writer_after_early_validation_failure(
     buffer_size: int,
     error_message: str,
 ) -> None:
-    """An early native validation error still consumes the writer transfer."""
+    """Later buffer or reader validation failures close the adopted writer."""
     writer_reader_fd: int | None = None
     writer_fd: int | None = None
     writer_handle: int | None = None
@@ -131,6 +140,9 @@ def test_pump_closes_writer_after_early_validation_failure(
         writer_handle = _streams_rs._duplicate_windows_handle(
             _streams_rs._convert_fd_for_platform(writer_fd)
         )
+
+        if not 0 <= writer_handle <= (1 << 63) - 1:
+            pytest.skip("Windows handle is outside the native PyO3 i64 range")
 
         writer_transferred = True
         with pytest.raises(ValueError, match=error_message):

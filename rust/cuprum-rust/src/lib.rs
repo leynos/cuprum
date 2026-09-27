@@ -8,10 +8,9 @@ use cuprum_native_io::PlatformFd;
 use cuprum_streams::{BufferSize, PumpError};
 #[cfg(unix)]
 use cuprum_streams::{consume_stream, pump_stream};
-#[cfg(windows)]
-use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use thiserror::Error;
+
 mod errors;
 #[cfg(test)]
 mod fd_tests;
@@ -68,6 +67,7 @@ fn validate_buffer_size(size: i64) -> Result<BufferSize, RustStreamError> {
 #[pyfunction]
 pub const fn is_available() -> bool { true }
 
+#[cfg(unix)]
 #[expect(
     clippy::allow_attributes,
     reason = "PyO3 emits the argument-count lint only in some build configurations"
@@ -76,9 +76,9 @@ pub const fn is_available() -> bool { true }
     clippy::too_many_arguments,
     reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
 )]
-#[cfg(unix)]
 mod stream_pyfunctions;
 
+#[cfg(windows)]
 #[expect(
     clippy::allow_attributes,
     reason = "PyO3 emits the argument-count lint only in some build configurations"
@@ -87,7 +87,7 @@ mod stream_pyfunctions;
     clippy::too_many_arguments,
     reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
 )]
-#[cfg(windows)]
+#[path = "stream_pyfunctions_windows.rs"]
 mod stream_pyfunctions;
 
 use stream_pyfunctions::{rust_consume_stream, rust_pump_stream};

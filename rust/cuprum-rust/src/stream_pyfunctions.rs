@@ -1,25 +1,19 @@
 //! Contain the Python stream exports and their generated `PyO3` wrappers.
 
-#[cfg(windows)]
-use std::os::windows::io::{FromRawHandle, RawHandle};
-
-#[cfg(windows)]
-use cuprum_native_io::OwnedStream;
-#[cfg(unix)]
 use super::{
     BufferSize,
     PumpError,
     PyErr,
+    PyResult,
+    Python,
     ReaderFd,
     RustStreamError,
     consume_stream,
     convert_fd,
     pump_stream,
+    pyfunction,
     validate_buffer_size,
 };
-#[cfg(windows)]
-use super::{PyOSError, convert_fd, validate_buffer_size};
-use super::{PlatformFd, PyResult, Python, pyfunction};
 
 /// Run a prepared stream operation after validating its buffer size.
 ///
@@ -32,7 +26,6 @@ use super::{PlatformFd, PyResult, Python, pyfunction};
 /// has been reacquired. The detached operation itself keeps its `PumpError`
 /// result: it outlives the argument checks and has no business knowing about
 /// them, so only its error is classified on the way out.
-#[cfg(unix)]
 fn run_stream_operation<T, Operation>(
     py: Python<'_>,
     reader_fd: i64,
@@ -53,19 +46,6 @@ where
     result.map_err(PyErr::from)
 }
 
-#[cfg(windows)]
-fn raw_windows_handle_error<T>() -> PyResult<T> {
-    Err(PyOSError::new_err(
-        "native stream operations do not accept raw Windows handles; use the Python fallback",
-    ))
-}
-
-#[cfg(windows)]
-fn reject_transferred_windows_writer<T>(writer: OwnedStream) -> PyResult<T> {
-    drop(writer);
-    raw_windows_handle_error()
-}
-
 /// Pump bytes between file descriptors outside the GIL.
 ///
 /// # Parameters
@@ -84,21 +64,8 @@ pub(super) fn rust_pump_stream(
     writer_fd: i64,
     buffer_size: i64,
 ) -> PyResult<u64> {
-    #[cfg(windows)]
-    {
-        let _ = py;
-        let writer_raw = convert_fd(writer_fd)?;
-        // SAFETY: this PyO3 entry point accepts a valid, uniquely owned
-        // Windows writer transfer. Generic ownership does not assert that the
-        // rejected handle supports synchronous I/O.
-        let writer = unsafe { OwnedStream::from_raw_handle(writer_raw as RawHandle) };
-        validate_buffer_size(buffer_size)?;
-        convert_fd(reader_fd)?;
-        reject_transferred_windows_writer(writer)
-    }
-    #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {
-        let writer_raw: PlatformFd = convert_fd(writer_fd)?;
+        let writer_raw: super::PlatformFd = convert_fd(writer_fd)?;
         // SAFETY: `_streams_rs` transfers its duplicate exactly once.
         // Python retains no owner after this hand-off; see the boundary
         // contract for direct native callers and submission rollback.
@@ -135,14 +102,6 @@ pub(super) fn rust_consume_stream(
     reader_fd: i64,
     buffer_size: i64,
 ) -> PyResult<String> {
-    #[cfg(windows)]
-    {
-        let _ = py;
-        validate_buffer_size(buffer_size)?;
-        convert_fd(reader_fd)?;
-        raw_windows_handle_error()
-    }
-    #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {
         Ok(|reader: ReaderFd, size| {
             // SAFETY: the Python consume caller retains its reader throughout
