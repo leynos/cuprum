@@ -46,6 +46,16 @@ LEG_FLAG_EXPRESSION: typ.Final = (
 #: against cannot drift apart.
 _PULL_REQUEST: typ.Final = "pull_request"
 
+#: One admitted leg, as its `key=value` fields. A leg is the identity of the
+#: pull request lane, so a caller asking whether the suite runs on more than one
+#: of them counts *these*, not the fields: reading the outer length would count
+#: the matrix keys of a single leg and report any leg as several. The alias
+#: exists to keep that distinction in the annotation rather than in a comment.
+type Lane = tuple[str, ...]
+
+#: One `(step name, lanes)` pair per step that admits at least one leg.
+type StepLanes = tuple[str, tuple[Lane, ...]]
+
 #: The negation inside the flag, read to decide a leg. The flag is
 #: ``!(<predicate>)``, so it is false exactly when its predicate holds: the leg
 #: is experimental *and* the event is a pull request. Reading the flag's own
@@ -212,7 +222,7 @@ def ungated(workflow_name: str, job_name: str, condition: object) -> str:
 
 def pull_request_legs(
     workflow_name: str, job_name: str, target: str
-) -> tuple[tuple[str, tuple[str, ...]], ...]:
+) -> tuple[StepLanes, ...]:
     """Return the pull-request legs a workflow's job would run a target on.
 
     The suite selector is only evaluated if some job step runs the target on a
@@ -237,19 +247,20 @@ def pull_request_legs(
 
     Returns
     -------
-    tuple of tuple
+    tuple of StepLanes
         One ``(step name, lanes)`` pair per step of that job that runs
         ``target`` and admits at least one leg the flag leaves enabled, in
-        declaration order, where ``lanes`` is one ``key=value`` tuple per
-        admitted pull-request leg. Empty when no step does, which is the
-        failure the caller reports.
+        declaration order. ``lanes`` holds one :data:`Lane` per admitted
+        pull-request *leg* — a tuple of that leg's ``key=value`` fields — so
+        its length is the number of lanes and not the number of matrix keys.
+        Empty when no step does, which is the failure the caller reports.
 
     Raises
     ------
     AssertionError
         If the job or its steps are not the shape the readers narrow them to.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the readers this composes
-    found: list[tuple[str, tuple[str, ...]]] = []
+    found: list[StepLanes] = []
     for step in steps(workflow_name, job_name):
         script = step.get("run")
         if not isinstance(script, str) or not script_runs_command(script, target):

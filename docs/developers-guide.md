@@ -502,8 +502,8 @@ actually invokes `make test-python` and that the target's recipe expands
 `$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates, or one
 consumed by a recipe that runs a bare directory, is caught too. The first of
 those resolves the step's guard against the job's matrix legs rather than
-grepping the command text: a step gated on the pre-release leg, or on any key
-a pull-request leg does not set, contains the command and still runs nothing on
+grepping the command text: a step gated on the pre-release leg, or on any key a
+pull-request leg does not set, contains the command and still runs nothing on
 the branch that merges. The legs come from `tests/helpers/ci_leg_matrix.py` and
 the leg flag from `tests/helpers/ci_leg_gate.py`, which is also where
 `pull_request_legs` composes the two. The two halves are separate modules

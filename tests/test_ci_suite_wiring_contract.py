@@ -33,6 +33,8 @@ from tests.helpers.workflow_shell import script_runs_command
 if typ.TYPE_CHECKING:
     import pytest
 
+    from tests.helpers.workflow_types import Step
+
 #: The workflow, job, and target that run the Python suite for a pull request.
 #: `make test` also works locally but runs the Rust suite too, which is why CI
 #: calls the Python half on its own. `typecheck-test` is the job holding the
@@ -139,9 +141,12 @@ def test_a_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
     # may declare — and seeding it would prove that rule rather than this one.
     flag = "env.LEG_RUNS == 'true'"
 
-    def suite_step_under(matrix_clause: str) -> list[object]:
+    def suite_step_under(matrix_clause: str) -> list[Step]:
         """Return this job's steps with the suite step re-gated."""
-        faulted = [dict(step) for step in real_steps]
+        # `dict(step)` is a shallow copy, which widens each `Step` to a plain
+        # mapping; the cast records that the copies still stand in for steps,
+        # which is the contract this seam has to satisfy.
+        faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
         suite = next(
             step
             for step in faulted

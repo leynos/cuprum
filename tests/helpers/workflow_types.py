@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import typing as typ
 
-# `with` is a Python keyword, so this key can only be declared through the
-# functional TypedDict form and mixed in as a base class.
-_StepInputs = typ.TypedDict("_StepInputs", {"with": object}, total=False)
+# `with` and `if` are Python keywords, so these keys can only be declared
+# through the functional TypedDict form and mixed in as a base class.
+_StepKeywords = typ.TypedDict(
+    "_StepKeywords", {"with": object, "if": object}, total=False
+)
 
 
-class Step(_StepInputs, total=False):
+class Step(_StepKeywords, total=False):
     """A workflow step with keys represented in the narrow test model.
 
     Attributes
@@ -24,6 +26,10 @@ class Step(_StepInputs, total=False):
         Shell script executed by the step.
     with : object
         Input mapping passed to the invoked action.
+    if : object
+        Condition guarding the step. Read by the many contracts that resolve a
+        guard, and written by the ones that seed a re-gated step as a fault, so
+        the model carries it rather than leaving those writes unrepresentable.
     """
 
     id: object
