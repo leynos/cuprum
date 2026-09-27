@@ -643,8 +643,13 @@ splits: `output.py` no longer holds the standard-stream vocabulary, and
 
 - `cuprum/sh/argv.py` — argv construction (`build_argv`, `_ArgValue`,
   `_stringify_arg`, `_serialize_kwargs`).
-- `cuprum/sh/execution.py` — `ExecutionContext`, `TimeoutExpired`, and
-  `StdinInput`.
+- `cuprum/sh/execution.py` — `ExecutionContext`, `TimeoutExpired`,
+  `StdinInput`, and the streaming-stdin types this work added: `StdinStream`
+  (the producer), `StdinSource` (the `StdinInput | StdinStream` union callers
+  pass), and `StdinSourceError` (what a producer or encoder failure raises).
+  All three joined the module's `__all__` and the `cuprum.sh` re-export list
+  alongside `StdinInput`, which is why this roster entry — not just the
+  addendum prose — had to grow.
 - `cuprum/sh/results.py` — `CommandResult` and `PipelineResult`.
 - `cuprum/sh/output.py` — `RunOutputOptions` and `IOOptions`.
 - `cuprum/sh/stdio.py` — `StdioTarget` and the validation policing it.

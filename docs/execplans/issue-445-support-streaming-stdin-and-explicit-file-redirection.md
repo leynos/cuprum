@@ -1270,7 +1270,13 @@ runs it with `SafeCmd.run` (async), `SafeCmd.run_sync` (blocking),
 The run path, in order, is:
 
 1. `cuprum/sh/safe_cmd.py` — `SafeCmd.run` resolves the `ExecutionContext`,
-   resolves `stdin` to bytes, and builds a `_ExecutionState`.
+   resolves `stdin` through `_resolve_stdin_source`, and builds a
+   `_ExecutionState`. That resolver is where the two variants part: a
+   `StdinInput` payload is encoded to bytes here, so an encoding error surfaces
+   synchronously from `run()`, while a `StdinStream` is passed through unpulled
+   — pulling it is the writer's job, and pulling it here would defeat the
+   bound. The `_ExecutionState.stdin_data` field therefore holds
+   `bytes | StdinStream | None`, not bytes alone.
 2. `cuprum/_command_internals.py` — `_build_subprocess_execution` turns the
    state into a `_SubprocessExecution`; `_run_prepared_command` opens the sink
    session and drives `_execute_with_hooks`.
