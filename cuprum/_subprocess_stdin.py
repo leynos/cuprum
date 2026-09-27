@@ -281,16 +281,17 @@ async def _write_chunk(
         mis-typed chunk is a caller error, not a pipe condition, so it is
         raised here for the streaming writer to wrap.
     """
-    if isinstance(chunk, str):
-        payload = sink.encoder.encode(chunk, final=False)
-    elif isinstance(chunk, bytes):
-        payload = chunk
-    else:
-        msg = (
-            f"stdin producer yielded {type(chunk).__name__}; "
-            f"chunks must be str or bytes"
-        )
-        raise TypeError(msg)
+    match chunk:
+        case str():
+            payload = sink.encoder.encode(chunk, final=False)
+        case bytes():
+            payload = chunk
+        case _:
+            msg = (
+                f"stdin producer yielded {type(chunk).__name__}; "
+                f"chunks must be str or bytes"
+            )
+            raise TypeError(msg)
     if not payload:
         return
     sink.stdin.write(payload)
