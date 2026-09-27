@@ -21,11 +21,38 @@ streaming input source, and no public way to say "the child's stdout goes to
 After this change a caller can write:
 
 ```python
-from cuprum import StdinStream, StdioTarget
+import pathlib
+import sys
 
-run = builder("consumer.py").run(
-    stdin=StdinStream(async_chunks()),
-    output=RunOutputOptions(stdout=StdioTarget.path(Path("out.log"))),
+from cuprum import (
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    StdioTarget,
+    StdinStream,
+    sh,
+)
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="streaming")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+command = python("-c", "import sys; sys.stdout.write(sys.stdin.read().upper())")
+
+
+async def _chunks() -> "collections.abc.AsyncIterator[bytes]":
+    """Yield the payload in bounded pieces rather than as one buffer."""
+    for word in (b"alpha ", b"beta ", b"gamma"):
+        yield word
+
+
+result = await command.run(
+    stdin=StdinStream(chunks=_chunks()),
+    # capture must be off: the child writes straight to the file, so there is
+    # no parent-side pipe for cuprum to read.
+    output=RunOutputOptions(
+        capture=False, stdout=StdioTarget.path(pathlib.Path("out.log"))
+    ),
+    context=ExecutionContext(),
 )
 ```
 
@@ -403,6 +430,45 @@ likelihood, and mitigation.
   log-backed evidence — a single suite-wide total is not printed by any one
   command. `typos.toml` was byte-identical before and after the run, and all
   four code files matched their pre-run hashes.
+- [x] (2026-09-27 19:30Z) The round-3 review's one `major`, discharged by
+  reading and then *measuring*: `_pipe_or` rewrote every stream in `pipes` to
+  `PIPE`, ignoring the computed value, so an unread pipe target's `DEVNULL`
+  left the parent holding a pipe nobody read and a child writing past the
+  buffer hung in `write`. Measured here rather than argued: the kwargs reaching
+  `create_subprocess_exec` carried `stdout == -1` (`PIPE`) where the spawn
+  layer had computed `-3` (`DEVNULL`); a 16 MiB child with `capture=False` hung
+  past 20 s on the fallback while the wait4 control finished in 0.02 s; the
+  host's pipe capacity is 65536 bytes. Committed as `2c01835c`.
+- [x] (2026-09-27 19:30Z) `_pipe_or` removed rather than narrowed, on evidence
+  that it had no remaining work and its stated rationale was false. Enumerating
+  its domain (54 value × stream × pipes combinations) showed the narrowed
+  predicate was an identity function everywhere, because `_output_stdio`
+  already returns exactly the int each backend needs. The docstring justified
+  the helper by claiming `create_subprocess_exec` "will wrap whatever
+  non-`None` value it is given in a pipe object"; a probe and asyncio's own
+  `base_subprocess.py` (`if stdout == subprocess.PIPE: self._pipes[1] = None`)
+  both show it attaches a reader only to the `PIPE` sentinel — a raw descriptor
+  reaches the child with `Process.stdout` left `None`, exactly as `Popen` does.
+  `origin/main` passes all three values straight through with no helper at all.
+  Two docstrings carried the same false premise (`DirectProcessConfig`,
+  `spawn_direct_process`) and are corrected; the latter also regained the
+  `Returns` section ruff DOC required.
+- [x] (2026-09-27 19:30Z) The regression test is red-capable, verified by
+  injection rather than assumed. Its first draft asserted only after awaiting
+  the child, so the red surfaced as a 30 s pytest-timeout that stranded a
+  blocked child — the wrong reason. Reordered to assert the value the backend
+  was handed *before* the await: red now fails in ~0.1 s naming `got -1` against
+  `-3`, and a `finally` that kills and awaits collects whatever the failure
+  leaves. Green against the restored fix in 0.49 s.
+- [x] (2026-09-27 19:30Z) Round-3 typecheck failure, caught by `scrutineer` and
+  fixed: the interceptor helper was annotated `**kwargs: int | None` and
+  splatted into `create_subprocess_exec`, so `ty` checked all 19 of that
+  function's keyword parameters against `int | None` (19
+  `invalid-argument-type` diagnostics at one line). A narrower `**kwargs` is
+  rejected at the splat and a wider one would have to be `Any`, which `ANN401`
+  forbids here, so the five keywords the fallback actually sends are now named
+  explicitly. Re-run sweep: all six gates green, tree unchanged before and
+  after, no `typos.toml` churn.
 
 ## Surprises & discoveries
 
@@ -738,7 +804,34 @@ likelihood, and mitigation.
   unfiltered, and the property it protects is load-bearing for
   `_share_one_owned_path`, which compares targets. Deleting the test would have
   returned the suite to the state where the regression was invisible.
-  Date/Author: 2026-09-27, implementation agent.
+- Observation (the round-3 major): a rewrite of a stdio value is invisible to
+  every assertion made *after* the child is awaited. A pipe-buffer overrun on
+  an unread pipe hangs, and a hang and a slow-but-correct run are reported the
+  same way by anything that only inspects the final `CommandResult`. Only
+  reading the kwargs the backend was handed, or timing the run, separates them.
+  Impact: the regression test asserts the value first and awaits second, and
+  the evidence that the defect was real is a recorded kwarg (`stdout == -1`)
+  plus a timing pair (20 s hung vs 0.02 s control), not a passing suite.
+- Observation (the round-3 major): the "cold" reading of a helper's docstring
+  can be wrong in a way that survives review, because a plausible-sounding
+  justification reads as verified. `_pipe_or`'s stated reason — that
+  `create_subprocess_exec` wraps any non-`None` value, including a borrowed
+  descriptor, in a pipe — is false, and CPython's `base_subprocess.py` says so
+  in two lines. Impact: the helper was defended twice (once upstream on main's
+  equivalent path, once by the branch) on a mechanism neither author checked.
+  The probe that settled it was nine lines long.
+- Observation (test hygiene): a regression test whose red phase times out is
+  worse than one that fails, because the timeout path skips the assertions and
+  leaves the process it created still blocked. The first draft here failed "for
+  the wrong reason" in exactly that way. Impact: assert the cheap, decisive
+  value before awaiting anything that a defect can make hang, and collect the
+  child in a `finally`.
+- Observation (typecheck): `**kwargs: X` on a helper that forwards to a
+  many-parameter function is a typecheck trap, not a convenience. `ty` checks
+  every parameter of the target against `X`; here that produced 19 diagnostics
+  from one line, and `ANN401` closed the obvious escape (`Any`). Impact:
+  helpers that forward to a wide signature should name the keywords they
+  actually pass. Date/Author: 2026-09-27, implementation agent.
 - Deviation (recorded, not silently absorbed): the plan's `Tolerances` bound
   this work at 24 tracked files or 1400 net lines, and the delivered change is
   materially larger — 44 tracked files and 5436 net added lines at `aca77867`,
@@ -756,6 +849,36 @@ likelihood, and mitigation.
   editing more than 24 tracked files" — was in fact met early and repeatedly.
   It is recorded here as a deviation for review rather than retroactively
   rewritten to fit the outcome. Date/Author: 2026-09-27, implementation agent.
+- Decision: delete `_pipe_or` rather than keep it in the narrowed form the
+  reviewing agent asked for. Rationale: the narrow form is an identity function
+  on every input its single call site can produce — proven by enumerating the
+  54-point domain, not by inspection — so keeping it would preserve a call, a
+  docstring, and two `PipeStream` parameters that do no work. Its justification
+  was also false: `create_subprocess_exec` does not wrap a raw descriptor in a
+  pipe, so the case the helper existed to prevent cannot arise. `origin/main`
+  reaches the same conclusion by passing the three values straight through.
+  Date/Author: 2026-09-27, implementation agent.
+- Decision: keep the fallback spawning the child even when the value-display
+  assertion has already failed, via a `finally` that kills and awaits, rather
+  than returning early. Rationale: an early return would leave the blocked
+  child running past the test, and the suite's whole subject here is process
+  lifetime; a regression test that strands a child to prove a point about pipes
+  would contradict the module docstring that says each test spawns a real child
+  for exactly that reason. Date/Author: 2026-09-27, implementation agent.
+- Decision: accept the round-3 finding that the roadmap's `_stdin_stdio` rule
+  was imprecise, the execplan opening example did not run, and the CHANGELOG
+  rejection wording named the wrong predicate; reject the other two findings.
+  Rationale: the three accepted ones were each verified false against the tree
+  and are fixed above. The users-guide finding ("do not present `pipe()` or
+  `inherit()` as `StdioTarget` options for stdin") is contradicted by the code
+  — a probe confirms both are accepted and the error message for `path()` reads
+  `choose ['inherit', 'pipe']` — so the guide's existing sentence is already
+  correct. The `_posix_only` finding asks to skip three `StdioTarget.path`
+  tests on non-POSIX platforms; those tests open no borrowed descriptor and the
+  file is absent from `EXTENSION_TEST_TARGETS`, which is the *only* thing the
+  single Windows job (`extension-tests-windows`) runs, so the marker would be
+  inert there while risking a genuine skip. Date/Author: 2026-09-27,
+  implementation agent.
 
 ## Outcomes & retrospective
 

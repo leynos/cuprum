@@ -125,8 +125,9 @@
   stream, a file **cuprum owns** (opened before the spawn, closed in a
   `finally` immediately after), or a **borrowed** descriptor or file object
   cuprum never closes and flushes before the spawn. Contradictory combinations
-  (capture or echo with a redirected stream, one path for both streams, a
-  non-pipe `stdin`) are rejected at construction
+  are rejected at construction: capture or echo with a redirected stream, one
+  path for both streams, and a `stdin` that names a file or descriptor, since
+  only `pipe()` and `inherit()` are meaningful for an input stream
   ([#445](https://github.com/leynos/cuprum/issues/445)).
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
