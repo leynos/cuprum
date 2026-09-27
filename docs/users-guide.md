@@ -231,6 +231,58 @@ independent. `RunOutputOptions.on_line` observes decoded lines even when
 capture and echo are off. Its callback runs synchronously and should return
 promptly; line order is guaranteed within each stream, not across streams.
 
+`RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget` naming where the
+child's stream is bound. Four variants exist and they differ in _ownership_,
+which is the whole contract:
+
+- `StdioTarget.pipe()` — a library-owned pipe. This is the default for a stream
+  that capture, echo, idle reporting, or line observation needs; without one of
+  those the default is inherited.
+- `StdioTarget.inherit()` — the parent's own stream, passed straight through.
+  This is the default for stdin, and for a stream nothing needs to read.
+- `StdioTarget.path(p)` — a file **cuprum owns**. Cuprum opens it immediately
+  before the spawn and closes its copy in a `finally` right after, so the
+  descriptor never outlives the run; the child keeps writing after that close.
+  The caller names a path and never manages a descriptor.
+- `StdioTarget.fd(f)` — a **borrowed** descriptor or open file object. The
+  caller owns it: cuprum never closes it, and a borrowed file object is flushed
+  before the spawn so buffered caller-side bytes reach the child.
+
+Redirecting two streams to one path is rejected: each open starts at offset 0,
+so the two streams would interleave unpredictably. Use distinct paths, or one
+borrowed descriptor you manage — a caller who shares a descriptor across two
+runs shares a single file offset, and the second run writes wherever the first
+left off.
+
+Capture and echo read from a parent-side pipe, so they cannot be combined with
+a redirected stream; `RunOutputOptions` rejects the combination at construction
+rather than silently choosing one. `stdin` is the exception in the other
+direction: it accepts only `pipe()` and `inherit()`, because the input itself
+arrives on `SafeCmd.run`'s `stdin=` argument, which is where the encoding is
+applied and a producer is pulled. `SafeCmd.lines()` requires stdout to be a
+pipe for the same reason — there is no parent-side stream to iterate when
+stdout goes to a file — and rejects a redirected stdout; use `SafeCmd.run` for
+that case.
+
+<!-- tested-example: redirect-stdout-to-a-file -->
+
+```python
+import sys
+import tempfile
+from pathlib import Path
+
+from cuprum import Program, ProgramCatalogue, RunOutputOptions, StdioTarget, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="redirect")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+log = Path(tempfile.mkdtemp()) / "out.log"
+result = python("-c", "print('redirected')").run_sync(
+    output=RunOutputOptions(capture=False, stdout=StdioTarget.path(log)),
+)
+assert result.stdout is None, "a redirected stream is not captured"
+assert log.read_text(encoding="utf-8") == "redirected\n"
+```
+
 ### Line-level output
 
 <!-- tested-example: output -->
@@ -326,6 +378,19 @@ assert result.stdout == "ready hello\n"
 A timeout raises `TimeoutExpired`; cancellation of an async run also starts
 child teardown. `cancel_grace` in `ExecutionContext` configures the wait
 between termination and forced kill. Catch timeout separately from child exit.
+
+For input too large to hold in memory, `StdinStream(chunks=...)` takes an async
+iterable and is pulled one chunk at a time: each chunk is written and drained
+before the next is requested, so the parent never retains more than one chunk
+however large the child's input is. A chunk may be `str` (encoded with the
+context's `encoding` and `errors`) or `bytes` (written verbatim). A slow reader
+therefore applies backpressure to the producer rather than growing a buffer. If
+the producer raises, the child is terminated and the failure surfaces as
+`StdinSourceError` with the producer's exception chained, even when the child
+would otherwise have run to its deadline. A child that closes stdin early is
+normal, not an error: the partial write is recorded as a `stdin_error`
+observation with `operation="early_close"` and the run continues to the child's
+exit code.
 
 ## Connect a pipeline
 

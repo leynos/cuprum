@@ -268,15 +268,67 @@ likelihood, and mitigation.
   `a1a0db9e` plus its delta, and a commit would otherwise invalidate it as a
   citation. The tree, not the revision, is what the gates observed, and the
   tree is unchanged.
+- [x] (2026-09-27 18:05Z) EP-M3: the rendezvous. Producer failure during a run
+  was reported as a slow child: the writer ran alongside the exit wait but
+  nothing raced them, so a producer that died at once was only noticed when the
+  child's own deadline expired, and the caller got `TimeoutExpired` about a
+  failure already known. `_await_exit_or_writer_failure` now owns that
+  decision, in a new `cuprum/_subprocess_rendezvous.py` (165 lines), because
+  ending a run divides in three and "end because the input source died" is
+  neither `_subprocess_deadline`'s business (the child's deadline) nor
+  `_subprocess_wait`'s (the parent's task reconciliation). The resolution is
+  deliberately narrow: only a writer that *failed* ends the run there; one that
+  merely finishes first is the ordinary way a stream ends, and the run
+  continues to the child's exit as before. No termination policy is restated —
+  the exit wait is cancelled, and `_wait_for_exit_code`'s own cancellation
+  handler already runs SIGTERM, `cancel_grace`, SIGKILL. The helper takes its
+  exit wait already constructed, so the two test modules that patch
+  `_wait_for_exit_code_within_timeout` by name in their *own* namespace keep
+  both seams. Three call sites: the streamed run, the unstreamed run, and the
+  line-stream coordinator. Red was observed, not assumed — the new
+  `test_producer_failure_beats_the_timeout` failed with exactly the predicted
+  signature (`TimeoutExpired ... timed out after 5 seconds`,
+  `1 failed, 9 passed`) and passes at `elapsed < 2.0s` with the producer's own
+  exception chained as `__cause__`. Two test-side shapes moved with it:
+  `_failed_run` passes `stdin_task=None` to take the no-writer branch, and the
+  timeout leak test is async-only and hand-driven because `asyncio.all_tasks()`
+  needs a running loop — a census taken after `asyncio.run` returns is empty
+  whatever the implementation did. Committed as `bd8ceb58`; focused suite 35
+  passed; full `cuprum/unittests` 2516 passed, 63 skipped.
 - [x] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
-- [ ] EP-M3: pull-after-drain streaming stdin with bounded memory; producer
+- [x] EP-M3: pull-after-drain streaming stdin with bounded memory; producer
   failure wrapped in `StdinSourceError` and routed through the existing
   teardown; early child-side close recorded as a `stdin_error` observation;
   timeout and cancellation behaviour unchanged.
-- [ ] EP-M4: streaming, redirection, and ownership test suites; user guide,
-  design, and roadmap updates.
+- [x] (2026-09-27 11:30Z) EP-M4 test artefacts, and three gate failures the
+  first gate sweep caught in them. `test_safe_cmd_stdio_rules.py` (356 lines)
+  covers the refusal boundary rather than the happy path: every rejection row
+  is paired with the accepted near-miss sitting beside it, because a rule that
+  refused everything would satisfy the rejection assertions on its own. The
+  four pairings are the wrong-payload variant against the correctly-shaped one,
+  `stdin` refusing a destination that `stdout` accepts, two owned paths against
+  two borrowed descriptors on one stream, and `lines()` refusing a redirected
+  stdout while an explicit pipe iterates. `test_stdin_property_based.py` gains
+  Suite 4: generated `str`/`bytes` chunk lists through `StdinStream`, with the
+  child hexing its stdin so the comparison is byte-perfect, and four forced
+  examples reaching the empty-list and empty-chunk classes where a missing
+  final encoder flush shows. The first gate sweep failed three of seven gates,
+  all on the new work: `check-fmt` on this file (19 lines mdtablefix wanted
+  reflowed), `lint` on 7 x PT018 composite assertions plus one D403
+  lowercase-docstring, and `typecheck` on three deliberate-invalid arguments
+  reaching typed parameters. All are fixed: the composite assertions split so
+  each half carries its own diagnostic, `ty: ignore[invalid-argument-type]`
+  marks the rows that pass a value the vocabulary does not define (the
+  documented pattern at `test_benchmark_suite.py:154`), the parametrized kind
+  is annotated `typ.Literal["pipe", "inherit"]` rather than `str`, and the
+  docstring opens `Stdin`. Post-fix: module 22 passed, `python-lint` 0 (76 s),
+  `check-fmt` 0.
+- [ ] EP-M4 docs: user guide (streaming contract and the redirection ownership
+  vocabulary), `cuprum-design.md` (the rendezvous roster entry), a new
+  append-only ADR-007 addendum for the rendezvous, `roadmap.md`, and
+  `CHANGELOG.md`.
 - [ ] Push and open the draft PR (`(#445)` in the title, `Closes #445` in the
   summary, Lody session link under `## References`).
 
@@ -400,6 +452,19 @@ likelihood, and mitigation.
   and `_subprocess_stdin.py` returns to 164; the 400-line ceiling is a `pylint`
   check the branch must hold at every milestone, not only at the plateau that
   first cleared it.
+
+- Observation (module size, EP-M3): the ceiling was met again by the *fix*
+  rather than the feature. Adding the rendezvous to
+  `cuprum/_subprocess_wait.py` took it from 327 to 449 lines — 49 over — and
+  the extraction that cleared it was itself forced by the same rule the
+  milestone was obeying. Evidence: `wc -l` after the fix read 449 against the
+  400-line `max-module-lines` ceiling in `pyproject.toml`. Impact:
+  `cuprum/_subprocess_rendezvous.py` owns the race and `_subprocess_wait.py`
+  returns to 336, re-exporting the moved name so the three call sites and the
+  monkeypatch seams keep one import path. This is the third pass at the same
+  ceiling (04:45Z, 09:05Z, 14:20Z were the earlier ones) and confirms the
+  lesson above: a milestone that adds *any* behaviour to a module already near
+  the line has to budget for the extraction, not just for the behaviour.
 
 - Observation (docs coupling): the module roster is test-enforced, so a split is
   not a code-only change. `cuprum/unittests/test_async_timeout_docs.py` asserts

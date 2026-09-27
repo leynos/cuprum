@@ -112,6 +112,22 @@
   of falling back to `Any` for every import. The marker is empty, which under
   PEP 561 declares the package fully typed; the marker travels in the pure
   Python wheel, the native wheel, and both source distributions.
+- **Streaming stdin:** `StdinStream(chunks=...)` feeds an async producer's
+  chunks to the child one at a time, writing and draining each before pulling
+  the next, so input larger than the parent would buffer is delivered without
+  holding the whole payload. A `str` chunk is encoded with the context's
+  `encoding` and `errors`, a `bytes` chunk verbatim. A producer failure ends
+  the run as `StdinSourceError` with the producer's exception chained, and an
+  early child-side close is recorded as a `stdin_error` observation rather than
+  failing the run ([#445](https://github.com/leynos/cuprum/issues/445)).
+- **Explicit standard-stream redirection:** `RunOutputOptions.stdout` and
+  `.stderr` accept a `StdioTarget` — a library pipe, the inherited parent
+  stream, a file **cuprum owns** (opened before the spawn, closed in a
+  `finally` immediately after), or a **borrowed** descriptor or file object
+  cuprum never closes and flushes before the spawn. Contradictory combinations
+  (capture or echo with a redirected stream, one path for both streams, a
+  non-pipe `stdin`) are rejected at construction
+  ([#445](https://github.com/leynos/cuprum/issues/445)).
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper

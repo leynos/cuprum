@@ -1775,9 +1775,22 @@ preserving the `SafeCmd.run()` execution contract:
   the line-stream coordinator, and the timeout test modules keep one import
   path. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
   addendum of 2026-09-27.
+- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
+  failure rather than on the child's exit: `_await_exit_or_writer_failure`
+  waits on the exit wait and the stdin writer together and returns the exit
+  only once it is the sole survivor, so a producer that dies while the child
+  would still be running surfaces as `StdinSourceError` instead of being
+  reported as `TimeoutExpired`. The exit wait is passed in already constructed,
+  so each caller resolves `_wait_for_exit_code_within_timeout` from its own
+  module namespace. It was split out of `_subprocess_wait`, which re-exports
+  the name, so the single-command run, the line-stream coordinator, and the
+  timeout test modules keep one import path. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-27.
 - `cuprum/_subprocess_wait.py` owns the other half of the rules for *ending* a
   run: draining the stream consumers exactly once, and cancelling the stdin
-  writer alongside them. The wait and the deadline moved to
+  writer alongside them. The race that decides *which* of the two ends the run
+  lives in `_subprocess_rendezvous.py`. The wait and the deadline moved to
   `_subprocess_deadline`, and this module re-exports both names. Its explicit
   drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
   task with the stdout and stderr consumer tasks, `_DrainContext` to carry
