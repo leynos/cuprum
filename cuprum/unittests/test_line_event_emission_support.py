@@ -216,10 +216,12 @@ def _prove_recorder_is_live(
 
     before = len(constructed)
     _EventDetails(pid=None, line="recorder-liveness-probe")
-    assert len(constructed) == before + 1, (
-        "the _EventDetails recorder is not intercepting constructions, so any "
-        "zero it reports below is vacuous rather than evidence"
-    )
+    if len(constructed) != before + 1:
+        msg = (
+            "the _EventDetails recorder is not intercepting constructions, so any "
+            "zero it reports below is vacuous rather than evidence"
+        )
+        raise AssertionError(msg)
     del constructed[-1]
 
 
