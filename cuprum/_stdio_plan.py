@@ -23,6 +23,7 @@ stream-wiring layers, and nothing about how a run is driven.
 from __future__ import annotations
 
 import dataclasses as dc
+import io
 import os
 import typing as typ
 
@@ -260,8 +261,11 @@ def _resolve_stdio_binding(
     ------
     ValueError
         If descriptor redirection is attempted on a platform without POSIX
-        descriptors, as decided by :func:`_ensure_redirection_supported`.
-    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _ensure_redirection_supported.
+        descriptors, as decided by :func:`_ensure_redirection_supported`; or
+        if an ``fd`` target's file object has no descriptor to inherit, in
+        which case the original ``io.UnsupportedOperation`` is chained as
+        ``__cause__``.
+    """
     kind = target.kind
     if kind == "pipe":
         return _StdioBinding(stream=stream, is_pipe=True)
@@ -279,7 +283,21 @@ def _resolve_stdio_binding(
     # spawn layer can flush it immediately before the fork, and it is never
     # closed by cuprum — the caller's file object stays the only thing that may
     # close it, which is why only *owned_path* is ever closed.
-    return _StdioBinding(stream=stream, descriptor=borrowed.fileno(), borrowed=borrowed)
+    try:
+        descriptor = borrowed.fileno()
+    except io.UnsupportedOperation as exc:
+        # An in-memory object has no descriptor to hand the child, and its own
+        # message is a bare ``fileno`` naming neither the stream nor the fault.
+        # ``UnsupportedOperation`` is already both a ``ValueError`` and an
+        # ``OSError``; re-raising as a ``ValueError`` naming the stream keeps
+        # the caller's own exception reachable as ``__cause__``.
+        msg = (
+            f"RunOutputOptions {stream} was given a file object that has no "
+            f"descriptor to inherit ({type(borrowed).__name__}); pass an int "
+            "descriptor, or open a real file instead of an in-memory object."
+        )
+        raise ValueError(msg) from exc
+    return _StdioBinding(stream=stream, descriptor=descriptor, borrowed=borrowed)
 
 
 def _resolve_stdin_plan(
