@@ -1928,6 +1928,92 @@ falsified — which also means the revision did not, as hoped, "sit one point
 above the aggressive projection"; it sits 3.0 points *below* the measured
 result.
 
+### 2026-09-27: the residual numerator is the constructor itself, and `frozen=True` is why
+
+EP-M2's own instruction is to "present the measured limitation for design
+revision", so this characterizes *what* the remaining 29.91% is before anyone
+proposes a replacement bar. The answer is narrower than expected and it is the
+single most useful input to that decision.
+
+**Every numerator sample is inside the constructor, not around it.** Decomposing
+the r2 pair's numerator by innermost executing frame gives, under both variants,
+**100.00% in a frame whose leaf is `__init__ (<string>:N)`** — the generated
+`ExecEvent.__init__` itself. Zero numerator samples are attributed to a caller
+that merely has the constructor on its stack (`emit_line`, `emit`,
+`emit_fail_fast`). The recount reproduces the classifier exactly (control
+D=25743/N=8828/34.2928%, candidate D=17758/N=5317/29.9414%), so this is the third
+independent confirmation of the same numbers and the first with attribution.
+The consequence is that the numerator is not "event-emission overhead" in
+general; it is the cost of one generated `__init__` per line, measured.
+
+**That cost is dominated by `frozen=True`.** Microbenchmarked on this host's
+interpreter (3.14.4, 300k reps, 27 fields, defaults included), constructing the
+shipped type and three invariant-preserving variants:
+
+| construction | ns/ctor | ratio to shipped |
+| --- | --- | --- |
+| **shipped** — `@dc.dataclass(frozen=True, slots=True)` | 1848.6 | — |
+| control — `@dc.dataclass(slots=True)`, `frozen=False` | 341.6 | **0.18×** |
+| frozen + manual `__slots__`, positional `__init__` calling `object.__setattr__` | 1709.6 | 0.92× |
+| frozen + manual `__slots__`, bound slot-descriptor setters looped | 1743.2 | 0.88× |
+| frozen + slot descriptors via `desc.__set__` looped | 2659.8 | 1.34× |
+
+**Why.** `dataclasses` implements `frozen=True` by emitting, per field, a full
+`CALL` to `object.__setattr__` — 27 load-attr/call/pop sequences in one function
+body (disassembled from the shipped type; `co_names` is `('__setattr__',)` and
+the body is 27 uniform 30-byte blocks). So the frozen guard costs roughly 5.4×
+the entire construction of the same 27 fields without it. Dropping
+`frozen=True` is by far the largest lever measured here, and it is a 5.4×
+reduction.
+
+**One invariant-preserving lever does exist, and it is the same order as the
+gap.** The bound-slot-descriptor variant (`setter = cls.__dict__[name].__set__`
+hoisted out of the loop, then `setter(self, value)`) measures **0.88×** the
+shipped constructor while keeping all three properties: 27 slots present,
+`FrozenInstanceError` still raised on a user write, and equality intact —
+verified in the same script rather than assumed. A 12% reduction in the
+constructor's cost is comparable in size to the 1.90-point miss, so it is a
+genuine candidate and not a curiosity.
+
+**No post-change share is projected from it, deliberately.** This plan has now
+seen two projections falsified by measurement (the 10% bar, then the 24.35%
+revision), and the second failed for a structural reason this entry has just
+supplied: the share is a ratio in which the constructor appears in both terms,
+so a cheaper constructor moves N and D together and the arithmetic is not
+`share × 0.88`. Anyone acting on this lever should *measure* the resulting
+share with the same three-pair protocol, not scale the current one.
+
+**One implementation consequence worth flagging now.** A hand-written
+`__init__` in `cuprum/events.py` renders as `__init__ (cuprum/events.py:N)`,
+whereas the generated one renders as `__init__ (<string>:N)`. The classifier's
+construction rule matches on the `<string>` location specifically, so adopting
+this lever requires re-baselining `classifier-rules.json` and re-verifying the
+control capture with it — the same re-baseline discipline the merged rule
+already went through, not a one-line edit.
+
+**This is not a licence to drop `frozen=True`, and the plan does not propose
+doing so.** Three things hold it in place: it is *pre-existing public API* —
+`@dc.dataclass(frozen=True, slots=True)` on `ExecEvent` dates to
+`2aa9b2c1` ("Implement structured pipeline events and telemetry", PR #16) and
+this branch does not touch `cuprum/events.py` at all; the type is hashable as a
+result, so immutability is part of its contract rather than an internal detail;
+and three suites assert `FrozenInstanceError` on event writes
+(`test_line_events.py`, `test_line_event_emission_parity.py`,
+`test_line_event_emission_properties.py`), one of them a property test. Weakening
+it is a public-API change that the tolerances require be approved separately, not
+a tuning move inside 5.2.1.
+
+**What this means for the threshold decision, stated plainly.** If `frozen=True`
+is held fixed and the generated constructor stays, the floor for any design that
+constructs a fresh 27-field `ExecEvent` per line — which V2/V4 require — is this
+constructor, and the measured 29.91% sits about 1.9 points above a bar that no
+further hoisting can move. Three routes exist and they are not equivalent:
+re-site the threshold on the measured artefact; keep the bar and take the 0.88×
+descriptor lever, measuring the result; or reopen `frozen=True` itself, a
+public-API change worth 5.4× and therefore a roadmap-level decision rather than
+tuning. The one thing this entry rules out is a third threshold revision derived
+from another projection.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
