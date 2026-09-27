@@ -435,3 +435,38 @@ surface are unchanged for importers. `cuprum._line_stream` follows the same
 package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
+
+## Addendum (2026-09-27): split streaming stdin out of `_subprocess_stdin`
+
+The #445 work made the stdin pipe handle a second kind of source: an async
+producer (`StdinStream`) pulled one chunk at a time, as distinct from the
+complete payload (`StdinInput`) the module already wrote in one go. The
+encoder, the per-chunk helpers, and the source-error construction that came
+with it pushed `cuprum/_subprocess_stdin.py` to 451 lines, back over the
+400-line module ceiling the 2026-09-14 addendum had cleared.
+
+The seam is the one the module's own docstring already drew.
+`cuprum/_subprocess_stdin.py` keeps what the decision outcome above assigns it —
+`_emit_stdin_error`, `_write_stdin`, `_close_stdin`, `_cancel_stdin_writer`,
+the `cuprum.stdin` logger, and `_spawn_stdin_writer`, which stays the single
+entry point both kinds of source are started from.
+`cuprum/_subprocess_stdin_stream.py` now owns the producer path:
+`_write_stdin_stream`, `_StdinCodec` and `_stdin_codec`, the `_StreamSink`
+bundle, `_write_chunk`, `_flush_encoder`, `_finalize_stdin_source`, and the
+`_stdin_source_error` / `_source_error` pair that builds the public
+`StdinSourceError`.
+
+The dependency runs one way. The streaming module imports the pipe primitives
+(`_close_stdin`, `_emit_stdin_error`) from `_subprocess_stdin` at module scope;
+the dispatcher in `_subprocess_stdin` imports `_write_stdin_stream` inside the
+function body. A module-scope import in both directions would close a cycle at
+load time, when neither module is complete, so the deferred import is
+deliberate rather than incidental.
+
+Ownership of the public surface is unchanged: `cuprum.sh` still exports
+`StdinStream` and `StdinSourceError`, and the type a producer failure raises is
+still resolved through `_subprocess_context._sh_module()`. The three spawn call
+sites that pass an `ExecutionContext` to `_stdin_codec` —
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`, and
+`cuprum/_line_stream/spawn.py` — now import it from the new module. No public
+API changes, and the module-size suppression remains unnecessary.

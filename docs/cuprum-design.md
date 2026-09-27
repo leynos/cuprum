@@ -1674,8 +1674,14 @@ preserving the `SafeCmd.run()` execution contract:
   one bounded, ASCII-safe keepalive line, resolving and writing it to the
   parent's diagnostic sink, and the failure policy when that write raises.
   Nothing there reads a clock, a process, or a child's output.
-- `cuprum/_subprocess_stdin.py` owns writing supplied stdin, closing the pipe,
-  and early-close diagnostics through the `cuprum.stdin` logger.
+- `cuprum/_subprocess_stdin.py` owns writing supplied stdin as a complete
+  payload, closing the pipe, early-close diagnostics through the `cuprum.stdin`
+  logger, and `_spawn_stdin_writer`, the single entry point either kind of
+  source is started from.
+- `cuprum/_subprocess_stdin_stream.py` owns the streaming source: pulling an
+  async producer's chunks one at a time, writing each and draining it before
+  the next pull, the incremental encoder a `str` chunk is encoded with, and
+  building the `StdinSourceError` a producer failure raises.
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
