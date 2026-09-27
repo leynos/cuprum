@@ -97,6 +97,13 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
     one contributes ``None`` to the stdio config and takes the descriptor
     opened here instead.
 
+    A failure part-way through undoes what it already did before re-raising.
+    The ``finally`` that closes owned descriptors in
+    :func:`_spawn_subprocess` wraps the *spawn*, so a binding that fails to open
+    never reaches it — and without this cleanup the streams opened before the
+    failing one would leak, one descriptor per failed run. Both streams can name
+    an owned path, so the partial case is reachable rather than theoretical.
+
     Returns
     -------
     dict[str, int]
@@ -110,11 +117,19 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
         so the spawn never begins with a half-open stdio set.
     """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _open_owned_path.
     opened: dict[str, int] = {}
-    for binding in (execution.stdio.stdout, execution.stdio.stderr):
-        if binding.owned_path is not None:
-            opened[binding.stream] = _open_owned_path(
-                binding.stream, binding.owned_path
-            )
+    try:
+        for binding in (execution.stdio.stdout, execution.stdio.stderr):
+            if binding.owned_path is not None:
+                opened[binding.stream] = _open_owned_path(
+                    binding.stream, binding.owned_path
+                )
+    except BaseException:
+        # Opened in the streams' own order, so whatever is recorded here was
+        # opened by this call and is cuprum's to close. Re-raised unchanged:
+        # the open failure is what the caller needs to see, not that its
+        # cleanup also ran.
+        _close_owned_stdio(opened)
+        raise
     return opened
 
 
