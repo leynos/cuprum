@@ -237,19 +237,29 @@ failure injection at that boundary.
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
-- [ ] EP-M2: **BLOCKED before implementation.** Pre-implementation feasibility
-  measurement of the committed control capture shows the hoist as designed
-  cannot reach V5. Every sampled per-line `ExecEvent.__init__` resolves to the
-  `emit` caller in `_pipeline_types.py`, which a hoist in `_line_callbacks.py`
-  cannot move, so only the `_EventDetails` rule is addressable. Removing all of
-  it is not enough: because the gate is a *share of consume-subtree time*,
-  removing 13.7% of the subtree pushes the ratio from 21.00% to **24.35%**. The
-  retained per-line construction must be at least **2.90x faster**
-  (`r* = 0.3453`) for the ratio to reach 10%, and the flat 27-field dataclass
-  constructor cannot be made to clear that by field consolidation alone. No
-  runtime edit was made; the milestone stops here for approval of a revised
-  design. See the 2026-09-27 feasibility discovery below for the mechanism, the
-  corrected cost driver, and four consolidated options.
+- [ ] EP-M2: **implemented, awaiting evidence.** The hoist landed as a single
+  production edit in `cuprum/_line_callbacks.py`: `_line_event_emitter` builds
+  a frozen slotted `_LineEventEmitter` that resolves `program`, `argv`, and
+  `project` once per observed stream, and `_compose_line_callbacks` binds it in
+  place of the deleted per-line `_event_details` call.
+  `cuprum/_pipeline_types.py` is byte-identical to its pre-hoist state. Both of
+  V1's assertions pass as ordinary tests with their strict markers removed.
+
+  The blocker recorded above is **superseded, not resolved in code**: the hoist
+  still cannot reach 10%, because the per-line `ExecEvent` construction remains
+  and is not addressable from `_line_callbacks.py`. The user approved revising
+  V5's gate to 28% instead (see the threshold-revision entry), which the hoist
+  is projected to clear. EP-M2's remaining acceptance is therefore the V5
+  measurement, not a further code change, and "no longer reconstructs invariant
+  fields" holds for the `_EventDetails` half only — the per-line `ExecEvent` is
+  still constructed and must be recorded as a residual gap against the original
+  wording of the roadmap item.
+
+  Done: the hoist; V1 green; the dispatch path proven covered by sabotage (four
+  scheduled-prefix tests fail when the emitter bypasses `_emit_event`). Not
+  done: the V5 candidate captures (three matched control/candidate pairs, D >=
+  10000, candidate share range <= 2 percentage points), the full gate suite on
+  the final commit, and EP-M3's closeout.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
   completion of roadmap item 5.2.1 after all acceptance conditions pass.
   Unreachable until EP-M2's design is revised and approved.
