@@ -365,12 +365,16 @@ contract module under `tests/` and forgets to name it will be told so by
 - Observation: the guard's own name puts it inside the selector it polices.
   `tests/test_ci_test_selection_contract.py` matches `tests/test_ci_*.py`, so
   removing that pattern also removes the guard. Evidence: negative control B,
-  which deleted the pattern, failed 52 of the 56 tests rather than all of them
-  — the four that survived include the seeded-fault control, which needs no
-  selector. Impact: accepted and recorded in `Context and orientation` as a
-  residual gap. The alternative — putting the guard outside the selector — is
-  not collected either, so it would guard nothing. The `test_ci_` family is the
-  right home; a repository-wide selector rewrite is a bigger change than issue
+  which deleted the pattern, failed most of the guard suite rather than all of
+  it — the survivors include the seeded-fault control, which needs no selector.
+  The figures were re-derived at each revision as the suite grew, so the
+  current pair of controls reads 4 of 62 (rename one module out) and 54 failed
+  / 8 passed (pattern removed); the same revision measured 52 of 56 earlier,
+  and a reader comparing them is seeing the suite's growth, not a regression.
+  Impact: accepted and recorded in `Context and orientation` as a residual gap.
+  The alternative — putting the guard outside the selector — is not collected
+  either, so it would guard nothing. The `test_ci_` family is the right home; a
+  repository-wide selector rewrite is a bigger change than issue
   #499 asks for.
 
 ## Decision log
@@ -960,6 +964,15 @@ them, and one self-measured defect was found alongside.
 - `covered_modules` was re-resolved in each of the 51 parametrized cases, at
   16 ms apiece. A module-scoped fixture removes the redundancy; the
   parametrization still collects 51 cases and the monkeypatch seam still fires.
+
+One earlier commit message is wrong and is corrected here rather than by
+history surgery. `7e875b7b` says it moves `pull_request_legs` to `ci_leg_gate`.
+It does not: `git show 7e875b7b` contains a single `+def pull_request_legs` and
+no deletion of that function anywhere, and the name is absent from the parent
+revision. The function was newly written as part of that commit. Rewriting a
+published commit would need a force-push, so the record is corrected here;
+treating the message as accurate would have the next reader hunting for a
+predecessor that never existed.
 
 A second finding was declined as stated: the execplan sentence the review read
 as naming a non-existent path does place its subject under `tests/`, but the
