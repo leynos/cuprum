@@ -384,16 +384,19 @@ between termination and forced kill. Catch timeout separately from child exit.
 For input too large to hold in memory, `StdinStream(chunks=...)` takes an async
 iterable and is pulled one chunk at a time: each chunk is written and `drain()`
 awaited before the next is requested, so a slow reader applies backpressure to
-the producer rather than letting it run to completion. Retention is bounded by
-the pipe rather than by the input, though not by a single chunk — the
-transport's write buffer and the OS pipe each hold bytes while `drain()` waits.
-A chunk may be `str` (encoded with the context's `encoding` and `errors`) or
-`bytes` (written verbatim). If the producer raises, the child is terminated and
-the failure surfaces as `StdinSourceError` with the producer's exception
-chained, even when the child would otherwise have run to its deadline. A child
-that closes stdin early is normal, not an error: the partial write is recorded
-as a `stdin_error` observation with `operation="early_close"` and the run
-continues to the child's exit code.
+the producer rather than letting it run to completion. That backpressure limits
+how far _ahead_ the producer is pulled; it does not limit the size of the chunk
+being written. Retention, likewise, is not bounded by the pipe: the chunk just
+pulled and its encoded payload stay in memory until `drain()` returns,
+alongside the transport's write buffer and the OS pipe. A caller who cares
+about peak memory should therefore yield bounded-size chunks. A chunk may be
+`str` (encoded with the context's `encoding` and `errors`) or `bytes` (written
+verbatim). If the producer raises, the child is terminated and the failure
+surfaces as `StdinSourceError` with the producer's exception chained, even when
+the child would otherwise have run to its deadline. A child that closes stdin
+early is normal, not an error: the partial write is recorded as a `stdin_error`
+observation with `operation="early_close"` and the run continues to the child's
+exit code.
 
 ## Connect a pipeline
 
@@ -1186,12 +1189,17 @@ hooks receive `ExecEvent` values describing:
   from an actual child exit. It never carries exception details. Spawn failure
   and cancellation therefore settle without an invented exit code.
 
-- `stdin` — input supplied through `StdinInput` was written to the child;
-  `byte_count` gives its size.
+- `stdin` — bytes were written to the child's stdin; `byte_count` records how
+  many. `StdinInput` emits one as its payload is written. `StdinStream` emits
+  one per chunk that produced bytes, and possibly one more for whatever the
+  incremental encoder was still holding when the producer was exhausted. A
+  chunk stored only inside the encoder — a lone leading surrogate, say —
+  produces no bytes and so emits nothing.
 
 - `stdin_error` — writing or closing the child's stdin failed, typically
   because the child stopped reading early, as `head` does. `operation` names
-  the failing step (`write` or `close`), and execution continues.
+  the failing step (`write`, `close`, or `early_close`), and execution
+  continues.
 
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).

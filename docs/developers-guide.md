@@ -6535,14 +6535,21 @@ executes:
    returns `asyncio.subprocess.PIPE` for every plan but `_NoStdin` and `None`
    for `_NoStdin`. Only a run with no source *and* no explicitly requested
    stdin pipe resolves to `_NoStdin`, so that one case is precisely the run
-   whose child should inherit the parent's stdin.
-4. `_spawn_stdin_writer` creates an `asyncio.Task` that calls `_write_stdin`,
-   which writes the bytes, drains the pipe, and closes it. `OSError` and
-   `RuntimeError` failures are logged to `cuprum.stdin` and emitted as a
-   `stdin_error` trace event so operators can observe early-close scenarios
-   without execution disruption. Successful writes emit a `stdin` event with a
-   byte count. The metrics adapter increments `cuprum_stdin_bytes_total` for
-   successful writes and `cuprum_stdin_errors_total` for failure events.
+   whose child should inherit the parent's stdin. Omitting `StdinInput` is
+   therefore not by itself enough to inherit: a run that asks
+   `RunOutputOptions` for an explicit stdin pipe resolves to `_PipeStdin` and
+   gets an empty pipe instead.
+4. `_spawn_stdin_writer` dispatches on the resolved plan and creates an
+   `asyncio.Task` for whichever writer it names. A payload goes to
+   `_write_stdin`, which writes the bytes, drains the pipe, and closes it. A
+   producer (`StdinStream`) goes to `_write_stdin_stream`, which pulls one
+   chunk at a time, writes it, awaits `drain()` before pulling the next, and
+   closes the pipe on every exit path. `OSError` and `RuntimeError` failures
+   are logged to `cuprum.stdin` and emitted as a `stdin_error` trace event so
+   operators can observe early-close scenarios without execution disruption.
+   Successful writes emit a `stdin` event with a byte count. The metrics
+   adapter increments `cuprum_stdin_bytes_total` for successful writes and
+   `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams` in
    `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
    with the stdout/stderr consumer tasks. On `TimeoutError` or
@@ -6554,11 +6561,13 @@ executes:
    re-raises `CancelledError` after all tasks settle.
 6. In the non-streaming path, `_execute_subprocess` delegates to
    `_run_subprocess_without_streams`, which creates the same writer task and
-   awaits `_wait_for_exit_code` itself. On `TimeoutError` or
-   `asyncio.CancelledError` from that wait, `_run_subprocess_without_streams`
-   itself cancels and drains the writer task via `_cancel_stdin_writer` before
-   the timeout is translated or the cancellation propagates, so a stdin drain
-   blocked on an unread pipe cannot delay completion.
+   awaits the exit through `_await_exit_or_writer_failure`, which settles the
+   exit wait and the writer together rather than awaiting either alone. On
+   `TimeoutError` or `asyncio.CancelledError` from that wait,
+   `_run_subprocess_without_streams` itself cancels and drains the writer task
+   via `_cancel_stdin_writer` before the timeout is translated or the
+   cancellation propagates, so a stdin drain blocked on an unread pipe cannot
+   delay completion.
 
 The `tests/helpers/stream_pipes.py` module provides
 `drain_blocking_payload_size()`, a shared helper returning a stdin payload size
