@@ -56,12 +56,14 @@ class DirectProcessConfig:
 
     *pipes* names the streams cuprum holds a parent-side pipe for, and it is
     carried separately from the three stdio values because that value cannot
-    express it: a ``Popen`` sets ``stdout``/``stderr`` only for the ``PIPE``
-    sentinel, leaving them ``None`` for ``DEVNULL`` and for a borrowed
-    descriptor alike, so the child object cannot be asked. Funding the
-    ``wait4`` route from this set is what keeps it from attaching a reader to a
-    stream cuprum does not own. The default covers every stream, which is what
-    a caller who omits the field and passes real ``PIPE`` sentinels means.
+    express it: by the time it reaches the spawn layer a non-consuming pipe has
+    been folded down to ``DEVNULL``, and ``Popen`` leaves ``stdout`` and
+    ``stderr`` as ``None`` for ``DEVNULL`` just as it does for a borrowed
+    descriptor, so neither the child object nor the value distinguishes the two.
+    Funding the ``wait4`` route from this set is what keeps it from attaching a
+    reader to a stream cuprum does not own. The default covers every stream,
+    which is what a caller who omits the field and passes real ``PIPE``
+    sentinels means.
 
     The fallback backend does not consult *pipes*: ``create_subprocess_exec``
     attaches a reader only to the ``PIPE`` sentinel, and a raw descriptor

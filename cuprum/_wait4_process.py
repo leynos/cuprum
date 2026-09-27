@@ -91,10 +91,10 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Wrap a spawned child before attaching its pipes to ``loop``.
 
         ``pipes`` is the set the spawn config named, and it is recorded rather
-        than re-derived. A child-side stream is something cuprum may attach a
-        reader to only when the resolution named it a pipe, and the ``Popen``
-        object cannot be asked: it exposes a stream object for a borrowed
-        descriptor and for ``DEVNULL`` alike.
+        than re-derived: ``Popen`` sets ``stdout``/``stderr`` only for the
+        ``PIPE`` sentinel, leaving them ``None`` for ``DEVNULL`` and for a
+        borrowed descriptor alike, so the child object alone cannot say whether
+        cuprum holds a reader to attach.
         """
         self._popen = popen
         # The inherited signal methods delegate to this transport. Popen offers
@@ -130,13 +130,13 @@ class _Wait4Process(asyncio.subprocess.Process):
     async def connect_pipes(self) -> None:
         """Attach the pipes cuprum owns to asyncio readers and writers.
 
-        The ``pipes`` test is the one that carries the decision. ``Popen``
-        sets ``stdout``/``stderr`` only for the ``PIPE`` sentinel, leaving them
-        ``None`` for ``DEVNULL`` and for a borrowed descriptor alike, so the
-        pair of conditions is belt-and-braces here; it is the *converse*
-        mistake that the set rules out, since a value reaching this layer as a
-        socket or a pipe object the resolution did not name must not be driven
-        by cuprum.
+        Both conditions are required, though only the ``Popen`` one can be the
+        deciding factor here. A stream named in ``pipes`` but absent from the
+        ``Popen`` is the case the guard exists for: nothing was handed over to
+        connect. The converse — a child-side stream the resolution did not name
+        as a pipe — cannot arise, because ``Popen`` sets ``stdout``/``stderr``
+        only for the ``PIPE`` sentinel, and ``DEVNULL`` and a borrowed
+        descriptor leave them ``None``.
         """
         if STDOUT_STREAM in self._pipes and self._popen.stdout is not None:
             self.stdout = await self._connect_reader(self._popen.stdout)
