@@ -28,6 +28,7 @@ from tests.helpers.stream_pipes import _safe_close
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
     from types import ModuleType
 
 
@@ -108,6 +109,7 @@ def given_compiled_backend_required(rust_streams: ModuleType) -> ModuleType:
 )
 def when_native_helper_receives(
     required_backend: ModuleType,
+    tmp_path: Path,
     operation: str,
     failure: str,
 ) -> BaseException:
@@ -117,6 +119,9 @@ def when_native_helper_receives(
     ----------
     required_backend : ModuleType
         The compiled native module.
+    tmp_path : Path
+        Pytest-provided temporary directory holding the unreadable file the
+        ``a fatal reader error`` row passes as its reader.
     operation : str
         ``pump`` or ``consume``, naming the entry point to call.
     failure : str
@@ -164,17 +169,28 @@ def when_native_helper_receives(
                 kwargs = {"buffer_size": 0}
                 return _capture(entry_point, args, kwargs)
         case "a fatal reader error":
-            # A closed read end fails on the first read; the write end must be
-            # a real descriptor, because the pump adopts and closes it.
-            closed_read, open_write = os.pipe()
-            os.close(closed_read)
-            try:
-                args = (
-                    (closed_read, open_write) if operation == "pump" else (closed_read,)
+            # The reader must be *open but unreadable*, not closed. A closed
+            # descriptor never reaches Rust on Windows: the wrapper resolves it
+            # through ``msvcrt.get_osfhandle`` during preparation, which raises
+            # ``OSError(EBADF)`` there, so the row would pass on the wrapper's
+            # descriptor failure rather than on the native read path it pins —
+            # the same vacuous pass the row above avoids. A file opened
+            # ``O_WRONLY`` is open on every platform yet fails the first read,
+            # which is also the device ``test_rust_errno_windows.py`` uses to
+            # put a native code on the error the conversion must retain.
+            with contextlib.ExitStack() as stack:
+                unreadable = os.open(
+                    tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT
                 )
+                stack.callback(_safe_close, unreadable)
+                args: tuple[int, ...] = (unreadable,)
+                if operation == "pump":
+                    # A separate write end, handed over rather than closed
+                    # here: the pump adopts and closes it, so closing it here as
+                    # well would be the double close this suite avoids.
+                    writer = os.open(os.devnull, os.O_WRONLY)
+                    args = (unreadable, writer)
                 return _capture(entry_point, args, {})
-            finally:
-                _safe_close(open_write)
         case _:
             msg = f"unknown failure {failure!r}"
             raise AssertionError(msg)
