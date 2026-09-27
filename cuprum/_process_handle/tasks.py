@@ -40,6 +40,7 @@ from cuprum._subprocess_spawn import (
     _SubprocessExecution,
 )
 from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
     _prepare_stream_spawn,
     _spawn_stream_consumers,
@@ -259,6 +260,7 @@ async def _attach_run_tasks(
         stdin_task = _spawn_stdin_writer(
             process,
             execution.stdin_data,
+            _stdin_codec(execution.ctx),
             execution.observation,
         )
         if stdin_task is not None:

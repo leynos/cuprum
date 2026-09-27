@@ -57,6 +57,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._subprocess_stdin_stream import _StdinCodec
     from cuprum.sh import SafeCmd
 
 # The fixture is imported rather than defined here because every module that
@@ -184,10 +185,11 @@ def test_a_cancel_at_the_writer_await_still_settles_the_group(
     def watching_spawn(
         process: asyncio.subprocess.Process,
         stdin_data: bytes | None,
+        codec: _StdinCodec,
         observation: _StageObservation,
     ) -> asyncio.Task[None] | None:
         """Spawn the writer unchanged, keeping a handle on the task it made."""
-        task = real_spawn(process, stdin_data, observation)
+        task = real_spawn(process, stdin_data, codec, observation)
         spawned.append(task)
         return task
 

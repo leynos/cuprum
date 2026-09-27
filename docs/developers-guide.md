@@ -7011,7 +7011,8 @@ are kept, and `verdict.txt` carries a header saying which is standing. Because
 The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`,
 `cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stdin.py`,
-`cuprum/_subprocess_timeout.py`, `cuprum/_subprocess_wait.py`, and
+`cuprum/_subprocess_stdin_stream.py`, `cuprum/_subprocess_timeout.py`,
+`cuprum/_subprocess_wait.py`, and
 `cuprum/_stream_drain.py`. Pipeline startup has its own boundary in
 `cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
 spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
@@ -7024,8 +7025,12 @@ the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
 rationale and compatibility constraints.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
-`_subprocess_stdin`; timeout or exit-event policy belongs in
-`_subprocess_timeout`; the rules for *ending* a run — applying the deadline and
+`_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
+incremental encoder, and the `StdinSourceError` build — belongs in
+`_subprocess_stdin_stream`, whose dispatcher stays the
+`_subprocess_stdin._spawn_stdin_writer` entry point; timeout or exit-event
+policy belongs in `_subprocess_timeout`; the rules for *ending* a run —
+applying the deadline and
 terminating the process — belong in `_subprocess_wait`, while draining the
 stream consumers exactly once belongs in `_stream_drain`; choosing each
 mirrored stream's destination and single-command stream-consumer construction —

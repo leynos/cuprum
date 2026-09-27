@@ -48,6 +48,7 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _deadline_for_collection,
@@ -179,7 +180,10 @@ async def _run_subprocess_without_streams(
         The process exit code and the observation's monotonic exit timestamp.
     """
     stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
+        process,
+        execution.stdin_data,
+        _stdin_codec(execution.ctx),
+        execution.observation,
     )
     try:
         exit_code, exited_at = await _wait_for_exit_code_within_timeout(

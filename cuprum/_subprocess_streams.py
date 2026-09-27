@@ -41,6 +41,7 @@ from cuprum._line_callbacks import _compose_line_callbacks, _LineEmissionContext
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._streams_pump import _current_read_size
 from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.echo_events import EchoStream
 
@@ -158,7 +159,10 @@ def _build_run_task_ownership(
     """
     return _RunTaskOwnership(
         stdin_task=_spawn_stdin_writer(
-            process, execution.stdin_data, execution.observation
+            process,
+            execution.stdin_data,
+            _stdin_codec(execution.ctx),
+            execution.observation,
         ),
         consumers=_spawn_stream_consumers(process, execution, spawn.spawn_context),
         discard_on_cancel=spawn.discard_on_cancel,
