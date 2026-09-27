@@ -569,6 +569,15 @@ full_name = [
 ]
 reason = "Reached only by self-dispatch: _TupleRegistration.__init__ calls self._append() and the inherited detach() calls self._release(), and each is overridden on the same hook-tuple path, so Skylos cannot follow the MRO to the override that runs. Only the override is reported, never the base it shadows. Traced executing through PumpHookRegistration, EchoHookRegistration, StreamOperationHookRegistration, LineStreamHookRegistration, and ControlHookRegistration."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum.sh.stdio._reject_unknown_kind",
+    "cuprum.sh.stdio._reject_unexpected_payload",
+    "cuprum.sh.stdio._normalize_payload",
+]
+reason = "Called only from StdioTarget.__post_init__, which the dataclass machinery invokes after __init__ and no source line names; StdioTarget is constructed directly (and by RunOutputOptions) rather than through a factory Skylos can follow."
+
 # The code-duplication gate. `make duplication` and `make lint` run the pinned
 # `nose` binary through `scripts/duplication_gate.py` with these settings.
 #
