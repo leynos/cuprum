@@ -497,6 +497,24 @@ There is no time limit. Tool failures do not justify lowering acceptance.
      introduce the gap; it is the first change to close it. Established by
      downloading that job's log rather than inferring it from the run's
      success; log `/tmp/611-win-main.log`.
+- [ ] (2026-09-27) **The required `coverage` check was failing, and fixing it
+      found a real test defect.** It had never run on this branch — the
+      concurrency group cancelled it on three prior pushes — and its first
+      observation failed at 86.05% against a baseline of 87.35% (±1.00 pp).
+      Root cause: `stream_error_behaviour.rs` bound only 2 of the 5 declared
+      scenarios, because a `#[scenario]` omitting both `name` and `index`
+      silently takes the first. Fixed by naming every binding and adding a
+      descriptor scenario; Rust coverage is now 997/1134 = **87.92%**, above the
+      baseline. Details and arithmetic in Surprises; the mutation V2 requires
+      was run. See also the false measurements this produced and corrected,
+      below.
+- [ ] (2026-09-27) Two self-corrections, both recorded rather than dropped: the
+      scenario's error code was moved 9 → 8 on a justification not present in
+      the code, and reverted; and the module docstring was rewritten to claim
+      the lint sees these functions as test code, which is wrong —
+      `no_expect_outside_tests` runs under `cargo check`, so a file-backed
+      `#[cfg(test)] mod` gives no test ancestry. Original text restored. Both
+      are in Surprises.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
