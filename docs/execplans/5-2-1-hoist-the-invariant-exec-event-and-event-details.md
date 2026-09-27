@@ -404,7 +404,20 @@ D = 30822 clears the plan's 10000 floor by 3×. The control exits 1, which the
 plan anticipates and requires be retained rather than treated as an error. The
 run's recorded artefacts are `worker-result.json` (worker `status: ok`,
 `wall_time_seconds` 316.24, 28256364 lines) and `construction-share.json`,
-which a re-run of the committed classifier reproduces byte-identically.
+which a re-run of the committed classifier reproduces exactly on every
+gate-consumed figure.
+
+**The control capture's source revision was not recorded, and V5 requires it.**
+V5 says to "identify generated constructor frames from their callers and the
+source revision". The capture itself predates the hoist by construction (that
+is what makes it a control), and the commit that was checked out when it was
+taken is written down nowhere — not in this entry, not in `worker-result.json`,
+not in the profile directory. The revision is recoverable by inference: it is
+the commit whose `_pipeline_types.py` still contains `_event_details` and
+`emit_line`, i.e. the parent of the hoist commit. For the matched-pair
+collection below, every run records its `HEAD` SHA beside its artefacts so this
+gap does not recur. The captured data itself is sound; what is missing is the
+provenance field, and the fix is procedural rather than a re-capture.
 
 **A supporting-module split was forced by the repo's own lint.** The first
 draft of `benchmarks/summarize_line_event_profile.py` was 651 lines, tripping
