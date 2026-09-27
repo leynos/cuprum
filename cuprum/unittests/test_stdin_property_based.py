@@ -217,27 +217,6 @@ def test_timeout_always_terminates_with_stdin(
 # ---------------------------------------------------------------------------
 
 
-def _classify_chunks(chunks: list[str | bytes]) -> str:
-    """Name the class of chunk list a generated example belongs to.
-
-    Returns
-    -------
-    str
-        One of ``empty-list``, ``all-empty``, ``empty-chunks``, ``binary``,
-        ``text``, or ``mixed``.
-    """
-    if not chunks:
-        return "empty-list"
-    if not any(chunks):
-        return "all-empty"
-    if any(not chunk for chunk in chunks):
-        return "empty-chunks"
-    kinds = {isinstance(chunk, str) for chunk in chunks}
-    if len(kinds) > 1:
-        return "mixed"
-    return "text" if kinds.pop() else "binary"
-
-
 # The child echoes its stdin as hex, so the comparison is byte-perfect and
 # independent of the capture encoding. The payload suites above inline the
 # same script; this one names it because the property's tail flush is the
