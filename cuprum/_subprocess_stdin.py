@@ -59,20 +59,20 @@ def _emit_stdin_error(
 
 async def _write_stdin(
     process: asyncio.subprocess.Process,
-    stdin_data: bytes | None,
+    stdin_data: bytes,
     observation: _StageObservation,
 ) -> None:
-    """Write caller-provided stdin bytes and close the pipe."""
+    """Write caller-provided stdin bytes and close the pipe.
+
+    *stdin_data* is never ``None``: the only caller is
+    :func:`_spawn_stdin_writer`, which returns before starting this task when
+    no payload was supplied, and routes a ``StdinStream`` to the streaming
+    writer instead. The payload is therefore a real ``bytes`` value here, and
+    the parameter says so.
+    """
     stdin = process.stdin
     if stdin is None:
         _LOGGER.debug("stdin_writer_skipped pid=%s reason=no_pipe", process.pid)
-        return
-    if stdin_data is None:
-        # A stream producer reaching this writer means the spawn layer bound
-        # stdin to a pipe without planning to pull it. Closing immediately is
-        # the safe fallback: the child sees EOF rather than hanging forever on
-        # a pipe nobody will write to.
-        await _close_stdin(process, stdin, observation)
         return
     _LOGGER.debug(
         "stdin_writer_write_start pid=%s bytes=%s",
