@@ -3459,15 +3459,18 @@ runs it on every pull request, which is where it has to hold.
 This is the only check in the repository that reads the `#[cfg(windows)]`
 branches with warnings denied. A trybuild case cannot substitute for it:
 trybuild compiles its fixtures for the host target, so on a Linux runner it
-sees the `#[cfg(unix)]` arm and never the Windows one.
+selects the Unix stream module and does not compile the Windows module. The
+Windows exports are in `stream_pyfunctions_windows.rs`, selected by
+`#[cfg(windows)]` at `rust/cuprum-rust/src/lib.rs:52-62`, so Linux coverage
+excludes those lines.
 
 ## Rust FD-borrow ownership contract
 
-On Unix, the PyO3 pump and consume paths in
-`rust/cuprum-rust/src/stream_pyfunctions.rs:42,80` sort every descriptor they
-touch into a *borrowed* or a *consumed* role. `pump_stream` borrows its reader
-and consumes its writer; `consume_stream` borrows its reader and takes no
-writer at all. On Unix, the unsafe raw-reader constructor
+On Unix, the PyO3 pump and consume paths
+(`rust/cuprum-rust/src/stream_pyfunctions.rs:50-69,88-101`) sort each
+descriptor they touch into a *borrowed* or a *consumed* role. `pump_stream`
+borrows its reader and consumes its writer; `consume_stream` borrows its reader
+and takes no writer at all. On Unix, the unsafe raw-reader constructor
 `cuprum_native_io::borrow_reader` is called only at this PyO3 integration
 boundary. The safe `cuprum_native_io::borrow` API returns a lifetime-bound OS
 borrow; `cuprum-streams` receives typed `AsStream` values and cannot
@@ -3532,13 +3535,13 @@ in return the helper guarantees it never closes the borrowed reader descriptor.
 The exported Windows PyO3 stream functions reject raw handles because those
 integers do not establish the synchronous-I/O capability. The pump still
 consumes and closes its transferred writer when rejecting the call;
-`rust/cuprum-rust/src/stream_pyfunctions.rs:45-59,80-86` implements that
-boundary, and `cuprum/unittests/test_rust_errno_windows.py` checks rejection
-and writer closure. The Python pipeline dispatcher also declines Windows
-asyncio subprocess-pipe handles with `platform_unsupported`: ProactorEventLoop
-uses overlapped handles, which do not satisfy the synchronous adapter's
-precondition. That fallback remains the policy until an overlapped-I/O
-implementation is designed.
+`rust/cuprum-rust/src/stream_pyfunctions_windows.rs:10-19,36-52,66-76`
+implements that boundary, and `cuprum/unittests/test_rust_errno_windows.py`
+checks rejection and writer closure. The Python pipeline dispatcher also
+declines Windows asyncio subprocess-pipe handles with `platform_unsupported`:
+`ProactorEventLoop` uses overlapped handles, which do not satisfy the
+synchronous adapter's precondition. That fallback remains the policy until an
+overlapped-I/O implementation is designed.
 
 The contract is checked at two levels, which are deliberately not
 interchangeable. `rust/cuprum-native-io/src/ownership_tests.rs` holds the
