@@ -515,6 +515,20 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       `no_expect_outside_tests` runs under `cargo check`, so a file-backed
       `#[cfg(test)] mod` gives no test ancestry. Original text restored. Both
       are in Surprises.
+- [ ] (2026-09-27) **`make check-fmt` cannot see markdownlint, so the plan's own
+      CI evidence block failed `lint-test` in CI.** The logged `coverage`
+      transcript was fenced without a language (`MD040`). `check-fmt` runs
+      `ruff format --check`, `rustfmt --check`, and `mdtablefix --check`; `lint`
+      runs Ruff/interrogate/pylint/df12/Skylos, clippy, Whitaker, spelling,
+      yamllint, and actionlint. Neither runs markdownlint. `lint-test` runs it
+      as its own step — the upstream `DavidAnson/markdownlint-cli2-action` over
+      `**/*.md`, `**/*.markdown`, `**/*.mdx`, reading `.markdownlint-cli2.jsonc`,
+      which the workflow notes is the same config `make markdownlint` uses. The
+      block now opens with `text`, matching the plan's two other output
+      excerpts, and `make markdownlint` reports 0 errors over 78 files. The
+      plan already said in "Concrete steps" that documentation-only commits
+      need `make markdownlint`; the step was omitted anyway, and the gates run
+      before the commit were `check-fmt` and `lint`, neither of which covers it.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
@@ -535,7 +549,7 @@ The result was reachable only from the `coverage` CI job, which is a *required*
 check and which had been `cancelled` by the concurrency group on three earlier
 pushes, so this was its first observation on the branch. It failed:
 
-```
+```text
 Coverage decreased
 Current coverage: 86.05%
 Baseline coverage: 87.35%
