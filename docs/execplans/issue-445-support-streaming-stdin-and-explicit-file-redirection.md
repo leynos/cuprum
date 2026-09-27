@@ -365,9 +365,11 @@ likelihood, and mitigation.
   needs a running loop — a census taken after `asyncio.run` returns is empty
   whatever the implementation did. Committed as `bd8ceb58`; focused suite 35
   passed; full `cuprum/unittests` 2516 passed, 63 skipped.
-- [x] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
-  spawn-time binding on both backends; descriptors opened before spawn and
-  closed in `finally`; consumers and writers built only for piped streams.
+- [x] EP-M2: `_StdinPlan` added and resolved from `stdin_data`, which is
+  *widened* to `bytes | StdinStream | None` rather than replaced; resolved
+  stdio planning and spawn-time binding on both backends; descriptors opened
+  before spawn and closed in `finally`; consumers and writers built only for
+  piped streams.
 - [x] EP-M3: pull-after-drain streaming stdin with bounded memory; producer
   failure wrapped in `StdinSourceError` and routed through the existing
   teardown; early child-side close recorded as a `stdin_error` observation;
@@ -593,6 +595,43 @@ likelihood, and mitigation.
       discrepancy between heads when both logs in fact print both lines.
       Neither error would have been visible by reading; both fell out of
       putting the archived log beside the claim.
+- [x] (2026-09-27 17:37Z) Round 8: the `daef57d3` pass under `review --agent`
+      returned two findings, both `minor`, both against this plan, and both
+      real — checked against source rather than accepted on the reviewer's
+      word. (a) The EP-M2 entry in `Progress` and the `Plan of work` paragraph
+      both said `_StdinPlan` "replaces `stdin_data`"; `grep` finds
+      `stdin_data: bytes | StdinStream | None` at
+      `cuprum/_command_internals.py:112`, consumed at line 190, so the field
+      was widened and the plan is resolved *from* it. (b) The glossary's
+      pull-after-drain entry under `Context and orientation` still said the
+      chunk is "drained into the child, which is what bounds memory" — the
+      claim the module docstring and `_write_chunk` were corrected for in
+      round 7. Both now state the widened field and the transport-buffer
+      semantics. A third site was found by sweeping the *concept* rather than
+      the flagged sentence: `_write_chunk`'s docstring still said the next pull
+      waits "only once the child has taken this chunk off the pipe", which
+      `drain()` does not mean. The applied instrument was the stem
+      `bound`/`bounds`/`bounded` plus `drain` alongside `child`/`pipe`, not the
+      `bounded by` phrase the posted reply names: that phrase is
+      inflection-specific and cannot match "bounds memory" or "taken this
+      chunk off the pipe", which is precisely how the site survived round 7.
+      Re-run over production code and rendered docs, the stem sweep returns one
+      line and it is a *negation* — `docs/users-guide.md:311`, retention is
+      "not bounded by the pipe" — so no remaining site states the claim.
+      The Python edit is docstring-only, proven by the `ast` strip-and-compare
+      method used earlier in this branch. One over-long line was caught by
+      `awk length>88` rather than by the gate: the first reflow left a
+      92-character line, past the 88-character `E501` limit with `E` selected
+      in `pyproject.toml`.
+- [x] (2026-09-27 17:37Z) A correction to the round-7 reply's own account of
+      its method, noted here because the reply is live on PR #511. Its
+      finding-2 section names the sweep instruments as `peak memory` and
+      `bounded by`; the second of those cannot find the `_write_chunk` site
+      above, so the stated instrument is narrower than the sweep that actually
+      found the third production site. The claim is about method, not about a
+      result — every site named in the reply was found and fixed — but the
+      posted wording overstates the instrument's reach, and the honest
+      instrument is the stem-based one.
 
 ## Surprises & discoveries
 
@@ -1262,7 +1301,11 @@ Terms used in this plan:
   stream has no parent-side pipe and therefore nothing for cuprum to consume or
   write.
 - **Pull-after-drain** means the producer is advanced only after the previous
-  chunk has been fully drained into the child, which is what bounds memory.
+  chunk has cleared the parent's transport write buffer. It does *not* mean the
+  child has read those bytes: `drain()` returns once the buffer falls below its
+  low-water mark, and the OS pipe holds bytes of its own, so several chunks can
+  be in flight at once. What the discipline bounds is how far *ahead* of the
+  child the producer may run, not the memory one step retains.
 - **Early close** means the child closed its stdin before the producer was
   exhausted, which on POSIX surfaces as `BrokenPipeError`/`EPIPE`.
 
@@ -1481,8 +1524,9 @@ The work is four milestones, one per task of the issue's coding plan. Each is a
 coherent plateau: the repository builds, all gates pass, and the feature is
 usable at whatever surface the milestone completed. No compatibility shim is
 introduced at any boundary — the widest signature change (`stdin` widening) is
-made in one step at EP-M1, and `_StdinPlan` replaces `stdin_data` outright at
-EP-M2 with every caller updated in the same commit.
+made in one step at EP-M1, and `stdin_data` is widened at EP-M2 to
+`bytes | StdinStream | None` — the field keeps its name, `_StdinPlan` is
+resolved *from* it, and every caller is updated in the same commit.
 
 Stage A (understanding) is complete: it is the reconnaissance recorded in
 `Progress` and `Surprises & discoveries`. Stage B, C, and D are the Red, Green,
