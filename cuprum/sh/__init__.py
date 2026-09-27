@@ -10,7 +10,9 @@ The implementation is split across submodules by responsibility:
 - ``execution`` holds the execution context, stdin, and timeout types.
 - ``results`` holds ``CommandResult`` and ``PipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
-- ``safe_cmd`` holds the ``SafeCmd`` and ``Pipeline`` execution primitives.
+- ``stdio`` holds the ``StdioTarget`` standard-stream binding vocabulary.
+- ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
+- ``pipeline`` holds the ``Pipeline`` composition primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``
@@ -81,9 +83,10 @@ from cuprum.sh.output import _validate_convenience_flags as _validate_convenienc
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
+from cuprum.sh.pipeline import Pipeline
 from cuprum.sh.results import CommandResult, PipelineResult
 from cuprum.sh.results import dc as dc
-from cuprum.sh.safe_cmd import Pipeline, SafeCmd, SafeCmdBuilder
+from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 

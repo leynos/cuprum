@@ -187,7 +187,7 @@ async def _write_stdin_stream(
         observation=observation,
     )
     try:
-        source = stream.chunks.__aiter__()
+        source = aiter(stream.chunks)
         async for chunk in source:
             await _write_chunk(sink, chunk)
         await _flush_encoder(sink)
