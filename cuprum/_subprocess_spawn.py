@@ -39,7 +39,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum.lines import _LineHookFn
-    from cuprum.sh import ExecutionContext, SafeCmd
+    from cuprum.sh import ExecutionContext, SafeCmd, StdinStream
     from cuprum.sinks.base import OutputSession
 
 
@@ -65,7 +65,11 @@ class _SubprocessExecution:
 
     observation: _StageObservation
 
-    stdin_data: bytes | None
+    # Either a payload already resolved against the context's encoding, or a
+    # producer the writer pulls during the run. ``SafeCmd.run``/``lines``
+    # resolve the payload half before constructing this bundle, so nothing
+    # downstream re-encodes a ``StdinInput``.
+    stdin_data: bytes | StdinStream | None
     on_line: _LineHookFn | None = None
     # Mirrors ``ExecutionContext.process_group``. Carried on the bundle so the
     # spawn and the teardown of the same run cannot disagree about whether the

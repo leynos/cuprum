@@ -51,7 +51,12 @@ from cuprum.events import CaptureMode, TerminalOutcome
 
 if typ.TYPE_CHECKING:
     from cuprum._result_types import _AnyCommandResult
-    from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmd
+    from cuprum.sh import (
+        ExecutionContext,
+        RunOutputOptions,
+        SafeCmd,
+        StdinStream,
+    )
     from cuprum.sinks import base as sinks
 
 __all__ = [
@@ -88,7 +93,11 @@ class _ExecutionState:
 
     context: ExecutionContext
     output: RunOutputOptions
-    stdin_data: bytes | None
+    # Either a payload already resolved against the context's encoding, or a
+    # producer the writer pulls during the run. ``SafeCmd.run``/``lines``
+    # resolve the payload half before constructing this bundle, so nothing
+    # downstream re-encodes a ``StdinInput``.
+    stdin_data: bytes | StdinStream | None
     timeout: float | None
     # Whether captures are reported as bytes rather than decoded text, carried
     # to both the drain and the event's ``capture_mode``.
