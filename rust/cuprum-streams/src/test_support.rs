@@ -1,28 +1,33 @@
 //! Shared Unix file-descriptor fixtures and assertions for Rust unit tests.
 
+use std::fmt::Debug;
+#[cfg(not(miri))]
 use std::{
-    fmt::Debug,
     io::{self, Read, Write},
     os::fd::OwnedFd,
 };
 
+#[cfg(not(miri))]
 use cap_std::fs::File;
 
 /// Create an anonymous pipe as `(read_end, write_end)`.
 ///
 /// Returns the operating-system error from `pipe(2)` so fixtures can pass it
 /// to the test body, where the failure receives assertion context.
+#[cfg(not(miri))]
 pub(crate) fn make_pipe() -> io::Result<(OwnedFd, OwnedFd)> { cuprum_native_io::pipe() }
 
 /// Duplicate a typed descriptor into an independently owned [`File`].
 ///
 /// The caller retains its descriptor; cloning failures propagate to the test.
+#[cfg(not(miri))]
 pub(crate) fn dup_as_file(fd: &OwnedFd) -> io::Result<File> { fd.try_clone().map(File::from) }
 
 /// Write every byte of `payload` through a duplicated descriptor.
 ///
 /// This preserves failures from both `dup(2)` and [`Write::write_all`] for the
 /// test body to assert on.
+#[cfg(not(miri))]
 pub(crate) fn write_all_to(fd: &OwnedFd, payload: &[u8]) -> io::Result<()> {
     let mut file = dup_as_file(fd)?;
     file.write_all(payload)
@@ -32,6 +37,7 @@ pub(crate) fn write_all_to(fd: &OwnedFd, payload: &[u8]) -> io::Result<()> {
 ///
 /// This preserves failures from both `dup(2)` and [`Read::read_to_end`] for
 /// the test body to assert on.
+#[cfg(not(miri))]
 pub(crate) fn read_all_from(fd: &OwnedFd) -> io::Result<Vec<u8>> {
     let mut collected = Vec::new();
     let mut file = dup_as_file(fd)?;
@@ -56,6 +62,6 @@ pub(crate) fn unwrap_err<T: Debug, E>(result: Result<T, E>) -> E {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(miri)))]
 #[path = "test_support_tests.rs"]
 mod tests;

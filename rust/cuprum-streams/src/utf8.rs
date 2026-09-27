@@ -188,6 +188,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::miri_proptest_config())]
+
         #[test]
         fn single_chunk_matches_from_utf8_lossy(input in any::<Vec<u8>>()) {
             let (output, pending) = decode_single_chunk(&input, true);

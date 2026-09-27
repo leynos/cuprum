@@ -3647,13 +3647,32 @@ symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
 three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
 four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
 the final prefix harness. These are bounded results, not an unbounded proof.
-Round 27 Miri passed all 13 isolated native tests with zero ignored; see
-`/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
-`libc::splice`, and unsupported operating-system representations. Round 33's
-prior local checkpoint passed, and Round 35's integrated local run passed the
-native and repository gates. Windows and macOS runtime tests are no longer
-pending hosted execution. On 2026-09-15, `Rust boundary verification` run
-35004943625 succeeded with its `Native contracts (windows-2022)`,
+The pinned `make boundary-miri` target runs separate Miri invocations for
+`cuprum-native-io` and `cuprum-streams`. The observed results were 13 native
+tests passed with zero ignored and 67 stream tests passed with zero ignored.
+Miri interprets the stream crate's pure fallback read/write progress and
+short-I/O policy, deterministic retry/error classification, UTF-8 decoder chunk
+handling, progress accounting, and the `with_owned_writer` normal/error drop
+crossing through an in-memory writer. No Miri UB check is disabled.
+
+The stream run compiles out tests requiring real pipes or descriptors:
+`consume_snapshot_tests`'s four fixed decoder tests and two property tests; the
+five real-descriptor `io_utils` tests; the six real-pipe `lib_tests` tests; and
+the three `test_support_tests` descriptor tests. The four real-descriptor
+splice tests (`splice_transfers_all_bytes_between_pipes`,
+`unsupported_descriptors_signal_fallback`,
+`broken_pipe_drains_reader_and_reports_transferred_bytes`, and
+`drain_reader_consumes_to_eof`) remain excluded because Miri has no unshimmed
+`libc::splice` support. PyO3/CPython is excluded at the `cuprum-rust` boundary
+and has no tests in `cuprum-streams`. Proptest uses 16 cases under Miri and
+disables failure persistence only because Miri isolation has no current
+directory; these are runtime bounds only.
+
+Round 27's native Miri result is retained in `/tmp/issue379-round27-miri.log`.
+Round 33's prior local checkpoint passed, and Round 35's integrated local run
+passed the native and repository gates. Windows and macOS runtime tests are no
+longer pending hosted execution. On 2026-09-15, `Rust boundary verification`
+run 35004943625 succeeded with its `Native contracts (windows-2022)`,
 `Native contracts (macos-latest)`, and `Native contracts (ubuntu-latest)` jobs,
 and `CI` run 35004943782 succeeded with its
 `Extension-gated tests (Windows Python/Rust boundary)` and

@@ -210,3 +210,28 @@ closed with the affected path; pure discovery and policy evaluation remain
 separately testable. The Linux debug doctest gate uses the pinned dev-fast
 nightly rustdoc route to display and deny doctest-body warnings. Stable Rust
 1.85.0 remains the published MSRV and retains its separate verification route.
+
+## Addendum (2026-09-27): Expanded Miri coverage across the stream boundary
+
+Issue #427 extends the Miri record across the safe stream boundary. The pinned
+`make boundary-miri` target separately interprets the native ownership crate
+and the Miri-compatible `cuprum-streams` policy, decoder, accounting, and
+`with_owned_writer` ownership-crossing paths:
+
+```bash
+cargo +nightly-2026-08-07 miri test --manifest-path rust/Cargo.toml --package cuprum-native-io --lib
+cargo +nightly-2026-08-07 miri test --manifest-path rust/Cargo.toml --package cuprum-streams --lib
+```
+
+The observed result was 13 native tests passed with 0 ignored and 67 stream
+tests passed with 0 ignored. PyO3/CPython, unshimmed `libc::splice`, and
+unsupported operating-system representations remain excluded, and no Miri UB
+check is disabled. Miri now interprets selected `cuprum-streams` policy,
+decoder, accounting, and ownership-crossing paths, so native tests remain
+necessary for real descriptor and handle effects.
+
+Tests needing real descriptors or pipes are compiled out under Miri, and
+generated property cases are bounded to 16; both settings bound runtime without
+weakening interpretation. The per-path inventory and the excluded tests remain
+in
+[Rust boundary verification and unsafe inventory](rust-boundary-verification.md).
