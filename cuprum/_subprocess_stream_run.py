@@ -51,6 +51,7 @@ from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
     _consumer_awaitable,
     _deadline_for_collection,
     _drain_context,
@@ -129,11 +130,24 @@ async def _wait_for_streamed_process_exit(
     tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
+    """Wait for the exit or a stdin failure, reconciling when that wait fails.
+
+    The stdin writer runs alongside the exit wait, so a producer that fails
+    ends the run there rather than after the child's own exit — see
+    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
+    Whatever that race raises — a deadline expiry, a producer failure, a
+    cancellation — lands in the handlers below, which already reconcile every
+    stream task before the error propagates.
+
+    Returns
+    -------
+    tuple[int, float]
+        The exit code and exit timestamp, as produced by the race.
+    """
     try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        return await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            tasks.stdin_task,
         )
     except TimeoutError as exc:
         # The process has been terminated; cancel the stdin writer and drain the
@@ -175,6 +189,11 @@ async def _run_subprocess_without_streams(
     runs cannot abandon it. An unexpected stdin-writer failure after the process
     exits normally propagates unchanged.
 
+    The wait is raced against that same writer — see
+    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure` — so a
+    producer that dies at once ends the run with its own failure rather than
+    being reported later as a slow child.
+
     Returns
     -------
     tuple[int, float]
@@ -187,9 +206,9 @@ async def _run_subprocess_without_streams(
         execution.observation,
     )
     try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        exit_code, exited_at = await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            stdin_task,
         )
     except BaseException:
         await _shielded_cleanup(_cancel_stdin_writer(stdin_task))

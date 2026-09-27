@@ -3,18 +3,20 @@
 Split from ``cuprum._subprocess_execution`` so the runner module is about
 orchestration — spawning, wiring streams, assembling the result — while the
 rules for *ending* a run live here: how the run's stream consumers are
-reconciled exactly once, and in what order the tasks that must stop before
-they drain are stopped.
+reconciled exactly once, how a stdin writer's failure is raced against the
+exit wait, and in what order the tasks that must stop before they drain
+are stopped.
 
 Those rules divide along a seam this module sits on one side of. Everything
 about the *child* — how long to wait for its exit, what a deadline expiry does
 to it, and the remainder that bounds what follows — is
-``cuprum._subprocess_deadline``'s. The drain rules a teardown runs are
-``cuprum._stream_drain``'s, and the types this module and that one exchange are
-``cuprum._subprocess_wait_types``'s. This module imports all three and
-re-exports them, so the splits stay an internal arrangement:
-``cuprum._subprocess_wait`` remains the one import path for every caller and
-for the test suite's monkeypatch seams.
+``cuprum._subprocess_deadline``'s. The race that ends a run on a stdin
+failure rather than on the child's exit is ``cuprum._subprocess_rendezvous``'s.
+The drain rules a teardown runs are ``cuprum._stream_drain``'s, and the types
+this module and that one exchange are ``cuprum._subprocess_wait_types``'s.
+This module imports all four and re-exports them, so the splits stay an
+internal arrangement: ``cuprum._subprocess_wait`` remains the one import
+path for every caller and for the test suite's monkeypatch seams.
 
 The reconciliation itself is owned by ``_reconcile_run_tasks`` so its callers
 can run it under ``_shielded_cleanup`` as one unit.
@@ -42,6 +44,7 @@ from cuprum._subprocess_deadline import (
     _wait_for_exit_code,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._subprocess_wait_types import _ConsumerPair, _DrainContext
 
@@ -155,6 +158,12 @@ __all__ = [
     "_ConsumerPair",
     "_DrainContext",
     "_await_eof_grace",
+    # Re-exported from ``cuprum._subprocess_rendezvous``, which owns the race
+    # that ends a run on a stdin failure. Kept in this module's namespace so
+    # the single-command run, the line-stream coordinator, and the timeout test
+    # modules keep one import path. Sorted into place, not grouped, because the
+    # repository's linter requires this list to stay isort-ordered.
+    "_await_exit_or_writer_failure",
     # Re-exported from ``cuprum._stream_drain``, which owns the drain rules a
     # teardown runs, for the same one-import-path reason as ``_DrainContext``:
     # the drain once lived here and callers still reach for it by this path.
