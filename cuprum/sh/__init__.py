@@ -12,8 +12,9 @@ The implementation is split across submodules by responsibility:
 - ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
   counterparts ``BytesCommandResult`` and ``BytesPipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
+- ``stdio`` holds the ``StdioTarget`` standard-stream binding vocabulary.
 - ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
-- ``pipeline`` holds the ``Pipeline`` execution primitive.
+- ``pipeline`` holds the ``Pipeline`` composition primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``

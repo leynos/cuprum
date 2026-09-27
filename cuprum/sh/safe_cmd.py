@@ -22,7 +22,8 @@ handle path resolves its own run inputs, so it lives with the handle package.
 # No ``from __future__ import annotations`` here: the public signatures are
 # introspected with ``typing.get_type_hints``, so annotations are evaluated
 # eagerly and every name they use is a genuine runtime import. Only the forward
-# references to ``SafeCmd`` and ``Pipeline`` inside the class bodies are quoted.
+# reference to ``Pipeline`` inside ``SafeCmd``'s own class body is quoted; the
+# module-level import that binds it sits at the bottom of this file.
 import asyncio
 import dataclasses as dc
 
@@ -440,11 +441,14 @@ class SafeCmd(_OwnedStart):
         )
 
 
-# Imported at the foot of the module, after both classes exist, to break the
+# Imported at the foot of the module, after ``SafeCmd`` exists, to break the
 # mutual dependency with ``cuprum.sh.pipeline``: that module imports this one
-# for its ``SafeCmd`` annotation, so importing it at the head would leave it
-# reading a half-built module. ``__or__`` needs the real class rather than a
-# postponed name, because ``Pipeline.concat`` is called on it.
+# for its ``SafeCmd``, so importing it at the head would leave it reading a
+# half-built module. ``__or__`` needs the real class rather than a postponed
+# name, because ``Pipeline.concat`` is called on it — and a function-local
+# import would fire too late for ``typing.get_type_hints``, which
+# ``cuprum.sh`` uses to resolve ``__or__``'s quoted annotation against this
+# module's namespace alone.
 from cuprum.sh.pipeline import (  # ruff: ignore[module-import-not-at-top-of-file]  # deferred to break the cuprum.sh.pipeline dependency cycle
     Pipeline,
 )

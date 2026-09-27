@@ -167,6 +167,7 @@
       'cuprum/sh/pipeline.py',
       'cuprum/sh/results.py',
       'cuprum/sh/safe_cmd.py',
+      'cuprum/sh/stdio.py',
       'cuprum/sinks/__init__.py',
       'cuprum/sinks/base.py',
       'cuprum/sinks/github_actions.py',
