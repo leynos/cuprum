@@ -6,17 +6,17 @@ per-chunk helpers, and source-error construction pushed that module past the
 payload is written in one go by ``cuprum._subprocess_stdin``, while a producer
 (``StdinStream``) is pulled one chunk at a time and is handled here.
 
-The pull-after-drain bound lives here. Each chunk is drained into the child
-before the next is pulled, so the writer cannot run far ahead of the child;
-pulling eagerly would let an unbounded producer outrun the child and
-re-materialize the payload in the parent's memory. What that bounds is how far
-*ahead* the producer runs, not what one step retains: ``drain()`` returns once
-the transport's write buffer has fallen below its low-water mark, and the OS
-pipe holds bytes of its own, so several chunks can be in flight together, and
-the chunk currently being written stays live in the parent until its drain
-completes. Retained memory is therefore the largest chunk yielded plus those
-buffers. The bound is on how far ahead the producer runs; the type does not
-police chunk size at all.
+The pull-after-drain bound lives here. Each chunk is drained out of the
+parent's transport buffer before the next is pulled, so the writer cannot
+run far ahead of the child; pulling eagerly would let an unbounded producer
+outrun the child and re-materialize the payload in the parent's memory.
+What that bounds is how far *ahead* the producer runs, not what one step
+retains: ``drain()`` returns once the transport's write buffer has fallen
+below its low-water mark, and the OS pipe holds bytes of its own, so several
+chunks can be in flight together, and the chunk currently being written
+stays live in the parent until its drain completes. Retained memory is
+therefore the largest chunk yielded plus those buffers. The bound is on how
+far ahead the producer runs; the type does not police chunk size at all.
 
 This module imports the pipe primitives (``_close_stdin``, ``_emit_stdin_error``)
 from ``cuprum._subprocess_stdin``, and the dispatcher in that module imports
@@ -136,7 +136,9 @@ async def _write_chunk(
     """Encode one chunk, write it, and drain before returning.
 
     Draining before returning is the backpressure: the caller's next pull
-    happens only once the child has taken this chunk off the pipe.
+    happens only once this chunk has cleared the transport's write buffer,
+    which is a statement about the parent's buffer rather than about the child
+    having read the bytes.
 
     An empty encoded payload writes nothing and emits nothing: a ``str`` chunk
     that the incremental encoder is still holding entirely (a lone leading
