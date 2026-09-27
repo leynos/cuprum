@@ -616,8 +616,8 @@ common `monkeypatch.setenv` case under pytest) remain visible to its children.
 `EnvMode.OVERLAY` and `EnvMode.INHERIT` compose identically: each keeps the
 mode selected by an outer scope while layering its values over the inherited
 overlay. `EnvMode.REPLACE` alone creates a boundary: it starts from an empty
-environment, applies only its mapping, and discards every outer overlay. Use
-the `UNSET` singleton as a value to remove a variable from a composed child
+environment, applies only its mapping, and discards every outer overlay. Use the
+`UNSET` singleton as a value to remove a variable from a composed child
 environment.
 
 <!-- tested-example: env-modes -->

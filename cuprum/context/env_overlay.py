@@ -1,9 +1,11 @@
 """Pure environment-policy composition and rendering.
 
 Overlay mappings are layered on top of the live ``os.environ`` at subprocess
-spawn time. This module owns the overlay-only merge (:func:`merge_env_overlays`)
-and the spawn-time resolution against the live environment
-(:func:`resolve_env`); it has no ``ContextVar`` dependency.
+spawn time. This module owns the overlay-only merge
+(:func:`merge_env_overlays`), the mode-aware renderer (:func:`render_env`)
+that the spawn paths call, and the overlay-only convenience wrapper
+(:func:`resolve_env`), which is public API but not itself on the spawn path;
+it has no ``ContextVar`` dependency.
 """
 
 from __future__ import annotations

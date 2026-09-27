@@ -2030,9 +2030,8 @@ diverge between the single-command and pipeline telemetry.
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
 semantics and stays immutable; both paths agree on the shared tag keys), a
-check that only a `REPLACE` policy publishes the reserved `env_mode` tag, and
-a syrupy snapshot of representative single-command and pipeline tag
-dictionaries.
+check that only a `REPLACE` policy publishes the reserved `env_mode` tag, and a
+syrupy snapshot of representative single-command and pipeline tag dictionaries.
 
 ## Context allowlist internals
 
@@ -2290,14 +2289,13 @@ The split between `merge_env_overlays` and `render_env` is deliberate.
 (`_StageObservation.env_overlay` and the `ExecEvent.env` field) — it must not
 include a snapshot of `os.environ`, otherwise structured event logs would carry
 the entire parent process environment on every emission. `render_env` is the
-spawn-time render that *does* include `os.environ`, except under `REPLACE`;
-the spawn path reaches it through `_merge_env`
-(`cuprum/_process_lifecycle.py`), which composes the ambient and per-call
-policies and their modes via `_resolve_env_policy`
-(`cuprum/context/_policy.py`) and is shared by both the single-command
-(`cuprum/_subprocess_execution.py`) and pipeline (`cuprum/_pipeline_spawn.py`)
-paths. `resolve_env` renders only in the default `OVERLAY` mode and is not on
-the spawn path.
+spawn-time render that *does* include `os.environ`, except under `REPLACE`; the
+spawn path reaches it through `_merge_env` (`cuprum/_process_lifecycle.py`),
+which composes the ambient and per-call policies and their modes via
+`_resolve_env_policy` (`cuprum/context/_policy.py`) and is shared by both the
+single-command (`cuprum/_subprocess_execution.py`) and pipeline
+(`cuprum/_pipeline_spawn.py`) paths. `resolve_env` renders only in the default
+`OVERLAY` mode and is not on the spawn path.
 
 The live-view contract from issue #100 is enforced at one place only:
 `render_env` reads `os.environ` at call time, not when the overlay is
