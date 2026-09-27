@@ -129,13 +129,9 @@ class StreamTelemetrySnapshot:
             tuple[StreamOperation, StreamOperationOutcome], StreamTelemetryGroup
         ] = {}
         for operation in StreamOperation:
-            raw_outcomes = raw_groups.get(operation.value)
-            if not isinstance(raw_outcomes, cabc.Mapping):
-                continue
-            for outcome in StreamOperationOutcome:
-                group = _group_from_dict(raw_outcomes.get(outcome.value))
-                if group is not None:
-                    groups[operation, outcome] = group
+            groups.update(
+                _groups_for_operation(operation, raw_groups.get(operation.value))
+            )
         return cls(groups=groups, totals=_totals(groups.values()))
 
     @classmethod
@@ -189,6 +185,23 @@ class StreamTelemetryAccumulator:
         """Return an immutable view of all measurements accumulated so far."""
         groups = dict(self._groups)
         return StreamTelemetrySnapshot(groups=groups, totals=_totals(groups.values()))
+
+
+def _groups_for_operation(
+    operation: StreamOperation,
+    raw_outcomes: object,
+) -> dict[tuple[StreamOperation, StreamOperationOutcome], StreamTelemetryGroup]:
+    """Return the valid outcome groups serialized for one operation."""
+    if not isinstance(raw_outcomes, cabc.Mapping):
+        return {}
+    groups: dict[
+        tuple[StreamOperation, StreamOperationOutcome], StreamTelemetryGroup
+    ] = {}
+    for outcome in StreamOperationOutcome:
+        group = _group_from_dict(raw_outcomes.get(outcome.value))
+        if group is not None:
+            groups[operation, outcome] = group
+    return groups
 
 
 def _group_from_dict(value: object) -> StreamTelemetryGroup | None:
