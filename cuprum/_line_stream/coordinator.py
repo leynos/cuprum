@@ -57,6 +57,7 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
@@ -168,9 +169,9 @@ async def _wait_for_line_stream_exit(
         If the caller cancels line iteration while the subprocess is running.
     """
     try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            run.process,
-            execution,
+        exit_code, exited_at = await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(run.process, execution),
+            run.tasks.stdin_task,
         )
     except TimeoutError as exc:
         run.telemetry.emit(LineStreamPhase.TIMEOUT, _LineStreamEventDetails(error=exc))

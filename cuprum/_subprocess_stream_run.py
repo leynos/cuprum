@@ -19,6 +19,7 @@ from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
     _consumer_awaitable,
     _drain_stream_consumers,
     _DrainContext,
@@ -37,11 +38,24 @@ async def _wait_for_streamed_process_exit(
     tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> tuple[int, float]:
-    """Wait for exit and reconcile every stream task when that wait fails."""
+    """Wait for the exit or a stdin failure, reconciling when that wait fails.
+
+    The stdin writer runs alongside the exit wait, so a producer that fails
+    ends the run there rather than after the child's own exit — see
+    :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
+    Whatever that race raises — a deadline expiry, a producer failure, a
+    cancellation — lands in the handlers below, which already reconcile every
+    stream task before the error propagates.
+
+    Returns
+    -------
+    tuple[int, float]
+        The exit code and exit timestamp, as produced by the race.
+    """
     try:
-        return await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        return await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            tasks.stdin_task,
         )
     except TimeoutError as exc:
         # The process has been terminated; cancel the stdin writer and drain the
