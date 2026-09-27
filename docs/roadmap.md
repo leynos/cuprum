@@ -9,9 +9,13 @@ done.
 
 - [x] `StdinInput` parameter object with mutual-exclusion enforcement in
   `__post_init__` and `resolve(ctx)` encoding helper.
-- [x] `_SubprocessExecution.stdin_data` field; `_spawn_subprocess` opens
-  `stdin=asyncio.subprocess.PIPE` only when data is present, falling back to
-  `None` to inherit parent stdin.
+- [x] `_ExecutionState.stdin_data` field; `_stdin_stdio` asks `Popen` for
+  `stdin=asyncio.subprocess.PIPE` only when the resolved plan carries input,
+  falling back to `None` to inherit parent stdin. Issue `#445` widened the
+  field from `bytes | None` to `bytes | StdinStream | None` and moved the
+  PIPE-or-`None` decision out of `_SubprocessExecution` into
+  `_subprocess_spawn`, where it reads a `_StdinPlan` resolved from the field,
+  so the byte-level spelling above is history rather than the current shape.
 - [x] Concurrent stdin writer task (`_spawn_stdin_writer` / `_write_stdin`)
   with `stdin_error` event emission, `cuprum.stdin` logging, and
   `cuprum_stdin_bytes_total` / `cuprum_stdin_errors_total` metrics for
