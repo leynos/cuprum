@@ -249,9 +249,9 @@ which is the whole contract:
 
 Redirecting two streams to one path is rejected: each open starts at offset 0,
 so the two streams would interleave unpredictably. Use distinct paths, or one
-borrowed descriptor you manage — a caller who shares a descriptor across two
-runs shares a single file offset, and the second run writes wherever the first
-left off.
+borrowed descriptor the caller manages — sharing a descriptor across two runs
+shares a single file offset, and the second run writes wherever the first left
+off.
 
 Capture and echo read from a parent-side pipe, so they cannot be combined with
 a redirected stream; `RunOutputOptions` rejects the combination at construction
