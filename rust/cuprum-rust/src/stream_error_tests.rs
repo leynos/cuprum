@@ -244,8 +244,15 @@ mod properties {
         #[test]
         fn validation_matches_the_size_window(size in any::<i64>()) {
             // `u64::try_from` rejects negative sizes rather than reinterpreting
-            // them, so the window is stated once: positive, and at most the cap.
-            let accepted = u64::try_from(size).is_ok_and(|magnitude| magnitude <= 1 << 30);
+            // them, so the window is stated once: strictly positive, and at
+            // most the inclusive cap. Zero is inside `i64` but outside the
+            // window, so it must be rejected — a `magnitude <= cap` test alone
+            // would call it accepted and fail against correct code. The lower
+            // bound is not exercised by `any::<i64>()` in practice, but the
+            // oracle is stated for the whole domain rather than for the values
+            // this generator happens to draw.
+            let accepted = u64::try_from(size)
+                .is_ok_and(|magnitude| magnitude > 0 && magnitude <= 1 << 30);
             prop_assert_eq!(
                 validate_buffer_size(size).is_ok(),
                 accepted,

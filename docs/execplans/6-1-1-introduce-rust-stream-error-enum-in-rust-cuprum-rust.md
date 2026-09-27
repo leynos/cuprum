@@ -4,9 +4,11 @@ Status: IN PROGRESS — M1 complete, M2 open. Approved 2026-09-26; the publishin
 draft-PR and approval checkboxes below are recorded as done by that approval.
 M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
 and the native extension stage both pass, with `actionlint` locally
-unobservable and Windows runtime evidence outstanding (both recorded in
-Progress and Surprises). M2 closes the platform evidence, reconciles the
-roadmap, and sets this status to COMPLETE.
+unobservable (recorded in Progress and Surprises). Windows runtime evidence has
+since been obtained and it found two branch defects, both now fixed and
+re-gated; confirming the fix on Windows requires a fresh CI run, so this status
+stays IN PROGRESS until that run is green. M2 closes the remaining evidence,
+reconciles the roadmap, and sets this status to COMPLETE.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -333,6 +335,56 @@ There is no time limit. Tool failures do not justify lowering acceptance.
     reports "Review skipped: draft pull request", which is why the plan calls for
     the `coderabbit review --agent` CLI pass instead; the app's verdict is not a
     review.
+  - [x] (2026-09-27) `coderabbit review --agent` completed on PR #432
+    (4 findings, 3 distinct). One was already fixed by `bcf72f52`; the other two
+    are actioned in the two entries below and the fix is re-gated. Logs:
+    `/tmp/coderabbit-74fbe974-b8fa-43c7-9beb-901c9d163da0-6-1-1-introduce-rust-stream-error-enum-in-rust-cuprum-rust.out`,
+    `...-findings.json`.
+  - [x] (2026-09-27) **Windows runtime evidence obtained, and it was red.** The
+    `Extension-gated tests (Windows Python/Rust boundary)` job failed
+    deterministically at both `6a28ff95` and `bcf72f52`:
+    `test_out_of_i64_buffer_size_stays_an_extraction_error[consume]` and
+    `test_native_stream_exception_categories[consume-a zero buffer size-ValueError]`,
+    both `OSError(9, 'Bad file descriptor')` from `cuprum/_streams_rs.py:103`.
+    The same job is green on `main` (`991dee64`), so this was a branch defect,
+    not a platform flake. See the Surprises entry for the causal chain: the two
+    failing rows are marked with `_buffer_validation_before_descriptor` on the
+    *push* path, but the *consume* counterpart of each was missing the same
+    mark, and both reached the reader-preparation step through the shim's
+    Windows-only `get_osfhandle` conversion.
+  - [x] (2026-09-27) Both failures fixed in the **tests**, not the shim, which
+    was not the failing component. `_streams_rs.py` is byte-identical to `main`
+    (`git diff origin/main...HEAD -- cuprum/_streams_rs.py` is empty), the plan
+    forbids reordering it (`## Constraints`: "The Python Windows shim has its
+    own earlier descriptor preparation; do not reorder it"), and the failing
+    consume rows had no `_buffer_validation_before_descriptor` mark, so the
+    push-path skip never reached them. Three changes:
+    1. `test_native_stream_exception_categories`'s zero-buffer step now opens
+       `os.devnull` for the reader instead of passing `-1`. The reader is never
+       dereferenced — the buffer check raises first — but on Windows `-1` fails
+       in the *wrapper's* preparation, so the row was observing the wrong layer.
+       The pump row hands a *separate* write end, because the wrapper closes a
+       rejected writer and reusing the reader would double-close it.
+    2. Every buffer-window property now opens a real read end rather than
+       passing the `-1` throwaway: `test_rejects_out_of_range_buffer` and
+       `test_out_of_i64_buffer_size_stays_an_extraction_error` were retargeted
+       onto the open-reader entry points, and the throwaway variants of both
+       were removed rather than kept. An earlier revision of this fix kept them
+       alongside the new rows, which would have left each entry point with two
+       properties asserting the same window — and would have left both
+       originally-failing nodeids still failing on Windows, since the
+       extraction-error property's consume row was the other Windows failure
+       and handover 1 above did not touch it. The `_UNUSED_FD` constant and
+       `_pump_with_buffer_size` helper are gone with them; the
+       `_buffer_validation_before_descriptor` mark survives on the one property
+       that supplies its own invalid descriptor as the subject of the assertion.
+       Net row change: `test_rejects_out_of_range_buffer_with_open_reader` is
+       new, two throwaway rows are removed, so the module's collected count is
+       unchanged at 10.
+    3. The Rust oracle is corrected — see the Surprises entry.
+    `uv run pytest` on the three extension modules: **22 passed**. Rust:
+    **51 passed, 0 skipped**. Logs: `/tmp/611-win-fix-pytest.out` (to follow
+    once the re-gate runs).
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
@@ -565,6 +617,61 @@ apply here only because the aborting step is last.
   shape. It now opens a genuinely valid writer, matching the existing
   `test_pump_rejects_invalid_reader_descriptor`.
 
+- (2026-09-27) **A skip written for one entry point was silently load-bearing
+  for its sibling, and Windows found the gap.** The two Windows failures share
+  one cause, and it is a bookkeeping error rather than a boundary error. Both
+  failing nodeids pass `-1` as the reader together with `buffer_size=0` and
+  expect the buffer rejection. On POSIX that holds even through the shim: the
+  shim validates `buffer_size` before preparing the reader, and
+  `_prepare_native_reader` passes a non-negative `-1` through
+  `_convert_fd_for_platform` unchanged, so the buffer error wins. On Windows
+  the same call reaches `msvcrt.get_osfhandle(-1)`, which raises `OSError(9)`
+  before the buffer check ever runs. `test_rejects_out_of_range_buffer` had
+  already been marked `_buffer_validation_before_descriptor` for exactly this
+  reason — its comment states the mechanism — but the mark was applied to the
+  *push* property only. Neither the consume property
+  (`test_out_of_i64_buffer_size_stays_an_extraction_error`'s consume row) nor
+  the consume row of the behaviour outline carried it. So the guarantee was
+  written down for one entry point and assumed for the other, and the two
+  consume rows were the only ones that could fail. The lesson is narrow and
+  checkable: **a platform exclusion derived from an entry point's argument
+  shape must be re-derived for every sibling entry point, because the shape —
+  not the helper's name — is what determines whether the exclusion applies.**
+  The fix observes the buffer window on both platforms through an open reader
+  instead of widening the skip, so the Windows job now has a live test for it
+  rather than one more exclusion.
+- (2026-09-27) **First repair of the above was itself incomplete, and the
+  failure list said so.** The first pass added an open-reader window property
+  and fixed the behaviour outline's consume row, but left
+  `test_out_of_i64_buffer_size_stays_an_extraction_error` — the *other* Windows
+  failure — on the `-1` throwaway, and left the now-redundant throwaway rows in
+  place beside their open-reader twins. The defect in the repair was the same
+  shape as the defect it was repairing: fixing one entry point and assuming the
+  sibling. What caught it was reading the recorded nodeids in Progress against
+  the change surface rather than against the description of the change: the two
+  failing ids were known, and only one of them had been retargeted. **Check a
+  fix against the verbatim failure identifiers, not against the narrative of
+  what the fix does** — a repair described accurately but incompletely still
+  reads as a repair.
+- (2026-09-27) **The Rust property oracle called `size == 0` accepted, and only
+  the generator's domain hid it.** `validation_matches_the_size_window` computed
+  `accepted` as
+  `u64::try_from(size).is_ok_and(|magnitude| magnitude <= 1 << 30)` — an upper
+  bound with no lower bound. `u64::try_from(0)` succeeds and `0 <= 1 << 30`, so
+  the oracle said "accepted" while `validate_buffer_size(0)` returns `Err`,
+  because `BufferSize::new` delegates to `checked_buffer_size`, whose first arm
+  is `if buffer_size <= 0`. The property passed only because `any::<i64>()`
+  draws through proptest's `supported_int_any`, so zero is a 2^-64 event per
+  draw. This is the failure mode property tests are supposed to make impossible
+  — a generator whose domain happens to exclude the defect — and it survived a
+  green `make lint`, a green Rust suite and a CodeRabbit pass. Corrected to
+  `magnitude > 0 && magnitude <= 1 << 30`, with the inclusive cap kept
+  (`< 1 << 30` would have regressed the boundary case the plan pins). Verified
+  by `cargo nextest run --package cuprum-rust`: **51 passed, 0 skipped**. The
+  general point: an oracle that restates a validator's window must restate
+  *every* arm of it, and a property that never fails is evidence about the
+  generator before it is evidence about the code.
+
 ## Outcomes & retrospective
 
 M1 is complete as of 2026-09-27; M2 is not. The one focused boundary change
@@ -588,12 +695,22 @@ What the evidence covers, stated at the strength it actually has:
   guide counts re-measured against the tree rather than trusted as prose and
   one users'-guide sentence falsified by measurement and corrected.
 
+- Platform evidence (R4) was obtained from Windows and **it failed first**,
+  which is what the plan asked of it. The `extension-tests-windows` job runs
+  `make develop` plus `make test-extension` and therefore exercises the typed
+  boundary for real rather than cross-compiling it. It was red at two heads,
+  identically, while green on `main`; the two failures were a missing platform
+  mark on the consume counterparts of two push-path rows, plus the Rust oracle
+  defect described in Surprises. Both are fixed. **The fix is not yet confirmed
+  on Windows** — that needs a fresh CI run, and until it is green the Windows
+  claim rests on the diagnosis rather than on observation.
+
 Deviations and limits, all recorded rather than smoothed over: red evidence was
-reconstructed after the implementation existed (see Surprises); `actionlint` is
-locally unobservable; and **Windows runtime behaviour is unproven** — only a
-cross-target compile of the `cfg(windows)` branches plus a skipped winerror
-test exist, and the plan is explicit that a cross-target compile is
-supplementary evidence only.
+reconstructed after the implementation existed (see Surprises); and
+`actionlint` is locally unobservable, so the GitHub Actions lint gate is proven
+by its sub-checks plus a bounded diagnostic rather than by the aggregate target
+(see Surprises). A cross-target compile of the `cfg(windows)` branches
+supplements — and does not replace — the Windows runtime job.
 
 ## Context and orientation
 
