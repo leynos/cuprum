@@ -139,8 +139,17 @@ def flag_holds_on(
             "would name legs the flag may have switched off"
         )
         raise AssertionError(message)
+    terms = list(_FLAG_TERMS.finditer(match.group("predicate")))
+    if not terms:
+        message = (
+            f"{workflow_name}:{job_name} declares LEG_RUNS as {declared!r}, "
+            "whose predicate names neither a matrix key nor an event; nothing "
+            "a leg carries could satisfy it, so reading the absence of terms "
+            "as 'the flag holds' would report every leg as switched off"
+        )
+        raise AssertionError(message)
     holds = True
-    for term in _FLAG_TERMS.finditer(match.group("predicate")):
+    for term in terms:
         key = term.group("key")
         if key is not None:
             holds = holds and bool(leg.get(key, False))

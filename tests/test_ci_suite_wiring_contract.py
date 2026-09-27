@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import typing as typ
 
-from tests.helpers.ci_leg_gate import pull_request_legs
+from tests.helpers.ci_leg_gate import flag_holds_on, pull_request_legs
+from tests.helpers.ci_leg_matrix import matrix_legs
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.ci_workflows import steps
 from tests.helpers.makefile import recipe_of
@@ -86,16 +87,19 @@ def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
     step anywhere, and it resolves the step's guard against the job's matrix
     legs rather than reading the command text alone.
 
-    Two things the text cannot tell apart, and this asserts. A workflow that
-    ran `make test-python` on a leg excluded by the guard — the 3.13 leg, which
-    sets `python-suite: false` because the coverage job already runs pytest
-    there — would satisfy a substring check while the pull-request lane that
-    merges collected nothing. And a step gated on the pre-release leg would
-    appear to run on every pull request while the job-level `LEG_RUNS` flag
-    switched it off on exactly that event; see `tests/helpers/ci_leg_gate.py`.
-    Matching the command by its leading shell tokens, and requiring at least
-    one admitted leg, is what makes this a claim about execution rather than
-    about text.
+    Three things the text cannot tell apart, and this asserts. A step gated on
+    the pre-release leg would appear to run on every pull request while the
+    job-level `LEG_RUNS` flag switched it off on exactly that event; see
+    `tests/helpers/ci_leg_gate.py`. The estate's own gate,
+    `matrix.python-suite`, is false on the 3.13 leg because the coverage job
+    already runs pytest there, so the step is admitted by two of the job's
+    four legs. That count is the claim: it is what says a selector break in
+    one interpreter cannot pass unobserved. And a step gated on a single leg
+    satisfies "at least one leg" while running on no other interpreter at all,
+    which is why the lane count is asserted separately rather than inferred
+    from the first assertion. Matching the command by its leading shell
+    tokens, and resolving its guard against the legs, is what makes this a
+    claim about execution rather than about text.
     """
     lanes = pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET)
     assert lanes, (
@@ -103,9 +107,27 @@ def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
         f"`{CI_SUITE_TARGET}` on a pull-request leg, so {SELECTOR} is never "
         "evaluated on the lane that merges and every coverage assertion is moot"
     )
-    assert any(len(admitted) > 1 for _step, admitted in lanes), (
+    admitted = max(len(step_lanes) for _step, step_lanes in lanes)
+    assert admitted > 1, (
         "the suite must run on more than one pull-request leg, or a selector "
         f"break in one interpreter is unobserved; got {lanes!r}"
+    )
+    # The denominator is the legs the flag leaves enabled for this event, not
+    # every leg the job declares: the experimental leg is never enabled on a
+    # pull request, so counting it would let an admit-everything guard satisfy
+    # `admitted < total` and this assertion would prove nothing.
+    enabled = [
+        leg
+        for leg in matrix_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+        if flag_holds_on(CI_SUITE_WORKFLOW, CI_SUITE_JOB, leg, "pull_request")
+    ]
+    assert admitted < len(enabled), (
+        f"the suite step is admitted by all {len(enabled)} legs the flag leaves "
+        f"enabled on a pull request, so its guard excludes none of them. The "
+        "3.13 leg is meant to be excluded — it sets `python-suite: false` "
+        "because the coverage job already runs pytest there — so this "
+        "assertion is now vacuous and the lane count above proves nothing. "
+        f"Got {lanes!r}"
     )
 
 
