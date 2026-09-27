@@ -1,6 +1,7 @@
 # Add an opt-in broken-pipe policy for echoed output
 
-Status: COMPLETE
+Status: COMPLETE at Revision 21; Revision 22 repairs three review findings and
+is gated on the pull request (see the Revision note).
 
 This living ExecPlan records the implementation of issue
 [#435](https://github.com/leynos/cuprum/issues/435). It is self-contained: a
@@ -426,23 +427,60 @@ escalation, not a workaround.
       anything this change introduced, and it is the last of the four Python
       legs to do so. The `coverage` job, still in flight when the gate sweep
       began, finished `success`.
-- [ ] CodeRabbit's *hosted* surfaces remain empty, and that emptiness is not
-      evidence of a clean review. See the Surprises entry below: the bot
-      declines to review draft PRs, so all nine passes have been local CLI
-      invocations and the `Kody Code Review` check-run is `skipped`, not
-      `success`. Re-verified at `f4c76c84`: the pull request carries zero
-      CodeRabbit review comments and the only CodeRabbit-authored artefact on
-      it is a "skip review" notice — a draft-PR notice, not a review. The
-      seventeen PR reviews are all `codescene-access[bot]` approvals, a
-      different service. Un-drafting the PR is expected to produce a first
-      hosted review against the then-current tree. The `CodeRabbit` *status*
-      context on the tip says the same thing in its own words:
-      `success  CodeRabbit  Review skipped: draft pull request`. It is a
-      success state carrying a skip description, which is precisely how a
-      pass-looking green check can mean the opposite of a review.
+- [x] CodeRabbit's *hosted* surfaces were empty while the pull request was a
+      draft, and that emptiness was never evidence of a clean review. See the
+      Surprises entry below: the bot declines to review draft PRs, so the nine
+      earlier passes were all local CLI invocations and the `Kody Code Review`
+      check-run was `skipped`, not `success`. Marking the PR ready closed that
+      gap as predicted: the bot then produced a real *hosted* review, and it
+      is an APPROVED submission at `96ebb638` (review `5328456449`,
+      `2026-09-27T01:47:47Z`). The `CodeRabbit` status context now reads
+      "Review completed" rather than a skip description. The contrast is the
+      point: a green `CodeRabbit` context meant nothing while it carried a skip
+      description, and it means something now that it names a completed review
+      at a known commit. Not every hosted surface agreed — `Sourcery review`
+      remains `skipping`, `Kody Code Review` remains `skipping`, and Codex
+      filed one inline finding — so "approved" here is one surface's verdict,
+      not the PR's.
+- [x] Disposition round at `96ebb638` (Revision 22). Every finding was
+      verified against the current tree before any edit: one Codex inline
+      thread (`4113713455`) and two CodeRabbit pre-merge warnings. All three
+      were valid, and all three were repaired. See Revision 22.
 
 ## Surprises & discoveries
 
+- `SafeCmd.lines()` silently dropped the result diagnostics the whole feature
+  is about, and the fix was not the one-liner the symptom suggested. Echo is
+  reachable through `lines()` — `_build_unstarted_run` wires the same
+  `_build_stream_config` that `run()` uses, so `echo_output` and
+  `broken_pipe_policy` both reach the drain and a `BROKEN_PIPE` record really
+  is appended to the run's collectors. But `_run_to_command_result` assembled
+  its `CommandResult` without passing them, so a fully consumed
+  `LineStream.result.relay_fallbacks` was `()` while the equivalent `run()`
+  result carried the record. Passing the collectors through would still have
+  returned `()`, because `_RelayDiagnostics.snapshot()` is gated on
+  `is_settled` and no settle ran on the healthy path: `_drain_after_exit` only
+  gathered the consumers, and the settle inside `_reconcile_run_tasks` is
+  reached solely from `_cleanup_failed_line_stream_run`, which raises and
+  produces no result. So the repair needed both a settle in `_drain_after_exit`
+  and the pass-through in the result assembly, and the second without the first
+  is a no-op that *reads* correct at every call site. The delegated repair
+  proved both halves necessary by removing each alone and reproducing the empty
+  tuple. The general form: a diagnostics collector whose read is gated on a
+  settle has two ways to look wired up and still report nothing.
+- A comment asserting *why* the happy path is the only one that needs a
+  settle was itself the thing most likely to be wrong. The first draft of the
+  new `_drain_after_exit` comment read "the failure path above settles through
+  `_discard_drain` instead." That is false: `_discard_drain` calls
+  `_drain_stream_consumers`, which does not settle — it is the same helper
+  `_reconcile_run_tasks` calls *before* running its own settle loop, so the
+  settle belongs to that caller, not to the helper. The accurate reason the
+  happy path is the only one that needs a settle is duller and stronger: every
+  failure path here re-raises, so no `CommandResult` is ever assembled after
+  one, and the collectors it leaves unsettled are read by nobody. Catching this
+  needed a pass over the *negative* claim rather than the positive one; a
+  comment about what cannot happen is not exercised by any passing test, so
+  nothing but reading it back against the call graph will falsify it.
 - Adding a defaulted field to the middle of `RunOutputOptions` is a **public
   API break**, not a private refactor. The class is `frozen=True, slots=True`
   but *not* `kw_only`, so every field up to `annotate_failure` is
@@ -853,6 +891,61 @@ meaningful); `asyncio` propagates a drain-task exception into `run_sync`'s
 await path, which the RED reproduction demonstrates.
 
 ## Revision note
+
+Revision 22: the first round to change production code since Revision 17, so
+the freeze recorded in Revision 21 is lifted and re-established here. Three
+findings were live at `96ebb638`; all three were verified against the current
+tree before any edit, and all three were valid. Nothing was skipped, so there
+is no "no-action" reason to record.
+
+The Codex finding was the substantive one. Its stated remedy — "pass the
+settled line-stream diagnostics into that result assembly" — was right about
+the destination and quiet about the precondition, and the precondition is where
+the work was: passing the collectors through returns `()` until something
+settles them, and on the healthy `lines()` path nothing did. The repair is
+therefore two edits, `_drain_after_exit` settling after its successful gather
+mirroring `_subprocess_stream_run.py:186-189`, and `_run_to_command_result`
+passing `_relay_fallbacks_for_result(run.tasks.relay_diagnostics)`. Both are
+covered by a new public-path case in `test_broken_pipe_result_diagnostics.py`
+that drives `.lines()` with `BEST_EFFORT` through a closed sink.
+
+The two CodeRabbit pre-merge warnings were both grounded and both repaired. The
+User-Facing Documentation row was right that a new public feature shipped
+without its migration-guide section — and the guide's existing
+`## Echo-fallback diagnostics` section was worse than incomplete, it asserted
+`unicode_encode` as *the* single category a `RelayFallback` carries, which the
+new `broken_pipe` category makes false. That sentence is corrected and a new
+`## Opt-in broken-pipe policy for echoed output` section carries the adoption
+path. The correction is deliberately narrow: `EchoErrorCategory` holds a third
+member, `truncated`, which `_write_finished_echo_line` emits as an `EchoEvent`
+but never appends to `relay_fallbacks`, so naming the two that do reach the
+field is the strict truth where listing the enum would have been a fresh
+inaccuracy.
+
+The Testing (Compile-Time / Ui) row rested on a written repository policy
+(`AGENTS.md:166-167`) rather than on house style, so it was repaired rather
+than argued away. `cuprum/unittests/test_broken_pipe_echo_snapshot.py` locks
+the four bounded projections — result records, echo events, the warning's
+`cuprum_*` extras, and the metric name and labels — parametrized over policy
+and stream, so the artefact holds the `STRICT`-empty arm adjacent to the
+`BEST_EFFORT`-populated one. It is additive: the field-by-field assertions stay
+in the modules that own them. Nothing is redacted because nothing needs to be,
+which the module docstring argues rather than asserts. The snapshot was shown
+to be capable of failing by perturbing one projected value and restoring it;
+only the two `best_effort` arms failed, which is the correct response for an
+empty-arm contrast.
+
+One delegated report is worth recording as a limitation rather than a result:
+the scribe that edited the migration guide had no execution tool, so its
+wrap-width and fence-parity checks were derived by reading rather than by
+running `mdtablefix --check`. Those are hypotheses until the gate sweep below
+confirms them, and the guide's prose is the likeliest place for a re-wrap to be
+needed.
+
+Gates for this revision are reported on the pull request, not appended here,
+for the reason Revision 21 gives: writing a gate's verdict into this file moves
+the tip it describes. The revision that carries this sentence is the one the PR
+evidence describes.
 
 Revision 21: the record moved the tip, so the tip was re-gated. Writing
 Revision 20 (`911ef293`) and then correcting its test count (`cabdc317`) both

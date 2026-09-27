@@ -91,6 +91,47 @@ def test_best_effort_returns_a_result_when_stdout_sink_pipe_is_broken(
     )
 
 
+def test_lines_best_effort_reports_the_same_fallback_record(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """``lines()`` returns the record ``run()`` returns, not an empty tuple.
+
+    This test fails while the line-stream result omits its relay diagnostics.
+    The drain collectors are never settled on the healthy path, so the tuple
+    comes back empty even when a fallback was recorded, and it passes once the
+    drain settles them and the result carries them.
+    """
+    sink = _BrokenPipeSink()
+    command = python_builder("-c", "print('hello')")
+
+    async def collect() -> CommandResult:
+        """Iterate the stream to exhaustion and return its final result."""
+        stream = command.lines(
+            output=RunOutputOptions(
+                capture=True,
+                echo_stdout=True,
+                broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
+            ),
+            context=ExecutionContext(stdout_sink=typ.cast("typ.IO[str]", sink)),
+        )
+        with observe_echo(lambda _event: None):
+            [event async for event in stream]
+        assert stream.result is not None, (
+            "a completed line stream must expose its CommandResult"
+        )
+        return stream.result
+
+    result = asyncio.run(collect())
+
+    assert result.relay_fallbacks == (_EXPECTED_STDOUT_FALLBACK,), (
+        "line iteration must carry the stdout broken-pipe record, got "
+        f"{result.relay_fallbacks!r}"
+    )
+    assert sink.attempts == ["hello\n"], (
+        f"echo must stop after the first broken write, got attempts={sink.attempts!r}"
+    )
+
+
 def test_best_effort_accepts_the_string_spelling_of_the_policy(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
