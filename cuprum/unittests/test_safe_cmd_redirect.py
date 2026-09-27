@@ -188,6 +188,72 @@ def test_path_target_does_not_leak_the_descriptor(
     )
 
 
+@_posix_only
+def test_partial_owned_open_closes_what_it_already_opened(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed second open does not leak the descriptor the first one opened.
+
+    Both streams can name an owned path, and they are opened in stdout-then-
+    stderr order. The ``finally`` that closes owned descriptors wraps the
+    *spawn*, so a stderr open that fails never reaches it: without cleanup the
+    stdout descriptor opened moments earlier would leak, once per failed run.
+
+    Only the first open is forced to succeed and the second to fail, so the
+    assertion is about the partial case specifically rather than about the
+    general path, which ``test_path_target_does_not_leak_the_descriptor``
+    already covers.
+    """
+    _, execute = execution_strategy
+    out_log = tmp_path / "out.log"
+    err_log = tmp_path / "err.log"
+    command = python_builder("-c", _WRITE_BOTH)
+
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracking_open(path: object, flags: int, *args: object) -> int:
+        """Open the stdout target, then fail on the stderr target."""
+        if str(path) == str(err_log):
+            msg = "stderr target refused"
+            raise OSError(msg)
+        fd = real_open(path, flags, *args)  # ty: ignore[invalid-argument-type]
+        if str(path) == str(out_log):
+            opened.append(fd)
+        return fd
+
+    def tracking_close(fd: int) -> None:
+        """Close a descriptor, recording it when the target opened it."""
+        if fd in opened:
+            closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "close", tracking_close)
+
+    with pytest.raises(OSError, match="stderr target refused"):
+        execute(
+            command,
+            {
+                "output": _redirect_options(
+                    stdout=StdioTarget.path(out_log),
+                    stderr=StdioTarget.path(err_log),
+                )
+            },
+        )
+
+    assert opened, "the stdout target must have been opened before stderr failed"
+    assert sorted(closed) == sorted(opened), (
+        "a spawn that never happened must still close the descriptors it opened "
+        f"before failing; opened={opened} closed={closed}"
+    )
+
+
 def test_redirected_stream_is_not_captured(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
