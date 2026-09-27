@@ -1002,18 +1002,17 @@ substance was right: the cited users' guide line is prose twelve fences deep,
 so no example raises `NameError`, but `BrokenPipePolicy` genuinely appeared in
 no import line in that guide, and a reader following the prose had no way to
 obtain it. The import is now documented. The first spelling of that fix put the
-guidance inside a bare
-
-```python fence and was itself defective — the published-example extractor
-rejects an unmarked fence at collection time, taking the whole behavioural suite
-with it (`docs/users-guide.md:220: unmarked fence`) — so the guidance moved into
-prose, where it belongs, since no example in the guide uses `BEST_EFFORT`. That
-defect and the property module's own generation bug both have Surprises
-entries. The status stays COMPLETE: the property module is test material and the
-guide edit is prose about an import, so no production behaviour changed. The
-gate set for this revision is the first that must include `typecheck` and the
-Python gates on their own merits since the earliest revisions, because the
-`cuprum` tree is no longer byte-identical to the one the last full run read.
+guidance inside a bare ```python fence and was itself defective — the
+published-example extractor rejects an unmarked fence at collection time,
+taking the whole behavioural suite with it
+(`docs/users-guide.md:220: unmarked fence`) — so the guidance moved into prose,
+where it belongs, since no example in the guide uses `BEST_EFFORT`. That defect
+and the property module's own generation bug both have Surprises entries. The
+status stays COMPLETE: the property module is test material and the guide edit
+is prose about an import, so no production behaviour changed. The gate set for
+this revision is the first that must include `typecheck` and the Python gates
+on their own merits since the earliest revisions, because the `cuprum` tree is
+no longer byte-identical to the one the last full run read.
 
 Revision 16: no code changed. An eighth CodeRabbit pass at `f4c76c84` returned
 one finding, where the seventh had returned zero, and the two runs are directly
