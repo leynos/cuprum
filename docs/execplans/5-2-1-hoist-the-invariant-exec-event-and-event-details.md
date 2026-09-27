@@ -2831,10 +2831,35 @@ clean before and after — `check-fmt`, `markdownlint` (chaining `spelling`),
 runtime could not have skipped it). No sub-check was bounded or skipped, and
 the known host `actionlint` deadlock did not reproduce. The run is valid as a
 citation for `3315c5c3`: that SHA and the tree hash were identical before and
-after every gate, so no gate observed a mutation mid-run. The commits that
-follow it (`7121c46e` and any later documentation commit) carry no production
-change, so the result transfers to the branch head; log in
+after every gate, so no gate observed a mutation mid-run. Log in
 `/tmp/closeout-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
+
+**After the review dispositions, the suite was re-run at `d98fb5c9`** (the
+revision carrying the CodeRabbit fixes) and passed every gate again —
+`check-fmt`, `markdownlint` with `spelling`, `typecheck`, `lint` (interrogate
+100.0%, pylint `10.00/10`), `test` (`2549 passed, 63 skipped`; nextest
+`125 passed`), and `nixie` — with the tree clean before and after and nothing
+skipped. That the `lint` log was not cut off is checkable rather than asserted:
+it ends on `github-actions-lint`'s last recipe line,
+`actionlint -config-file .github/actionlint.yaml` (`Makefile:384`), which
+prints nothing on success, so the log reaching that line is what "no sub-check
+was bounded" means here. The command ran unbounded; no `timeout` appears in the
+log or the command that produced it. `make test-act` was not re-run, which is
+sound rather than an omission: it drives GitHub Actions workflows and no
+workflow file, Rust source, or production Python changed in the delta, whose
+only Python edits are docstrings — verified by inspecting both hunks. The delta
+from `3315c5c3` to `d98fb5c9` is four files: two documentation files (this plan
+and the evidence directory's `README.md`) and two docstring-only test edits.
+Logs in
+`/tmp/final-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
+
+One caveat on the evidence, recorded rather than glossed: the CodeRabbit CLI
+agent was the **only** review surface available, because the app skips draft
+PRs and this one was still a draft when the dispositions were made. There are
+therefore no GitHub-side review threads for them, and the four dispositions
+rest on the agent's JSON stream rather than on a threads API that could be
+cross-checked. Should the PR later leave draft, the app's findings will be a
+*fresh* surface, not a re-derivation of the ones disposed here.
 
 ### What was sacrificed for legibility and maintainability
 
