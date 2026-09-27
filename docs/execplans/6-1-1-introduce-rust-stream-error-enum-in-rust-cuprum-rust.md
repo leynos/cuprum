@@ -1,14 +1,16 @@
 # Centralize native stream errors (6.1.1)
 
-Status: IN PROGRESS — M1 complete, M2 open. Approved 2026-09-26; the publishing
+Status: COMPLETE — M1 and M2 both closed. Approved 2026-09-26; the publishing
 draft-PR and approval checkboxes below are recorded as done by that approval.
 M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
 and the native extension stage both pass, with `actionlint` locally
 unobservable (recorded in Progress and Surprises). Windows runtime evidence has
 since been obtained: it found two branch defects, both fixed at `dafbfa4e`, and
 the Windows job at that head succeeded (job `108519345532`; evidence in
-Progress). M2 closes the remaining evidence, reconciles the roadmap, and sets
-this status to COMPLETE.
+Progress). M2 closed the remaining evidence, reconciled the roadmap, and ticked
+6.1.1; the closing head is `7dba35cf`, whose CI run is `completed|success` with
+no non-success job, including the required `coverage` check (job
+`108538239040`) that this work existed to fix.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -529,7 +531,18 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       plan already said in "Concrete steps" that documentation-only commits
       need `make markdownlint`; the step was omitted anyway, and the gates run
       before the commit were `check-fmt` and `lint`, neither of which covers it.
-- [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
+- [x] (2026-09-27) **M2's required evidence is green on `7dba35cf`, and the
+      roadmap tick is done.** The CI run at that head is `completed|success`
+      with **no** non-success job: `lint-test` passes at the step that had
+      failed (`Lint Markdown`), and the required `coverage` check passes as job
+      `108538239040`, which is the check whose failure started this work. Both
+      extension-gated jobs pass, including Windows. `docs/roadmap.md` now
+      carries `[x]` on 6.1.1 and leaves 6.1.2 and all later items open
+      (verified by grep: phase 6 shows 1 ticked, 6 open). The tick is a
+      one-line hand edit because `mapsplice` cannot parse the roadmap; the
+      deviation, its proof, and the unrelated churn mapsplice also produced are
+      recorded in the Decision log, with the parser defect itself in Surprises.
+- [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
 ## Surprises & discoveries
@@ -718,6 +731,30 @@ when the abort happened, so their pass is real evidence rather than something
 the abort left unobserved. The converse is the trap
 `aborting-gate-leaves-later-checks-unobserved` warns about, and it does not
 apply here only because the aborting step is last.
+
+**`mapsplice` cannot parse this repository's roadmap, and the failure is silent
+until you try it.** Every command fails, including one that would change
+nothing, with a message that names the symptom and not the site:
+
+```text
+error="task list appeared without a current step" error_class="invalid_roadmap"
+```
+
+The site is phase `## 9.`, which has numbered tasks `9.1.1.`–`9.1.6.` sitting
+directly under the phase heading with no `### 9.1.` step heading between them.
+The grammar requires a step to own a task list, and the installer of that phase
+never added one, so the whole file became uneditable by the tool. This is on
+`main` and predates the branch. The diagnosis was confirmed by construction
+rather than by reading: adding the missing heading to a scratch copy turns the
+same failing command green. Anyone needing `mapsplice` on this repository must
+add that heading first; anyone ticking a single checkbox does not need
+`mapsplice` at all, since renumbering — its actual value — is not involved. See
+the Decision log for why this task hand-edited instead of repairing it.
+
+The related trap is that a tool which fails closed on a whole file gives no
+partial signal. `mapsplice` is not "broken for phase 9"; it is inert for the
+entire roadmap, so a later phase-6 or phase-8 edit would have failed the same
+way, and would have looked like a problem with *that* edit.
 
 ## Decision log
 
@@ -933,15 +970,61 @@ apply here only because the aborting step is last.
   `0.2.0-beta1` ships without 6.1.2: a release note is the right home for
   "errors are now classified at one boundary point", which is an internal
   statement with no user-visible consequence today.
+- (2026-09-27) **The roadmap tick is a one-line hand edit, not a `mapsplice`
+  run — a deviation from M2's stated method, approved before it was taken.** M2
+  says to "use the `mapsplice` skill to mark exactly 6.1.1 `[x]`". That is not
+  possible on this roadmap: `mapsplice` cannot parse it at all. Any command
+  fails, including a probe that changes nothing:
+
+  ```text
+  error="task list appeared without a current step" error_class="invalid_roadmap"
+  ```
+
+  The cause is pre-existing on `main`, not branch-induced: `docs/roadmap.md`
+  here is byte-identical to `origin/main`, and phase `## 9.` carries numbered
+  tasks `9.1.1.`–`9.1.6.` directly under the phase heading with no `### 9.1.`
+  step heading above them. The defect arrived with `b63a0f21` ("Add an idle
+  heartbeat for quiet children (#359) (#398)"). It was proven rather than
+  inferred: injecting a synthetic `### 9.1.` heading into a scratch copy makes
+  the same command parse and succeed (`EXIT=0`). Phase `0.2.0` is the roadmap's
+  other heading-less task list, but its bullets are unnumbered release notes
+  rather than addressed tasks, so it is not evidence of a second instance of
+  this defect.
+
+  A second, independent reason not to use `mapsplice` here: even with parsing
+  unblocked, its output rewrote unrelated prose. On a scratch copy it escaped
+  parentheses in three unrelated phase headings (`## 6. … (issues …)` →
+  `## 6. … \(issues …\)`, and likewise 7 and 9), re-indented task continuation
+  lines from two spaces to four, and inserted blank lines between each task and
+  its sub-bullets — six hunks across phases 6, 7 and 9 for a single checkbox.
+  That is the churn the skill's own "Known caveat" warns about.
+
+  The tick is therefore a hand edit changing `- [ ]` to `- [x]` on the 6.1.1
+  item: one line, `1 insertion(+), 1 deletion(-)`. Nothing about this edit needs
+  `mapsplice`'s actual value-add, which is renumbering and `Requires`
+  reference rewriting; ticking a checkbox renumbers nothing, and 6.1.1 is only
+  ever a *referenced* anchor (`Requires 6.1.1` in 6.1.2 and three later items),
+  never a reference site. 6.1.2 and every later item are left open, verified by
+  grep. The parser defect itself is **not** repaired here: adding a `### 9.1.`
+  heading to an unrelated completed phase would be scope creep in a PR about
+  error classification, and it belongs in its own change against `main`. It is
+  recorded under Surprises so the next user of `mapsplice` does not have to
+  rediscover it.
 
 ## Outcomes & retrospective
 
-M1 is complete as of 2026-09-27; M2 is not. The one focused boundary change
+Both milestones are complete as of 2026-09-27. The one focused boundary change
 landed as intended: a crate-private `RustStreamError`, typed validators, and a
 single `From<RustStreamError> for PyErr` conversion point reached once through
-`run_stream_operation`'s `map_err(PyErr::from)`. The roadmap checkbox is *not*
-yet ticked — publishing this plan completes nothing, and `docs/roadmap.md` is
-M2's to change.
+`run_stream_operation`'s `map_err(PyErr::from)`. The roadmap checkbox is ticked
+at `7dba35cf`, the head whose CI run is fully green including the required
+`coverage` check. The clause that sentence replaces — "the roadmap checkbox is
+*not* yet ticked" — was true when written and is left in the record here rather
+than silently deleted, because it is the reason 6.1.1's Success criterion was
+checked against the code before the tick rather than assumed from the plan:
+`grep` shows no PyErr construction in the validators or the stream call sites,
+and both halves of the criterion are asserted against the compiled extension
+(`ValueError` for `buffer_size`; `OSError` carrying `errno`/`winerror` for I/O).
 
 What the evidence covers, stated at the strength it actually has:
 
