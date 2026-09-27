@@ -12,11 +12,13 @@
 //! here inspects a `PyErr`: this crate links no interpreter, so the Python
 //! half of the contract is asserted by the extension-required Python suite.
 //!
-//! Every step is fallible and returns a `StepResult`. `rstest-bdd` erases the
-//! step attributes while expanding, so these functions carry no test marker by
-//! the time the house lint sees them, and a `.expect(...)` here would read as
-//! production code. Returning a step error also names the step that failed,
-//! where an `expect` reports only the slot access that came up empty.
+//! Every step is fallible and returns a `StepResult`. The module is included
+//! through `#[cfg(test)]`, so the lint sees these functions as test code and
+//! permits `expect`; returning a step error is preferred anyway, because it
+//! names the step that failed where an `expect` reports only the slot access
+//! that came up empty. Every step is also reachable from a bound scenario —
+//! an unreachable step would compile, register, and never run, which is how
+//! this module first lost three of its five scenarios.
 
 use cuprum_streams::PumpError;
 use rstest::fixture;
@@ -260,8 +262,17 @@ fn observe(error: RustStreamError) -> ObservedError {
     }
 }
 
-#[scenario(path = "tests/features/stream_errors.feature")]
-fn typed_native_stream_failures(context: StreamErrorContext) {
+// One `#[scenario]` binds exactly one scenario, and a binding that omits both
+// `name` and `index` silently takes the first in the file. Each scenario below
+// is therefore bound by name: an unnamed binding would run "Reject an invalid
+// buffer before stream preparation" three times over and leave the rest of the
+// feature unexecuted, which looks like coverage while proving nothing.
+
+#[scenario(
+    path = "tests/features/stream_errors.feature",
+    name = "Reject an invalid buffer before stream preparation"
+)]
+fn rejects_an_invalid_buffer(context: StreamErrorContext) {
     // `rstest-bdd` injects the fixture; the body runs after every step, so
     // the scenario itself has nothing left to assert.
     let _ = context;
@@ -269,8 +280,34 @@ fn typed_native_stream_failures(context: StreamErrorContext) {
 
 #[scenario(
     path = "tests/features/stream_errors.feature",
+    name = "Reject a buffer above the cap"
+)]
+fn rejects_a_buffer_above_the_cap(context: StreamErrorContext) { let _ = context; }
+
+#[scenario(
+    path = "tests/features/stream_errors.feature",
     name = "Accept a valid buffer size"
 )]
 fn accepts_a_valid_buffer_size(context: StreamErrorContext, size: isize) {
+    // The outline's `size` column binds to this parameter; the same value
+    // reaches the steps of each generated case.
     let _ = (context, size);
 }
+
+#[scenario(
+    path = "tests/features/stream_errors.feature",
+    name = "Reject a negative descriptor"
+)]
+fn rejects_a_negative_descriptor(context: StreamErrorContext) { let _ = context; }
+
+#[scenario(
+    path = "tests/features/stream_errors.feature",
+    name = "Retain a native I/O failure"
+)]
+fn retains_a_native_io_failure(context: StreamErrorContext) { let _ = context; }
+
+#[scenario(
+    path = "tests/features/stream_errors.feature",
+    name = "Retain a semantic stream failure"
+)]
+fn retains_a_semantic_stream_failure(context: StreamErrorContext) { let _ = context; }

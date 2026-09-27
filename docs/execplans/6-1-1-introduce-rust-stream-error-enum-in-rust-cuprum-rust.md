@@ -498,6 +498,89 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
 ## Surprises & discoveries
 
+**Three of the five behavioural scenarios never ran, and the only signal was a
+coverage percentage.** `stream_error_behaviour.rs` carried two `#[scenario]`
+bindings for the five scenarios `stream_errors.feature` declared. A binding
+that omits both `name` and `index` silently takes the *first* scenario in the
+file (`rstest-bdd-macros-0.5.0`, selector semantics in its `scenario` docs), so
+the unnamed binding ran "Reject an invalid buffer before stream preparation"
+and the second binding ran the outline. "Reject a buffer above the cap",
+"Retain a native I/O failure" and "Retain a semantic stream failure" were
+declared, parsed, never bound, and never executed. The suite was green; the
+feature file read as complete coverage.
+
+The result was reachable only from the `coverage` CI job, which is a *required*
+check and which had been `cancelled` by the concurrency group on three earlier
+pushes, so this was its first observation on the branch. It failed:
+
+```
+Coverage decreased
+Current coverage: 86.05%
+Baseline coverage: 87.35%
+Tolerance: +/-1.00 percentage points
+```
+
+The failing pair was identified by arithmetic rather than inference. The
+ratchet step runs `ratchet_coverage.py` twice against two independent baselines,
+Rust then Python, and the failure message names neither pair; the reported
+`86.05` matches the Rust half exactly (975/1133 = 86.0547%, while the Python
+half was 89.65 and passed). The per-file decomposition then names the cause:
+`stream_error_behaviour.rs` contributes +21 uncovered lines (absent → 20/41).
+`cargo nextest list` confirms the mechanism — only
+`typed_native_stream_failures` and `accepts_a_valid_buffer_size::case_{1,2,3}`
+were registered.
+
+Measuring the baseline took a second pass and one correction. Local
+`cargo llvm-cov` reaches a *superset* of production lines, so its file line
+totals are larger and its percentages differ from CI's; the two are not
+comparable, and an earlier reading of the baseline as "87.53%, an exact match
+to both printed numbers" was wrong — 87.53% is the local toolchain's figure.
+CI instruments with **rustc 1.85.0**, and only at 1.85.0 does the baseline
+resolve to 946/1083 = 87.35% exactly. Both printed numbers are then reproduced
+against CI's own report: 86.05% and 87.35%.
+
+The consequence was not the 1.48 pp dip but that **R2's OS-code-retention
+behaviour was unverified**. `observe()` maps `PumpError::Io` through
+`inner.raw_os_error()`, and *no bound scenario ever reached that arm*, so
+nothing in the suite would have failed had the code been dropped. Fixed by
+binding every scenario by name and adding a scenario for the descriptor path,
+whose steps had been unreachable since they were written. Verified to have
+teeth: setting `observe()`'s code to `None` fails
+`retains_a_native_io_failure` with "a stream failure carrying an OS code was
+expected, found Stream { code: None, ... }".
+
+The fix binds all five scenarios by name and adds a scenario for the descriptor
+path, whose steps had been unreachable since they were written. Re-measured
+with CI's own toolchain (`cargo +1.85.0 llvm-cov … --all-targets --all-features
+--cobertura`), the same `.rs` scope moves 975/1133 = 86.05% → 997/1134 =
+**87.92%**, above the 87.35% baseline rather than merely inside tolerance, with
+`stream_error_behaviour.rs` at 60/60 (the earlier 41-line figure was itself a
+newer-toolchain measurement).
+
+One change was made and then reverted, and the reversal is the more useful
+record. The scenario's error code was moved from 9 to 8 on the stated grounds
+that 9 reads as a negative errno on Windows — a claim that is not in the code:
+`errors.rs` selects by `cfg(unix)`/`cfg(windows)`, not by sign, and it tests
+with 9 throughout. The plan's own behavioural spec says only "a platform error
+code", so 9 was free and the edit was gratuitous. Both the edit and its
+justification are withdrawn; the feature diff is additive only.
+
+Three lessons. A `#[scenario]` that binds the wrong scenario is
+indistinguishable from a passing test — the macro has no diagnostic for "a
+feature scenario no binding selects", so nothing but line coverage reports the
+gap. A *required* check that the concurrency group keeps cancelling is not being
+observed; three green-looking pushes had simply never run it. And a coverage
+percentage is only comparable to CI's own number when it comes from CI's own
+toolchain: the same commit measures differently under a newer rustc, which
+nearly produced a false diagnosis of which file the ratchet was reading.
+
+A fourth, smaller one: the first version of the fix passed `cargo nextest` but
+failed `make check-fmt`. `rust/.rustfmt.toml` sets `fn_single_line = true`, so
+four one-statement scenario bodies rustfmt wanted as `fn f(..) { body }` were
+written across three lines. Running the focused test target is not a substitute
+for the formatting gate, and the formatter here is the pinned nightly
+(`nightly-2026-05-28`), not the default toolchain.
+
 **Red evidence was captured after the fact, not before the edit.** The plan
 requires the new Rust tests' *initial failure* to identify the absent enum or
 typed result. The first build attempt was blocked by the lockfile/MSRV problem
@@ -834,6 +917,13 @@ What the evidence covers, stated at the strength it actually has:
   is unchanged from V4 (13 + 116), and the mutation experiment recorded in
   Progress showed a real-extension assertion failing when the classification
   was deliberately broken.
+- R2's source-retention half was *asserted* by V2 but *unexercised* until
+  2026-09-27. The scenarios naming it were declared without a `#[scenario]`
+  binding and never ran (see Surprises). They are now bound and pass, and the
+  mutation V2 requires — discarding the OS code in the classifier — was run
+  and fails `retains_a_native_io_failure` as specified. Before that fix, the
+  R2 claim rested on `stream_error_tests.rs` alone, which tests the conversion
+  directly rather than through a scenario.
 - Scope and documentation accuracy (R3) are recorded in Progress, including two
   guide counts re-measured against the tree rather than trusted as prose and
   one users'-guide sentence falsified by measurement and corrected.
@@ -965,6 +1055,11 @@ The snippet shows the shape; add `#[error("{0}")]` to the argument variants,
 `#[error(transparent)]` to `Stream`, and `#[from]` to its payload. Reuse the
 existing `thiserror = "2.0.18"` requirement in the integration crate's manifest
 and update `rust/Cargo.lock` without unrelated upgrades.
+
+> **Superseded — the premise is false.** `cuprum-rust` declares no `thiserror`
+> requirement to reuse: it is declared only in `cuprum-streams`. The line above
+> is kept as the text that was approved; M1 instead *added* the dependency,
+> as the Decision log entry of 2026-09-26 records.
 
 Change `validate_buffer_size` and `convert_fd` to return
 `Result<_, RustStreamError>`, preserving `convert_platform_fd` and its string
