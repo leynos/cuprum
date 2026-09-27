@@ -33,13 +33,16 @@ if typ.TYPE_CHECKING:
 # The gate: construction must be at most this share of the consume subtree.
 # The plan fixes this threshold, so it is a constant rather than an option.
 #
-# Raised from 10.0 to 28.0 on 2026-09-27, with user approval. The retained
-# per-line `ExecEvent` construction that V2/V4's observation contract requires
-# puts a floor of roughly 24-27% on the achievable share, so 10% was
-# unreachable by this design; 28% sits one point above the aggressive
-# projection. The derivation is in
+# Revised 10.0 -> 28.0 -> 30.0, both 2026-09-27, with user approval. The
+# retained per-line `ExecEvent` construction that V2/V4's observation contract
+# requires puts a floor of roughly 24-27% on the achievable share, so 10% was
+# unreachable by this design. The completed hoist measured 29.91% (three
+# matched pairs, candidate range 0.0423 points), which cleared the floor the
+# projection predicted but missed 28%; 30.0 is the approved target, sited
+# above the measured result rather than on a further projection. The
+# derivation, the measured miss, and the options for closing it are in
 # docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md.
-CONSTRUCTION_SHARE_LIMIT_PERCENT = 28.0
+CONSTRUCTION_SHARE_LIMIT_PERCENT = 30.0
 
 
 def _caller_depth(

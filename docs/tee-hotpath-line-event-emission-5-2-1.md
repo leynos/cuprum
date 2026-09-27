@@ -9,8 +9,9 @@ in Markdown.
 
 ## Result
 
-The hoist is implemented, correct, and materially faster. It **misses** roadmap
-item 5.2.1's revised construction-share threshold of 28%.
+The hoist is implemented, correct, and materially faster. It **meets** roadmap
+item 5.2.1's construction-share threshold, at 30% as revised on 2026-09-27 with
+user approval.
 
 | Quantity                                        | Control (`01ec41bd`) | Candidate (`f4d1010a`) | Change         |
 | ----------------------------------------------- | -------------------- | ---------------------- | -------------- |
@@ -18,18 +19,25 @@ item 5.2.1's revised construction-share threshold of 28%.
 | wall time, median, profiled callback scenario   | 260.97 s             | 180.16 s               | **−30.96%**    |
 | wall time, median, unprofiled callback scenario | 242.534 s            | 178.789 s              | **−26.28%**    |
 
-Every candidate capture exceeds the 28% bar, the smallest by 1.8991 points. The
+Every candidate capture is below the 30% bar, the closest by 0.0586 points. The
 candidate's dispersion is 0.0423 points across three matched pairs against a
-two-percentage-point tolerance, so the miss is a stable property of the
-implementation rather than an unstable observation. The control misses the same
-bar by 6.04 to 7.35 points, which is expected: the control predates the hoist.
+two-percentage-point tolerance, so the result is a stable property of the
+implementation rather than a lucky observation. Each of the three controls
+exceeds the same bar, by 4.04 to 5.35 points: the pairs separate cleanly, and
+the threshold is therefore discriminating rather than merely permissive.
 
-**Why the threshold is missed, in one sentence.** The share is `N/D` and the
+The bar was 28% when the collection ran, and the same captures missed it by
+1.90 points. The measurement did not change; the target did, on the evidence
+below. The section "Why the share fell short of the 28% projection" is retained
+because it is the case for that revision, and "Acceptance status" records which
+target the committed numbers were measured against.
+
+**Why the 28% bar was missed, in one sentence.** The share is `N/D` and the
 hoist shrinks both terms; it removed 39.8% of N and 31.0% of D, where the
 projection the bar was sited on assumed N would fall 39.5% but D only 13.7%.
 The numerator behaved as predicted and the denominator shrank more than twice
 as far, and it is the smaller denominator that leaves the surviving numerator
-at a higher share. See "Why the share fell short of the projection".
+at a higher share. See "Why the share fell short of the 28% projection".
 
 **The measurement does not say the hoist is worthless.** It says a
 percentage-of-total-work gate does not capture "the hot path got faster" for a
@@ -209,13 +217,14 @@ re-measurement is the evidence that the no-callback path is genuinely
 unaffected: two independent no-callback scenarios both land within a percentage
 point of parity.
 
-## Why the share fell short of the projection
+## Why the share fell short of the 28% projection
 
 The share **did** fall: 34.2928% to 29.9087%, a 4.3841-point improvement, on
-every pair. What it did not do is reach the bar. The threshold was revised from
-10% to 28% before implementation, on a projected post-hoist share of 24.35% to
-26.91%, and the measurement lands above that range. Phrasing this as "the share
-did not fall" would be wrong; the projection over-predicted how far it would.
+every pair. What it did not do is reach the 28% bar. The threshold was revised
+from 10% to 28% before implementation, on a projected post-hoist share of
+24.35% to 26.91%, and the measurement lands above that range. Phrasing this as
+"the share did not fall" would be wrong; the projection over-predicted how far
+it would.
 
 The projection subtracted the same _absolute_ frame weights from numerator and
 denominator, which assumes each removed sample was as likely to be counted by
@@ -242,8 +251,9 @@ short of that by a similar margin:
 | r2-candidate | 5317 | 17758 | 29.9414% | 18989.3            | −1231.3   |
 | r3-candidate | 5208 | 17413 | 29.9087% | 18600.0            | −1187.0   |
 
-_Table 7: The candidate misses the bar by a consistent ~1200 denominator
-samples, or 6.3 to 6.9% of its own D._
+_Table 7: Against the 28% bar, the candidate missed by a consistent ~1200
+denominator samples, or 6.3 to 6.9% of its own D. Against the revised 30% bar
+the same rows clear it; Table 11 gives the headroom._
 
 Reconstructing the projection on the _final_ rule set, rather than against the
 pre-hoist rule set it was written with, isolates the error. Had the removals
@@ -313,6 +323,23 @@ capture. Removing it moves the share from 29.9414% to 30.9686% — a worse numbe
 from work the roadmap explicitly wants done. Item 5.2.1's share gate therefore
 cannot be the acceptance instrument for 5.2.2.
 
+**At the revised 30% target this stops being a caveat and becomes a dated
+forecast.** 5.2.1 now passes by 0.0586 points, and 5.2.2 would move the same
+number to 30.9686% — 0.9686 points _above_ the bar, by succeeding. So the
+criterion as written is satisfied by the state of the tree at this commit and
+will be contradicted by the next item the roadmap schedules. Two things follow.
+First, 5.2.2 must not be accepted or rejected on this share; its own criterion
+(`inspect.isawaitable` contributes 0 sampled frames in the per-line path) is
+the one that measures what it does. Second, anyone re-running 5.2.1's V5 gate
+after 5.2.2 lands should expect a failure and should read it as the metric's
+known inversion rather than as a regression — the numbers to compare are the
+per-frame contributions, which the decomposition tables above provide.
+
+That a criterion is met at a commit where it is about to be broken is not a
+reason to withhold the pass; the measurement is what it is, and 5.2.1's Success
+text is written as a state, not a trend. It is recorded so the forecast is not
+rediscovered as a surprise.
+
 `ExecEvent` is declared `@dc.dataclass(frozen=True, slots=True)` with 27
 fields, and the `frozen=True` guard dominates the constructor's cost:
 `dataclasses` emits one `object.__setattr__` call per field, 27 full call
@@ -342,21 +369,45 @@ it is a public-API decision outside item 5.2.1's approved scope.
 
 ## Acceptance status
 
-| Requirement                                  | Status      | Evidence                                                  |
-| -------------------------------------------- | ----------- | --------------------------------------------------------- |
-| R1 — invariant fields hoisted per stream     | met         | V1; no per-line `_EventDetails`, no per-line argv rebuild |
-| R2 — payloads and hooks unchanged            | met         | V2–V4; behavioural scenarios                              |
-| R3 — construction share at most 28%          | **NOT met** | 29.9087% median, minimum 29.8991%                         |
-| R4 — Python-first tuning, unchanged dispatch | met         | scoped diff; unchanged dispatcher                         |
+| Requirement                                  | Status | Evidence                                                  |
+| -------------------------------------------- | ------ | --------------------------------------------------------- |
+| R1 — invariant fields hoisted per stream     | met    | V1; no per-line `_EventDetails`, no per-line argv rebuild |
+| R2 — payloads and hooks unchanged            | met    | V2–V4; behavioural scenarios                              |
+| R3 — construction share at most 30%          | met    | 29.9087% median, worst 29.9414%, limit 30.0               |
+| R4 — Python-first tuning, unchanged dispatch | met    | scoped diff; unchanged dispatcher                         |
 
 V5's regression tolerances all pass: `D ≥ 10000` in every capture (minimum
 17413), candidate share range at most two points (0.0423), five unprofiled
 rounds per scenario for the callback workload and both no-callback controls,
 and no scenario slowed by more than 5%.
 
-Item 5.2.1 remains blocked against R3. The measurement and its decomposition
-are committed so the threshold decision rests on this artefact rather than on a
-further projection.
+All six captures were re-classified at the 30% limit with the committed
+classifier and rule file, unchanged from the collection: every candidate reports
+`pass` and every control reports `fail_above_limit`. The
+`construction_share_percent` values are identical to the 28% run — only
+`limit_percent` and `status` moved, which is the check that the revision
+changed the target and not the measurement.
+
+**The margin at 30% is thin, and that is recorded rather than presented as
+comfort.** Expressed as the denominator headroom each pair has before it would
+cross 30%:
+
+| pair         | N    | D     | share    | D required for 30% | headroom | as % of required |
+| ------------ | ---- | ----- | -------- | ------------------ | -------- | ---------------- |
+| r1-candidate | 5244 | 17539 | 29.8991% | 17480.0            | +59.0    | 0.34%            |
+| r2-candidate | 5317 | 17758 | 29.9414% | 17723.3            | +34.7    | 0.20%            |
+| r3-candidate | 5208 | 17413 | 29.9087% | 17360.0            | +53.0    | 0.31%            |
+
+_Table 11: Distance to the 30% bar, per candidate pair._
+
+The tightest pair clears by 0.0586 points. That is **larger** than the
+0.0423-point spread the three pairs show, so the pass is not an artefact of
+sampling noise — but it is the same order of magnitude, which means the
+criterion is close to being undecidable on this instrument. Two consequences
+worth carrying forward: the measurement should not be relied on to distinguish
+a small regression, and the systematic direction of the metric documented under
+"What the residual numerator is" (a faster path that removes pre-constructor
+work _raises_ the share) applies to any future change here, including 5.2.2.
 
 ## Machine-readable outputs
 

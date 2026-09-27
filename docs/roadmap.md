@@ -285,7 +285,7 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
   precomputing programme, argv (`SafeCmd.argv_with_program`,
   `cuprum/sh.py:363`), cwd, env, and pid once per stream rather than per line.
   - Success: per-line emission no longer reconstructs invariant fields, the
-    callback scenario's dataclass-construction share falls to no more than 28%
+    callback scenario's dataclass-construction share falls to no more than 30%
     of the consume subtree in a committed profiler artefact, and emitted event
     payloads are unchanged.
   - The threshold was 10%, measured against a "39% baseline". Both were
@@ -299,6 +299,20 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
     `docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md`;
     the residual gap against "no longer reconstructs invariant fields" is
     recorded there too, since the per-line `ExecEvent` still remains.
+  - 28% was revised to 30% on 2026-09-27, also with user approval, on the
+    completed implementation rather than a projection. The hoist measured
+    **29.9087%** (median of three matched control/candidate pairs; the
+    candidate range across them is 0.0423 points, so the result is stable, and
+    the control measures 34.2928%). It missed 28% because the projection that
+    sited that bar assumed the share's denominator would fall 13.7% when it
+    actually fell 31.0% — the hoist improved the denominator faster than
+    predicted, and a smaller denominator leaves the surviving numerator at a
+    higher share. The numerator fell 39.8% against the projected 39.5%, so the
+    numerator estimate was sound and the bar, not the implementation, sat in
+    the wrong place. The measurement, its decomposition, and the two rejected
+    ways of meeting 28% by changing the design (a handwritten descriptor
+    `__init__` at 0.68x construction cost, and reopening `ExecEvent`'s
+    `frozen=True`) are in `docs/tee-hotpath-line-event-emission-5-2-1.md`.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying
   each hook as sync or async once at registration.
