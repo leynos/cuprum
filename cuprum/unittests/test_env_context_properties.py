@@ -228,6 +228,55 @@ def test_resolve_env_policy_rejects_invalid_modes(
         )
 
 
+@settings(max_examples=150)
+@given(overlay=_OPTIONAL_POLICY_OVERLAYS)
+def test_inherit_renders_exactly_as_overlay(
+    overlay: dict[str, str | UnsetType] | None,
+) -> None:
+    """``INHERIT`` and ``OVERLAY`` differ in name only, never in rendering.
+
+    The two modes are documented as composing identically, and the whole
+    difference between them is that ``INHERIT`` records that an outer scope
+    already chose the policy. That distinction disappears at render time, so
+    a regression that gave ``INHERIT`` its own rendering branch would be
+    invisible to every composition test while silently changing what a child
+    receives.
+    """
+    assert render_env(overlay, EnvMode.INHERIT) == render_env(
+        overlay, EnvMode.OVERLAY
+    ), "an inherit policy must render exactly as an overlay policy does"
+
+
+@settings(max_examples=150)
+@given(overlay=_OPTIONAL_POLICY_OVERLAYS)
+def test_replace_rendering_discards_the_live_environment(
+    overlay: dict[str, str | UnsetType] | None,
+) -> None:
+    """A replacement render starts from empty, so no ambient key survives.
+
+    The overlay alphabet is disjoint from real variable names, so the equality
+    below is the whole assertion for the supplied entries; ``PATH`` is checked
+    separately because it is the ambient key a replacement child most often
+    needs and most conspicuously loses.
+    """
+    rendered = render_env(overlay, EnvMode.REPLACE)
+    expected = {
+        key: value
+        for key, value in (overlay or {}).items()
+        if not isinstance(value, UnsetType)
+    }
+
+    assert rendered is not None, (
+        "a replacement boundary must always produce an explicit environment"
+    )
+    assert rendered == expected, (
+        "replacement must retain exactly its own non-UNSET entries"
+    )
+    assert "PATH" not in rendered, (
+        "a replacement boundary must not carry the ambient PATH through"
+    )
+
+
 @pytest.mark.parametrize("invalid_mode", [None, "replace"])
 def test_render_env_rejects_invalid_modes(invalid_mode: object) -> None:
     """Rendering accepts only typed ``EnvMode`` policy values."""

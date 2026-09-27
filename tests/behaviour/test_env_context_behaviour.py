@@ -58,7 +58,7 @@ def test_explicit_unset_removes_inherited_variable() -> None:
 
 @scenario(
     "../features/env_context.feature",
-    "Replace mode reaches a pipeline stage",
+    "Replace mode reaches every pipeline stage",
 )
 def test_replace_mode_reaches_pipeline_stage() -> None:
     """Coverage for pipeline replacement semantics."""
@@ -213,12 +213,15 @@ def when_run_pipeline_with_replacement_context(
 ) -> None:
     """Run a two-stage pipeline under one per-call replacement policy."""
     monkeypatch.setenv("CUPRUM_BDD_PIPELINE_PARENT", "parent-value")
-    producer = builder(
-        "-c",
+    sample = (
         "import os;print(os.environ.get('CUPRUM_BDD_PIPELINE_PARENT', '<missing>'));"
-        "print(os.environ.get('CUPRUM_BDD_PIPELINE_VALUE', '<missing>'))",
+        "print(os.environ.get('CUPRUM_BDD_PIPELINE_VALUE', '<missing>'))"
     )
-    consumer = builder("-c", "import sys;print(sys.stdin.read().strip())")
+    producer = builder("-c", sample)
+    # The consumer samples its own environment too, ahead of forwarding stdin:
+    # a bare pass-through would exercise only the producer, leaving a
+    # regression confined to the second stage undetected.
+    consumer = builder("-c", f"import sys;print(sys.stdin.read().strip());{sample}")
     result = (producer | consumer).run_sync(
         context=ExecutionContext(
             env={"CUPRUM_BDD_PIPELINE_VALUE": "replacement"},
@@ -228,11 +231,14 @@ def when_run_pipeline_with_replacement_context(
     behaviour_state["stdout"] = (result.stdout or "").splitlines()
 
 
-@then("the pipeline stage receives only the replacement value")
+@then("every pipeline stage receives only the replacement value")
 def then_pipeline_stage_receives_replacement(
     behaviour_state: dict[str, object],
 ) -> None:
-    """Assert the pipeline stage uses the same replacement policy."""
-    assert behaviour_state["stdout"] == ["<missing>", "replacement"], (
-        "each pipeline stage must receive the replacement environment"
-    )
+    """Assert each pipeline stage uses the same replacement policy."""
+    assert behaviour_state["stdout"] == [
+        "<missing>",
+        "replacement",
+        "<missing>",
+        "replacement",
+    ], "each pipeline stage must receive the replacement environment"

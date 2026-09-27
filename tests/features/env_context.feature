@@ -23,7 +23,7 @@ Feature: Scoped env context manager
     When I run a command inside an env scope explicitly unsetting CUPRUM_BDD_UNSET
     Then the subprocess does not receive CUPRUM_BDD_UNSET and the parent retains it
 
-  Scenario: Replace mode reaches a pipeline stage
+  Scenario: Replace mode reaches every pipeline stage
     Given a python builder available to the test catalogue
     When I run a pipeline with a replacement execution context
-    Then the pipeline stage receives only the replacement value
+    Then every pipeline stage receives only the replacement value

@@ -73,8 +73,15 @@ def test_replace_policy_reaches_every_pipeline_stage(
     supplied = "CUPRUM_TEST_PIPELINE_SUPPLIED"
     monkeypatch.setenv(inherited, "parent")
     parent_snapshot = dict(os.environ)
-    producer = python_builder("-c", _print_values(inherited, supplied))
-    consumer = python_builder("-c", "import sys;print(sys.stdin.read().strip())")
+    # Both stages sample their own environment rather than the consumer acting
+    # as a pass-through. ``_pipeline_spawn`` merges the policy per stage, so a
+    # consumer that only forwarded stdin would leave a regression confined to
+    # the second stage undetected: the producer's report would stay correct.
+    stage_values = _print_values(inherited, supplied)
+    producer = python_builder("-c", stage_values)
+    consumer = python_builder(
+        "-c", f"import sys;print(sys.stdin.read().strip());{stage_values}"
+    )
 
     result = (producer | consumer).run_sync(
         context=ExecutionContext(
@@ -83,11 +90,53 @@ def test_replace_policy_reaches_every_pipeline_stage(
         )
     )
 
-    assert result.stdout == "<missing>|stage\n", (
+    assert result.stdout == "<missing>|stage\n<missing>|stage\n", (
         "every pipeline stage must receive the replacement environment"
     )
     assert dict(os.environ) == parent_snapshot, (
         "pipeline execution must not mutate os.environ"
+    )
+
+
+def test_inherit_mode_never_escapes_an_outer_replacement_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """An inherit scope keeps the outer replacement boundary it was created in.
+
+    ``INHERIT`` records that an outer scope already chose the policy, so an
+    inner inherit scope must not resurrect the environment a replacement
+    boundary discarded.
+
+    The composition rule is what this pins, not the rendering: overlay and
+    inherit render identically by design, so a regression that gave ``INHERIT``
+    its own rendering branch is invisible here and is caught by
+    ``test_inherit_renders_exactly_as_overlay`` instead. What a rendering test
+    cannot see is a composition that treated ``INHERIT`` as a fresh boundary,
+    and that is exactly what this asserts against.
+
+    Both the scoped and the per-call route are exercised, because they resolve
+    the mode through different entry points.
+    """
+    escaped = "CUPRUM_TEST_INHERIT_ESCAPED"
+    own = "CUPRUM_TEST_INHERIT_OWN"
+    monkeypatch.setenv(escaped, "parent-value")
+    command = python_builder("-c", _print_values(escaped, own))
+
+    with env({"CUPRUM_TEST_INHERIT_OUTER": "outer"}, mode=EnvMode.REPLACE):
+        with env({own: "scoped"}, mode=EnvMode.INHERIT):
+            scoped_run = command.run_sync()
+        per_call = command.run_sync(
+            context=ExecutionContext(env={own: "per-call"}, env_mode=EnvMode.INHERIT)
+        )
+
+    assert scoped_run.stdout == "<missing>|scoped\n", (
+        "an inherit scope inside a replacement boundary must not read the live "
+        "environment that boundary discarded"
+    )
+    assert per_call.stdout == "<missing>|per-call\n", (
+        "a per-call inherit policy inside a replacement boundary must not read "
+        "the live environment that boundary discarded"
     )
 
 

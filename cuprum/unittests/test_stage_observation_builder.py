@@ -124,6 +124,29 @@ def test_replace_env_policy_is_tagged_for_observers() -> None:
     )
 
 
+def test_replace_env_policy_is_tagged_for_every_pipeline_stage() -> None:
+    """Each pipeline stage carries the replacement boundary, not just the first.
+
+    Tags are grafted per stage, so a regression that published the mode only
+    for the stage it happened to resolve first would leave every single-command
+    assertion above green while a consumer of stage two onwards saw an ordinary
+    overlay run.
+    """
+    command = sh.make(ECHO)("observed")
+    context = ExecutionContext(
+        env={"CUPRUM_TEST_PIPELINE_OBSERVE_REPLACE": "value"},
+        env_mode=EnvMode.REPLACE,
+    )
+
+    stages = _pipeline_tags((command, command), context, capture=True, echo=False)
+
+    assert len(stages) == 2, "the fixture pipeline must have two stages to check"
+    assert all(tags["env_mode"] is EnvMode.REPLACE for tags in stages), (
+        "every pipeline stage must expose the replacement tag, got "
+        f"{[tags.get('env_mode') for tags in stages]!r}"
+    )
+
+
 def test_caller_tags_cannot_spoof_the_environment_mode() -> None:
     """Only replacement policies may publish the reserved mode tag."""
     command = sh.make(ECHO)("observed")
