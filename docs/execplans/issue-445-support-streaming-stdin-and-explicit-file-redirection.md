@@ -245,7 +245,30 @@ likelihood, and mitigation.
   `make typecheck` reports zero diagnostics. The maturin wheel snapshot is
   regenerated from a real wheel build, which also picked up the
   previously-unrecorded `cuprum/_stdio_plan.py` from the 04:45Z pass.
-- [ ] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
+- [x] (2026-09-27 07:20Z) EP-M2 plateau committed as `77553d30`, on a fully
+  green gate sweep. All seven targets ran under `scrutineer`, sequentially,
+  each teed under `/tmp`: `check-fmt`, `lint`, `typecheck`, `markdownlint`,
+  `nixie`, `spelling`, `test`. `test` printed nine pytest sessions all green
+  (2507/638/2/116/4/123/12/21/22 passed), nextest `125 tests run: 125 passed`,
+  and zero `FAILED`/`ERROR`/`panicked` in 3823 log lines. The one non-green
+  observation was environmental, not a defect: `make lint` completed every
+  Python and Rust stage and then stalled *inside* `actionlint`
+  (`futex_wait_queue`, no children, ~549 s) — the known local shellcheck stdin
+  deadlock; a standalone run with `shellcheck` off the `PATH` exited 0, which
+  is the CI condition. Two secondary findings from the same sweep: the
+  `ACTIONLINT` make variable cannot carry `-shellcheck=` (it is parsed through
+  `ensure_tool` and the `TOOLS` list as a bare tool name, so the flag reads as
+  a missing tool), and local `uv tool run --python pypy` resolves to PyPy
+  **3.12.14**, not the 3.11 the earlier note in this plan assumed. `typos.toml`
+  did *not* regenerate this time (SHA-256 byte-identical across the run), and
+  the idle-heartbeat shared-sink keepalive test did not flake. The commit's
+  tree hash is `dd9dfee5577c835eb9cde44b8e2633de94f86f4f`, recorded from
+  `git write-tree` before the commit and re-read from `HEAD^{tree}` after it.
+  That equality is deliberate: this sweep ran against the *staged* tree at
+  `a1a0db9e` plus its delta, and a commit would otherwise invalidate it as a
+  citation. The tree, not the revision, is what the gates observed, and the
+  tree is unchanged.
+- [x] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
 - [ ] EP-M3: pull-after-drain streaming stdin with bounded memory; producer
