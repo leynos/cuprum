@@ -261,6 +261,7 @@ def test_partial_owned_open_closes_what_it_already_opened(
     )
 
 
+@_posix_only
 def test_redirected_stream_is_not_captured(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -435,6 +436,7 @@ def test_path_target_closed_after_a_failing_run(
     assert stat.S_ISREG(log.stat().st_mode), "the file must be a plain closed file"
 
 
+@_posix_only
 def test_path_target_closed_after_a_timeout(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
@@ -460,6 +462,7 @@ def test_path_target_closed_after_a_timeout(
     )
 
 
+@_posix_only
 def test_both_streams_can_be_redirected_at_once(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],

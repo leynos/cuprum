@@ -197,7 +197,7 @@ type StdinSource = StdinInput | StdinStream
 
 @dc.dataclass(frozen=True, slots=True)
 class StdinStream:
-    """A library-owned, bounded, pull-after-drain producer for stdin.
+    """A library-owned, pull-after-drain producer for stdin.
 
     Cuprum pulls one chunk from *chunks*, writes it to the child's stdin pipe,
     and waits for that write to drain before pulling the next. That is what
