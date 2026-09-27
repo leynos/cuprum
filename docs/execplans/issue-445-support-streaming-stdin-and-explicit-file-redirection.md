@@ -163,11 +163,15 @@ likelihood, and mitigation.
 - [x] (2026-09-27 00:35Z) Reconnaissance complete: every module named in this
   plan read; CPython `Popen` stdio semantics verified against source; absence
   of interior runtime `cuprum.sh` imports confirmed by grep.
-- [ ] (2026-09-27 01:10Z) ExecPlan authored.
-- [ ] EP-M1: public `StdinStream`, `StdinSourceError`, `StdioTarget`; `stdin=`
-  widened on `SafeCmd.run`/`run_sync`/`lines`; `RunOutputOptions` extended with
-  stdio targets and their validation; three names exported;
-  `test_public_api.py` updated.
+- [x] (2026-09-27 01:10Z) ExecPlan authored.
+- [x] (2026-09-27 05:40Z) EP-M1 complete. `StdinStream`, `StdinSourceError`,
+  and the `type StdinSource` alias live in `cuprum/sh/execution.py`;
+  `StdioTarget` and `_validate_stdio_targets` live in `cuprum/sh/output.py`;
+  `stdin=` is widened on `SafeCmd.run`/`run_sync`/`lines`; `RunOutputOptions`
+  carries `stdout`/`stderr` targets. All four names are exported from
+  `cuprum.sh` and `cuprum`. Red: 10 failed / 14 passed. Green: 24 passed. Wider
+  set (stdin, output, run, lines, streams, timeout, context, property,
+  early-close, pipeline-output): 169 passed, 12 skipped.
 - [ ] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
@@ -203,6 +207,22 @@ likelihood, and mitigation.
   no aggregate byte counter to extend. Evidence: `cuprum/_pipeline_types.py`.
   Impact: streaming progress is reported as per-chunk `stdin` events with their
   own `byte_count`, not as a running total.
+- Observation (EP-M1): a PEP 695 `type StdinSource = StdinInput | StdinStream`
+  alias does **not** flatten when unioned. `StdinSource | None` has
+  `typ.get_args(...) == (StdinSource, NoneType)`, and
+  `(StdinSource | None) == (StdinInput | StdinStream | None)` is `False`.
+  Evidence: a probe against the built module printed the alias repr and both
+  argument tuples. Impact: `test_stdin_parameter_accepts_both_source_forms`
+  checks `sh.StdinSource.__value__ == sh.StdinInput | sh.StdinStream` rather
+  than comparing the annotated union against an inline expansion. Any future
+  test that wants the flattened union must read `__value__`.
+- Observation (EP-M1): `cuprum/sh/output.py` had no runtime `Path` import —
+  `StdioTarget.path()` raised `NameError` under
+  `from __future__ import annotations`, because the annotation form hid the
+  dependency until the recipe ran. Evidence: 7
+  `NameError: name 'Path' is not defined` failures in the first green run.
+  Impact: `pathlib.Path` is now a genuine runtime import in that module; the
+  annotations-first habit does not excuse a name the body uses.
 
 ## Decision log
 
@@ -736,7 +756,7 @@ Every step is a source edit followed by tests, so re-running is safe:
 with two exceptions to watch. `make lint` regenerates `typos.toml`; commit the
 refreshed file as its own commit rather than reverting it, or the gate dirties
 the tree again. `make fmt` rewrites Markdown through `mdtablefix`, which
-reflows prose narrower than 80 columns; if it changes a hand-written paragraph,
+reflows prose narrower than 80 columns; if it changes a handwritten paragraph,
 take the tool's output as the authority. Temporary files go under `/tmp` only,
 never inside the repository; probe files placed in the repository root break
 `check-fmt` and must be excluded via `.git/info/exclude` rather than deleted
@@ -776,15 +796,42 @@ be re-exported from `cuprum.sh` and `cuprum`:
 @dc.dataclass(frozen=True, slots=True)
 class StdinStream:
     """A library-owned, bounded, pull-after-drain producer for a child's stdin."""
+
     chunks: cabc.AsyncIterable[str | bytes] | cabc.AsyncIterator[str | bytes]
+
 
 class StdinSourceError(Exception):
     """Raised when a streaming stdin producer or its encoder fails."""
 
+
 type StdinSource = StdinInput | StdinStream
 
-type StdioTarget = StdioPipe | StdioInherit | StdioPath | StdioFd
+
+@dc.dataclass(frozen=True, slots=True)
+class StdioTarget:
+    """Where a child's standard stream is bound; four tagged variants."""
+
+    kind: _StdioKind = "pipe"  # "pipe" | "inherit" | "path" | "fd"
+    value: Path | int | typ.IO[bytes] | typ.IO[str] | None = None
+
+    @staticmethod
+    def pipe() -> StdioTarget: ...  # cuprum-owned pipe
+
+    @staticmethod
+    def inherit() -> StdioTarget: ...  # parent's stream, untouched
+
+    @staticmethod
+    def path(path: Path) -> StdioTarget: ...  # cuprum opens and closes
+
+    @staticmethod
+    def fd(fd: int | typ.IO[bytes] | typ.IO[str]) -> StdioTarget: ...  # borrowed
 ```
+
+`StdioTarget` is a single tagged frozen dataclass rather than a union of four
+types, because callers construct variants through the staticmethods above and a
+union alias cannot host methods. The free staticmethods are the whole point:
+`StdioTarget.pipe()` reads as one name at the call site, and `is_owned_path`
+tells EP-M2 which descriptors cuprum must close.
 
 `SafeCmd.run`, `SafeCmd.run_sync`, and `SafeCmd.lines` gain the widened
 annotation `stdin: StdinSource | None = None`; `RunOutputOptions` gains
