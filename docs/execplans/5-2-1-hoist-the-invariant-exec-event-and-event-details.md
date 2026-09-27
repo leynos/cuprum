@@ -160,11 +160,14 @@ failure injection at that boundary.
     Cohesion rule among them); all four are fixed and `cs delta origin/main`
     reports no introduced findings. The 654-line test module is split by
     subject into four modules under the same `test_line_event_emission` prefix,
-    with the test inventory verified unchanged at 22 functions. This is a
-    *local* replay of CI's classifier, not yet a green hosted check: the
-    pushed head has not been re-graded, and the commit that carries the fix
-    has not been landed or gated yet. See the 2026-09-27 CodeScene discovery
-    below.
+    with the test inventory verified unchanged at 22 functions. **Confirmed by
+    the hosted check at `dbaba9ac`:** the `CodeScene Code Health Review (main)`
+    check run completed `success` with *Quality Gate Passed* and 6 of 6 gates,
+    on the *Pay Down Tech Debt* profile. Two CodeScene review *threads* remain
+    open on `benchmarks/_line_event_profile_model.py`, but they are
+    thread-comments from an earlier revision, not the gate: the gate itself is
+    green at head, and the threads are not part of the required ruleset. See
+    the 2026-09-27 CodeScene discovery below.
   - [x] The split's own lint fallout cleared, and `make lint` observed to its
     **end** for the first time: `ruff check`, `interrogate` (100.0%), `pylint`
     (10.00/10), `df12-python-lints`, `ambrleaks`, `skylos`, `rust-lint`
@@ -1079,51 +1082,159 @@ prints nothing on success, so exit 0 means it ran and passed. Same host, same
 either result.
 
 **The hang, measured.** Two independent observers — the scrutineer and the
-planning agent — characterized the same process.
-`actionlint -config-file .github/actionlint.yaml`, 198 s elapsed,
-`TIME 00:00:00`: **zero CPU across 198 s**, 34 threads, every one parked in
-`futex_wait_queue` except a single `ep_poll`. `voluntary_ctxt_switches: 58`, so
-it wakes and goes straight back to sleep. An anonymous pipe pair (fds 93/94) is
-held by that process and by **no other process on the host**, and no
-`shellcheck` child is ever spawned despite shellcheck being installed. Zero CPU
-rules out "slow but working"; the self-held pipe with no reader rules out
+planning agent — characterized the same process, and the findings were
+re-confirmed against a second instance (PID 668124, 41 min elapsed) later the
+same session. Both samples agree: **zero CPU consumed** — 198 s and 41 min
+respectively, against 14 *centiseconds* of CPU in the second case — 34 threads,
+every one parked in `futex_wait_queue` except a single `ep_poll`, and
+`voluntary_ctxt_switches` in the low hundreds. It wakes occasionally and goes
+straight back to sleep. An anonymous pipe pair (fds 93/94) is held by that
+process and, by a full `/proc` sweep, by **no other process on the host**, and
+no `shellcheck` child is ever spawned despite shellcheck being installed. Zero
+CPU rules out "slow but working"; the self-held pipe with no reader rules out
 "waiting on a busy child"; no `shellcheck` process rules out "the linter is the
-bottleneck". Two *other* `actionlint` processes were hung on the same host at
-the same time — one for 28 hours, both parents being other sessions'
-stop-hooks. That last observation is the strongest evidence available here that
-this is host-level and not branch-attributable: three unrelated invocations,
-three separate trees, different session lifetimes, one shared symptom.
+bottleneck".
 
-**Why the bounded re-run is evidence, not a substitution.** The hung invocation
-and the re-run differ by one argument. The gate's recipe is
-`actionlint -config-file .github/actionlint.yaml`; with shellcheck on `PATH`,
-actionlint enables its shellcheck-backed rules and spawns the child whose pipe
-it then parks on. CI's runners have no shellcheck, so the path that actually
-gates upstream is effectively `-shellcheck=`. Running
+**The hang recurs, and it is not this branch's fault.** A single census of every
+`actionlint` alive on this host at one moment found three, in three separate
+trees, under three different parent commands:
+
+| PID     | parent                          | tree                                 | elapsed | CPU                |
+| ------- | ------------------------------- | ------------------------------------ | ------- | ------------------ |
+| 94258   | `make check-fmt lint typecheck` | deleted worktree `30bb8047`          | ~29 h   | 1 s                |
+| 668124  | `make lint`                     | **this branch's worktree**           | 41 m    | 14 cticks (0.14 s) |
+| 1501431 | `timeout 900 make lint`         | another session, worktree `74fbe974` | ~5 m    | 0 s                |
+
+Three trees, three sessions, three different parent commands, one symptom, and
+— verified by reading `/proc/<pid>/cwd` — no common checkout between them
+except that two share this branch. Four distinct hangs have been observed
+across this work in total. PID 94258's worktree **no longer exists on disk**:
+it still holds a deleted cwd and has burned 1 s of CPU in 29 hours. That is the
+decisive argument that the cause is the host and not any branch, because no
+defect in this branch's source could hang a process inside a deleted directory
+belonging to a session that ended a day earlier. CI is unaffected: the
+`902b05fb` run completed its whole chain in 66 s, and every GitHub Actions run
+of this PR has completed `actionlint` normally.
+
+**The direct cause is a broken pipe pair, and it is structural.** The pooled
+`/proc/668124/fd` census shows fd 93 (read) and fd 94 (write) as two ends of
+the *same* anonymous pipe, `pipe:[2027191927]`, with **no file descriptor to it
+anywhere else on the host**. A process writing to a pipe it holds the write end
+of, whose read end it also holds and never reads, blocks forever: `SIGPIPE` is
+only raised when *no* descriptor references a read end, and the kernel's write
+end is full. So the write never returns, no error is ever raised, and the
+process is not exiting *late* — it is not exiting at all. This is why no
+`timeout` value is a fix and why no poll can observe a resolution: only
+external constraint terminates it.
+
+**Two of this branch's own `make lint` runs hung, and neither was bounded.**
+This corrects an earlier reading of the logs in this plan. The `521b` run was
+recorded here as having been *killed* at the `skylos` command line, on the
+strength of its log stopping there. Its tail, compared line for line against a
+later run, ends on the same `actionlint -config-file .github/actionlint.yaml`
+line as every other: **31 lines versus 29, the difference being two `uv`
+bootstrap lines, not a `skylos` truncation.** It hung in `actionlint` like the
+rest. And both hung wrappers are *still alive* as this is written — the `521b`
+one at 43 minutes, the `521c` one at 41 — because neither armed a `timeout`
+around `make lint`; their command lines carry `make lint 2>&1 | tee …` with no
+bound at all. Their `.exit` files were never written, which is what an
+unfinished shell looks like, not a killed one: a killed wrapper would have
+proceeded to its `printf`.
+
+So neither run may be cited as a completed gate run, bounded or otherwise. What
+they support is the narrower claim that the sub-check hangs, which the process
+table establishes directly. The generalizable lesson is the one now under **How
+to apply**: **the log cannot tell you a run was killed.** A truncated log and a
+hung-forever log are byte-identical in shape, and only an out-of-band exit
+status distinguishes them. The `902b05fb` run — the one that *is* citable — is
+the counter-example that makes the distinction concrete: same tail, but a
+`.status` file recording `exit_code: 0`, `duration_seconds: 66`, and
+`head_equal: YES`.
+
+**The narrowed path is not a workaround; it is CI's own path.** The gate's
+recipe is `actionlint -config-file .github/actionlint.yaml`. With shellcheck on
+`PATH` — this host has `/usr/local/bin/shellcheck` — actionlint enables its
+shellcheck-backed rules and spawns a child. CI's runners have no shellcheck, so
+the path that actually gates upstream never takes that branch. Running
 
 ```sh
 timeout 120 actionlint -shellcheck= -config-file .github/actionlint.yaml
 ```
 
-exits **0** in under a second with empty output.
+exits **0 in under a second with empty output**, and every re-run recorded on
+this host used that form. The honest limit is narrow and statable: it disables
+actionlint's shell *syntax* checks inside `run:` blocks, and this branch's
+change surface contains **no** `.github/` paths at all (see `dbaba9ac`'s change
+set: `benchmarks/`, `cuprum/unittests/`, `docs/`, `tests/`), so the narrowed
+check is observed on the revision that matters. `actionlint` still validates
+`${{ }}` expressions under `-shellcheck=`, and it parses `.github/actions` as
+workflows, which makes `yamllint` the only tool covering the composite actions
+— none of which this branch modifies.
 
-The honest limits of that: `-shellcheck=` narrows `actionlint`'s own coverage
-by disabling its shell *syntax* checks, so the re-run is a strict subset of what
-`github-actions-lint` would check unbounded. The missing coverage is
-shell-syntax checking inside `run:` blocks — and this branch's change surface
-contains **no** `.github/` paths at all (see `dbaba9ac`'s change set:
-`benchmarks/`, `cuprum/unittests/`, `docs/`, `tests/`). So the narrowed check
-is observed on the revision that matters, `yamllint` remains green alongside
-it, and no unobserved coverage applies to any file this branch touched.
-`actionlint` still validates `${{ }}` expressions under `-shellcheck=`, and it
-parses `.github/actions` as workflows, which is why `yamllint` is the only tool
-that covers the composite actions — none of which this branch modifies.
+**A clean `-shellcheck=` exit is not vacuous.** An empty exit-0 result could
+mean the checker read nothing, so the binary was probed with a deliberately
+broken workflow on stdin: it reported `undefined function "nonexistent_fn"` and
+exited 1. It inspects input, and the clean exit over the ten workflow files is
+a real pass.
+
+**The unbounded recipe passed on this host too, in the same session.** Run
+immediately after the census, bounded at 90 s and against the clean tree the
+gate had already read (`git write-tree` = `7283589b…`, the gate's own tree):
+
+```text
+timeout 90 actionlint -config-file .github/actionlint.yaml                EXIT=0  0 s
+timeout 90 actionlint -shellcheck= -config-file .github/actionlint.yaml   EXIT=0  0 s
+```
+
+That is the terminus of the intermittency case: the command that hung for 41
+minutes and the command that returned in 0 s are the same command on the same
+revision. It also exposes how the earlier logs misled — the unbounded path
+*does* succeed silently when it succeeds, so "the log's last line is the
+`actionlint` command" is what **both** outcomes look like from inside `tee`,
+and the log alone cannot separate them. Only a captured exit status can.
 
 **How to apply:** never let `make lint` run unbounded. Expect one of two
 outcomes and re-run only the `actionlint` sub-check, bounded, on failure.
-`make lint`'s nine other sub-checks are independent and need no re-run; the
+`make lint`'s ten other sub-checks are independent and need no re-run; the
 per-sub-check breakdown is recoverable from the log because each writes its own
-evidence line before the hang.
+evidence line before the hang. **Two operational rules, both learned the hard
+way.** First, arm the bound on the *wrapper*, not inside it:
+`timeout 300 make lint 2>&1 | tee "$log"` bounds the whole pipeline, whereas a
+bound that lives only in a sub-make leaves the parent alive after the child
+dies. Second — and this is the one that bit twice — **capture the exit status
+out of band**, as `${PIPESTATUS[0]}` written to a status file beside the log. A
+run piped through `tee` and read afterwards cannot be distinguished from one
+that hung until killed: the log ends on `actionlint`'s invocation line either
+way, because actionlint prints nothing on success. The failure mode is exactly
+the tempting one — reading the tail, seeing `actionlint`, and recording a pass
+that was never observed.
+
+**What the gate's *other* sub-checks are worth without it.** `make` echoes each
+recipe line before running it, so a sub-check's line appearing in the log is
+proof that *every* preceding line in the chain exited 0. `actionlint`'s line
+appearing is therefore evidence for all ten lines above it. Only seven of those
+ten then print a verdict string of their own: ruff's `All checks passed!`,
+interrogate's `RESULT: PASSED (minimum: 100.0%, actual: 100.0%)`, two
+`Your code has been rated at 10.00/10` lines (pylint and the `df12` lints), the
+`Finished` lines for clippy and whitaker, and typos-config-builder's
+`current: typos.toml`. **Three print nothing on success.** Two are `ambrleaks`
+and `skylos`; the third is `yamllint`, whose silence is nevertheless *provable*
+rather than merely assumed, because `actionlint`'s line follows it in the same
+recipe and `yamllint` is silent on success too — silence is its passing output,
+so there is no missing artefact there. For the other two the chain argument is
+the only evidence, and it is worth naming that rather than counting the
+invocation line as a clean result. It is still evidence: a non-zero exit from
+either would have stopped the chain before `actionlint` was reached, and
+`actionlint` was demonstrably reached.
+
+**Evidence-integrity note.** Two logs from this run (`check-fmt`,
+`markdownlint`) were discarded as contaminated: the planning agent edited a
+tracked file mid-run, and the run's own column-2 `MM` tripwire in
+`git status --porcelain` caught the same event independently. Both gates were
+re-run on the restored tree and only the `-rerun` logs count. The gate suite
+verifies the revision, so a writer editing during it invalidates the affected
+logs and nothing else — but the affected set is *every* gate whose read window
+touched the edit, not just the one whose log looks wrong.
 
 ### Earlier discoveries
 
