@@ -560,14 +560,39 @@ likelihood, and mitigation.
       the red is worth keeping. Six of seven gates passed; `make markdownlint`
       failed with exactly 2 `MD049/emphasis-style` errors at
       `docs/users-guide.md:310`, both from my own new text: `*ahead*` written
-      into a file that uses underscore emphasis throughout — measured over the
-      whole file, single-asterisk emphasis spans number 0. The commit was never
-      pushed; the whole of the delta to `ac2b8c29` is that one line, `*ahead*`
-      to `_ahead_`, and re-measured at the new head the same count is still 0.
+      into a file that uses underscore emphasis throughout. Measured with a
+      grep for an asterisk-delimited span whose neighbouring characters are not
+      asterisks, `docs/users-guide.md` carries 1 such span at `594a0fee` — the
+      offending line — and 0 at `ac2b8c29`, against 164 underscore-delimited
+      spans there. The commit was never pushed; the whole of the delta to
+      `ac2b8c29` is that one line, `*ahead*` to `_ahead_` (`git diff --stat
+      594a0fee ac2b8c29` reports `1 file changed, 1 insertion(+), 1
+      deletion(-)`).
       The lesson: `make markdownlint` is not run by local `check-fmt` or
       `lint`, so a Markdown emphasis mistake reaches a full sweep only if the
       sweep includes it — which is why every sweep in this plan runs all seven
       rather than the formats the diff "should" touch.
+- [x] (2026-09-27 17:05Z) The round-7 reply is posted to PR #511 as
+      `issuecomment-5858015233`, after a full seven-gate re-sweep of
+      `6346cbed` — the head that carries the two plan-only commits
+      (`bd7297e4`, `6346cbed`) on top of the reviewed `ac2b8c29`. The re-sweep
+      was not ceremony: `ac2b8c29`'s own sweep is archived at
+      `/tmp/gates-445/prior-sweep-ac2b8c29/`, and `git diff --name-status
+      ac2b8c29 6346cbed` shows the execplan is the only file that moved, but
+      "nothing that matters moved" is a guess until the gates are run against
+      the frozen tree. All seven exited 0; pytest's main session read `2545
+      passed, 63 skipped in 172.87s` and nextest `125 tests run: 125 passed, 0
+      skipped`, both identical to the reviewed head.
+- [x] (2026-09-27 17:05Z) Two numbers in my own prose were wrong and were
+      caught by re-measuring rather than by re-reading. (a) The reply's table
+      first quoted the reviewed head's `test` duration as `159.60s`; that
+      figure belongs to the `bd7297e4` sweep, and `ac2b8c29`'s archived log
+      says `142.28s`. (b) The two columns of that table quoted *different
+      lines* of the same `check-fmt` output — `683 files already formatted`
+      (ruff) against `78 files left unchanged.` (mdtablefix) — which read as a
+      discrepancy between heads when both logs in fact print both lines.
+      Neither error would have been visible by reading; both fell out of
+      putting the archived log beside the claim.
 
 ## Surprises & discoveries
 
