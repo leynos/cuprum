@@ -133,6 +133,7 @@ def _prepare_execution_observation(
         tags=tags,
         pending_tasks=tracking.pending_tasks,
         wall_clock=time.time,
+        env_mode=env_mode,
     )
 
 

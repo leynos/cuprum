@@ -40,7 +40,11 @@ if typ.TYPE_CHECKING:
     # cycle. The other direction is the reason the record lives here.
     from cuprum._streams import _RelayDiagnostics
     from cuprum.context import AfterHook, BeforeHook
-    from cuprum.context.env_overlay import EnvOverlay
+
+    # Annotation-only, as in ``cuprum.events``: ``env_mode`` is read as a value
+    # off the event, never resolved as a hint, so the names stay out of the
+    # runtime scope.
+    from cuprum.context.env_overlay import EnvMode, EnvOverlay
     from cuprum.echo_events import RelayFallback
     from cuprum.events import ExecHook, ExecId
     from cuprum.sh import SafeCmd
@@ -109,6 +113,14 @@ class _StageObservation:
     # emits shares one correlation token, distinguishing this execution from
     # any other that happens to reuse the same PID.
     exec_id: ExecId = dc.field(default_factory=new_exec_id)
+    # Appended after ``exec_id`` rather than placed beside ``env_overlay``, for
+    # the reason ``ExecEvent`` documents: a positional construction would
+    # otherwise rebind ``exec_id`` and hand the correlation token to the mode.
+    # The value is the composed policy the execution actually runs under,
+    # resolved once from the same call that produced ``env_overlay``. It is a
+    # trusted field rather than a tag because a caller may shadow any tag key,
+    # and the point of publishing the mode is that a consumer can rely on it.
+    env_mode: EnvMode | None = None
 
     def emit(
         self,
@@ -146,6 +158,7 @@ class _StageObservation:
             user_cpu_seconds=details.user_cpu_seconds,
             system_cpu_seconds=details.system_cpu_seconds,
             resource_usage_mode=details.resource_usage_mode,
+            env_mode=self.env_mode,
         )
         self._emit_event(event)
 
@@ -184,6 +197,12 @@ class _StageObservation:
             user_cpu_seconds=None,
             system_cpu_seconds=None,
             resource_usage_mode=None,
+            # Unlike the environment itself, which this sanitized decision
+            # event omits, the mode is a bounded policy name with no caller
+            # data in it. A teardown decision is exactly where a consumer
+            # needs it: whether the failing stage ran under a replacement
+            # boundary is the first thing that explains a missing ``PATH``.
+            env_mode=self.env_mode,
         )
         self._emit_event(event)
 

@@ -69,6 +69,35 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "pipeline_fail_fast": "cuprum_pipeline_fail_fast_total",
 })
 
+# The unit-counter phases whose counter describes the execution as a whole and
+# therefore carries the effective environment mode. The stream, drain, and
+# pipe counters deliberately do not: their volume is per-line or per-event, and
+# multiplying every one of those series to repeat a per-execution constant
+# would buy nothing an operator cannot read off ``cuprum_executions_total``.
+_ENV_MODE_PHASES: frozenset[str] = frozenset({"start"})
+
+
+def _env_mode_label(event: ExecEvent) -> dict[str, str]:
+    """Return the ``env_mode`` label for an event that records a policy.
+
+    A bounded label by construction: :class:`~cuprum.context.env_overlay.EnvMode`
+    is a closed three-value ``StrEnum`` resolved by production code, so no
+    caller-supplied string can reach it. Absent rather than invented when an
+    event carries no mode, so a hand-built event does not fabricate one.
+
+    Returns
+    -------
+    dict[str, str]
+        The ``env_mode`` label, or an empty mapping when the event records no
+        mode, so callers may merge it unconditionally.
+    """
+    if event.env_mode is None:
+        return {}
+    # Rendered, not passed through, for the same reason as the resource mode
+    # below: the label must be the plain string an operator filters on rather
+    # than the member's ``repr``.
+    return {"env_mode": str(event.env_mode)}
+
 
 def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     """Return the resource-measurement ops for a terminal ``exit`` event."""
@@ -119,11 +148,13 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
 def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     """Return the failure, duration, and resource ops for an exit event."""
     operations: list[_MetricOp] = []
-    # A failure counter is produced only for a known non-zero exit code, and
-    # a duration observation only when a duration was measured; a clean exit
-    # with no duration therefore produces nothing.
+    # The failure counter is the one that most needs the mode: a replacement
+    # policy that omits ``PATH`` fails at spawn, and without the label that
+    # failure sits in the same series as an ordinary overlay one.
     if event.exit_code is not None and event.exit_code != 0:
-        operations.append(_CounterOp("cuprum_failures_total", 1.0))
+        operations.append(
+            _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))
+        )
     if event.duration_s is not None:
         operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
     return (*operations, *_resource_operations(event))
@@ -152,7 +183,8 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
             # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
             # than repeated as a literal alternation, so the metric names have
             # exactly one definition.
-            return (_CounterOp(counter_name, 1.0),)
+            labels = _env_mode_label(event) if phase in _ENV_MODE_PHASES else {}
+            return (_CounterOp(counter_name, 1.0, labels),)
         case _:
             raise _UnhandledMetricsPhaseError(phase)
 

@@ -128,6 +128,7 @@ def _build_pipeline_observations(
             env_overlay=env_overlay,
             pending_tasks=pending_tasks,
             wall_clock=time.time,
+            env_mode=env_mode,
         )
         for idx, (cmd, hooks) in enumerate(zip(parts, hooks_by_stage, strict=True))
     )

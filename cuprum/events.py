@@ -16,7 +16,7 @@ import uuid
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-    from cuprum.context.env_overlay import EnvOverlay
+    from cuprum.context.env_overlay import EnvMode, EnvOverlay
     from cuprum.program import Program
 
 # ``plan`` … ``stdin_error`` describe one command's own lifecycle.
@@ -239,6 +239,19 @@ class ExecEvent:
         event therefore still distinguishes a platform that cannot measure from
         one whose samples went missing, which a bare ``None`` cannot. The mode
         is ``None`` on every non-terminal phase.
+    env_mode:
+        The effective environment policy for this execution, once the active
+        context and any per-call policy have been composed. Carried on every
+        phase, because it is known before the child is spawned and describes
+        the whole execution rather than one measurement.
+
+        A replacement boundary is the reason the field exists: a
+        ``REPLACE`` policy discards the live parent environment, so a child
+        that omits ``PATH`` can fail to resolve a bare program name before it
+        ever starts. Without the mode, a consumer sees an ordinary spawn
+        failure and cannot tell it apart from an overlay run. ``None`` only on
+        legacy or manually constructed events; the execution paths always
+        resolve a mode.
 
     New optional fields are appended after ``exec_id`` rather than inserted
     beside the field they relate to. Inserting one ahead of ``exec_id`` would
@@ -277,6 +290,7 @@ class ExecEvent:
     user_cpu_seconds: float | None = None
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
+    env_mode: EnvMode | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
