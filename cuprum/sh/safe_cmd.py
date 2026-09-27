@@ -47,9 +47,46 @@ from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings
 from cuprum.context import current_context
 from cuprum.program import Program
-from cuprum.sh.execution import ExecutionContext, StdinInput
+from cuprum.sh.execution import (
+    ExecutionContext,
+    StdinInput,
+    StdinSource,
+    _resolve_stdin_source,
+)
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import BytesCommandResult, CommandResult
+
+
+def _reject_redirected_lines_stdout(output: RunOutputOptions) -> None:
+    """Reject a stdout target where line iteration needs a parent-side pipe.
+
+    ``RunOutputOptions`` cannot make this call on its own: the very same
+    object is a valid argument to :meth:`SafeCmd.run`, which reads nothing
+    back from stdout and is happy to send it to a file. The requirement is
+    specific to line iteration, so the check belongs where the requirement is
+    known.
+
+    Parameters
+    ----------
+    output : RunOutputOptions
+        The options about to drive a line iteration.
+
+    Raises
+    ------
+    ValueError
+        If ``output.stdout`` names anything other than a pipe. ``None`` means
+        "unspecified", which resolves to a pipe for this path, so it is
+        accepted.
+    """
+    if output.stdout is None or output.stdout.kind == "pipe":
+        return
+    msg = (
+        f"SafeCmd.lines requires stdout to be a pipe, but output.stdout is "
+        f"{output.stdout.kind!r}; there is no parent-side stream to iterate. "
+        f"Use SafeCmd.run when stdout is redirected to a file or descriptor."
+    )
+    raise ValueError(msg)
+
 
 __all__ = [
     "SafeCmd",
@@ -94,7 +131,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,  # ruff: ignore[async-function-with-timeout]  # ExecutionContext also supplies the timeout.
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult:
         """Execute the command asynchronously with predictable cancellation.
 
@@ -109,8 +146,12 @@ class SafeCmd(_OwnedStart):
             timeout in ``context``.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source. ``StdinInput`` supplies one complete bytes
+            or text payload; ``StdinStream`` supplies an async producer whose
+            chunks are pulled one at a time, written, and drained before the
+            next is pulled, so peak memory is bounded by the largest chunk.
+            ``None`` inherits the parent's stdin.
 
         Returns
         -------
@@ -126,11 +167,14 @@ class SafeCmd(_OwnedStart):
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails. The child is
+            terminated before this is raised.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through execution helpers
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        stdin_source = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         return _require_command_result(
             await _run_prepared_command(
@@ -138,7 +182,7 @@ class SafeCmd(_OwnedStart):
                 _ExecutionState(
                     context=ctx,
                     output=out,
-                    stdin_data=stdin_data,
+                    stdin_data=stdin_source,
                     timeout=effective_timeout,
                 ),
             )
@@ -275,7 +319,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> LineStream:
         """Iterate the command's output lines as they arrive.
 
@@ -294,7 +338,7 @@ class SafeCmd(_OwnedStart):
         context:
             Optional execution settings such as env, cwd, and cancel grace.
         stdin:
-            Optional ``StdinInput`` data to feed to the subprocess.
+            Optional stdin source, as for :meth:`run`.
 
         Returns
         -------
@@ -310,11 +354,18 @@ class SafeCmd(_OwnedStart):
             If *timeout* elapses before the command completes.
         UnicodeEncodeError
             If ``stdin`` text cannot be encoded with the context's encoding.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
+        ValueError
+            If *output* redirects stdout: line iteration reads stdout through
+            a parent-side pipe, so a redirected stdout has nothing to iterate.
+            Use :meth:`run` when stdout goes to a file or descriptor.
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         out = output or RunOutputOptions()
         ctx = context or ExecutionContext()
         _enforce_allowlist(self)
-        stdin_data = stdin.resolve(ctx) if stdin is not None else None
+        _reject_redirected_lines_stdout(out)
+        stdin_source = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),
@@ -328,7 +379,7 @@ class SafeCmd(_OwnedStart):
         state = _ExecutionState(
             context=ctx,
             output=out,
-            stdin_data=stdin_data,
+            stdin_data=stdin_source,
             timeout=effective_timeout,
         )
         observation = _prepare_execution_observation(self, state, tracking)
@@ -350,7 +401,7 @@ class SafeCmd(_OwnedStart):
         output: RunOutputOptions | None = None,
         timeout: float | None = None,
         context: ExecutionContext | None = None,
-        stdin: StdinInput | None = None,
+        stdin: StdinSource | None = None,
     ) -> CommandResult:
         """Execute the command synchronously.
 
@@ -364,8 +415,8 @@ class SafeCmd(_OwnedStart):
             Maximum execution time in seconds.
         context : ExecutionContext | None, default=None
             Execution settings, including echo sinks and text encoding.
-        stdin : StdinInput | None, default=None
-            Optional bytes or text supplied to the child process's stdin.
+        stdin : StdinInput | StdinStream | None, default=None
+            Optional stdin source, as for :meth:`run`.
 
         Returns
         -------
@@ -381,6 +432,8 @@ class SafeCmd(_OwnedStart):
             If execution exceeds the effective timeout.
         UnicodeEncodeError
             If text stdin cannot be encoded by the execution context.
+        StdinSourceError
+            If a ``StdinStream`` producer or its encoder fails.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         return asyncio.run(
             self.run(output=output, timeout=timeout, context=context, stdin=stdin),
