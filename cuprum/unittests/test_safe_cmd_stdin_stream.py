@@ -27,6 +27,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.events import ExecEvent
     from cuprum.sh import CommandResult, SafeCmd
@@ -394,3 +395,160 @@ def test_timeout_leaves_no_stdin_writer_behind(
 
     leaked = asyncio.run(census_after_timeout())
     assert not leaked, f"a timed-out run must leave no pending task; got {leaked}"
+
+
+# The bounded-memory evidence. Every other test in this module checks *what*
+# reaches the child; this pair checks how far ahead the writer may run while
+# doing it, which no assertion about the delivered bytes can see. The child
+# publishes a marker file once it has read its first byte, so the producer can
+# date each pull against "the child has consumed something".
+_PACE_SCRIPT = "\n".join((
+    "import pathlib, sys",
+    "sys.stdin.buffer.read(1)",
+    "pathlib.Path(sys.argv[1]).write_text('read')",
+    "sys.stdin.buffer.read()",
+))
+
+# 1 MiB in 4 KiB chunks: comfortably past any pipe buffer, so a pull-after-drain
+# writer fills the pipe and stops while an eager one runs to the end.
+_CHUNK = b"x" * 4096
+_CHUNK_COUNT = 256
+
+# A quarter of the payload, and roughly four times the pipe capacity (the Linux
+# default is 64 KiB, so sixteen of these chunks). The gap between the two is
+# what makes the bound evidence rather than a number that happens to hold: a
+# writer that drains the producer first must cross it.
+_READ_AHEAD_CAP = _CHUNK_COUNT // 4
+
+
+class _PullRecorder:
+    """A producer counting the pulls that precede the child's first read."""
+
+    def __init__(self, consumed: cabc.Callable[[], bool]) -> None:
+        """Record pulls against *consumed*, the child-side progress marker."""
+        self._consumed = consumed
+        self.pulls = 0
+        self.pulls_before_child_read = 0
+
+    async def chunks(self) -> cabc.AsyncIterator[bytes]:
+        """Yield filler chunks, dating each pull against the marker.
+
+        The ``sleep(0)`` is the suspension point that makes this an async
+        generator to the tooling, and it mirrors a producer that awaits between
+        chunks rather than returning one.
+
+        Yields
+        ------
+        bytes
+            One filler chunk per pull.
+        """
+        for _ in range(_CHUNK_COUNT):
+            if not self._consumed():
+                self.pulls_before_child_read += 1
+            self.pulls += 1
+            await asyncio.sleep(0)
+            yield _CHUNK
+
+
+async def _drained_first(
+    producer: cabc.AsyncIterator[bytes],
+) -> cabc.AsyncIterator[bytes]:
+    """Collect *producer* into a list, then replay it: the eager shape.
+
+    This is the negative control. It is what a writer that resolved its source
+    up front would do to the same producer, and it must cross the bound the
+    streaming writer stays under.
+
+    Yields
+    ------
+    bytes
+        The buffered chunks, in the order they were collected.
+    """
+    buffered = [chunk async for chunk in producer]
+    for chunk in buffered:
+        yield chunk
+
+
+def _paced_run(
+    execute: ExecuteFn,
+    command: SafeCmd,
+    wrap: cabc.Callable[[cabc.AsyncIterator[bytes]], cabc.AsyncIterator[bytes]],
+    marker: Path,
+) -> _PullRecorder:
+    """Run the paced child against a recorded producer and return the counts.
+
+    Returns
+    -------
+    _PullRecorder
+        The producer, whose counters describe how far ahead the writer ran.
+    """
+    recorder = _PullRecorder(marker.exists)
+    result = execute(
+        command,
+        {"stdin": StdinStream(wrap(recorder.chunks())), "timeout": 30},
+    )
+    assert result.exit_code == 0, "the paced child should exit cleanly"
+    assert recorder.pulls == _CHUNK_COUNT, (
+        "every chunk must still be delivered, whatever the writer's shape"
+    )
+    return recorder
+
+
+def test_a_slow_reader_bounds_how_far_the_writer_runs_ahead(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """The writer pulls only as far ahead as the pipe lets it.
+
+    This is the invariant the type exists for: a caller must be able to feed a
+    child more data than they would ever hold in one buffer. The observable is
+    the pull counter, because retained memory is not something a test can read
+    off a finished run — the writer's progress is.
+
+    The bound is deliberately loose. It is the pipe capacity that limits how
+    far ahead a streaming writer can get, and that capacity is a property of
+    the host rather than of cuprum, so the assertion is "far short of
+    everything" rather than a count that would pin the pipe size.
+    """
+    _, execute = execution_strategy
+    marker = tmp_path / "read"
+    command = python_builder("-c", _PACE_SCRIPT, str(marker))
+
+    recorder = _paced_run(
+        execute, command, wrap=lambda producer: producer, marker=marker
+    )
+
+    assert recorder.pulls_before_child_read < _READ_AHEAD_CAP, (
+        "a pull-after-drain writer must not drain the producer before the child "
+        f"reads: {recorder.pulls_before_child_read} of {recorder.pulls} chunks "
+        "were pulled with nothing consumed"
+    )
+
+
+def test_the_bound_discriminates_an_eager_writer(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+    tmp_path: Path,
+) -> None:
+    """The negative control: draining the producer first crosses the bound.
+
+    Without this case the bound would be consistent with an implementation that
+    buffered the whole payload — a number that happens to hold proves nothing
+    on its own. The assertion is one-sided rather than an exact count because
+    the control races a child that must boot a Python interpreter, and the
+    claim being made is about which side of the cap the eager shape lands on,
+    not about how quickly it gets there.
+    """
+    _, execute = execution_strategy
+    marker = tmp_path / "read"
+    command = python_builder("-c", _PACE_SCRIPT, str(marker))
+
+    recorder = _paced_run(execute, command, wrap=_drained_first, marker=marker)
+
+    assert recorder.pulls_before_child_read >= _READ_AHEAD_CAP, (
+        "an eager collector must break the bound the streaming writer holds, "
+        f"or the assertion above is vacuous; only "
+        f"{recorder.pulls_before_child_read} of {recorder.pulls} chunks were "
+        "pulled with nothing consumed"
+    )

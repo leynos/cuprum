@@ -325,10 +325,31 @@ likelihood, and mitigation.
   is annotated `typ.Literal["pipe", "inherit"]` rather than `str`, and the
   docstring opens `Stdin`. Post-fix: module 22 passed, `python-lint` 0 (76 s),
   `check-fmt` 0.
-- [ ] EP-M4 docs: user guide (streaming contract and the redirection ownership
-  vocabulary), `cuprum-design.md` (the rendezvous roster entry), a new
-  append-only ADR-007 addendum for the rendezvous, `roadmap.md`, and
-  `CHANGELOG.md`.
+- [x] (2026-09-27 12:05Z) EP-M4 docs, committed as `28d86c56` (six files, 223
+  insertions): the users' guide's streaming contract and redirection ownership
+  vocabulary, the executed `redirect-stdout-to-a-file` example, the
+  `cuprum-design.md` roster entry, the append-only ADR-007 addendum for the
+  rendezvous, `roadmap.md`, and `CHANGELOG.md`. `check-fmt` passed on this
+  revision before the sweep was interrupted.
+- [x] (2026-09-27 12:20Z) EP-M4 INV-1, the last verification artefact the
+  traceability matrix names and the last one built. The plan's own text
+  (`INV-1 — bounded memory`) asks for "a producer that records how many chunks
+  it has yielded at each moment" plus an eager negative control; the
+  reconciliation in `/tmp/em4-recon.md` had listed both as still missing. The
+  pair landed in `cuprum/unittests/test_safe_cmd_stdin_stream.py`, which the
+  module docstring already names as the artefact. The pacing child reads one
+  byte, publishes a marker file, then reads the rest, so each pull can be dated
+  against "the child has consumed something"; the same producer and the same
+  child are then run behind `_drained_first`, which collects the iterable into
+  a list before replaying it — the eager shape a resolve-up-front
+  implementation would have. Measured directly, not asserted on faith:
+  streaming 33 pulls of 256 before the child read, eager 256 of 256, against a
+  cap of 64 (a quarter of the payload, and about four times the host's 64 KiB
+  pipe capacity). Both margins are at least 2x, so neither side is near its
+  threshold. The bound is deliberately loose rather than an exact count,
+  because the pipe capacity is a property of the host and not of cuprum. Local:
+  module 20 passed, the three EP-M4 modules together 49 passed, `ruff check` and
+  `ruff format --check` clean, interrogate 100.0%.
 - [ ] Push and open the draft PR (`(#445)` in the title, `Closes #445` in the
   summary, Lody session link under `## References`).
 
