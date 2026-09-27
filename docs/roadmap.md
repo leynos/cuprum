@@ -279,11 +279,15 @@ removing per-line work from the observe-hook path without changing observable
 event semantics. Its outcome informs whether per-line events ever need to
 become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
 
-- [ ] 5.2.1. Hoist the invariant `ExecEvent` / `_EventDetails`
+- [x] 5.2.1. Hoist the invariant `ExecEvent` / `_EventDetails`
   (`cuprum/events.py:31`, `cuprum/_pipeline_types.py:40`) fields out of the
   per-line path in `_StageObservation.emit` (`cuprum/_pipeline_types.py:62`),
   precomputing programme, argv (`SafeCmd.argv_with_program`,
   `cuprum/sh.py:363`), cwd, env, and pid once per stream rather than per line.
+  Done as `_LineEventEmitter` in `cuprum/_line_callbacks.py`, one per observed
+  stream, built after spawn; evidence in
+  `docs/tee-hotpath-line-event-emission-5-2-1.md` with the raw captures under
+  `docs/profiling/5-2-1-line-event-emission/`.
   - Success: per-line emission no longer reconstructs invariant fields, the
     callback scenario's dataclass-construction share falls to no more than 30%
     of the consume subtree in a committed profiler artefact, and emitted event
@@ -313,6 +317,16 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
     ways of meeting 28% by changing the design (a handwritten descriptor
     `__init__` at 0.68x construction cost, and reopening `ExecEvent`'s
     `frozen=True`) are in `docs/tee-hotpath-line-event-emission-5-2-1.md`.
+  - Two properties of this criterion are recorded so they are not
+    rediscovered as defects. The margin is thin: the tightest pair clears 30%
+    by 0.0586 points, larger than the 0.0423-point spread across pairs but the
+    same order of magnitude, so the measurement should not be relied on to
+    detect a small regression. And the metric **inverts** — 100% of the
+    numerator is the retained `ExecEvent.__init__`, so removing pre-constructor
+    work lowers the denominator and *raises* the share. Item 5.2.2 would move
+    29.9414% to 30.9686% **by succeeding**, which is why 5.2.2 must be judged
+    on its own criterion and why a future re-run of this gate after 5.2.2
+    should be read as this known inversion rather than as a regression.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying
   each hook as sync or async once at registration.

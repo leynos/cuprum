@@ -398,6 +398,24 @@
   values through the overlay or `ExecutionContext.env` instead
   ([#175](https://github.com/leynos/cuprum/pull/175), [d2e2b92](https://github.com/leynos/cuprum/commit/d2e2b921bde69b8162ba0ca37ed68d36c5d6c8a6)).
 
+- **Line-callback event emission stops rebuilding invariant metadata:** The
+  observe-hook path resolved `program`, `argv` (including the full
+  program-prefixed tuple), `cwd`, `env`, `pid`, tags, and the execution
+  correlation token once per *line*, inside the same per-line `_EventDetails`
+  construction. A private `_LineEventEmitter` now binds them once per observed
+  stream, after spawn when the `pid` is known, and each line adds only the line
+  text and a fresh monotonic timestamp to a fresh frozen `ExecEvent`. The
+  observable contract is unchanged: the same payloads and field order, a
+  distinct event object and clock read per line, unchanged hook ordering and
+  failure propagation, and the same dispatcher. On the wrap-76 callback
+  workload the construction share of the consume subtree fell from 34.2928% to
+  29.9087% (median of three matched pairs) and median wall time fell 30.96%
+  profiled and 26.28% unprofiled. The gain is concentrated in line-callback
+  workloads; see the
+  [evidence record](docs/tee-hotpath-line-event-emission-5-2-1.md) and the raw
+  captures under
+  [`docs/profiling/5-2-1-line-event-emission/`](docs/profiling/5-2-1-line-event-emission/README.md).
+
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
