@@ -1628,6 +1628,58 @@ further observations" entry records; the threshold revision makes the
 measurement honest, it does not make the clause true. That residual gap belongs
 in the closeout report.
 
+### 2026-09-27: V5 needs a second fixture, and the provenance of the control capture
+
+**Two facts V5's collection depends on, neither of which was in the plan.**
+
+**1. The no-callback controls need the unwrapped fixture, which did not exist.**
+`benchmarks/tee_profile_scenarios.py` pairs `seed12345-nowrap.b64` with every
+`with_line_callbacks=False` scenario and reserves `seed12345-wrap76.b64` for
+`echo-devnull-cb-s1` alone. The wrapped fixture is line-oriented (76 columns, so
+a newline every 76 bytes); feeding it to a no-callback control would measure a
+differently-shaped workload from the suite's own definition of that scenario.
+Only the wrapped fixture was present in `dist/`, so the echo/tee no-callback
+controls V5 requires for its 5% wall-time tolerance had nothing to run against.
+
+Generated 2026-09-27 with the documented command from `benchmarks/README.md`
+(`--seed 12345 --raw-bytes 1610612736 --wrap 0`), outside the measurement
+window, while another session's `make test` was running on the host: 2147483648
+bytes, manifest `dist/fixtures/seed12345-nowrap.json`, SHA-256
+`15e4356ae06fa10a81a3b4ba9e7b0e4437961a21752f982582371aa88389f914`.
+`dist/` is gitignored, so the fixture is a local artefact and cannot be
+committed as evidence; the manifest content is recorded here instead.
+
+Verified rather than assumed: the two fixtures share a seed, so their decoded
+content must agree. Decoding the first 1048575 bytes of each gives one SHA-256
+(`9ab664d7…`) for both — byte-identical payload, wrap mode the only difference.
+The structural check confirms the intent: the first 4 KiB contain 0 newlines
+unwrapped against 53 wrapped. A manifest's self-reported `sha256` is over the
+*encoded* file and would not have caught a wrong seed; this cross-check does.
+
+**2. The committed control capture's provenance was narrower than assumed.**
+`dist/profiles/5-2-1-event-details/control-1/worker-result.json` records
+`scenario=echo-devnull-cb-s1-python, backend=python,
+fixture=dist/fixtures/seed12345-wrap76.b64, with_line_callbacks=true`,
+`wall_time_seconds=316.24`, `stdout_line_count=28256364`. The current tree's
+scenario is named `echo-devnull-cb-s1` and declares `backend="auto"`, so the
+control capture was taken through an explicit `--backend python` selection that
+the canonical suite does not itself specify. V5 requires both variants to use
+"the same interpreter, read size, fixture, backend, sink", so the collection
+script pins `--backend python` on **both** sides. Resolving `auto`
+independently on each side would have left backend selection free to differ
+between control and candidate — a difference that would have been invisible in
+the share and looked like a performance result.
+
+**Also recorded: the recorded `control-1/construction-share.json` is not
+reproducible by the current classifier, and should not be.** It reports
+`limit_percent: 10.0`, two `ExecEvent.__init__ via _StageObservation.emit` /
+`_EventDetails.__init__ for the per-line payload` rules, and
+`construction_share_percent: 34.7284`. The rules have since been re-baselined to
+the single merged rule and the limit to 28.0, so a fresh run necessarily
+differs in `limit_percent`, rule names, and `matched_frames` keys. The
+fidelity test that *is* meaningful — pre-split code vs post-split code on one
+capture — was run separately and produced byte-identical JSON.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -2195,6 +2247,32 @@ than the design being re-scoped. EP-M2 therefore resumes with its scope
 **unchanged**: hoist the per-line `_EventDetails` and argv construction, keep
 the per-line `ExecEvent`, and meet 28%. Do not widen the hoist to chase the old
 number; that route breaks V2/V4 and was explicitly declined.
+
+**Gate status at HEAD `42b19f85` (2026-09-27).** `make lint` is green: exit 0
+in 53 s with **all 13 sub-checks reached and none never-reached**, so the chain
+that had been unobserved since `01ec41bd` is now observed end to end. Both
+defects it had been masking are cleared — `pylint` walked the tree at
+`10.00/10` with no `C0302` (the 406-line module is now 132 lines plus a
+311-line engine), and the `hand-written` spelling finding is gone.
+`make test` (7 pytest groups plus nextest `125 passed`), `typecheck`,
+`check-fmt`, `markdownlint`, and `nixie` all passed against `54fb5c8f`, the
+commit before the two fixes; they are **not yet re-run against `42b19f85`**,
+which moved production code after that pass. Re-run them before any CodeRabbit
+request, since a commit after a gate run invalidates that run as a citation.
+
+Two caveats recorded with the lint result rather than glossed. First, five
+sub-checks (`ambrleaks`, `skylos`, `yamllint`, `actionlint`, and `spelling`'s
+silent-success path) are attested by exit status alone — the tools print
+nothing on success, so "no output" is a pass by exit code, not positive
+evidence. Second, `skylos`'s green is **scoped away from this branch's new
+file**: `SKYLOS_PRODUCTION_TARGETS ?= cuprum`, so `benchmarks/` is outside its
+scan root and its pass says nothing about the new classifier module.
+
+The `actionlint` hang did not reproduce on either run; the parked processes
+from earlier sessions are still in `futex_wait_queue` with 0.00 s CPU and no
+`shellcheck` child. Because this branch touches no path under `.github/`
+(confirmed: empty `git diff --stat origin/main...HEAD -- .github/`), actionlint
+has nothing branch-attributable to report in either direction.
 
 ### EP-M3: durable evidence and closeout
 
