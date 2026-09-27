@@ -27,6 +27,14 @@ Feature: Typed native stream failures
       | 65536      |
       | 1073741824 |
 
+  Scenario: Reject a negative descriptor
+    # Only the classification is asserted, not the text: the message names a
+    # file descriptor on Unix and a file handle on Windows, so pinning it here
+    # would make the scenario assert the platform it happens to run on.
+    Given a descriptor value of -1
+    When the native descriptor validator checks the value
+    Then the error is InvalidDescriptor
+
   Scenario: Retain a native I/O failure
     Given a stream I/O error with platform error code 9
     When it becomes a RustStreamError
