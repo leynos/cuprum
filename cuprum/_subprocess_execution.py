@@ -50,7 +50,10 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutContext,
     _SubprocessTimeoutError,
 )
-from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
+from cuprum._subprocess_wait import (
+    _await_exit_or_writer_failure,
+    _wait_for_exit_code_within_timeout,
+)
 
 # Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
 # dataclass's own default value, so the name must resolve when the class body
@@ -223,9 +226,9 @@ async def _run_subprocess_without_streams(
         execution.observation,
     )
     try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
+        exit_code, exited_at = await _await_exit_or_writer_failure(
+            _wait_for_exit_code_within_timeout(process, execution),
+            stdin_task,
         )
     except BaseException:
         await _shielded_cleanup(_cancel_stdin_writer(stdin_task))

@@ -3,14 +3,16 @@
 Split from ``cuprum._subprocess_execution`` so the runner module is about
 orchestration — spawning, wiring streams, assembling the result — while the
 rules for *ending* a run live here: how the stream consumers are drained
-exactly once, and how the stdin writer is cancelled alongside them.
+exactly once, how a stdin writer's failure is raced against the exit wait, and
+how the stdin writer is cancelled alongside them.
 
-The other half of ending a run — how long to wait for the child, what a
-deadline expiry does to it, and which exception a cancelled wait raises — is
-``cuprum._subprocess_deadline``'s. This module imports the wait helpers it
-needs from there and re-exports them, so the split stays an internal
-arrangement: ``cuprum._subprocess_wait`` remains the one import path for every
-caller and for the test suite's monkeypatch seams.
+The other halves of ending a run — how long to wait for the child, what a
+deadline expiry does to it, and which exception a cancelled wait raises — are
+``cuprum._subprocess_deadline``'s; and the race that ends a run on a stdin
+failure rather than on the child's exit is ``cuprum._subprocess_rendezvous``'s.
+This module imports the helpers it needs from both and re-exports them, so the
+split stays an internal arrangement: ``cuprum._subprocess_wait`` remains the
+one import path for every caller and for the test suite's monkeypatch seams.
 
 The task reconciliation a run ends with is owned by ``_reconcile_run_tasks``
 so its callers can run it under ``_shielded_cleanup`` as one unit.
@@ -30,6 +32,7 @@ from cuprum._subprocess_deadline import (
     _wait_for_exit_code,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
 from cuprum._subprocess_stdin import _cancel_stdin_writer
 from cuprum._timeout_reporting import (
     _report_capture_eof_grace_expiry,
@@ -314,6 +317,12 @@ __all__ = [
     "_RunTaskOwnership",
     "_await_capture_eof_grace",
     "_await_eof_grace",
+    # Re-exported from ``cuprum._subprocess_rendezvous``, which owns the race
+    # that ends a run on a stdin failure. Kept in this module's namespace so
+    # the single-command run, the line-stream coordinator, and the timeout test
+    # modules keep one import path. Sorted into place, not grouped, because the
+    # repository's linter requires this list to stay isort-ordered.
+    "_await_exit_or_writer_failure",
     "_cancel_pending_consumers",
     "_decode_consumer_result",
     "_drain_stream_consumers",
@@ -321,8 +330,7 @@ __all__ = [
     "_report_drain_failures",
     "_settle_consumers",
     # Re-exported from ``cuprum._subprocess_deadline``, which owns the child's
-    # exit wait. Kept in this module's namespace so the single-command run, the
-    # line-stream coordinator, and the timeout test modules keep one import path.
+    # exit wait, for the same one-import-path reason as the name above.
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
 ]
