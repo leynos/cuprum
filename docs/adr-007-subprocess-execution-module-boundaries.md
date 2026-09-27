@@ -499,10 +499,15 @@ resolver because resolution and the fork coincide only on the `run()` path:
 `lines()` resolves its bindings when it is called and forks at first iteration,
 so a resolver-side flush would drop anything the caller wrote in between. The
 mapping is where the two kinds are told apart, and that is why pipe-ness
-travels as an explicit `pipes` frozenset: `Popen` treats `PIPE`, a raw `int`,
-and a file object differently, and it leaves its own `stdin`/ `stdout`/`stderr`
-as `None` for everything that is not a pipe, so pipe-ness is the one piece of
-the resolution the value cannot express for itself.
+travels as an explicit `pipes` frozenset. `Popen` treats `PIPE`, `DEVNULL`, a
+raw `int`, and a file object differently, but it exposes a parent-side stream
+object only for `PIPE`: the other three all leave `Popen.stdin`,
+`Popen.stdout`, and `Popen.stderr` as `None`, so the `wait4` path cannot
+recover pipe-ness from the child object it holds. The computed value cannot
+supply the answer either, because a pipe nothing consumes has already been
+folded down to `DEVNULL` and is indistinguishable there from a borrowed
+descriptor the caller owns. Pipe-ness is therefore the one piece of the
+resolution the value cannot express for itself.
 
 `cuprum/_subprocess_deadline.py` now owns the child-exit half of ending a run:
 `_wait_for_exit_code`, which awaits the process and terminates it on
