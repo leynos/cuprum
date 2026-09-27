@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 ## Purpose / big picture
 
@@ -111,11 +111,16 @@ repository rather than re-derived here.
       `0cc065c8`).
 - [x] (2026-09-27) Added ADR-018 and updated the developer guide, `AGENTS.md`,
       `docs/contents.md`, `docs/repository-layout.md` and the ADR-003 addendum.
+- [x] (2026-09-27) Ran the full commit gates green at head `ccccaa85` and
+      opened draft pull request
+      [#510](https://github.com/leynos/cuprum/pull/510). Not merged.
 - [x] (2026-10-02) Rebasing onto `main` found that number taken by
       [ADR-018: Typed environment policies](../../docs/adr-018-typed-environment-policies.md),
       so this branch's record was renumbered to ADR-019 across
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
-- [ ] Run the gates and open the draft pull request.
+- [ ] Re-run the commit gates against the rebased head and update the draft
+      pull request. The `ccccaa85` evidence above describes the pre-rebase
+      series and does not carry over to the rewritten commits.
 
 ### Gate remediation (2026-09-27)
 
@@ -142,7 +147,7 @@ The first full gate run failed four checks. Each is fixed; the fixes are commits
   `try` beside a `skip` in `except`). The latter is resolved with the
   `-> typ.NoReturn` helper idiom `test_duplication_gate_blocking.py` already
   documents for exactly this case.
-- **Spelling.** Two non-Oxford spellings in `docs/adr-018` were reported and
+- **Spelling.** Two non-Oxford spellings in `docs/adr-019` were reported and
   corrected. Four more in `pyproject.toml` allow reasons were *not* reported,
   because the spelling gate never reads a file named `pyproject.toml`. They
   were corrected anyway, as genuine ADR-009 violations that the gate has a
@@ -186,7 +191,7 @@ maps to exit 2, and `test_nose_detector.py` covers it. Verified against the
 real pinned binary: `docs` and a nonexistent root both exit 2, while
 `roots = ["cuprum"]` still returns its 26 findings.
 
-The count in this plan's own risk section and in ADR-018 moved with these two
+The count in this plan's own risk section and in ADR-019 moved with these two
 changes: the surface is 26 families covered by 24 reasoned entries, up from the
 23 entries / 25 families recorded at adjudication time. `top = 30` remains
 non-binding.
@@ -383,5 +388,54 @@ non-binding.
 
 ## Outcomes & Retrospective
 
-To be completed. Exact validation outcomes, and any deviation from the
-reference, belong here at the end.
+Delivered as draft pull request
+[#510](https://github.com/leynos/cuprum/pull/510): 13 commits on `main` through
+`ccccaa85`, plus this finalization. The branch is pushed and the pull request
+is open, draft, and **not merged**.
+
+The branch was then rebased onto `main` on 2026-10-02. The replay renumbered
+this plan's ADR to 019 (the identifier collision noted in the Decision Log),
+restored `main`'s ADR-003 addenda alongside this one in date order, and
+reconciled the developer guide's stage count with the seventh-stage order the
+Makefile already ran. Everything above describing head `ccccaa85` is the
+pre-rebase series; the rebased commits are fresh objects and their gate
+evidence was re-established separately.
+
+All commit gates passed at head `ccccaa85` with the working tree clean and the
+head unchanged across the run, so that run is citable for that revision. This
+finalization is a Markdown-only commit on top, covered by the Markdown gates
+(`markdownlint`, `spelling`, and the `ruff format --check` / `rustfmt` /
+`mdtablefix` constituents of `check-fmt`) rather than by a second full run.
+`make lint`'s own `timeout 900` bound fired at `actionlint`, whose shellcheck
+stdin write deadlocks on this host (state `S`, `wchan=futex_wait_queue`, 0.13s
+CPU after nine minutes, no `shellcheck` child) — a documented local defect, not
+a branch finding. Every sub-check before it passed and was observed
+individually; a bounded `actionlint -shellcheck=` probe exited 0, which shows
+the workflow parses and its expressions are valid but does **not** exercise
+shell syntax, so actionlint's shell linting is recorded as unobserved rather
+than passing.
+
+Two deviations from the reference were made deliberately and are recorded in
+ADR-019: `MEMBERS` replaces a repeated `SECOND`, because GNU Make overwrites a
+repeated command-line variable so a family with more than two locations could
+not otherwise be recorded; and an empty scope is now a configuration error
+rather than a silent pass. The second was a real gap, not a hypothetical one:
+before the fix, `roots = ["docs"]` printed `duplication gate passed` while
+scanning nothing, because nose answers an empty scope with exit 0 and a JSON
+summary identical to a clean tree's.
+
+The adoption closed its own loop in a way worth recording. Adjudication
+extracted three genuine shared implementations and left 23 reasoned entries
+over 25 families. Then the refactor that fixed a `ty` error removed a
+three-line preamble from `_lookup_active_span` and left a two-line None guard
+byte-identical to an unrelated guard in a module the branch never touched, so
+the gate reported a new family against this branch's own tip. That is the
+detector working as designed — it matches token windows, not intentions — and
+the exception records the comparison rather than hiding it. The final state is
+26 families covered by 24 reasoned entries, with `top = 30` still not binding.
+
+The §9 demonstration was re-run at the delivered head after `nose_detector.py`
+changed, so its evidence describes the shipped code: all four legs pass with
+the real pinned binary, and the checkout's manifest is unchanged across the
+run. No planted clone, temporary exception, or scratch artefact was left behind
+in the repository.
