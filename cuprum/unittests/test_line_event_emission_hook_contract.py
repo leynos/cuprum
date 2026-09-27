@@ -6,10 +6,11 @@ observes when lines are delivered: hook ordering, what a failing hook leaves
 behind, and how a clock failure fails a delivery.
 
 ``_LineHookOutcome`` is an awaitable a caller-supplied ``on_line`` may return,
-but the *composed* callback is a plain function: internally it calls
-``observation.emit``, which schedules an async hook itself. That is why a hook
-returning an awaitable still has its task retained on the observation's list
-while the callback's own return value stays ``None``.
+but the *composed* callback is a plain function: internally it dispatches
+through the emitter's bound ``observation._emit_event``, which schedules an
+async hook itself. That is why a hook returning an awaitable still has its task
+retained on the observation's list while the callback's own return value stays
+``None``.
 """
 
 from __future__ import annotations
@@ -56,9 +57,10 @@ class TestLineDeliveryHookContract:
 
     ``_LineHookOutcome`` is an awaitable a caller-supplied ``on_line`` may
     return, but the *composed* callback is a plain function: internally it
-    calls ``observation.emit``, which schedules an async hook itself. That is
-    why a hook returning an awaitable still has its task retained on the
-    observation's list while the callback's own return value stays ``None``.
+    dispatches through the emitter's bound ``observation._emit_event``, which
+    schedules an async hook itself. That is why a hook returning an awaitable
+    still has its task retained on the observation's list while the callback's
+    own return value stays ``None``.
     """
 
     def test_delivered_lines_reach_every_async_hook_in_order(self) -> None:

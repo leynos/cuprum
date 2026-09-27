@@ -17,19 +17,27 @@ unprofiled/             five paired rounds per unprofiled scenario (30 runs)
 reclassified-at-30/     the six captures re-judged at the revised 30% limit
 ```
 
-Each capture directory carries the same nine files:
+Each capture directory carries the same seven committed files:
 
-| file                      | contents                                           |
-| ------------------------- | -------------------------------------------------- |
-| `stacks.folded`           | the py-spy raw capture, folded-stack format        |
-| `construction-share.json` | the classifier's result document for this capture  |
-| `classifier.log`          | the classifier's stdout, as run at collection time |
-| `worker-result.json`      | the worker's own timings and validation record     |
-| `revision.txt`            | the resolved source SHA this capture ran against   |
-| `variant.txt`             | `control` or `candidate`                           |
-| `pyspy.log`               | py-spy's sampling lines and sample count           |
-| `pyspy-exit.txt`          | py-spy's exit status                               |
-| `classifier-exit.txt`     | the classifier's exit status                       |
+| file                      | contents                                          |
+| ------------------------- | ------------------------------------------------- |
+| `stacks.folded`           | the py-spy raw capture, folded-stack format       |
+| `construction-share.json` | the classifier's result document for this capture |
+| `worker-result.json`      | the worker's own timings and validation record    |
+| `revision.txt`            | the resolved source SHA this capture ran against  |
+| `variant.txt`             | `control` or `candidate`                          |
+| `pyspy-exit.txt`          | py-spy's exit status                              |
+| `classifier-exit.txt`     | the classifier's exit status                      |
+
+A collection run also produces `pyspy.log` and `classifier.log` beside these,
+but `.gitignore` excludes `*.log` (as it does everywhere in this repository),
+so neither is committed. Both are recoverable from what is: `classifier.log` is
+byte-identical to the committed `construction-share.json`, and `pyspy.log`'s
+load-bearing line — `Samples: <n> Errors: 0` — reports the sum of the weights
+in the committed `stacks.folded` (26224 for `r2-control`), with its teardown
+error, where one occurred, quoted in the evidence report alongside the
+committed exit status in `pyspy-exit.txt`. Nothing in the analysis depends on a
+file a reader cannot obtain.
 
 ## Reproducing the classification
 

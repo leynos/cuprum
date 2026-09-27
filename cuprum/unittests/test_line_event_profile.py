@@ -1,7 +1,9 @@
 """Tests for the 5.2.1 construction-share classifier.
 
 The classifier decides whether hoisting invariant execution metadata brought
-event construction under the plan's 10% share of the per-line consume subtree.
+event construction under the configured share limit — see
+``CONSTRUCTION_SHARE_LIMIT_PERCENT`` for the value in force — of the per-line
+consume subtree.
 Its arithmetic is small enough to check exactly, and its interesting failure
 modes are all about *identification*: a generated ``__init__`` renders as
 ``__init__ (<string>:N)`` because :func:`dataclasses.dataclass` builds it with
