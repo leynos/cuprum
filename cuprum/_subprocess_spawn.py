@@ -21,6 +21,14 @@ descriptor to the child, and closes cuprum's copy in a ``finally`` immediately
 after the spawn returns. A borrowed descriptor or file object is never closed —
 the caller's own use of it afterwards is the only witness that the rule held,
 since no exit code can tell a close cuprum owed from a close it did not.
+
+A borrowed file object is nonetheless *flushed* here, immediately before the
+fork, by :func:`_flush_borrowed_stdio`. That is not a contradiction of the rule:
+a flush pushes the caller's own buffered bytes through the caller's own
+descriptor and changes nothing about who closes it. It belongs here rather than
+in the resolver because resolution and the fork are the same instant only on the
+``run()`` path; ``lines()`` resolves when it is called and forks at first
+iteration, so a resolver-side flush would miss anything written in between.
 """
 
 from __future__ import annotations
@@ -133,6 +141,32 @@ def _open_owned_stdio(execution: _SubprocessExecution) -> dict[str, int]:
     return opened
 
 
+def _flush_borrowed_stdio(execution: _SubprocessExecution) -> None:
+    """Push a borrowed file object's buffered bytes out, immediately pre-fork.
+
+    The flush has to happen here rather than where the binding was resolved.
+    Resolution runs when the run is prepared, and on the ``lines()`` path that
+    is when ``lines()`` is called, not when the child is spawned; the caller
+    can legitimately write to the borrowed object in between and expect those
+    bytes to reach the child. Flushing at resolution would push only what was
+    written before the call and silently drop the rest — measured, not
+    assumed: the child read ``b'first '`` while the file held
+    ``b'first second '``.
+
+    Only a borrowed *file object* has anything to flush; a borrowed ``int``
+    descriptor has no buffer cuprum can reach, and a library-owned pipe or path
+    has no caller-side buffer to push.
+
+    Parameters
+    ----------
+    execution : _SubprocessExecution
+        The run being spawned; its stdout and stderr bindings are consulted.
+    """
+    for binding in (execution.stdio.stdout, execution.stdio.stderr):
+        if binding.borrowed is not None:
+            binding.borrowed.flush()
+
+
 def _close_owned_stdio(opened: dict[str, int]) -> None:
     """Close cuprum's copy of each owned descriptor, once the child has one.
 
@@ -192,8 +226,13 @@ async def _spawn_subprocess(
     # lifetime of an owned descriptor: it exists for exactly as long as it takes
     # the child to inherit it. A borrowed binding carries no entry in ``opened``,
     # so it reaches the spawn without ever being recorded as something to close.
+    #
+    # The borrowed flush sits between the opens and the spawn for the same
+    # reason the opens do: this is the last moment before the fork, and it is
+    # the only moment that is adjacent to it on every path.
     opened = _open_owned_stdio(execution)
     try:
+        _flush_borrowed_stdio(execution)
         return await _wait4_process.spawn_direct_process(
             _wait4_process.DirectProcessConfig(
                 argv=execution.cmd.argv_with_program,
@@ -218,6 +257,7 @@ async def _spawn_subprocess(
 
 
 __all__ = [
+    "_flush_borrowed_stdio",
     "_open_owned_stdio",
     "_output_stdio",
     "_spawn_subprocess",
