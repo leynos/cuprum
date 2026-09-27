@@ -41,9 +41,27 @@ regression criterion passes; see "Acceptance status".
 Three matched control/candidate profile pairs, each with one worker repeat,
 collected sequentially with no gate or competing profile running alongside.
 Control and candidate order alternates per round. One unprofiled warm-up per
-variant precedes collection. The same shared interpreter (CPython 3.14.4) runs
-both variants, and `cuprum` is imported from the current working directory
-rather than from `site-packages`, so a worktree checkout selects the variant.
+variant precedes collection.
+
+The same shared interpreter (CPython 3.14.4) runs both variants, and the
+working directory selects which `cuprum` is imported. That needs stating
+carefully, because the obvious reading is wrong in a way that would silently
+invalidate every number here. The candidate worktree's virtualenv _does_
+contain a `cuprum.pth` in `site-packages`, and it points at the **candidate**
+worktree. If that entry won, both variants would import the candidate and the
+collection would report a meaningless near-zero spread. It does not win: under
+`python -m`, an empty string is `sys.path[0]`, so the current working directory
+precedes `site-packages` (index 4) and its `.pth` path (index 5). Verified by
+running from the control worktree and inspecting the imported module:
+
+```text
+cuprum.__file__ = .../5-2-1-control-01ec41bd/cuprum/__init__.py
+has _LineEventEmitter (candidate-only)? False
+has _event_details (control-only)? True
+```
+
+The control resolves to its own tree and exposes the pre-hoist helper, so the
+two variants were genuinely distinct code under one interpreter.
 
 - profiler: `py-spy 0.4.2`, `--format raw --rate 100`;
 - backend: `--backend python` (isolates Python tuning from the extension);
