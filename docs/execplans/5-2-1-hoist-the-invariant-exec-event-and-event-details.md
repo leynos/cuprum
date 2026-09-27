@@ -1,20 +1,21 @@
 # Hoist invariant execution-event fields (5.2.1)
 
-Status: **UNBLOCKED — R3 met at the revised 30% target.** EP-M2 is implemented,
-its gates are green, and the completed hoist measures **29.91%** (median of
-three matched pairs, candidate range 0.0423 points) against the **30%** bar
-approved on 2026-09-27. That is up from 28%, which the same captures missed by
-1.90 points; the revision is the one this plan's Tolerances section required,
-and it was granted on the measurement rather than on a further projection (see
-"The 30% revision, and why the margin is thin" below). All four acceptance
-requirements R1–R4 are now met. EP-M1 is complete and EP-M3's evidence artefact
-is committed (`docs/tee-hotpath-line-event-emission-5-2-1.md`); EP-M3's
-documentation closeout and the roadmap tick remain to be done. The pass is
-*not* a weakening of a met criterion for its own sake: the same collection
-shows the candidate 30.96% faster in median wall time, the three controls
-exceed the 30% bar by 4.04 to 5.35 points, and the margin over 30% is 0.0586
-points against a 0.0423-point spread — thin, recorded as thin, and forecast to
-be inverted by 5.2.2.
+Status: **COMPLETE — R3 met at the revised 30% target, all three milestones
+done and every gate green at `3315c5c3`.** EP-M2 is implemented, and the
+completed hoist measures **29.91%** (median of three matched pairs, candidate
+range 0.0423 points) against the **30%** bar approved on 2026-09-27. That is up
+from 28%, which the same captures missed by 1.90 points; the revision is the
+one this plan's Tolerances section required, and it was granted on the
+measurement rather than on a further projection (see "The 30% revision, and why
+the margin is thin" below). All four acceptance requirements R1–R4 are met.
+EP-M1 is complete; EP-M3's evidence artefact
+(`docs/tee-hotpath-line-event-emission-5-2-1.md`), documentation closeout
+(design §8.1.3, both guides, contents index), roadmap tick, and changelog entry
+are all committed. The pass is *not* a weakening of a met criterion for its own
+sake: the same collection shows the candidate 30.96% faster in median wall
+time, the three controls exceed the 30% bar by 4.04 to 5.35 points, and the
+margin over 30% is 0.0586 points against a 0.0423-point spread — thin, recorded
+as thin, and forecast to be inverted by 5.2.2.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -290,15 +291,21 @@ failure injection at that boundary.
   own module, with the split proven behaviour-preserving by byte-identical
   output on a real capture). Also done: the V5 candidate captures (three
   matched control/candidate pairs, D >= 10000, candidate share range <= 2
-  percentage points) and the gate suite at `6da258a6`. Not done: the full gate
-  suite at the commit that lands the 30% revision, and EP-M3's closeout.
-- [ ] EP-M3: commit representative profiler evidence, documentation, and
-  completion of roadmap item 5.2.1 after all acceptance conditions pass. **In
-  progress:** the design revision EP-M2 was waiting on has been approved and
-  applied. The evidence is committed at `79302ae6` (six captures, thirty
-  unprofiled runs, the 30% reclassification) and the roadmap tick with the
-  changelog entry at `16917587`. Remaining: the four documentation edits, and a
-  final green gate run at the closeout commit.
+  percentage points) and the gate suite at `6da258a6`. Both items this note
+  once listed as not done were completed later: the full gate suite at the
+  30%-revision commit, and EP-M3's closeout at `3315c5c3`.
+- [x] EP-M3: commit representative profiler evidence, documentation, and
+  completion of roadmap item 5.2.1 after all acceptance conditions pass.
+  **Done.** The design revision EP-M2 was waiting on was approved and applied;
+  the evidence is committed at `79302ae6` (six captures, thirty unprofiled
+  runs, the 30% reclassification), the roadmap tick with the changelog entry at
+  `16917587`, and the four documentation edits at `3315c5c3` (design §8.1.3,
+  developers' and users' guides, contents index). The closeout gate run at
+  `3315c5c3` passed all eight gates — `check-fmt`, `markdownlint` (with
+  `spelling`), `typecheck`, `lint`, `test`, `nixie`, and `test-act` — with the
+  tree clean before and after, so the evidence is valid for that HEAD and no
+  sub-check was bounded or skipped. Logs under
+  `/tmp/closeout-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
 
 ## Surprises & discoveries
 
@@ -2778,9 +2785,28 @@ host-level-hang hypothesis from an argument into a measurement.
 Implementation approval for a **revised** EP-M2 design was granted on
 2026-09-27, and it was granted on the measurement rather than inferred from
 this branch's green gates: the gates prove the characterization work is sound;
-they do not by themselves show that any design option is acceptable. Before
-COMPLETE, reconcile discoveries with the design, guides, ADRs, and roadmap;
-retain rejected options and the reason for each rejection.
+they do not by themselves show that any design option is acceptable.
+
+**Closed out on 2026-09-28 at `3315c5c3`, after the pre-COMPLETE
+reconciliation.** The discoveries were reconciled with every downstream
+document: `docs/cuprum-design.md` §8.1.3 no longer says the plan is "BLOCKED at
+21.00%" and now documents `_LineEventEmitter`'s scope and lifetime; the
+developers' guide carries the reproduction convention, the N/D definition, the
+metric's non-monotonicity stated as something to design around, and the
+shared-Cargo-cache invariant; the users' guide carries the measured guidance
+with the caveat that the gain is confined to line-callback workloads; and the
+contents index gained both the evidence report and its data directory. Both
+rejected performance options are retained with their measured ratios here and
+in the evidence artefact, so a future reader can reverse or re-take each
+decision on evidence rather than on recollection.
+
+The closeout gate run then passed all eight gates at `3315c5c3` with the tree
+clean before and after — `check-fmt`, `markdownlint` (chaining `spelling`),
+`typecheck`, `lint`, `test` (`2549 passed, 63 skipped`; nextest `125 passed`),
+`nixie`, and `test-act` (`24 passed`, `CUPRUM_REQUIRE_ACT=1` so a missing
+runtime could not have skipped it). No sub-check was bounded or skipped, and
+the known host `actionlint` deadlock did not reproduce. The run is valid as a
+citation for that HEAD because no commit followed it.
 
 ### What was sacrificed for legibility and maintainability
 
