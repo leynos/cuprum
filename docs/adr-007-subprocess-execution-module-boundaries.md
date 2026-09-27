@@ -470,3 +470,70 @@ sites that pass an `ExecutionContext` to `_stdin_codec` —
 `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`, and
 `cuprum/_line_stream/spawn.py` — now import it from the new module. No public
 API changes, and the module-size suppression remains unnecessary.
+
+## Addendum (2026-09-27): split the spawn binding and the child-exit wait
+
+The same #445 work carried two more branch-introduced overruns. Resolving stdio
+and opening the caller's target files grew `cuprum/_subprocess_execution.py` to
+523 lines, and the streaming-source and early-close work grew
+`cuprum/_subprocess_wait.py` to 438; against `origin/main` the two modules sit
+at 363 and 392. Both crossed the repository's 400-line `max-module-lines`
+ceiling, whose suppression Option B removed, so two further extractions at
+cycle-safe seams brought them to 367 and 327.
+
+`cuprum/_subprocess_spawn.py` now owns everything the parent does around a
+spawn without consuming a stream: the mapping of a resolved stdio onto the
+value the spawn layer receives (`_output_stdio`, `_stdin_stdio`), the opening
+of each cuprum-owned target file immediately before the fork and the closing of
+cuprum's copy immediately after (`_open_owned_stdio`, `_close_owned_stdio`),
+and the spawn call itself (`_spawn_subprocess`). Its ownership rule is narrow
+on purpose: only library-owned resources are closed. A path target opens the
+file, hands the descriptor to the child, and closes cuprum's copy in a
+`finally` immediately after the spawn returns, whereas a borrowed descriptor or
+file object is never closed — the caller's own later use of it is the only
+witness that the rule held, since no exit code can distinguish a close cuprum
+owed from one it did not. A borrowed file object is still flushed before the
+spawn, in `_stdio_plan._resolve_stdio_binding`, so buffered caller-side bytes
+reach the child. The mapping is where the two kinds are told apart, and that is
+why pipe-ness travels as an explicit `pipes` frozenset: `Popen` treats `PIPE`,
+a raw `int`, and a file object differently, and it leaves its own `stdin`/
+`stdout`/`stderr` as `None` for everything that is not a pipe, so pipe-ness is
+the one piece of the resolution the value cannot express for itself.
+
+`cuprum/_subprocess_deadline.py` now owns the child-exit half of ending a run:
+`_wait_for_exit_code`, which awaits the process and terminates it on
+cancellation without a timeout of its own, and
+`_wait_for_exit_code_within_timeout`, which applies the deadline and translates
+expiry into the public timeout surface. The other half — cancelling the stdin
+writer and draining the stream consumers exactly once — deliberately stayed in
+`cuprum/_subprocess_wait.py`. Nothing in the new module touches the parent's
+stream tasks, which is what keeps a reader wedged on a pipe from delaying the
+termination that lets it reach EOF. The split is also where the earlier
+addenda's division of labour is preserved unchanged: both helpers terminate the
+child but never drain, so the caller's single drain through
+`_drain_stream_consumers` still reaches EOF, and a non-positive deadline still
+expires immediately rather than racing `asyncio.timeout`.
+
+The seam was drawn on the drain's other side for a test-visible reason.
+`cuprum/unittests/test_subprocess_drain_logging.py` pins
+`_DRAIN_LOGGER = "cuprum._subprocess_wait"`, and `logging.getLogger(__name__)`
+resolves to the module that _defines_ the helper, so moving the drain's debug
+calls would have broken that interface even though the behaviour would have
+been identical. The child-exit half is logger-name-neutral by construction:
+`_report_timeout_expiry`, which the deadline module calls for both expiry
+routes, takes the `_StageObservation` rather than a logger, so the timeout
+records it emits are attributed to the observation the caller supplied and not
+to the defining module.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: both moved names are re-exported from their original modules, so
+`_subprocess_execution` still resolves `_spawn_subprocess` and
+`_subprocess_wait` still resolves `_wait_for_exit_code` and
+`_wait_for_exit_code_within_timeout`. Direct private imports and monkeypatch
+targets therefore resolve the same names as before, and the single-command run,
+the line-stream coordinator, and the timeout test modules each keep one import
+path. The design and developer guides' §8.1.5 rosters now name both modules,
+correcting the earlier statements that placed the wait with the drain and the
+spawn with the orchestration module; the 2026-09-27 stdin addendum above named
+neither. No public API changes, and the module-size suppression remains
+unnecessary.

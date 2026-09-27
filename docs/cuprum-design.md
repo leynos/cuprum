@@ -1693,10 +1693,25 @@ from the `_TimeoutFallback`.
 The private subprocess implementation is divided by lifecycle concern while
 preserving the `SafeCmd.run()` execution contract:
 
-- `cuprum/_subprocess_execution.py` owns runner orchestration, spawning, and
-  assembling the `CommandResult`. It remains the composition root for a run: it
-  decides whether each stream is consumed, and it calls `_build_stream_config`
-  and `_spawn_stream_consumers` to act on that decision.
+- `cuprum/_subprocess_execution.py` owns runner orchestration and assembling
+  the `CommandResult`. It remains the composition root for a run: it decides
+  whether each stream is consumed, and it calls `_spawn_subprocess`,
+  `_build_stream_config`, and `_spawn_stream_consumers` to act on that decision.
+- `cuprum/_subprocess_spawn.py` owns the spawn binding: mapping each resolved
+  stdio onto the value the spawn layer receives, opening a cuprum-owned target
+  file immediately before the fork and closing cuprum's copy immediately after,
+  and the spawn call itself. Its ownership rule is narrow on purpose — only
+  library-owned resources are closed — so a borrowed descriptor or file object
+  is never closed by cuprum, while a borrowed file object is flushed before the
+  spawn so buffered caller-side bytes reach the child. The mapping is where
+  borrowed and owned descriptors are told apart, which is why pipe-ness travels
+  as an explicit `pipes` set: the one piece of the resolution the stdio value
+  cannot express for itself. It was split out of `_subprocess_execution` so
+  that module stays within the Pylint module ceiling, and
+  `_subprocess_execution` re-exports `_spawn_subprocess`, so callers and
+  monkeypatch targets resolve the same name as before. See the
+  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+  2026-09-27.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured text and settled relay
@@ -1746,10 +1761,24 @@ preserving the `SafeCmd.run()` execution contract:
 - `cuprum/_subprocess_timeout.py` owns timeout data and translation to the
   public `TimeoutExpired` error, plus exit-event helpers shared with normal
   completion.
-- `cuprum/_subprocess_wait.py` owns the rules for *ending* a run: applying the
-  deadline, terminating the process (through `_terminate_all_shielded`, so a
-  caller cancelling during the grace period cannot skip the `SIGKILL`
-  escalation), and draining the stream consumers exactly once. Its explicit
+- `cuprum/_subprocess_deadline.py` owns the child-exit half of ending a run:
+  how long to wait for a child, which exception a cancelled wait raises, and
+  what a deadline expiry does to the child. `_wait_for_exit_code` awaits the
+  process and terminates it on cancellation, without a timeout of its own, and
+  `_wait_for_exit_code_within_timeout` applies `execution.timeout` around it
+  and translates expiry into the public timeout surface. Termination goes
+  through `_terminate_all_shielded`, so a caller cancelling during the grace
+  period cannot skip the `SIGKILL` escalation. Nothing here touches the
+  parent's stream tasks, which is what keeps a reader wedged on a pipe from
+  delaying the termination that lets it reach EOF. It was split out of
+  `_subprocess_wait`, which re-exports both names, so the single-command run,
+  the line-stream coordinator, and the timeout test modules keep one import
+  path. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
+  addendum of 2026-09-27.
+- `cuprum/_subprocess_wait.py` owns the other half of the rules for *ending* a
+  run: draining the stream consumers exactly once, and cancelling the stdin
+  writer alongside them. The wait and the deadline moved to
+  `_subprocess_deadline`, and this module re-exports both names. Its explicit
   drain interface uses `_RunTaskOwnership` to bundle the optional stdin-writer
   task with the stdout and stderr consumer tasks, `_DrainContext` to carry
   capture and observability settings, and
