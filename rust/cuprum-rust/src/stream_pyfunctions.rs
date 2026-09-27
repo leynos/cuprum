@@ -4,7 +4,7 @@
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
 #[cfg(windows)]
-use cuprum_native_io::{OwnedStream, PlatformFd};
+use cuprum_native_io::OwnedStream;
 
 #[cfg(unix)]
 use super::{
