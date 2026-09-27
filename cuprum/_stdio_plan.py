@@ -96,21 +96,27 @@ type _StdinPlan = _NoStdin | _PayloadStdin | _StreamStdin | _PipeStdin
 class _StdioBinding:
     """Where one of the child's standard streams is bound, resolved.
 
-    The three fields answer three different questions the spawn layer asks
-    separately. *descriptor* is what the child is given, or ``None`` to inherit
-    the parent's own stream. *is_pipe* is the only thing that may start a
-    consumer or a writer task. *owned_path* is the file cuprum owes a close
-    once the child has inherited it, and it is a path rather than a descriptor
-    precisely so that no descriptor exists until the spawn is about to happen.
-    A borrowed descriptor is carried in *descriptor* alone, which is what makes
-    "cuprum closes only what it opened" a property of the value rather than a
-    rule someone has to remember.
+    The fields answer different questions the spawn layer asks separately.
+    *descriptor* is what the child is given, or ``None`` to inherit the
+    parent's own stream. *is_pipe* is the only thing that may start a consumer
+    or a writer task. *owned_path* is the file cuprum owes a close once the
+    child has inherited it, and it is a path rather than a descriptor precisely
+    so that no descriptor exists until the spawn is about to happen. *borrowed*
+    is the caller's own file object, kept for the one thing the descriptor
+    cannot do: flush it at the moment the child is spawned.
+
+    Carrying the object is what makes the flush land in the right place. A
+    borrowed descriptor is never closed, which is what makes "cuprum closes
+    only what it opened" a property of the value rather than a rule someone has
+    to remember; the object is held for the flush alone and is released with
+    the binding, which happens as soon as the spawn has used it.
     """
 
     stream: PipeStream
     descriptor: int | None = None
     is_pipe: bool = False
     owned_path: Path | None = None
+    borrowed: typ.IO[bytes] | typ.IO[str] | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -123,6 +129,10 @@ class _ResolvedStdio:
     that is not a pipe, but ``asyncio.create_subprocess_exec`` would wrap
     whatever it is handed. Naming the pipes explicitly is what makes both
     backends agree on which streams cuprum owns a reader for.
+
+    The bindings stay live until the spawn consumes them rather than being
+    reduced to descriptors here: a borrowed file object still owes a flush at
+    the fork, and only the object itself can perform it.
     """
 
     stdin: _StdinPlan
@@ -217,10 +227,14 @@ def _resolve_stdio_binding(
 ) -> _StdioBinding:
     """Resolve one output target into what the spawn layer binds.
 
-    A borrowed file object is flushed here, immediately before the spawn, so
-    bytes the caller has already written but not yet pushed to the kernel are
-    visible to the child. Flushing earlier would not be enough — more writes
-    could follow — and later would be too late.
+    A borrowed file object is carried in the binding rather than flushed here.
+    Resolution happens when the run is *prepared*, which on the ``lines()`` path
+    is well before the child exists — the stream resolves when ``lines()`` is
+    called, and the fork happens at first iteration. Flushing here would push
+    only the bytes written before that call, silently dropping anything the
+    caller buffered between calling ``lines()`` and consuming it. The spawn
+    layer performs the flush immediately before the fork instead, which is the
+    only point adjacent to it on every path.
 
     Parameters
     ----------
@@ -234,10 +248,10 @@ def _resolve_stdio_binding(
     -------
     _StdioBinding
         The descriptor to pass to the child (or ``None`` to inherit), whether
-        it is a pipe, and the path cuprum owes a close. A ``path`` target
-        contributes only the *path*: the descriptor is opened immediately
-        before the spawn, so nothing is opened here and no ``OSError`` can
-        arise from this call.
+        it is a pipe, the path cuprum owes a close, and the borrowed object the
+        spawn layer flushes. A ``path`` target contributes only the *path*: the
+        descriptor is opened immediately before the spawn, so nothing is opened
+        here and no ``OSError`` can arise from this call.
 
     Raises
     ------
@@ -256,12 +270,13 @@ def _resolve_stdio_binding(
     borrowed = target.fd_value
     if isinstance(borrowed, int):
         return _StdioBinding(stream=stream, descriptor=borrowed)
-    borrowed.flush()
-    # The object's descriptor, not the object: the spawn layer wants an ``int``,
-    # and taking it here is the same call ``Popen`` would make for itself. The
-    # descriptor keeps its owner — the caller's file object is still the only
-    # thing that may close it, which is why only *owned_path* is ever closed.
-    return _StdioBinding(stream=stream, descriptor=borrowed.fileno())
+    # The object's descriptor, not the object, is what the child is given: the
+    # spawn layer wants an ``int``, and taking it here is the same call
+    # ``Popen`` would make for itself. The object travels beside it so the
+    # spawn layer can flush it immediately before the fork, and it is never
+    # closed by cuprum — the caller's file object stays the only thing that may
+    # close it, which is why only *owned_path* is ever closed.
+    return _StdioBinding(stream=stream, descriptor=borrowed.fileno(), borrowed=borrowed)
 
 
 def _resolve_stdin_plan(
