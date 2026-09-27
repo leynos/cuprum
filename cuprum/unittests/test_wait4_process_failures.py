@@ -264,6 +264,106 @@ def test_reap_rejects_a_child_this_owner_did_not_spawn(
     )
 
 
+def _record_fallback_stdio(monkeypatch: pytest.MonkeyPatch) -> dict[str, int | None]:
+    """Patch the fallback spawn to record the stdio it was handed.
+
+    The real ``create_subprocess_exec`` is captured before the replacement is
+    installed, and both happen here, so "capture first, patch second" is a
+    property of this helper rather than a rule a caller has to remember.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        The test's patcher, used to install the replacement.
+
+    Returns
+    -------
+    dict[str, int | None]
+        The mapping the replacement fills in, keyed by stream name.
+    """
+    observed: dict[str, int | None] = {}
+    real_spawn = _wait4_process.asyncio.create_subprocess_exec
+
+    async def _record(
+        *argv: str,
+        stdin: int | None = None,
+        stdout: int | None = None,
+        stderr: int | None = None,
+        env: cabc.Mapping[str, str] | None = None,
+        cwd: str | None = None,
+    ) -> asyncio.subprocess.Process:
+        """Record the stdio the fallback was handed, then spawn for real.
+
+        The keywords are spelled out rather than taken as ``**kwargs``: a
+        ``**kwargs`` annotation has to describe every parameter the real
+        ``create_subprocess_exec`` accepts, so a narrower one is rejected at the
+        splat and a wider one would have to be ``Any``. Naming the five the
+        fallback actually sends keeps the recording and the call in agreement.
+
+        Returns
+        -------
+        asyncio.subprocess.Process
+            The process the real spawn produced, so the test can await it.
+        """
+        observed.update({"stdin": stdin, "stdout": stdout, "stderr": stderr})
+        return await real_spawn(
+            *argv, stdin=stdin, stdout=stdout, stderr=stderr, env=env, cwd=cwd
+        )
+
+    monkeypatch.setattr(_wait4_process.asyncio, "create_subprocess_exec", _record)
+    return observed
+
+
+async def _run_unread_overrunning_child(observed: dict[str, int | None]) -> None:
+    """Run a child that writes far more than a pipe buffer, with nothing reading.
+
+    Parameters
+    ----------
+    observed : dict[str, int | None]
+        What the recorder saw the fallback hand the spawn, keyed by stream
+        name. Read by the assertion below rather than returned, because the
+        assertion has to run against it before the child is awaited.
+    """
+    config = _wait4_process.DirectProcessConfig(
+        argv=(
+            sys.executable,
+            "-c",
+            f"import sys; sys.stdout.write('x' * {_OVERRUNS_ANY_PIPE_BUFFER})",
+        ),
+        stdin=None,
+        # Computed exactly as the spawn layer computes it: a pipe target
+        # that nothing consumes. ``None`` would be inherited, not
+        # discarded, and the child would block on a full pipe for a
+        # different reason than the one under test.
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=None,
+        cwd=None,
+        pipes=frozenset({"stdout", "stderr"}),
+    )
+    process = await _wait4_process.spawn_direct_process(config)
+    try:
+        # Checked here, on the value the backend was handed and before the
+        # child is awaited: a no-op in the passing case, and in the failing
+        # case the only assertion that can run at all, since the child is
+        # blocked in ``write`` for as long as the parent declines to read.
+        assert observed.get("stdout") == asyncio.subprocess.DEVNULL, (
+            "an unread stream must reach the fallback as DEVNULL, not as "
+            f"a pipe the parent never reads; got {observed.get('stdout')!r}"
+        )
+        returncode = await asyncio.wait_for(process.wait(), timeout=30)
+    finally:
+        # A child left mid-``write`` on an unread pipe outlives the run
+        # that stranded it, so it is both signalled and collected here
+        # rather than abandoned to the interpreter's exit. ``kill`` raises
+        # once the child has already been collected, which is exactly the
+        # passing case; the ``wait`` below then returns the stored code.
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+    assert returncode == 0, "an unread child must still exit cleanly"
+
+
 def test_unread_pipe_stays_devnull_on_the_fallback_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,76 +393,5 @@ def test_unread_pipe_stays_devnull_on_the_fallback_backend(
     monkeypatch.setattr(
         _wait4_process, "wait4_resource_measurement_available", lambda: False
     )
-    spawn = _wait4_process.asyncio.create_subprocess_exec
-    observed: dict[str, int | None] = {}
-
-    async def _record(
-        *argv: str,
-        stdin: int | None = None,
-        stdout: int | None = None,
-        stderr: int | None = None,
-        env: cabc.Mapping[str, str] | None = None,
-        cwd: str | None = None,
-    ) -> asyncio.subprocess.Process:
-        """Record the stdio the fallback was handed, then spawn for real.
-
-        The keywords are spelled out rather than taken as ``**kwargs``: a
-        ``**kwargs`` annotation has to describe every parameter the real
-        ``create_subprocess_exec`` accepts, so a narrower one is rejected at the
-        splat and a wider one would have to be ``Any``. Naming the five the
-        fallback actually sends keeps the recording and the call in agreement.
-
-        Returns
-        -------
-        asyncio.subprocess.Process
-            The process the real spawn produced, so the test can await it.
-        """
-        observed.update({"stdin": stdin, "stdout": stdout, "stderr": stderr})
-        return await spawn(
-            *argv, stdin=stdin, stdout=stdout, stderr=stderr, env=env, cwd=cwd
-        )
-
-    monkeypatch.setattr(_wait4_process.asyncio, "create_subprocess_exec", _record)
-
-    async def run_child() -> None:
-        """Run a child that writes far more than a pipe buffer, unread."""
-        config = _wait4_process.DirectProcessConfig(
-            argv=(
-                sys.executable,
-                "-c",
-                f"import sys; sys.stdout.write('x' * {_OVERRUNS_ANY_PIPE_BUFFER})",
-            ),
-            stdin=None,
-            # Computed exactly as the spawn layer computes it: a pipe target
-            # that nothing consumes. ``None`` would be inherited, not
-            # discarded, and the child would block on a full pipe for a
-            # different reason than the one under test.
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=None,
-            cwd=None,
-            pipes=frozenset({"stdout", "stderr"}),
-        )
-        process = await _wait4_process.spawn_direct_process(config)
-        try:
-            # Checked here, on the value the backend was handed and before the
-            # child is awaited: a no-op in the passing case, and in the failing
-            # case the only assertion that can run at all, since the child is
-            # blocked in ``write`` for as long as the parent declines to read.
-            assert observed.get("stdout") == asyncio.subprocess.DEVNULL, (
-                "an unread stream must reach the fallback as DEVNULL, not as "
-                f"a pipe the parent never reads; got {observed.get('stdout')!r}"
-            )
-            returncode = await asyncio.wait_for(process.wait(), timeout=30)
-        finally:
-            # A child left mid-``write`` on an unread pipe outlives the run
-            # that stranded it, so it is both signalled and collected here
-            # rather than abandoned to the interpreter's exit. ``kill`` raises
-            # once the child has already been collected, which is exactly the
-            # passing case; the ``wait`` below then returns the stored code.
-            with contextlib.suppress(ProcessLookupError):
-                process.kill()
-            await process.wait()
-        assert returncode == 0, "an unread child must still exit cleanly"
-
-    asyncio.run(run_child())
+    observed = _record_fallback_stdio(monkeypatch)
+    asyncio.run(_run_unread_overrunning_child(observed))
