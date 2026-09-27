@@ -21,6 +21,8 @@ streaming input source, and no public way to say "the child's stdout goes to
 After this change a caller can write:
 
 ```python
+import asyncio
+import collections.abc
 import pathlib
 import sys
 
@@ -39,21 +41,27 @@ python = sh.make(Program(sys.executable), catalogue=catalogue)
 command = python("-c", "import sys; sys.stdout.write(sys.stdin.read().upper())")
 
 
-async def _chunks() -> "collections.abc.AsyncIterator[bytes]":
+async def _chunks() -> collections.abc.AsyncIterator[bytes]:
     """Yield the payload in bounded pieces rather than as one buffer."""
     for word in (b"alpha ", b"beta ", b"gamma"):
         yield word
 
 
-result = await command.run(
-    stdin=StdinStream(chunks=_chunks()),
-    # capture must be off: the child writes straight to the file, so there is
-    # no parent-side pipe for cuprum to read.
-    output=RunOutputOptions(
-        capture=False, stdout=StdioTarget.path(pathlib.Path("out.log"))
-    ),
-    context=ExecutionContext(),
-)
+async def main() -> None:
+    """Feed the producer to the child and print the result's exit code."""
+    result = await command.run(
+        stdin=StdinStream(chunks=_chunks()),
+        # capture must be off: the child writes straight to the file, so there
+        # is no parent-side pipe for cuprum to read.
+        output=RunOutputOptions(
+            capture=False, stdout=StdioTarget.path(pathlib.Path("out.log"))
+        ),
+        context=ExecutionContext(),
+    )
+    print(result.exit_code)
+
+
+asyncio.run(main())
 ```
 
 and mean two new things. First, the producer's chunks are pulled one at a time,
@@ -188,6 +196,33 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-09-27 22:05Z) Re-gate after the round-4 repair. The first attempt
+  aborted at `python-lint`: the new regression test's `_collect_stdout_lines`
+  helper used `# noqa: ANN401`, which this repository no longer honours
+  (`ruff: ignore[...]` is the accepted spelling), and the helper's manual
+  append loop tripped the manual-list-comprehension rule. Rather than suppress
+  the annotation, the parameter is now typed `LineStream` — a public, exported
+  type — so no annotation suppression is needed at all. The comprehension
+  rewrite keeps the helper's non-vacuity: with the flush call removed, the test
+  still fails, now with the child reading `[]` instead of the flushed
+  `['caller-first', 'caller-second']`. The sweep was halted at the first
+  failure and re-run on the repaired tree from gate 1, because gates after an
+  abort prove nothing about the tree that follows.
+- [x] (2026-09-27 21:30Z) Round-4 review actioned. One finding was a real
+  defect: the borrowed-file flush sat in the resolver, so on the `lines()` path
+  bytes the caller wrote between calling `lines()` and iterating it never
+  reached the child. Fixed by carrying the borrowed object on `_StdioBinding`
+  and flushing in `_subprocess_spawn._flush_borrowed_stdio` at the fork, with a
+  regression test that fails on the old placement. Four further findings were
+  accepted (users-guide default-output description, the execplan's
+  non-executable example, the EP-M2 `connect_pipes()` description, and the
+  stale flush location in the ADR and plan), and two were declined (the roadmap
+  field rename, whose premise is false, and the `_StdioBinding` "data only"
+  framing, which would put the flush and the fork back out of step). Also
+  extracted two helpers from
+  `test_unread_pipe_stays_devnull_on_the_fallback_backend` to clear CodeScene's
+  Large Method advisory (93 → 28 non-blank LOC), with the red-green property
+  re-verified after the extraction.
 - [x] (2026-09-27 00:35Z) Reconnaissance complete: every module named in this
   plan read; CPython `Popen` stdio semantics verified against source; absence
   of interior runtime `cuprum.sh` imports confirmed by grep.
@@ -469,6 +504,27 @@ likelihood, and mitigation.
   forbids here, so the five keywords the fallback actually sends are now named
   explicitly. Re-run sweep: all six gates green, tree unchanged before and
   after, no `typos.toml` churn.
+- [x] (2026-09-27 21:15Z) Round-4 review found the borrowed-file flush
+      misplaced;
+  probes confirmed it was a real defect, not a style preference. The flush ran
+  in `_stdio_plan._resolve_stdio_binding`, i.e. at *resolution* time, but
+  resolution and the fork are the same instant only on the `run()` path:
+  `lines()` resolves when it is called and forks at first iteration. Measured
+  before fixing, with a borrowed stderr written once before the `lines()` call
+  and once after: the child read `b'first '` while the file held
+  `b'first second '` — the second write was dropped. Fixed by carrying the
+  borrowed object on `_StdioBinding` and flushing in a new
+  `_subprocess_spawn._flush_borrowed_stdio` immediately before the spawn; after
+  the fix the child reads `b'first second '`. Regression test
+  `test_borrowed_file_object_written_before_iteration_reaches_the_child` added,
+  red-first verified by reverting the fix (the child then reads only
+  `['caller-first']`). Also fixed in this round: the users-guide's default
+  output description (settled by a `capture=False` probe, not by reading the
+  resolver), the execplan's non-executable opening example (verified by running
+  it: exit 0, `ALPHA BETA GAMMA` in `out.log`), the EP-M2 `connect_pipes()`
+  description, and four places that cited the old flush location or a
+  planned-but-unbuilt state shape; the roadmap rename finding was declined
+  because the field it calls removed still exists.
 
 ## Surprises & discoveries
 
@@ -879,6 +935,48 @@ likelihood, and mitigation.
   single Windows job (`extension-tests-windows`) runs, so the marker would be
   inert there while risking a genuine skip. Date/Author: 2026-09-27,
   implementation agent.
+- Decision: move the borrowed-file flush from
+  `_stdio_plan._resolve_stdio_binding` to a new
+  `_subprocess_spawn._flush_borrowed_stdio`, carrying the caller's file object
+  on `_StdioBinding` so the flush can happen at the fork. Rationale: a round-4
+  review finding claimed the eager flush was misplaced, and a probe confirms it
+  is a real defect rather than a style preference. Resolution and the fork
+  coincide only on the `run()` path; `lines()` resolves its bindings when it is
+  *called* and forks at first *iteration*, so a caller who writes to the
+  borrowed object in between had those bytes silently dropped — the probe's
+  child read `b'first '` while the file held `b'first second '`. The finding's
+  proposed remedy (flush "in the spawn path, such as `_open_owned_stdio` or
+  `_spawn_subprocess`") is what was implemented; its framing of `_StdioBinding`
+  as "data only" is not, because the descriptor alone cannot flush a buffer and
+  dropping the object from the binding would put the flush and the fork back
+  out of step. Date/Author: 2026-09-27, implementation agent.
+- Decision: correct the users-guide's `StdioTarget.pipe()` description to say
+  an unobserved stream defaults to `/dev/null`, not inherited, and name
+  `inherit()` as the explicit way to pass an output stream through. Rationale:
+  a probe with `capture=False` and both streams unset produced *no* output on
+  the parent's terminal, while an explicit `inherit()` on both produced it, so
+  the guide said the opposite of what the library does. This reverses an
+  earlier rejection of the same class of finding (round 3), which had been
+  argued from `_resolve_output_binding`'s code rather than from a run; the
+  measurement is the authority. Date/Author: 2026-09-27, implementation agent.
+- Decision: decline the roadmap finding to rename `_ExecutionState.stdin_data`
+  to `stdin_plan`. Rationale: the field was never renamed — `grep` finds
+  `stdin_data: bytes | StdinStream | None` in `_command_internals.py`, and the
+  roadmap bullet already says the field was *widened* and that the plan is
+  resolved "from the field" in `_subprocess_spawn`. The finding's premise ("the
+  removed `_ExecutionState.stdin_data` field") is false. Date/Author:
+  2026-09-27, implementation agent.
+- Deviation (recorded): the Plan of work section described the shape planned at
+  EP-M2 — `stdin_plan` on the state, `stdout_target`/`stderr_target` fields, a
+  `_resolve_stdio_target` helper, and the spawn mapping living in
+  `_subprocess_execution.py` — none of which is what shipped. The implemented
+  shape resolves the plan and the bindings together in
+  `_build_subprocess_execution`, keeps the field name, and puts the spawn
+  mapping in `_subprocess_spawn.py` with `_resolve_output_binding`/
+  `_resolve_stdio` as the resolvers. Milestone plans are written before the
+  code; the reconciliation that should have followed is what this entry
+  supplies, and the section above now describes the delivered shape.
+  Date/Author: 2026-09-27, implementation agent.
 
 ## Outcomes & retrospective
 
@@ -968,8 +1066,10 @@ The run path, in order, is:
 4. `cuprum/_wait4_process.py` — on POSIX with `os.wait4` available,
    `_Wait4Process` owns the child and reaps it with resource measurement;
    `spawn_direct_process` takes a `DirectProcessConfig` whose `stdin`,
-   `stdout`, and `stderr` are today `int | None`, and `connect_pipes()` wraps
-   each non-`None` pipe in `StreamReader`/`StreamWriter`. When `wait4` is
+   `stdout`, and `stderr` are today `int | None`, and `connect_pipes()`
+   attaches a reader or writer only for streams named in the pipe set — the
+   config carries one because a `Popen` stream is non-`None` for anything it
+   was handed, including a descriptor the caller owns. When `wait4` is
    unavailable, plain `asyncio.create_subprocess_exec` is used instead.
 5. `cuprum/_subprocess_stdin.py` — `_spawn_stdin_writer` starts a task that
    writes the already-resolved bytes and closes the pipe. A `StdinStream`
@@ -1233,22 +1333,29 @@ Green:
 
 - New module `cuprum/_stdio_plan.py` (kept small, per ADR-007): the four-variant
   `_StdinPlan` (`_NoStdin`, `_PayloadStdin`, `_StreamStdin`, `_PipeStdin`), the
-  resolved `_StdioBinding` for each output stream, `_resolve_stdin_plan`, and
-  `_resolve_stdio_target` (which flushes a borrowed file object and returns the
-  descriptor to pass).
-- `cuprum/_command_internals.py`: `_ExecutionState.stdin_data` becomes
-  `stdin_plan: _StdinPlan`, plus `stdout_target`/`stderr_target`; thread both
-  through `_build_subprocess_execution`.
-- `cuprum/_subprocess_execution.py`: `_SubprocessExecution` carries the plan and
-  targets; `_spawn_subprocess` maps them to stdio values, opens owned paths
-  immediately before the spawn call, and closes only the owned descriptors in a
-  `finally` right after; `consumes_stdout`/`consumes_stderr` gain "and the
-  stream is still a pipe".
+  resolved `_StdioBinding` for each output stream, `_resolve_stdin_plan`,
+  `_resolve_output_binding`, and `_resolve_stdio` (which returns the whole
+  `_ResolvedStdio`). No single-target resolver is exported: the two output
+  streams and stdin are resolved together, so a per-target helper would have no
+  caller.
+- `cuprum/_command_internals.py`: `_ExecutionState.stdin_data` keeps its name
+  and is *widened* to `bytes | StdinStream | None` — the plan is resolved from
+  it in `_build_subprocess_execution` rather than stored on the state, so the
+  run's output targets travel to the spawn layer as part of the
+  `_SubprocessExecution` bundle instead of as separate fields.
+- `cuprum/_subprocess_spawn.py` (not `_subprocess_execution.py`): a new module
+  owning the spawn's own surface. `_SubprocessExecution` carries the resolved
+  `_ResolvedStdio`; `_spawn_subprocess` maps it to stdio values, opens owned
+  paths immediately before the spawn call, and closes only the owned
+  descriptors in a `finally` right after. `consumes_stdout`/`consumes_stderr`
+  gain "and the stream is still a pipe", and `_flush_borrowed_stdio` performs
+  the pre-fork flush that a resolver-side one could not place correctly (see
+  the Decision log).
 - `cuprum/_wait4_process.py`: `DirectProcessConfig` gains the pipe-ness
-  information (a `pipes: frozenset[str]` field whose default preserves today's
-  behaviour); `_Wait4Process.connect_pipes()` attaches a `StreamReader` only
-  for streams named in it; the `create_subprocess_exec` fallback receives the
-  same values.
+  information (a `pipes: frozenset[PipeStream]` field whose default preserves
+  today's behaviour); `_Wait4Process.connect_pipes()` attaches a `StreamReader`
+  only for streams named in it; the `create_subprocess_exec` fallback receives
+  the same values, unchanged.
 - `cuprum/_subprocess_streams.py`, `cuprum/_subprocess_stream_run.py`,
   `cuprum/_line_stream/spawn.py`, `cuprum/_subprocess_execution.py`: build a
   consumer only for a piped stream, tolerating `None` in the consumer tuple
