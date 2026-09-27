@@ -7,9 +7,13 @@ payload is written in one go by ``cuprum._subprocess_stdin``, while a producer
 (``StdinStream``) is pulled one chunk at a time and is handled here.
 
 The pull-after-drain bound lives here. Each chunk is drained into the child
-before the next is pulled, so the parent's peak retention is the largest chunk
-rather than the whole stream; pulling eagerly would let an unbounded producer
-outrun the child and re-materialize the payload in the parent's memory.
+before the next is pulled, so the writer cannot run far ahead of the child;
+what the parent retains is bounded by the pipe rather than by the stream, and
+pulling eagerly would let an unbounded producer outrun the child and
+re-materialize the payload in the parent's memory. It is a bound, not a
+one-chunk guarantee: ``drain()`` returns once the transport's write buffer has
+fallen below its low-water mark, and the OS pipe holds bytes of its own, so
+several chunks can be in flight together.
 
 This module imports the pipe primitives (``_close_stdin``, ``_emit_stdin_error``)
 from ``cuprum._subprocess_stdin``, and the dispatcher in that module imports
