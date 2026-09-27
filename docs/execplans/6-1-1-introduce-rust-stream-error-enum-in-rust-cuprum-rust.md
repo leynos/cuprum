@@ -8,9 +8,13 @@ unobservable (recorded in Progress and Surprises). Windows runtime evidence has
 since been obtained: it found two branch defects, both fixed at `dafbfa4e`, and
 the Windows job at that head succeeded (job `108519345532`; evidence in
 Progress). M2 closed the remaining evidence, reconciled the roadmap, and ticked
-6.1.1; the closing head is `7dba35cf`, whose CI run is `completed|success` with
-no non-success job, including the required `coverage` check (job
-`108538239040`) that this work existed to fix.
+6.1.1. The closing head is `11c6cb7f`, whose CI run `36290878443` is
+`completed|success` with **zero** non-success jobs, including the required
+`coverage` check that this work existed to fix; `7dba35cf` is the head where
+that check first went green (job `108538239040`) and where the closing
+documentation was then built on top. A CodeRabbit pass over `11c6cb7f` then
+found one further defect — a behavioural row that passed vacuously on Windows —
+which is fixed and recorded in Progress.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -542,6 +546,137 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       one-line hand edit because `mapsplice` cannot parse the roadmap; the
       deviation, its proof, and the unrelated churn mapsplice also produced are
       recorded in the Decision log, with the parser defect itself in Surprises.
+      This entry was written while `7dba35cf` was the head, so the evidence it
+      cites is that head's; the tick itself landed one commit later in
+      `11c6cb7f`, whose own run is green — see the entry below.
+- [x] (2026-09-27) **The closing head `11c6cb7f` is green, and the documentation
+      gates were re-run over it.** CI run `36290878443` (event `pull_request`,
+      head `11c6cb7f3540d9ac1ab16f4ffa48cc9bd153301b`) is
+      `completed|success` with **zero** non-success jobs — including the
+      required `coverage` check this work existed to fix, `benchmark-ratchet`,
+      `lint-test` (green at `Lint Markdown`, the step that had failed), and both
+      extension-gated jobs including Windows. Unlike the intermediate heads,
+      this run is the head's own and is not superseded, so it is citable at
+      run level and not only at job level.
+
+  The four documentation gates that ran over the frozen head, head unchanged
+  before and after, tree clean, were `make fmt`, `make check-fmt` (675
+  formatted, 78 unchanged), `make markdownlint` (78 files, 0 errors, spelling
+  clean) and `make nixie`; their logs are
+  `/tmp/611-scrutineer-{fmt,check-fmt,markdownlint,nixie}-11c6cb7f.out`.
+  `make lint` was **not observed at that head** — it stalls locally at
+  `github-actions-lint` in the actionlint/shellcheck stdin deadlock recorded
+  under Surprises, and that sub-check is local-only, so this is an unobserved
+  check rather than a pass. Fence pairing in this plan was confirmed
+  independently by a balanced scan (22 fences, 11 blocks, zero unlabelled
+  openers), which is what cleared the `MD040` failure mechanically rather than
+  by inspection.
+
+  **Scope caveat, carried at the strength it actually has:** these gates
+  covered the documentation-only commit range `7dba35cf..11c6cb7f`, not the
+  whole branch. The branch against `origin/main` is 19 files and roughly 3,817
+  insertions, whose Rust and Python changes are gated by CI rather than by this
+  local run. This run must not be cited as whole-PR coverage.
+- [x] (2026-09-27) **The CodeRabbit slot was rate-limited, and the review was
+      re-run once the limit reset.** `coderabbit review --usage` reported
+      `Remaining: 1 of 10`; the attempt then consumed the last slot and the
+      service returned a rate-limit payload (`10 of 10` used, `waitTime` about
+      six minutes). The rate limit is a property of the review seat, not of this
+      branch, and a request that is delivered can still yield zero review, so a
+      consumed slot is not evidence of a review having happened. The re-run was
+      launched against the frozen closing head `11c6cb7f` after `--usage`
+      reported `Remaining: 10 of 10` again. It completed in 281 s and returned
+      **two** findings, both naming the same lines
+      (`tests/behaviour/test_rust_streams_errors_behaviour.py`, around 169-175)
+      at different severities — one `major`, one `trivial`. They are one defect,
+      not two, and are actioned as the single change in the next entry.
+- [x] (2026-09-28) **`a fatal reader error` passed vacuously on Windows, and
+      now does not.** CodeRabbit's re-run flagged the descriptor the
+      `a fatal reader error` rows passed as their reader: a **closed** pipe read
+      end. A closed descriptor never reaches Rust on Windows — the wrapper
+      resolves it through `msvcrt.get_osfhandle` while preparing the call and
+      raises `OSError(EBADF)` there — so the row observed the *wrapper's*
+      descriptor failure while claiming to pin the native read path. That is the
+      same vacuity the `a zero buffer size` rows had already been fixed for, and
+      it was **provable from this branch's own evidence before the fix**: in the
+      RED run at `bcf72f52` (log `/tmp/611-win-ci-RED.log`) the two
+      `a fatal reader error` rows read `PASSED` on Windows at the same moment the
+      sibling `consume-a zero buffer size` row read `FAILED` with
+      `AssertionError: expected ValueError, found OSError: [Errno 9] Bad file
+      descriptor` — the `get_osfhandle` refusal — proving the wrapper, not Rust,
+      was answering. The rows are now green in CI (`36290878443`), so the
+      `PASSED` lines alone could not have revealed it; only the contrast with
+      the failing sibling does. The reader is now an **open but unreadable**
+      descriptor — a file under `tmp_path` opened `O_WRONLY | O_CREAT` — which
+      is open on every platform and still fails the first read, and it is
+      registered in a `contextlib.ExitStack` so it is closed even when
+      `_capture` raises. This is the same device
+      `test_rust_errno_windows.py` already uses to put a native code on the
+      error the conversion must retain. Verified locally: all four rows in the
+      module pass with `CUPRUM_REQUIRE_RUST_EXTENSION=1`, and the fix is
+      non-vacuous on POSIX because an `O_WRONLY` descriptor there also fails
+      `read(2)` with `EBADF`.
+- [x] (2026-09-28) **The PR description was brought up to date with the
+      implementation.** The body was still the pre-approval text — it described
+      the branch as carrying "the pre-implementation plan", asserted "This
+      branch changes no runtime code and leaves roadmap item 6.1.1 open", and
+      listed only documentation gates under Validation. Every one of those
+      claims is now false. The replacement states the implementation, links the
+      conversion point, quotes the test counts from the logs that contain them
+      (`cargo nextest` 154/154; extension-gated 101 passed/1 skipped on Linux,
+      89 passed/13 skipped on Windows; Rust ratchet 997/1134 = 87.92% against
+      87.35%), and carries the two traps a reader of the diff would otherwise
+      have to rediscover — the unbound `#[scenario]` bindings behind the
+      coverage failure, and the Windows wrapper masking the native read
+      failure. It also records the `mapsplice` deviation and why `CHANGELOG.md`
+      is untouched. The bot-generated "Summary by Sourcery" section was
+      preserved rather than dropped, and the attribution line moved to the end
+      where it belongs. Verified by an independent read-back rather than the
+      `gh api -X PATCH` echo, because a read-back taken from the same call can
+      show the value it was sent rather than the value the server stored.
+- [x] (2026-09-28) **The one remaining documentation gate failure was an
+      `MD046` this plan had introduced itself, and it is fixed.** `make fmt`
+      and `make markdownlint` had been failing with a single error,
+      `docs/execplans/6-1-1-…-cuprum-rust.md:562 error MD046/code-block-style
+      Code block style [Expected: fenced; Actual: indented]`. The trigger was
+      not the line's own content (§562 is 70 characters, well inside the
+      limit): within a list item, a **blank line followed by a continuation
+      line indented four or more spaces** is read as an indented code block.
+      That is why the earlier attempt to fix it — removing a blank line —
+      could only move the report to the next blank-line-separated
+      sub-paragraph rather than clear it. Four variants were measured against
+      the repository's own `.markdownlint-cli2.jsonc` before choosing one:
+      the unmodified blob reported 1 issue at 562; deleting the blank line
+      reported 1 issue at 574; re-indenting the paragraph to two spaces but
+      leaving the later paragraphs alone reported 1 issue at 575; re-indenting
+      the whole remainder of the list item to two spaces reported **0
+      issues**. Only the last is a fix, so the item's continuation paragraphs
+      were re-indented from six spaces to two. `mdtablefix` does not revert
+      that indent, which was the open question: `make fmt` runs mdtablefix
+      before `markdownlint --fix`, and a reflow that undid the change would
+      have made the fix invisible to the gate that required it.
+- [x] (2026-09-28) **The documentation gates were re-run over the frozen tree,
+      and their earlier results are superseded.** The prior run's
+      `markdownlint` verdict was pinned to blob `1913074f` and the four gates
+      before it to earlier revisions still, because the plan was being edited
+      throughout that window — so those results did not vouch for the Markdown
+      they were later cited against. Over the frozen tree, head unchanged and
+      both edited files' blobs identical before and after every gate (plan
+      `64913648`, test module `a1015c40`): `make fmt` exit 0 with markdownlint
+      reporting `Summary: 0 error(s)` over 78 files; `make check-fmt` exit 0
+      (`675 files already formatted`, `78 files left unchanged`);
+      `make markdownlint` exit 0, 0 errors; `make nixie` exit 0,
+      `All diagrams validated successfully!`. Logs:
+      `/tmp/611-{fmt,check-fmt,markdownlint,nixie}-md046fix.out`. As before,
+      `make lint` is **unobserved on this tree** — it is green in CI at the
+      closing head and green locally on an earlier run of this branch's
+      Python change (`/tmp/611-scrutineer-lint-fatalreader.out`, all 11
+      sub-checks observed), but it was not re-run after this Markdown edit.
+      The test module's blob `a1015c40` is unchanged from the run that gated
+      it (`4 passed` in the extension-gated module, `3 passed` in its
+      neighbour), so that evidence still stands. The recording entry you are
+      reading is itself the next edit, so these verdicts pin the commit that
+      precedes it, not this file's final revision.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -629,6 +764,37 @@ four one-statement scenario bodies rustfmt wanted as `fn f(..) { body }` were
 written across three lines. Running the focused test target is not a substitute
 for the formatting gate, and the formatter here is the pinned nightly
 (`nightly-2026-05-28`), not the default toolchain.
+
+**A behavioural row passed on Windows for the wrong reason, and its `PASSED`
+line was the only thing that looked like evidence.** The `a fatal reader error`
+rows handed the native entry point a **closed** pipe read end. On Windows a
+closed descriptor is refused by the *wrapper*, not by Rust: the wrapper
+resolves the reader through `msvcrt.get_osfhandle` while preparing the call,
+and that raises `OSError(EBADF)` before the native read path is reached. The
+rows therefore asserted `OSError` — which the wrapper's own refusal already
+satisfied — and never exercised the native failure they exist to pin. The trap
+is sharper than the `#[scenario]` one above, because there the tests did not
+run at all; here they ran, passed, and printed a green line while covering
+nothing.
+
+What makes it discoverable is a *contrast*, not the row itself. In the RED run
+at `bcf72f52` (`/tmp/611-win-ci-RED.log`) the two `a fatal reader error` rows
+read `PASSED` on Windows in the same session where the sibling
+`consume-a zero buffer size` row read `FAILED` with
+`AssertionError: expected
+ValueError, found OSError: [Errno 9] Bad file descriptor` —
+the same `get_osfhandle` refusal. One row's failure is what identifies the
+other's pass as vacuous; neither row's own status is wrong on its face. The
+lesson generalizes: when a platform's wrapper can raise the *same exception
+class* the native path would, an assertion on that class cannot tell the two
+apart, and the fix is to make the setup reach past the wrapper — as the
+`zero buffer size` rows already did — rather than to add another assertion.
+
+The remedy is an **open but unreadable** descriptor: a file opened
+`O_WRONLY | O_CREAT`, which every platform lets the wrapper prepare and every
+platform fails on the first read. `cuprum/unittests/test_rust_errno_windows.py`
+already used exactly this device, so the correct idiom was in the tree and only
+the behavioural module had missed it.
 
 **Red evidence was captured after the fact, not before the edit.** The plan
 requires the new Rust tests' *initial failure* to identify the absent enum or
@@ -1017,14 +1183,15 @@ Both milestones are complete as of 2026-09-27. The one focused boundary change
 landed as intended: a crate-private `RustStreamError`, typed validators, and a
 single `From<RustStreamError> for PyErr` conversion point reached once through
 `run_stream_operation`'s `map_err(PyErr::from)`. The roadmap checkbox is ticked
-at `7dba35cf`, the head whose CI run is fully green including the required
-`coverage` check. The clause that sentence replaces — "the roadmap checkbox is
-*not* yet ticked" — was true when written and is left in the record here rather
-than silently deleted, because it is the reason 6.1.1's Success criterion was
-checked against the code before the tick rather than assumed from the plan:
-`grep` shows no PyErr construction in the validators or the stream call sites,
-and both halves of the criterion are asserted against the compiled extension
-(`ValueError` for `buffer_size`; `OSError` carrying `errno`/`winerror` for I/O).
+at `7dba35cf`, and moved to its final state in `11c6cb7f`, whose own CI run is
+fully green including the required `coverage` check. The clause that sentence
+replaces — "the roadmap checkbox is *not* yet ticked" — was true when written
+and is left in the record here rather than silently deleted, because it is the
+reason 6.1.1's Success criterion was checked against the code before the tick
+rather than assumed from the plan: `grep` shows no PyErr construction in the
+validators or the stream call sites, and both halves of the criterion are
+asserted against the compiled extension (`ValueError` for `buffer_size`;
+`OSError` carrying `errno`/`winerror` for I/O).
 
 What the evidence covers, stated at the strength it actually has:
 
