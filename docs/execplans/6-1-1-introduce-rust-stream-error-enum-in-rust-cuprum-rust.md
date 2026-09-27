@@ -14,7 +14,13 @@ Progress). M2 closed the remaining evidence, reconciled the roadmap, and ticked
 that check first went green (job `108538239040`) and where the closing
 documentation was then built on top. A CodeRabbit pass over `11c6cb7f` then
 found one further defect — a behavioural row that passed vacuously on Windows —
-which is fixed and recorded in Progress.
+which is fixed and recorded in Progress. The branch was then rebased onto `main`
+(`7f762870`) as a pure replay, and the head is now `b7d1b109`, whose CI run
+`36356062517` is likewise `completed|success` with **17 of 17** jobs green and
+zero non-success, the required `coverage` check included. That rebase moved the
+Rust coverage figure from 87.92% to **88.11%**, because `main` added
+`cuprum-streams` code to the measured workspace; both measurements are recorded
+in Progress, each bound to the revision it measured.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -510,10 +516,12 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       Root cause: `stream_error_behaviour.rs` bound only 2 of the 5 declared
       scenarios, because a `#[scenario]` omitting both `name` and `index`
       silently takes the first. Fixed by naming every binding and adding a
-      descriptor scenario; Rust coverage is now 997/1134 = **87.92%**, above the
-      baseline. Details and arithmetic in Surprises; the mutation V2 requires
-      was run. See also the false measurements this produced and corrected,
-      below.
+      descriptor scenario; Rust coverage then measured **87.92%** at the
+      pre-rebase head, above the baseline. Details and arithmetic in Surprises;
+      the mutation V2 requires was run. See also the false measurements this
+      produced and corrected, below. The figure was re-measured after the
+      rebase onto `main` and is now **88.11%** — see the entry at the end of
+      Progress.
 - [ ] (2026-09-27) Two self-corrections, both recorded rather than dropped: the
       scenario's error code was moved 9 → 8 on a justification not present in
       the code, and reverted; and the module docstring was rewritten to claim
@@ -623,9 +631,10 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       listed only documentation gates under Validation. Every one of those
       claims is now false. The replacement states the implementation, links the
       conversion point, quotes the test counts from the logs that contain them
-      (`cargo nextest` 154/154; extension-gated 101 passed/1 skipped on Linux,
-      89 passed/13 skipped on Windows; Rust ratchet 997/1134 = 87.92% against
-      87.35%), and carries the two traps a reader of the diff would otherwise
+      (`cargo nextest` 154/154 *at the pre-rebase head*; extension-gated 101
+      passed/1 skipped on Linux, 89 passed/13 skipped on Windows; Rust ratchet
+      997/1134 = 87.92% against 87.35% *also at the pre-rebase head*), and
+      carries the two traps a reader of the diff would otherwise
       have to rediscover — the unbound `#[scenario]` bindings behind the
       coverage failure, and the Windows wrapper masking the native read
       failure. It also records the `mapsplice` deviation and why `CHANGELOG.md`
@@ -677,6 +686,62 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       neighbour), so that evidence still stands. The recording entry you are
       reading is itself the next edit, so these verdicts pin the commit that
       precedes it, not this file's final revision.
+- [x] (2026-09-28) **Rebased onto `main` (`7f762870`) as a pure replay, and the
+      gates were re-run at the new head.** The boundary was `991dee64`,
+      corroborated three ways rather than assumed: `ab58a3d6^` is that commit,
+      the Progress entry above records the earlier rebase onto it, and PR #432's
+      base is `main` rather than a stacked parent. All 19 commits replayed with
+      **no conflict**, but a clean exit is not the evidence — `range-diff` reports
+      19 unchanged, 0 modified, 0 added, 0 removed; the branch-owned diffstat is
+      identical (19 files, 4000+/87-) on both sides; every key blob
+      (`errors.rs`, `lib.rs`, `Cargo.lock`, this plan, the behavioural module) is
+      byte-identical; and `git diff 7f762870 b7d1b109` produces a tree equal to
+      `git merge-tree 0ff37532 7f762870` **exactly**, which is the strongest
+      available proof that the result is `main` plus this branch and nothing
+      else. `main`'s two changes arrived intact and were checked for presence
+      rather than inferred from the clean exit: the `cuprum-streams` Miri
+      invocation in `boundary-miri`, and the rewritten Miri section of
+      `docs/developers-guide.md`. Neither overlapped this branch's hunks
+      (Makefile 508 vs 171; guide 3647 vs 3369). `rust/Cargo.lock` needed no
+      rebuild: `main` did not touch it, its `Cargo.toml` change (`cfg(miri)`)
+      added no dependency, the branch's lock is carried byte-identical, and
+      `cargo metadata --locked` exits 0.
+- [x] (2026-09-28) **The coverage figure moved, and the plan now records both
+      measurements.** CI at the rebased head `b7d1b109` is `completed|success`
+      with **17 of 17** jobs successful and **zero** non-success — including the
+      required `coverage` check. That check's ratchet step prints two pairs,
+      Rust then Python, and names neither; the pairing is nonetheless
+      unambiguous from the log, which prints them adjacent in order: Rust
+      **88.11%** against a 87.35% baseline, and Python 89.65% against 89.82%,
+      both inside the `±1.00` pp tolerance. The Rust figure was **87.92%**
+      before the rebase, so `main`'s added `cuprum-streams` code moved it. This
+      is worth recording precisely because the earlier number was not an error:
+      `997/1134 = 87.92%` was a correct measurement of a fixed revision, and it
+      went stale because the workspace it measured changed underneath it. The
+      sites asserting *current* state were updated to 88.11%; the ones recording
+      *historical* measurement (the 86.05% failure, the Surprises arithmetic)
+      were left at their measured values and given forward pointers, because
+      rewriting a dated observation to match today's number would falsify it.
+      CI prints percentages only, so no exact post-rebase fraction is
+      re-derivable by hand — the percentage is quoted as CI printed it rather
+      than reconstructed.
+- [x] (2026-09-28) **All four post-rebase gates passed on the frozen tree.**
+      `make check-fmt` (675 formatted, 78 unchanged, mdtablefix clean),
+      `make test` (`cargo nextest` **160/160**, and nine pytest invocations all
+      green — 2543 passed / 1 skipped, 638, 116, 123, 34, 22, 19, 4, 2 — with
+      the single skip being the Windows-only
+      `test_rust_errno_windows.py::test_windows_failures_carry_the_native_code_as_winerror`
+      case on a Linux host), `make typecheck` (`ty` reports all checks passed),
+      and
+      `make lint` (all leaves observed, actionlint included). Each log records
+      the head it ran at, and all four name `b7d1b109`; `git status` was clean
+      before and after every gate and no gate mutated a tracked file. Two known
+      local traps were probed and did **not** reproduce: the `BASH_ENV`
+      `gh`-stand-in shadowing (`0` occurrences of `failed to run git`) and the
+      host-only actionlint 1.7.12 deadlock (`make lint` finished in 52 s inside
+      a 900 s bound). The nextest total is **160** where the pre-rebase head
+      measured **154** — `main` added six tests — which is a second, independent
+      signal that the coverage scope grew.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -740,6 +805,12 @@ with CI's own toolchain
 `.rs` scope moves 975/1133 = 86.05% → 997/1134 = **87.92%**, above the 87.35%
 baseline rather than merely inside tolerance, with `stream_error_behaviour.rs`
 at 60/60 (the earlier 41-line figure was itself a newer-toolchain measurement).
+That measurement is bound to the pre-rebase head. CI re-measured the same scope
+at **88.11%** after the rebase onto `main`, which added `cuprum-streams`
+coverage — see the closing Progress entry. The direction of the cause is worth
+stating: `997/1134` was a *correct measurement of a fixed revision*, not an
+error, and it went stale because the workspace it measured changed underneath
+it, not because the arithmetic was wrong.
 
 One change was made and then reverted, and the reversal is the more useful
 record. The scenario's error code was moved from 9 to 8 on the stated grounds
