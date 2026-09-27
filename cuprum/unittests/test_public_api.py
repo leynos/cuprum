@@ -475,8 +475,9 @@ def test_stdin_stream_wraps_an_async_iterable() -> None:
     """``StdinStream`` carries the producer unmodified and stays frozen."""
 
     async def producer() -> cabc.AsyncIterator[bytes]:
-        # A real producer suspends between chunks; the yield point is what makes
-        # the object an async *generator* rather than a coroutine returning one.
+        """Yield one chunk, suspending first as a real producer would."""
+        # The yield point is what makes the object an async *generator* rather
+        # than a coroutine returning one, so the suspension is load-bearing.
         await asyncio.sleep(0)
         yield b""
 

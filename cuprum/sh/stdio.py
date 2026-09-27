@@ -35,6 +35,10 @@ type _StdioKind = typ.Literal["pipe", "inherit", "path", "fd"]
 
 _STDIO_KINDS: frozenset[str] = frozenset({"pipe", "inherit", "path", "fd"})
 
+# The variants that describe a stream rather than naming a destination for data
+# cuprum is given. Only these may stand for stdin.
+_STDIN_KINDS: frozenset[str] = frozenset({"pipe", "inherit"})
+
 
 @dc.dataclass(frozen=True, slots=True)
 class StdioTarget:
@@ -196,8 +200,8 @@ class StdioTarget:
 def _validate_stdio_targets(options: RunOutputOptions) -> None:
     """Reject stdio targets this options object cannot honour.
 
-    Two rules are enforced here, both at construction rather than at spawn,
-    because both are contradictions in the caller's *intent* rather than
+    Three rules are enforced here, all at construction rather than at spawn,
+    because all three are contradictions in the caller's *intent* rather than
     runtime conditions:
 
     Capture reads from a parent-side pipe. A stream bound to a file, a
@@ -212,17 +216,38 @@ def _validate_stdio_targets(options: RunOutputOptions) -> None:
     in an order neither owns. Distinct paths, or a borrowed descriptor the
     caller manages, are the supported forms.
 
+    ``stdin`` accepts only the two variants that describe the stream itself.
+    ``path`` and ``fd`` are rejected not because cuprum could not open or use
+    them — it redirects output that way — but because an input source has to
+    carry the bytes as well as the destination, and both live on
+    ``SafeCmd.run``'s ``stdin=`` argument: a payload resolves against the
+    context's encoding and a producer is pulled during the run. Accepting an
+    input descriptor here would create a second, competing way to say where
+    stdin comes from, and the combination that lost would fail silently.
+
     Parameters
     ----------
     options : RunOutputOptions
-        The options whose ``stdout`` and ``stderr`` targets are checked.
+        The options whose ``stdin``, ``stdout``, and ``stderr`` targets are
+        checked.
 
     Raises
     ------
     ValueError
         If a target names a non-pipe for a stream that capture or echo
-        requires, or if stdout and stderr share one path.
+        requires, if ``stdin`` names a file or descriptor, or if stdout and
+        stderr share one path.
     """
+    stdin_target = options.stdin
+    if stdin_target is not None and stdin_target.kind not in _STDIN_KINDS:
+        msg = (
+            f"RunOutputOptions stdin cannot be redirected to "
+            f"{stdin_target.kind!r}: pass the input itself as "
+            f"stdin=StdinInput(...) or stdin=StdinStream(...) on the run call, "
+            f"which selects a pipe, and use RunOutputOptions.stdin only to "
+            f"choose {sorted(_STDIN_KINDS)}."
+        )
+        raise ValueError(msg)
     for name, target in (("stdout", options.stdout), ("stderr", options.stderr)):
         if target is None or target.kind == "pipe":
             continue

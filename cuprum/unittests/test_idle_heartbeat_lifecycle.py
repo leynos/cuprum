@@ -23,6 +23,7 @@ import pytest
 from cuprum import _subprocess_execution
 from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
+from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_execution import _SubprocessExecution
 from cuprum.sh import ExecutionContext, RunOutputOptions, TimeoutExpired
 from tests.helpers.catalogue import python_builder as build_python_builder
@@ -90,7 +91,7 @@ def _execution(
             pending_tasks=[],
             wall_clock=time.monotonic,
         ),
-        stdin_data=None,
+        stdio=_resolve_stdio(None, RunOutputOptions()),
         idle=idle,
     )
 
