@@ -363,6 +363,15 @@ repetitions):
 
 _Table 10: Construction cost of the shipped type and three alternatives._
 
+The ratios are computed from the unrounded per-construction means, then rounded
+to four decimal places; the `ns/ctor` column shows those means at one. Dividing
+the printed nanoseconds instead can differ in the last digit (341.6/1890.3 →
+0.1807, but 1765.8/1890.3 → 0.9341 and 1278.3/1890.3 → 0.6762). The differences
+are at the edge of the measurement's own resolution and change no conclusion
+here — every variant is far from the shipped cost and the ordering is stable in
+every run — but the ratios should be read as computed from the means, not
+recomputed from the displayed nanoseconds.
+
 The descriptor variant preserves the full dataclass protocol surface — 27 slots,
 `FrozenInstanceError` on write, and `dc.fields`, `dc.replace`, `dc.asdict`,
 `dc.astuple`, keyword construction, `pickle`, `copy`, `deepcopy`, hash and set
