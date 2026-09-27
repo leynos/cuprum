@@ -163,8 +163,11 @@ class SafeCmd:
             Optional stdin source. ``StdinInput`` supplies one complete bytes
             or text payload; ``StdinStream`` supplies an async producer whose
             chunks are pulled one at a time, written, and drained before the
-            next is pulled, so peak memory is bounded by the largest chunk.
-            ``None`` inherits the parent's stdin.
+            next is pulled, so the producer is never drained ahead of the child
+            and the payload is never held whole. Retained memory is roughly the
+            chunk currently being written plus the transport and OS-pipe
+            buffers, so yield bounded-size chunks when that matters. ``None``
+            inherits the parent's stdin.
 
         Returns
         -------

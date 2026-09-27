@@ -66,12 +66,15 @@ asyncio.run(main())
 
 and mean two new things. First, the producer's chunks are pulled one at a time,
 written to the child's stdin, and drained before the next chunk is pulled, so
-the writer cannot outrun the child; peak memory is bounded by the pipe rather
-than by the payload, though not by a single chunk, since `drain()` returns at
-the transport's low-water mark and the OS pipe holds bytes of its own. Second,
-the child's stdout is bound to a file cuprum opened for the run and closed as
-soon as the child was spawned — the child keeps the descriptor for its
-lifetime, cuprum keeps ownership of closing it, and the caller never sees a
+the writer cannot outrun the child and the payload is never held whole. That is
+a bound on how far *ahead* the producer is pulled, not on the size of the chunk
+being written: until `drain()` returns, the chunk just pulled and its encoded
+payload are still in memory alongside the transport's write buffer and the OS
+pipe, so peak memory is roughly the largest chunk yielded plus those buffers —
+which is why a caller who cares about it should yield bounded-size chunks.
+Second, the child's stdout is bound to a file cuprum opened for the run and
+closed as soon as the child was spawned — the child keeps the descriptor for
+its lifetime, cuprum keeps ownership of closing it, and the caller never sees a
 leak.
 
 The existing `stdin=StdinInput(...)` payload API and the inherited-stdin
@@ -1036,10 +1039,15 @@ likelihood, and mitigation.
   control's docstring calls the cap "deliberately loose" and attributes it to
   "the pipe capacity … a property of the host rather than of cuprum". The prose
   asserted a bound the tests were explicitly written to avoid pinning. The
-  claim is now "bounded by the pipe, not by the input, and not by one chunk" in
-  each site that made it. Applying the lesson recorded for round 5, I grepped
-  the concept rather than the flagged sentence, which is how two unflagged
-  sites came to light. Date/Author: 2026-09-27, implementation agent.
+  claim became "bounded by the pipe, not by the input, and not by one chunk" in
+  each site that made it. That replacement was itself incomplete, and round 7
+  caught it: it named the transport and the pipe but dropped the chunk, which
+  `_write_chunk` holds as both `chunk` and `payload` until `drain()` returns.
+  The claim is now "the bound is on input pulled ahead, not on retained bytes:
+  the largest chunk yielded, plus the transport buffer, plus the pipe" — see
+  the entry below. Applying the lesson recorded for round 5, I grepped the
+  concept rather than the flagged sentence, which is how two unflagged sites
+  came to light. Date/Author: 2026-09-27, implementation agent.
 - Decision: rewrite `INV-1` and strike two overclaims from it that the round-6
   finding did not name. Rationale: the obligation promised (a) a "configured
   buffering bound" that exists nowhere in the tree — the cap is a test constant,
@@ -1051,6 +1059,26 @@ likelihood, and mitigation.
   pull counter at first read, and a one-sided assertion against a pipe-derived
   cap — plus a closing paragraph stating plainly that there is no RSS
   measurement and no hard sub-pipe memory guarantee. Date/Author: 2026-09-27,
+  implementation agent.
+- Decision: complete the memory claim a second time, adding the chunk to the
+  transport and the pipe, and apply it to two production docstrings the review
+  did not flag. Rationale: round 7's four distinct findings are all one defect
+  seen from different angles — the round-6 wording bounded retention by "the
+  pipe, not one chunk", which is still wrong, because `_write_chunk` binds
+  `chunk` and encodes `payload` and both stay live across
+  `await sink.stdin.drain()`. The bound is a bound on *input pulled ahead*, not
+  on what one step retains, and the type polices chunk size not at all. Two
+  sites carried the original single-chunk claim and were caught by neither the
+  reviewer nor round 6: `cuprum/sh/execution.py` (`StdinStream`) and
+  `cuprum/sh/safe_cmd.py` (`SafeCmd.run`'s `stdin` parameter), both introduced
+  by `19938020b` on this branch — so the defect was in code docs as well as
+  prose, not documentation only. Applying the round-5 lesson again (grep the
+  concept, not the flagged sentence) is what surfaced them; the round-6 grep
+  used the *new* sentence as its pattern and so could not find the old one.
+  Also corrected in this pass: the users-guide event reference, which omitted
+  per-chunk `stdin` events and the `early_close` operation value, and the
+  developers-guide stdin narration, which named only the payload writer and
+  omitted `_await_exit_or_writer_failure`. Date/Author: 2026-09-27,
   implementation agent.
 
 ## Outcomes & retrospective
@@ -1239,15 +1267,19 @@ and why a passing result cannot be vacuous.
   and the test module includes that variant as a negative control so the
   assertion is shown to bite.
 
-  Two limits of this obligation, stated so the evidence is not read as stronger
-  than it is. The bound is the *pipe*, not one chunk: `drain()` returns once
-  the transport's write buffer falls below its low-water mark, and the OS pipe
-  holds bytes of its own, so several chunks are legitimately in flight — the
-  test's cap is deliberately loose for exactly this reason. And there is no
+  Three limits of this obligation, stated so the evidence is not read as
+  stronger than it is. The bound is on how far *ahead* the producer is pulled,
+  not on what is retained: `drain()` returns once the transport's write buffer
+  falls below its low-water mark, and the OS pipe holds bytes of its own, so
+  several chunks are legitimately in flight — the test's cap is deliberately
+  loose for exactly this reason. What is retained is therefore "the largest
+  chunk yielded, plus the transport buffer, plus the pipe", not the pipe alone,
+  and no chunk size is enforced: the type does not police it, so a producer
+  yielding one enormous chunk is not protected from itself. And there is no
   peak-RSS measurement, on the `wait4` path or anywhere else: retained memory
   cannot be read off a finished run, so the counter stands in for it. A caller
-  who needs a hard memory guarantee smaller than the pipe capacity does not
-  have one.
+  who needs a hard memory guarantee should yield bounded-size chunks, because
+  cuprum offers none smaller than one chunk.
 
 - Obligation: `INV-2 — byte-exact delivery`. For a producer yielding a
   generated list of `bytes` and `str` chunks, the child receives exactly the
@@ -1370,8 +1402,10 @@ state space, and no `unsafe` boundary; its obligations are finite enumerations
 over streams, targets, outcomes, and exit paths, plus one broad-input property.
 The one genuinely temporal obligation, INV-1, is discharged by a counter-based
 witness rather than by a proof, and that residual gap is recorded here rather
-than papered over: the test shows bounded retention for the exercised payload
-sizes, not for all conceivable schedules.
+than papered over: the test shows the writer does not pull far ahead of the
+child for the exercised payload sizes, not that retained memory is bounded for
+all conceivable schedules — and it measures pulls, not bytes, so a producer
+yielding one enormous chunk would satisfy it while retaining that whole chunk.
 
 ## Plan of work
 

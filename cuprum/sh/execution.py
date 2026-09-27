@@ -200,10 +200,15 @@ class StdinStream:
     """A library-owned, bounded, pull-after-drain producer for stdin.
 
     Cuprum pulls one chunk from *chunks*, writes it to the child's stdin pipe,
-    and waits for that write to drain before pulling the next. Peak memory is
-    therefore bounded by the largest single chunk rather than by the whole
-    payload, which is the point of the type: a caller can feed a child more
-    data than they would ever hold in one buffer.
+    and waits for that write to drain before pulling the next. That is what
+    lets a caller feed a child more data than they would ever hold in one
+    buffer: the payload is never materialized whole. What it bounds is how far
+    *ahead* the producer runs, not the size of a single chunk. While
+    ``drain()`` waits, the chunk just pulled and its encoded payload are still
+    in memory alongside the transport's write buffer and the OS pipe, so
+    retained memory is roughly the largest chunk the producer yields plus those
+    buffers. A caller who cares about peak memory should yield bounded-size
+    chunks.
 
     The producer is advanced with ``aiter()``, so *chunks* may be any async
     iterable. ``str`` chunks are encoded with the run's
