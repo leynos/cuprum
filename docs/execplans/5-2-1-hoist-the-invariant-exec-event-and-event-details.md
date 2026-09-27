@@ -2126,6 +2126,56 @@ this plan can supply for either route is a measured, reproducible artefact and
 the decomposition above, which separates the constructor's contribution from
 everything else.
 
+### 2026-09-27: the bar is clearable — the descriptor lever, and its thin margin
+
+**Route 2 of the three the previous entry lists is not speculative.** Applying
+the *measured* 0.8770 descriptor ratio to the r2 candidate's own sample counts
+gives a share under 28%, on arithmetic that follows directly from what the
+numerator is:
+
+| constructor ratio | numerator samples | denominator samples | share | against 28% |
+| --- | --- | --- | --- | --- |
+| 1.0000 (shipped) | 5317 | 17758 | 29.9414% | fail, +1.94 |
+| 0.9248 (bound `object.__setattr__`, hand-written) | 4917 | 17358 | 28.3270% | fail, +0.33 |
+| **0.8770 (bound slot descriptors — measured)** | **4663** | **17104** | **27.2626%** | **pass, −0.74** |
+| 0.8500 | 4519 | 16960 | 26.6450% | pass |
+| 0.5000 | 2658 | 15099 | 17.6038% | pass |
+
+The model is the one the decomposition licenses: samples inside the constructor
+scale with its cost (they are time spent executing it), and the samples that
+leave the numerator leave the denominator with them, because the work they
+measured no longer happens. It is the same `N/D` coupling that defeated the
+24.35% projection — but here it is applied *with* a measured ratio rather than
+an assumed frame set, which is the difference that matters.
+
+**What is still a model and what is not.** The 0.8770 is measured on this host
+and this interpreter (3.14.4) across 300k constructions; the invariance claims
+(slots, `FrozenInstanceError`, equality) were each checked, not assumed. The
+*share* of 27.26% is arithmetic on that measurement, not a capture — no
+three-pair V5 collection has been run against a descriptor-based constructor.
+So this clears the bar on paper with a real constant, and the honest statement
+is "expected to pass, margin about 0.7 points, must be confirmed by the same
+protocol that produced the 29.91%". Given that the previous two misses both came
+from treating an estimate as a result, the confirmation is not optional.
+
+**The margin is the weak part, and it is worth stating plainly.** −0.74 points
+is smaller than the control's own between-pair spread (1.31 points) and only
+about 17× the candidate's (0.0423 points). The candidate's dispersion is tight
+enough that 0.74 points is likely real, but a host-load change that moved the
+candidate's share by 0.7 points would flip the verdict. The hand-written
+`object.__setattr__` variant at 0.9248 lands at 28.33% — still failing — so the
+implementation choice inside the lever is not free either: only the descriptor
+form clears, and a plausible near-miss implementation of the same idea does not.
+
+**Recommendation, now with a number behind it.** Take the descriptor lever (or
+re-site the threshold, or reopen `frozen=True` for 5.4×) — but if the lever is
+taken, budget for the re-baseline it requires: a hand-written `__init__` renders
+as `__init__ (cuprum/events.py:N)`, so the classifier's `<string>` construction
+rule stops matching and `classifier-rules.json`, the control capture, and the
+three-pair collection all have to be redone before any number from it is
+citable. That is a milestone of work, not a commit, and it is the real cost of
+route 2 compared with the other two.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
