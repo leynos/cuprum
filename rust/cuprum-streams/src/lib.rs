@@ -25,6 +25,8 @@ mod test_support;
 #[cfg(all(test, unix))]
 mod tracing_capture;
 mod utf8;
+#[cfg(all(test, windows))]
+mod windows_tests;
 
 #[cfg(unix)]
 use cuprum_native_io::{AsStream, OwnedStream};
@@ -32,7 +34,7 @@ use cuprum_native_io::{AsStream, OwnedStream};
 use cuprum_native_io::{SynchronousBorrowedStream, SynchronousOwnedStream};
 pub use errors::PumpError;
 use io_utils::{classify_write, operation_span, read_stream};
-use pump_machine::{Flow, PumpState, advance};
+use pump_machine::{Flow, PumpState, WriteEvent, advance};
 use utf8::{FinalChunk, decode_utf8_replace};
 
 /// Maximum accepted stream buffer size, in bytes (1 GiB).
@@ -192,53 +194,11 @@ fn pump_stream_files_readwrite(
     writer: &impl AsStream,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
-    // Operation span (see `operation_span`) so the EINTR (`warn!`) and
-    // fatal-I/O (`error!`) events emitted from the read/write seams inherit
-    // the operation name, `buffer_size`, and `total_bytes` context even under
-    // a `warn`/`error`-only production filter.
-    let span = operation_span("pump_stream_readwrite", buffer_size.value());
-    let _guard = span.enter();
-    io_utils::reset_retry_counters();
-
-    let mut buffer = buffer::allocate_buffer(buffer_size.value())?;
-    let mut state = PumpState::start();
-
-    loop {
-        let read_len = read_stream(reader, &mut buffer)?;
-        let writer_was_open = state.writer_open();
-
-        // `advance` owns both the zero-length-is-EOF translation and the write
-        // precondition — a chunk read while the writer is still open — so this
-        // loop, the property tests, and the bounded proofs share one
-        // definition of them. Fatal writes propagate the real error and never
-        // reach the pure state machine.
-        let flow = advance(&mut state, read_len, || {
-            let chunk = buffer
-                .get(..read_len)
-                .ok_or(PumpError::BufferRangeExceeded)?;
-            classify_write(writer, chunk)
-        })?;
-
-        // The latch closing is the `head`-style early exit. Mirror splice's
-        // field and message so the event is not visible on one path only, and
-        // observe it here rather than in the deliberately pure `pump_machine`.
-        if writer_was_open && !state.writer_open() {
-            tracing::debug!(
-                bytes_transferred = state.total_written(),
-                "broken pipe; draining reader"
-            );
-        }
-
-        if flow == Flow::Stop {
-            break;
-        }
-    }
-
-    let total_written = state.total_written();
-    span.record("total_bytes", total_written);
-    span.record("read_retries", io_utils::read_retry_count());
-    span.record("write_retries", io_utils::write_retry_count());
-    Ok(total_written)
+    pump_stream_with_io(
+        |buffer| read_stream(reader, buffer),
+        |chunk| classify_write(writer, chunk),
+        buffer_size,
+    )
 }
 
 #[cfg(windows)]
@@ -247,8 +207,22 @@ fn pump_stream_files_readwrite(
     writer: SynchronousBorrowedStream<'_>,
     buffer_size: BufferSize,
 ) -> Result<u64, PumpError> {
+    pump_stream_with_io(
+        |buffer| read_stream(reader, buffer),
+        |chunk| classify_write(writer, chunk),
+        buffer_size,
+    )
+}
+
+/// Run the shared pump loop while platform adapters retain their typed I/O.
+fn pump_stream_with_io(
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, PumpError>,
+    mut write: impl FnMut(&[u8]) -> Result<WriteEvent, PumpError>,
+    buffer_size: BufferSize,
+) -> Result<u64, PumpError> {
     // Operation span (see `operation_span`) so the native I/O events inherit
-    // the operation name, `buffer_size`, and `total_bytes` context.
+    // the operation name, `buffer_size`, and `total_bytes` context on every
+    // platform while the closures keep the Windows capability boundary local.
     let span = operation_span("pump_stream_readwrite", buffer_size.value());
     let _guard = span.enter();
     io_utils::reset_retry_counters();
@@ -257,15 +231,21 @@ fn pump_stream_files_readwrite(
     let mut state = PumpState::start();
 
     loop {
-        let read_len = read_stream(reader, &mut buffer)?;
+        let read_len = read(&mut buffer)?;
         let writer_was_open = state.writer_open();
+
+        // `advance` owns zero-length-is-EOF translation and the write
+        // precondition, so this loop and the state-machine tests share them.
+        // Fatal writes propagate without reaching the pure state machine.
         let flow = advance(&mut state, read_len, || {
             let chunk = buffer
                 .get(..read_len)
                 .ok_or(PumpError::BufferRangeExceeded)?;
-            classify_write(writer, chunk)
+            write(chunk)
         })?;
 
+        // Observe the latch here so the broken-pipe drain event remains visible
+        // outside the deliberately pure `pump_machine`.
         if writer_was_open && !state.writer_open() {
             tracing::debug!(
                 bytes_transferred = state.total_written(),
