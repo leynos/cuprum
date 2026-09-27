@@ -114,7 +114,7 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
     ids=("buffer-size", "reader-handle"),
 )
 @_windows_only
-def test_pump_closes_writer_before_early_validation(
+def test_pump_closes_writer_after_early_validation_failure(
     rust_streams: ModuleType,
     reader_fd: int,
     buffer_size: int,
