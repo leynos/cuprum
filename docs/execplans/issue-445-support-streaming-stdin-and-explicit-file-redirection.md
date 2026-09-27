@@ -166,15 +166,16 @@ likelihood, and mitigation.
 - [x] (2026-09-27 01:10Z) ExecPlan authored.
 - [x] (2026-09-27 05:40Z) EP-M1 complete. `StdinStream`, `StdinSourceError`,
   and the `type StdinSource` alias live in `cuprum/sh/execution.py`;
-  `StdioTarget` and `_validate_stdio_targets` live in `cuprum/sh/output.py`;
+  `StdioTarget` and `_validate_stdio_targets` live in `cuprum/sh/stdio.py`
+  (since the 04:45Z relocation below; `cuprum/sh/output.py` re-exports them);
   `stdin=` is widened on `SafeCmd.run`/`run_sync`/`lines`; `RunOutputOptions`
   carries `stdout`/`stderr` targets. All four names are exported from
   `cuprum.sh` and `cuprum`. Red: 10 failed / 14 passed. Green: 24 passed. Wider
   set (stdin, output, run, lines, streams, timeout, context, property,
   early-close, pipeline-output): 169 passed, 12 skipped.
-- [x] (2026-09-27 04:45Z) Module-size plateau. Both branch-introduced
-  `too-many-lines` findings are refactored rather than suppressed:
-  `cuprum/sh/stdio.py` takes the stdio target vocabulary out of
+- [x] (2026-09-27 04:45Z) Module-size plateau, first pass. Both
+  branch-introduced `too-many-lines` findings are refactored rather than
+  suppressed: `cuprum/sh/stdio.py` takes the stdio target vocabulary out of
   `cuprum/sh/output.py` (584 → 349 lines), and `cuprum/sh/pipeline.py` takes
   `Pipeline` out of `cuprum/sh/safe_cmd.py` (450 → 325 lines). `pylint`'s
   `too-many-lines` is in the `enable = [...]` list, so it cannot be annotated
@@ -182,6 +183,26 @@ likelihood, and mitigation.
   — both overruns were introduced by this branch. Commits `cbf8c190`,
   `9532dfd4`, `81b2ef2c`. The maturin wheel snapshot is regenerated for the two
   new modules.
+- [x] (2026-09-27 09:05Z) Module-size plateau, second pass, and the gate sweep
+  at HEAD `3037eb63` that found it. `cuprum/_subprocess_stdin.py` had grown to
+  451 lines (119 on `origin/main`, 371 at `3037eb63`) as the streaming writer
+  and its encoder landed, re-crossing the ceiling the 04:45Z entry above had
+  cleared for *other* modules. The producer path moves to
+  `cuprum/_subprocess_stdin_stream.py` (328 lines), leaving
+  `_subprocess_stdin.py` at 164 — the seam is the one the module's own
+  docstring already drew, between a one-shot payload and a pulled producer.
+  Routing: `_subprocess_stdin` keeps the ADR-007 roster (`_emit_stdin_error`,
+  `_write_stdin`, `_close_stdin`, `_cancel_stdin_writer`, the `cuprum.stdin`
+  logger) plus `_spawn_stdin_writer`, which stays the single dispatcher both
+  kinds of source are started from; the streaming module imports the pipe
+  primitives at module scope and `_spawn_stdin_writer` imports
+  `_write_stdin_stream` inside the function body, because a module-scope import
+  in both directions would close a load-time cycle. The same sweep also caught a
+  `spelling` regression in the new test module: a British-spelled variant of
+  "recognize" that the gate's own correction table (`typos.toml`) enumerates
+  with its American fix. ADR-007 gains a 2026-09-27 addendum, and the module
+  rosters in `docs/cuprum-design.md` and `docs/developers-guide.md` name the
+  new module.
 - [x] (2026-09-27 04:50Z) `make lint` sub-checks all observed passing, on a
   single HEAD (81b2ef2c): `ruff`, `interrogate`, `pylint`, `df12-pylint`,
   `ambrleaks`, `skylos`, `clippy`, `whitaker`, `spelling`, `yamllint`,
@@ -192,6 +213,17 @@ likelihood, and mitigation.
   deadlock that CI does not hit). The full-target run reached `spelling` and
   aborted there, so `github-actions-lint` is evidenced by its own run, not by
   the aggregate.
+- [x] (2026-09-27 07:20Z) First CodeRabbit review round, at HEAD 3037eb63
+  (`review_completed`, 4 findings, bound to that revision). One `major` was
+  real and is fixed: the streaming writer read its encoder settings with
+  `getattr(process, "encoding", "utf-8")`, but `asyncio.subprocess.Process` has
+  no such attribute — cuprum passes raw descriptors, not text-mode file objects
+  — so both fallbacks always won and a streaming `str` chunk was always UTF-8/
+  `replace` regardless of `ExecutionContext`. The settings now travel in a
+  `_StdinCodec` built from `execution.ctx`. The review's other three findings
+  were doc-level: an over-claiming EPIPE docstring (fixed by adding the
+  `errno.EPIPE` arm, which is the arm the docstring promised) and two stale
+  ExecPlan references to the pre-relocation `cuprum/sh/output.py`.
 - [ ] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
@@ -270,8 +302,80 @@ likelihood, and mitigation.
   standalone run; the aggregate target should not be trusted to exercise it on
   this host.
 
+- Observation (CodeRabbit round 1): `asyncio.subprocess.Process` exposes no
+  `encoding` or `errors` attribute, so a `getattr(process, "encoding", ...)`
+  fallback is not a fallback — it is dead code that always wins. The streaming
+  writer therefore ignored `ExecutionContext.encoding` and `errors` entirely: a
+  `cp1252` caller received UTF-8 bytes, and `errors="strict"` silently degraded
+  to `replace`. Evidence: with `encoding="cp1252"`, a streaming `str` chunk
+  produced `e28093` where the equivalent `StdinInput` payload produced `96`;
+  with `ascii`/`strict` the stream exited 0 while the payload raised
+  `UnicodeEncodeError`. Impact: the codec now travels as a `_StdinCodec` read
+  from `execution.ctx` at all three spawn sites, and
+  `cuprum/unittests/test_safe_cmd_stdin_stream.py` pins both settings against
+  the child's raw stdin bytes. The general lesson is that a defensive `getattr`
+  default on an attribute a type does not have *hides* the bug rather than
+  tolerating its absence.
+- Observation (verification): the four encoding pins were checked for
+  non-vacuity by reverting the writer to the pre-fix `getattr` encoder and
+  re-running: all four failed
+  (`the child should receive exactly the cp1252 bytes, not UTF-8` for the
+  encoding pins, and a decode failure for the strict pins), then passed again
+  on restore. Evidence: the revert/restore run in `/tmp`. Impact: the pins are
+  load-bearing rather than merely satisfied.
+- Observation (engine quirk): `except SomeError as exc if cond:` is a syntax
+  error — `except` clauses accept no condition. The first attempt at the
+  `errno.EPIPE` arm used that form and never compiled. Impact: the arm is an
+  explicit `except OSError` with a guarded `raise ... from exc` inside, and the
+  wrap is spelled at the handler (rather than inside a helper that raises on
+  the caller's behalf) because the repository's `blind-except` rule requires the
+  `raise` to be visible in the handler body.
+
+- Observation (lints): `RUF029` (`unused-async`) flags an `async def` that
+  yields but never awaits, so a minimal async generator in a test helper is
+  rejected as if it were a mislabelled coroutine. Evidence: a two-function
+  probe under the repo config flagged both the plain generator and the
+  `__all__`-documented one, while the guarded one did not. Impact: the test
+  helper carries an `await asyncio.sleep(0)` before its `yield`, matching the
+  existing producer in `test_public_api.py` — which is also more faithful to a
+  real producer, since a real one suspends between chunks. The added multi-line
+  docstring then required a `Yields` section under `pydoclint` (one-line
+  docstrings are exempt), so the two lints interact.
+
+- Observation (module size): a *cleared* module ceiling is not a stable
+  property of a branch, because a later milestone puts code back into the
+  modules the earlier one trimmed. The 04:45Z plateau cleared the two overruns
+  that existed then — `cuprum/sh/output.py` and `cuprum/sh/safe_cmd.py` — but
+  fixing the CodeRabbit encoding finding threaded a codec through the streaming
+  writer and pushed `cuprum/_subprocess_stdin.py` from 371 to 451 lines,
+  re-crossing the same ceiling at commit `3037eb63` with no further refactor.
+  The lesson is to re-measure the ceiling-bearing modules at every milestone
+  boundary rather than trusting an earlier pass. Evidence: scrutineer's sweep
+  quoted `origin/main` 119, `HEAD` 371, staged 451 for that one file. Impact:
+  the producer path moves to `cuprum/_subprocess_stdin_stream.py` (328 lines)
+  and `_subprocess_stdin.py` returns to 164; the 400-line ceiling is a `pylint`
+  check the branch must hold at every milestone, not only at the plateau that
+  first cleared it.
+
+- Observation (docs coupling): the module roster is test-enforced, so a split is
+  not a code-only change. `cuprum/unittests/test_async_timeout_docs.py` asserts
+  specific wording in ADR-007, and
+  `cuprum/unittests/test_line_observation_docs.py` asserts an explicit list of
+  module paths in the developers' guide's line observation section, so an ADR
+  or guide edit can fail `make test` while reading as prose. The maturin wheel
+  snapshot in `cuprum/unittests/__snapshots__/test_maturin_build.ambr`
+  additionally lists every shipped module, so a new `cuprum/*.py` file changes
+  it. Impact: the split carries edits to ADR-007, `docs/cuprum-design.md`, and
+  `docs/developers-guide.md`, and the wheel snapshot is regenerated.
+
 ## Decision log
 
+- Decision: fix the ignored-encoding defect by threading a codec value rather
+  than by widening `_spawn_stdin_writer` with two more scalar parameters.
+  Rationale: the spawn call sites are already at the repository's argument
+  ceiling (`max-args = 5`), and the two settings are always read together from
+  one source, so a single value keeps the signature legal and the call sites
+  readable. Date/Author: 2026-09-27, implementation agent.
 - Decision: model streaming input as a wrapper type, `StdinStream`, over an
   async iterable of `str | bytes`, rather than accepting a bare async iterable
   in `stdin=`. Rationale: a bare iterable makes "is this a payload or a
@@ -304,6 +408,29 @@ likelihood, and mitigation.
   command's standard streams; pipeline stages already have a library-owned pipe
   from `Pipeline` and a stage-level redirection contract needs its own design
   for inter-stage interception. Date/Author: 2026-09-27, planning agent.
+- Decision: split the streaming writer out along the payload/producer seam
+  rather than along a codec/IO seam or by trimming docstrings. Rationale: the
+  module's own docstring already separates the two sources by how much of the
+  payload exists at once — complete in memory versus pulled a chunk at a time —
+  so the split reinforces the existing boundary instead of introducing a new
+  one. Trimming prose was not available: the docstrings carry the early-close
+  policy, the incremental-encoder rationale, and the reason the codec cannot be
+  read off the process, and each of the last two records a defect already paid
+  for. The ADR-007 roster also constrained the choice: `_emit_stdin_error`,
+  `_write_stdin`, and `_spawn_stdin_writer` are named there as
+  `_subprocess_stdin`'s, so the dispatcher stayed put and only the producer
+  path moved, which keeps the ADR's ownership claim true as written.
+  Date/Author: 2026-09-27, implementation agent.
+- Decision: import `_write_stdin_stream` inside `_spawn_stdin_writer`'s body
+  rather than at module scope in both directions. Rationale: the streaming
+  module imports the pipe primitives (`_close_stdin`, `_emit_stdin_error`) at
+  module scope, so a module-scope import of the streaming writer in the
+  dispatcher would close a load-time cycle in which neither module is complete
+  when the other needs it. The module `__init__` order already depends on
+  nothing in either module importing `cuprum.sh` at runtime, so the deferred
+  import is the repository's established pattern for this shape of dependency —
+  `_source_error` reaches `StdinSourceError` through the same lazy shim for the
+  same reason. Date/Author: 2026-09-27, implementation agent.
 
 ## Outcomes & retrospective
 
@@ -336,7 +463,9 @@ The run path, in order, is:
    each non-`None` pipe in `StreamReader`/`StreamWriter`. When `wait4` is
    unavailable, plain `asyncio.create_subprocess_exec` is used instead.
 5. `cuprum/_subprocess_stdin.py` — `_spawn_stdin_writer` starts a task that
-   writes the already-resolved bytes and closes the pipe.
+   writes the already-resolved bytes and closes the pipe. A `StdinStream`
+   producer is started from the same dispatcher but written by
+   `cuprum/_subprocess_stdin_stream.py`, which pulls it one chunk at a time.
 6. `cuprum/_subprocess_wait.py` — `_reconcile_run_tasks` cancels the stdin
    writer, drains the stream consumers, and settles diagnostics on every exit
    path. `_RunTaskOwnership` is the bundle it takes.
@@ -614,15 +743,16 @@ cancellation/timeout tests. Expect the counter assertion and the
 
 Green:
 
-- `cuprum/_subprocess_stdin.py`: obtain the iterator with `aiter()`, encode
-  `str` chunks incrementally through an `IncrementalEncoder`, write a chunk and
-  `await drain()` before pulling the next, flush the encoder at completion,
-  emit one `stdin` event per chunk with its `byte_count`, treat
-  `BrokenPipeError`/`EPIPE` as an early close and emit exactly one
-  `stdin_error` observation, wrap producer and encoding exceptions in
-  `StdinSourceError`, propagate `CancelledError` unchanged, and on every exit
-  path call the iterator's `aclose()` when present, then close the pipe and
-  await `wait_closed()`.
+- `cuprum/_subprocess_stdin_stream.py` (created by the split recorded in
+  `Progress`; this list named `_subprocess_stdin.py` when EP-M3 was planned):
+  obtain the iterator with `aiter()`, encode `str` chunks incrementally through
+  an `IncrementalEncoder`, write a chunk and `await drain()` before pulling the
+  next, flush the encoder at completion, emit one `stdin` event per chunk with
+  its `byte_count`, treat `BrokenPipeError`/`EPIPE` as an early close and emit
+  exactly one `stdin_error` observation, wrap producer and encoding exceptions
+  in `StdinSourceError`, propagate `CancelledError` unchanged, and on every
+  exit path call the iterator's `aclose()` when present, then close the pipe
+  and await `wait_closed()`.
 - `cuprum/_subprocess_wait.py`: watch process exit and the writer together; on
   an early `StdinSourceError`, cancel the exit wait, escalate termination,
   reconcile consumers, and raise; raise on a late producer failure too, after
@@ -835,8 +965,10 @@ ExecEvent(phase="stdin_error", details=_EventDetails(error_type="BrokenPipeError
 ## Interfaces and dependencies
 
 No new external dependency. The following public names must exist at the end of
-EP-M1, in `cuprum/sh/execution.py` and `cuprum/sh/output.py` respectively, and
-be re-exported from `cuprum.sh` and `cuprum`:
+EP-M1, in `cuprum/sh/execution.py` and `cuprum/sh/stdio.py` respectively (the
+latter having been extracted from `cuprum/sh/output.py` at the 04:45Z
+relocation, which re-exports it), and be re-exported from `cuprum.sh` and
+`cuprum`:
 
 ```python
 @dc.dataclass(frozen=True, slots=True)
