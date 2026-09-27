@@ -48,14 +48,15 @@ bypass cuprum entirely or re-implement the catalogue check around it.
 
 ## Current state
 
-`SafeCmd.run()` and `run_sync()` in `cuprum/sh/execution.py` build a
+`SafeCmd.run()` and `run_sync()` in `cuprum/sh/safe_cmd.py` build a
 `_SubprocessExecution` and await `_execute_subprocess()` in
 `cuprum/_subprocess_execution.py`. That function takes the pre-spawn readings,
 calls `_spawn_subprocess()`, which calls
 `cuprum/_wait4_process.py:spawn_direct_process()` with a `DirectProcessConfig`,
 and then drives capture, echo, idle monitoring and the hooks before assembling a
-`CommandResult`. Pipelines take a parallel path through
-`cuprum/_pipeline_streams.py`.
+`CommandResult`. Pipelines spawn separately, through
+`asyncio.create_subprocess_exec()` in `cuprum/_pipeline_spawn.py`, and share
+the capture and pump plumbing in `cuprum/_pipeline_streams.py`.
 
 Nothing between `run_sync()` and `spawn_direct_process()` is injectable.
 `ScopeConfig` carries an allowlist, hooks, a timeout and an environment overlay;
@@ -96,13 +97,14 @@ Non-goals:
 @dc.dataclass(frozen=True, slots=True)
 class Invocation:
     program: Program
-    argv: tuple[str, ...]          # argv_with_program
-    env: Mapping[str, str]         # fully resolved, after every overlay
+    argv: tuple[str, ...]  # argv_with_program
+    env: Mapping[str, str]  # fully resolved, after every overlay
     cwd: Path | None
     stdin: StdinInput | None
     output: RunOutputOptions
     context: ExecutionContext
     tags: Mapping[str, object]
+
 
 class ExecutionBackend(Protocol):
     async def execute(
@@ -133,7 +135,7 @@ before `_spawn_subprocess()`, if a backend is configured it builds the
 `_DirectBackend.execute` is the existing body of the function from the spawn
 onwards, moved rather than duplicated. Hooks, events, telemetry and the result
 assembly stay where they are, so a substituted run emits the same `plan`,
-`start` and terminal events as a real one, with `pid=0` and no resource usage.
+`start` and terminal events as a real one, with `pid=-1` and no resource usage.
 
 ### The reference double
 
@@ -141,23 +143,28 @@ assembly stay where they are, so a substituted run emits the same `plan`,
 # cuprum/testing.py
 class RecordingBackend:
     invocations: list[Invocation]
+
     def returns(self, *, exit_code=0, stdout="", stderr="") -> Self: ...
     def raises(self, error: BaseException) -> Self: ...
-    def passthrough(self) -> Self: ...          # delegate to real
+    def passthrough(self) -> Self: ...  # delegate to real
     async def execute(self, invocation, *, real) -> CommandResult: ...
 ```
 
-Scripted results are consumed in order; an unscripted invocation raises
-`AssertionError` naming the argv, so a test cannot pass by accident. This is
-deliberately small; matchers and fluent expectations belong to a mocking
-framework, not to cuprum.
+Both blocks above sketch signatures, not final source; the constructor, the
+scripted-result storage and the concrete parameter types are implementation
+decisions. Scripted results are consumed in order; an unscripted invocation
+raises `AssertionError` naming the argv, so a test cannot pass by accident.
+This is deliberately small; matchers and fluent expectations belong to a
+mocking framework, not to cuprum.
 
 ## Compatibility and migration
 
 Additive. `ScopeConfig` and both run methods gain an optional keyword with a
-default of `None`. `CommandResult` is unchanged; a substituted run fills
-`pid=0`, `max_rss_bytes=None`, and the CPU fields with `0.0`, which are already
-the documented "not measured" values. No existing test needs to change.
+default of `None`. `CommandResult` is unchanged; a substituted run reports
+`pid=-1`, the documented "unavailable" sentinel `_execute_subprocess()` already
+emits, and leaves `max_rss_bytes`, `user_cpu_seconds` and `system_cpu_seconds`
+at their documented "not measured" value of `None`. No existing test needs to
+change.
 
 Adopters migrate opportunistically. lading would replace its `PATH`-stub
 property tests with `RecordingBackend`, keep the stub helper for the two
