@@ -2077,6 +2077,55 @@ That property, not the 29.91% itself, is what a design revision needs to weigh �
 a percentage-of-total-work gate measures how the total is spent, and this work
 was spent so that the total shrank.
 
+### 2026-09-27: the next roadmap item will raise this same number (5.2.2)
+
+The decomposition generalises further than this gate, and the consequence lands
+on the next item in the phase, so it is recorded here rather than left for that
+item's own plan to rediscover.
+
+Roadmap **5.2.2** — "Remove the per-hook `inspect.isawaitable` call from the
+per-line path" — depends on 5.2.1 and is scoped against the same kind of
+evidence: "a committed profiler artefact shows `inspect.isawaitable` contributes
+0 sampled frames in the per-line hot path". In the *candidate* capture that
+symbol is **589 samples, every one of them D-only**, with the stack ending
+
+`emit_line (_line_callbacks.py:216)` → `emit_line (_line_callbacks.py:135)` →
+`_emit_event (_pipeline_types.py:203)` → `_emit_exec_event (_observability.py:108)`
+→ `isawaitable (inspect.py:371)`
+
+so it is genuinely per-line work of exactly the kind 5.2.2 targets, reached
+through the hook dispatcher rather than through the constructor.
+
+**Removing it subtracts 589 from D and 0 from N.** At the r2 candidate's
+D=17758 and N=5317, that moves the share from 29.9414% to **30.9686%**, a rise
+of **+1.03 points** — a *worse* number on
+this gate than the one 5.2.1 is currently blocked on, from work the roadmap
+explicitly wants done. That is not an argument against 5.2.2; the work is worth
+doing and the 0-frame goal in its own success criterion is stated on the frame
+count, which 5.2.2 will meet cleanly. It is an argument that **5.2.1's
+construction-share gate cannot be the acceptance instrument for 5.2.2**, and
+more sharply, that a threshold sited just above a predecessor's measured result
+is a threshold the next optimization will breach by succeeding.
+
+**The structural reason, restated once more in its most general form.** The
+numerator counts samples *inside* `ExecEvent.__init__` and nothing else
+(measured: 100%, previous entry). D counts all work in the consume subtree.
+Any change that reduces consume-subtree work without reducing the number of
+constructor calls lowers the denominator while holding the numerator, so it
+raises the ratio. Every optimization in this phase has that shape. A
+percentage-of-total gate therefore cannot express "the hot path got faster"
+across a series of such changes, however well it discriminates the first one.
+
+**Recommended for whoever re-sites the threshold.** Either (a) state the gate as
+an absolute numerator rate — constructor samples per emitted line, which is what
+"per-line emission no longer reconstructs invariant fields" actually claims and
+which is invariant under unrelated work being removed — or (b) keep the share
+form and re-measure the bar per item against its own predecessor, accepting that
+the number is a description of the current workload rather than a target. What
+this plan can supply for either route is a measured, reproducible artefact and
+the decomposition above, which separates the constructor's contribution from
+everything else.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
