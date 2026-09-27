@@ -537,3 +537,57 @@ correcting the earlier statements that placed the wait with the drain and the
 spawn with the orchestration module; the 2026-09-27 stdin addendum above named
 neither. No public API changes, and the module-size suppression remains
 unnecessary.
+
+## Addendum (2026-09-27): the stdin-writer rendezvous
+
+The same #445 work found a third ending, and it belonged to neither module the
+previous addendum had just separated. A producer that failed while the child
+was still running was reported as a slow child: the writer ran alongside the
+exit wait, but nothing raced them, so a producer that died at once was noticed
+only when the child's own deadline expired and the caller received
+`TimeoutExpired` about a failure already known. Awaiting the child first is
+correct as long as a failed producer also stops the child, and it does not —
+the writer's teardown closes the pipe, so a child that reads to EOF and then
+works, or one that never reads at all, keeps running. That is what a
+`head`-like child ignoring its input produces, not a hypothetical shape.
+
+`cuprum/_subprocess_rendezvous.py` now owns that decision.
+`_await_exit_or_writer_failure` waits on the exit wait and the stdin writer
+together and returns the exit only once it is the sole survivor, so a writer
+failure ends the run immediately. The resolution is deliberately narrow: only a
+writer that _failed_ is an outcome, and one that merely _finished_ first is the
+ordinary way a stream ends — a producer exhausted, the pipe closed, the child
+still draining — so the run continues to the child's exit as before. No
+termination policy is restated. The exit wait is cancelled, and
+`_wait_for_exit_code`'s own cancellation handler already escalates through
+`_terminate_all_shielded`.
+
+The module exists because ending a run divides in three. The child's deadline is
+`_subprocess_deadline`'s and the parent's task reconciliation is
+`_subprocess_wait`'s, but "end because the input source died" is neither the
+child's fault nor the parent task set's, so neither is the right place to
+notice it. The ceiling made the same demand from the other side: adding the
+race to `cuprum/_subprocess_wait.py` took it to 449 lines against the
+repository's 400-line `max-module-lines`, whose suppression Option B removed.
+Unlike the two overruns recorded above, this one was never committed — the
+extraction was made in the same working session that introduced the race — so
+the module reads 328 before and 336 after on the branch, re-exporting the moved
+name. This was the third pass at the same ceiling in one milestone, and it
+confirms the lesson the earlier addendum drew: a milestone adding _any_
+behaviour to a module already near the line must budget for the extraction, not
+just for the behaviour.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: `_subprocess_wait` re-exports `_await_exit_or_writer_failure` from
+the new module, and all three call sites — `_subprocess_execution`, the
+line-stream coordinator, and `_subprocess_stream_run` — import it from there as
+before. The helper takes its exit wait already constructed rather than
+resolving it by name, which is what keeps the existing monkeypatch seams
+working: `test_line_stream_exit.py` patches
+`_wait_for_exit_code_within_timeout` on the coordinator, and
+`test_safe_cmd_timeout.py` patches it with process doubles, so each caller must
+still resolve that name from its own module namespace for the patch to land.
+
+The design guide's §8.1.5 roster now names the new module, and this addendum is
+the statement its `_subprocess_wait.py` entry points at for the race. No public
+API changes, and the module-size suppression remains unnecessary.

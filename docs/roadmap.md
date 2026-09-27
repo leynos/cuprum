@@ -22,6 +22,12 @@ done.
 - [x] `RunOutputOptions` parameter object replacing flat `capture` / `echo`
   kwargs on `SafeCmd.run` and `run_sync`.
 - [x] `IOOptions` retained as a deprecated alias for `RunOutputOptions`.
+- [x] Streaming stdin and explicit standard-stream redirection (issue `#445`):
+  `StdinStream` pulls an async producer one chunk at a time under backpressure;
+  `RunOutputOptions.stdout` and `.stderr` accept a `StdioTarget` that names a
+  library-owned pipe, the parent's stream, a file cuprum opens and closes
+  around the spawn, or a borrowed descriptor cuprum never closes; contradictory
+  combinations are rejected at construction.
 
 ## 1. Foundation
 
