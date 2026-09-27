@@ -173,6 +173,15 @@ failure injection at that boundary.
     the handwritten split headers and one R9112 survived the first fix; both
     rounds are recorded below, because each round left eight sub-checks
     unobserved behind the abort.
+  - [x] (2026-09-27) EP-M1 exited at `dbaba9ac`, tree frozen and clean. All six
+    deterministic gates observed to their end: `check-fmt`, `markdownlint`
+    (with spelling), `typecheck`, `test`, `nixie`, and `lint`. `make lint`
+    cleared nine sub-checks and then hit the intermittent host-only
+    `actionlint` deadlock; the tenth was re-observed separately, bounded, on
+    the path CI itself takes. See the 2026-09-27 actionlint discovery below for
+    why that re-run is legitimate evidence rather than a substitution, and
+    also for the measurement that falsifies this plan's earlier
+    "deterministic" characterization of the hang.
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
@@ -1055,6 +1064,67 @@ microbenchmarks are `timeit` in a single process on this host and are
 comparative only; they are not capture-derived and are not offered as gate
 evidence.
 
+### 2026-09-27: `actionlint` is intermittent, not deterministic — and why the bounded re-run is valid evidence
+
+The gate run at `dbaba9ac` ended with nine of `make lint`'s ten sub-checks
+green and `actionlint` hung. This plan previously called that hang
+"deterministic: fails 3/3 attempts". **That characterization is false**, and
+the earlier run at `902b05fb` already disproves it: that run's log ends on the
+bare `actionlint -config-file .github/actionlint.yaml` command line with
+nothing after it, and the whole `make lint` chain exited 0. `actionlint` is the
+last command of `github-actions-lint`, the last prerequisite of `lint`, and it
+prints nothing on success, so exit 0 means it ran and passed. Same host, same
+`/usr/local/bin/shellcheck` on `PATH`, opposite outcome. Treat the hang as
+**intermittent** and bound every invocation with `timeout` rather than assuming
+either result.
+
+**The hang, measured.** Two independent observers — the scrutineer and the
+planning agent — characterized the same process.
+`actionlint -config-file .github/actionlint.yaml`, 198 s elapsed,
+`TIME 00:00:00`: **zero CPU across 198 s**, 34 threads, every one parked in
+`futex_wait_queue` except a single `ep_poll`. `voluntary_ctxt_switches: 58`, so
+it wakes and goes straight back to sleep. An anonymous pipe pair (fds 93/94) is
+held by that process and by **no other process on the host**, and no
+`shellcheck` child is ever spawned despite shellcheck being installed. Zero CPU
+rules out "slow but working"; the self-held pipe with no reader rules out
+"waiting on a busy child"; no `shellcheck` process rules out "the linter is the
+bottleneck". Two *other* `actionlint` processes were hung on the same host at
+the same time — one for 28 hours, both parents being other sessions'
+stop-hooks. That last observation is the strongest evidence available here that
+this is host-level and not branch-attributable: three unrelated invocations,
+three separate trees, different session lifetimes, one shared symptom.
+
+**Why the bounded re-run is evidence, not a substitution.** The hung invocation
+and the re-run differ by one argument. The gate's recipe is
+`actionlint -config-file .github/actionlint.yaml`; with shellcheck on `PATH`,
+actionlint enables its shellcheck-backed rules and spawns the child whose pipe
+it then parks on. CI's runners have no shellcheck, so the path that actually
+gates upstream is effectively `-shellcheck=`. Running
+
+```sh
+timeout 120 actionlint -shellcheck= -config-file .github/actionlint.yaml
+```
+
+exits **0** in under a second with empty output.
+
+The honest limits of that: `-shellcheck=` narrows `actionlint`'s own coverage
+by disabling its shell *syntax* checks, so the re-run is a strict subset of what
+`github-actions-lint` would check unbounded. The missing coverage is
+shell-syntax checking inside `run:` blocks — and this branch's change surface
+contains **no** `.github/` paths at all (see `dbaba9ac`'s change set:
+`benchmarks/`, `cuprum/unittests/`, `docs/`, `tests/`). So the narrowed check
+is observed on the revision that matters, `yamllint` remains green alongside
+it, and no unobserved coverage applies to any file this branch touched.
+`actionlint` still validates `${{ }}` expressions under `-shellcheck=`, and it
+parses `.github/actions` as workflows, which is why `yamllint` is the only tool
+that covers the composite actions — none of which this branch modifies.
+
+**How to apply:** never let `make lint` run unbounded. Expect one of two
+outcomes and re-run only the `actionlint` sub-check, bounded, on failure.
+`make lint`'s nine other sub-checks are independent and need no re-run; the
+per-sub-check breakdown is recoverable from the log because each writes its own
+evidence line before the hang.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -1163,18 +1233,39 @@ require checking the explicit callback factory bodies as well.
   consume subtree. A design revision that proceeded on either earlier number
   would have been arguing from a figure this plan itself had already shown to
   be wrong.
+- 2026-09-27: Treat the bounded `actionlint -shellcheck=` re-run as **valid
+  evidence for this revision** rather than as a weakened substitute for the
+  hung gate. The narrowing removes shell-syntax checking inside `run:` blocks,
+  and this branch's change surface contains no `.github/` path at all, so the
+  narrowed check covers every file the branch actually touched; `yamllint`,
+  which shares the sub-check, is green alongside it. Record the *intermittent*
+  character of the hang explicitly, because the earlier "deterministic"
+  characterization would otherwise license a false permanent exemption.
 
 ## Outcomes & retrospective
 
-Planning has identified a narrow implementation and an honest stop condition.
-Draft PR #433 publishes the reviewed plan and proposed design note. The initial
-plan commit is `ee8026b2`; `make fmt`, `make check-fmt`, `make markdownlint`
-(including spelling), `make nixie`, and `git diff --check` passed. The branch
-tracks its matching `origin` branch. Implementation approval remains pending.
-No runtime changes, benchmark runs, or implementation acceptance claims belong
-to this draft. Record actual results and gate evidence at each milestone.
-Before COMPLETE, reconcile discoveries with the design, guides, ADRs, and
-roadmap; retain rejected options and the reason for each rejection.
+Planning identified a narrow implementation and an honest stop condition, and
+the outcome so far vindicates the stop. EP-M1 is complete at `dbaba9ac`: the
+control capture, classifier, characterization modules, and the contract
+evidence all exist and are gated. EP-M2 then stopped **before writing any
+runtime code**, because the pre-implementation feasibility measurement showed
+the hoist as designed cannot reach the 10% gate, and that finding is the
+milestone's most valuable output — it cost one measurement instead of an
+implementation, a benchmark cycle, and a rejection. The plan's own §Risks
+predicted exactly this and the Tolerances section required the stop.
+
+Two of the plan's substantive design claims were falsified by measurement and
+recorded as corrections rather than quietly edited: the pipeline model of
+execution identity (§V4) and the post-spawn ownership claim (§V3). Two further
+numeric claims were corrected in the BLOCKED entry. The plan text has, in four
+places, been wrong in ways only measurement could reveal; that is the argument
+for the characterization-first structure, not against it.
+
+Implementation approval for a **revised** EP-M2 design remains pending, and it
+must not be inferred from this branch's green gates: the gates prove the
+characterization work is sound, not that any of the four recorded options is
+acceptable. Before COMPLETE, reconcile discoveries with the design, guides,
+ADRs, and roadmap; retain rejected options and the reason for each rejection.
 
 ## Context and orientation
 
