@@ -24,6 +24,7 @@ import typing as typ
 from pathlib import Path
 
 if typ.TYPE_CHECKING:
+    from cuprum._constants import PipeStream
     from cuprum.sh.output import RunOutputOptions
 
 __all__ = [
@@ -38,6 +39,91 @@ _STDIO_KINDS: frozenset[str] = frozenset({"pipe", "inherit", "path", "fd"})
 # The variants that describe a stream rather than naming a destination for data
 # cuprum is given. Only these may stand for stdin.
 _STDIN_KINDS: frozenset[str] = frozenset({"pipe", "inherit"})
+
+# The variants that name a binding and carry no payload of their own. The
+# remaining two each require one: a path for ``path``, a resource for ``fd``.
+_PAYLOADLESS_KINDS: frozenset[str] = frozenset({"pipe", "inherit"})
+
+
+def _reject_unknown_kind(kind: str) -> None:
+    """Refuse a variant name the vocabulary does not define.
+
+    Parameters
+    ----------
+    kind : str
+        The variant name to check.
+
+    Raises
+    ------
+    ValueError
+        If *kind* is not one of the four defined variants.
+    """
+    if kind in _STDIO_KINDS:
+        return
+    msg = f"StdioTarget kind must be one of {sorted(_STDIO_KINDS)}, got {kind!r}"
+    raise ValueError(msg)
+
+
+def _reject_unexpected_payload(
+    kind: str,
+    value: Path | int | typ.IO[bytes] | typ.IO[str] | None,
+) -> None:
+    """Refuse a variant carrying the shape its own kind cannot honour.
+
+    Only the two payloadless kinds are checked: their payload must be absent,
+    so anything present is a caller who meant a different variant. The two
+    payload-bearing kinds are validated when their payload is normalised, and
+    a ``str`` is caught there rather than here.
+
+    Parameters
+    ----------
+    kind : str
+        The variant name, already known to be one of the four.
+    value : Path | int | IO[bytes] | IO[str] | None
+        The payload the variant was built with.
+
+    Raises
+    ------
+    ValueError
+        If a payloadless kind was given a payload.
+    """
+    if kind not in _PAYLOADLESS_KINDS or value is None:
+        return
+    msg = f"StdioTarget.{kind}() takes no payload, got {value!r}"
+    raise ValueError(msg)
+
+
+def _normalise_payload(target: StdioTarget) -> None:
+    """Check a payload-bearing variant and store what the kind requires.
+
+    An ``fd`` target needs a resource and cuprum keeps it as given. A ``path``
+    target needs a path, and the target stores a ``Path`` whichever form it was
+    given, so equality between two targets is equality of paths.
+
+    Parameters
+    ----------
+    target : StdioTarget
+        The target being initialised, whose ``kind`` is one of the four.
+
+    Raises
+    ------
+    ValueError
+        If the ``fd`` variant carries no resource, or the ``path`` variant
+        carries something other than a path.
+    """
+    if target.kind == "fd":
+        if target.value is None:
+            msg = "StdioTarget.fd requires a descriptor or file object"
+            raise ValueError(msg)
+        return
+    if target.kind != "path":
+        return
+    if not isinstance(target.value, str | Path):
+        msg = f"StdioTarget.path requires a path, got {target.value!r}"
+        # A wrong-shaped payload here is a caller error, not an internal type
+        # fault, and the four variants are one vocabulary whose refusals all
+        # read as ValueError; `StdioTarget.fd` above is refused the same way.
+        raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -73,27 +159,15 @@ class StdioTarget:
     value: Path | int | typ.IO[bytes] | typ.IO[str] | None = None
 
     def __post_init__(self) -> None:
-        """Reject a variant that carries the wrong payload."""
-        if self.kind not in _STDIO_KINDS:
-            msg = (
-                f"StdioTarget kind must be one of {sorted(_STDIO_KINDS)}, "
-                f"got {self.kind!r}"
-            )
-            raise ValueError(msg)
-        if self.kind == "path":
-            if not isinstance(self.value, str | Path):
-                msg = f"StdioTarget.path requires a path, got {self.value!r}"
-                raise ValueError(msg)
-            object.__setattr__(self, "value", Path(self.value))
-            return
-        if self.kind == "fd":
-            if self.value is None:
-                msg = "StdioTarget.fd requires a descriptor or file object"
-                raise ValueError(msg)
-            return
-        if self.value is not None:
-            msg = f"StdioTarget.{self.kind}() takes no payload, got {self.value!r}"
-            raise ValueError(msg)
+        """Reject a variant that carries the wrong payload.
+
+        Each kind's own requirement is checked by one helper below, so this
+        method stays a dispatch: reject an undefined kind, refuse a payload the
+        named kind cannot carry, then normalise what the kind does carry.
+        """
+        _reject_unknown_kind(self.kind)
+        _reject_unexpected_payload(self.kind, self.value)
+        _normalise_payload(self)
 
     @property
     def path_value(self) -> Path:
@@ -237,39 +311,99 @@ def _validate_stdio_targets(options: RunOutputOptions) -> None:
         If a target names a non-pipe for a stream that capture or echo
         requires, if ``stdin`` names a file or descriptor, or if stdout and
         stderr share one path.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the _reject_* helpers.
+    _reject_redirected_stdin(options.stdin)
+    _reject_captured_redirection("stdout", options)
+    _reject_captured_redirection("stderr", options)
+    _reject_shared_owned_path(options)
+
+
+def _reject_redirected_stdin(stdin_target: StdioTarget | None) -> None:
+    """Refuse a stdin target that names a destination rather than a stream.
+
+    Parameters
+    ----------
+    stdin_target : StdioTarget | None
+        The options'``stdin`` target, or ``None`` when unspecified.
+
+    Raises
+    ------
+    ValueError
+        If the target names a file or a descriptor instead of a stream.
     """
-    stdin_target = options.stdin
-    if stdin_target is not None and stdin_target.kind not in _STDIN_KINDS:
-        msg = (
-            f"RunOutputOptions stdin cannot be redirected to "
-            f"{stdin_target.kind!r}: pass the input itself as "
-            f"stdin=StdinInput(...) or stdin=StdinStream(...) on the run call, "
-            f"which selects a pipe, and use RunOutputOptions.stdin only to "
-            f"choose {sorted(_STDIN_KINDS)}."
-        )
-        raise ValueError(msg)
-    for name, target in (("stdout", options.stdout), ("stderr", options.stderr)):
-        if target is None or target.kind == "pipe":
-            continue
-        captures = options.capture or (
-            options.echo_stdout if name == "stdout" else options.echo_stderr
-        )
-        if captures:
-            msg = (
-                f"RunOutputOptions {name} cannot be redirected to "
-                f"{target.kind!r} while capture or echo is enabled: there is no "
-                f"parent-side pipe to read. Set capture=False (and echo=False) "
-                f"or leave {name} unset."
-            )
-            raise ValueError(msg)
-    if _share_one_owned_path(options.stdout, options.stderr):
-        msg = (
-            "RunOutputOptions stdout and stderr cannot share one path: each "
-            "open starts at offset 0, so the two streams would interleave "
-            "unpredictably. Use distinct paths, or StdioTarget.fd for a "
-            "descriptor you manage."
-        )
-        raise ValueError(msg)
+    if stdin_target is None or stdin_target.kind in _STDIN_KINDS:
+        return
+    msg = (
+        f"RunOutputOptions stdin cannot be redirected to "
+        f"{stdin_target.kind!r}: pass the input itself as "
+        f"stdin=StdinInput(...) or stdin=StdinStream(...) on the run call, "
+        f"which selects a pipe, and use RunOutputOptions.stdin only to "
+        f"choose {sorted(_STDIN_KINDS)}."
+    )
+    raise ValueError(msg)
+
+
+def _reject_captured_redirection(
+    name: PipeStream,
+    options: RunOutputOptions,
+) -> None:
+    """Refuse a redirected stream that capture or echo must read.
+
+    Capture reads from a parent-side pipe, and a stream bound elsewhere has no
+    such pipe; echo mirrors what the consumer read, so it fails the same way.
+    A pipe target is untouched, and so is one that was left unset.
+
+    Parameters
+    ----------
+    name : str
+        Which stream to check: ``"stdout"`` or ``"stderr"``.
+    options : RunOutputOptions
+        The options holding the target and the capture and echo flags.
+
+    Raises
+    ------
+    ValueError
+        If the named stream is redirected while capture or echo is on.
+    """
+    target = options.stdout if name == "stdout" else options.stderr
+    if target is None or target.kind == "pipe":
+        return
+    captures = options.capture or (
+        options.echo_stdout if name == "stdout" else options.echo_stderr
+    )
+    if not captures:
+        return
+    msg = (
+        f"RunOutputOptions {name} cannot be redirected to "
+        f"{target.kind!r} while capture or echo is enabled: there is no "
+        f"parent-side pipe to read. Set capture=False (and echo=False) "
+        f"or leave {name} unset."
+    )
+    raise ValueError(msg)
+
+
+def _reject_shared_owned_path(options: RunOutputOptions) -> None:
+    """Refuse one file named for both streams cuprum would have to open.
+
+    Parameters
+    ----------
+    options : RunOutputOptions
+        The options whose two output targets are checked.
+
+    Raises
+    ------
+    ValueError
+        If both streams name the same path for cuprum to own.
+    """
+    if not _share_one_owned_path(options.stdout, options.stderr):
+        return
+    msg = (
+        "RunOutputOptions stdout and stderr cannot share one path: each "
+        "open starts at offset 0, so the two streams would interleave "
+        "unpredictably. Use distinct paths, or StdioTarget.fd for a "
+        "descriptor you manage."
+    )
+    raise ValueError(msg)
 
 
 def _share_one_owned_path(

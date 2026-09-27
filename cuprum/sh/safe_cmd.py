@@ -49,6 +49,26 @@ if typ.TYPE_CHECKING:
 type SafeCmdBuilder = cabc.Callable[..., SafeCmd]
 
 
+def _line_iteration_tracking() -> _ExecutionTracking:
+    """Build the hook bookkeeping one line iteration travels with.
+
+    Line iteration never opens a presentation session: the line events are the
+    caller's own consumption of the streams, so there is no adapter framing to
+    bracket. The empty bracket keeps the required field satisfied.
+
+    Returns
+    -------
+    _ExecutionTracking
+        Tracking whose sink bracket owns nothing and whose pending-task list
+        starts empty.
+    """
+    return _ExecutionTracking(
+        execution_hooks=_collect_hooks(current_context()),
+        pending_tasks=[],
+        sink_bracket=_SinkBracket(None),
+    )
+
+
 def _reject_redirected_lines_stdout(output: RunOutputOptions) -> None:
     """Reject a stdout target where line iteration needs a parent-side pipe.
 
@@ -233,15 +253,7 @@ class SafeCmd:
         _reject_redirected_lines_stdout(out)
         stdin_source = _resolve_stdin_source(stdin, ctx)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        tracking = _ExecutionTracking(
-            execution_hooks=_collect_hooks(current_context()),
-            pending_tasks=[],
-            # Line iteration never opens a presentation session: the line
-            # events are the caller's own consumption of the streams, so there
-            # is no adapter framing to bracket. The empty bracket keeps the
-            # required field satisfied.
-            sink_bracket=_SinkBracket(None),
-        )
+        tracking = _line_iteration_tracking()
         observation = _prepare_execution_observation(self, ctx, tracking, out)
 
         return LineStream(
