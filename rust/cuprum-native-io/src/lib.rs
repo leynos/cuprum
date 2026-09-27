@@ -60,17 +60,8 @@ pub fn borrow(stream: &impl AsStream) -> BorrowedStream<'_> {
 #[must_use]
 #[cfg(unix)]
 pub unsafe fn adopt_writer(raw: PlatformFd) -> OwnedStream {
-    #[cfg(unix)]
-    {
-        // SAFETY: the caller transfers a valid, uniquely owned descriptor.
-        unsafe { OwnedStream::from_raw_fd(raw) }
-    }
-    #[cfg(windows)]
-    {
-        // SAFETY: the caller transfers a valid independently duplicated Win32
-        // handle, not a CRT descriptor. The cast preserves pointer width.
-        unsafe { OwnedStream::from_raw_handle(raw as RawHandle) }
-    }
+    // SAFETY: the caller transfers a valid, uniquely owned descriptor.
+    unsafe { OwnedStream::from_raw_fd(raw) }
 }
 
 /// Accept a synchronous Windows writer transferred by the integration boundary.
@@ -98,17 +89,8 @@ pub unsafe fn adopt_writer(raw: PlatformFd) -> SynchronousOwnedStream {
 #[must_use]
 #[cfg(unix)]
 pub const unsafe fn borrow_reader<'owner>(raw: PlatformFd) -> BorrowedStream<'owner> {
-    #[cfg(unix)]
-    {
-        // SAFETY: the caller guarantees validity for the returned lifetime.
-        unsafe { BorrowedStream::borrow_raw(raw) }
-    }
-    #[cfg(windows)]
-    {
-        // SAFETY: the caller guarantees validity for the returned lifetime;
-        // the integer is a pointer-width Win32 handle, not a CRT descriptor.
-        unsafe { BorrowedStream::borrow_raw(raw as RawHandle) }
-    }
+    // SAFETY: the caller guarantees validity for the returned lifetime.
+    unsafe { BorrowedStream::borrow_raw(raw) }
 }
 
 /// Borrow a synchronous Windows reader whose owner is maintained externally.
