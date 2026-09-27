@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import contextlib
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -153,6 +154,23 @@ async def _write_stdin_stream(
     producer or encoder failure is different: it is wrapped in
     ``StdinSourceError`` and raised, because the run's input contract was
     broken rather than satisfied early.
+
+    The pipe is closed and the producer finalized on every exit path,
+    including the raising ones, so a caller who sees a failure still knows
+    that nothing cuprum owns outlives the run.
+
+    Raises
+    ------
+    _source_error
+        If pulling or encoding a chunk fails. The helper builds the public
+        ``StdinSourceError`` from the lazy shim, so what a caller catches is
+        that type, with the producer's own exception chained as ``__cause__``.
+        It is raised through the helper rather than named literally here
+        because this module must not import ``cuprum.sh`` at runtime.
+    asyncio.CancelledError
+        If the writer is cancelled while the run is being torn down.
+        Cancellation is control flow rather than a source failure, so it
+        propagates unchanged instead of being wrapped.
     """
     stdin = process.stdin
     if stdin is None:
@@ -162,11 +180,17 @@ async def _write_stdin_stream(
     encoder = codecs.getincrementalencoder(getattr(process, "encoding", "utf-8"))(
         getattr(process, "errors", "replace")
     )
+    sink = _StreamSink(
+        process=process,
+        stdin=stdin,
+        encoder=encoder,
+        observation=observation,
+    )
     try:
         source = stream.chunks.__aiter__()
         async for chunk in source:
-            await _write_chunk(process, stdin, chunk, encoder, observation)
-        await _flush_encoder(process, stdin, encoder, observation)
+            await _write_chunk(sink, chunk)
+        await _flush_encoder(sink)
     except asyncio.CancelledError:
         # Cancellation is control flow, not a source failure: the run is being
         # torn down and the caller must see the cancellation, not an error.
@@ -220,20 +244,45 @@ def _source_error(msg: str, exc: BaseException) -> Exception:
     return error_type(msg)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StreamSink:
+    """Everything one streaming write needs beyond the chunk itself.
+
+    These four values are bound once per run and never vary between chunks, so
+    they travel as one object rather than as four positional arguments. That
+    keeps the per-chunk helpers to a single changing parameter, which is what
+    makes their signatures readable at the call site.
+    """
+
+    process: asyncio.subprocess.Process
+    stdin: asyncio.StreamWriter
+    encoder: codecs.IncrementalEncoder
+    observation: _StageObservation
+
+
 async def _write_chunk(
-    process: asyncio.subprocess.Process,
-    stdin: asyncio.StreamWriter,
+    sink: _StreamSink,
     chunk: str | bytes,
-    encoder: codecs.IncrementalEncoder,
-    observation: _StageObservation,
 ) -> None:
     """Encode one chunk, write it, and drain before returning.
 
     Draining before returning is the backpressure: the caller's next pull
     happens only once the child has taken this chunk off the pipe.
+
+    An empty encoded payload writes nothing and emits nothing: a ``str`` chunk
+    that the incremental encoder is still holding entirely (a lone leading
+    surrogate, say) produces no bytes, and reporting a zero-byte write would
+    be noise.
+
+    Raises
+    ------
+    TypeError
+        If the producer yields anything other than ``str`` or ``bytes``. A
+        mis-typed chunk is a caller error, not a pipe condition, so it is
+        raised here for the streaming writer to wrap.
     """
     if isinstance(chunk, str):
-        payload = encoder.encode(chunk, final=False)
+        payload = sink.encoder.encode(chunk, final=False)
     elif isinstance(chunk, bytes):
         payload = chunk
     else:
@@ -244,29 +293,28 @@ async def _write_chunk(
         raise TypeError(msg)
     if not payload:
         return
-    stdin.write(payload)
-    await stdin.drain()
-    observation.emit(
+    sink.stdin.write(payload)
+    await sink.stdin.drain()
+    sink.observation.emit(
         "stdin",
-        _EventDetails(pid=process.pid, byte_count=len(payload)),
+        _EventDetails(pid=sink.process.pid, byte_count=len(payload)),
     )
 
 
-async def _flush_encoder(
-    process: asyncio.subprocess.Process,
-    stdin: asyncio.StreamWriter,
-    encoder: codecs.IncrementalEncoder,
-    observation: _StageObservation,
-) -> None:
-    """Write whatever the incremental encoder is still holding."""
-    tail = encoder.encode("", final=True)
+async def _flush_encoder(sink: _StreamSink) -> None:
+    """Write whatever the incremental encoder is still holding.
+
+    A trailing partial sequence only becomes visible to the child here, so this
+    runs after the producer is exhausted and before the pipe is closed.
+    """
+    tail = sink.encoder.encode("", final=True)
     if not tail:
         return
-    stdin.write(tail)
-    await stdin.drain()
-    observation.emit(
+    sink.stdin.write(tail)
+    await sink.stdin.drain()
+    sink.observation.emit(
         "stdin",
-        _EventDetails(pid=process.pid, byte_count=len(tail)),
+        _EventDetails(pid=sink.process.pid, byte_count=len(tail)),
     )
 
 
@@ -283,29 +331,26 @@ async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
     await asyncio.gather(stdin_task, return_exceptions=True)
 
 
-def _is_streaming_source(stdin_data: object) -> bool:
-    """Whether *stdin_data* is a producer rather than a resolved payload.
-
-    The check reads the class from its defining module rather than importing
-    it, for the same load-order reason as :func:`_source_error`.
-    """
-    from cuprum.sh.execution import StdinStream
-
-    return isinstance(stdin_data, StdinStream)
-
-
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
     stdin_data: bytes | StdinStream | None,
     observation: _StageObservation,
 ) -> asyncio.Task[None] | None:
     """Start stdin writing when a payload or a producer was supplied."""
+    # Imported here rather than at module load, for the same reason
+    # :func:`_source_error` reaches its type through the lazy shim:
+    # ``cuprum.sh.execution`` is complete only once the ``cuprum`` surface
+    # that imports this module has finished initializing. Naming the class
+    # locally also lets the type checker narrow the union at the ``isinstance``
+    # below, which is what keeps the payload branch free of a redundant guard.
+    from cuprum.sh.execution import StdinStream
+
     if stdin_data is None:
         return None
-    if _is_streaming_source(stdin_data):
+    if isinstance(stdin_data, StdinStream):
         _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
         return asyncio.create_task(
-            _write_stdin_stream(process, stdin_data, observation)  # ty: ignore[invalid-argument-type] - narrowed by _is_streaming_source
+            _write_stdin_stream(process, stdin_data, observation)
         )
     _LOGGER.debug(
         "stdin_writer_task_start pid=%s bytes=%s",

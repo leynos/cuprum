@@ -39,9 +39,7 @@ from cuprum.context import current_context
 from cuprum.program import Program
 from cuprum.sh.execution import (
     ExecutionContext,
-    StdinInput,
     StdinSource,
-    StdinStream,
     _resolve_stdin_source,
 )
 from cuprum.sh.output import (

@@ -245,12 +245,7 @@ def _validate_stdio_targets(options: RunOutputOptions) -> None:
                 f"or leave {name} unset."
             )
             raise ValueError(msg)
-    if (
-        options.stdout is not None
-        and options.stderr is not None
-        and options.stdout.kind == "path"
-        and options.stdout == options.stderr
-    ):
+    if _share_one_owned_path(options.stdout, options.stderr):
         msg = (
             "RunOutputOptions stdout and stderr cannot share one path: each "
             "open starts at offset 0, so the two streams would interleave "
@@ -258,6 +253,34 @@ def _validate_stdio_targets(options: RunOutputOptions) -> None:
             "descriptor you manage."
         )
         raise ValueError(msg)
+
+
+def _share_one_owned_path(
+    stdout: StdioTarget | None,
+    stderr: StdioTarget | None,
+) -> bool:
+    """Whether both streams name the same file for cuprum to own.
+
+    Only ``path`` targets are cuprum's to open, so only they can collide: two
+    ``fd`` targets naming one descriptor is the caller's own arrangement, and
+    ``inherit`` carries no file at all. Two path targets are the same file when
+    the targets compare equal, which for this variant means the same path.
+
+    Parameters
+    ----------
+    stdout : StdioTarget | None
+        The stdout target, or ``None`` when unspecified.
+    stderr : StdioTarget | None
+        The stderr target, or ``None`` when unspecified.
+
+    Returns
+    -------
+    bool
+        ``True`` when both name the same path target.
+    """
+    if stdout is None or stderr is None:
+        return False
+    return stdout.kind == "path" and stdout == stderr
 
 
 def _validate_convenience_flags(options: RunOutputOptions) -> None:
