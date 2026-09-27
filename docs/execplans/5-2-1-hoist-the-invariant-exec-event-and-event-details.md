@@ -1,8 +1,10 @@
 # Hoist invariant execution-event fields (5.2.1)
 
-Status: BLOCKED — EP-M2's design cannot reach V5's 10% target. See the
-2026-09-27 feasibility discovery below; a revised design needs approval before
-any runtime change. EP-M1 is complete.
+Status: UNBLOCKED — the user approved a revised V5 threshold on 2026-09-27 (bar
+10% → **28%**); EP-M2 may proceed against the already-defined hoist (per-line
+`_EventDetails` and argv construction removed, per-line `ExecEvent` retained).
+See the feasibility discovery and the threshold-revision entry below. EP-M1 is
+complete.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -20,7 +22,7 @@ and lifecycle semantics, including a fresh timestamp and event per line.
 
 Success requires all three results: metadata is resolved once per observed
 stream, payload and hook contracts remain unchanged, and a committed profiler
-artefact shows construction accounts for no more than 10% of the callback
+artefact shows construction accounts for no more than 28% of the callback
 consume samples. The historical approximately 39% is context, not a current
 control. No performance result has been established by this plan.
 
@@ -71,9 +73,17 @@ written in either direction.
 A missed performance target is a design exception, not permission to weaken
 acceptance. Try the ordinary-constructor factory and at most two local
 refinements within the same design. If the final representative measurement
-still exceeds 10%, set this plan to BLOCKED, record the measurements and
-options, and seek approval for a revised design. Do not declare the feature
+still exceeds the threshold, set this plan to BLOCKED, record the measurements
+and options, and seek approval for a revised design. Do not declare the feature
 complete merely because field hoisting or correctness tests pass.
+
+The threshold is **28%**, revised from 10% on 2026-09-27 with user approval and
+derived in the threshold-revision discovery entry above. The 10% figure was
+unreachable by this design without breaking V2/V4's observation contract, and
+the 39% baseline it was compared against has no denominator in its source. The
+revision is a change to an unmeetable acceptance criterion, made explicitly and
+on the record, not a weakening of a met one — 28% is still 6.7 points below the
+control and is not reached by a partial hoist.
 
 The two refinements are limited to argument-passing and local-binding variants
 of ordinary `ExecEvent` construction. Neither may change public signatures or
@@ -90,9 +100,15 @@ another agent's files or processes.
 
 ## Risks
 
-High impact, medium likelihood: caching metadata may not reach 10% because a
-fresh `ExecEvent` still initializes 23 slots. Mitigate with the early measured
-feasibility gate; do not promise an unmeasured result.
+High impact, medium likelihood: caching metadata may not reach the threshold
+because a fresh `ExecEvent` still initializes 23 slots. Mitigate with the early
+measured feasibility gate; do not promise an unmeasured result. This risk has
+**materialized and been priced**: the retained per-line `ExecEvent`
+construction is what makes the original 10% unreachable, and the threshold was
+revised to 28% on 2026-09-27 for that reason (see the threshold-revision
+entry). The risk is now that a *partial* hoist — one that leaves argv or the
+payload per-line — is mistaken for a complete one; the
+`27-of-100 passes / 29-of-100 fails` boundary in V5's tests is the guard.
 
 High impact, medium likelihood: caching too early can bind the wrong PID or
 execution context; caching an event can corrupt retained asynchronous payloads.
@@ -1384,6 +1400,61 @@ verifies the revision, so a writer editing during it invalidates the affected
 logs and nothing else — but the affected set is *every* gate whose read window
 touched the edit, not just the one whose log looks wrong.
 
+### 2026-09-27: V5's threshold is revised to 28%, and the projection is a range
+
+**Decision (user-approved 2026-09-27, `AskUserQuestion`).** The user chose
+"revise the threshold, then implement". V5's construction-share bar moves from
+**10% to 28%**, measured on the consume subtree exactly as V5 already defines
+D, N, and the classifier. The `39% baseline` comparison is retired with it: as
+recorded above, that figure has no denominator in its source document and no
+percentage this capture produces matches it, so the criterion could not be
+evaluated as literally written in either direction.
+
+**Why 28%, derived rather than chosen.** EP-M2's scope is already fixed by the
+two red tests in `cuprum/unittests/test_line_event_emission_prep_cost.py`: the
+hoist must deliver **zero `_EventDetails` constructions and zero argv rebuilds
+per line**, while the per-line `ExecEvent` construction is retained (it is what
+V2/V4's distinct-object and payload-preservation contract requires). Priced on
+the committed control capture, that removes the `_EventDetails` constructor
+(4230 samples) plus the `_event_details` helper frame that only exists to build
+it (2182), and the two `argv_with_program` frames hoisted along with it (353).
+
+**The projection is a range, not a point, and that is the finding that
+corrected this plan's own first proposal.** The share is `N/D`, and the hoist
+shrinks *both*: removing construction also removes the samples it cost, so
+every sample that leaves N also leaves D. Which frames a given implementation
+actually removes is not knowable before it is written, so:
+
+| assumption about what leaves D      | post-hoist share |
+| ----------------------------------- | ---------------- |
+| conservative — only the ctor leaves | **24.35%**       |
+| aggressive — ctor, helper, argv too | **26.91%**       |
+
+An earlier draft of this entry proposed a bar of **25%**, computed from the
+*control* denominator (30822). That is an unreachable bar: the aggressive
+projection is 26.91%, so a correct implementation of the already-approved hoist
+would fail it. The lesson generalizes and is recorded in the decision log: a
+post-hoist projection must use the *post-hoist* denominator, not the control's,
+for the same reason the naive `r·f_ev` form is wrong — both compare a numerator
+against a denominator that has already moved.
+
+**28% = the aggressive projection (26.91%) rounded up to 1.0 percentage point
+of headroom.** It is cleared by the full intended hoist, is not cleared by a
+partial one that leaves argv or the payload per-line, and is 6.7 points below
+the control's 34.73% so it still requires real work. It is far weaker than the
+roadmap's 10%, and that is deliberate and recorded here rather than glossed:
+10% is unreachable without converting the per-line event to a per-run one,
+which breaks the observation contract V2/V4 exist to protect. The roadmap's
+success criterion should be amended to cite 28% and to drop the 39% baseline.
+
+**What remains genuinely unmet.** The roadmap asks that "per-line emission no
+longer reconstructs invariant fields". Under the approved threshold the
+`ExecEvent` construction stays in the per-line path, so that clause is met only
+for the `_EventDetails` half. This is the same partial satisfaction the "three
+further observations" entry records; the threshold revision makes the
+measurement honest, it does not make the clause true. That residual gap belongs
+in the closeout report.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -1492,6 +1563,20 @@ require checking the explicit callback factory bodies as well.
   consume subtree. A design revision that proceeded on either earlier number
   would have been arguing from a figure this plan itself had already shown to
   be wrong.
+- 2026-09-27: **V5's threshold is revised from 10% to 28%** (user-approved),
+  and the 39% baseline comparison is retired with it. Derived from the
+  aggressive post-hoist projection of EP-M2's already-fixed scope (26.91%)
+  rounded up to one point of headroom. Recorded in full in the discovery above;
+  the roadmap's success criterion should be amended to match.
+- 2026-09-27: **A post-hoist projection must be computed on the post-hoist
+  denominator.** The first draft of this entry proposed a 25% bar by dividing
+  the projected numerator by the *control* denominator (30822). The aggressive
+  projection is 26.91%, so that bar would have failed a correct implementation
+  of the already-approved hoist. This is the same error as the naive `r·f_ev`
+  form in a different guise — a numerator compared against a denominator that
+  the change itself moves — and it is the fourth instance in this milestone.
+  Projections are therefore stated as a **range** over what a given
+  implementation might remove, not as a point estimate.
 - 2026-09-27: **Judge every construction-cost lever on `share(r)`, never on
   `r·f_ev`.** The naive form has now been used three times in this milestone in
   place of the correct one (the option-1 projection, and the "two further
@@ -1633,8 +1718,9 @@ Use these selective trace links throughout implementation:
   and absence of per-line `_EventDetails` construction.
 - R2, unchanged observable payloads and hooks: EP-M1 and EP-M2, evidenced by
   V2–V4, public dataclass parity, and real-process behavioural scenarios.
-- R3, construction share at most 10%: EP-M2 feasibility and EP-M3 acceptance,
-  evidenced by V5's committed samples and reproducible classification.
+- R3, construction share at most 28%: EP-M2 feasibility and EP-M3 acceptance,
+  evidenced by V5's committed samples and reproducible classification. (Revised
+  from 10% on 2026-09-27 with user approval; see the threshold-revision entry.)
 - R4, Python-first tuning and unchanged pump observation: every milestone,
   evidenced by the scoped diff, unchanged dispatcher, and sequential gates.
 
@@ -1802,7 +1888,7 @@ phase, defaults, or stage ownership. Keep existing timeout, cancellation,
 stdin, and sanitized fail-fast regressions in the full run. Characterization
 scenarios should already pass before the optimization.
 
-### V5: measured construction share is at most 10%
+### V5: measured construction share is at most 28%
 
 Use parent-only py-spy raw stacks as the primary Python attribution evidence,
 with the same flags for control and candidate. Do not replace this with
@@ -1834,8 +1920,8 @@ existing folded-stack parser in `benchmarks/summarize_folded.py` where
 suitable. Test it under `cuprum/unittests/test_line_event_profile.py`: exact
 weighted fractions, nested constructor frames counted once, replacement helper
 frames, empty/malformed data, and unresolved generated frames. An
-all-constructor synthetic profile must fail the gate; a 9-of-100 input must
-pass and 11-of-100 must fail. Actual control frames must match non-empty
+all-constructor synthetic profile must fail the gate; a 27-of-100 input must
+pass and 29-of-100 must fail. Actual control frames must match non-empty
 categories. Keep the helper under the scripting standards and avoid adding
 runtime dependencies.
 
@@ -1843,13 +1929,13 @@ The proposed command accepts one folded-stack path, `--rules` for an explicit
 JSON classification file, and `--output` for its JSON result. Emit weighted
 `parent_samples`, `consume_samples`, `construction_samples`, both percentages,
 `matched_frames`, `unresolved_frames`, and `status`. Exit 0 for a valid share
-at most 10%, 1 for a valid share above 10%, and 2 for malformed, insufficient,
+at most 28%, 1 for a valid share above 28%, and 2 for malformed, insufficient,
 or unresolved input. A control run may intentionally exit 1; retain its result.
 Regression timing is assessed separately from this single-capture command.
 
 Collect three matched control/candidate profile pairs on the full wrap-76
 fixture, each with one worker repeat. Require every valid candidate run to be
-at most 10%, publish sample counts and dispersion, and require D of at least
+at most 28%, publish sample counts and dispersion, and require D of at least
 10000 in every capture and a candidate share range of at most two percentage
 points. These are proposed measurement tolerances. If samples are insufficient,
 increase the whole-run repeat count equally for both variants and collect a new
@@ -1905,12 +1991,19 @@ and revert only the task's own uncommitted work.
 Implement the shared factory and update both production callers together. Make
 V1 green, then run V2–V4 and inspect adjacent hook ownership. Remove all
 experimental alternatives, temporary expected-failure markers, and probes. Run
-the representative profile gate before claiming R3. If it misses, record
-BLOCKED and present the measured limitation for design revision. Correctness
-alone does not discharge R3. A successful plateau contains one production
-factory, unchanged dispatch, passing gates, and reproducible profile evidence;
-commit it as one atomic functional change. Recovery is an ordinary reviewed
-revert, not a force reset of unrelated work.
+the representative profile gate before claiming R3. If it misses the **28%**
+threshold, record BLOCKED and present the measured limitation for design
+revision. Correctness alone does not discharge R3. A successful plateau
+contains one production factory, unchanged dispatch, passing gates, and
+reproducible profile evidence; commit it as one atomic functional change.
+Recovery is an ordinary reviewed revert, not a force reset of unrelated work.
+
+The feasibility stop condition was reached on 2026-09-27 against the original
+10% threshold, and the threshold was then revised with user approval rather
+than the design being re-scoped. EP-M2 therefore resumes with its scope
+**unchanged**: hoist the per-line `_EventDetails` and argv construction, keep
+the per-line `ExecEvent`, and meet 28%. Do not widen the hoist to chase the old
+number; that route breaks V2/V4 and was explicitly declined.
 
 ### EP-M3: durable evidence and closeout
 
@@ -2038,7 +2131,7 @@ callback paths must use the factory. No-hook streams must retain their existing
 callback-free path, and lifecycle/failure sanitization must remain unchanged.
 
 The committed report must allow recalculation of N/D from complete inputs. All
-three candidate captures must be at most 10%, controls must use the same
+three candidate captures must be at most 28%, controls must use the same
 classification, and unprofiled runs must meet the regression tolerance. Missing
 Python symbols, skipped callback work, changed line counts, or a moved
 constructor cost do not pass. Record exact gate commands, exit statuses, and

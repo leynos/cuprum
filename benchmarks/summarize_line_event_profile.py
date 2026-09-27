@@ -54,7 +54,14 @@ if typ.TYPE_CHECKING:
 
 # The gate: construction must be at most this share of the consume subtree.
 # The plan fixes this threshold, so it is a constant rather than an option.
-CONSTRUCTION_SHARE_LIMIT_PERCENT = 10.0
+#
+# Raised from 10.0 to 28.0 on 2026-09-27, with user approval. The retained
+# per-line `ExecEvent` construction that V2/V4's observation contract requires
+# puts a floor of roughly 24-27% on the achievable share, so 10% was
+# unreachable by this design; 28% sits one point above the aggressive
+# projection. The derivation is in
+# docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md.
+CONSTRUCTION_SHARE_LIMIT_PERCENT = 28.0
 
 _EXIT_PASS = 0
 _EXIT_ABOVE_LIMIT = 1

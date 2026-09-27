@@ -105,38 +105,50 @@ def _line(frames: str, samples: int) -> str:
 class TestWeightedFractions:
     """Counts and percentages are exact and use the documented denominator."""
 
-    def test_nine_of_one_hundred_passes(self, tmp_path: pth.Path) -> None:
-        """A 9-of-100 construction share is at or below the limit."""
-        capture = _line(f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", 9) + _line(
-            f"a;{CONSUME};{EMIT_LINE}", 91
-        )
+    def test_just_below_the_limit_passes(self, tmp_path: pth.Path) -> None:
+        """One sample under the limit passes, at the limit's own boundary."""
+        limit = classifier.CONSTRUCTION_SHARE_LIMIT_PERCENT
+        construction = int(limit) - 1
+        capture = _line(
+            f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", construction
+        ) + _line(f"a;{CONSUME};{EMIT_LINE}", 100 - construction)
         status, result = _run(tmp_path, capture)
 
         assert result["consume_samples"] == 100
-        assert result["construction_samples"] == 9
-        assert result["construction_share_percent"] == pytest.approx(9.0)
+        assert result["construction_samples"] == construction
+        assert result["construction_share_percent"] == pytest.approx(
+            float(construction)
+        )
         assert result["status"] == "pass"
         assert status == 0
 
-    def test_eleven_of_one_hundred_fails(self, tmp_path: pth.Path) -> None:
-        """An 11-of-100 construction share is above the limit."""
-        capture = _line(f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", 11) + _line(
-            f"a;{CONSUME};{EMIT_LINE}", 89
-        )
+    def test_just_above_the_limit_fails(self, tmp_path: pth.Path) -> None:
+        """One sample over the limit fails, at the limit's own boundary."""
+        limit = classifier.CONSTRUCTION_SHARE_LIMIT_PERCENT
+        construction = int(limit) + 1
+        capture = _line(
+            f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", construction
+        ) + _line(f"a;{CONSUME};{EMIT_LINE}", 100 - construction)
         status, result = _run(tmp_path, capture)
 
-        assert result["construction_share_percent"] == pytest.approx(11.0)
+        assert result["construction_share_percent"] == pytest.approx(
+            float(construction)
+        )
         assert result["status"] == "fail_above_limit"
         assert status == 1, "a valid measurement above the limit exits 1"
 
-    def test_exactly_ten_percent_passes(self, tmp_path: pth.Path) -> None:
-        """The limit is inclusive: exactly 10% passes."""
-        capture = _line(f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", 10) + _line(
-            f"a;{CONSUME};{EMIT_LINE}", 90
-        )
+    def test_exactly_the_limit_passes(self, tmp_path: pth.Path) -> None:
+        """The limit is inclusive: a share equal to it passes."""
+        limit = classifier.CONSTRUCTION_SHARE_LIMIT_PERCENT
+        construction = int(limit)
+        capture = _line(
+            f"a;{CONSUME};{EMIT_LINE};{GENERATED_INIT}", construction
+        ) + _line(f"a;{CONSUME};{EMIT_LINE}", 100 - construction)
         status, result = _run(tmp_path, capture)
 
-        assert result["construction_share_percent"] == pytest.approx(10.0)
+        assert result["construction_share_percent"] == pytest.approx(
+            float(construction)
+        )
         assert status == 0
 
     def test_samples_outside_the_consume_subtree_are_excluded(
