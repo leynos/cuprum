@@ -24,6 +24,24 @@ artefact shows construction accounts for no more than 10% of the callback
 consume samples. The historical approximately 39% is context, not a current
 control. No performance result has been established by this plan.
 
+**The 39% baseline does not reproduce, and its denominator was never stated.**
+Its only source is a one-line table row in
+`docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5, whose scope is a
+narrower July fixture; the document names no denominator for it. This branch's
+own committed control on the wrap-76 fixture measures **34.73%** of the consume
+subtree and **32.97%** of all parent samples
+(`dist/profiles/5-2-1-event-details/control-1/construction-share.json`), and a
+small-fixture smoke run reads **47.86%**. Both percentages a reader might
+plausibly have meant sit below 39%, so "falls from the 39% baseline" does not
+name a real quantity for this scenario. The plan's statement that 39% is
+"context, not a current control" is therefore correct, and should be read more
+strongly than it was written: the roadmap's *baseline* is as unusable as its
+*threshold*. V5's denominator and fixture are this plan's own definitions, so
+the 10% bar is well-formed; only the comparison to 39% is not. This is the
+strongest argument yet for settling the design question as an explicit
+threshold revision, since the criterion cannot be evaluated as literally
+written in either direction.
+
 ## Constraints
 
 - Obtain explicit user approval of this plan before changing runtime code,
@@ -980,12 +998,29 @@ one `object.__setattr__` per field when `frozen=True`. `ExecEvent` has 27.
 `__init__` on the same 27 fields — `init=False` plus explicit
 `object.__setattr__` calls, which leaves the dataclass's fields, `repr`,
 equality, and public shape unchanged — runs at 2287 ns against 3367 ns
-generated, a 0.68x ratio, projecting 14.27%. Consolidating the 16 optionals
-into one nested record time-shares at 0.52–0.65x depending on noise, projecting
-10.2–13.6%. Against the `r* = 0.3453` bar, neither clears it: the handwritten
-constructor is ruled out anyway, since the plan forbids slot mutation, and
-field consolidation changes the public event representation, which the
-Tolerances section marks as a stop-for-approval change.
+generated, a **0.68x** ratio. Consolidating the 16 optionals into one nested
+record time-shares at **0.52–0.65x** depending on noise.
+
+**Both are judged on the `share(r)` algebra, and an earlier draft of this entry
+judged them on the naive one.** That draft applied `r* = 0.3453` to both, but
+`r*` is derived from `share(r)`; comparing `r` against it is only valid if the
+share is `r·f_ev`, which is precisely the model this section exists to correct.
+Re-derived on the same formula as the table above:
+
+| lever                  | `r`  | correct `share(r)` | naive `r·f_ev` |
+| ---------------------- | ---- | ------------------ | -------------- |
+| handwritten `__init__` | 0.68 | **17.95%**         | 14.28%         |
+| nested record (low)    | 0.52 | **14.33%**         | 10.92%         |
+| nested record (high)   | 0.65 | **17.30%**         | 13.65%         |
+
+The verdict is unchanged but the margin is not: the earlier 14.27% and
+10.2–13.6% understated the true share by 3.5–4.6 points, and the naive column's
+"10.92%" sits close enough to the bar to invite a false near-miss reading. On
+the correct figures the 0.52x nested record is 4.3 points clear of the bar, not
+0.9. Either way neither clears it, for the reasons already given: the
+handwritten constructor is ruled out anyway, since the plan forbids slot
+mutation, and field consolidation changes the public event representation,
+which the Tolerances section marks as a stop-for-approval change.
 
 Every benchmark above is comparative, single-process, on a host that was
 running the gate suite concurrently: run-to-run spread was large enough to move
@@ -1061,8 +1096,8 @@ Option 3 is the only recorded route measured to clear the bar with margin — it
 removes the per-line construction rather than shrinking it — and it is also the
 one no local refinement can approximate.
 
-**Two further observations that bear on the design, recorded here because they
-were found late and neither is derived from the numbers above.**
+**Three further observations that bear on the design, recorded here because
+they were found late and none is derived from the numbers above.**
 
 *First: the roadmap's success criterion is stated against a baseline that
 already bundles both constructors.* Item 5.2.1 asks for "per-line emission no
@@ -1077,6 +1112,20 @@ and the invariant fields the criterion names are the ones being rebuilt.
 Whichever option is approved, the roadmap text needs revisiting rather than
 treating as a fixed spec.
 
+**Its baseline is unusable too, not just its threshold.** The 39% has a single
+source — a table row in `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5,
+whose scope is a narrower fixture — and the document never states the
+denominator behind it. This branch's committed control on the wrap-76 fixture
+reads **34.73%** of the consume subtree and **32.97%** of all parent samples;
+the small-fixture smoke reads **47.86%**. Neither of the two percentages a
+reader might reasonably have meant is 39%. So the criterion cannot be evaluated
+as literally written in *either* direction: no revision of this design can
+demonstrate a fall "from the 39% baseline", because there is no such baseline
+for this scenario to fall from. That makes the design question a threshold
+revision rather than a fix, and it should be settled explicitly instead of left
+to whoever reads the roadmap next. V5's 10% bar is unaffected — its denominator
+and fixture are defined in this plan, so it is well-formed on its own terms.
+
 *Second: the hoist's natural shape is a specialized emitter, not a cached
 prefix.* Only `pid` and `line` vary per line — `_event_details(*, pid, line)`
 passes exactly those two — yet `emit` reassigns all 27 `ExecEvent` fields on
@@ -1090,6 +1139,20 @@ resolves to** and requires the classifier's rules to be re-baselined before V5
 can be read. That re-baselining is a prerequisite for measuring option 1, not a
 consequence of having measured it, and it should be in the approved work rather
 than discovered during it.
+
+*Third: the paragraph above "Two further levers" was judged with the wrong
+formula, and the correction widens the margin without changing the verdict.* It
+applied the bar `r* = 0.3453` directly to each lever's time ratio and reported
+"projecting 14.27%" and "10.2–13.6%". But `r*` is derived *from* `share(r)`, so
+`r` may only be compared against it when the share is `r·f_ev` — the naive
+model that the "share is a ratio of times" section exists to refute. Re-derived
+on `share(r)`, the same levers read **17.95%** (0.68x), **14.33%** (0.52x), and
+**17.30%** (0.65x): every figure was understated by 3.5–4.6 points, and the
+naive column's 10.92% sits close enough to the bar to read as a near miss when
+the true figure is 14.33%. This is the third time in this milestone that the
+naive formula has been used in place of the correct one — see the corrected
+option-1 projection — which is worth recording as a pattern rather than three
+separate slips: the naive form is the intuitive one, and it is wrong here.
 
 **Independent corroboration that the samples are real constructor time.** The
 capture's own arithmetic and the microbenchmarks agree without being fitted to
@@ -1429,6 +1492,22 @@ require checking the explicit callback factory bodies as well.
   consume subtree. A design revision that proceeded on either earlier number
   would have been arguing from a figure this plan itself had already shown to
   be wrong.
+- 2026-09-27: **Judge every construction-cost lever on `share(r)`, never on
+  `r·f_ev`.** The naive form has now been used three times in this milestone in
+  place of the correct one (the option-1 projection, and the "two further
+  levers" figures), each time understating the post-hoist share by 3.5–4.6
+  percentage points and once producing a 10.92% that reads like a near miss
+  against a true 14.33%. It is the intuitive form, which is why it keeps
+  returning; the rule is to re-derive any projected share through the closed
+  form before it is written down.
+- 2026-09-27: **The roadmap's 39% baseline is unusable, not merely historical.**
+  It traces to one table row in a narrower July-fixture document that states no
+  denominator; this branch's committed control reads 34.73% (consume) and
+  32.97% (all parent), and the smoke fixture reads 47.86%. The criterion
+  therefore cannot be evaluated as written in either direction, which makes the
+  open question a **threshold revision** rather than a design fix. Record this
+  in the approval request; do not let a future reader re-derive a bar from a
+  number with no denominator behind it.
 - 2026-09-27: Treat the bounded `actionlint -shellcheck=` re-run as **valid
   evidence for this revision** rather than as a weakened substitute for the
   hung gate. The narrowing removes shell-syntax checking inside `run:` blocks,
