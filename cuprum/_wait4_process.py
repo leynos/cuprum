@@ -57,12 +57,14 @@ class DirectProcessConfig:
 
     *pipes* names the streams cuprum holds a parent-side pipe for, and it is
     carried separately from the three stdio values because that value cannot
-    express it. ``Popen`` leaves ``stdout`` and ``stderr`` as ``None`` for
-    anything that is not a pipe, so the ``wait4`` path could infer pipe-ness
-    from the absence of a child-side object. Funding that path from this set is
-    what keeps it from attaching a reader to a borrowed descriptor the caller
-    owns. The default covers every stream, which is what a caller who omits the
-    field and passes real ``PIPE`` sentinels means.
+    express it: by the time it reaches the spawn layer a non-consuming pipe has
+    been folded down to ``DEVNULL``, and ``Popen`` leaves ``stdout`` and
+    ``stderr`` as ``None`` for ``DEVNULL`` just as it does for a borrowed
+    descriptor, so neither the child object nor the value distinguishes the two.
+    Funding the ``wait4`` path from this set is what keeps it from attaching a
+    reader to a stream cuprum does not own. The default covers every stream,
+    which is what a caller who omits the field and passes real ``PIPE``
+    sentinels means.
 
     The fallback backend does not consult *pipes*: ``create_subprocess_exec``
     attaches a reader only to the ``PIPE`` sentinel, and a raw descriptor
@@ -124,9 +126,10 @@ class _Wait4Process(asyncio.subprocess.Process):
         """Wrap a spawned child before attaching its pipes to ``loop``.
 
         ``pipes`` is the set the spawn config named, and it is recorded rather
-        than re-derived: ``Popen`` makes ``stdout``/``stderr`` non-``None`` for
-        any object it was handed, but only a pipe is something cuprum may
-        attach a reader to.
+        than re-derived: ``Popen`` sets ``stdout``/``stderr`` only for the
+        ``PIPE`` sentinel, leaving them ``None`` for ``DEVNULL`` and for a
+        borrowed descriptor alike, so the child object alone cannot say whether
+        cuprum holds a reader to attach.
         """
         self._popen = popen
         # The inherited signal methods delegate to this transport. Popen offers
@@ -157,11 +160,13 @@ class _Wait4Process(asyncio.subprocess.Process):
     async def connect_pipes(self) -> None:
         """Attach the pipes cuprum owns to asyncio readers and writers.
 
-        Both conditions are required. ``Popen`` exposes a stream object for
-        anything it was handed, including a caller's borrowed file, and
-        attaching an ``asyncio`` reader to one of those would take over a
-        descriptor that is not cuprum's to drive. A stream named in ``pipes``
-        but absent from the ``Popen`` is the mirror image: nothing to connect.
+        Both conditions are required, though only the ``Popen`` one can be the
+        deciding factor here. A stream named in ``pipes`` but absent from the
+        ``Popen`` is the case the guard exists for: nothing was handed over to
+        connect. The converse — a child-side stream the resolution did not name
+        as a pipe — cannot arise, because ``Popen`` sets ``stdout``/``stderr``
+        only for the ``PIPE`` sentinel, and ``DEVNULL`` and a borrowed
+        descriptor leave them ``None``.
         """
         if STDOUT_STREAM in self._pipes and self._popen.stdout is not None:
             self.stdout = await self._connect_reader(self._popen.stdout)

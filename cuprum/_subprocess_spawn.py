@@ -7,11 +7,14 @@ of it immediately after, and the spawn call itself.
 
 The stdio mapping is where a borrowed descriptor and a library-owned one are
 told apart, and that distinction is the whole point of the module. ``Popen``
-treats ``PIPE``, ``DEVNULL``, a raw ``int``, and a file object differently, and
-it leaves its own ``stdin``/``stdout``/``stderr`` as ``None`` for everything
-that is not a pipe — so the ``wait4`` backend could infer pipe-ness. The
-``create_subprocess_exec`` fallback would instead attach a reader to whatever it
-was handed, including a descriptor the caller owns. ``pipes`` names the streams
+treats ``PIPE``, ``DEVNULL``, a raw ``int``, and a file object differently, but
+it exposes a parent-side stream object only for ``PIPE``: a raw descriptor, a
+file object, and ``DEVNULL`` alike leave ``Popen.stdout`` ``None`` (measured,
+not assumed), so the ``wait4`` backend cannot recover pipe-ness from the child
+object — it would have to guess from the value it computed, and the value has
+already folded a non-consuming pipe down to ``DEVNULL``. ``create_subprocess_exec``
+behaves the same way in this respect, yielding a reader only for ``PIPE``, so
+this is not a divergence between the backends. ``pipes`` names the streams
 cuprum really holds a parent-side pipe for, which is the one piece of the
 resolution the value cannot express for itself.
 
@@ -205,11 +208,12 @@ async def _spawn_subprocess(
     The config the spawn layer receives is deliberately a superset of what
     ``Popen`` consumes: ``pipes`` names the streams cuprum holds a parent-side
     pipe for, which is information the value cannot express. ``Popen`` leaves
-    its own ``stdin``/``stdout``/``stderr`` as ``None`` for anything that is not
-    a pipe, so the ``wait4`` path could infer pipe-ness; the
-    ``create_subprocess_exec`` fallback would instead attach a reader to
-    whatever it was handed, including a borrowed descriptor. Naming the pipes
-    explicitly is what makes both paths agree.
+    its own ``stdin``/``stdout``/``stderr`` as ``None`` for everything except
+    ``PIPE``, so a child object cannot be asked whether cuprum owns a reader for
+    it; and the value cannot be asked either, because it has already folded a
+    non-consuming pipe down to ``DEVNULL`` — indistinguishable, at the child
+    object, from a borrowed descriptor. Naming the pipes explicitly is what
+    makes both backends agree.
 
     Returns
     -------
