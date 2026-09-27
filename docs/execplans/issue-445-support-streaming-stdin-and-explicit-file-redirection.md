@@ -279,7 +279,7 @@ likelihood, and mitigation.
   design, and roadmap updates.
 - [ ] Push and open the draft PR (`(#445)` in the title, `Closes #445` in the
   summary, Lody session link under `## References`).
-- [~] Rebase onto `origin/main` (PR #511 targets `main`). In progress: 105 picks
+- [~] Rebase onto `origin/main` (PR #511 targets `main`). In progress: 103 picks
   remain from `ed06abd36`. The `ed06abd36` replay is resolved as a union, and
   that resolution is the pattern the rest of the rebase follows. Where `main`
   and this branch each split a module, the union keeps one home for each name
@@ -302,10 +302,25 @@ likelihood, and mitigation.
     argument vector, because `argv0` and the executable binding are `main`'s
     additions (#440/#571) and a committed test asserts the child sees the bound
     path as its own `argv[0]`.
-  - `cuprum/_subprocess_deadline.py`, which this pick would have created, is
-    **not** created: `main`'s `_stream_drain` split already owns every
-    deadline and drain name. `_subprocess_wait.py` re-exports them instead, so
-    the one-import-path contract that module documents still holds.
+  - `cuprum/_subprocess_deadline.py` **is** created, and `main`'s
+    `_stream_drain` split survives alongside it. The two are orthogonal seams,
+    not rival answers to one question: `main` split the *drain* off
+    `_subprocess_wait.py`, while this branch split the *child-exit* wait off it,
+    so the union is three modules with one home per name —
+    `_subprocess_deadline` owns `_wait_for_exit_code` and
+    `_wait_for_exit_code_within_timeout`, `_subprocess_wait` owns the
+    reconciliation, and `_stream_drain` owns the drain rules that
+    reconciliation runs. This branch's `_subprocess_wait.py:31` imports both
+    names from the deadline module and re-exports them, and the later pick
+    `6c7884250` imports it too, so dropping the module would have left a
+    dangling import two picks on.
+  - `_deadline_for_collection` moves into `cuprum/_subprocess_deadline.py`
+    with the exit wait. It does **not** exist at `36d35801b` — `main` added it
+    after the fork and its docstring says it "lives here, beside the exit wait"
+    — but "here" was `_subprocess_wait.py` only because `main` had not yet
+    moved the wait. Its remainder is measured from the reference the wait was
+    scheduled against, so the subtraction and the wait belong in one module.
+    No test patches it (only imports it), so relocating it moves no seam.
   - `asyncio.gather(*tasks.consumers)` becomes
     `asyncio.gather(*(_consumer_awaitable(task) for task in tasks.consumers))`.
     This is the branch's `_Consumer = _StreamConsumerTask | None`: a stream
