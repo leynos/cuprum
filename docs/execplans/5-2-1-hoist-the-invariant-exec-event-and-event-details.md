@@ -107,6 +107,22 @@ failure injection at that boundary.
   granted, with instruction to implement the plan in full.
 - [x] (2026-09-26) EP-M1b: re-baseline the plan against the current tree
   before writing any characterization test (see 2026-09-26 discoveries).
+- [x] (2026-09-27) Full gate suite at `807cf62c`: 6 passed, 1 failed.
+      `make fmt`, `check-fmt`, `markdownlint`, `spelling`, `typecheck`, and
+      `test` all
+      exit 0; `make lint` failed at `python-lint`. Two branch-attributable
+      defects found, both fixed in this plan's own work (see the two 2026-09-27
+      entries on interrogate and mdtablefix below). Eight `make lint`
+      sub-checks were **unobserved**, not passing, because that target aborts
+      at its first failing prerequisite.
+- [x] (2026-09-27) Gate re-run at `902b05fb`, tree frozen and clean: **all
+  seven gates pass**. `check-fmt` moved ahead of `fmt` so its pass is on its
+  own merits. `make lint` completed its full chain in 66s, so all eight
+  previously-unobserved sub-checks are now observed green. Plain `make test`
+  failed 13 release tests on this host's `BASH_ENV` defect and passed under
+  `env -u BASH_ENV` with `2543 passed, 0 failed` (2530 + 13 = 2543, nothing
+  regressed); that is environmental, not branch-attributable. Evidence in the
+  2026-09-27 entry below.
 - [~] EP-M1: establish current control and contract characterization.
   - [x] V1 red test written and recorded through *both* existing production
     factories; `strict=True` xfail keeps the committed suite green, and a
@@ -630,6 +646,74 @@ gates, and is recorded here rather than in the code because there is nothing in
 the code to change. The residual risk is that a `make test` run under the same
 load reports it again; the disposition is to re-read the tier's log rather than
 rebuild anything.
+
+### 2026-09-27: the first full gate run — two real defects, and a corrupted verdict
+
+EP-M1's gate run reported 6 passed and 1 failed. Both defects were
+branch-attributable and are fixed; the more useful lesson is *how* the run's
+evidence failed to be good evidence, in two independent ways.
+
+**`make fmt` is not read-only, so it can launder the next gate's verdict.** The
+first gate rewrote
+`docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md` in
+place, because the plan had been hand-edited since its last reflow and
+`mdtablefix` had table separator padding to fix. `make check-fmt` then ran
+against the *repaired* tree and passed. That pass therefore says nothing about
+the revision that was actually checked out: `mdtablefix --check` against the
+committed blob at `807cf62c` fails with `+96 -95`. `make fmt` is the one gate
+here that mutates tracked files, so it must be run *after* `check-fmt` — or its
+dirt read as a finding rather than absorbed. This is the same failure mode the
+plan already records for rebases; it was not previously recorded for `fmt`.
+
+**An aborting gate hides everything downstream of it.** `make lint` stops at
+its first failing prerequisite, so after `python-lint` failed on five
+undocumented closures, seven sub-checks never ran at all: `df12-python-lints`,
+`ambrleaks`, `skylos`, `lint-clippy`, `lint-whitaker`, `spelling` (Rust), and
+`github-actions-lint`. Their status is **unobserved**, and this plan's own
+Validation section already requires that word. The corollary is that
+"`make lint` passes" is a claim no single run can support unless it reached the
+end, so the fix for `python-lint` is only half the work — the seven unobserved
+checks still need a run that gets past it.
+
+The five interrogate misses were one-line `async def record()` closures nested
+in the hook-contract helpers; `interrogate --fail-under 100` is strict enough
+that a nested coroutine's docstring counts, and a partial `~[~]`-style
+tolerance is not available. Worth noting that `origin/main` sits *exactly* on
+that threshold already, with 2 pre-existing misses in `scripts/tests/` that
+round up to 100.0% — so this gate has no headroom, and any branch that adds
+even one miss fails it. Those 2 are not branch-attributable and were left alone.
+
+**A concurrent writer invalidates a run even when the gates pass.** HEAD moved
+from `807cf62c` to `859f6489` mid-run — my own commits, landed while the gate
+suite was executing — and two of them touched the very `.md` file `make fmt`
+had just repaired. So the run's docs-axis verdict describes a revision that no
+longer exists. The mitigation for this plan is to freeze the tree for the
+duration of a gate run and to state the tested revision explicitly.
+
+**The re-run: green, with the freeze honoured.** After both fixes, all seven
+gates pass at `902b05fb` with the tree clean before, during, and after, and
+`git write-tree` (`5b87bf7f`) identical at both ends. Run order was changed to
+put `check-fmt` *first* and `fmt` second, which is the concrete remedy for the
+laundering above: `check-fmt` then passes on its own merits, and `fmt` leaving
+the tree clean independently proves the file was already formatted. `make lint`
+completed its whole chain in 66s, so the eight sub-checks the abort had hidden
+(seven listed above, plus `pylint`, which was also skipped) are now
+**observed** green rather than assumed.
+
+**Two host conditions surfaced, neither branch-attributable.** The plain
+`make test` run failed 13 release tests with
+`failed to run git: fatal: not a git repository`; the identical gate passed
+under `env -u BASH_ENV` with `2543 passed, 0 failed`, and 2530 + 13 = 2543
+exactly, so nothing regressed. The cause is
+`BASH_ENV=/home/leynos/.lody/bashenv`, which re-prepends `~/.lody/bin` inside
+every non-interactive `bash -c` so the real `gh` wrapper shadows the test's
+stand-in. The committed fix for it is not an ancestor of this branch, so
+`env -u BASH_ENV make test` is the authoritative local invocation here; CI is
+unaffected. Separately, this worktree is carrying `actionlint` processes from
+the session's Stop-hook gate runs that have been blocked in `futex_wait_queue`
+for over 27 hours — the documented shellcheck stdin deadlock, which `make lint`
+did *not* hit when run directly. Neither changes this branch, and neither
+should be "fixed" here.
 
 ### 2026-09-27: EP-M2 is BLOCKED — the hoist as designed cannot reach 10%
 
