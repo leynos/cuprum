@@ -172,6 +172,26 @@ likelihood, and mitigation.
   `cuprum.sh` and `cuprum`. Red: 10 failed / 14 passed. Green: 24 passed. Wider
   set (stdin, output, run, lines, streams, timeout, context, property,
   early-close, pipeline-output): 169 passed, 12 skipped.
+- [x] (2026-09-27 04:45Z) Module-size plateau. Both branch-introduced
+  `too-many-lines` findings are refactored rather than suppressed:
+  `cuprum/sh/stdio.py` takes the stdio target vocabulary out of
+  `cuprum/sh/output.py` (584 → 349 lines), and `cuprum/sh/pipeline.py` takes
+  `Pipeline` out of `cuprum/sh/safe_cmd.py` (450 → 325 lines). `pylint`'s
+  `too-many-lines` is in the `enable = [...]` list, so it cannot be annotated
+  away, and no production module on `origin/main` exceeds the 400-line ceiling
+  — both overruns were introduced by this branch. Commits `cbf8c190`,
+  `9532dfd4`, `81b2ef2c`. The maturin wheel snapshot is regenerated for the two
+  new modules.
+- [x] (2026-09-27 04:50Z) `make lint` sub-checks all observed passing, on a
+  single HEAD (81b2ef2c): `ruff`, `interrogate`, `pylint`, `df12-pylint`,
+  `ambrleaks`, `skylos`, `clippy`, `whitaker`, `spelling`, `yamllint`,
+  `actionlint`. Two abort-driven gaps were closed by running the aborted stages
+  directly rather than re-running the whole target: `spelling` (after the
+  rejected-token reword) and `github-actions-lint` (a standalone run, because
+  the in-target `actionlint` invocation stalls locally in a shellcheck stdin
+  deadlock that CI does not hit). The full-target run reached `spelling` and
+  aborted there, so `github-actions-lint` is evidenced by its own run, not by
+  the aggregate.
 - [ ] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
@@ -223,6 +243,32 @@ likelihood, and mitigation.
   `NameError: name 'Path' is not defined` failures in the first green run.
   Impact: `pathlib.Path` is now a genuine runtime import in that module; the
   annotations-first habit does not excuse a name the body uses.
+- Observation (module split): `typing.get_type_hints` evaluates a quoted
+  annotation against the *defining module's* namespace alone. Splitting
+  `Pipeline` into its own module made `SafeCmd.__or__`'s `"SafeCmd | Pipeline"`
+  return annotation unresolvable — it raised
+  `NameError: name 'Pipeline' is not defined` — even though the identical
+  annotation had resolved when both classes shared a module. Evidence: probe on
+  the split tree, before and after binding the name. Impact:
+  `cuprum/sh/safe_cmd.py` binds `Pipeline` with a module-level import at the
+  *bottom* of the file, after `SafeCmd` is defined. A function-local import
+  inside `__or__` is not sufficient, because it fires after introspection would
+  have failed. This is the reason the import order looks wrong and is not.
+- Observation (module split): a module-level import placed before the class
+  definitions still deadlocks the cycle. `cuprum.sh.pipeline` imports `SafeCmd`
+  at its own module scope, so binding `Pipeline` at the *top* of `safe_cmd.py`
+  asks `pipeline` to import a `SafeCmd` that does not exist yet —
+  `ImportError: cannot import name 'SafeCmd' from partially initialized module`.
+  Evidence: the first attempt at the split. Impact: bottom placement is load
+  bearing, not stylistic.
+- Observation (gates): local `actionlint` (v1.7.12) stalls at the
+  `github-actions-lint` recipe line because of an stdin pipe-buffer race in its
+  shellcheck integration; this branch touches no `.github/` file. Evidence:
+  `make github-actions-lint` exited 0 and printed both recipe echoes when the
+  local shellcheck was absent from `PATH`, while the aggregate `make lint` run
+  never reached the stage. Impact: the stage's pass is evidenced by a scoped
+  standalone run; the aggregate target should not be trusted to exercise it on
+  this host.
 
 ## Decision log
 
