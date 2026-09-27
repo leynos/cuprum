@@ -4,10 +4,12 @@ Status: **BLOCKED** — EP-M2 is implemented and its gates are green, but the
 completed hoist measures **29.91%** against V5's revised **28%** bar, missing
 by 1.90 points reproducibly (three matched pairs, candidate range 0.0423
 points). R3 is therefore not met and the measurement is presented for design
-revision. EP-M1 is complete; EP-M3 has not started. The blocked state is *not*
-a correctness or performance failure: the same collection shows the candidate
-30.96% faster in median wall time, and V1–V4 pass. It is a failure of a
-threshold that was derived from a projection rather than a measurement — see
+revision. EP-M1 is complete and EP-M3's evidence artefact is committed
+(`docs/tee-hotpath-line-event-emission-5-2-1.md`); EP-M3's documentation
+closeout and the roadmap tick remain pending the R3 decision. The blocked state
+is *not* a correctness or performance failure: the same collection shows the
+candidate 30.96% faster in median wall time, and V1–V4 pass. It is a failure of
+a threshold that was derived from a projection rather than a measurement — see
 "V5 measured — 29.91%, and the 28% bar is not met" below.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
@@ -2275,6 +2277,45 @@ isolated `tee-nocb` re-measurement (+0.18%) is the check that the no-callback
 path is genuinely untouched by the hoist. Two independent no-callback scenarios
 landing within a percentage point of parity is what "the change does not affect
 this path" looks like in measurement.
+
+### 2026-09-27: the evidence artefact is committed, and one of its claims was false
+
+`docs/tee-hotpath-line-event-emission-5-2-1.md` now carries the EP-M3 evidence:
+the verdict, the protocol, both commands, the folded-format sample counts, the
+decomposition of the miss, the residual-numerator finding, and the acceptance
+table. It is committed so the R3 decision rests on a reviewable artefact rather
+than on this plan's prose.
+
+Four numbers in the first draft were wrong and were caught by re-deriving each
+from the raw captures rather than from working notes: the measured revision
+(recorded as the branch tip `94ebcda1` instead of the `f4d1010a` that actually
+ran), the framing of the section (written as "the share did not fall" when it
+fell 34.2928% → 29.9087%), a percentage column that mixed two denominators, and
+a table row that held its neighbour's load figures. The first is the dangerous
+one: `git diff f4d1010a..94ebcda1` touches only this plan, so the SHA the draft
+named by mistake referred to a revision that was byte-identical where it
+mattered — the artefact would have been *wrong but checkable as consistent*.
+
+A fifth defect was found later and is the reason for the correction commit
+`dd2df8d0`. The protocol section explained variant selection as "`cuprum` is
+imported from the current working directory rather than from `site-packages`".
+The first clause is true; the second is false in the direction that matters.
+The candidate venv's `site-packages` **does** contain a `cuprum.pth`, and it
+points at the **candidate** worktree. Had that entry won the `sys.path` race,
+both variants would have imported the candidate and the collection would have
+reported a near-zero spread — a clean-looking, entirely meaningless result.
+
+The mechanism that actually holds is ordering, verified empirically from the
+control worktree: under `python -m` the empty string is `sys.path[0]`, so the
+cwd precedes `site-packages` (index 4) and the `.pth` path it adds (index 5);
+`cuprum.__file__` resolved to the control tree, `_LineEventEmitter` was absent
+and `_event_details` present. The measurement stands unchanged — only the
+stated reason was wrong.
+
+The generalizable lesson is recorded in the artefact's own terms: a validity
+argument that *sounds* structural ("cwd beats site-packages") deserves the same
+empirical check as a number, because here the superficially-similar true
+statement and the false one differ by one path index.
 
 ### Earlier discoveries
 
