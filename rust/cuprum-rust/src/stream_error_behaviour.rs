@@ -12,13 +12,15 @@
 //! here inspects a `PyErr`: this crate links no interpreter, so the Python
 //! half of the contract is asserted by the extension-required Python suite.
 //!
-//! Every step is fallible and returns a `StepResult`. The module is included
-//! through `#[cfg(test)]`, so the lint sees these functions as test code and
-//! permits `expect`; returning a step error is preferred anyway, because it
-//! names the step that failed where an `expect` reports only the slot access
-//! that came up empty. Every step is also reachable from a bound scenario —
-//! an unreachable step would compile, register, and never run, which is how
-//! this module first lost three of its five scenarios.
+//! Every step is fallible and returns a `StepResult`. `rstest-bdd` erases the
+//! step attributes while expanding, so these functions carry no test marker by
+//! the time the house lint sees them, and a `.expect(...)` here would read as
+//! production code. Returning a step error also names the step that failed,
+//! where an `expect` reports only the slot access that came up empty.
+//!
+//! Every step is also reachable from a bound scenario: an unreachable step
+//! would compile, register, and never run, which is how this module first lost
+//! three of its five scenarios.
 
 use cuprum_streams::PumpError;
 use rstest::fixture;
