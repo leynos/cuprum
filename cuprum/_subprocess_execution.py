@@ -53,7 +53,7 @@ if typ.TYPE_CHECKING:
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd, StdinStream
     from cuprum.sinks.base import OutputSession
 
 
@@ -79,7 +79,7 @@ class _SubprocessExecution:
 
     observation: _StageObservation
 
-    stdin_data: bytes | None
+    stdin_data: bytes | StdinStream | None
     on_line: _LineHookFn | None = None
     # Defaulted for the tests that build this bundle directly, and resolved by
     # ``RunOutputOptions.__post_init__`` on the production path, so the value
