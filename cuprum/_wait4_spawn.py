@@ -163,7 +163,24 @@ async def _settle_spawned_child(
 async def spawn_direct_process(
     config: DirectProcessConfig,
 ) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
+    """Spawn a direct process using ``wait4`` where it can own the reap.
+
+    The three stdio values reach the fallback exactly as the spawn layer
+    computed them. They must not be rewritten here: ``DEVNULL`` is what an
+    unread pipe target resolves to, and promoting it back to ``PIPE`` — because
+    the stream appears in *pipes* — would leave the parent holding a pipe
+    nobody reads, so a child writing past the buffer would hang in ``write``
+    instead of discarding its output. ``create_subprocess_exec`` attaches a
+    reader only to the ``PIPE`` sentinel itself; a raw descriptor passes
+    through to the child and leaves ``Process.stdout`` ``None``, exactly as
+    ``Popen`` does, so no value here needs translating for either backend.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The spawned child, wrapped by :class:`_Wait4Process` when ``wait4``
+        can own its reap and by asyncio's own transport otherwise.
+    """
     if wait4_resource_measurement_available():
         return await spawn_wait4_process(config)
     return await asyncio.create_subprocess_exec(
