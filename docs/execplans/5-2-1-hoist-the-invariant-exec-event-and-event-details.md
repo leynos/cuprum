@@ -2806,7 +2806,11 @@ clean before and after — `check-fmt`, `markdownlint` (chaining `spelling`),
 `nixie`, and `test-act` (`24 passed`, `CUPRUM_REQUIRE_ACT=1` so a missing
 runtime could not have skipped it). No sub-check was bounded or skipped, and
 the known host `actionlint` deadlock did not reproduce. The run is valid as a
-citation for that HEAD because no commit followed it.
+citation for `3315c5c3`: that SHA and the tree hash were identical before and
+after every gate, so no gate observed a mutation mid-run. The commits that
+follow it (`7121c46e` and any later documentation commit) carry no production
+change, so the result transfers to the branch head; log in
+`/tmp/closeout-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
 
 ### What was sacrificed for legibility and maintainability
 
