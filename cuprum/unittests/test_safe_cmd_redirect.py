@@ -15,6 +15,7 @@ its descriptor *after* the run.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import stat
 import typing as typ
@@ -530,4 +531,40 @@ def test_capture_with_a_path_target_is_rejected(
 
     assert "capture" in str(info.value), (
         "the message must name the conflicting setting, not just the field"
+    )
+
+
+@_posix_only
+def test_descriptorless_file_object_is_refused_with_the_stream_named(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """An in-memory object cannot be inherited, and the refusal says which stream.
+
+    ``StdioTarget.fd`` accepts "an open file object", and ``io.StringIO`` is
+    one, so nothing rejects it until the spawn layer asks for its descriptor.
+    The object's own ``fileno`` failure is a bare ``fileno`` naming neither the
+    stream nor the fault, which is useless to a caller with two redirected
+    streams; the resolver re-raises with both, keeping the original exception
+    reachable as ``__cause__``.
+
+    ``io.UnsupportedOperation`` is a subclass of both ``OSError`` and
+    ``ValueError``, so re-raising as a plain ``ValueError`` is the one choice
+    that would silently drop the ``OSError`` arm for callers catching that.
+    Both are asserted, which is what makes this test about the contract rather
+    than about the message alone.
+    """
+    command = python_builder("-c", _WRITE_STDOUT)
+
+    with pytest.raises(ValueError, match="stdout") as info:
+        command.run_sync(output=_redirect_options(stdout=StdioTarget.fd(io.StringIO())))
+
+    assert "StringIO" in str(info.value), (
+        "the message must name the offending object type, not just the stream"
+    )
+    assert isinstance(info.value.__cause__, io.UnsupportedOperation), (
+        "the original fileno failure must stay reachable as __cause__"
+    )
+    assert isinstance(info.value.__cause__, OSError), (
+        "callers catching OSError must still see this, which a plain "
+        "ValueError would silently drop"
     )
