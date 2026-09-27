@@ -95,7 +95,14 @@
   environment ([#434](https://github.com/leynos/cuprum/issues/434)).
 - **`env_mode` fields:** `ScopeConfig`, `CuprumContext`, and
   `ExecutionContext` now carry the selected environment policy
-  ([#434](https://github.com/leynos/cuprum/issues/434)).
+  ([#434](https://github.com/leynos/cuprum/issues/434)). The effective policy
+  also reaches observers: `ExecEvent` carries an `env_mode` field on every
+  phase, which the logging and tracing adapters project as an extra and a span
+  attribute. The metrics adapter labels `cuprum_executions_total` and
+  `cuprum_failures_total` with it, so a replacement run that failed to resolve
+  a bare program name is distinguishable from an ordinary overlay one; the
+  per-line stream counters deliberately omit it, because a line's environment
+  says nothing that its execution's mode does not already carry.
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper

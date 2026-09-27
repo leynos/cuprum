@@ -613,10 +613,12 @@ the live `os.environ` when a subprocess is spawned, rather than against an
 import-time or scope-entry snapshot. Variables added after a scope starts (the
 common `monkeypatch.setenv` case under pytest) remain visible to its children.
 
-`EnvMode.INHERIT` adds values while retaining the mode selected by an outer
-scope. `EnvMode.REPLACE` starts from an empty environment, applies only its
-mapping, and discards every outer overlay. Use the `UNSET` singleton as a value
-to remove a variable from an overlaid child environment.
+`EnvMode.OVERLAY` and `EnvMode.INHERIT` compose identically: each keeps the
+mode selected by an outer scope while layering its values over the inherited
+overlay. `EnvMode.REPLACE` alone creates a boundary: it starts from an empty
+environment, applies only its mapping, and discards every outer overlay. Use
+the `UNSET` singleton as a value to remove a variable from a composed child
+environment.
 
 <!-- tested-example: env-modes -->
 

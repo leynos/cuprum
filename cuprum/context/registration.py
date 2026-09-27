@@ -239,10 +239,11 @@ class EnvRegistration(_TokenRegistration):
     :class:`_TokenRegistration`.
 
     The overlay itself is overlay-only. The live :func:`os.environ` is read at
-    subprocess spawn time (see :func:`resolve_env`), so any updates to the
-    process environment after the registration is created — for example via
-    ``pytest``'s ``monkeypatch.setenv`` — remain visible to subprocesses
-    spawned inside the scope. This is the behaviour the issue requires.
+    subprocess spawn time, when :func:`~cuprum.context.env_overlay.render_env`
+    renders the composed policy, so any updates to the process environment
+    after the registration is created — for example via ``pytest``'s
+    ``monkeypatch.setenv`` — remain visible to subprocesses spawned inside the
+    scope. This is the behaviour the issue requires.
     """
 
     __slots__ = ("_overlay",)

@@ -25,9 +25,12 @@ active context, resolved live at subprocess spawn time against
 explicit teardown. ``merge_env_overlays(parent, child)`` is the
 overlay-only merge that returns an immutable :class:`MappingProxyType`
 without reading ``os.environ`` — it is the helper used to record the
-effective overlay in observation events. ``resolve_env(*layers)`` is the
-spawn-time merge of ``os.environ`` with one or more overlay layers; it
-returns a plain ``dict`` or ``None`` when no layers contribute. Precedence
+effective overlay in observation events. ``resolve_env(*layers)`` is an
+overlay-only helper that merges ``os.environ`` with one or more overlay
+layers and returns a plain ``dict`` or ``None`` when no layers contribute;
+it is not on the subprocess spawn path. Spawning composes through
+``_resolve_env_policy`` and renders through ``render_env``, which is what
+consults the effective :class:`EnvMode`. Precedence
 at spawn time, from lowest to highest, is: live ``os.environ`` < scoped
 ``env()`` overlays (innermost wins) < per-call ``ExecutionContext.env``.
 This deliberately diverges from plumbum's ``local.env``, which snapshots
