@@ -17,7 +17,7 @@ if typ.TYPE_CHECKING:
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,
-        StdinInput,
+        StdinSource,
     )
 
 
@@ -27,7 +27,7 @@ class _RunKwargs(typ.TypedDict, total=False):
     output: RunOutputOptions | None
     timeout: float | None
     context: ExecutionContext | None
-    stdin: StdinInput | None
+    stdin: StdinSource | None
 
 
 type ExecuteFn = cabc.Callable[[SafeCmd, _RunKwargs], CommandResult]
