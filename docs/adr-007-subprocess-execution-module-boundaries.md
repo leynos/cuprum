@@ -493,12 +493,16 @@ file, hands the descriptor to the child, and closes cuprum's copy in a
 file object is never closed — the caller's own later use of it is the only
 witness that the rule held, since no exit code can distinguish a close cuprum
 owed from one it did not. A borrowed file object is still flushed before the
-spawn, in `_stdio_plan._resolve_stdio_binding`, so buffered caller-side bytes
-reach the child. The mapping is where the two kinds are told apart, and that is
-why pipe-ness travels as an explicit `pipes` frozenset: `Popen` treats `PIPE`,
-a raw `int`, and a file object differently, and it leaves its own `stdin`/
-`stdout`/`stderr` as `None` for everything that is not a pipe, so pipe-ness is
-the one piece of the resolution the value cannot express for itself.
+spawn, by `_subprocess_spawn._flush_borrowed_stdio`, so buffered caller-side
+bytes reach the child. That flush sits beside the fork rather than in the
+resolver because resolution and the fork coincide only on the `run()` path:
+`lines()` resolves its bindings when it is called and forks at first iteration,
+so a resolver-side flush would drop anything the caller wrote in between. The
+mapping is where the two kinds are told apart, and that is why pipe-ness
+travels as an explicit `pipes` frozenset: `Popen` treats `PIPE`, a raw `int`,
+and a file object differently, and it leaves its own `stdin`/ `stdout`/`stderr`
+as `None` for everything that is not a pipe, so pipe-ness is the one piece of
+the resolution the value cannot express for itself.
 
 `cuprum/_subprocess_deadline.py` now owns the child-exit half of ending a run:
 `_wait_for_exit_code`, which awaits the process and terminates it on
