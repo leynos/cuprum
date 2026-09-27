@@ -1402,51 +1402,84 @@ touched the edit, not just the one whose log looks wrong.
 
 ### 2026-09-27: EP-M2 lands, and three of its own claims were falsified first
 
-The hoist is implemented: `_StageObservation.line_emitter(stream, pid)` returns a
-prepared `_LineEmitter` that resolves `program`, `argv`, and `project` once per
-observed stream, and `_compose_line_callbacks` binds it there instead of
-rebuilding an `_EventDetails` per line. The deleted `_event_details` helper and
-its deferred import are gone. Both of V1's assertions now pass as ordinary
+The hoist is implemented: `_line_event_emitter(observation, context)` returns a
+prepared `_LineEventEmitter` that resolves `program`, `argv`, and `project`
+once per observed stream, and `_compose_line_callbacks` binds it there instead
+of rebuilding an `_EventDetails` per line. The deleted `_event_details` helper
+and its deferred import are gone. Both of V1's assertions now pass as ordinary
 tests, and the strict markers were removed as designed.
 
 Four findings are worth more than the diff:
 
 *The ExecEvent rule had to be **merged**, not split, and the reason is
-counter-intuitive.* Every generated constructor renders as `__init__ (<string>)`,
-so rules over that frame are separated only by their callers and resolved by
-proximity. A two-rule split therefore does not partition the samples: the
-nearer-caller rule wins every frame both could claim, and the loser keeps caller
-weight with zero matches — which `_drifted_rules` reports, exiting 2. This was
-**measured, not reasoned**: a two-rule split over a post-hoist-shaped stack gave
-the nearer rule all 100 samples and reported the other as drifted. The pre-hoist
-split only ever worked because `_event_details` was genuinely nearest for its own
-4230 frames. My first two attempts to confirm the hazard failed to reproduce it —
-the first used disjoint caller sets, the second used a frame that still existed
-in the control capture — and the mechanism I had already written into the rules
-file was wrong. It is now corrected there, with the measurement recorded.
+counter-intuitive.* Every generated constructor renders as
+`__init__ (<string>)`, so rules over that frame are separated only by their
+callers and resolved by proximity. A two-rule split therefore does not
+partition the samples: the nearer-caller rule wins every frame both could
+claim, and the loser keeps caller weight with zero matches — which
+`_drifted_rules` reports, exiting 2. This was **measured, not reasoned**: a
+two-rule split over a post-hoist-shaped stack gave the nearer rule all 100
+samples and reported the other as drifted. The pre-hoist split only ever worked
+because `_event_details` was genuinely nearest for its own 4230 frames. My
+first two attempts to confirm the hazard failed to reproduce it — the first
+used disjoint caller sets, the second used a frame that still existed in the
+control capture — and the mechanism I had already written into the rules file
+was wrong. It is now corrected there, with the measurement recorded.
 
-*A `__init__` can exit 2 vacuously and be caught, but the sync stub path cannot.*
-The committed rules' caller entries `_LineEventEmitter` and `_emit_line_event`
-name nothing that exists in the tree or on `main`; they are plan-era names for a
-design that was never built, and they were dropped.
+*The interface was kept and the location moved, so the rules' caller entries
+survive.* The committed rules' caller entries `_LineEventEmitter` and
+`_emit_line_event` named nothing that existed at the time the rules were
+written; they were plan-era names for the approved post-hoist design, which had
+not been built yet. They are dropped as *capture* caller entries regardless,
+because a py-spy frame is rendered with a bare function name and a file
+location: `emit_line`, never `_LineEventEmitter.emit_line`. Whether the class
+exists does not change the rendering, so a capture can never match a
+class-qualified name.
+
+*The hoist's first landing broke a gate, and the plan's own relocation decision
+was the thing that fixed it.* The first version followed the approved shape and
+added `_StageObservation.line_emitter()` plus a `_LineEmitter` class to
+`cuprum/_pipeline_types.py`. That took the module from 299 to 415 lines against
+`max-module-lines = 400`, so `pylint` raised C0302 and `make lint` failed. The
+plan had already recorded the fix: put the emitter in
+`cuprum/_line_callbacks.py` and keep `_pipeline_types.py` untouched. The landed
+revision does exactly that, so `_pipeline_types.py` is byte-identical to its
+pre-hoist state and the hoist is now a single-module diff. `_line_callbacks.py`
+grew to 285 lines, still well inside the cap.
+
+Two details of the landed shape are worth recording, since both are easy to get
+wrong on a later edit:
+
+- `_LineEventEmitter.project` and `.exec_id` are passed *explicitly* even though
+  `ExecEvent` declares both with a `None` default. The generic oracle passes
+  its observation's real values, so omitting them here would have been a silent
+  payload divergence that the field-for-field parity test catches — this is why
+  that test compares every declared field rather than a chosen subset.
+- The emitter holds the observation's own bound `_emit_event` rather than
+  re-implementing its body. `_emit_event` catches `_ExecEventEmissionError`,
+  retains the observation's pending-task list, and preserves the tasks of hooks
+  that already ran when a later one failed. The private attribute access is
+  deliberate and confined to the factory, which is the one place that already
+  holds the observation. This is a deliberate, recorded exception to the
+  no-reach-past-the-seam rule, taken to keep task ownership in one place.
 
 *The V1 recorder had gone blind, and the zero it reported would have been
 vacuous.* `_record_event_details` patched the module attribute
 `_pipeline_types._EventDetails`, which only intercepts callers that resolve the
-name at call time. The deleted `_event_details` did exactly that — which is *why*
-the test was ever red. Every surviving production site binds the name eagerly, so
-after the hoist the spy could not see anything, and `per_line == 0` was true for a
-reason that had nothing to do with the hoist. The spy now patches
-`_EventDetails.__init__`, which is binding-independent, and every zero-asserting
-case calls `_prove_recorder_is_live` first. Falsified by sabotage: with a
-deliberately blinded recorder, 5 tests fail on the liveness assertion instead of
-passing on a false zero.
+name at call time. The deleted `_event_details` did exactly that — which is
+*why* the test was ever red. Every surviving production site binds the name
+eagerly, so after the hoist the spy could not see anything, and `per_line == 0`
+was true for a reason that had nothing to do with the hoist. The spy now patches
+`_EventDetails.__init__`, which is binding-independent, and every
+zero-asserting case calls `_prove_recorder_is_live` first. Falsified by
+sabotage: with a deliberately blinded recorder, 5 tests fail on the liveness
+assertion instead of passing on a false zero.
 
-*The payload is unchanged.* Driving the hoisted emitter and `emit()` side by side
-yields events differing only in `line` and `timestamp`, which is the whole of the
-observation contract. My first attempt to check this reported 25 differing
-fields; that comparison was itself broken (`dc.fields` over a dict), and the
-re-run with an explicit per-field dump is the one that counts.
+*The payload is unchanged.* Driving the hoisted emitter and `emit()` side by
+side yields events differing only in `line` and `timestamp`, which is the whole
+of the observation contract. My first attempt to check this reported 25
+differing fields; that comparison was itself broken (`dc.fields` over a dict),
+and the re-run with an explicit per-field dump is the one that counts.
 
 ### 2026-09-27: V5's threshold is revised to 28%, and the projection is a range
 
@@ -1797,6 +1830,24 @@ conceptual interface is unchanged from the original proposal — a
 `Literal["stdout", "stderr"]` phase and a post-spawn `int | None` PID, returning
 `Callable[[str], None] | None` — but it is a frozen slotted dataclass rather
 than a `_StageObservation` method, for the reasons recorded in the decision log.
+
+**As landed 2026-09-27 (see Surprises & discoveries).** Two deliberate
+departures from the text above, both made during implementation and both to be
+preferred over it:
+
+- The phase is *not* declared as its own `Literal["stdout", "stderr"]` field.
+  `LineStreamName` already *is* that literal, so a separate phase field would
+  be a second name for the same thing; the emitter stores the stream name and
+  uses it as both. The observable payload is identical.
+- `_compose_line_callbacks` does not "return it in place of the current
+  closure". It keeps returning a closure, which binds the emitter built by the
+  new `_line_event_emitter` factory. The closure is still required: it carries
+  the caller's `on_line` fan-out and `_stamp_line` for the `LineEvent` channel,
+  which is a different payload from the observe event and is not part of the
+  hoist. Returning the emitter itself would have deleted that channel.
+
+The emitter reaches the observation's bound `_emit_event` rather than a copy of
+its body; see the landing entry for why preserving task ownership requires it.
 
 **Revised 2026-09-27 (EP-M1, see Surprises & discoveries).** This is the only
 production edit EP-M2 makes. Both existing callback factories reach it

@@ -23,6 +23,7 @@ import functools
 import inspect
 import typing as typ
 
+from cuprum.events import ExecEvent
 from cuprum.lines import (
     LineEvent,
     LineStreamName,
@@ -33,8 +34,11 @@ from cuprum.lines import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum.events import ExecId
+    from cuprum.program import Program
 
 
 def _stamp_line(
@@ -75,6 +79,116 @@ class _LineEmissionContext:
     started_at: float
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _LineEventEmitter:
+    """The invariant half of a line ``ExecEvent``, bound once per stream.
+
+    Every field here is fixed for the life of one observed stream, so a line
+    event needs only a line and a timestamp to complete it. ``emit`` rebuilds
+    all of them — including ``argv_with_program``, which walks the whole argv
+    tuple — for every line, which is the cost this type exists to remove.
+
+    Attributes
+    ----------
+    program:
+        The allowlisted program, read from the command once.
+    argv:
+        The full argv with the program name first, resolved once.
+    cwd:
+        Working directory for the execution, when set.
+    env:
+        Environment overlay for the execution, when set.
+    pid:
+        Subprocess identifier, ``None`` before spawn.
+    stream:
+        Which output stream the lines arrive on; this doubles as the event
+        phase, so no ``Literal["stdout", "stderr"]`` alias is needed.
+    tags:
+        The observation's tag mapping, shared not copied.
+    project:
+        Trusted project name, read from the command once.
+    exec_id:
+        Correlation token minted once per stage observation.
+    wall_clock:
+        The clock read once per emitted line.
+    emit_event:
+        The observation's own dispatcher, bound rather than called, so the
+        emission still runs through ``_emit_event``.
+
+    """
+
+    program: Program
+    argv: tuple[str, ...]
+    cwd: Path | None
+    env: cabc.Mapping[str, str] | None
+    pid: int | None
+    stream: LineStreamName
+    tags: cabc.Mapping[str, object]
+    project: str
+    exec_id: ExecId
+    wall_clock: cabc.Callable[[], float]
+    emit_event: cabc.Callable[[ExecEvent], None]
+
+    def emit_line(self, line: str) -> None:
+        """Emit one line event from the values bound at preparation time."""
+        self.emit_event(
+            ExecEvent(
+                phase=self.stream,
+                program=self.program,
+                argv=self.argv,
+                cwd=self.cwd,
+                env=self.env,
+                pid=self.pid,
+                timestamp=self.wall_clock(),
+                line=line,
+                exit_code=None,
+                duration_s=None,
+                tags=self.tags,
+                project=self.project,
+                exec_id=self.exec_id,
+            ),
+        )
+
+
+def _line_event_emitter(
+    observation: _StageObservation,
+    context: _LineEmissionContext,
+) -> _LineEventEmitter | None:
+    """Bind one stream's invariant event fields, or ``None`` to skip emitting.
+
+    Returns
+    -------
+    _LineEventEmitter | None
+        A prepared emitter, or ``None`` when no observe hook is installed, so
+        a stream nobody observes pays nothing to prepare.
+
+    Notes
+    -----
+    The emitter holds ``observation._emit_event`` rather than a copy of its
+    body. That method catches ``_ExecEventEmissionError``, retains the
+    observation's pending-task list, and owns the tasks of hooks that already
+    ran when a later hook failed, so re-implementing the dispatch here — or
+    reaching past it to ``_emit_exec_event`` — would silently drop that
+    ownership. The private access is deliberate and confined to this factory.
+
+    """
+    if not observation.hooks.observe_hooks:
+        return None
+    return _LineEventEmitter(
+        program=observation.cmd.program,
+        argv=observation.cmd.argv_with_program,
+        cwd=observation.cwd,
+        env=observation.env_overlay,
+        pid=context.pid,
+        stream=context.stream,
+        tags=observation.tags,
+        project=observation.cmd.project.name,
+        exec_id=observation.exec_id,
+        wall_clock=observation.wall_clock,
+        emit_event=observation._emit_event,
+    )
+
+
 def _compose_line_callbacks(
     observation: _StageObservation,
     context: _LineEmissionContext,
@@ -94,14 +208,11 @@ def _compose_line_callbacks(
     if not has_observe_hooks and context.on_line is None:
         return None
 
-    # Bound once per observed stream, not per line: the emitter resolves the
-    # command's program, argv, and project name here, where ``emit`` would have
-    # re-read all three for every line.
-    emitter = observation.line_emitter(context.stream, context.pid)
+    emitter = _line_event_emitter(observation, context)
 
     def emit_line(line: str) -> _LineHookOutcome:
         """Fan one line out, returning the hook's awaitable when it has one."""
-        if has_observe_hooks:
+        if emitter is not None:
             emitter.emit_line(line)
         if context.on_line is None:
             return None
