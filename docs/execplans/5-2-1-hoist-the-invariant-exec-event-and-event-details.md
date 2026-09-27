@@ -1436,6 +1436,26 @@ location: `emit_line`, never `_LineEventEmitter.emit_line`. Whether the class
 exists does not change the rendering, so a capture can never match a
 class-qualified name.
 
+*A third rules entry was also dead, and it was found by moving code rather than
+by reading it.* The rules file listed `emit_line` at
+`cuprum/_pipeline_types.py` as "the hoisted emitter, which is where the
+per-line construction now happens". Relocating the emitter to
+`_line_callbacks.py` exposed that this was never true: the hoist landed as a
+`_LineEventEmitter` method there, and `_pipeline_types.py` contains no
+`emit_line` at all after the revert. Measured against the control capture: zero
+frames carry `_pipeline_types.py` in an `emit_line` frame, 111 carry
+`_line_callbacks.py`. Deleting the entry and re-running the classifier left
+every aggregate of the control result identical — 10704, 30822, 34.7284%,
+`fail_above_limit` — so it was inert on the one capture the gate has, not
+merely unreachable in theory. The lesson worth keeping: a rules entry that
+names nothing can survive indefinitely, because the classifier treats an
+unmatched caller as *absent* rather than as drift, and absence is silent. Only
+the caller that still runs can drift, and drift is what exits 2. The control is
+the pre-hoist tree, so the surviving `emit_line (_line_callbacks.py)` entry
+covers both the hoisted construction (inside that method) and the un-hoisted
+one (the composed closure in the same file), which is what makes the entry
+durable across a revert.
+
 *The hoist's first landing broke a gate, and the plan's own relocation decision
 was the thing that fixed it.* The first version followed the approved shape and
 added `_StageObservation.line_emitter()` plus a `_LineEmitter` class to
