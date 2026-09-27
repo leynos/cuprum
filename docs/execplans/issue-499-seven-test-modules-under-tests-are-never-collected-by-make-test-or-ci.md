@@ -524,7 +524,7 @@ All seven rename by prefacing `ci_`:
 mutation-mutmut workflow caller and the shorter name would read as if it owned
 every workflow contract.
 
-`tests/dev_fast_action.ambr` is the one syrupy snapshot file affected; it lives
+`test_dev_fast_action.ambr` is the one syrupy snapshot file affected; it lives
 at `tests/__snapshots__/test_dev_fast_action.ambr` and is keyed by module name.
 
 The guard test belongs in the `test_ci_` family because it is itself a CI
@@ -919,6 +919,53 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 `test-python`; no new dependency is introduced.
 
 ## Revision note
+
+2026-09-28, third revision. A CodeRabbit pass over the pushed head reported
+seven findings, all of which were verified against the tree before any edit;
+six were real, one misread a correct sentence. The verification changed two of
+them, and one self-measured defect was found alongside.
+
+- `flag_holds_on` returned `False` — "every leg switched off" — for a flag
+  expression it could not read, while its docstring promised an
+  `AssertionError`. An unreadable predicate produced no `_FLAG_TERMS` matches,
+  so the loop left `holds` at its initial `True` and the function returned
+  `not holds`. Confirmed by overriding `job_env` with
+  `${{ !(github.repository_owner == 'leynos') }}`: the call returned `False`
+  rather than raising. The function now refuses a predicate naming neither a
+  matrix key nor an event, which is the same class of failure the surrounding
+  branches already report.
+- The suite-wiring docstring described the 3.13 exclusion as satisfying a
+  substring check while the merge lane collected nothing. Measured, that is not
+  the mechanism: re-gating the step on the 3.13 leg alone still passes
+  `assert lanes` and fails only the separate lane-count assertion. The
+  docstring now states the measured behaviour, and a third assertion pins the
+  exclusion that makes the count meaningful.
+- The lane-count assertion itself was the subtlest of the three. Checking
+  `admitted < len(matrix_legs(...))` would have been vacuous — the experimental
+  leg is never enabled on a pull request, so an admit-everything guard yields
+  three admitted lanes against four declared legs and passes. The denominator
+  is the flag-enabled legs, and the negative control confirms the corrected
+  assertion fires on a seeded admit-all guard.
+- Three copies of `require` existed across `ci_documents`, `ci_placement`, and
+  `suite_selection`; `ci_placement`'s own docstring called itself the
+  alternative to "a third copy". Consolidating into `ci_documents` is forced by
+  the import graph: `ci_placement` depends on `ci_workflows`, which depends on
+  `ci_documents`, so hosting the shared helper in `ci_placement` would close a
+  cycle — exactly the fallback the review suggested. Verified after the change
+  that all six importing modules resolve `require` to one object.
+- `variable_expansion`'s docstring claimed the parser had already collapsed
+  continuation backslashes. The opposite is true: `makeutil` reports
+  `raw_value` with `\\\n` intact, which is why `_expand` calls
+  `_join_continuations`. Both halves were measured before rewriting the claim.
+- `covered_modules` was re-resolved in each of the 51 parametrized cases, at
+  16 ms apiece. A module-scoped fixture removes the redundancy; the
+  parametrization still collects 51 cases and the monkeypatch seam still fires.
+
+A second finding was declined as stated: the execplan sentence the review read
+as naming a non-existent path does place its subject under `tests/`, but the
+same sentence names the correct snapshot path immediately after; the queue is
+one filename, not a claimed repository path. The redundant `tests/` prefix was
+dropped so the sentence cannot be misread that way again.
 
 2026-09-26, second revision. `EP-M1` through `EP-M3` are complete. This
 revision records the Task 2 and Task 3 outcomes, the three defects found during

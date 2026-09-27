@@ -23,6 +23,7 @@ from __future__ import annotations
 import pathlib as pth
 import typing as typ
 
+from tests.helpers.ci_documents import require
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
 from tests.helpers.makefile import recipe_of, variable_expansion
@@ -148,12 +149,6 @@ def selected_paths(
             path.relative_to(base) for path in base.glob(pattern) if path.is_file()
         )
     return tuple(sorted(found))
-
-
-def require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold."""
-    if not condition:
-        raise AssertionError(message)
 
 
 def root_modules() -> tuple[str, ...]:

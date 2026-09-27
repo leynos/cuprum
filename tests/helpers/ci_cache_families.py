@@ -26,8 +26,9 @@ from __future__ import annotations
 import re
 import typing as typ
 
+from tests.helpers.ci_documents import require
 from tests.helpers.ci_leg_matrix import admits, matrix_legs
-from tests.helpers.ci_placement import placement, require
+from tests.helpers.ci_placement import placement
 from tests.helpers.ci_workflows import save_steps, step_inputs, steps
 
 if typ.TYPE_CHECKING:

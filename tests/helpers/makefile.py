@@ -219,7 +219,7 @@ def _join_continuations(value: str) -> str:
     -------
     str
         The logical single line: `make` replaces each backslash-newline and
-        the whitespace after it with one space, so a two-line list fails apart
+        the whitespace after it with one space, so a two-line list falls apart
         into the same words a one-line list does. Leaving them in place would
         make each backslash a word in its own right, and it is not a `.py`
         path — the pattern beside it would still resolve, so the selector would
@@ -292,8 +292,11 @@ def _expand(
 def variable_expansion(name: str, *, makefile: str = MAKEFILE) -> tuple[str, ...]:
     """Expand a Makefile variable into the whitespace-separated words it names.
 
-    Continuation lines are already collapsed by the parser's `raw_value`, so
-    the split is over the logical assignment rather than its source layout.
+    The parser's `raw_value` keeps each assignment's backslash-newlines
+    verbatim, so the continuations are collapsed by `_expand` — via
+    `_join_continuations` — before the split. Without that step every
+    continuation backslash would become a word of its own and the selector
+    would carry junk alongside the patterns it names.
 
     Parameters
     ----------

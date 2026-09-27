@@ -5,8 +5,8 @@ The manifests that say which jobs and caches are intended live in
 Every accessor here resolves a repository workflow by name and answers a
 question about it. The layer underneath — parsing source text and narrowing a
 parsed document, with no file name involved — lives in
-``tests/helpers/ci_documents.py``, and this module blocks re-export it so a
-caller still has one import for the whole vocabulary.
+``tests/helpers/ci_documents.py``, and this module re-exports it so a caller
+still has one import for the whole vocabulary.
 
 Reading and parsing are fallible too, and every query in the contract helpers
 reaches the filesystem through the two readers here, ``read_workflow`` and

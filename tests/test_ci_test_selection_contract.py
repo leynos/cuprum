@@ -255,15 +255,48 @@ def test_the_selector_resolves_the_whole_root_module_population() -> None:
     )
 
 
+@pytest.fixture(scope="module")
+def covered() -> frozenset[str]:
+    """Resolve the selector once, for every case the parametrization below spawns.
+
+    `covered_modules` re-reads the Makefile and re-expands both selectors on
+    each call, and the test below parametrizes one case per root-level module —
+    fifty-one of them at present — so resolving in the test body would parse the
+    same file fifty-one times to reach an identical answer. The scope is the
+    module because the Makefile cannot change while the suite runs; a fixture
+    that outlived a run would start asserting against a stale file.
+
+    Returns
+    -------
+    frozenset of str
+        The root-level modules the two selectors resolve to.
+
+    Raises
+    ------
+    AssertionError
+        If either selector resolves to nothing, or if neither names a
+        root-level module; propagated from `covered_modules` so a broken
+        selector fails as that resolver's diagnostic rather than as fifty-one
+        identical per-module reports.
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from covered_modules()
+    return covered_modules()
+
+
 @pytest.mark.parametrize("module", root_modules())
-def test_each_root_module_matches_a_selector_pattern(module: str) -> None:
+def test_each_root_module_matches_a_selector_pattern(
+    module: str, covered: frozenset[str]
+) -> None:
     """Report each uncovered module separately, so one does not hide another.
 
     The population check fails on the first list it builds; this one fails per
     module, which is what a contributor sees in an IDE's test tree: the module
     they added is the red one.
+
+    `exceptions_verified` is called per case rather than folded into the
+    fixture: it validates the exception table, so a bad entry should fail as
+    the assertion it is on every case that depends on it, not only on the first.
     """
     require(
-        condition=module in covered_modules() or module in exceptions_verified(),
+        condition=module in covered or module in exceptions_verified(),
         message=remedy((module,)),
     )

@@ -33,12 +33,39 @@ __all__ = (
     "document_jobs",
     "narrow_steps",
     "parse_document",
+    "require",
     "step_inputs",
 )
 
 
 def require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold."""
+    """Raise a contract failure when ``condition`` does not hold.
+
+    The single definition for the whole helper family, and it lives here
+    because this module is its import-graph leaf: it reaches only
+    ``strict_yaml``, so every reader above it may share these three lines
+    without a cycle. `ci_placement` depends on `ci_workflows`, which depends
+    on this module, so hosting it there would close
+    ``ci_documents -> ci_placement -> ci_workflows -> ci_documents``.
+
+    Parameters
+    ----------
+    condition : bool
+        The claim the contract asserts.
+    message : str
+        The diagnostic carried by the failure, naming what was expected and
+        what was found.
+
+    Raises
+    ------
+    AssertionError
+        When ``condition`` is false.
+
+    Notes
+    -----
+    Returning normally says the claim held, so a caller wraps the assertion
+    rather than branching on a result.
+    """
     if not condition:
         raise AssertionError(message)
 

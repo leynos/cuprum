@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 import typing as typ
 
-from tests.helpers.ci_placement import require
+from tests.helpers.ci_documents import require
 from tests.helpers.ci_workflows import job
 
 if typ.TYPE_CHECKING:
