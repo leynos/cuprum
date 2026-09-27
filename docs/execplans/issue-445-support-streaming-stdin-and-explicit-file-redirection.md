@@ -977,6 +977,51 @@ likelihood, and mitigation.
   code; the reconciliation that should have followed is what this entry
   supplies, and the section above now describes the delivered shape.
   Date/Author: 2026-09-27, implementation agent.
+- Decision: correct the explanation of why `pipes` exists, in six sites across
+  `cuprum/_stdio_plan.py`, `cuprum/_subprocess_spawn.py`,
+  `cuprum/_wait4_process.py`, the ADR, and this plan. Rationale: a round-5
+  finding flagged the claim that a `Popen` or `create_subprocess_exec` stream
+  object is non-`None` "for anything it was handed, including a borrowed
+  descriptor", and probes confirm the claim is simply false. Measured: `Popen`
+  with `stdout=` a raw fd gives `Popen.stdout is None`; with a file object,
+  `None`; with `PIPE`, a `BufferedReader`. `create_subprocess_exec` is
+  identical for all four inputs — `None`, `None`, `StreamReader`, and `None` for
+  `DEVNULL` — so the two backends do not diverge here at all. The real reason
+  `pipes` is needed is the other half of the same fact: because `DEVNULL` also
+  yields `None`, and the resolution folds a non-consuming pipe down to
+  `DEVNULL`, the child object cannot distinguish a pipe cuprum owns from a
+  borrowed descriptor. The prose in those six sites had the right conclusion
+  (carry pipe-ness explicitly) attached to a wrong reason. That reason had
+  already been caught once in its `create_subprocess_exec` form — the Progress
+  entry at line 480 records a probe disproving "will wrap whatever non-`None`
+  value it is given in a pipe object" — but the mirrored `Popen` claim was left
+  standing, which is the lesson: when a premise is disproved on one backend,
+  the same premise stated about the other has to be re-tested rather than
+  assumed to hold. The `connect_pipes` guard's `stream in self._pipes` clause
+  is a consequence: a probe deleting it left all 51 relevant tests passing,
+  since the `Popen` `is not None` test alone already excludes `DEVNULL` and
+  borrowed descriptors. It is kept as defence-in-depth for the config's `pipes`
+  default, and the docstring now says plainly that the converse case cannot
+  arise. Date/Author: 2026-09-27, implementation agent.
+- Decision: widen the validation criterion for capture/echo/`on_line` to say the
+  features work on streams that *stay piped*, and that a run combining one of
+  them with a redirect on the same stream is rejected at construction.
+  Rationale: a round-5 finding questioned the plan's "continue to work in
+  combination with redirection" phrasing, and a probe confirms the rejection is
+  real. `RunOutputOptions(capture=True, stdout=<path>)` and the `echo=True`
+  equivalent both raise a message beginning "cannot be redirected" and ending
+  "there is no parent-side pipe to read", while `capture=False` with the same
+  redirect is accepted. The old wording described a combination the library
+  deliberately refuses. Date/Author: 2026-09-27, implementation agent.
+- Decision: sharpen the INV-3 after-final-chunk non-vacuity note to require a
+  producer that terminates *normally* past its final chunk. Rationale: a
+  round-5 finding asked for this, and a probe of a three-chunk producer shows
+  the writer calls `__anext__` four times, the fourth raising
+  `StopAsyncIteration` on the normal path — so a producer that *raises* when
+  advanced past the end is not a contrast to the fault case, it is the fault
+  case again. The note now names the one-step-past behaviour so the control
+  cannot be built from the wrong fixture. Date/Author: 2026-09-27,
+  implementation agent.
 
 ## Outcomes & retrospective
 
@@ -1068,9 +1113,11 @@ The run path, in order, is:
    `spawn_direct_process` takes a `DirectProcessConfig` whose `stdin`,
    `stdout`, and `stderr` are today `int | None`, and `connect_pipes()`
    attaches a reader or writer only for streams named in the pipe set — the
-   config carries one because a `Popen` stream is non-`None` for anything it
-   was handed, including a descriptor the caller owns. When `wait4` is
-   unavailable, plain `asyncio.create_subprocess_exec` is used instead.
+   config carries one because `Popen` sets a parent-side stream only for the
+   `PIPE` sentinel, leaving `DEVNULL` and a borrowed descriptor alike with
+   `stdout`/`stderr` `None`, so pipe-ness cannot be read off the child object.
+   When `wait4` is unavailable, plain `asyncio.create_subprocess_exec` is used
+   instead.
 5. `cuprum/_subprocess_stdin.py` — `_spawn_stdin_writer` starts a task that
    writes the already-resolved bytes and closes the pipe. A `StdinStream`
    producer is started from the same dispatcher but written by
@@ -1189,7 +1236,13 @@ and why a passing result cannot be vacuous.
   swallowed, after it as `StdinSourceError` with the child's exit observed.
   Non-vacuity: the after-final-chunk case is the negative control — it must
   *not* raise, since the producer completed successfully; an implementation
-  that wraps every exception indiscriminately fails that case.
+  that wraps every exception indiscriminately fails that case. The control
+  needs a producer that terminates *normally* after its final chunk and leaves
+  the writer asking for one more: the writer always takes one step past the
+  final chunk (a three-chunk producer's `__anext__` is called four times, the
+  fourth raising `StopAsyncIteration` on the normal path), so a producer that
+  raises when advanced past the end is not a control at all — it re-tests the
+  fault case it is meant to contrast with.
 
 - Obligation: `INV-4 — cancellation and timeout leave no writer`. A cancelled
   run and a timed-out run each leave no pending stdin writer and no live child.
@@ -1541,9 +1594,12 @@ Acceptance as behaviour:
   timeout, and spawn failure.
 - A borrowed descriptor and a borrowed file object are usable by the caller
   afterwards.
-- Capture, echo, idle observation, and `on_line` continue to work in
-  combination with redirection, and the unsupported combinations are rejected
-  with a message naming the fields.
+- Capture, echo, idle observation, and `on_line` continue to work on the
+  streams that stay piped, and a run that asks for one of them *and* redirects
+  that same stream is rejected at construction, with a message naming the
+  fields. Redirection removes the parent-side pipe those features read, so the
+  pair is unsupported rather than merely untested — the rejection is what makes
+  `lines()` refuse a redirected stdout instead of silently observing nothing.
 
 Quality criteria: `make test` passes; `make typecheck` passes; `make check-fmt`,
 `make lint`, `make markdownlint`, `make spelling`, and `make nixie` pass; no

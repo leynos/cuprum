@@ -124,11 +124,14 @@ class _ResolvedStdio:
     """Every stream of one run, resolved, as the spawn layer consumes it.
 
     ``pipes`` is a frozenset of stream names rather than a flag per stream
-    because it is the one piece of the resolution the *fallback* backend cannot
-    re-derive: ``Popen`` leaves ``stdout``/``stderr`` as ``None`` for anything
-    that is not a pipe, but ``asyncio.create_subprocess_exec`` would wrap
-    whatever it is handed. Naming the pipes explicitly is what makes both
-    backends agree on which streams cuprum owns a reader for.
+    because it is the one piece of the resolution neither backend can re-derive.
+    Both leave the child-side stream ``None`` for every stdio value that is not
+    ``PIPE`` — ``DEVNULL`` and a borrowed descriptor alike — so the spawned
+    object cannot be asked whether cuprum owns a reader for it. The value cannot
+    be asked either: a pipe nothing consumes has already been folded down to
+    ``DEVNULL``, which is the same answer a borrowed descriptor gives. Naming
+    the pipes explicitly is what makes both backends agree on which streams
+    cuprum owns a reader for.
 
     The bindings stay live until the spawn consumes them rather than being
     reduced to descriptors here: a borrowed file object still owes a flush at
