@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._subprocess_wait import _consumer_awaitable
+
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineStreamRun
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -36,8 +38,14 @@ async def _drain_after_exit(
         except BaseException:
             await _discard_drain(run, pid, execution)
             raise
+    # The pair may hold ``None`` for a stream cuprum holds no pipe for; the
+    # stand-in keeps each result in its own stream's position. ``gather``
+    # reports a list however many awaitables it was handed, so the pair is
+    # unpacked by hand rather than returned as it comes back.
     try:
-        stdout_text, stderr_text = await asyncio.gather(*run.tasks.consumers)
+        stdout_text, stderr_text = await asyncio.gather(
+            *(_consumer_awaitable(task) for task in run.tasks.consumers)
+        )
     except BaseException:
         await _discard_drain(run, pid, execution)
         raise

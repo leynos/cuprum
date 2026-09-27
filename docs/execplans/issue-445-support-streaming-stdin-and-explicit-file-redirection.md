@@ -224,6 +224,27 @@ likelihood, and mitigation.
   were doc-level: an over-claiming EPIPE docstring (fixed by adding the
   `errno.EPIPE` arm, which is the arm the docstring promised) and two stale
   ExecPlan references to the pre-relocation `cuprum/sh/output.py`.
+- [x] (2026-09-27 14:20Z) Module-size plateau, third pass, and the round-2
+  review fixes. Two more branch-introduced `too-many-lines` findings, both
+  created by EP-M2's own additions: `cuprum/_subprocess_execution.py` reached
+  523 lines and `cuprum/_subprocess_wait.py` 438, against 363 and 392 on
+  `origin/main`. Cleared by two further extractions at cycle-safe seams:
+  `cuprum/_subprocess_spawn.py` (~195 lines) takes the stdio mapping, the
+  owned-descriptor open/close pair, and the spawn call, and
+  `cuprum/_subprocess_deadline.py` (153 lines) takes the child-exit wait and
+  its deadline. `_subprocess_execution.py` returns to 367 and
+  `_subprocess_wait.py` to 327. Both moved names are re-exported from their
+  original modules, so every monkeypatch seam and import path the suite relies
+  on is unchanged; the 20-module focused suite is 185 passed. Remaining round-2
+  scrub items also closed: the four test helpers that pass an
+  `eof_grace_waiter` now annotate its parameter as `_ConsumerPair` rather than
+  a non-optional `tuple[Task[str | None], Task[str | None]]` (the parameter is
+  contravariant, so the narrower annotation was the rejected one), and
+  `cuprum/_line_stream/drain.py` unpacks its `asyncio.gather` result rather
+  than returning the `list` it produces as the declared `tuple`.
+  `make typecheck` reports zero diagnostics. The maturin wheel snapshot is
+  regenerated from a real wheel build, which also picked up the
+  previously-unrecorded `cuprum/_stdio_plan.py` from the 04:45Z pass.
 - [ ] EP-M2: `_StdinPlan` replaces `stdin_data`; resolved stdio planning and
   spawn-time binding on both backends; descriptors opened before spawn and
   closed in `finally`; consumers and writers built only for piped streams.
@@ -367,6 +388,37 @@ likelihood, and mitigation.
   additionally lists every shipped module, so a new `cuprum/*.py` file changes
   it. Impact: the split carries edits to ADR-007, `docs/cuprum-design.md`, and
   `docs/developers-guide.md`, and the wheel snapshot is regenerated.
+- Observation (module split, third pass): a *logger name* can be a
+  test-visible interface. `cuprum/unittests/test_subprocess_drain_logging.py`
+  pins `_DRAIN_LOGGER = "cuprum._subprocess_wait"` and asserts on records from
+  that logger, so moving the drain's `_LOGGER.debug` calls out of
+  `_subprocess_wait` would break the test even though behaviour was identical —
+  `logging.getLogger(__name__)` resolves to the *defining* module's name.
+  Evidence: the constant and its `caplog.at_level(..., logger=_DRAIN_LOGGER)`
+  use read before the split. Impact: the child-exit half of the split was
+  chosen so the drain calls stay put: `_report_timeout_expiry`, which
+  `_subprocess_deadline` calls, takes the observation rather than a logger and
+  routes its own reporting through `cuprum._timeout_reporting`, and
+  `_await_process_exit` is not monkeypatched anywhere. The new modules are
+  therefore logger-name-neutral by construction, not by luck.
+- Observation (module split, third pass): a *contravariant* parameter rejects
+  the narrower annotation.
+  `type _EofGraceWaiter = Callable[[_ConsumerPair], ...]` with
+  `type _Consumer = Task[str | None] | None` was rejected at five test call
+  sites whose helpers annotated their parameter as the non-optional
+  `tuple[Task[str | None], Task[str | None]]` — ty reports "`_ConsumerPair` is
+  not assignable to `tuple[Task[str | None], Task[str | None]]`", i.e. it is
+  the *helper* that does not accept what the field may pass, not the field that
+  is too wide. Impact: the four helpers now annotate the parameter as
+  `_ConsumerPair` and drop the `None` slots before gathering, which is what the
+  real `_await_eof_grace` does with the same value.
+- Observation (verification): the `asyncio.gather` return-type diagnostic in
+  `cuprum/_line_stream/drain.py` was *not* a missing-annotation problem to
+  silence. `gather`'s variadic overload returns `list`, and only its
+  fixed-arity overloads return `tuple`, so a returned gather result can never
+  satisfy a declared `tuple[...]` return type. Impact: the two settled results
+  are unpacked by index instead; an annotation-only fix at the call site would
+  have left the mismatch for the next reader.
 
 ## Decision log
 
@@ -431,6 +483,31 @@ likelihood, and mitigation.
   import is the repository's established pattern for this shape of dependency —
   `_source_error` reaches `StdinSourceError` through the same lazy shim for the
   same reason. Date/Author: 2026-09-27, implementation agent.
+- Decision: clear the third module-size pass by extracting
+  `cuprum/_subprocess_spawn.py` (stdio mapping, owned-descriptor lifetime, the
+  spawn call) and `cuprum/_subprocess_deadline.py` (the child-exit wait and its
+  deadline) rather than by any of the alternatives — trimming docstrings,
+  moving the drain, or suppressing the finding. Rationale: `too-many-lines` is
+  in `pylint`'s `enable = [...]` list, so it cannot be annotated away, and the
+  docstrings in both modules carry policy that no other artefact records (the
+  early-close contract, the owned-versus-borrowed rule, the sampling order the
+  timing tests pin). The seam for each module is the one its own docstring
+  already drew: `_subprocess_execution`'s is "everything below the
+  orchestration", and the spawn binding is exactly that; `_subprocess_wait`'s
+  is the child-exit wait versus the consumer drain. The drain could not move —
+  a test pins the logger name `cuprum._subprocess_wait`, and
+  `logging.getLogger(__name__)` resolves to the defining module — so drawing
+  the seam on the *other* side of the drain was the only split available that
+  left the test-visible interface alone. Both moved names are re-exported from
+  their original modules, so no import path or monkeypatch seam changes.
+  Date/Author: 2026-09-27, implementation agent.
+- Decision: annotate the four test helpers' `eof_grace_waiter` parameter as
+  `_ConsumerPair` rather than widening `_EofGraceWaiter` back to the structural
+  form. Rationale: the parameter is contravariant, so the *helper* is what must
+  accept what the field may pass; the wider alias was rejected precisely
+  because the tests' annotations were narrower than the value the field can
+  hold. Naming the shared alias also keeps the two ends of the seam describing
+  the same thing. Date/Author: 2026-09-27, implementation agent.
 
 ## Outcomes & retrospective
 
@@ -452,10 +529,14 @@ The run path, in order, is:
    state into a `_SubprocessExecution`; `_run_prepared_command` opens the sink
    session and drives `_execute_with_hooks`.
 3. `cuprum/_subprocess_execution.py` — `_SubprocessExecution` holds the run's
-   frozen configuration and spawns the child in `_spawn_subprocess`, choosing
-   `PIPE` or `DEVNULL` per stream from the `consumes_stdout`/`consumes_stderr`
-   properties. Two execution paths exist: `_run_subprocess_without_streams`
-   (direct) and, for line observation and the pipeline, the streamed path.
+   frozen configuration. `_spawn_subprocess` now lives in
+   `cuprum/_subprocess_spawn.py`, which maps the resolved stdio onto the value
+   `Popen` receives, choosing `PIPE` or `DEVNULL` per stream from the
+   `consumes_stdout`/`consumes_stderr` properties, opens and closes each
+   cuprum-owned target, and is re-exported here so the composition root keeps
+   its one import path. Two execution paths exist:
+   `_run_subprocess_without_streams` (direct) and, for line observation and the
+   pipeline, the streamed path.
 4. `cuprum/_wait4_process.py` — on POSIX with `os.wait4` available,
    `_Wait4Process` owns the child and reaps it with resource measurement;
    `spawn_direct_process` takes a `DirectProcessConfig` whose `stdin`,
@@ -468,7 +549,9 @@ The run path, in order, is:
    `cuprum/_subprocess_stdin_stream.py`, which pulls it one chunk at a time.
 6. `cuprum/_subprocess_wait.py` — `_reconcile_run_tasks` cancels the stdin
    writer, drains the stream consumers, and settles diagnostics on every exit
-   path. `_RunTaskOwnership` is the bundle it takes.
+   path. `_RunTaskOwnership` is the bundle it takes. The child-exit half of the
+   wait — `_wait_for_exit_code` and `_wait_for_exit_code_within_timeout` —
+   moved to `cuprum/_subprocess_deadline.py` and is re-exported here.
 7. `cuprum/_subprocess_stream_run.py` and `cuprum/_line_stream/` — the streamed
    path and the `lines()` path, both of which build consumers and a stdin
    writer the same way.

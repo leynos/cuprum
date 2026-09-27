@@ -133,7 +133,7 @@ def _build_unstarted_run(
         tasks=_RunTaskOwnership(
             stdin_task=_spawn_stdin_writer(
                 process,
-                execution.stdin_data,
+                execution.stdio.stdin,
                 _stdin_codec(execution.ctx),
                 execution.observation,
             ),
