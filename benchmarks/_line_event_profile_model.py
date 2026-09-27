@@ -247,38 +247,84 @@ def _pattern_from_json(raw: object, *, where: str) -> FramePattern:
     )
 
 
+def _require_array(raw: object, *, where: str) -> list[object]:
+    """Return ``raw`` as a non-empty list, or reject it with a located message."""
+    if not isinstance(raw, list) or not raw:
+        msg = f"{where}: expected a non-empty array"
+        raise _ProfileInputError(msg)
+    return typ.cast("list[object]", raw)
+
+
 def _patterns_from_json(raw: object, *, where: str) -> tuple[FramePattern, ...]:
     """Build a non-empty list of frame patterns from a decoded JSON array."""
-    if not isinstance(raw, list) or not raw:
-        msg = f"{where}: expected a non-empty array of frame patterns"
-        raise _ProfileInputError(msg)
     return tuple(
         _pattern_from_json(entry, where=f"{where}[{index}]")
-        for index, entry in enumerate(raw)
+        for index, entry in enumerate(_require_array(raw, where=where))
     )
+
+
+def _require_object(raw: object, *, where: str) -> dict[str, object]:
+    """Return ``raw`` as a mapping, or reject it with a located message."""
+    if not isinstance(raw, dict):
+        msg = f"{where}: must be an object, got {type(raw).__name__}"
+        raise _ProfileInputError(msg)
+    return typ.cast("dict[str, object]", raw)
+
+
+def _require_key(raw: dict[str, object], key: str, *, where: str) -> object:
+    """Return ``raw[key]``, or reject a mapping that omits ``key``."""
+    if key not in raw:
+        msg = f"{where}: is missing {key!r}"
+        raise _ProfileInputError(msg)
+    return raw[key]
+
+
+def _rule_name(raw: dict[str, object], *, where: str) -> str:
+    """Return the rule's non-empty name, or reject the rule without one."""
+    name = raw.get("name")
+    if not isinstance(name, str) or not name:
+        msg = f"{where}: rule needs a non-empty 'name'"
+        raise _ProfileInputError(msg)
+    return name
 
 
 def _rule_from_json(raw: object, *, index: int) -> ClassificationRule:
     """Build one classification rule from its decoded JSON object."""
     where = f"construction_rules[{index}]"
-    if not isinstance(raw, dict):
-        msg = f"{where}: rule must be an object, got {type(raw).__name__}"
-        raise _ProfileInputError(msg)
-    name = raw.get("name")
-    if not isinstance(name, str) or not name:
-        msg = f"{where}: rule needs a non-empty 'name'"
-        raise _ProfileInputError(msg)
-    if "frame" not in raw or "callers" not in raw:
-        msg = f"{where}: rule {name!r} needs both 'frame' and 'callers'"
-        raise _ProfileInputError(msg)
-    callers = _patterns_from_json(raw["callers"], where=f"{where}.callers")
+    rule = _require_object(raw, where=where)
+    name = _rule_name(rule, where=where)
+    frame = _require_key(rule, "frame", where=f"{where}: rule {name!r}")
+    callers = _patterns_from_json(
+        _require_key(rule, "callers", where=f"{where}: rule {name!r}"),
+        where=f"{where}.callers",
+    )
     if len(callers) < _MIN_RULE_CALLERS:
         msg = f"{where}: rule {name!r} needs at least one caller pattern"
         raise _ProfileInputError(msg)
     return ClassificationRule(
         name=name,
-        frame=_pattern_from_json(raw["frame"], where=f"{where}.frame"),
+        frame=_pattern_from_json(frame, where=f"{where}.frame"),
         callers=callers,
+    )
+
+
+def _load_rules_json(rules_path: pth.Path) -> object:
+    """Decode the rules file, rejecting unreadable or malformed input."""
+    try:
+        return json.loads(rules_path.read_text())
+    except OSError as exc:
+        msg = f"cannot read rules at {rules_path}: {exc}"
+        raise _ProfileInputError(msg) from exc
+    except json.JSONDecodeError as exc:
+        msg = f"rules at {rules_path} are not valid JSON: {exc}"
+        raise _ProfileInputError(msg) from exc
+
+
+def _rules_from_json(raw: object, *, where: str) -> tuple[ClassificationRule, ...]:
+    """Build the ordered construction rules from a decoded JSON array."""
+    return tuple(
+        _rule_from_json(entry, index=index)
+        for index, entry in enumerate(_require_array(raw, where=where))
     )
 
 
@@ -296,32 +342,22 @@ def load_rules(rules_path: pth.Path) -> ClassifierRules:
         If the file cannot be read, is not valid JSON, or omits either
         ``consume_frames`` or ``construction_rules``.
     """
-    try:
-        raw = json.loads(rules_path.read_text())
-    except OSError as exc:
-        msg = f"cannot read rules at {rules_path}: {exc}"
-        raise _ProfileInputError(msg) from exc
-    except json.JSONDecodeError as exc:
-        msg = f"rules at {rules_path} are not valid JSON: {exc}"
-        raise _ProfileInputError(msg) from exc
-
+    raw = _load_rules_json(rules_path)
     if not isinstance(raw, dict):
         msg = f"rules at {rules_path} must be a JSON object"
         raise _ProfileInputError(msg)
-    if "consume_frames" not in raw:
-        msg = f"rules at {rules_path} are missing 'consume_frames'"
-        raise _ProfileInputError(msg)
-    if "construction_rules" not in raw:
-        msg = f"rules at {rules_path} are missing 'construction_rules'"
-        raise _ProfileInputError(msg)
+    document = typ.cast("dict[str, object]", raw)
     return ClassifierRules(
         consume_frames=_patterns_from_json(
-            raw["consume_frames"], where="consume_frames"
+            _require_key(document, "consume_frames", where=f"rules at {rules_path}"),
+            where="consume_frames",
         ),
-        construction_rules=tuple(
-            _rule_from_json(entry, index=index)
-            for index, entry in enumerate(
-                typ.cast("list[object]", raw["construction_rules"]),
-            )
+        construction_rules=_rules_from_json(
+            _require_key(
+                document,
+                "construction_rules",
+                where=f"rules at {rules_path}",
+            ),
+            where="construction_rules",
         ),
     )

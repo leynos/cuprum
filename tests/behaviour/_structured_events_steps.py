@@ -11,6 +11,9 @@ scenario-state mapping, which keeps the step bodies to a single call.
 
 from __future__ import annotations
 
+import collections.abc as cabc
+import typing as typ
+
 from pytest_bdd import given, when
 
 from tests.behaviour._structured_events_support import (
@@ -23,6 +26,22 @@ from tests.behaviour._structured_events_support import (
     run_twice_with_distinct_contexts,
     runnable_of,
 )
+
+if typ.TYPE_CHECKING:
+    from tests.behaviour._structured_events_support import (
+        CommandCatalogue,
+        Runnable,
+    )
+
+# The run helpers share one signature, so the ``when`` steps below can resolve
+# the scenario's command once and hand it to whichever helper they name.
+if typ.TYPE_CHECKING:
+    type _RunHelper = cabc.Callable[
+        [dict[str, object], CommandCatalogue, Runnable],
+        None,
+    ]
+else:
+    type _RunHelper = cabc.Callable
 
 
 @given(
@@ -221,17 +240,26 @@ def given_observer_retains(behaviour_state: dict[str, object]) -> None:
     behaviour_state["retains"] = True
 
 
+def _run_scenario(
+    behaviour_state: dict[str, object],
+    observed_command: dict[str, object],
+    helper: _RunHelper,
+) -> None:
+    """Run the scenario's command through ``helper``, resolving it once."""
+    helper(
+        behaviour_state,
+        catalogue_of(observed_command),
+        runnable_of(observed_command),
+    )
+
+
 @when("I run the command with an observe hook")
 def when_run_with_observe_hook(
     behaviour_state: dict[str, object],
     observed_command: dict[str, object],
 ) -> None:
     """Run the command while collecting observe events."""
-    run_observed(
-        behaviour_state,
-        catalogue_of(observed_command),
-        runnable_of(observed_command),
-    )
+    _run_scenario(behaviour_state, observed_command, run_observed)
 
 
 @when("the command runs with captured and echoed output")
@@ -240,11 +268,7 @@ def when_command_runs_captured_and_echoed(
     observed_command: dict[str, object],
 ) -> None:
     """Run with capture on so the streams are drained and echoed."""
-    run_captured_and_echoed(
-        behaviour_state,
-        catalogue_of(observed_command),
-        runnable_of(observed_command),
-    )
+    _run_scenario(behaviour_state, observed_command, run_captured_and_echoed)
 
 
 @when("the pipeline runs with captured and echoed output")
@@ -257,11 +281,7 @@ def when_pipeline_runs_captured_and_echoed(
     The step is the command step's name one stage up the specification: both
     run with identical settings, which is why it delegates rather than repeats.
     """
-    run_captured_and_echoed(
-        behaviour_state,
-        catalogue_of(observed_command),
-        runnable_of(observed_command),
-    )
+    _run_scenario(behaviour_state, observed_command, run_captured_and_echoed)
 
 
 @when("the same command runs twice under distinct execution contexts")
@@ -270,8 +290,8 @@ def when_same_command_runs_twice(
     observed_command: dict[str, object],
 ) -> None:
     """Run one command twice, tagging each run differently."""
-    run_twice_with_distinct_contexts(
+    _run_scenario(
         behaviour_state,
-        catalogue_of(observed_command),
-        runnable_of(observed_command),
+        observed_command,
+        run_twice_with_distinct_contexts,
     )

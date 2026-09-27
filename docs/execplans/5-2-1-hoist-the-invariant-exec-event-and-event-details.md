@@ -155,6 +155,24 @@ failure injection at that boundary.
     module is loaded as a `pytest_plugins` entry because pytest-bdd 8 scopes a
     step to its defining module. See the 2026-09-27 "the 400-line cap applies
     to `tests/`" discovery below.
+  - [x] CodeScene findings on this branch's four added files cleared. Four new
+    files failed the *Pay Down Tech Debt* profile (one **critical** Low
+    Cohesion rule among them); all four are fixed and `cs delta origin/main`
+    reports no introduced findings. The 654-line test module is split by
+    subject into four modules under the same `test_line_event_emission` prefix,
+    with the test inventory verified unchanged at 22 functions. This is a
+    *local* replay of CI's classifier, not yet a green hosted check: the
+    pushed head has not been re-graded, and the commit that carries the fix
+    has not been landed or gated yet. See the 2026-09-27 CodeScene discovery
+    below.
+  - [x] The split's own lint fallout cleared, and `make lint` observed to its
+    **end** for the first time: `ruff check`, `interrogate` (100.0%), `pylint`
+    (10.00/10), `df12-python-lints`, `ambrleaks`, `skylos`, `rust-lint`
+    (`lint-clippy`, `lint-whitaker`, `spelling`) and `github-actions-lint`
+    (`yamllint`, `actionlint`) all ran. Ten `ruff check` defects arrived with
+    the handwritten split headers and one R9112 survived the first fix; both
+    rounds are recorded below, because each round left eight sub-checks
+    unobserved behind the abort.
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
@@ -715,6 +733,105 @@ for over 27 hours — the documented shellcheck stdin deadlock, which `make lint
 did *not* hit when run directly. Neither changes this branch, and neither
 should be "fixed" here.
 
+### 2026-09-27: CodeScene failed the PR on four files this branch added
+
+The CodeScene check reported `failure` on the pushed head while the seven
+`make` gates were green, so it was reviewed before being dismissed. It is not
+in the required status-check ruleset — but every one of the last twelve merged
+PRs *passes* it, including ones that added a dozen new Python files, so passing
+is this repository's real bar and the finding is branch-attributable rather
+than ambient.
+
+Reproduced locally with `cs delta origin/main --output-format json`, which
+matched CI finding for finding. All four files are new on this branch
+(`old-score: null`), and the gate profile is *Pay Down Tech Debt*, which
+requires every new file to reach code health 10.00 — hence zero headroom:
+
+| file                                      | score | findings                                                                                                     |
+| ----------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------ |
+| `test_line_event_emission.py`             | 8.03  | Lines of Code in a Single File (654 > 600), **Low Cohesion** (critical), Excess Number of Function Arguments |
+| `benchmarks/_line_event_profile_model.py` | 8.79  | Complex Method ×2, Overall Code Complexity                                                                   |
+| `_structured_events_steps.py`             | 9.38  | Code Duplication                                                                                             |
+| `test_line_event_emission_properties.py`  | 9.68  | Excess Number of Function Arguments                                                                          |
+
+**The three smaller findings.** The properties module's 5-argument assertion
+helper took a 4-tuple; giving the generator a frozen `_InterleavedCase` record
+reduced it to 4 arguments and removed the tuple unpacking. The behaviour module
+duplicated one three-line body across three `when` steps, which now resolve the
+scenario's command once in a shared `_run_scenario` helper. The benchmark
+model's complexity came from inline validation, now factored into
+`_require_object` / `_require_key` / `_require_array`; `load_rules` and
+`_rule_from_json` each dropped under the threshold without changing a single
+error message that a test asserts (only `"consume_frames"` is matched on).
+
+**The 654-line module.** Two of its three findings are size and cohesion, and
+they are the same root cause: the file carried four responsibilities. It is
+split by subject into four modules, all keeping the `test_line_event_emission`
+prefix so the plan's `FOCUSED_TESTS` glob still covers them:
+
+| module                 | lines | subject                                               |
+| ---------------------- | ----- | ----------------------------------------------------- |
+| `..._support.py`       | 180   | stand-ins, the observation factory, the two recorders |
+| `..._parity.py`        | 216   | payload parity against the generic `emit` oracle      |
+| `..._prep_cost.py`     | 352   | the red preparation-cost assertions                   |
+| `..._hook_contract.py` | 353   | hook scheduling and failure contract                  |
+
+The fifth finding was `pending=` on `_make_observation`. That parameter was
+redundant: `_StageObservation` already owns the list it extends, so the five
+call sites now read `observation.pending_tasks` back, which is exactly what the
+parameter took as input. The helper is down to four arguments.
+
+Test inventory is unchanged, verified by comparing totals rather than by
+inspection: the original module defined 22 test functions and the three split
+modules define 22 between them, and every case count matches — 11 payload
+parity, 5 hook contract, 21 properties, and 5 passed + 6 strict-xfailed for the
+red cost assertions, which is the 21 passed / 6 xfailed the single file
+reported. `cuprum/unittests/**` is excluded from both wheel builds, so the
+split does not touch packaging.
+
+**Meaning an empty `cs delta` result was checked before it was trusted.** A
+tool that fails silently would look identical to a clean tree, and `cs` does
+have a real failure mode here: it prints a version-upgrade banner ahead of the
+JSON, so an unguarded `json.load` on its output raises. Its result was
+therefore probed by re-adding the deleted 654-line module as an untracked file
+and re-running: it reported the same three findings, proving the tool was live.
+With the probe removed, the delta reports no introduced findings at all.
+
+### 2026-09-27: the module split's leftover imports, and what `make lint` hides
+
+Splitting a 1012-line test module by hand means writing four new import headers
+by hand, and `ruff check` found ten defects in them — the split's own cost, not
+a pre-existing one. Five were imports the moved tests no longer used; four were
+annotation-only imports of private symbols, which belong in the
+`if typ.TYPE_CHECKING:` block because nothing resolves them at runtime (this is
+a *test* module, so the public-annotation exception recorded in Decision log
+does not apply); one was `typing.Callable` where the repo bans it.
+
+The last one is worth recording because the obvious fix is wrong. R9112
+(`prefer-type-statement`) requires `type _RunHelper = ...`, and the alias names
+two imports that are themselves `TYPE_CHECKING`-only, so a bare `type`
+statement at module scope would put `CommandCatalogue` and `Runnable` in a
+runtime scope that does not import them. The repository's answer is a guarded
+pair — a `TYPE_CHECKING` branch with the real signature and an `else` branch
+with the unsubscripted `cabc.Callable` — matching the four existing `type`
+aliases in `cuprum/`.
+
+**The gate ordering hid eight sub-checks for two rounds.** `make lint` aborts
+at its first failing prerequisite, so the ten `ruff check` errors meant
+`interrogate`, `pylint`, `df12-python-lints`, `ambrleaks`, and `skylos` never
+ran, and neither did the whole of `rust-lint` (`lint-clippy`, `lint-whitaker`,
+`spelling`) or `github-actions-lint`. Fixing the ruff errors did not finish the
+job either: the next run got past ruff and then failed at `df12-python-lints`
+with the R9112 above, leaving those same checks unobserved a second time. Only
+the third run reached the end. This is the same trap the plan already records
+for `make lint` generally, applied twice in succession, and it is why each
+round's verdict is reported as passed / failed / **unobserved** rather than as
+a count of green checks.
+
+The third run passed the **entire** chain, `actionlint` included. The
+shellcheck stdin deadlock noted above did not recur, which is consistent with
+the recorded finding that it is a race rather than a deterministic failure.
+
 ### 2026-09-27: EP-M2 is BLOCKED — the hoist as designed cannot reach 10%
 
 This is the Tolerances stop condition, reached *before* any runtime edit. It
@@ -866,19 +983,44 @@ what the ratio charges to the subtree.
    Collapse `ExecEvent`'s 16 optionals into one nested record so a per-line
    construction sets 11–12 fields instead of 27. Field count is the driver
    (~110 ns each), so this is the largest lever: a 12-field shape time-shares
-   at 0.484x, projecting 10.17%, and 11 fields at 0.451x, projecting 9.47%. 11
-   fields is *exactly* `r*`-adjacent, which makes this the only option measured
-   within reach — but it lands on the bar rather than under it, and the whole
-   plan's margin then rests on benchmark noise. It also changes the public
-   event representation, which the Tolerances section marks as a
-   stop-for-approval change, and fails R2's payload-parity reading unless
-   parity is redefined to the flattened view. Treat as
-   necessary-but-likely-insufficient, not a solution.
+   at 0.484x and 11 fields at 0.451x.
+
+   **Corrected projection.** Applying the `share(r)` algebra above rather than
+   the naive `r·f_ev`, those ratios project **13.48%** (12 fields) and
+   **12.67%** (11 fields), not the 10.17% and 9.47% an earlier draft of this
+   entry recorded — that draft multiplied the time ratio by `f_ev` alone and so
+   omitted the shrinking denominator, the same error the section above was
+   written to correct. The consequence is decisive for this option: at 0.451
+   the measured 11-field shape sits **above** the `r* = 0.3453` bar, so it does
+   not reach 10% even before noise, and field count alone is the only lever
+   this option has.
+
+   It also changes the public event representation, which the Tolerances
+   section marks as a stop-for-approval change, and fails R2's payload-parity
+   reading unless parity is redefined to the flattened view. Treat as
+   **insufficient on its own**, not merely likely-insufficient.
 2. **Re-scope the measurement.** Split the gate's input so the *lifecycle*
    events and the per-line events are reported separately, and hold only the
    per-line share to 10%. This is arguably what the roadmap meant — the
    numerator was never meant to include lifecycle construction — but it is a
    change to acceptance, so it needs approval, not assertion.
+
+   **Measured correction: for this scenario the split is a no-op.** The premise
+   is false against the committed capture. Re-deriving the split through the
+   gate's own classifier: every one of the 6474 `ExecEvent.__init__` samples
+   resolves to the *nearest* caller `emit` at `cuprum/_pipeline_types.py:147` —
+   the `line=details.line` binding inside `emit`'s single `ExecEvent(...)` call
+   — and the ExecEvent rule carries **zero** caller weight outside the consume
+   subtree (`1646` non-consume samples against `32468` parent samples, none of
+   them on this rule's callers). No `plan`, `start`, or `exit` sample appears
+   under the callback, because the callback workload never emits a lifecycle
+   event. So the per-line and lifecycle populations are the *same set* here:
+   splitting them reports 21.00% under one heading and 0% under the other, and
+   V5's stated inputs (D as the `_consume_stream_with_lines` subtree, N and D
+   as percentages over all parent samples) stay numerically identical either
+   way. The split would matter only for a workload that emits lifecycle events,
+   and the committed capture is a callback-only scenario.
+
 3. **Change the callback's shape.** Drop the per-line event emission in favour
    of one event per run carrying a line sequence. This removes the per-line
    construction outright, at the cost of the observation contract V2 and V4
@@ -887,9 +1029,10 @@ what the ratio charges to the subtree.
    measured floor, mark R3 unmet, and leave the roadmap item unchecked so the
    remaining work is visible rather than absorbed.
 
-Options 1 and 2 are the only ones that keep the current observation contract;
-option 1 is measured, option 2 is a re-scoping argument that needs the
-roadmap's intent checked against 5.2.2 and 5.2.3 before it is claimed.
+Options 1 and 2 are the only ones that keep the current observation contract.
+Option 3 is the only recorded route measured to clear the bar with margin — it
+removes the per-line construction rather than shrinking it — and it is also the
+one no local refinement can approximate.
 
 **Independent corroboration that the samples are real constructor time.** The
 capture's own arithmetic and the microbenchmarks agree without being fitted to
@@ -1003,6 +1146,23 @@ require checking the explicit callback factory bodies as well.
   Model and parsers move to `benchmarks/_line_event_profile_model.py`; the gate
   re-exports them so its entry point is unchanged, and a test pins the
   re-export surface to the model's own objects so the two cannot drift.
+- 2026-09-27: Split the 654-line `test_line_event_emission` module by *subject*
+  into four modules under the same name prefix, rather than trimming it to fit
+  CodeScene's Low Cohesion rule. The rule is a **critical** finding on the *Pay
+  Down Tech Debt* profile, and every one of the 12 most recent merged PRs
+  passes that check, so it is the repo's real bar even though it is not in the
+  required ruleset. The prefix is load-bearing: the plan's `FOCUSED_TESTS` glob
+  is `test_line_event_emission*.py`. Test inventory verified unchanged at 22
+  functions, `42 passed, 6 xfailed`.
+- 2026-09-27: Record the two **corrected projections** in the BLOCKED entry
+  rather than leaving the earlier draft's numbers. Both corrections were
+  re-derived through the gate's own classifier and arithmetic, not restated:
+  option 1's shares become 13.48% / 12.67% once the shrinking denominator is
+  applied, and option 2's lifecycle/per-line split is a **no-op** on this
+  capture because the ExecEvent rule carries zero caller weight outside the
+  consume subtree. A design revision that proceeded on either earlier number
+  would have been arguing from a figure this plan itself had already shown to
+  be wrong.
 
 ## Outcomes & retrospective
 
