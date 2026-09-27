@@ -1,10 +1,14 @@
 # Hoist invariant execution-event fields (5.2.1)
 
-Status: UNBLOCKED — the user approved a revised V5 threshold on 2026-09-27 (bar
-10% → **28%**); EP-M2 may proceed against the already-defined hoist (per-line
-`_EventDetails` and argv construction removed, per-line `ExecEvent` retained).
-See the feasibility discovery and the threshold-revision entry below. EP-M1 is
-complete.
+Status: **BLOCKED** — EP-M2 is implemented and its gates are green, but the
+completed hoist measures **29.91%** against V5's revised **28%** bar, missing by
+1.90 points reproducibly (three matched pairs, candidate range 0.0423 points).
+R3 is therefore not met and the measurement is presented for design revision.
+EP-M1 is complete; EP-M3 has not started. The blocked state is *not* a
+correctness or performance failure: the same collection shows the candidate
+30.96% faster in median wall time, and V1–V4 pass. It is a failure of a
+threshold that was derived from a projection rather than a measurement — see
+"V5 measured — 29.91%, and the 28% bar is not met" below.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -1795,6 +1799,135 @@ wholesale. The smoke fixture is too small for this scenario to be meaningful,
 which is why V5 forbids it as evidence ("Small fixtures are smoke tests only").
 The script's uses of it are limited to exercising the plumbing.
 
+### 2026-09-27: V5 measured — 29.91%, and the 28% bar is not met
+
+**Three matched pairs, collected per V5's own protocol.** Full wrap-76 fixture,
+`--backend python --stages 1 --mode echo --sink-kind devnull --line-callbacks
+--read-size 65536 --repeat-count 1`, py-spy raw at 100 Hz, one unprofiled
+warm-up per variant before collection, control/candidate order alternated per
+round. Control = `01ec41bd` (pre-hoist); candidate = `f4d1010a`, whose
+`cuprum/` and `benchmarks/` trees are byte-identical to the `18083334` probe
+tree (only plan text changed in between).
+
+| pair | control D | control share | candidate D | candidate share | candidate wall |
+| --- | --- | --- | --- | --- | --- |
+| r1 | 25726 | 35.3533% | 17539 | 29.8991% | 180.16 s |
+| r2 | 25743 | 34.2928% | 17758 | 29.9414% | 181.18 s |
+| r3 | 29722 | 34.0388% | 17413 | 29.9087% | 175.41 s |
+| **median** | | **34.2928%** | | **29.9087%** | **180.16 s** |
+
+**Tolerances.** D ≥ 10000: **met** (min 17413). Candidate range ≤ 2 points:
+**met, and by a wide margin** — 0.0423 points (29.8991 → 29.9414), where the
+tolerance allows 2.0. `unresolved_frames` is empty in all six captures, so no
+rule drifted. Candidate ≤ 28% in every capture: **NOT met** — the worst
+candidate run is 29.8991%, **1.90 points above the bar**, and the *best* is
+29.9087%, so no run comes close. Median wall time fell 30.96% (260.97 s →
+180.16 s).
+
+**Why this settles it rather than inviting another round.** The candidate's
+dispersion is 0.0423 points across three pairs — roughly 1/47th of the allowed
+2-point band. A measurement that tight cannot be brought under 28% by more
+sampling: the interval is nowhere near the threshold. The control's spread is
+larger (1.31 points) purely from host-load variation, and even the control's
+*best* case (34.0388%) is 6 points clear of the bar. The result is a stable
+property of the design, not an unstable observation that V5's "persistently
+unstable results are inconclusive" escape hatch could cover.
+
+**Interference was present and is recorded, but does not explain the gap.**
+Other sessions ran full gates and `cargo` jobs throughout, so per-run load
+varied from 2.77 to 35.41. That variability shows up where it should — in the
+denominators and wall times (control D ranges 25726–29722, wall 259–306 s) — and
+*none of it* moves the candidate share, which stays inside 0.05 points. Load
+affects the total work measured, not the fraction of the consume subtree spent
+constructing. A quieter host would not close a 1.9-point gap that is stable to
+0.04 points under load.
+
+**Collection parameters and the raw capture record.** Raw folded captures are
+at `/tmp/smoke521/v5/r{1,2,3}-{control,candidate}/`: control
+`01ec41bd56b5968e7b9b5ec205ba82ffdbe55724`, candidate
+`f4d1010aaf352a4dd6f549f6f602dd29bc329c4d`, both resolved per run and written to
+`revision.txt`. Every capture has `unresolved_frames: {}` and
+`status: fail_above_limit`, so no rule drifted and every failure is a genuine
+over-limit share rather than an inconclusive result misread as one.
+
+| capture | py-spy samples | parent | D | N | share % | wall s | py-spy rc | load at start |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| r1-control | 26185 | 26184 | 25726 | 9095 | 35.3533 | 260.97 | 0 | 11.40 21.09 21.91 |
+| r1-candidate | 17912 | 17911 | 17539 | 5244 | 29.8991 | 180.16 | 0 | 5.59 12.31 18.02 |
+| r2-control | 26224 | 26223 | 25743 | 8828 | 34.2928 | 259.22 | 1 | 5.70 7.88 14.14 |
+| r2-candidate | 18145 | 18141 | 17758 | 5317 | 29.9414 | 181.18 | 0 | 5.59 12.31 18.02 |
+| r3-control | 31311 | 31310 | 29722 | 10117 | 34.0388 | 306.38 | 0 | 4.11 5.72 11.70 |
+| r3-candidate | 17740 | 17737 | 17413 | 5208 | 29.9087 | 175.41 | 1 | 8.25 16.96 15.89 |
+
+**Two captures carry a non-zero py-spy exit, and both are benign — checked, not
+assumed.** r2-control and r3-candidate report `py-spy=1` with the log ending
+`Wrote raw flamegraph data to '…/stacks.folded'. Samples: 26224 Errors: 0`
+followed by `Error: No child process (os error 10)`. The capture is complete
+(the sample count in the log equals the folded file's weighting, and the
+classifier read it without an `unresolved_frames` entry); the error is py-spy
+losing its target in teardown *after* the worker exited. Treating the exit code
+alone as "capture failed" would have discarded two of the six valid captures,
+including one of the three controls. It is recorded here rather than silently
+tolerated so a future reader of `pyspy-exit.txt` does not re-open it.
+
+**Liveness is established on the work done, not on a wall-time heuristic.**
+All six captures report `stdout_line_count` of exactly **28256364** with
+`exit_code` 0 and `read_size` 65536, so every run did identical work. (This is
+the check the collection script *should* have used from the start; its first
+version asserted capture size, which is structurally zero for `--mode echo`, and
+its fallback asserted a wall-time floor. See the liveness-traps entry.)
+
+**Mechanism of the miss: the projection subtracted equal weights from N and D;
+the implementation removed far more from D.** The threshold-revision entry
+projected a post-hoist share by subtracting the same absolute frame weights
+from numerator and denominator — `N` 10704 → 6474 and `D` 30822 → 26592, giving
+24.35%. Measured on one rule set (r2, the middle pair), the hoist removed:
+
+| | control | candidate | removed | share of control |
+| --- | --- | --- | --- | --- |
+| N (numerator) | 8828 | 5317 | **3511** | 39.8% |
+| D (denominator) | 25743 | 17758 | **7985** | 31.0% |
+
+So 7985 samples of denominator work disappeared, but only 3511 of them were in
+stacks the numerator counted. The other **4474 samples were pure denominator**:
+stacks inside the consume subtree that carried a hoisted frame but never had a
+generated constructor on the stack at the moment they were sampled. Removing
+work that only D was counting necessarily *raises* the share, and it is the
+whole of the 5.6-point gap between the 24.35% projection and the 29.91%
+measurement. N fell by a larger *fraction* than D (39.8% vs 31.0%), which is why
+the share still moved the right way; it did not fall far enough to clear a bar
+that had been sited on the assumption that the two removals were equal.
+
+**This is the same trap the threshold entry named, one level up.** That entry
+correctly diagnosed that a post-hoist projection must use the post-hoist
+denominator, and correctly refused a 25% bar computed from the control's
+denominator. What it did not do was measure *which* frames the hoist removes
+from D — it estimated that the removals were equal because they were the same
+frames. They are the same frames, but D and N count them differently: N counts a
+stack once however many matching frames it holds, while D counts every stack the
+frames appear in. The revision's own lesson — "which frames a given
+implementation actually removes is not knowable before it is written" — was
+applied to the numerator and not to the denominator.
+
+**Second confound, recorded so the derivation is not read as cleaner than it
+is.** The projection was computed on the *pre-re-baseline* classifier and
+compared against a *post-re-baseline* measurement; re-baselining the rules to
+the single merged construction rule moved the control's own accounting (the
+control capture reads 34.73% / N 10704 / D 30822 before, and 34.29% / N 8828 /
+D 25743 after). The 34%-to-29.9% movement is therefore not attributable to the
+hoist alone across that boundary. The r2 control-vs-candidate table above is the
+clean comparison: both sides measured with the identical rule set at the
+identical revision of the classifier, so the 3511/7985 decomposition is
+unconfounded.
+
+**This is the second miss of the same gate and the first with real code.** The
+first (10%, pre-implementation) produced the threshold revision to 28%, which
+was approved on a projection of 24.35–26.91%. The implemented design measures
+29.91%. So the approved bar rests on a projection that the implementation
+falsified — which also means the revision did not, as hoped, "sit one point
+above the aggressive projection"; it sits 3.0 points *below* the measured
+result.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -1894,6 +2027,18 @@ require checking the explicit callback factory bodies as well.
   required ruleset. The prefix is load-bearing: the plan's `FOCUSED_TESTS` glob
   is `test_line_event_emission*.py`. Test inventory verified unchanged at 22
   functions, `42 passed, 6 xfailed`.
+- 2026-09-27: **EP-M2 is BLOCKED at 29.91% against the 28% bar**, per this
+  plan's own instruction: "If it misses the **28%** threshold, record BLOCKED
+  and present the measured limitation for design revision." The implementation
+  is complete and correct (V1–V4 pass, candidate 30.96% faster in median wall
+  time, identical work in every capture at 28256364 lines); it is the
+  *threshold derivation* that the measurement falsifies. The miss is fully
+  decomposed — 7985 samples of D removed against 3511 of N, with the 4474
+  difference being pure-denominator stacks — so a revision can be derived from
+  a real capture instead of a projection. **No threshold is proposed here**: the
+  previous revision was approved on a projection and this plan has now
+  falsified two of them, so the next one should be a design decision taken on
+  the committed artefact, not another estimate from the plan.
 - 2026-09-27: Record the two **corrected projections** in the BLOCKED entry
   rather than leaving the earlier draft's numbers. Both corrections were
   re-derived through the gate's own classifier and arithmetic, not restated:
