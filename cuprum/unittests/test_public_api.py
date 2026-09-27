@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
 import dataclasses as dc
 import inspect
 import typing as typ
@@ -21,6 +20,9 @@ from cuprum import (
     pump_span_observation,
 )
 from cuprum.events import ExecHook, new_exec_id
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def test_public_exports_are_available() -> None:
@@ -474,6 +476,9 @@ def test_stdin_stream_wraps_an_async_iterable() -> None:
     """``StdinStream`` carries the producer unmodified and stays frozen."""
 
     async def producer() -> cabc.AsyncIterator[bytes]:
+        # A real producer suspends between chunks; the yield point is what makes
+        # the object an async *generator* rather than a coroutine returning one.
+        await asyncio.sleep(0)
         yield b""
 
     stream = c.StdinStream(producer())
@@ -530,7 +535,7 @@ def test_output_options_reject_one_path_for_both_streams() -> None:
     appends at its own offset.
     """
     shared = c.StdioTarget.path(Path("both.log"))
-    with pytest.raises(ValueError, match="stdout.*stderr|stderr.*stdout"):
+    with pytest.raises(ValueError, match=r"stdout.*stderr|stderr.*stdout"):
         c.RunOutputOptions(capture=False, stdout=shared, stderr=shared)
 
 

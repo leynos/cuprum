@@ -71,6 +71,7 @@ if typ.TYPE_CHECKING:
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,
+        StdinStream,
     )
     from cuprum.sinks import base as sinks
 
@@ -102,7 +103,11 @@ class _ExecutionState:
 
     context: ExecutionContext
     output: RunOutputOptions
-    stdin_data: bytes | None
+    # Either a payload already resolved against the context's encoding, or a
+    # producer the writer pulls during the run. ``SafeCmd.run``/``lines``
+    # resolve the payload half before constructing this bundle, so nothing
+    # downstream re-encodes a ``StdinInput``.
+    stdin_data: bytes | StdinStream | None
     timeout: float | None
 
 
