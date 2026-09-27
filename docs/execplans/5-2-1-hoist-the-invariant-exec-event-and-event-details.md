@@ -2209,6 +2209,66 @@ three-pair collection all have to be redone before any number from it is citable
 That is a milestone of work, not a commit, and it is the real cost of route 2
 compared with the other two.
 
+### 2026-09-27: V5 collection complete — verdict FAIL; two timings re-measured
+
+**The collection finished with all 30 unprofiled rounds and no liveness failure.**
+`/tmp/smoke521/v5-verdict.py` derives the verdict from the directory rather than
+from hand arithmetic:
+
+```
+PROFILED FAIL: r1-candidate: candidate share 29.8991 > 28.0
+PROFILED FAIL: r2-candidate: candidate share 29.9414 > 28.0
+PROFILED FAIL: r3-candidate: candidate share 29.9087 > 28.0
+
+UNPROFILED (per scenario, never pooled)
+cb           control median  242.534s candidate median  178.789s delta  -26.28% (n=5/5)
+echo-nocb    control median    2.156s candidate median    2.140s delta   -0.70% (n=5/5)
+tee-nocb     control median    4.688s candidate median    3.306s delta  -29.49% (n=5/5)
+
+UNPROFILED: ALL TOLERANCES MET
+
+V5 VERDICT: FAIL
+```
+
+So the regression tolerances all pass — no scenario is more than 5% slower, and
+the callback scenario is 26.28% faster unprofiled (broader than the 30.96% the
+profiled pairs showed, because that figure included py-spy's own overhead). The
+only failing tolerance is the share itself. All 30 unprofiled runs were checked
+for liveness under the corrected rules: 30/30 rc=0, `tee-nocb` capturing
+2147483648 bytes each time, `echo-nocb` and `cb` clearing the wall-time floor
+that substitutes for capture size in echo mode.
+
+**`tee-nocb`'s −29.49% is a host artifact, and this was tested rather than
+excused.** It is the one timing that did not make sense: `tee-nocb` runs
+`with_line_callbacks=False`, and both the control and the candidate return
+`None` from `_compose_line_callbacks` before the hoisted code is reached
+(verified in both trees — the early return at control `_line_callbacks.py:102`
+and candidate `_line_callbacks.py:208`), so the production diff of 119 lines in
+that one file cannot reach it. Re-measured alone on a quieter host (8
+alternating rounds, load 2.7–3.2 against the collection's 5.95–7.64):
+
+| | median | min | max |
+| --- | --- | --- | --- |
+| control | 4.574 s | 4.517 s | 4.665 s |
+| candidate | 4.582 s | 4.497 s | 4.668 s |
+| **delta** | **+0.18%** | | |
+
+The distributions overlap completely (candidate min 4.497 below control min
+4.517; candidate max 4.668 above control max 4.665) where the collection's two
+sets were disjoint (control min 4.462 above candidate max 4.171). The
+collection's apparent separation was load, not code. This is recorded because it
+is the one place where the collection produced a *large favourable* result in a
+scenario the change cannot touch — the direction that invites being reported
+without checking — and because it is a concrete demonstration of why V5's
+"documenting the interference" clause needs the load numbers it already
+requires.
+
+**`echo-nocb`'s −0.70% is the honest null**, and its consistency with the
+isolated `tee-nocb` re-measurement (+0.18%) is the check that the no-callback
+path is genuinely untouched by the hoist. Two independent no-callback scenarios
+landing within a percentage point of parity is what "the change does not affect
+this path" looks like in measurement.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
