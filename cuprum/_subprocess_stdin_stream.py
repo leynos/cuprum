@@ -181,6 +181,29 @@ async def _flush_encoder(sink: _StreamSink) -> None:
     )
 
 
+def _is_early_close(exc: BaseException) -> bool:
+    """Whether *exc* is the child closing its end of the input pipe.
+
+    ``BrokenPipeError`` is how CPython spells a pipe write, but the
+    subclassing happens at construction only: an ``OSError`` whose errno is
+    assigned afterwards stays plain. Both are the same pipe condition, so both
+    belong on the early-close path.
+
+    Parameters
+    ----------
+    exc : BaseException
+        The failure raised while writing to the child's stdin.
+
+    Returns
+    -------
+    bool
+        ``True`` when the child closed the pipe rather than cuprum failing.
+    """
+    if isinstance(exc, BrokenPipeError | ConnectionResetError):
+        return True
+    return isinstance(exc, OSError) and exc.errno == errno.EPIPE
+
+
 async def _write_stdin_stream(
     process: asyncio.subprocess.Process,
     stream: StdinStream,
@@ -241,18 +264,10 @@ async def _write_stdin_stream(
         # Cancellation is control flow, not a source failure: the run is being
         # torn down and the caller must see the cancellation, not an error.
         raise
-    except (BrokenPipeError, ConnectionResetError) as exc:
-        _emit_stdin_error(process, observation, exc, operation="early_close")
-    except OSError as exc:
-        # ``BrokenPipeError`` is how CPython spells a pipe write, but the
-        # subclassing happens at construction only: an ``OSError`` whose errno
-        # is assigned afterwards stays plain. Both are the same pipe
-        # condition, so both belong on the early-close path.
-        if exc.errno != errno.EPIPE:
+    except Exception as exc:
+        if not _is_early_close(exc):
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
-    except Exception as exc:
-        raise _stdin_source_error(exc) from exc
     finally:
         await _finalize_stdin_source(source)
         await _close_stdin(process, stdin, observation)
