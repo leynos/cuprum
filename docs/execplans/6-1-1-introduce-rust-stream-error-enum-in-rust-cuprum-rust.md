@@ -5,10 +5,10 @@ draft-PR and approval checkboxes below are recorded as done by that approval.
 M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
 and the native extension stage both pass, with `actionlint` locally
 unobservable (recorded in Progress and Surprises). Windows runtime evidence has
-since been obtained and it found two branch defects, both now fixed and
-re-gated; confirming the fix on Windows requires a fresh CI run, so this status
-stays IN PROGRESS until that run is green. M2 closes the remaining evidence,
-reconciles the roadmap, and sets this status to COMPLETE.
+since been obtained: it found two branch defects, both fixed at `dafbfa4e`, and
+the fresh Windows CI run at that head is green (job `108519345532`; evidence in
+Progress). M2 closes the remaining evidence, reconciles the roadmap, and sets
+this status to COMPLETE.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -380,11 +380,109 @@ There is no time limit. Tool failures do not justify lowering acceptance.
        that supplies its own invalid descriptor as the subject of the assertion.
        Net row change: `test_rejects_out_of_range_buffer_with_open_reader` is
        new, two throwaway rows are removed, so the module's collected count is
-       unchanged at 10.
+       unchanged at 10. The collected count is not the figure that moved on
+       Windows, though: on `main` the two removed rows were *skipped* there, so
+       the Windows job's status totals shift by both of them. That is recorded
+       under the Windows entry below, because it is the part of this change the
+       platform actually observes.
     3. The Rust oracle is corrected — see the Surprises entry.
-    `uv run pytest` on the three extension modules: **22 passed**. Rust:
-    **51 passed, 0 skipped**. Logs: `/tmp/611-win-fix-pytest.out` (to follow
-    once the re-gate runs).
+    Committed as `dafbfa4e` and re-gated on the frozen commit. All eleven gates
+    green, sequentially: `make fmt`, `make check-fmt`, `make lint`,
+    `make typecheck`, `env -u BASH_ENV make test`, `make markdownlint`,
+    `make nixie`, `make msrv-check`, `make develop`, `make test-extension`,
+    `make boundary-test`. Blob hashes of the change surface were identical
+    before and after, so the run is citable against `dafbfa4e` — the two known
+    tree-dirtying tripwires (`typos.toml` regeneration, `uv.lock`) did not fire.
+    Counts, quoted from the logs: nextest **154 tests run: 154 passed, 0
+    skipped** — which includes the corrected
+    `stream_error_tests::properties::validation_matches_the_size_window`, the
+    test the previous gate run never executed; `make test-extension`
+    **101 passed, 1 skipped**, exactly the M1 figure (103 − the two rows this
+    change removes); `make boundary-test` **13 passed** Rust plus **116 passed**
+    Python. Logs: `/tmp/regate-611-*.out`, frozen-state captures in
+    `/tmp/regate-611-state/{pre,post}.txt`.
+    `env -u BASH_ENV` is required on this branch: the host sets `BASH_ENV` to
+    `/home/leynos/.lody/bashenv`, which re-prepends `~/.lody/bin` inside every
+    `bash -c` so the release tests' recorded `gh`/`git` stand-ins are shadowed.
+    The fix for that lives on another branch (`ccd9d1df`, PR #466) and is not
+    an ancestor here. The unscrubbed `make test` fails 13 tests for that reason
+    and for no other; see the Surprises entry, which records that an aborted
+    gate leaves its later checks unobserved.
+- [x] (2026-09-27) **Windows runtime evidence obtained and green at `dafbfa4e`
+      .**
+  CI run `36283355903` (event `pull_request`, head
+  `dafbfa4e0ad604ca75dca65131af841fc50b2431`, attempt 1); job
+  `Extension-gated tests (Windows Python/Rust boundary)`, job id `108519345532`,
+  `completed` / `success`, every step successful including *Build the native
+  extension* and *Run extension-gated tests*. Log: `/tmp/611-win-ci-job.log`
+  (de-ANSI'd from the raw job log). The suite is extension-required — the job's
+  pytest line is prefixed `CUPRUM_REQUIRE_RUST_EXTENSION=1` — so this is
+  compiled-boundary evidence, not a shim run. Verbatim PASS lines at `dafbfa4e`:
+
+  ```text
+  test_rejects_out_of_range_buffer_with_open_reader[consume]     PASSED [ 17%]
+  test_rejects_out_of_range_buffer_with_open_reader[pump]        PASSED [ 18%]
+  test_out_of_i64_buffer_size_stays_an_extraction_error[consume] PASSED [ 25%]
+  test_out_of_i64_buffer_size_stays_an_extraction_error[pump]    PASSED [ 26%]
+  test_native_stream_exception_categories[consume-a zero buffer size-ValueError] PASSED [ 90%]
+  ======================= 89 passed, 13 skipped in 2.83s ========================
+  ```
+
+  The RED run this replaces is CI run `36280857796` at head `bcf72f52`, job
+  `108512365806`, whose verbatim failures were:
+
+  ```text
+  FAILED .../test_out_of_i64_buffer_size_stays_an_extraction_error[consume]
+    - OSError: [Errno 9] Bad file descriptor
+  FAILED .../test_native_stream_exception_categories[consume-a zero buffer size-ValueError]
+    - AssertionError: expected ValueError, found OSError: [Errno 9] Bad file descriptor
+  ================== 2 failed, 85 passed, 15 skipped in 4.99s ===================
+  ```
+
+  (The two `FAILED` entries are wrapped here to fit the 120-character
+  code-block limit; pytest prints each as one line. No text is omitted, and the
+  summary line is unwrapped.)
+
+  Both failures carry the predicted signature: `[Errno 9]`, the `get_osfhandle`
+  refusal, and both are on the **consume** path, which is the asymmetry the
+  diagnosis named. Log: `/tmp/611-win-ci-RED.log`. Comparing the two runs'
+  status totals accounts for every entry that moved between them — 85 passed /
+  2 failed / 15 skipped becoming 89 passed / 0 failed / 13 skipped, and the
+  collected count is 102 in both. Three rows changed failure into success: the
+  two `FAILED` nodeids above plus
+  `test_out_of_i64_buffer_size_stays_an_extraction_error[pump]`, which passed
+  in the RED run but belongs to the same retargeted set. Three rows changed
+  skipped into passing: both `test_rejects_out_of_range_buffer[consume|pump]`,
+  which the RED run skipped on `win32` via
+  `_buffer_validation_before_descriptor` and which this change replaces with
+  the open-reader property; plus
+  `test_native_stream_exception_categories[consume-a zero buffer size-ValueError]`,
+  which the RED run *reached and failed* (pytest tags a failing test `F`, not
+  `s`, so it counts as a failure in that run and as a pass in this one).
+  Nothing was dropped, disabled, or made to skip to obtain the green; the
+  change *removed* two Windows skips and added none.
+
+  Two findings this evidence adds, neither visible before it:
+
+  1. **The RED run under-reported the breakage, and the skip is why.** It showed
+     two failures, not three. `test_pump_rejects_invalid_reader_descriptor`
+     already passed a genuinely valid writer, so the writer-conversion arm was
+     covered; the uncovered arm was the *consume* counterpart of the
+     buffer-window path, and it was hidden behind a skip rather than absent. A
+     skip that conceals a defect is indistinguishable in the summary line from
+     a skip that is merely inapplicable — both print `s`. The status totals, not
+     the failure list, are what exposed it.
+  2. **The consume buffer path was never observed on Windows, even on `main`.**
+     On `main` (`991dee64`, CI run `36195887840`, Windows job `108271499312`,
+     `success`) the boundary-property module reports
+     `test_rejects_out_of_range_buffer[consume] SKIPPED`, `[pump] SKIPPED`, and
+     `74 passed, 10 skipped`. The asymmetry this branch hit was therefore
+     long-standing and latent on `main`: the `-1`-throwaway window property had
+     been skipping on Windows all along, and only this branch — routing the same
+     window through an open reader — makes it execute there. The branch did not
+     introduce the gap; it is the first change to close it. Established by
+     downloading that job's log rather than inferring it from the run's
+     success; log `/tmp/611-win-main.log`.
 - [ ] M2: reconcile documentation, complete platform evidence, and mark 6.1.1
       done.
 
@@ -671,6 +769,21 @@ apply here only because the aborting step is last.
   general point: an oracle that restates a validator's window must restate
   *every* arm of it, and a property that never fails is evidence about the
   generator before it is evidence about the code.
+- (2026-09-27) **`make test` stopped at its first failing prerequisite, so the
+  half that would have caught the Rust defect never ran.** `make test` is
+  `test-python test-rust` as separate recipe lines, and `test-python` aborted
+  on the host `BASH_ENV` trap (13 release tests, environmental, fixed by
+  `ccd9d1df` on PR #466, which is not an ancestor of this branch). The abort
+  meant `test-rust` never executed: `stream_error_tests` appears zero times in
+  that run's log. The corrected property oracle had therefore been edited,
+  reviewed, compiled by `make lint`'s `cargo doc`/`clippy`, and never
+  *executed* by any gate in that session. This is the same failure mode the
+  `actionlint` entry above describes — **a gate that stops early proves nothing
+  about the sub-checks after it** — recurring one target lower. The remedy is
+  the recorded one: re-run with `env -u BASH_ENV`, which restores the whole
+  target and prints `154 tests run: 154 passed, 0 skipped`. Report passed,
+  failed, and *unobserved* separately; an unobserved check is neither, and it
+  is the one that propagates silently.
 
 ## Outcomes & retrospective
 
@@ -701,9 +814,16 @@ What the evidence covers, stated at the strength it actually has:
   boundary for real rather than cross-compiling it. It was red at two heads,
   identically, while green on `main`; the two failures were a missing platform
   mark on the consume counterparts of two push-path rows, plus the Rust oracle
-  defect described in Surprises. Both are fixed. **The fix is not yet confirmed
-  on Windows** — that needs a fresh CI run, and until it is green the Windows
-  claim rests on the diagnosis rather than on observation.
+  defect described in Surprises. Both are fixed at `dafbfa4e`, where all eleven
+  local gates pass, and **the fix is confirmed on Windows**: the fresh CI run at
+  `dafbfa4e` is green, with the previously failing consume rows now passing
+  and the two substituted rows executing there instead of skipping. The Windows
+  claim therefore rests on observation, not on the diagnosis that predicted it.
+  Two caveats stay attached to that. The RED run exposed only two of the three
+  affected rows, because the third was hidden behind a `win32` skip; and the
+  consume buffer path had been unobserved on Windows since before this branch,
+  so the green is the first observation of it rather than a restoration of an
+  earlier one. Both are recorded in Progress with their log paths.
 
 Deviations and limits, all recorded rather than smoothed over: red evidence was
 reconstructed after the implementation existed (see Surprises); and
