@@ -93,15 +93,22 @@ open each document.
 - [Execution plans](execplans/) - task-specific implementation plans created
   when substantial work needs a durable plan.
   - [Line-event field hoisting plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md)
-    - implementation and validation for roadmap item 5.2.1. **BLOCKED**: the
-      characterization milestone (EP-M1) is complete and its measurements show
-      the planned hoist cannot reach the 10% target, so no runtime change has
-      been made and a revised design needs approval.
+    - implementation and validation for roadmap item 5.2.1. The hoist is
+      implemented and measured at a 29.9087% construction share against an
+      approved 30% limit, with the evidence under
+      `profiling/5-2-1-line-event-emission/`.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 - [Tee hot-path read-size sweep (2026-08-29)][tee-read-size-sweep] - the
   interleaved measurement that selected the Python stream read size for roadmap
   item 5.1.1.
+- [Tee hot-path line-event emission (5.2.1)][tee-line-event-emission] - the
+  construction-share analysis, its verdict against the 30% limit, and the
+  forecast that item 5.2.2 inverts the same metric by succeeding.
+- [5.2.1 line-event-emission profile evidence](profiling/5-2-1-line-event-emission/README.md)
+  - the six matched captures, the thirty unprofiled runs, the committed
+  classifier rules, and the 30% reclassification the report's arithmetic rests
+  on.
 - [Rust boundary verification and unsafe inventory][rust-boundary-verification]
   - unsafe inventory, crate contracts, verifier evidence, and trusted
   assumptions for the native stream boundaries.
@@ -125,4 +132,5 @@ open each document.
 [migration-020]: v0-2-0-migration-guide.md
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
+[tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md

@@ -952,6 +952,25 @@ Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
+Observing lines is cheaper than it was: Cuprum no longer rebuilds the invariant
+part of a line event — program, argv, cwd, env, pid, stream, tags, project, and
+exec id — for every line. Nothing else changed. The payloads are the same
+`ExecEvent` values, the hook ordering is the same, a hook that raises still
+fails the run exactly as described under
+[When an observe hook raises](#when-an-observe-hook-raises), and each line
+still carries a fresh event and a fresh timestamp. In the benchmarked
+line-callback workload the median wall time fell 30.96% under the profiler and
+26.28% unprofiled.
+
+That is not a universal speedup. The gain is confined to line-callback
+workloads that emit events per line: a run with no observe hook and no
+`on_line` callback creates no line callback at all, and is unaffected. Treat
+the figure as a property of the emission path, not a promise about an
+application. The construction-share gate that accepted the change is likewise
+sensitive to how much other work a change on this path removes, because the
+share is measured against the whole consume subtree; a later optimization here
+can raise that share while making the path faster.
+
 #### Aggregate Python stream-operation events
 
 For opt-in aggregate telemetry from the pure-Python stream paths, register a

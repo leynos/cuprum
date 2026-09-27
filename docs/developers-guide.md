@@ -3338,6 +3338,51 @@ recursion or inlined duplicate symbols). This matches the convention used by
 most sampling profilers: a recursive frame inflates the wall-time cost of the
 leaf, not the inclusive tally of every caller on the path.
 
+## Construction-share classification (roadmap 5.2.1)
+
+Roadmap item 5.2.1's gate is reproduced with
+`benchmarks/summarize_line_event_profile.py`, which classifies one py-spy raw
+capture against a rule set:
+
+```bash
+python -m benchmarks.summarize_line_event_profile <stacks.folded> \
+  --rules <rules.json> --output <out.json>
+```
+
+`--output` is required; the result document is written there as well as
+printed. Exit status 0 means the share is within the limit, 1 that it is above
+it, and 2 that the input was malformed, insufficient, or contained unresolved
+frames. A control capture is expected to exit 1. The committed rule set is
+`docs/profiling/5-2-1-line-event-emission/classifier-rules.json`, and committed
+inputs and results live beside it under
+`docs/profiling/5-2-1-line-event-emission/`; the 2 GiB fixtures are
+deliberately kept in the gitignored `dist/`.
+
+The limit applies to `N/D`. `D` is the weighted samples of stacks containing
+`_consume_stream_with_lines`; `N` is those that also contain a matched
+construction frame, counted once per stack. The limit constant is
+`CONSTRUCTION_SHARE_LIMIT_PERCENT` in
+`benchmarks/_line_event_profile_classifier.py`.
+
+**The metric is structurally non-monotonic, and that is a property to design
+around rather than a defect to fix.** 100% of the numerator sits inside the
+retained generated `ExecEvent.__init__`, so an optimization that removes work
+*outside* the constructor lowers `D` while holding `N`, and therefore
+**raises** the share. A higher share after a successful optimization is this
+metric's known behaviour, not a regression; judge such work by the per-frame
+contributions the classifier reports instead. The 5.2.1 measurement records the
+case concretely, and its successor is already forecast: item 5.2.2's
+`inspect.isawaitable` removal is expected to move the share 0.9686 points
+*above* the bar by succeeding. See
+[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
+
+**Shared Cargo cache.** This repository never creates an isolated Cargo cache.
+Measurement helpers and builds use the shared default cache and let Cargo's
+package-cache lock serialize access, so concurrent worktrees do not each refill
+a private registry. Do not redirect `CARGO_HOME` to a scratch directory, and do
+not work around the lock: if another Cargo job holds it, wait for the lock to
+clear.
+
 ## Makefile tooling changes
 
 On POSIX platforms, `LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to
