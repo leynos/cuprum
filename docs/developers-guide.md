@@ -6527,9 +6527,15 @@ executes:
 1. `StdinInput.resolve(ctx)` encodes `text` via the execution-context
    encoding/errors, or returns `data` bytes unchanged. Mutual exclusion is
    enforced at `StdinInput` construction time by `__post_init__`.
-2. The resolved bytes are stored on `_SubprocessExecution.stdin_data`.
-3. `_spawn_subprocess` opens `stdin=asyncio.subprocess.PIPE` when
-   `stdin_data is not None`; otherwise `stdin=None` (inherit parent).
+2. The resolved payload is carried as `_ExecutionState.stdin_data`. The stdio
+   plan and the stream bindings are resolved from it — together with `output`'s
+   targets — in `_build_subprocess_execution`, which stores the result as
+   `_SubprocessExecution.stdio: _ResolvedStdio`.
+3. `_spawn_subprocess` writes the binding through as `_stdin_stdio(...)`, which
+   returns `asyncio.subprocess.PIPE` for every plan but `_NoStdin` and `None`
+   for `_NoStdin`. Only a run with no source *and* no explicitly requested
+   stdin pipe resolves to `_NoStdin`, so that one case is precisely the run
+   whose child should inherit the parent's stdin.
 4. `_spawn_stdin_writer` creates an `asyncio.Task` that calls `_write_stdin`,
    which writes the bytes, drains the pipe, and closes it. `OSError` and
    `RuntimeError` failures are logged to `cuprum.stdin` and emitted as a
