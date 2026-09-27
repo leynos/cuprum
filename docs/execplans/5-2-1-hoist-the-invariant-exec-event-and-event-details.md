@@ -1758,6 +1758,43 @@ and implemented lands around 30%, not under 28%. It does not settle the
 three-pair dispersion question, so a BLOCKED decision should rest on a completed
 V5 collection rather than on this probe alone.
 
+### 2026-09-27: two liveness traps in the V5 collection script
+
+Both were found by running the real script end-to-end on small fixtures before
+committing 2.1 hours to the full collection. Neither is a defect in the hoist;
+both are defects in the measurement script, and both would have produced
+*plausible-looking* output.
+
+**Trap 1 — `stdout_line_count` is zero for every no-callback scenario, by
+construction.** `_run_command_sync` increments the line count only inside
+`observe_line`, and that hook is installed only under
+`if config.with_line_callbacks:`. So a `with_line_callbacks=False` run reports
+`stdout_line_count: 0` however much data it processed. Reading that as "the
+scenario did no work" would discard sound measurements; reading it as "the run
+succeeded" would accept vacuous ones. V5's no-callback controls exist precisely
+to bound the callback result, so a silent zero there would have made the
+headline comparison unbacked. `captured_output_length` is the usable signal —
+but only where the mode captures.
+
+**Trap 2 — capture size is mode-dependent, so the obvious liveness check is a
+false alarm on two of the three scenarios.** Per
+`benchmarks/_tee_profile_worker_command.py::_capture_and_echo_flags`:
+`echo => (False, True)`, `capture => (True, False)`, `tee => (True, True)`. The
+callback scenario and `echo-nocb` both run `--mode echo`, so both capture
+nothing *by design*; asserting a non-zero capture on them fires on correct
+runs. The first version of the check did exactly that. The corrected script
+asserts capture size only for `tee-nocb` and falls back to a wall-time floor
+for the two echo-mode scenarios.
+
+**A related non-finding, recorded so it is not re-investigated.** On the 26 MB
+smoke fixture `echo-nocb` finishes in 0.044 s, which looks like a skipped
+workload. On the full fixture it takes **40.86 s**. The difference is real and
+expected: the unwrapped fixture contains no newlines, so with no line callbacks
+and echo-to-devnull there is no per-line work at all — the stream is discarded
+wholesale. The smoke fixture is too small for this scenario to be meaningful,
+which is why V5 forbids it as evidence ("Small fixtures are smoke tests only").
+The script's uses of it are limited to exercising the plumbing.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
