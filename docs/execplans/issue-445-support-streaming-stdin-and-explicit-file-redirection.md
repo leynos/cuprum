@@ -350,8 +350,25 @@ likelihood, and mitigation.
   because the pipe capacity is a property of the host and not of cuprum. Local:
   module 20 passed, the three EP-M4 modules together 49 passed, `ruff check` and
   `ruff format --check` clean, interrogate 100.0%.
-- [ ] Push and open the draft PR (`(#445)` in the title, `Closes #445` in the
-  summary, Lody session link under `## References`).
+- [x] (2026-09-27 12:00Z) Pushed `c100e810` and opened draft PR
+  [#511](https://github.com/leynos/cuprum/pull/511) — `(#445)` in the title,
+  `Closes #445` in the summary, the Lody session link under `## References`.
+  The branch's changes touch no Rust file and no ADR-011: an earlier two-dot
+  diffstat appeared to delete from both, but `origin/main` had advanced one
+  commit (`7f762870`, Miri coverage) on the fetch, so those were main's own new
+  work seen backwards. Confirmed with
+  `git diff --name-only <merge-base>..HEAD -- rust/` (0 files) and a clean
+  `git merge-tree --write-tree origin/main HEAD`.
+- [x] (2026-09-27 11:59Z) Full seven-gate sweep on `c100e810`, all exit 0 in
+  5 minutes (warm shared Cargo cache): `check-fmt` 5s, `lint` 55s (every
+  sub-check ran to completion — ruff, interrogate 100%, pylint 10.00/10,
+  df12-pylint, ambrleaks, skylos, rustdoc, clippy, whitaker, typos, yamllint,
+  actionlint; actionlint did **not** stall this run), `typecheck` 5s,
+  `markdownlint` 10s, `nixie` 5s, `spelling` 10s, `test` 205s (9 pytest blocks,
+  largest 2543 passed / 63 skipped; nextest 125/125). All four new INV-1 cases
+  ran and passed under both execution strategies. Logs under
+  `/tmp/$ACTION-cuprum-<branch>.out`; summary
+  `/tmp/gates-445/all-gates.summary`.
 
 ## Surprises & discoveries
 
