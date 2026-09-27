@@ -148,6 +148,27 @@ def test_every_variant_builds_with_its_own_payload(
     assert StdioTarget.path(str(tmp_path / "log.txt")) == owned, (
         "the str and Path spellings must build equal targets"
     )
+    # The rows above reach normalization through the factory, which wraps in
+    # ``Path`` itself and so would pass even if ``__post_init__`` had lost the
+    # normalization. Constructing the dataclass directly is what proves the
+    # stored value was normalized rather than passed through as given: a str
+    # left unnormalized still opens and still reads back, but it compares
+    # unequal to the factory's target, and ``_share_one_owned_path`` compares
+    # targets, so the shared-path rejection would miss the pair.
+    # ``stdin`` accepts a ``str`` through ``StdioTarget.path``, which wraps it
+    # in ``Path`` before the dataclass ever sees it, so the field's declared
+    # union omits ``str`` even though ``__post_init__`` handles one. Passing
+    # the ``str`` straight to the field is the only way to reach normalization
+    # unfiltered, which is what this row is for.
+    direct = StdioTarget(
+        kind="path",
+        value=str(tmp_path / "log.txt"),  # ty: ignore[invalid-argument-type]
+    )
+    assert isinstance(direct.value, type(tmp_path)), (
+        "a directly constructed path target must store a Path, "
+        f"not {type(direct.value).__name__}"
+    )
+    assert direct == owned, "the direct and factory spellings must build equal targets"
     assert borrowed.fd_value == 7, "a descriptor target must read back its fd"
     assert not borrowed.is_owned_path, "a borrowed descriptor is not cuprum's to close"
     assert StdioTarget.pipe().value is None, "a pipe target carries no payload"

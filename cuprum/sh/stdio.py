@@ -76,6 +76,13 @@ def _reject_unexpected_payload(
 def _normalize_payload(target: StdioTarget) -> None:
     """Check a payload-bearing variant and store what the kind requires.
 
+    The ``path`` variant is normalized as well as checked: ``str`` and ``Path``
+    are both accepted, and both are stored as a ``Path``, so two spellings of
+    one file build equal targets. That matters beyond tidiness, because
+    ``_share_one_owned_path`` decides whether stdout and stderr name the same
+    file by comparing targets, and an unnormalized ``str`` would compare
+    unequal to its own ``Path`` spelling and slip past the shared-path refusal.
+
     Raises
     ------
     ValueError
@@ -95,6 +102,8 @@ def _normalize_payload(target: StdioTarget) -> None:
         # fault, and the four variants are one vocabulary whose refusals all
         # read as ValueError; `StdioTarget.fd` above is refused the same way.
         raise ValueError(msg)  # ruff: ignore[type-check-without-type-error]
+    if not isinstance(target.value, Path):
+        object.__setattr__(target, "value", Path(target.value))
 
 
 @dc.dataclass(frozen=True, slots=True)
