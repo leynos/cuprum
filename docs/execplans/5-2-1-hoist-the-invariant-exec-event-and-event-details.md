@@ -1948,40 +1948,44 @@ general; it is the cost of one generated `__init__` per line, measured.
 
 **That cost is dominated by `frozen=True`.** Microbenchmarked on this host's
 interpreter (3.14.4, 300k reps, 27 fields, defaults included), constructing the
-shipped type and three invariant-preserving variants:
+shipped type and three comparisons:
 
 | construction | ns/ctor | ratio to shipped |
 | --- | --- | --- |
-| **shipped** — `@dc.dataclass(frozen=True, slots=True)` | 1848.6 | — |
+| **shipped** — `@dc.dataclass(frozen=True, slots=True)` | 1890.3 | 1.0000 |
 | control — `@dc.dataclass(slots=True)`, `frozen=False` | 341.6 | **0.18×** |
-| frozen + manual `__slots__`, positional `__init__` calling `object.__setattr__` | 1709.6 | 0.92× |
-| frozen + manual `__slots__`, bound slot-descriptor setters looped | 1743.2 | 0.88× |
-| frozen + slot descriptors via `desc.__set__` looped | 2659.8 | 1.34× |
+| frozen, hand-written `object.__setattr__` `__init__`, 27 named params | 1765.8 | 0.9342 |
+| **frozen, hand-written descriptor `__init__`, 27 named params** | **1278.3** | **0.6763** |
 
 **Why.** `dataclasses` implements `frozen=True` by emitting, per field, a full
 `CALL` to `object.__setattr__` — 27 load-attr/call/pop sequences in one function
 body (disassembled from the shipped type; `co_names` is `('__setattr__',)` and
-the body is 27 uniform 30-byte blocks). So the frozen guard costs roughly 5.4×
+the body is 27 uniform 30-byte blocks). So the frozen guard costs roughly 5.5×
 the entire construction of the same 27 fields without it. Dropping
-`frozen=True` is by far the largest lever measured here, and it is a 5.4×
-reduction.
+`frozen=True` is by far the largest lever measured here, and it is a 5.5×
+reduction — with the descriptor route below recovering 0.68× of it while
+keeping every invariant.
 
-**One invariant-preserving lever does exist, and it is the same order as the
-gap.** The bound-slot-descriptor variant (`setter = cls.__dict__[name].__set__`
-hoisted out of the loop, then `setter(self, value)`) measures **0.88×** the
-shipped constructor while keeping all three properties: 27 slots present,
-`FrozenInstanceError` still raised on a user write, and equality intact —
-verified in the same script rather than assumed. A 12% reduction in the
-constructor's cost is comparable in size to the 1.90-point miss, so it is a
-genuine candidate and not a curiosity.
+**An invariant-preserving lever also exists, and it is larger than first
+measured.** A named-parameter `__init__` that hoists the slot-descriptor
+setters out of the loop measures **0.6763×** the shipped constructor and passes
+the full dataclass protocol surface, not merely the three properties an earlier
+draft of this entry checked. **This supersedes a 0.88× figure recorded earlier in
+this same entry**: that measurement used an `*args` `__init__`, which cannot
+accept keywords, so `dc.replace` and keyword construction break and the variant
+is not a drop-in — see the entry below for the correction and the protocol
+matrix that caught it. The corrected 0.68× is a 32% reduction in constructor
+cost, comfortably larger than the 1.90-point miss.
 
-**No post-change share is projected from it, deliberately.** This plan has now
-seen two projections falsified by measurement (the 10% bar, then the 24.35%
-revision), and the second failed for a structural reason this entry has just
-supplied: the share is a ratio in which the constructor appears in both terms,
-so a cheaper constructor moves N and D together and the arithmetic is not
-`share × 0.88`. Anyone acting on this lever should *measure* the resulting
-share with the same three-pair protocol, not scale the current one.
+**Any post-change share must be measured, not scaled.** This plan has now seen
+two projections falsified by measurement (the 10% bar, then the 24.35%
+revision), and the second failed for the structural reason this entry supplies:
+the share is a ratio in which the constructor appears in both terms, so a
+cheaper constructor moves N and D together. The model is therefore not
+`share × 0.68`; it needs the coupling applied explicitly, which is what the
+superseding entry below does before quoting 22.42%. Even then it is arithmetic
+on a microbenchmark, and the same three-pair protocol that produced the 29.91%
+is what confirms it.
 
 **One implementation consequence worth flagging now.** A hand-written
 `__init__` in `cuprum/events.py` renders as `__init__ (cuprum/events.py:N)`,
@@ -2008,9 +2012,9 @@ is held fixed and the generated constructor stays, the floor for any design that
 constructs a fresh 27-field `ExecEvent` per line — which V2/V4 require — is this
 constructor, and the measured 29.91% sits about 1.9 points above a bar that no
 further hoisting can move. Three routes exist and they are not equivalent:
-re-site the threshold on the measured artefact; keep the bar and take the 0.88×
+re-site the threshold on the measured artefact; keep the bar and take the 0.68×
 descriptor lever, measuring the result; or reopen `frozen=True` itself, a
-public-API change worth 5.4× and therefore a roadmap-level decision rather than
+public-API change worth 5.5× and therefore a roadmap-level decision rather than
 tuning. The one thing this entry rules out is a third threshold revision derived
 from another projection.
 
@@ -2126,55 +2130,84 @@ this plan can supply for either route is a measured, reproducible artefact and
 the decomposition above, which separates the constructor's contribution from
 everything else.
 
-### 2026-09-27: the bar is clearable — the descriptor lever, and its thin margin
+### 2026-09-27: the bar is clearable — the descriptor lever, at 0.68× (superseding entry)
 
-**Route 2 of the three the previous entry lists is not speculative.** Applying
-the *measured* 0.8770 descriptor ratio to the r2 candidate's own sample counts
-gives a share under 28%, on arithmetic that follows directly from what the
-numerator is:
+**An earlier version of this entry is superseded and its numbers were wrong.**
+It reported a 0.8770 descriptor ratio clearing 28% by 0.74 points, measured on a
+candidate whose `__init__` took `*args`. That candidate is not a drop-in
+replacement: `*args` rejects keywords, so `dc.replace(inst, phase=...)` and
+ordinary keyword construction both raise `TypeError`. The protocol-equivalence
+check that caught it also showed the same candidate failing `pickle` and
+`copy` — and both earlier measurements were blind to this because each verified
+only the three properties named in the entry text (slots, `FrozenInstanceError`,
+equality) rather than the protocol surface. Recorded rather than quietly
+replaced, because "I verified the invariants I thought to name" is how a 0.88
+became a recommendation.
 
-| constructor ratio | numerator samples | denominator samples | share | against 28% |
-| --- | --- | --- | --- | --- |
-| 1.0000 (shipped) | 5317 | 17758 | 29.9414% | fail, +1.94 |
-| 0.9248 (bound `object.__setattr__`, hand-written) | 4917 | 17358 | 28.3270% | fail, +0.33 |
-| **0.8770 (bound slot descriptors — measured)** | **4663** | **17104** | **27.2626%** | **pass, −0.74** |
-| 0.8500 | 4519 | 16960 | 26.6450% | pass |
-| 0.5000 | 2658 | 15099 | 17.6038% | pass |
+**The corrected result is better, not worse.** Generating a *named-parameter*
+`__init__` that hoists the slot-descriptor setters out of the loop, and
+reproducing by hand the `__getstate__`/`__setstate__` hooks dataclasses installs
+alongside `slots=`, gives a full protocol-equivalent drop-in:
+
+| construction | ns/ctor | ratio to shipped |
+| --- | --- | --- |
+| shipped — generated `frozen=True, slots=True` | 1890.3 | 1.0000 |
+| descriptor `__init__`, 27 named params, hoisted setters | **1278.3** | **0.6763** |
+| `object.__setattr__` `__init__`, 27 named params | 1765.8 | 0.9342 |
+
+Checked against the shipped type on the full surface, each comparison running on
+both: `dc.fields` (27), `dc.replace`, `dc.asdict`, `dc.astuple`, keyword
+construction, `pickle` round-trip, `copy.copy`, `copy.deepcopy`, `hash`/set
+membership, `repr`, `FrozenInstanceError` on write, and 27 slots. **All twelve
+pass on all three classes**, and the shipped and descriptor rows agree in every
+column. The `object.__setattr__` variant is also equivalent, which is what makes
+it a useful control: the win is the descriptor dispatch, not the named
+parameters.
+
+**Share model at r2 (D=17758, N=5317):**
+
+| construction | ratio | numerator | denominator | share | against 28% |
+| --- | --- | --- | --- | --- | --- |
+| shipped | 1.0000 | 5317 | 17758 | 29.9414% | fail, +1.94 |
+| `object.__setattr__` named-param | 0.9342 | 4967 | 17408 | 28.5329% | fail, +0.53 |
+| **descriptor named-param** | **0.6763** | **3596** | **16037** | **22.4231%** | **pass, −5.58** |
 
 The model is the one the decomposition licenses: samples inside the constructor
-scale with its cost (they are time spent executing it), and the samples that
-leave the numerator leave the denominator with them, because the work they
-measured no longer happens. It is the same `N/D` coupling that defeated the
-24.35% projection — but here it is applied *with* a measured ratio rather than
-an assumed frame set, which is the difference that matters.
+scale with its cost, and what leaves the numerator leaves the denominator with
+it. It is the same `N/D` coupling that defeated the 24.35% projection — applied
+here with a measured ratio for the constructor rather than an assumed frame set.
 
-**What is still a model and what is not.** The 0.8770 is measured on this host
-and this interpreter (3.14.4) across 300k constructions; the invariance claims
-(slots, `FrozenInstanceError`, equality) were each checked, not assumed. The
-*share* of 27.26% is arithmetic on that measurement, not a capture — no
-three-pair V5 collection has been run against a descriptor-based constructor.
-So this clears the bar on paper with a real constant, and the honest statement
-is "expected to pass, margin about 0.7 points, must be confirmed by the same
-protocol that produced the 29.91%". Given that the previous two misses both came
-from treating an estimate as a result, the confirmation is not optional.
+**Why this margin is credible where the superseded 0.74 was not.** −5.58 points
+against a control between-pair spread of 1.31 and a candidate spread of 0.0423
+is a gap no plausible load effect closes, and unlike the earlier figure it comes
+from a candidate that passes the protocol surface the shipped type defines. It
+is still a model, not a capture: no three-pair V5 collection has been run
+against a descriptor-based constructor, and two projections in this plan have
+already been falsified by measurement, so confirmation by the same protocol that
+produced the 29.91% remains required before any number here is citable.
 
-**The margin is the weak part, and it is worth stating plainly.** −0.74 points
-is smaller than the control's own between-pair spread (1.31 points) and only
-about 17× the candidate's (0.0423 points). The candidate's dispersion is tight
-enough that 0.74 points is likely real, but a host-load change that moved the
-candidate's share by 0.7 points would flip the verdict. The hand-written
-`object.__setattr__` variant at 0.9248 lands at 28.33% — still failing — so the
-implementation choice inside the lever is not free either: only the descriptor
-form clears, and a plausible near-miss implementation of the same idea does not.
+**Two implementation facts a future implementer needs, both verified.**
+*Defaults:* 16 of the 27 fields carry defaults, all exact literals — no
+`default_factory` anywhere in the type — so a generated `__init__` reproduces
+them by binding `field.default` into the generated code's globals, with no
+sentinel and no `_MISSING` handling. *Drift:* a hand-written `__init__`
+duplicates the signature, so a field added to the class would leave
+`dc.replace`/`asdict` inconsistent with the constructor. Generating the
+`__init__` *from* `dc.fields(cls)` removes that risk — tested by rebuilding with
+an extra field, where the signature grew to match (9 params, 9 fields),
+`dc.replace` worked on the new field, and `asdict` keys stayed equal to the
+field set. A class whose `__init__` is written by hand rather than generated
+fails `dc.replace` on an added field with `TypeError`, which is the drift the
+generation exists to prevent.
 
 **Recommendation, now with a number behind it.** Take the descriptor lever (or
-re-site the threshold, or reopen `frozen=True` for 5.4×) — but if the lever is
+re-site the threshold, or reopen `frozen=True` for 5.8×) — but if the lever is
 taken, budget for the re-baseline it requires: a hand-written `__init__` renders
 as `__init__ (cuprum/events.py:N)`, so the classifier's `<string>` construction
 rule stops matching and `classifier-rules.json`, the control capture, and the
-three-pair collection all have to be redone before any number from it is
-citable. That is a milestone of work, not a commit, and it is the real cost of
-route 2 compared with the other two.
+three-pair collection all have to be redone before any number from it is citable.
+That is a milestone of work, not a commit, and it is the real cost of route 2
+compared with the other two.
 
 ### Earlier discoveries
 
