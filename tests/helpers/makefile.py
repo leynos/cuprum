@@ -11,9 +11,15 @@ own literal text all shrink the set, and a set that is too small makes every
 So the parse is not hand-rolled. `makeutil`, the pinned parser the repository
 already depends on, reports each assignment's `raw_value` with its
 continuations and each rule's recipe text, and this module reads that. Its
-first consumer is `tests/test_ci_test_selection_contract.py`, which needs both
-the resolved selector and the recipes that consume it; the guard's docstring
-records why the two are read together.
+consumers are `tests/helpers/suite_selection.py` and
+`tests/test_ci_suite_wiring_contract.py`, which need both the resolved
+selector and the recipes that consume it.
+
+This module reads the Makefile; it does not decide what a selector *means*.
+Resolving a pattern against the repository, and refusing a pattern that could
+not be a `pytest` argument, are claims about the suite rather than about
+`make`, and they live in `tests/helpers/suite_selection.py` beside the rest of
+the selection policy.
 """
 
 from __future__ import annotations
@@ -27,23 +33,17 @@ from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import pathlib as pth
 
 __all__ = (
     "MAKEFILE",
     "makeutil_document",
     "recipe_of",
-    "selected_paths",
     "variable_expansion",
 )
 
 #: The Makefile this module reads. One definition, so a test that needs to
 #: name it and a helper that needs to read it cannot disagree.
 MAKEFILE = "Makefile"
-
-#: Marker distinguishing "this pattern names files" from "this pattern is a
-#: bare word". A `pytest` argument with no `.py` in it is not a path.
-_PATH_SUFFIX = ".py"
 
 #: Operators that always take effect, so the last of them wins. The empty
 #: string is a recipe-line assignment: `makeutil` reports the bodies of
@@ -120,12 +120,19 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
 
     Notes
     -----
-    This reads the file, not an invocation. A variable passed on `make`'s own
-    command line, or present in the environment, is defined before the
-    Makefile is read, so a ``?=`` for it does nothing — and a caller that
-    relied on such an override would see the file's value here. The guard
-    asks what the repository declares and CI invokes no overrides, so that
-    gap is out of scope rather than unconsidered.
+    This reads the file, not an invocation: a variable passed on `make`'s own
+    command line is defined before the Makefile is read, so a ``?=`` for it
+    does nothing, and a caller relying on such an override would see the
+    file's value here. CI invokes no overrides, so that gap is out of scope
+    rather than unconsidered.
+
+    ``:=`` and ``::=`` are stored as raw text like ``=``, so their value is
+    expanded late rather than at their own line. That differs from `make` only
+    where the right-hand side references a name assigned again later, which
+    this Makefile does exactly once, in ``MATURIN_DEVELOP_IS_RELEASE``. No
+    selector's closure reaches it, and resolving it would mean evaluating
+    `make`'s ``strip``, ``filter``, and ``call``; ``_expand`` reports such a
+    function rather than returning a plausible wrong answer.
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
     declared = document.get("variables")
     _require(
@@ -170,9 +177,9 @@ def makeutil_document(*, makefile: str = MAKEFILE) -> dict[str, typ.Any]:
     ------
     AssertionError
         If `makeutil` exits non-zero or emits something other than a JSON
-        object. Both mean the parse did not happen, and a caller that treated
-        the empty result as "the selector names nothing" would fail a moment
-        later with a misleading message.
+        object. Both mean the parse did not happen, and a caller that read the
+        empty result as "the selector names nothing" would fail later with a
+        misleading message.
     """
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argument vector.
         ["makeutil", "parse", makefile],  # ruff: ignore[start-process-with-partial-path] - `makeutil` resolved from PATH.
@@ -211,12 +218,12 @@ def _join_continuations(value: str) -> str:
     Returns
     -------
     str
-        The logical single line. `make` replaces each backslash-newline and the
-        whitespace that follows it with one space, so a two-line list fails
-        apart into the same words a one-line list does. Leaving the backslashes
-        in place would make each of them a word in its own right, and a
-        backslash is not a `.py` path — the pattern beside it would still
-        resolve, so the selector would look right while the tuple carried junk.
+        The logical single line: `make` replaces each backslash-newline and
+        the whitespace after it with one space, so a two-line list fails apart
+        into the same words a one-line list does. Leaving them in place would
+        make each backslash a word in its own right, and it is not a `.py`
+        path — the pattern beside it would still resolve, so the selector would
+        look right while the tuple carried junk.
     """
     return re.sub(r"\\\n[ \t]*", " ", value)
 
@@ -313,45 +320,6 @@ def variable_expansion(name: str, *, makefile: str = MAKEFILE) -> tuple[str, ...
         message=f"the Makefile must assign {name}",
     )
     return tuple(_expand(records[name], records).split())
-
-
-def selected_paths(
-    patterns: cabc.Iterable[str], *, root: pth.Path | None = None
-) -> tuple[pth.Path, ...]:
-    """Resolve selector patterns against the repository root.
-
-    Parameters
-    ----------
-    patterns : Iterable of str
-        Shell glob patterns, as a selector variable expands to them.
-    root : Path or None
-        Directory to resolve against. Defaults to the repository root.
-
-    Returns
-    -------
-    tuple of Path
-        Every file the patterns name, relative to ``root``, sorted and
-        deduplicated. A pattern matching nothing contributes nothing, which is
-        how `make test-python` itself behaves: its loop skips a pattern whose
-        first expansion does not exist.
-
-    Notes
-    -----
-    A pattern without a `.py` suffix is treated as naming no files rather than
-    as a file named literally. The selector is a list of Python test paths and
-    the recipes pass it straight to `pytest`, so a bare word in it is a
-    mistake, not a file. Callers that need to police that case should assert
-    the word appears in the variable rather than expecting a path here.
-    """
-    base = repo_root() if root is None else root
-    found: set[pth.Path] = set()
-    for pattern in patterns:
-        if not pattern.endswith(_PATH_SUFFIX):
-            continue
-        found.update(
-            path.relative_to(base) for path in base.glob(pattern) if path.is_file()
-        )
-    return tuple(sorted(found))
 
 
 def recipe_of(name: str, *, makefile: str = MAKEFILE) -> str:

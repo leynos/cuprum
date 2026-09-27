@@ -160,12 +160,45 @@ def narrow_steps(payload: Job, where: str) -> list[Step]:
 
 
 def step_inputs(step: Step, message: str) -> dict[str, object]:
-    """Return the ``with`` mapping declared by one workflow step."""
+    """Return the ``with`` mapping declared by one workflow step.
+
+    Parameters
+    ----------
+    step : Step
+        One parsed step mapping.
+    message : str
+        Location to cite in a diagnostic when ``with`` is missing or malformed.
+
+    Returns
+    -------
+    dict
+        The step's ``with`` inputs, keyed by name.
+    """
     return mapping(step.get("with"), message)
 
 
 def cache_paths(step: Step, message: str) -> list[str]:
-    """Return the paths a cache step owns, one per line."""
+    """Return the paths a cache step owns, one per line.
+
+    Parameters
+    ----------
+    step : Step
+        One parsed step mapping, declaring a ``with.path``.
+    message : str
+        Location to cite in a diagnostic, as ``workflow:job:step``.
+
+    Returns
+    -------
+    list of str
+        The declared paths, trimmed, in declaration order.
+
+    Raises
+    ------
+    AssertionError
+        If ``path`` is not a string, or declares no paths at all. A cache step
+        owning nothing would satisfy every ownership assertion vacuously, so
+        the empty case is reported here rather than passing as a clean run.
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     declared = step_inputs(step, message).get("path")
     require(
         condition=isinstance(declared, str),

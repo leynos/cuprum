@@ -25,7 +25,7 @@ import typing as typ
 
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
-from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
+from tests.helpers.makefile import recipe_of, variable_expansion
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
@@ -42,6 +42,7 @@ __all__ = (
     "remedy",
     "require",
     "root_modules",
+    "selected_paths",
     "uncovered",
 )
 
@@ -49,6 +50,10 @@ __all__ = (
 #: deliberately excludes.
 SELECTOR = "PYTEST_TARGETS"
 SCENARIO_SELECTOR = "ACT_SCENARIO_TARGETS"
+
+#: Marker distinguishing "this pattern names files" from "this pattern is a
+#: bare word". A `pytest` argument with no `.py` in it is not a path.
+_PATH_SUFFIX = ".py"
 
 
 #: An exemption's three claims: the Makefile variable whose expansion collects
@@ -99,6 +104,50 @@ ROOT_MODULE_GLOB = "test_*.py"
 #: module and report all of them as uncovered.
 _TESTS = "tests"
 _TESTS_DIR = pth.Path(_TESTS)
+
+
+def selected_paths(
+    patterns: cabc.Iterable[str], *, root: pth.Path | None = None
+) -> tuple[pth.Path, ...]:
+    """Resolve selector patterns against the repository root.
+
+    Parameters
+    ----------
+    patterns : Iterable of str
+        Shell glob patterns, as a selector variable expands to them.
+    root : Path or None
+        Directory to resolve against. Defaults to the repository root.
+
+    Returns
+    -------
+    tuple of Path
+        Every file the patterns name, relative to ``root``, sorted and
+        deduplicated. A pattern matching nothing contributes nothing, which is
+        how `make test-python` itself behaves: its loop skips a pattern whose
+        first expansion does not exist.
+
+    Notes
+    -----
+    A pattern without a `.py` suffix is treated as naming no files rather than
+    as a file named literally. The selector is a list of Python test paths and
+    the recipes pass it straight to `pytest`, so a bare word in it is a
+    mistake, not a file. Callers that need to police that case should assert
+    the word appears in the variable rather than expecting a path here.
+
+    This lives here rather than beside the Makefile reader because it is a
+    claim about the suite, not about `make`: `make` would happily treat a bare
+    word as a literal path, and only the fact that these patterns go to
+    `pytest` makes that reading wrong.
+    """
+    base = repo_root() if root is None else root
+    found: set[pth.Path] = set()
+    for pattern in patterns:
+        if not pattern.endswith(_PATH_SUFFIX):
+            continue
+        found.update(
+            path.relative_to(base) for path in base.glob(pattern) if path.is_file()
+        )
+    return tuple(sorted(found))
 
 
 def require(*, condition: bool, message: str) -> None:
@@ -250,13 +299,33 @@ def exceptions_verified() -> frozenset[str]:
 
 
 def uncovered() -> tuple[str, ...]:
-    """Return root-level modules no selector and no verified exception covers."""
+    """Return root-level modules no selector and no verified exception covers.
+
+    Returns
+    -------
+    tuple of str
+        Each enumerated module that neither selector names and no verified
+        exemption accounts for, in enumeration order. Empty when the selector
+        covers the whole population.
+    """
     covered = covered_modules() | exceptions_verified()
     return tuple(module for module in root_modules() if module not in covered)
 
 
 def remedy(modules: cabc.Iterable[str]) -> str:
-    """Return the failure message naming each module and both fixes."""
+    """Return the failure message naming each module and both fixes.
+
+    Parameters
+    ----------
+    modules : Iterable of str
+        The root-level modules to report, as `uncovered` returns them.
+
+    Returns
+    -------
+    str
+        A message listing each module and the two ways to give it a route, so
+        a reader is told what to do rather than only what is wrong.
+    """
     listing = "\n".join(f"  - {module}" for module in modules)
     return (
         "these root-level modules are collected by no target the suite runs, "

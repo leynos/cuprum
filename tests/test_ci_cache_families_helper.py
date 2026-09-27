@@ -17,10 +17,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tests.helpers import ci_cache_families as families
+from tests.helpers import ci_leg_matrix
+from tests.helpers.ci_leg_matrix import admits, matrix_legs
 from tests.helpers.ci_placement import Placement
-
-if typ.TYPE_CHECKING:
-    from tests.helpers.workflow_types import Step
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -79,8 +78,7 @@ def test_a_condition_admits_a_leg_when_every_named_flag_is_true(
 ) -> None:
     """Honour a save condition that names matrix values, and only those."""
     condition = " && ".join(f"matrix.{name}" for name in flags)
-    step = typ.cast("Step", {"if": condition})
-    admitted = families._writes_on_leg(step, flags)
+    admitted = admits(condition, flags)
     assert admitted == all(flags.values()), (
         f"condition {condition!r} against {dict(flags)} must admit the leg only "
         "when every flag it names is true"
@@ -99,8 +97,7 @@ def test_a_condition_naming_no_matrix_value_admits_every_leg(
     condition: str | None,
 ) -> None:
     """Model matrix references only; run-time values are not this test's job."""
-    step = typ.cast("Step", {"if": condition} if condition is not None else {})
-    assert families._writes_on_leg(step, {"python-suite": False}), (
+    assert admits(condition, {"python-suite": False}), (
         f"condition {condition!r} names no matrix value, so it must admit every leg"
     )
 
@@ -109,8 +106,8 @@ def test_a_job_without_a_matrix_expands_to_one_leg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Let callers iterate legs uniformly whether or not a matrix exists."""
-    monkeypatch.setattr(families, "job", lambda *_: {"runs-on": "ubuntu-latest"})
-    assert families.matrix_legs("w.yml", "j") == [{}], (
+    monkeypatch.setattr(ci_leg_matrix, "job", lambda *_: {"runs-on": "ubuntu-latest"})
+    assert matrix_legs("w.yml", "j") == [{}], (
         "a job with no matrix must expand to exactly one empty leg"
     )
 
@@ -120,10 +117,12 @@ def test_a_matrix_without_include_is_a_contract_failure(
 ) -> None:
     """Fail loudly on a matrix shape this reader cannot expand."""
     monkeypatch.setattr(
-        families, "job", lambda *_: {"strategy": {"matrix": {"python": ["3.13"]}}}
+        ci_leg_matrix,
+        "job",
+        lambda *_: {"strategy": {"matrix": {"python": ["3.13"]}}},
     )
     with pytest.raises(AssertionError, match="only `include` lists are supported"):
-        families.matrix_legs("w.yml", "j")
+        matrix_legs("w.yml", "j")
 
 
 def test_an_unmapped_runner_label_is_a_contract_failure(

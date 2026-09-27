@@ -15,18 +15,19 @@ execution; the guard is scoped to the first of those, and the developers' guide
 says so.
 
 The failure is invisible from a green run, which is why this module reads the
-tree and the selector rather than the test results. Two rules pin the
-selection:
+tree and the selector rather than the test results. One rule pins the
+selection: every root-level `tests/test_*.py` module is named by
+`PYTEST_TARGETS` or by `ACT_SCENARIO_TARGETS`, or appears in `EXCEPTIONS` as an
+`Exemption` naming the selector that collects it, the target that expands that
+selector, and a reason (see `tests/helpers/suite_selection.py` for why that
+table is empty and how to add to it).
 
-- every root-level `tests/test_*.py` module is named by `PYTEST_TARGETS` or by
-  `ACT_SCENARIO_TARGETS`, or appears in `EXCEPTIONS` as an `Exemption` naming
-  the selector that collects it, the target that expands that selector, and a
-  reason (see `tests/helpers/suite_selection.py` for why that table is empty
-  and how to add to it);
-
-- the `typecheck-test` job of `ci.yml` invokes `make test-python`, the target
-  that consumes the selector, so the guard connects the selector to the job
-  that actually runs it instead of stopping at the Makefile.
+Whether anything *runs* that selector — the recipe consuming it, and the CI
+job invoking that recipe on a leg a pull request schedules — is the companion
+question, and it lives in `tests/test_ci_suite_wiring_contract.py`. The two
+fail differently: a module outside the selector is a missing test reported by
+name against the tree, while a broken wiring leaves the tree correctly covered
+and CI collecting something else.
 
 The resolution machinery — the exception table, and everything that validates
 it — lives in `tests/helpers/suite_selection.py`, so this module holds only the
@@ -38,8 +39,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.helpers.ci_run_scripts import run_scripts
-from tests.helpers.makefile import recipe_of, selected_paths, variable_expansion
+from tests.helpers.makefile import variable_expansion
 from tests.helpers.suite_selection import (
     EXCEPTIONS,
     SCENARIO_SELECTOR,
@@ -50,49 +50,8 @@ from tests.helpers.suite_selection import (
     remedy,
     require,
     root_modules,
+    selected_paths,
     uncovered,
-)
-from tests.helpers.workflow_shell import script_runs_command
-
-#: The workflow, job, and target that run the Python suite for a pull request.
-#: `make test` also works locally but runs the Rust suite too, which is why CI
-#: calls the Python half on its own. `typecheck-test` is the job holding the
-#: `Run tests` step; `lint-test` runs the formatting, lint, Markdown, and MSRV
-#: checks but never the Python suite, so naming it here would assert a contract
-#: that does not exist.
-CI_SUITE_WORKFLOW = "ci.yml"
-CI_SUITE_JOB = "typecheck-test"
-CI_SUITE_TARGET = "make test-python"
-
-#: Every endpoint the `test-python` recipe must wire together, paired with what
-#: breaks when it is dropped. Held as one table because the claims are read
-#: together: a recipe satisfying three of the four still discards the selector,
-#: and a reader fixing a broken recipe should see every missing endpoint at
-#: once rather than rediscovering the next one on the following run.
-_RECIPE_ENDPOINTS = (
-    (
-        f"$({SELECTOR})",
-        (
-            "the selector is never expanded, so the recipe collects whatever "
-            "its pattern argument happened to be"
-        ),
-    ),
-    (
-        "$(foreach",
-        (
-            "the selector is handed to a single command instead of being "
-            "iterated, so the per-pattern `[ -e ]` guard and the per-pattern "
-            "exit status are lost"
-        ),
-    ),
-    (
-        "$(PYTEST)",
-        "the loop's arguments never reach the configured pytest invocation",
-    ),
-    (
-        "$$@",
-        "the loop's arguments are expanded and then discarded",
-    ),
 )
 
 
@@ -248,6 +207,13 @@ def test_the_seven_reported_modules_are_now_collected() -> None:
     selector, but only as a line in a list. Naming them keeps the issue's own
     finding legible in the test that closes it, so a reader can see the seven
     without reconstructing the report.
+
+    Resolved against `PYTEST_TARGETS` alone rather than through
+    `covered_modules`, which unions in `ACT_SCENARIO_TARGETS`. These seven are
+    the *default suite*, and the scenario selector is the suite they were
+    deliberately kept out of: a module moved there would leave `make test`
+    while an aggregate check still called it covered. Asking the narrower
+    question is what makes this test about the issue it closes.
     """
     expected = {
         "tests/test_ci_codescene_environment_contract.py",
@@ -258,11 +224,11 @@ def test_the_seven_reported_modules_are_now_collected() -> None:
         "tests/test_ci_resource_sampler_action.py",
         "tests/test_ci_setup_sccache_action.py",
     }
-    covered = covered_modules()
-    missing = sorted(expected - covered)
+    selected = {str(path) for path in selected_paths(variable_expansion(SELECTOR))}
+    missing = sorted(expected - selected)
     assert not missing, (
-        "issue #499's seven modules must stay in the suite; these are no "
-        f"longer collected: {missing}"
+        f"issue #499's seven modules must stay in the suite; these are no "
+        f"longer collected by {SELECTOR}: {missing}"
     )
 
 
@@ -300,91 +266,4 @@ def test_each_root_module_matches_a_selector_pattern(module: str) -> None:
     require(
         condition=module in covered_modules() or module in exceptions_verified(),
         message=remedy((module,)),
-    )
-
-
-def test_ci_invokes_the_target_that_consumes_the_selector() -> None:
-    """Require `ci.yml`'s `typecheck-test` job to run `make test-python`.
-
-    Without this, the Makefile could carry a correct selector that no job ever
-    evaluates: the questions above would all pass while CI ran something else,
-    or nothing. The assertion names the job rather than accepting any step
-    anywhere — a workflow that happened to run `make test-python` on a lane
-    excluded by an `if:` would otherwise satisfy it, and the guard would be
-    certifying a job that never executes on a pull request. Matching the
-    command by its leading shell tokens, rather than by substring, keeps a
-    mention in a comment from satisfying it too.
-    """
-    callers = [
-        f"{workflow_name}:{job_name}"
-        for workflow_name, job_name, _index, script in run_scripts()
-        if workflow_name == CI_SUITE_WORKFLOW
-        and job_name == CI_SUITE_JOB
-        and script_runs_command(script, CI_SUITE_TARGET)
-    ]
-    assert callers, (
-        f"no step of {CI_SUITE_WORKFLOW}:{CI_SUITE_JOB} runs "
-        f"`{CI_SUITE_TARGET}`, so {SELECTOR} is never evaluated on the pull "
-        "request lane and every coverage assertion above is moot"
-    )
-
-
-def test_the_suite_target_recipe_consumes_the_selector() -> None:
-    """Require the recipe to feed the selector into the pytest command.
-
-    A target named `test-python` that runs a bare directory would satisfy the
-    workflow check while collecting everything under `tests/` — including the
-    container-bound scenarios this repository keeps out of the default suite.
-    So the check pins the data flow, not the presence of a name: the recipe
-    iterates `$(foreach ... $(PYTEST_TARGETS) ...)`, and each iteration runs
-    `$(PYTEST)` over the loop variable. Asserting every endpoint of that path —
-    the selector supplies the loop, the loop sets a shell variable, and that
-    variable reaches pytest — is what ties the workflow check to the selector
-    the checks above read. A recipe that merely mentioned `$(PYTEST_TARGETS)`
-    somewhere would pass a substring test and fail this one.
-
-    The endpoints are read as one table rather than as a probe apiece, so a
-    recipe missing two of them reports both, and a reviewer reads the required
-    data flow in one place instead of reconstructing it from four assertions.
-    """
-    recipe = recipe_of("test-python")
-    absent = [
-        f"  {endpoint!r} is missing: {consequence}"
-        for endpoint, consequence in _RECIPE_ENDPOINTS
-        if endpoint not in recipe
-    ]
-    assert not absent, (
-        "the `test-python` recipe must wire every endpoint of the selection "
-        "into the pytest invocation:\n" + "\n".join(absent) + f"\nRecipe: {recipe!r}"
-    )
-    iterated = recipe.split("$(foreach", 1)[1].split(";", 1)[0]
-    assert f"$({SELECTOR})" in iterated, (
-        f"the selector must be the list `$(foreach` iterates, not merely a "
-        f"variable the recipe mentions. Recipe: {recipe!r}"
-    )
-
-
-def test_the_guard_names_the_ci_job_that_runs_the_suite() -> None:
-    """Pin the attribution, because the issue text and the tree disagreed.
-
-    Issue #499 said `lint-test` ran the suite. It does not: `lint-test` runs
-    the formatting, lint, Markdown, and MSRV checks, and the `Run tests` step
-    belongs to `typecheck-test`. Both appear in `ci.yml` and both are plausible
-    from the issue text alone, so the constant is asserted rather than trusted
-    — a guard pointing at the wrong job would certify a lane that never
-    evaluates the selector.
-    """
-    scripts = [
-        (job_name, script)
-        for workflow_name, job_name, _index, script in run_scripts()
-        if workflow_name == CI_SUITE_WORKFLOW
-    ]
-    running = {
-        job_name
-        for job_name, script in scripts
-        if script_runs_command(script, CI_SUITE_TARGET)
-    }
-    assert running == {CI_SUITE_JOB}, (
-        f"{CI_SUITE_TARGET} must be run by {CI_SUITE_JOB} and no other job; "
-        f"found {sorted(running)}"
     )

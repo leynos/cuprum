@@ -488,16 +488,28 @@ that runs it.
 
 `tests/test_ci_test_selection_contract.py` enforces the rule, and it fails with
 a message naming each uncovered module and both fixes rather than reporting
-only that something is wrong. It also asserts that a workflow step actually
-invokes `make test-python` and that the target's recipe expands
-`$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates — or one
-consumed by a recipe that runs a bare directory — is caught too. The
-enumeration and the exception table live in `tests/helpers/suite_selection.py`,
-which sits beside the code that validates each exemption's claim. Other
-contracts read the Makefile through `tests/helpers/makefile.py`, which parses
-it with the pinned `makeutil` binary: a regex over the source can miss a
-continuation or read a comment as an assignment, and either mistake shrinks the
-selector to a set that makes every coverage assertion pass for the wrong reason.
+only that something is wrong. The enumeration and the exception table live in
+`tests/helpers/suite_selection.py`, which sits beside the code that validates
+each exemption's claim. Other contracts read the Makefile through
+`tests/helpers/makefile.py`, which parses it with the pinned `makeutil` binary:
+a regex over the source can miss a continuation or read a comment as an
+assignment, and either mistake shrinks the selector to a set that makes every
+coverage assertion pass for the wrong reason.
+
+The companion question — whether anything *runs* that selector — is
+`tests/test_ci_suite_wiring_contract.py`. It asserts that a workflow step
+actually invokes `make test-python` and that the target's recipe expands
+`$(PYTEST_TARGETS)`, so a correct selector that CI never evaluates, or one
+consumed by a recipe that runs a bare directory, is caught too. The first of
+those resolves the step's guard against the job's matrix legs rather than
+grepping the command text: a step gated on the pre-release leg, or on any key
+a pull-request leg does not set, contains the command and still runs nothing on
+the branch that merges. The legs come from `tests/helpers/ci_leg_matrix.py` and
+the leg flag from `tests/helpers/ci_leg_gate.py`, which is also where
+`pull_request_legs` composes the two. The two halves are separate modules
+because they fail differently: a module outside the selector is a missing test
+reported by name against the tree, while broken wiring leaves the tree
+correctly covered and CI collecting something else.
 
 The exceptions that prove the shape are elsewhere: `ACT_SCENARIO_TARGETS` stays
 out of `PYTEST_TARGETS` because the scenarios need a container runtime, and
