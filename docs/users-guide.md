@@ -237,9 +237,11 @@ which is the whole contract:
 
 - `StdioTarget.pipe()` — a library-owned pipe. This is the default for a stream
   that capture, echo, idle reporting, or line observation needs; without one of
-  those the default is inherited.
+  those the default is `/dev/null`.
 - `StdioTarget.inherit()` — the parent's own stream, passed straight through.
-  This is the default for stdin, and for a stream nothing needs to read.
+  This is the default for stdin. For stdout and stderr it is the explicit way
+  to let an unobserved stream through to the parent, since the default there
+  discards it.
 - `StdioTarget.path(p)` — a file **cuprum owns**. Cuprum opens it immediately
   before the spawn and closes its copy in a `finally` right after, so the
   descriptor never outlives the run; the child keeps writing after that close.
