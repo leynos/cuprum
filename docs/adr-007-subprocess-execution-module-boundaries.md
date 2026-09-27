@@ -591,3 +591,59 @@ still resolve that name from its own module namespace for the patch to land.
 The design guide's §8.1.5 roster now names the new module, and this addendum is
 the statement its `_subprocess_wait.py` entry points at for the race. No public
 API changes, and the module-size suppression remains unnecessary.
+
+## Addendum (2026-09-27): two more `cuprum.sh` submodules
+
+The 2026-09-25 addendum's roster above is now incomplete, and one of its
+entries is wrong. The same #445 work that split the private subprocess modules
+also crossed the ceiling in two public-facing ones, and the splits are
+unavoidable rather than discretionary because `max-module-lines` is an enabled
+rule rather than a suppressible one.
+
+`cuprum/sh/output.py` reached 584 lines against the 400-line ceiling. The
+overrun was branch-introduced: against `origin/main` the module sits at 332
+lines and holds no stdio vocabulary at all, because `StdioTarget` is new in
+this work. `cuprum/sh/stdio.py` now owns that vocabulary — `StdioTarget`, its
+four-variant kind, and the validation policing it (`_validate_stdio_targets`,
+the `_reject_*` helpers, and `_share_one_owned_path`). `output.py` keeps
+`RunOutputOptions` and `IOOptions` and stands at 363 lines. It re-exports
+`StdioTarget` and `_validate_stdio_targets`, so `cuprum.sh.output` remains a
+usable import path for both.
+
+`cuprum/sh/safe_cmd.py` is the other overrun, and its shape differs. Against
+`origin/main` it sits at 398 lines — two short of the ceiling with no
+suppression — so the #445 work crossed the cap by adding 52 lines to a module
+already at the line. The extraction took `Pipeline`, which at 138 lines was the
+largest cohesive seam available rather than the thing that had grown; the same
+class was 138 lines on `origin/main`. `cuprum/sh/pipeline.py` now owns it,
+leaving `SafeCmd` and `SafeCmdBuilder` behind, and the two modules reference
+each other. That reciprocal reference is why `Pipeline` is bound by a
+module-level import at the _bottom_ of `safe_cmd.py` rather than at the top or
+inside `__or__`: `SafeCmd.__or__` is annotated `-> "Pipeline"`, and the public
+signatures are introspected with `typing.get_type_hints`, which evaluates a
+quoted annotation against the defining module's namespace alone. A
+function-local import would leave that annotation unresolvable from the first
+composition onwards, and a top-of-file import would ask `pipeline` to import a
+`SafeCmd` that did not exist yet, closing the cycle at load time.
+
+So the roster above reads correctly except in two places. It omits
+`cuprum/sh/stdio.py` and `cuprum/sh/pipeline.py`, and its `cuprum/sh/output.py`
+and `cuprum/sh/safe_cmd.py` entries describe the code as it stood before these
+splits: `output.py` no longer holds the standard-stream vocabulary, and
+`safe_cmd.py` no longer holds `Pipeline`. The corrected roster is:
+
+- `cuprum/sh/argv.py` — argv construction (`build_argv`, `_ArgValue`,
+  `_stringify_arg`, `_serialize_kwargs`).
+- `cuprum/sh/execution.py` — `ExecutionContext`, `TimeoutExpired`, and
+  `StdinInput`.
+- `cuprum/sh/results.py` — `CommandResult` and `PipelineResult`.
+- `cuprum/sh/output.py` — `RunOutputOptions` and `IOOptions`.
+- `cuprum/sh/stdio.py` — `StdioTarget` and the validation policing it.
+- `cuprum/sh/safe_cmd.py` — `SafeCmd` and `SafeCmdBuilder`.
+- `cuprum/sh/pipeline.py` — `Pipeline`, which the package re-exports.
+- `cuprum/sh/factory.py` — the `make()` builder factory.
+
+The public surface is unchanged: `cuprum.sh` still exports `StdioTarget` and
+`Pipeline` under the same names with the same object identity, and the wheel
+snapshot is regenerated for the two new modules. No public API changes, and the
+module-size suppression remains unnecessary.

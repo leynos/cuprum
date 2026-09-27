@@ -717,13 +717,24 @@ ADR-007 (module boundaries)     -> EP-M2              -> code review + module li
 ADR-009 (Oxford spelling)       -> EP-M4              -> make spelling
 ```
 
-ADR-007 keeps subprocess plumbing split across the single-responsibility
-modules listed in `Context and orientation`; this plan adds no new module
-boundary and moves no existing one, so the ADR is satisfied by construction and
-re-checked at each milestone boundary. The 400-line module ceiling is the
-practical expression of that ADR here: `_subprocess_execution.py` (364 lines),
-`_subprocess_wait.py` (393), and `sh/safe_cmd.py` (399) are all near the cap,
-so new logic goes into new small modules rather than into them.
+ADR-007 keeps subprocess plumbing split across single-responsibility modules.
+This plan **does** add module boundaries and move an existing one, so the ADR
+was amended rather than satisfied by construction. Three append-only addenda
+dated 2026-09-27 record the subprocess half: the stdin-producer split
+(`_subprocess_stdin_stream.py`), the spawn-and-deadline split
+(`_subprocess_spawn.py`, `_subprocess_deadline.py`, and the exit that
+`_wait_for_exit_code_within_timeout` made from `_subprocess_wait.py`), and the
+stdin-writer rendezvous (`_subprocess_rendezvous.py`). The accepted body above
+them is left unedited: an addendum is appended, never a retroactive rewrite of
+the text that was accepted. The boundaries are re-checked at each milestone
+boundary.
+
+The 400-line module ceiling is the practical expression of that ADR here. The
+counts move as the work proceeds, so they are recorded by milestone rather than
+restated here: at the time of writing `_subprocess_execution.py` is 381 lines,
+`_subprocess_wait.py` 336, and `sh/safe_cmd.py` 337, all near enough to the cap
+that new logic goes into new small modules rather than into them — which is how
+the four modules above came to exist.
 
 ## Verification plan
 
