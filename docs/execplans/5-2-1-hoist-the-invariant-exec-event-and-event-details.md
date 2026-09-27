@@ -1680,6 +1680,84 @@ differs in `limit_percent`, rule names, and `matched_frames` keys. The
 fidelity test that *is* meaningful — pre-split code vs post-split code on one
 capture — was run separately and produced byte-identical JSON.
 
+### 2026-09-27: the completed hoist measures 30.20% — above the revised 28% bar
+
+**This is a matched full-fixture measurement of the implemented hoist**, not a
+projection. It supersedes the 24.35%/26.91% projection table above, and it is
+the second time this gate has been missed — the first was against 10%, before
+any code was written.
+
+Probe: one control/candidate pair, full wrap-76 fixture, `--backend python`,
+`--stages 1 --mode echo --sink-kind devnull --line-callbacks --read-size 65536
+--repeat-count 1`, py-spy raw at 100 Hz. Control = `01ec41bd` (pre-hoist),
+candidate = `18083334` (post-hoist). Both captured `stdout_line_count =
+28256364` and `exit_code = 0`, so the same workload ran on both sides.
+
+| | control | candidate | delta |
+| --- | --- | --- | --- |
+| D (consume samples) | 26469 | 21832 | −4637 (−17.5%) |
+| N (construction samples) | 9106 | 6594 | −2512 (−27.6%) |
+| **share N/D** | **34.4025%** | **30.2034%** | **−4.20 points** |
+| share of all parent samples | 33.6387% | 28.0012% | −5.64 points |
+| parent samples | 27070 | 23549 | −3521 |
+| wall time | 271.32 s | 228.11 s | **−43.20 s (−15.92%)** |
+
+**The hoist demonstrably works; the gate's metric does not register it.** The
+candidate is 15.92% faster end to end on a 2 GiB workload, and the
+construction work it removed fell 27.6% against a denominator that fell only
+17.5%. But because the share is `N/D` and the removed work leaves both, the
+ratio improves by 4.20 points where a naive reading of a 15.92% speedup would
+suggest far more. The candidate would need N ≤ 6113, i.e. **481 fewer samples
+out of 6594**, to clear 28%.
+
+**Those 481 samples are not addressable by this design.** Every one of the
+6594 matched samples is a leaf inside `ExecEvent.__init__` itself — the
+decomposition finds no sub-frame work under the constructor to shave. So the
+remaining numerator is not overhead around the retained construction; it *is*
+the retained construction, which EP-M2 was explicitly scoped to keep and which
+V2/V4's distinct-object and payload-preservation contract requires. Reaching
+28% would mean constructing `ExecEvent` fewer times, which is the same
+observation-contract break the plan already declined for 10%.
+
+**Corroboration that this is not a rules artefact.** The classifier's own
+attribution was re-derived independently from the raw capture — an
+independently written matcher using the same nearest-caller rule reproduced
+D=21832, N=6594, 30.2034% exactly on the candidate capture. `unresolved_frames`
+is `{}` on both sides, so no rule drifted. The echo-truncation limiter's own
+generated constructors (`finish_line` under `_echo_truncation.py`, seen at
+weights 247/256/62 in the immediate-caller analysis) are correctly *excluded*,
+because no `emit`/`emit_line` caller sits below them — that is the caller
+requirement doing its job, not an under-count.
+
+**Two caveats on this probe, stated because they bound its authority.** It is
+**one pair, not the three** V5 requires, and the two runs were taken ~6 minutes
+apart at different host loads (control saw a transient spike to load 85.31 from
+another session's `rustc`; candidate ran at load 6). V5's own controls — D ≥
+10000 (met on both: 26469 and 21832), a candidate range ≤ 2 points across three
+pairs, and five unprofiled rounds per scenario — are therefore **not** yet
+satisfied. The wall-time figure especially is a single unpaired observation and
+is not yet evidence under V5's 5%-median rule.
+
+**Why the projection missed, in the terms it was written in.** Both projected
+shares were computed as `6474 / D_posthoist`, so each was only as good as its
+`D` estimate. Recovering the implied denominators: 24.35% implies D ≈ 26587 and
+26.91% implies D ≈ 24058. The observed post-hoist D is **21832** — below both.
+The projection underestimated how much the hoist would shrink the denominator,
+and a smaller denominator with a roughly fixed numerator gives a larger share
+than either figure. Two limits on how far this should be pressed: the observed
+N (6594) is not the projected 6474 measured again, because the rule set was
+merged in the same change — under the pre-hoist split the 6474 counted only the
+frames resolving through `emit` in `_pipeline_types.py`, whereas the merged rule
+also matches `emit_line` in `_line_callbacks.py`, which is where the hoist put
+the construction. So "N rose by 120" is not a like-for-like claim and is not
+made here; what is defensible is that N did **not** fall to the projected value
+while D fell further than projected, and the ratio followed.
+
+**What this does and does not settle.** It settles that the design as approved
+and implemented lands around 30%, not under 28%. It does not settle the
+three-pair dispersion question, so a BLOCKED decision should rest on a completed
+V5 collection rather than on this probe alone.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
