@@ -185,6 +185,21 @@ failure injection at that boundary.
     why that re-run is legitimate evidence rather than a substitution, and
     also for the measurement that falsifies this plan's earlier
     "deterministic" characterization of the hang.
+  - [x] (2026-09-27) EP-M1 re-confirmed at `6f82a697` on tree `75b18498`, by an
+    **independent** scrutineer run that did not take this plan's word for
+    anything: it re-derived the change surface itself, and captured every
+    gate's exit status out of band rather than reading log tails. Result —
+    `check-fmt`, `typecheck`, `lint`, `markdownlint`, `nixie` all pass;
+    `make lint` passed **unbounded** (exit 0, 52 s), so the narrowed path was
+    not needed at all. `make test` went red on a single host-load flake
+    (`test_a_shared_sink_keeps_the_keepalive_on_its_own_line`, a file this
+    branch never touches); a bounded re-run at 04:56 passed clean with
+    `2543 passed, 63 skipped, 6 xfailed in 145.85s` and nextest
+    `125 tests run: 125 passed`, exit 0, tree unchanged. The flake test passed
+    3/3 in isolation, and system load fell from 22.2 to 9.1 between the two
+    runs. **This run also produced the controlled A/B that settles the
+    actionlint question** — see the discovery below.
+
   - [ ] Three matched control/candidate pairs and ≥5 unprofiled paired rounds.
     Gated on EP-M2 by construction: the *candidate* is the post-hoist
     implementation, so there is nothing to pair until the hoist exists.
@@ -1046,6 +1061,36 @@ Option 3 is the only recorded route measured to clear the bar with margin — it
 removes the per-line construction rather than shrinking it — and it is also the
 one no local refinement can approximate.
 
+**Two further observations that bear on the design, recorded here because they
+were found late and neither is derived from the numbers above.**
+
+*First: the roadmap's success criterion is stated against a baseline that
+already bundles both constructors.* Item 5.2.1 asks for "per-line emission no
+longer reconstructs invariant fields", and the 39% figure it names as the
+starting point counts `ExecEvent` and `_EventDetails` **together**. A criterion
+that says "no longer reconstructs invariant fields" cannot be met by a change
+that leaves `ExecEvent`'s 27-field construction in the per-line path — which is
+exactly what the nearest-caller measurement shows must happen. So the roadmap's
+own wording, independent of any measurement, undercuts option 2's rationale:
+for a callback-only scenario there is no lifecycle construction to set aside,
+and the invariant fields the criterion names are the ones being rebuilt.
+Whichever option is approved, the roadmap text needs revisiting rather than
+treating as a fixed spec.
+
+*Second: the hoist's natural shape is a specialized emitter, not a cached
+prefix.* Only `pid` and `line` vary per line — `_event_details(*, pid, line)`
+passes exactly those two — yet `emit` reassigns all 27 `ExecEvent` fields on
+every line, of which 25 are stage-invariant or pinned to `None` for line
+phases. The reframing matters because option 1 reasons about *declared* fields
+(required versus optional), when the cost driver is *assigned* fields: a
+dataclass with a required `line` field still constructs it per line. Realizing
+the hoist therefore means preparing a specialized emitter at
+callback-composition time, which changes **which caller `_matching_rule`
+resolves to** and requires the classifier's rules to be re-baselined before V5
+can be read. That re-baselining is a prerequisite for measuring option 1, not a
+consequence of having measured it, and it should be in the approved work rather
+than discovered during it.
+
 **Independent corroboration that the samples are real constructor time.** The
 capture's own arithmetic and the microbenchmarks agree without being fitted to
 each other. One repeat delivers 28,256,364 lines in 316.24 s; the consume
@@ -1162,20 +1207,60 @@ timeout 120 actionlint -shellcheck= -config-file .github/actionlint.yaml
 ```
 
 exits **0 in under a second with empty output**, and every re-run recorded on
-this host used that form. The honest limit is narrow and statable: it disables
-actionlint's shell *syntax* checks inside `run:` blocks, and this branch's
-change surface contains **no** `.github/` paths at all (see `dbaba9ac`'s change
-set: `benchmarks/`, `cuprum/unittests/`, `docs/`, `tests/`), so the narrowed
-check is observed on the revision that matters. `actionlint` still validates
-`${{ }}` expressions under `-shellcheck=`, and it parses `.github/actions` as
-workflows, which makes `yamllint` the only tool covering the composite actions
-— none of which this branch modifies.
+this host used that form.
+
+**The justification is stronger than "this branch does not touch `.github/`",
+and it should be stated that way.** The `.github` subtree SHA is
+`7fb57438b7b7b953f5e5898004614c006f0614ba` at **every** revision examined —
+`66f11b9e`, `902b05fb`, `1bfefbb8`, `3251f1e1`, `dbaba9ac`, `8dd2ec0b`,
+`05267b9c`, `6f82a697` — *and at `origin/main`* (`7f762870`). The input is
+byte-identical across the branch's whole life, so no actionlint behaviour can
+be a function of revision content here. That is what makes the narrowed check
+non-substitutive: the shell-syntax coverage it forgoes cannot mask a
+branch-introduced defect, because there is no branch-introduced `.github/`
+change for it to hide. `actionlint` still validates `${{ }}` expressions under
+`-shellcheck=`, and it parses `.github/actions` as workflows, which makes
+`yamllint` the only tool covering the composite actions — none of which this
+branch modifies.
+
+**Two revision-attribution errors in this plan's earlier text, corrected
+here.** This paragraph previously cited "`dbaba9ac`'s change set" while
+describing the run at `902b05fb`; those are different revisions with different
+trees (`7b14eb39` and `5b87bf7f`). The path list is the range's
+(`8dd2ec0b..HEAD`), and it is stated as such above. Separately, **`902b05fb` is
+not an ancestor of `HEAD`**: it was amended away into `1bfefbb8`
+(`git branch --contains 902b05fb` is empty; only the reflog reaches it). It is
+a discarded draft *of this branch*, not a revision of its current history, and a
+`git gc` would take it along with the log that corroborates it. The
+intermittency conclusion does not rest on it — see the controlled A/B on a
+frozen tree recorded below.
 
 **A clean `-shellcheck=` exit is not vacuous.** An empty exit-0 result could
 mean the checker read nothing, so the binary was probed with a deliberately
 broken workflow on stdin: it reported `undefined function "nonexistent_fn"` and
 exited 1. It inspects input, and the clean exit over the ten workflow files is
-a real pass.
+a real pass. Re-verified at 05:06 on 2026-09-27, with the error text reproduced
+verbatim and the exit still 1 — the probe reads both a named file and `-` on
+stdin, so this is not an artefact of the input form.
+
+**The controlled A/B: the same command, the same tree, opposite outcomes, four
+minutes apart.** This is the settled form of the argument and it needs no
+orphaned revision. While gating `6f82a697` on tree `75b18498`:
+
+| when     | what                                      | outcome                                         |
+| -------- | ----------------------------------------- | ----------------------------------------------- |
+| 04:43:31 | `timeout 420 make lint`, unbounded recipe | **exit 0**, 52 s, reached actionlint            |
+| ~04:45   | `timeout 90 actionlint -config-file …`    | **exit 124**, killed at 90 s, 0 bytes of output |
+
+Same host, same revision, same tree hash, same actionlint binary, same
+`.github` content (`7fb57438b7b7b953f5e5898004614c006f0614ba`), four minutes
+apart. A pass and a hang from one command on one input cannot be a property of
+the input. This supersedes every earlier argument in this section: the earlier
+ones were circumstantial, and this one is a direct measurement.
+
+**The intermittency therefore is not "the tests were lucky once".** It is a
+property of the host that the *same* invocation can go either way, which is
+also why the earlier `902b05fb`-based reasoning was right for the wrong reason.
 
 **The unbounded recipe passed on this host too, in the same session.** Run
 immediately after the census, bounded at 90 s and against the clean tree the
@@ -1347,11 +1432,40 @@ require checking the explicit callback factory bodies as well.
 - 2026-09-27: Treat the bounded `actionlint -shellcheck=` re-run as **valid
   evidence for this revision** rather than as a weakened substitute for the
   hung gate. The narrowing removes shell-syntax checking inside `run:` blocks,
-  and this branch's change surface contains no `.github/` path at all, so the
-  narrowed check covers every file the branch actually touched; `yamllint`,
-  which shares the sub-check, is green alongside it. Record the *intermittent*
-  character of the hang explicitly, because the earlier "deterministic"
-  characterization would otherwise license a false permanent exemption.
+  and the `.github` subtree SHA `7fb57438…` is identical at every revision in
+  `8dd2ec0b..HEAD` *and* at `origin/main`, so the narrowed check covers every
+  file the branch could have changed; `yamllint`, which shares the sub-check,
+  is green alongside it. Record the *intermittent* character of the hang
+  explicitly, because the earlier "deterministic" characterization would
+  otherwise license a false permanent exemption.
+- 2026-09-27: **Do not infer a gate's outcome from a log tail.** Two hung runs
+  (`521b`, `521c`) were read as "killed at the `skylos` command line" purely
+  from where their logs stopped; both actually ended on the `actionlint`
+  invocation line like every other run, and neither wrapper had armed a bound
+  at all. The general rule, now in the discovery: `make` echoes a recipe line
+  before running it and actionlint prints nothing on success, so a **pass and a
+  hang are byte-identical in the log**. Only an out-of-band exit status
+  distinguishes them — `timeout 300 make lint 2>&1 | tee "$log"` with
+  `rc=${PIPESTATUS[0]}` written to a status file beside the log. The scrutineer
+  was asked to work this way and confirmed it independently.
+- 2026-09-27: **Prefer a controlled A/B to an argument from circumstance.**
+  The intermittent hang was argued for a long time from log tails, process
+  counts, and an orphaned revision. It was settled in four minutes by running
+  the same command twice on one frozen tree: `timeout 420 make lint` → exit 0
+  in 52 s at 04:43, and
+  `timeout 90 actionlint -config-file .github/actionlint.yaml` → exit 124 at
+  04:45. Same tree hash, same binary, same `.github` content. When a phenomenon
+  is suspected to be environmental, measuring it directly on a frozen input
+  beats accumulating circumstantial cases.
+- 2026-09-27: **A red gate in an untouched file is a load hypothesis to test,
+  not a conclusion to assert.** `make test` went red on
+  `test_a_shared_sink_keeps_the_keepalive_on_its_own_line` while the tree was
+  frozen and the file byte-identical across the range. The response was to
+  check load (22.2 falling to 9.1), run the test in isolation (3/3 pass), and
+  re-run the suite bounded (exit 0, `2543 passed`), rather than either
+  dismissing it or chasing a fix. The flake has no `/tmp` precedent, so "there
+  is no earlier instance" is recorded as the actual state of the evidence
+  rather than upgraded to "known flake".
 
 ## Outcomes & retrospective
 
@@ -1371,6 +1485,15 @@ execution identity (§V4) and the post-spawn ownership claim (§V3). Two further
 numeric claims were corrected in the BLOCKED entry. The plan text has, in four
 places, been wrong in ways only measurement could reveal; that is the argument
 for the characterization-first structure, not against it.
+
+The gate evidence was **independently reproduced**, not merely re-asserted: a
+scrutineer that was instructed to trust none of this plan's claims re-derived
+the change surface, ran all six gates, captured exit statuses out of band, and
+reported one red — a load-induced timing flake in a file the branch does not
+touch, confirmed by a clean bounded re-run at lower load. Its single most
+useful contribution was unplanned: gating the tree gave a frozen input on which
+the unbounded `actionlint` both passed and hung minutes apart, converting the
+host-level-hang hypothesis from an argument into a measurement.
 
 Implementation approval for a **revised** EP-M2 design remains pending, and it
 must not be inferred from this branch's green gates: the gates prove the
