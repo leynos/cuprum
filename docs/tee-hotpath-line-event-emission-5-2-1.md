@@ -411,8 +411,18 @@ work _raises_ the share) applies to any future change here, including 5.2.2.
 
 ## Machine-readable outputs
 
-The full folded captures, worker results, and classifier outputs remain in the
-gitignored `dist/` tree and in `/tmp/smoke521/v5/`. The fixtures are 2 GiB each
-and are not committed; their checksums above identify them. The classifier
-rules are committed at
+The full folded captures, worker results, and classifier outputs are committed
+under
+[`profiling/5-2-1-line-event-emission/`](profiling/5-2-1-line-event-emission/README.md):
+six capture directories, the thirty unprofiled runs, the collection's
+`verdict.txt`, and the six captures re-classified at the revised 30% limit.
+Together they let a reader recalculate N/D and re-run the classifier from the
+committed inputs alone, which is what makes the acceptance table above
+checkable rather than merely asserted. Absolute host paths in those files are
+replaced with `<repo>` and `<capture>`; frame names, line identifiers, sample
+weights, timings, and SHAs are verbatim.
+
+The fixtures are 2 GiB each and are **not** committed; their checksums above
+identify them, and the large binary profiles stay in the gitignored `dist/`
+tree. The classifier rules are committed at
 [`profiling/5-2-1-line-event-emission/classifier-rules.json`](profiling/5-2-1-line-event-emission/classifier-rules.json).
