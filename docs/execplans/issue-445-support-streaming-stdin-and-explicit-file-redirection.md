@@ -1337,10 +1337,16 @@ and why a passing result cannot be vacuous.
   the child is terminated, a `StdinSourceError` reaches the caller, and no
   writer task, pipe, or child process outlives the run. Method: parameterized
   integration tests over the strategy fixture, with a producer that raises
-  after N chunks for N in {0, 1, mid, last}. Rationale: the failure must be
-  raised on every exit path, and the exit paths are a finite enumeration.
-  Domain: `run()` and `run_sync()`; capture on and off; raise before the first
-  chunk, between chunks, and after the final chunk. Artefact:
+  after N chunks, for the two sites the suite builds: N = 0 (before the first
+  chunk) and N = 1 (between chunks), written as `_raising_after(0)` and
+  `_raising_after(1)`. Rationale: the failure must be raised on every exit
+  path, and the exit paths are a finite enumeration. The two sites are chosen
+  to be the two *distinct* outcomes rather than a longer series: N = 0 is
+  failure known before the child ever exits, N = 1 is failure arriving after
+  the child's exit has already settled. A producer that raises *after* its
+  final chunk is constructible and is deliberately not a case here: it tests
+  the fault the control below contrasts with, not the control. Domain: `run()`
+  and `run_sync()`; capture on and off; the two raise sites above. Artefact:
   `cuprum/unittests/test_safe_cmd_stdin_stream.py`. Evidence: `make test`;
   before EP-M3 the exception surfaces as a bare producer exception or is
   swallowed, after it as `StdinSourceError` with the child's exit observed.
