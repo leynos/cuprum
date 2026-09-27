@@ -1320,12 +1320,13 @@ Terms used in this plan:
   pipe — inherited, `/dev/null`, a file, or a borrowed descriptor. A pinned
   stream has no parent-side pipe and therefore nothing for cuprum to consume or
   write.
-- **Pull-after-drain** means the producer is advanced only after the previous
-  chunk has cleared the parent's transport write buffer. It does *not* mean the
-  child has read those bytes: `drain()` returns once the buffer falls below its
-  low-water mark, and the OS pipe holds bytes of its own, so several chunks can
-  be in flight at once. What the discipline bounds is how far *ahead* of the
-  child the producer may run, not the memory one step retains.
+- **Pull-after-drain** means the producer is advanced only after `drain()` has
+  returned for the previous chunk. It does *not* mean the buffer is empty or
+  that the child has read those bytes: `drain()` returns once the buffer falls
+  below its low-water mark, and the OS pipe holds bytes of its own, so several
+  chunks can be in flight at once and the writer may pull ahead of the child's
+  reads. What the discipline bounds is how far *ahead* of the child the
+  producer may run, not the memory one step retains.
 - **Early close** means the child closed its stdin before the producer was
   exhausted, which on POSIX surfaces as `BrokenPipeError`/`EPIPE`.
 

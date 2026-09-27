@@ -136,9 +136,10 @@ async def _write_chunk(
     """Encode one chunk, write it, and drain before returning.
 
     Draining before returning is the backpressure: the caller's next pull
-    happens only once this chunk has cleared the transport's write buffer,
-    which is a statement about the parent's buffer rather than about the child
-    having read the bytes.
+    happens only after ``drain()`` has returned, and because that return comes
+    at the transport's low-water mark rather than on an empty buffer, the
+    writer may pull ahead of the child's reads. The bound is on how far ahead
+    it runs, not on whether the child has taken these bytes off the pipe.
 
     An empty encoded payload writes nothing and emits nothing: a ``str`` chunk
     that the incremental encoder is still holding entirely (a lone leading
