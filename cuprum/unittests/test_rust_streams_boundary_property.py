@@ -15,6 +15,15 @@ Buffer-size validation runs before descriptor conversion, so the
 buffer-size properties can pass a throwaway descriptor without performing
 I/O. The descriptor properties use the default (valid) buffer size so that
 conversion is the failing step.
+
+The buffer-size properties open a real read end rather than passing ``-1``, so
+they hold on every platform: Windows resolves a CRT descriptor to an OS handle
+in ``cuprum._streams_rs`` before the native call, and ``msvcrt.get_osfhandle``
+raises ``OSError`` for ``-1``, which would mask the buffer rejection the
+property asserts. Where a deliberately invalid descriptor is the subject — a
+negative or out-of-``int`` value the property supplies itself — the enclosing
+property carries ``_buffer_validation_before_descriptor`` to record the same
+limit.
 """
 
 from __future__ import annotations
@@ -37,11 +46,6 @@ _DEFAULT_BUFFER_SIZE = 65536
 _I32_MAX = (1 << 31) - 1
 _I64_MAX = (1 << 63) - 1
 _I64_MIN = -(1 << 63)
-# A descriptor value that is deterministically invalid, used only where
-# validation fails before the descriptor is dereferenced. -1 never names an
-# open descriptor, so a validation-order regression fails loudly instead of
-# blocking on a real fd such as stdin (0).
-_UNUSED_FD = -1
 
 # The descriptor properties assert the Unix i32 file-descriptor conversion
 # contract. On Windows the wrapper routes fds through msvcrt.get_osfhandle and
@@ -53,8 +57,10 @@ _unix_only = pytest.mark.skipif(
 )
 
 # Windows resolves a CRT descriptor to a file handle in the Python wrapper
-# before Rust receives ``buffer_size``. The throwaway descriptor this property
-# uses consequently fails there before the buffer-validation boundary can run.
+# before Rust receives ``buffer_size``. A ``-1`` throwaway descriptor
+# consequently fails there before the buffer-validation boundary can run:
+# ``msvcrt.get_osfhandle(-1)`` raises ``OSError(EBADF)``. Properties that hand
+# over an open descriptor instead do not need this mark.
 _buffer_validation_before_descriptor = pytest.mark.skipif(
     sys.platform == "win32",
     reason="Windows resolves the descriptor before Rust validates buffer_size",
@@ -84,16 +90,6 @@ class _BufferSizeEntryPoint(typ.Protocol):
         pass
 
 
-def _consume_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:
-    """Call ``rust_consume_stream`` with the supplied ``buffer_size``."""
-    return streams.rust_consume_stream(_UNUSED_FD, buffer_size=buffer_size)
-
-
-def _pump_with_buffer_size(streams: ModuleType, *, buffer_size: int) -> object:
-    """Call ``rust_pump_stream`` with the supplied ``buffer_size``."""
-    return streams.rust_pump_stream(_UNUSED_FD, _UNUSED_FD, buffer_size=buffer_size)
-
-
 # Both bounds span the whole signed 64-bit range, so the failure is the
 # documented buffer-size rejection rather than an integer-conversion overflow.
 # The negative bound reaches ``i64::MIN``: PyO3 extracts ``buffer_size`` as an
@@ -105,28 +101,79 @@ _OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
 )
 
 
+class _OpenReaderEntryPoint(typ.Protocol):
+    """An entry point invoked with an open descriptor and a buffer size."""
+
+    def __call__(
+        self, streams: ModuleType, *, reader_fd: int, buffer_size: int
+    ) -> object:
+        """Invoke the entry point with the supplied reader and buffer size."""
+        ...
+
+
+def _consume_with_open_reader(
+    streams: ModuleType, *, reader_fd: int, buffer_size: int
+) -> object:
+    """Call ``rust_consume_stream`` with the open reader and buffer size."""
+    return streams.rust_consume_stream(reader_fd, buffer_size=buffer_size)
+
+
+def _pump_with_open_reader(
+    streams: ModuleType, *, reader_fd: int, buffer_size: int
+) -> object:
+    """Call ``rust_pump_stream`` with the open reader and a valid writer.
+
+    The writer is opened separately rather than reusing ``reader_fd``: the
+    pump's wrapper closes a writer that never reached the native ownership
+    boundary, and closing the reader would leave the descriptor the property
+    depends on in an undefined state on the next example.
+
+    Returns
+    -------
+    object
+        Whatever the entry point returns; the property expects it to raise
+        instead.
+    """
+    with contextlib.ExitStack() as stack:
+        writer_fd = os.open(os.devnull, os.O_WRONLY)
+        stack.callback(_safe_close, writer_fd)
+        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+
+
 @pytest.mark.parametrize(
     "entry_point",
     [
-        pytest.param(_consume_with_buffer_size, id="consume"),
-        pytest.param(_pump_with_buffer_size, id="pump"),
+        pytest.param(_consume_with_open_reader, id="consume"),
+        pytest.param(_pump_with_open_reader, id="pump"),
     ],
 )
-@_buffer_validation_before_descriptor
 @_SUPPRESS_FIXTURE
 @given(bad_size=_OUT_OF_RANGE_BUFFER_SIZES)
-def test_rejects_out_of_range_buffer(
+def test_rejects_out_of_range_buffer_with_open_reader(
     rust_streams: ModuleType,
-    entry_point: _BufferSizeEntryPoint,
+    entry_point: _OpenReaderEntryPoint,
     bad_size: int,
 ) -> None:
-    """Both entry points reject any ``buffer_size`` outside ``1..=1 GiB``.
+    """Both entry points reject an out-of-range buffer for an open reader.
 
-    On the POSIX path, validation precedes descriptor conversion, so a
-    throwaway descriptor is enough and no I/O is performed.
+    The reader is never dereferenced: the buffer check runs first and raises.
+    An invalid buffer reported as anything but ``ValueError`` — in particular
+    as the ``OSError`` a first read from an exhausted descriptor would produce
+    — is the regression this catches.
+
+    The read end is real so the property holds on Windows as well as POSIX.
+    Handing ``-1`` to the wrapper would fail there during its own descriptor
+    preparation, before the native validation this property exists to observe,
+    which is why the equivalent property that still uses an invalid descriptor
+    carries ``_buffer_validation_before_descriptor``. An open descriptor needs
+    no such exclusion, so this is the row that gives the Windows job live
+    coverage of the buffer window.
     """
-    with pytest.raises(ValueError, match="buffer_size"):
-        entry_point(rust_streams, buffer_size=bad_size)
+    with contextlib.ExitStack() as stack:
+        reader = os.open(os.devnull, os.O_RDONLY)
+        stack.callback(_safe_close, reader)
+        with pytest.raises(ValueError, match="buffer_size"):
+            entry_point(rust_streams, reader_fd=reader, buffer_size=bad_size)
 
 
 def _consume_with_reader_and_buffer(
@@ -346,8 +393,8 @@ def test_pump_default_buffer_matches_explicit(
 @pytest.mark.parametrize(
     "entry_point",
     [
-        pytest.param(_consume_with_buffer_size, id="consume"),
-        pytest.param(_pump_with_buffer_size, id="pump"),
+        pytest.param(_consume_with_open_reader, id="consume"),
+        pytest.param(_pump_with_open_reader, id="pump"),
     ],
 )
 @_SUPPRESS_FIXTURE
@@ -358,7 +405,7 @@ def test_pump_default_buffer_matches_explicit(
 )
 def test_out_of_i64_buffer_size_stays_an_extraction_error(
     rust_streams: ModuleType,
-    entry_point: _BufferSizeEntryPoint,
+    entry_point: _OpenReaderEntryPoint,
     beyond_i64: int,
 ) -> None:
     """Values outside ``i64`` keep PyO3's ``OverflowError``, not ``ValueError``.
@@ -371,6 +418,14 @@ def test_out_of_i64_buffer_size_stays_an_extraction_error(
     ``OverflowError`` is a subclass of ``ArithmeticError``, not of
     ``ValueError``, so ``pytest.raises(ValueError)`` would not mask a
     regression here.
+
+    The reader is a real read end for the same reason the window properties use
+    one: the argument is never extracted, so the descriptor is not
+    dereferenced, but Windows would fail it during the wrapper's own
+    preparation and mask the extraction error this property pins.
     """
-    with pytest.raises(OverflowError):
-        entry_point(rust_streams, buffer_size=beyond_i64)
+    with contextlib.ExitStack() as stack:
+        reader = os.open(os.devnull, os.O_RDONLY)
+        stack.callback(_safe_close, reader)
+        with pytest.raises(OverflowError):
+            entry_point(rust_streams, reader_fd=reader, buffer_size=beyond_i64)

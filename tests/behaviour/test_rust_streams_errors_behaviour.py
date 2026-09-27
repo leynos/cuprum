@@ -17,6 +17,7 @@ pytest tests/behaviour/test_rust_streams_errors_behaviour.py
 
 from __future__ import annotations
 
+import contextlib
 import os
 import typing as typ
 
@@ -140,11 +141,28 @@ def when_native_helper_receives(
 
     match failure:
         case "a zero buffer size":
-            # The descriptor is never dereferenced: buffer validation runs
-            # first, so -1 is a witness rather than an I/O participant.
-            args = (-1, -1) if operation == "pump" else (-1,)
-            kwargs = {"buffer_size": 0}
-            return _capture(entry_point, args, kwargs)
+            # The reader is never dereferenced — buffer validation runs first —
+            # but it must still be one the wrapper can prepare. ``-1`` is not:
+            # on Windows the wrapper resolves the reader through
+            # ``msvcrt.get_osfhandle``, which raises ``OSError(EBADF)`` for it
+            # before the native buffer check can run, so the row would observe
+            # the wrapper's descriptor failure rather than the native category
+            # it pins. An open read end survives that preparation on every
+            # platform.
+            with contextlib.ExitStack() as stack:
+                reader = os.open(os.devnull, os.O_RDONLY)
+                stack.callback(_safe_close, reader)
+                args: tuple[int, ...] = (reader,)
+                if operation == "pump":
+                    # A separate write end, handed over rather than closed
+                    # here: the wrapper closes a writer that never reached the
+                    # native ownership boundary, so closing it here as well
+                    # would be the double close this suite avoids. It is never
+                    # written to, because the buffer check raises first.
+                    writer = os.open(os.devnull, os.O_WRONLY)
+                    args = (reader, writer)
+                kwargs = {"buffer_size": 0}
+                return _capture(entry_point, args, kwargs)
         case "a fatal reader error":
             # A closed read end fails on the first read; the write end must be
             # a real descriptor, because the pump adopts and closes it.
