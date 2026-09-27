@@ -2359,20 +2359,31 @@ both and cannot disambiguate. `coordination.py` has carried `pipeline_` since
 the file was added in `b63a0f21`, so no version of the tree ever supported the
 short name in that file.
 
-The recorded symptom does disambiguate, and it identifies the coordination test:
-`partial-final` and the assertion text "the stage's own bytes must be
-unchanged" belong to it, while the execution test writes `partial\n`, sleeps
-0.45 s, and has no such assertion. Both older entries are corrected above. What
-is *not* established is which test actually failed on 2026-09-19 — that log has
-since been removed from `/tmp`, so "the citation was wrong then" and "the
-citation was right then about a genuinely different test" cannot be
-distinguished from the surviving evidence. It is recorded as unresolved rather
-than assumed either way.
+The recorded symptom does disambiguate, and it identifies the coordination
+test. Its distinguishing detail is smaller than expected: both tests assert
+that a sink's leading bytes are unchanged, and their messages differ by three
+words — `coordination.py:258` says "the **stage's** own bytes must be
+unchanged" while `execution.py:292` says "the **child's**". Only the
+coordination test writes `partial-final`; the execution test writes
+`partial\n`. The 04:56 entry records "the stage's own bytes must be unchanged"
+alongside `partial-final`, so it is the coordination test on both counts. Both
+older entries are corrected above.
+
+A separate background search found a genuine historical `FAILED` line for the
+**execution** test as well — so that test does flake too, which is presumably
+how the name came to be written down. Its log has since been recycled from
+`/tmp` and cannot be dated, so it is not claimed as the source of the 04:56
+citation. What the surviving evidence supports is narrower and sufficient: the
+04:56 failure was the coordination test, and the execution test independently
+flakes with a near-identical message.
 
 The generalizable part: when two identifiers differ by one word and both appear
 in the same logs, a prose citation of either is unverifiable except against the
-tree, and a gate will not catch it — no linter resolves prose identifiers. Cite
-the file alongside the test name.
+tree, and a gate will not catch it — no linter resolves prose identifiers. Here
+the ambiguity was worse than the names: the two assertion messages differ by
+three words and both describe the same failure mode, so a reader checking the
+citation against a remembered symptom would confirm it. Cite the file alongside
+the test name, and quote assertion text verbatim rather than paraphrasing it.
 
 **A prediction of mine failed here, and the measurement is stronger for it.**
 Before dispatching the second run I read `uptime`, saw the 1-minute load fall
