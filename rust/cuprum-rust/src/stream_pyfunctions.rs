@@ -51,11 +51,8 @@ fn raw_windows_handle_error<T>() -> PyResult<T> {
 }
 
 #[cfg(windows)]
-fn reject_transferred_windows_writer<T>(writer: PlatformFd) -> PyResult<T> {
-    // SAFETY: this PyO3 entry point accepts an ownership transfer for its
-    // writer argument. Rejecting unsupported raw Windows I/O still consumes
-    // that transfer, but never asserts the synchronous-I/O capability.
-    drop(unsafe { OwnedStream::from_raw_handle(writer as RawHandle) });
+fn reject_transferred_windows_writer<T>(writer: OwnedStream) -> PyResult<T> {
+    drop(writer);
     raw_windows_handle_error()
 }
 
@@ -80,9 +77,14 @@ pub(super) fn rust_pump_stream(
     #[cfg(windows)]
     {
         let _ = py;
+        let writer_raw = convert_fd(writer_fd)?;
+        // SAFETY: this PyO3 entry point accepts a valid, uniquely owned
+        // Windows writer transfer. Generic ownership does not assert that the
+        // rejected handle supports synchronous I/O.
+        let writer = unsafe { OwnedStream::from_raw_handle(writer_raw as RawHandle) };
         validate_buffer_size(buffer_size)?;
         convert_fd(reader_fd)?;
-        reject_transferred_windows_writer(convert_fd(writer_fd)?)
+        reject_transferred_windows_writer(writer)
     }
     #[cfg(unix)]
     run_stream_operation(py, reader_fd, buffer_size, || {

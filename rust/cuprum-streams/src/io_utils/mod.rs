@@ -112,13 +112,7 @@ pub(crate) fn handle_write(
     writer: &impl AsStream,
     chunk: &[u8],
 ) -> Result<WriteOutcome, PumpError> {
-    #[cfg(unix)]
-    let outcome = write_all_unix(writer, chunk)?;
-
-    #[cfg(windows)]
-    let outcome = write_all_windows(writer, chunk)?;
-
-    Ok(outcome)
+    write_all_unix(writer, chunk)
 }
 
 #[cfg(windows)]

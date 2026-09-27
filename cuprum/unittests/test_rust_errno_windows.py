@@ -73,15 +73,23 @@ def test_consume_rejects_raw_windows_handle(rust_streams: ModuleType) -> None:
 @_windows_only
 def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
     """The raw writer transfer is consumed while the unsupported call fails."""
-    native = rust_streams._load_native()
-    reader_fd, reader_writer_fd = os.pipe()
-    writer_reader_fd, writer_fd = os.pipe()
-    reader_handle = _streams_rs._convert_fd_for_platform(reader_fd)
-    writer_handle = _streams_rs._duplicate_windows_handle(
-        _streams_rs._convert_fd_for_platform(writer_fd)
-    )
+    reader_fd: int | None = None
+    reader_writer_fd: int | None = None
+    writer_reader_fd: int | None = None
+    writer_fd: int | None = None
+    writer_handle: int | None = None
     writer_transferred = False
     try:
+        native = rust_streams._load_native()
+        reader_fd, reader_writer_fd = os.pipe()
+        writer_reader_fd, writer_fd = os.pipe()
+        reader_handle = _streams_rs._convert_fd_for_platform(reader_fd)
+        writer_handle = _streams_rs._duplicate_windows_handle(
+            _streams_rs._convert_fd_for_platform(writer_fd)
+        )
+
+        # Calling the native function transfers ownership before its Rust-side
+        # buffer and reader validation can fail.
         writer_transferred = True
         with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
             native.rust_pump_stream(reader_handle, writer_handle)
@@ -89,8 +97,51 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
         _assert_invalid_windows_handle(writer_handle)
     finally:
         for fd in (reader_fd, reader_writer_fd, writer_reader_fd, writer_fd):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        if writer_handle is not None and not writer_transferred:
             with contextlib.suppress(OSError):
-                os.close(fd)
-        if not writer_transferred:
+                _streams_rs._close_windows_handle(writer_handle)
+
+
+@pytest.mark.parametrize(
+    ("reader_fd", "buffer_size", "error_message"),
+    [
+        (0, 0, "buffer_size must be greater than zero"),
+        (-1, 65536, "file handle must be non-negative"),
+    ],
+    ids=("buffer-size", "reader-handle"),
+)
+@_windows_only
+def test_pump_closes_writer_before_early_validation(
+    rust_streams: ModuleType,
+    reader_fd: int,
+    buffer_size: int,
+    error_message: str,
+) -> None:
+    """An early native validation error still consumes the writer transfer."""
+    writer_reader_fd: int | None = None
+    writer_fd: int | None = None
+    writer_handle: int | None = None
+    writer_transferred = False
+    try:
+        native = rust_streams._load_native()
+        writer_reader_fd, writer_fd = os.pipe()
+        writer_handle = _streams_rs._duplicate_windows_handle(
+            _streams_rs._convert_fd_for_platform(writer_fd)
+        )
+
+        writer_transferred = True
+        with pytest.raises(ValueError, match=error_message):
+            native.rust_pump_stream(reader_fd, writer_handle, buffer_size)
+
+        _assert_invalid_windows_handle(writer_handle)
+    finally:
+        for fd in (writer_reader_fd, writer_fd):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        if writer_handle is not None and not writer_transferred:
             with contextlib.suppress(OSError):
                 _streams_rs._close_windows_handle(writer_handle)

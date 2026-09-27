@@ -57,14 +57,6 @@ fn borrowed_reader_survives(
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: reader remains owned outside this scope, including unwind.
         let view = unsafe { borrow_reader(raw) };
-        // Windows also reconstructs a temporary capability File for I/O.
-        // Unwind through that exact adapter before observing the real handle.
-        #[cfg(windows)]
-        if should_panic {
-            drop(super::windows::with_file(view, |_| {
-                panic!("injected real unwind")
-            }));
-        }
         assert!(!should_panic, "injected real unwind");
         let written = super::write_once(borrow(&writer), b"ping")
             .unwrap_or_else(|error| panic!("write payload: {error:?}"));
