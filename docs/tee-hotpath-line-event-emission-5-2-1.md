@@ -260,8 +260,8 @@ short of that by a similar margin:
 | r3-candidate | 5208 | 17413 | 29.9087% | 18600.0            | −1187.0   |
 
 _Table 7: Against the 28% bar, the candidate missed by a consistent ~1200
-denominator samples, or 6.3 to 6.9% of its own D. Against the revised 30% bar
-the same rows clear it; Table 11 gives the headroom._
+denominator samples — 6.8 to 6.9% of its own D. Against the revised 30% bar the
+same rows clear it; Table 11 gives the headroom._
 
 Reconstructing the projection on the _final_ rule set, rather than against the
 pre-hoist rule set it was written with, isolates the error. Had the removals
