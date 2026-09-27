@@ -28,7 +28,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import CommandResult, LineStream, SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
 
@@ -36,6 +36,13 @@ _WRITE_STDOUT = "import sys; sys.stdout.write('out\\n'); sys.stdout.flush()"
 _WRITE_STDERR = "import sys; sys.stderr.write('err\\n'); sys.stderr.flush()"
 _WRITE_BOTH = f"{_WRITE_STDOUT}; {_WRITE_STDERR}"
 _WRITE_THEN_FAIL = f"{_WRITE_BOTH}; raise SystemExit(3)"
+
+# The child reports the contents of the descriptor it was handed on fd 2 onto
+# its own stdout, which is where the line stream can see it. A report sent back
+# on stderr would travel through the very descriptor under test.
+_READ_BACK_STDERR = (
+    "import os, sys; os.lseek(2, 0, 0); sys.stdout.write(os.read(2, 4096).decode())"
+)
 
 # Only POSIX descriptor semantics are asserted: on Windows a "borrowed
 # descriptor" is a CRT file descriptor, whose inheritance and reuse rules are a
@@ -364,6 +371,46 @@ def test_borrowed_file_object_is_flushed_before_spawn(
         "the child must inherit the borrowed descriptor at the caller's offset, "
         f"so its bytes land after the flushed ones; got {written!r}"
     )
+
+
+@_posix_only
+def test_borrowed_file_object_written_before_iteration_reaches_the_child(
+    python_builder: cabc.Callable[..., SafeCmd],
+    tmp_path: Path,
+) -> None:
+    """On the ``lines()`` path the flush must still follow the fork.
+
+    ``lines()`` resolves its stdio when it is *called* but spawns the child only
+    when the returned stream is first *iterated*, so a flush performed during
+    resolution fires early and silently drops anything the caller writes in
+    between. This test writes after the call and before the iteration, which is
+    the only window that distinguishes the two placements.
+
+    The child reports what it read on its own stdout, which the line stream
+    observes; reporting on stderr would send the answer through the descriptor
+    under test.
+    """
+    log = tmp_path / "borrowed.log"
+    command = python_builder("-c", _READ_BACK_STDERR)
+
+    with log.open("w+b") as handle:
+        handle.write(b"caller-first\n")
+        stream = command.lines(output=_redirect_options(stderr=StdioTarget.fd(handle)))
+        # After resolution, before the fork: a resolver-side flush has already
+        # happened and cannot see this.
+        handle.write(b"caller-second\n")
+        lines = asyncio.run(_collect_stdout_lines(stream))
+
+    assert lines == ["caller-first", "caller-second"], (
+        "a borrowed object must be flushed immediately before the fork, so "
+        f"bytes written between calling lines() and iterating it reach the "
+        f"child; the child read {lines!r}"
+    )
+
+
+async def _collect_stdout_lines(stream: LineStream) -> list[str]:
+    """Drain a line stream and return the text of each stdout line."""
+    return [event.text async for event in stream if event.stream == "stdout"]
 
 
 @_posix_only
