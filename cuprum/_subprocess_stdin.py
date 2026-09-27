@@ -278,8 +278,8 @@ async def _write_chunk(
     ------
     TypeError
         If the producer yields anything other than ``str`` or ``bytes``. A
-        mis-typed chunk is a caller error, not a pipe condition, so it is
-        raised here for the streaming writer to wrap.
+        chunk of the wrong type is a caller error, not a pipe condition, so
+        it is raised here for the streaming writer to wrap.
     """
     match chunk:
         case str():
