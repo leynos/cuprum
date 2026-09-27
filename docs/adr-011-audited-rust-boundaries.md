@@ -172,18 +172,6 @@ does not prove actual operating-system close or real panic unwind. Existing
 verification context in issues [#80], [#81], [#84], [#89], [#125], and [#233]
 remains in force. Scheduled Loom interleaving work is a separate deliverable.
 
-On Windows, this decision additionally distinguishes a live borrowed handle
-from one valid for the synchronous native adapter. `SynchronousBorrowedStream`
-and `SynchronousOwnedStream` carry the non-overlapped `ReadFile`/`WriteFile`
-precondition from known `CreatePipe` resources or from the audited unsafe
-`borrow_reader` and `adopt_writer` hand-offs. Win32 does not document a runtime
-query that can recover this creation-time mode from a bare handle, so the
-unsafe caller must establish it explicitly. Python's Proactor fallback remains
-in place for its overlapped subprocess handles until a separately designed
-overlapped-I/O adapter exists. The PyO3 raw-handle helpers reject Windows calls
-because their safe Python inputs cannot establish the capability; they consume
-an explicitly transferred writer without attempting synchronous I/O.
-
 [#80]: https://github.com/leynos/cuprum/issues/80
 [#81]: https://github.com/leynos/cuprum/issues/81
 [#84]: https://github.com/leynos/cuprum/issues/84
@@ -193,11 +181,10 @@ an explicitly transferred writer without attempting synchronous I/O.
 
 The safe crate's descriptor fixtures use `cap_std::fs::File` constructed from
 owned descriptors. The Windows native adapter uses the same capability file
-wrapper for `SynchronousBorrowedStream` I/O, with the production retention
-kernel suppressing its owner drop. This avoids carrying the former
-extension-wide `std::fs` lint exclusion into either extracted crate; `cap-std`
-and its handle adapters are trusted dependencies, not verifier-proved
-implementations.
+wrapper for borrowed-handle I/O, with the production retention kernel
+suppressing its owner drop. This avoids carrying the former extension-wide
+`std::fs` lint exclusion into either extracted crate; `cap-std` and its handle
+adapters are trusted dependencies, not verifier-proved implementations.
 
 Cargo cannot override an individual workspace-inherited lint. The safe crate
 therefore keeps its `#![forbid(unsafe_code)]` source-level prohibition while
@@ -248,3 +235,21 @@ generated property cases are bounded to 16; both settings bound runtime without
 weakening interpretation. The per-path inventory and the excluded tests remain
 in
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md).
+
+## Addendum (2026-09-27): Windows synchronous native I/O capability
+
+Issue #428 distinguishes a live borrowed Windows handle from one suitable for
+the synchronous `ReadFile`/`WriteFile` operations used by the native adapter.
+`SynchronousBorrowedStream` and `SynchronousOwnedStream` encode the
+non-overlapped requirement: a handle opened with `FILE_FLAG_OVERLAPPED` does
+not satisfy the synchronous `Read`/`Write` contract. `synchronous_pipe()` can
+safely provide this capability for Cuprum-created `CreatePipe` resources.
+
+Win32 does not provide a documented runtime query that can establish this
+creation-time mode from a bare handle. The unsafe `borrow_reader` and
+`adopt_writer` FFI hand-offs therefore require their caller to establish and
+guarantee the synchronous, non-overlapped property. Python's
+`ProactorEventLoop` subprocess pipes use overlapped handles, so the existing
+Python fallback remains in place until a separately designed overlapped-I/O
+adapter exists. The `cap-std` file and handle adapters remain trusted
+dependencies, not verifier-proved implementations.

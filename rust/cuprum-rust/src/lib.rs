@@ -40,23 +40,17 @@ pub const fn is_available() -> bool { true }
 
 #[cfg(unix)]
 #[expect(
-    clippy::allow_attributes,
-    reason = "PyO3 emits the argument-count lint only in some build configurations"
-)]
-#[allow(
     clippy::too_many_arguments,
-    reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
+    reason = "PyO3-generated stream wrappers in this module exceed the workspace argument \
+              threshold"
 )]
 mod stream_pyfunctions;
 
 #[cfg(windows)]
 #[expect(
-    clippy::allow_attributes,
-    reason = "PyO3 emits the argument-count lint only in some build configurations"
-)]
-#[allow(
     clippy::too_many_arguments,
-    reason = "PyO3 generates five-parameter wrappers for these stable Python FFI functions"
+    reason = "PyO3-generated stream wrappers in this module exceed the workspace argument \
+              threshold"
 )]
 #[path = "stream_pyfunctions_windows.rs"]
 mod stream_pyfunctions;
