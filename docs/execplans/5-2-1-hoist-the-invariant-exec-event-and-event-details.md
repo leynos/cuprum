@@ -293,10 +293,12 @@ failure injection at that boundary.
   percentage points) and the gate suite at `6da258a6`. Not done: the full gate
   suite at the commit that lands the 30% revision, and EP-M3's closeout.
 - [ ] EP-M3: commit representative profiler evidence, documentation, and
-  completion of roadmap item 5.2.1 after all acceptance conditions pass. **Now
-  reachable:** the design revision EP-M2 was waiting on has been approved and
-  applied, so the remaining work is closeout — the documentation edits, the
-  roadmap tick, and a final green gate run.
+  completion of roadmap item 5.2.1 after all acceptance conditions pass. **In
+  progress:** the design revision EP-M2 was waiting on has been approved and
+  applied. The evidence is committed at `79302ae6` (six captures, thirty
+  unprofiled runs, the 30% reclassification) and the roadmap tick with the
+  changelog entry at `16917587`. Remaining: the four documentation edits, and a
+  final green gate run at the closeout commit.
 
 ## Surprises & discoveries
 
