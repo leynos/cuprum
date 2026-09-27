@@ -2735,6 +2735,30 @@ require checking the explicit callback factory bodies as well.
   either dismissing it or chasing a fix. The flake has no `/tmp` precedent, so
   "there is no earlier instance" is recorded as the actual state of the
   evidence rather than upgraded to "known flake".
+- 2026-09-28: **An evidence directory's own manifest is part of its evidence.**
+  The review of `docs/profiling/5-2-1-line-event-emission/README.md` found it
+  claiming nine files per capture directory when only seven are committed;
+  `.gitignore`'s `*.log` excludes `classifier.log` and `pyspy.log`. For a
+  directory whose whole purpose is that a reader can recompute `N/D` instead of
+  trusting a report, that is a correctness defect in the evidence, not a
+  cosmetic one — it promises data the clone does not contain. The fix was to
+  check whether anything depended on the missing files and then say so: an
+  untracked file that a committed one already duplicates (`classifier.log`
+  versus `construction-share.json`, byte-identical in all six directories) or
+  that is derivable from a committed one (`pyspy.log`'s `Samples: <n>` line is
+  the weight sum of the committed `stacks.folded`) costs the reader nothing.
+  Where that is true, state it; where it is not, commit the data. The
+  repository's own convention — no `.log` file is tracked anywhere — was
+  treated as deliberate and left intact.
+- 2026-09-28: **A docstring that names a value should name the constant that
+  holds it.** `test_line_event_profile.py` said the classifier decides against
+  "the plan's 10% share" two revisions after the limit became 30.0, because it
+  restated a number instead of pointing at `CONSTRUCTION_SHARE_LIMIT_PERCENT`.
+  It now names the constant, so the next revision cannot stale it. The two
+  sites that *should* keep the old numbers — the classifier's header comment
+  and this plan's decision log — are dated audit trails of each revision and
+  were deliberately left alone; the distinction is between a live claim and a
+  record of a past decision.
 
 ## Outcomes & retrospective
 
