@@ -2014,6 +2014,69 @@ public-API change worth 5.4× and therefore a roadmap-level decision rather than
 tuning. The one thing this entry rules out is a third threshold revision derived
 from another projection.
 
+### 2026-09-27: the hoist removed denominator-only work — the mechanism, at source level
+
+The reason the share did not fall as projected is now fully traceable, and the
+trace is the most direct answer to "why did a correct implementation miss?" that
+this plan can give.
+
+**Split D by leaf frame class on the r2 pair** (stacks in the consume subtree,
+partitioned by whether a generated constructor is also on the stack):
+
+| | control | candidate | removed |
+| --- | --- | --- | --- |
+| D (consume subtree) | 25743 | 17758 | 7985 |
+| N (has the constructor on the stack) | 8828 | 5317 | 3511 |
+| **D-only** (no constructor on the stack) | **16915** | **12441** | **4474** |
+
+Of the 7985 samples the hoist removed from the denominator, only 3511 were in
+stacks the numerator counts. The other **4474 were denominator-only** — and the
+twelve largest sources of that removal are *exactly the three things EP-M2 was
+scoped to remove*:
+
+| leaf frame | control | candidate | removed |
+| --- | --- | --- | --- |
+| `emit (cuprum/_pipeline_types.py)` | 4471 | 0 | **4471** |
+| `_event_details (cuprum/_line_callbacks.py)` | 1212 | 0 | **1212** |
+| `argv_with_program (cuprum/sh/safe_cmd.py)` | 337 | 0 | **337** |
+| all other leaves combined | 10895 | 12441 | −1546 (noise, both directions) |
+
+Those three sum to **6020 of the 4474** — they do not merely dominate the
+removal, they over-explain it, and the excess is offset by ordinary sampling
+noise in the unchanged leaves (some, like `bound_line`, actually *rose*). Zero
+samples remain in any of the three under the candidate: every call site is gone,
+which is the signature of a hoist that removed the work rather than moving it.
+
+**Why they were D-only, verified rather than inferred.** A representative
+control stack for the largest source ends
+`emit_line (cuprum/_line_callbacks.py:109)` → `emit (cuprum/_pipeline_types.py:135)`.
+The sample lands *inside* `emit` while it is assembling the per-line payload —
+before the constructor is reached — so the stack has no generated frame and the
+numerator cannot count it. The candidate's `_LineEventEmitter.emit_line` calls
+`self.emit_event(ExecEvent(...))` directly, so the `emit` hop does not exist at
+all. Removing a frame that only ever appeared below the numerator is
+arithmetically guaranteed to raise `N/D`, because it subtracts from D alone.
+
+**So `emit` is the decisive one.** Not the `_EventDetails` constructor as the
+projection assumed — that was 1212 samples here — but the 4471 samples spent in
+the *hop* that built the payload before constructing the event. The projection
+priced the constructor and the helper; it could not price the frame the helper
+was reached through, because that frame's weight only appears in a real capture.
+This is precisely the plan's own recorded lesson — "which frames a given
+implementation actually removes is not knowable before it is written" — and it
+turned out to bind hardest on the term the projection treated as unchanged.
+
+**A consequence that generalises beyond this gate.** Because 100% of the
+numerator is inside the constructor (previous entry), *any* optimization that
+removes sample weight from the consume subtree participates in the numerator only
+if the sampled frame happens to sit inside the constructor. Work eliminated
+before the constructor call lands in D alone and raises the share. So on this
+classifier, a strictly faster emission path can score *worse* than a slower one,
+which is exactly what happened: 30.96% less wall time, 1.9 points more share.
+That property, not the 29.91% itself, is what a design revision needs to weigh —
+a percentage-of-total-work gate measures how the total is spent, and this work
+was spent so that the total shrank.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
