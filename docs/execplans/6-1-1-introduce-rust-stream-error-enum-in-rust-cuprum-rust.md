@@ -6,7 +6,7 @@ M1's plateau is reached at head `6a28ff95`: the full pure-Python gate sequence
 and the native extension stage both pass, with `actionlint` locally
 unobservable (recorded in Progress and Surprises). Windows runtime evidence has
 since been obtained: it found two branch defects, both fixed at `dafbfa4e`, and
-the fresh Windows CI run at that head is green (job `108519345532`; evidence in
+the Windows job at that head succeeded (job `108519345532`; evidence in
 Progress). M2 closes the remaining evidence, reconciles the roadmap, and sets
 this status to COMPLETE.
 
@@ -414,10 +414,20 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `dafbfa4e0ad604ca75dca65131af841fc50b2431`, attempt 1); job
   `Extension-gated tests (Windows Python/Rust boundary)`, job id `108519345532`,
   `completed` / `success`, every step successful including *Build the native
-  extension* and *Run extension-gated tests*. Log: `/tmp/611-win-ci-job.log`
-  (de-ANSI'd from the raw job log). The suite is extension-required — the job's
-  pytest line is prefixed `CUPRUM_REQUIRE_RUST_EXTENSION=1` — so this is
-  compiled-boundary evidence, not a shim run. Verbatim PASS lines at `dafbfa4e`:
+  extension* and *Run extension-gated tests*. **The claim is job-level, not
+  run-level:** the parent run reads `cancelled`, because `ci.yml` sets
+  `concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: … }` and
+  every later push cancels the previous head's run. Fourteen of that run's
+  eighteen jobs reached `success` — including the Linux extension-gated job and
+  the Windows/Linux/macOS wheel builds — and the remaining four
+  (`Typecheck and test (Python 3.12)`, `lint-test`, `coverage`,
+  `benchmark-ratchet`) read `cancelled`, superseded by the next push rather
+  than failed. No non-head commit's *run* can ever be cited as green; its
+  *jobs* can, which is what is cited here and below. Log:
+  `/tmp/611-win-ci-job.log` (de-ANSI'd from the raw job log). The suite is
+  extension-required — the job's pytest line is prefixed
+  `CUPRUM_REQUIRE_RUST_EXTENSION=1` — so this is compiled-boundary evidence,
+  not a shim run. Verbatim PASS lines at `dafbfa4e`:
 
   ```text
   test_rejects_out_of_range_buffer_with_open_reader[consume]     PASSED [ 17%]
