@@ -266,7 +266,7 @@ jobs:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
       - name: Install Nixie
-        uses: leynos/shared-actions/.github/actions/install-nixie@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-nixie@4fb8eb7ad52454678a0662865d81d3cd17aa6e0e
 
       # The formatter profile needs nightly-only settings. Install its pinned
       # maintenance toolchain before restoring the supported project compiler.
