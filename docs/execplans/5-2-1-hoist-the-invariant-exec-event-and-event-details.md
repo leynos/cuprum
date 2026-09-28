@@ -2861,6 +2861,30 @@ rest on the agent's JSON stream rather than on a threads API that could be
 cross-checked. Should the PR later leave draft, the app's findings will be a
 *fresh* surface, not a re-derivation of the ones disposed here.
 
+**Five commits sit above `d98fb5c9`**, and all five are documentation edits —
+four to this plan's evidence report and one to this plan. Each went in behind
+its own docs-scoped gate sweep, and the five compose into a single verified
+chain rather than five unrelated assertions: each sweep recorded the commit it
+started from as `head_before` and the SHA-256 of the file it was about to gate,
+and for all five that digest is the digest of the blob the next commit actually
+shipped. Checked by recomputing from the commits rather than from the logs:
+`7cbc266a` ran at `d98fb5c9` over the plan (gated `433bb89d`), `aa30ced6` at
+`7cbc266a` over the report (gated `2d6e841c`), `a21b08a9` at `aa30ced6`
+(`acec114d`), `c83b12a3` at `a21b08a9` (`d1e88169`), and `05140b65` at
+`c83b12a3` (`cf276c88`) — and `cf276c88` is the report's blob at HEAD. Every
+sweep ran `mdtablefix`, `check-fmt`, `markdownlint`, and `nixie` and every gate
+exited 0 with the file hash identical before and after, so no sweep observed a
+mutation mid-run. Logs under `/tmp/` with the prefixes `plan-fix-`,
+`report-fix-`, `table10-`, `shortfall-`, and `range-note-`.
+
+The plan's Status line and milestone entries cite the closeout run at
+`3315c5c3` and this re-run at `d98fb5c9`, and neither is superseded by the five
+documentation commits above: those two are the only *full-suite* runs on the
+branch, and a docs-only edit cannot invalidate a suite whose scope excludes
+docs except through the four Markdown gates, which each sweep re-ran. The PR
+description was written to the same standard, so a reader of the PR does not
+have to open this plan to know the head is ahead of the last full-suite run.
+
 ### What was sacrificed for legibility and maintainability
 
 The user asked, when approving the 30% target, for the legibility and
