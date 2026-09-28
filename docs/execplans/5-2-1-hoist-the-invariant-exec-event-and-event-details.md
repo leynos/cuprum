@@ -2883,11 +2883,31 @@ the shape — each sweep's `head_before` is the commit before it and its gated
 digest is the blob the commit after it shipped.
 
 That chain is why the two full-suite runs are the only ones the branch needs,
-and why neither is superseded by the documentation commits above them: a
-docs-only edit cannot invalidate a suite whose scope excludes docs except
-through the four Markdown gates, and every sweep re-ran all four. The PR
-description states the same thing, so a reader of the PR does not have to open
-this plan to know the head is ahead of the last full-suite run.
+and why neither is superseded by the documentation commits above them. The
+reason is narrower than "docs cannot affect a suite": **`make lint` does read
+Markdown.** Its `skylos` stage credits a symbol as live when a document names
+it, which is why this branch's own `_LineEventEmitter.emit_line` carries
+`documented_public_api` evidence — sourced from the class-qualified
+`_LineEventEmitter.emit_line` mentions in this plan and in the evidence report.
+So a documentation edit *can* move `lint`, and the four-Markdown-gate sweep is
+not on its own enough to prove it did not.
+
+The claim that it did not was tested rather than argued, because the failure
+mode is invisible to the sweeps. Running the pinned skylos (`4.33.2`) over
+`cuprum` at HEAD and again with these two documents reverted to `d98fb5c9`
+gives byte-identical verdicts: the same 22 liveness-credited symbols, the same
+zero `unused_functions`. As a control that the mechanism is live rather than
+dormant, the class-qualified mentions were then degraded to bare
+`LineEventEmitter.emit_line` in both files — a change the four Markdown gates
+would still pass — and `_LineEventEmitter.emit_line` immediately lost its
+credit and became `unused_functions: 1`, which is an `SKY-U001` failure. So:
+the sweeps honestly report what they cover, the full-suite runs at `d98fb5c9`
+are the last word on `lint` for the code, and the delta since is verified
+separately by re-running skylos over both documentation revisions rather than
+by assuming docs are out of scope.
+
+The PR description states the same thing, so a reader of the PR does not have
+to open this plan to know the head is ahead of the last full-suite run.
 
 ### What was sacrificed for legibility and maintainability
 
