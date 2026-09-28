@@ -288,7 +288,7 @@ jobs:
         # A dispatch may start from any branch, and CodeScene accepts uploads
         # only for the branch it analyses, so the ref is part of the guard.
         if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
-        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@4fb8eb7ad52454678a0662865d81d3cd17aa6e0e
         with:
           format: cobertura
           mode: upload
