@@ -762,23 +762,31 @@ escalation, not a workaround.
   table enumerates whole words and a document that spells the form wrongly to
   explain why that form is wrong is one edit from tripping again. This is cheap
   to get right and embarrassing to get wrong twice.
-- A docstring rule is not confined to production modules. The snapshot module
-  tripped `docstring-missing-returns` on its one multi-line helper, and the
-  gate's own log — `make lint` at `c6cd2055`, reporting
-  `cuprum/unittests/test_broken_pipe_echo_snapshot.py:138` — is what proved it.
-  That log also falsified a belief this branch had been carrying: the walk does
-  descend into `cuprum/unittests/`, which has no `__init__.py`, so descent does
-  not require one and "this directory is skipped" was never available as a
-  reason to treat a pylint finding there as spurious. A file path handed to
-  pylint did report a vacuous clean rating, which is how the wrong belief
-  survived; only the invocation the gate actually runs is evidence.
+- A lint log does not say which tool spoke, and this branch was amended once on
+  the strength of a misread excerpt. The snapshot module tripped a docstring
+  rule on its one multi-line helper, and `make lint` at `c6cd2055` reports it at
+  `cuprum/unittests/test_broken_pipe_echo_snapshot.py:138`. That message is
+  `ruff`'s — `docstring-missing-returns` is ruff rule DOC201, and the indented
+  `-->` arrow beneath it is ruff's renderer, where pylint writes
+  `path:line:col: CODE: message`. `python-lint` chains six tools into one log
+  with `&&`, so an excerpt without the command line above it identifies
+  nothing, and the amendment inverted the conclusion. The walk *does* skip
+  `cuprum/unittests/`; it partitions at the package boundary. Measured directly:
+  `pylint --max-module-lines=1 cuprum` names 118 files and every one lies
+  outside that directory, which is precisely the count of `.py` files under
+  `cuprum/` outside it. The control is what makes the zero readable — a plain
+  `pylint cuprum` returns a bare `10.00/10` while 34 committed test modules sit
+  above the 400-line ceiling with no waiver, so a bare rating proves nothing
+  until the checker is shown able to fire. Naming one such file *by path* does
+  fire `C0302` at cap 1, which is why that probe never disproved the skip
+  either.
 - A repaired finding can hide the gate behind it. `python-lint` chains its
-  stages with `&&`, so the `docstring-missing-returns` failure aborted
-  `make lint` before `spelling` was ever reached, and the *second* sweep's
-  genuinely new defect only surfaced once the first was repaired. The same
-  chain left `github-actions-lint` unobserved across both runs. A sweep that
-  stops early bounds the sub-checks it reports; a green `python-lint` after a
-  repair is not a green `make lint` until the later stages have run.
+  stages with `&&`, so the docstring failure aborted `make lint` before
+  `spelling` was ever reached, and the *second* sweep's genuinely new defect
+  only surfaced once the first was repaired. The same chain left
+  `github-actions-lint` unobserved across both runs. A sweep that stops early
+  bounds the sub-checks it reports; a green `python-lint` after a repair is not
+  a green `make lint` until the later stages have run.
 
 ## Decision log
 
@@ -931,15 +939,19 @@ so the prose was corrected rather than the table. Two supporting facts were
 checked before editing: no other token from the table's 1490 differing entries
 appears anywhere in this branch's seven changed files, and neither flagged line
 changed length in a way that could disturb the reflow. The commit message's own
-account of the pylint trap was also corrected while amending: it had recorded
-the skip as following from `cuprum/unittests` not being a package, which the
-gate's own log disproves.
+account of the lint trap was corrected a second time while amending. It first
+recorded the skip as following from `cuprum/unittests` not being a package; the
+next amendment inverted that on the strength of a log excerpt that was
+`ruff`'s, not `pylint`'s; the final text restores the skip and adds the
+mechanism, because `pylint --max-module-lines=1 cuprum` names 118 files and
+none is under that directory. See the surprises bullet for the measurement and
+its control.
 
-Revision 22: the first round to change production code since Revision 17, so to
-change production code since Revision 17, so the freeze recorded in Revision 21
-is lifted and re-established here. Three findings were live at `96ebb638`; all
-three were verified against the current tree before any edit, and all three
-were valid. Nothing was skipped, so there is no "no-action" reason to record.
+Revision 22: the first round to change production code since Revision 17, so
+the freeze recorded in Revision 21 is lifted and re-established here. Three
+findings were live at `96ebb638`; all three were verified against the current
+tree before any edit, and all three were valid. Nothing was skipped, so there
+is no "no-action" reason to record.
 
 The Codex finding was the substantive one. Its stated remedy — "pass the
 settled line-stream diagnostics into that result assembly" — was right about
