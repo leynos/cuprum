@@ -258,8 +258,15 @@ contract module under `tests/` and forgets to name it will be told so by
   gates, edit the plan again — invalidates each run as a citation, because a
   commit after a gate run moves the head the run certified. The plan is frozen
   at `704a4b03`; anything later belongs on the PR body.
-- [ ] Push and open a draft pull request.
-- [ ] CodeRabbit review on the pushed head.
+- [x] (2026-09-28 03:00Z) Draft pull request #505 opened at `df3c59ad`, with
+  the full seven-gate set green there. Two further commits followed (`ca5fb1fb`,
+  `1e968b86`), both spanning the same single file under `docs/`.
+- [ ] Re-run the three lock-dependent gates (`make lint`, `make test-python`,
+  `make test-rust`) at `1e968b86` once the host's Cargo package cache is free.
+  Blocked, not failed: see the deadlock observation in
+  `Surprises & discoveries`.
+- [ ] Push `ca5fb1fb` and `1e968b86`, update the pull request body, and run
+  CodeRabbit on the final head.
 
 - Observation: the guard as first written passed every local gate and CI's
   `typecheck-test`, and still failed CodeScene's delta review. The check-run is
@@ -382,6 +389,43 @@ contract module under `tests/` and forgets to name it will be told so by
   putting the guard outside the selector — is not collected either, so it would
   guard nothing. The `test_ci_` family is the right home; a repository-wide
   selector rewrite is a bigger change than issue #499 asks for.
+
+- Observation: the host's Cargo package cache deadlocked at 02:53:12 on the
+  day this revision was written, and it did not recover. The holder is pid
+  1832225, a `cargo test --all-targets --all-features` in an unrelated
+  repository's worktree, holding an exclusive `flock` on
+  `~/.cargo/.package-cache-mutate`. Its grandchild pid 1855450 is a nested
+  cargo, launched by a `trybuild` test, waiting in `locks_lock_inode_wait` for
+  that same file. The holder waits in `do_wait` for the child that waits for
+  the holder: a cycle no amount of waiting can break. Sixty-four processes
+  across thirteen worktrees were queued behind it, including peers belonging to
+  six other sessions on this machine. Evidence: `/proc/locks` shows the write
+  lock and its waiter chain under one inode; `ps -o stat,wchan` shows `SN`/
+  `do_wait` on the holder and `SN`/`locks_lock_inode_wait` on the nested cargo;
+  `ps -o etime` showed the holder at four hours with every cargo process at
+  0.00% CPU. Impact: three of the seven commit gates — `make lint`,
+  `make test-python`, `make test-rust` — could not complete at this revision
+  and are recorded as unobserved rather than passed. The other four
+  (`check-fmt`, `markdownlint`, `typecheck`, `nixie`) do not take the lock and
+  all passed at this head. This is a host fault that happened to coincide with
+  the change; it is not caused by it, and the branch's two lock-sensitive
+  failures were each shown to pass where the lock was free. Recovery: the
+  affected trees belong to other sessions; per the standing rule against
+  killing another agent's processes and against working around the cache with a
+  private one, the deadlock is reported rather than worked around.
+
+- Observation: the first annotation written against the aborted
+  `make test-python` log was itself wrong. It reported the run as reaching 47%
+  with one test failed; the log body shows 51% with two failed. The 47% marker
+  belongs to the `test_maturin_build.py` batch, which the run cleared, and the
+  second failure — `test_maturin_wheel_build_snapshot` — was missed because the
+  annotation was written from an intermediate reading rather than measured
+  against the log. Evidence: re-deriving the markers and the pass/fail tallies
+  from lines 1-1331 of the log gave 51%, 1309 passed, 2 failed, 1 skipped, 0
+  errors. Impact: the annotation stands corrected in place, with the error left
+  visible beside its fix rather than edited away. The lesson is the one this
+  document keeps relearning: an annotation about a run is a claim about that
+  run and has to be measured from it, not recalled.
 
 ## Decision log
 
@@ -967,6 +1011,35 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 `test-python`; no new dependency is introduced.
 
 ## Revision note
+
+2026-09-28, fifth revision. Records a host fault that interrupted delivery, and
+corrects an annotation this document's own author wrote about it.
+
+The host's Cargo package cache deadlocked at 02:53:12 and stayed deadlocked.
+One repository's `cargo test` holds the cache's exclusive lock while waiting on
+a nested cargo its own `trybuild` test launched, which waits for that lock: a
+cycle. Sixty-four processes across thirteen worktrees queued behind it. Three
+of the seven commit gates — `make lint`, `make test-python`, and
+`make test-rust` — take that lock, and none could complete at `1e968b86`. They
+are recorded as unobserved at that head, not as passed. The remaining four
+gates do not take the lock and all passed there.
+
+The interruption does not put the change in doubt, and the reason is stronger
+than an assurance. Everything the three blocked gates read is byte-identical
+between `1e968b86` and `df3c59ad`, where all three passed in full: the branch
+delta between those two revisions is one file under `docs/`, and the subtree
+hashes of `tests/`, `rust/`, `cuprum/`, `Makefile`, and `pyproject.toml` are
+equal. The gates are unobserved because the host could not run them, not
+because they might fail. The reader should nonetheless treat the three as
+outstanding work rather than letting the byte-identity argument stand in for a
+measurement; the plan's `Progress` keeps them open for that reason.
+
+The correction is to this revision's own first draft. The annotation written
+against the aborted `make test-python` log reported 47% and one failure; the
+log holds 51% and two. The second failure, in the maturin build, was missed,
+and the percentage was transcribed from an intermediate reading rather than
+measured. Both are corrected in the log in place, with the error left visible
+beside its fix.
 
 2026-09-28, fourth revision. Every quantitative claim in this document that is
 not anchored to a revision was re-derived at `df3c59ad`, and the unanchored
