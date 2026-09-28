@@ -265,11 +265,11 @@ key and its restore-key prefix as environment values. A restore and its save
 cannot disagree, and the rendered key is printed into the run summary so any
 miss can be explained from the run alone.
 
-| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                      |
-| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                           |
-| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test`                                            |
-| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs |
+| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                         |
+| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                              |
+| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test` (3.12, 3.14, 3.15a), `extension-tests` (3.13) |
+| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs    |
 
 Four rules hold that table together, each with a contract test:
 
@@ -460,8 +460,7 @@ Table 2: CI suite execution by job and interpreter
 | `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
 | `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
-| `typecheck-test` 3.13       | 3.13   | none                           | none, coverage runs it                   | absent    |
-| `extension-tests`           | 3.13   | none                           | 13 gated modules                         | **built** |
+| `extension-tests`           | 3.13   | none                           | 13 gated modules, then `make typecheck`  | **built** |
 | `extension-tests-windows`   | 3.13   | none                           | 13 gated modules                         | **built** |
 
 The 3.15a leg is experimental: it may fail without failing the run, and its
@@ -518,11 +517,13 @@ Two jobs survive that look like duplicates and are not:
   `SKIPPED`. The two runs execute different code. Its Windows counterpart,
   `extension-tests-windows`, runs the same gated modules against the native
   Windows boundary rather than duplicating the Linux run.
-- **`typecheck-test` on 3.13** keeps the typechecker and its required check
-  name while running neither suite. Dropping its pytest run is only safe
-  because the typechecker stands alone: `make typecheck` depends on `build`,
-  the dependency sync, and on nothing the test run produces. The other three
-  legs keep their Python run because coverage does not run those interpreters.
+- **The 3.13 typecheck** runs in `extension-tests`, after its gated modules,
+  rather than in a matrix leg of its own. The coverage job already runs the
+  3.13 suite, so a 3.13 leg would only start a runner to typecheck. The move is
+  safe because the typechecker stands alone: `make typecheck` depends on
+  `build`, the dependency sync, and on nothing the test run produces. The
+  `typecheck-test` legs, 3.12, 3.14 and 3.15a, keep their Python run because
+  coverage does not run those interpreters.
 
 The nextest installer is gone from this repository. Nothing here runs nextest
 directly any more; the coverage action installs its own.

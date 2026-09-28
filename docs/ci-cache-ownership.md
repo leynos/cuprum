@@ -125,7 +125,8 @@ the family without saving it.
 | Family                                | Writer                              |
 | ------------------------------------- | ----------------------------------- |
 | Cargo registry, Ubicloud              | `ci.yml` `extension-tests`          |
-| Tools, per interpreter                | `ci.yml` `typecheck-test`, that leg |
+| Tools, 3.13                           | `ci.yml` `extension-tests`          |
+| Tools, 3.12/3.14/3.15a                | `ci.yml` `typecheck-test`, that leg |
 | Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`          |
 | Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg |
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`        |

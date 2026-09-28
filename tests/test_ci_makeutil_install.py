@@ -302,6 +302,11 @@ def test_a_tool_family_writer_installs_the_parser_before_saving(
     guard = ungated(workflow_name, job_name, step.get("if"))
     assert guard == MISS_GUARD, f"{where} install must be guarded {MISS_GUARD!r}"
     assert install < save, f"{where} must install the parser before saving"
+    # Installing first is not enough if the save leaves out the directory the
+    # parser lands in.
+    assert CARGO_BIN in cache_paths(job_steps[save], f"{where} tool save"), (
+        f"{where}'s tool save must archive {CARGO_BIN}, where makeutil is installed"
+    )
 
 
 def test_the_writer_rule_covers_every_tool_family() -> None:
