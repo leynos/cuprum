@@ -754,6 +754,32 @@ escalation, not a workaround.
   printed, rather than to compose a total by hand across two toolchains that
   report separately.
 
+- Writing *about* the correction table trips the correction table. Revision 18
+  recorded this very lesson and quoted the flagged token four times in doing
+  so, so `ddd8d301` failed CI's `lint-test` on prose that existed only to
+  explain the failure it then caused. The repair is to name the class — "a
+  misspelling the table lists" — and never to reproduce the token, because the
+  table enumerates whole words and a document that spells the form wrongly to
+  explain why that form is wrong is one edit from tripping again. This is cheap
+  to get right and embarrassing to get wrong twice.
+- A docstring rule is not confined to production modules. The snapshot module
+  tripped `docstring-missing-returns` on its one multi-line helper, and the
+  gate's own log — `make lint` at `c6cd2055`, reporting
+  `cuprum/unittests/test_broken_pipe_echo_snapshot.py:138` — is what proved it.
+  That log also falsified a belief this branch had been carrying: the walk does
+  descend into `cuprum/unittests/`, which has no `__init__.py`, so descent does
+  not require one and "this directory is skipped" was never available as a
+  reason to treat a pylint finding there as spurious. A file path handed to
+  pylint did report a vacuous clean rating, which is how the wrong belief
+  survived; only the invocation the gate actually runs is evidence.
+- A repaired finding can hide the gate behind it. `python-lint` chains its
+  stages with `&&`, so the `docstring-missing-returns` failure aborted
+  `make lint` before `spelling` was ever reached, and the *second* sweep's
+  genuinely new defect only surfaced once the first was repaired. The same
+  chain left `github-actions-lint` unobserved across both runs. A sweep that
+  stops early bounds the sub-checks it reports; a green `python-lint` after a
+  repair is not a green `make lint` until the later stages have run.
+
 ## Decision log
 
 - Decision: reuse the existing `_EchoGuard` recovery mechanism rather than
@@ -892,11 +918,28 @@ await path, which the RED reproduction demonstrates.
 
 ## Revision note
 
-Revision 22: the first round to change production code since Revision 17, so
-the freeze recorded in Revision 21 is lifted and re-established here. Three
-findings were live at `96ebb638`; all three were verified against the current
-tree before any edit, and all three were valid. Nothing was skipped, so there
-is no "no-action" reason to record.
+Revision 22 (continued): the first sweep at `c6cd2055` returned the
+`docstring-missing-returns` repair green and reported both of the earlier
+failures repaired, but failed `lint` and `markdownlint` on one shared,
+previously unreported defect: `typos` flagged two tokens in the snapshot
+module, a hyphenated form of a table-listed word and the British spelling of
+the repo's serialization term. The second is the same class this file's
+surprises section already warns about, and this paragraph nearly repeated it:
+naming either token here re-trips the gate, so the class is named and the
+tokens are not reproduced. Both are entries in `typos.toml`'s correction table,
+so the prose was corrected rather than the table. Two supporting facts were
+checked before editing: no other token from the table's 1490 differing entries
+appears anywhere in this branch's seven changed files, and neither flagged line
+changed length in a way that could disturb the reflow. The commit message's own
+account of the pylint trap was also corrected while amending: it had recorded
+the skip as following from `cuprum/unittests` not being a package, which the
+gate's own log disproves.
+
+Revision 22: the first round to change production code since Revision 17, so to
+change production code since Revision 17, so the freeze recorded in Revision 21
+is lifted and re-established here. Three findings were live at `96ebb638`; all
+three were verified against the current tree before any edit, and all three
+were valid. Nothing was skipped, so there is no "no-action" reason to record.
 
 The Codex finding was the substantive one. Its stated remedy — "pass the
 settled line-stream diagnostics into that result assembly" — was right about
