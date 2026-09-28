@@ -8,18 +8,23 @@ import typing as typ
 import pytest
 
 from cuprum import sh
+from cuprum.catalogue import ProgramCatalogue
 from cuprum.context import (
     CuprumContext,
     EnvMode,
     EnvRegistration,
+    ScopeConfig,
     current_context,
     env,
+    scoped,
 )
+from cuprum.program import Program
 from cuprum.sh import ExecutionContext
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
@@ -37,6 +42,28 @@ def _print_values(*names: str) -> str:
         "import os;print('|'.join(os.environ.get(name, '<missing>') for name in "
         f"{names!r}))"
     )
+
+
+def _bare_name_builder(name: str) -> cabc.Callable[[], SafeCmd]:
+    """Return a builder for a program addressed by its bare name.
+
+    Unlike :func:`python_builder`, which allowlists an absolute interpreter
+    path, this allowlists a name with no directory component. Whether the child
+    starts at all then depends on the rendered ``PATH``, which is what the
+    replacement-path tests need to observe.
+
+    Returns
+    -------
+    cabc.Callable[[], SafeCmd]
+        A builder that produces commands for the bare-name program.
+    """
+    program = Program(name)
+    catalogue = ProgramCatalogue.from_programs(
+        program,
+        name="bare-name-probes",
+        documentation_locations=("docs/users-guide.md#environment-policy-modes",),
+    )
+    return sh.make(program, catalogue=catalogue)
 
 
 def test_nested_replace_discards_outer_and_per_call_wins(
@@ -140,6 +167,113 @@ def test_inherit_mode_never_escapes_an_outer_replacement_boundary(
         "a per-call inherit policy inside a replacement boundary must not read "
         "the live environment that boundary discarded"
     )
+
+
+def test_scoped_replacement_reaches_the_subprocess_and_its_events(
+    monkeypatch: pytest.MonkeyPatch,
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """A scoped replacement discards the outer overlay and reaches the child.
+
+    The scoped route resolves its policy in ``CuprumContext.narrow``, which
+    passes the parent mode and the config mode to ``_resolve_env_policy``. Both
+    default to ``OVERLAY``, so every scoped test that leaves the mode unset
+    stays green even when those two arguments are swapped, and the swap is
+    invisible even here unless the outer layer carries an overlay of its own:
+    with an empty parent overlay the swapped call still lands on ``REPLACE``
+    and still composes an equally empty mapping. Nesting a replacement scope
+    inside a populated outer one is therefore the arrangement that can see the
+    difference — the outer value must reach neither the child nor the events.
+    """
+    outer_var = "CUPRUM_TEST_SCOPED_REPLACE_OUTER"
+    inner_var = "CUPRUM_TEST_SCOPED_REPLACE_INNER"
+    monkeypatch.setenv("CUPRUM_TEST_SCOPED_REPLACE_LIVE", "parent-value")
+    parent_snapshot = dict(os.environ)
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        """Record an emitted execution event."""
+        events.append(ev)
+
+    command = python_builder(
+        "-c", _print_values("CUPRUM_TEST_SCOPED_REPLACE_LIVE", outer_var, inner_var)
+    )
+    with (
+        sh.observe(hook),
+        scoped(ScopeConfig(env_overlay={outer_var: "outer"})),
+        scoped(ScopeConfig(env_overlay={inner_var: "inner"}, env_mode=EnvMode.REPLACE)),
+    ):
+        result = command.run_sync()
+
+    assert result.stdout == "<missing>|<missing>|inner\n", (
+        "a scoped replacement must discard the live environment and every outer "
+        "overlay, keeping only its own"
+    )
+    assert events, "the scoped run must emit observe events"
+    assert all(ev.env_mode is EnvMode.REPLACE for ev in events), (
+        f"a scoped replacement must report replace on every phase, got "
+        f"{[ev.env_mode for ev in events]!r}"
+    )
+    assert dict(os.environ) == parent_snapshot, (
+        "a scoped replacement must not mutate os.environ"
+    )
+
+
+def test_replacement_path_resolves_a_bare_program_name(tmp_path: Path) -> None:
+    """A replacement ``PATH`` is what makes a bare program name resolvable.
+
+    Every other replacement test in this module runs an absolute
+    ``sys.executable``, which spawns under any policy and so proves nothing
+    about the rendered ``PATH``. Here the program is a bare name, and the only
+    thing that can find it is the ``PATH`` supplied by the replacement overlay.
+    That is the arrangement the user guide describes, and it is the one that
+    makes a missing ``PATH`` a spawn failure rather than a silent fallback to
+    the live environment.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    probe = bindir / "cuprum-probe-bare-name"
+    probe.write_text("#!/bin/sh\necho resolved-from-replacement-path\n")
+    probe.chmod(0o755)
+    builder = _bare_name_builder(probe.name)
+
+    replaced = builder().run_sync(
+        context=ExecutionContext(
+            env={"PATH": str(bindir)},
+            env_mode=EnvMode.REPLACE,
+        )
+    )
+
+    assert replaced.exit_code == 0, (
+        "a replacement PATH naming the program's directory must resolve a bare "
+        f"name, got exit {replaced.exit_code} with stderr {replaced.stderr!r}"
+    )
+    assert replaced.stdout == "resolved-from-replacement-path\n", (
+        "the resolved program must be the one the replacement PATH names"
+    )
+
+
+def test_replacement_without_path_cannot_resolve_a_bare_program_name(
+    tmp_path: Path,
+) -> None:
+    """Dropping ``PATH`` from a replacement policy makes the spawn itself fail.
+
+    This is the boundary the metrics adapter documents: the failure is raised
+    before ``start``, so no ``exit`` event and no ``cuprum_failures_total``
+    sample follow. Pinning it here keeps that documented gap honest — if a
+    later change ever teaches the spawn path to fall back to the live
+    environment, this test fails rather than silently papering over the
+    documented absence of a failure sample.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    probe = bindir / "cuprum-probe-unresolvable"
+    probe.write_text("#!/bin/sh\necho should-never-run\n")
+    probe.chmod(0o755)
+    builder = _bare_name_builder(probe.name)
+
+    with pytest.raises(FileNotFoundError):
+        builder().run_sync(context=ExecutionContext(env={}, env_mode=EnvMode.REPLACE))
 
 
 def test_observed_events_carry_the_resolved_environment_mode(

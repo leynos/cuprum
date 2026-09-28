@@ -1368,7 +1368,8 @@ implemented with the following decisions:
   adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
   phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
   so it records no failure sample at all; the typed field is the only signal
-  available for it.
+  available for it. The typed policy and its composition rules are specified in
+  [ADR-018](adr-018-typed-environment-policies.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
