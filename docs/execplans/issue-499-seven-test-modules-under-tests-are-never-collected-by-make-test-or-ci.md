@@ -261,12 +261,19 @@ contract module under `tests/` and forgets to name it will be told so by
 - [x] (2026-09-28 03:00Z) Draft pull request #505 opened at `df3c59ad`, with
   the full seven-gate set green there. Two further commits followed (`ca5fb1fb`,
   `1e968b86`), both spanning the same single file under `docs/`.
-- [ ] Re-run the three lock-dependent gates (`make lint`, `make test-python`,
-  `make test-rust`) at `1e968b86` once the host's Cargo package cache is free.
-  Blocked, not failed: see the deadlock observation in
-  `Surprises & discoveries`.
-- [ ] Push `ca5fb1fb` and `1e968b86`, update the pull request body, and run
-  CodeRabbit on the final head.
+- [x] (2026-09-28 07:20Z) The three lock-dependent gates were measured by CI
+  instead, at `0220baf6`: run `36380609989` is `success` across all 17 jobs,
+  including `lint-test` (which runs `/usr/bin/make ACTIONLINT=… lint` at
+  `ci.yml:326` — the same target whose local run died at `lint-clippy`),
+  `Typecheck and test` on 3.12/3.14/3.15a (which run `make test-python`), and
+  `coverage` (which runs the Rust suite under `cargo llvm-cov nextest` with
+  `all-targets`, `all-features`, and `doctests: 'true'`). Evidence:
+  `/tmp/R15-ci-coverage-499.out`. Caveat recorded there too: a `pull_request`
+  run checks out the **merge ref**, so this certifies the head *merged with
+  main*, not the bare head. The two agree here because `git merge-tree` reports
+  no conflicted path.
+- [ ] Push `ca5fb1fb`, `1e968b86`, and the deadlock record; update the pull
+  request body; run CodeRabbit on the final head.
 
 - Observation: the guard as first written passed every local gate and CI's
   `typecheck-test`, and still failed CodeScene's delta review. The check-run is
@@ -1011,6 +1018,29 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 `test-python`; no new dependency is introduced.
 
 ## Revision note
+
+2026-09-28, sixth revision. Supplements the fifth with the measurement that
+closes the gap it left open: CI.
+
+The fifth revision recorded the three lock-dependent gates as unobserved,
+because the host could not run them. They have since been run — not on this
+host, but in CI, at `0220baf6`. Run `36380609989` is `success` on all 17 jobs.
+The jobs that matter are `lint-test`, `Typecheck and test` on 3.12, 3.14 and
+3.15a, and `coverage`, and between them they invoke exactly the three targets
+this host could not: `make lint`, `make test-python`, and the Rust suite under
+an instrumented `cargo llvm-cov nextest`. The command that matters most is
+`ci.yml:326`, `/usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint` —
+the same `make lint` that terminated locally at `lint-clippy`.
+
+Two precision points, because the citation is only worth its caveats. First, a
+`pull_request` run checks out the **merge ref**, so CI certified the head
+merged with `main` rather than the bare head; the two agree here because
+`git merge-tree HEAD origin/main` reports no conflicted path, but they are not
+the same object and the record should not pretend otherwise. Second, the
+literal string `make lint` occurs in `ci.yml` only inside comments, at lines
+221 and 583. A grep for it finds the comments and misses the step, which is how
+the first pass of this revision wrongly concluded CI does not run `make lint`
+at all. The step is real; it is spelled with an environment prefix.
 
 2026-09-28, fifth revision. Records a host fault that interrupted delivery, and
 corrects an annotation this document's own author wrote about it.
