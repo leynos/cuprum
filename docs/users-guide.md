@@ -741,6 +741,14 @@ command-line argument reaches the log. Pass secrets through the environment or
 a file instead. [Metrics adapter](#metrics-adapter) and
 [Tracing adapter](#tracing-adapter) list every metric and span attribute.
 
+The structured log record carries the execution's effective environment policy
+as `cuprum_env_mode` (`inherit`, `overlay`, or `replace`), alongside the other
+correlation fields. The value is projected from the typed `ExecEvent.env_mode`
+field, which only Cuprum sets, so no caller input can forge it. The tag of the
+same name is reserved for the same reason: a caller-supplied `env_mode` tag is
+stripped when the observation tags are built, and a replacement run's trusted
+value is grafted in its place.
+
 ### Present output in GitHub Actions
 
 On GitHub Actions, Cuprum can frame a run's echoed output in a collapsible log
@@ -1019,6 +1027,15 @@ rather than `pid`, which the operating system can recycle across executions.
 Events with `exec_id=None` cannot be correlated, so correlation-consuming hooks
 (such as the tracing adapter) drop them.
 
+Every event also carries `env_mode`: the effective environment policy for the
+execution, once the active context and any per-call policy have been composed.
+It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`, or `EnvMode.REPLACE`, and it
+is present on every phase — including `plan`, `pipeline_fail_fast`, and the
+ancillary `timeout`, `teardown_error`, and `capture_eof_grace_expired` events —
+because it is known before the child is spawned and describes the whole
+execution rather than one measurement. The value is `None` only on legacy or
+manually constructed events; the execution paths always resolve a mode.
+
 Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
 before the run completes.
 
@@ -1134,6 +1151,20 @@ The hook collects:
 All metrics carry `program` and `project` labels; missing, empty, or explicit
 `None` project tags fall back to `unknown`.
 
+`cuprum_executions_total` and `cuprum_failures_total` additionally carry an
+`env_mode` label holding the execution's effective policy — `inherit`,
+`overlay`, or `replace`. It is a bounded label by construction (`EnvMode` is a
+closed three-value enum resolved by Cuprum, never by caller input), so it
+cannot give the series unbounded cardinality, and it is applied only to those
+two metrics: the per-line stream counters omit it, because a line's environment
+says nothing that its execution's mode does not already carry.
+
+A spawn failure is not counted. When a replacement policy's missing `PATH`
+leaves a bare program name unresolvable, the failure is raised before `start`,
+so no `exit` event follows and no `cuprum_failures_total` sample — and
+therefore no `env_mode`-labelled series — is recorded. Use the typed `env_mode`
+field on the corresponding `ExecEvent` to distinguish that case.
+
 The four resource metrics also carry a low-cardinality `resource_usage_mode`
 label naming how the measurement was obtained: `wait4_child`,
 `aggregate_cpu_delta`, or `unavailable`. The label applies only to those four
@@ -1176,6 +1207,8 @@ The hook creates spans with these attributes:
 - `cuprum.exit_code`: Exit code (set on span end)
 - `cuprum.duration_s`: Duration in seconds (set on span end)
 - `cuprum.project`: Project name from tags
+- `cuprum.env_mode`: The execution's effective environment policy
+  (`inherit`, `overlay`, or `replace`), set on spans for every phase
 - `cuprum.pipeline_stage_index`: Pipeline stage index (if applicable)
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,

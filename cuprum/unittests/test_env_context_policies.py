@@ -7,6 +7,7 @@ import typing as typ
 
 import pytest
 
+from cuprum import sh
 from cuprum.context import (
     CuprumContext,
     EnvMode,
@@ -20,6 +21,7 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
 
@@ -137,6 +139,53 @@ def test_inherit_mode_never_escapes_an_outer_replacement_boundary(
     assert per_call.stdout == "<missing>|per-call\n", (
         "a per-call inherit policy inside a replacement boundary must not read "
         "the live environment that boundary discarded"
+    )
+
+
+def test_observed_events_carry_the_resolved_environment_mode(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """Every observed phase carries the mode the execution actually ran under.
+
+    The observation tag is a separate surface from the typed field: the tag is
+    grafted from the same resolved policy, so the tag tests in
+    ``test_stage_observation_builder`` stay green if the builder stops passing
+    that policy on to :class:`~cuprum._pipeline_types._StageObservation`. Only
+    the emitted event can witness the two staying in step, so this asserts the
+    field on a real run rather than on a hand-built event.
+    """
+    events: list[ExecEvent] = []
+
+    def hook(ev: ExecEvent) -> None:
+        """Record an emitted execution event."""
+        events.append(ev)
+
+    command = python_builder("-c", "print('observed')")
+    with sh.observe(hook):
+        command.run_sync()
+        boundary = len(events)
+        command.run_sync(
+            context=ExecutionContext(
+                env={"CUPRUM_TEST_OBSERVE_MODE": "replaced"},
+                env_mode=EnvMode.REPLACE,
+            )
+        )
+
+    overlay_events = events[:boundary]
+    replace_events = events[boundary:]
+
+    assert overlay_events, "the ordinary run must emit observe events"
+    assert replace_events, "the replacement run must emit observe events"
+    assert all(ev.env_mode is EnvMode.OVERLAY for ev in overlay_events), (
+        f"an ordinary run must report overlay, got "
+        f"{[ev.env_mode for ev in overlay_events]!r}"
+    )
+    assert all(ev.env_mode is EnvMode.REPLACE for ev in replace_events), (
+        f"a replacement run must report replace on every phase, got "
+        f"{[ev.env_mode for ev in replace_events]!r}"
+    )
+    assert {ev.phase for ev in replace_events} >= {"plan", "start", "exit"}, (
+        "the replacement run must span the lifecycle phases, not just one"
     )
 
 

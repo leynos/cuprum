@@ -830,7 +830,7 @@ class ExecEvent:
     program: Program | None
     argv: tuple[str, ...]
     cwd: Path | None
-    env: Mapping[str, str] | None
+    env: EnvOverlay | None
     pid: int | None
     timestamp: float
     line: str | None
@@ -847,6 +847,7 @@ class ExecEvent:
     user_cpu_seconds: float | None  # exit: child user CPU seconds
     system_cpu_seconds: float | None  # exit: child system CPU seconds
     resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
+    env_mode: EnvMode | None  # effective policy; on every phase
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -1348,6 +1349,26 @@ implemented with the following decisions:
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
+- **Environment mode:** every event carries `ExecEvent.env_mode`, the effective
+  environment policy for the execution once the active context and any per-call
+  policy have been composed. It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`,
+  or `EnvMode.REPLACE`, and it is present on every phase — including `plan`,
+  `pipeline_fail_fast`, and the ancillary diagnostics — because it is known
+  before the child is spawned and describes the whole execution rather than one
+  measurement. It is `None` only on legacy or manually constructed events. A
+  `REPLACE` policy discards the live parent environment, so a child that omits
+  `PATH` can fail to resolve a bare program name before it ever starts; without
+  the field a consumer sees an ordinary spawn failure and cannot tell it apart
+  from an overlay run. The mode is a trusted value projected by Cuprum, never
+  read from a caller tag: it is carried on the typed event, and `env_mode` is
+  additionally a reserved observation-tag key — stripped from caller-supplied
+  tags when the tags are built, with the REPLACE tag grafted only by production
+  code. The logging adapter emits it as the `cuprum_env_mode` extra, the
+  tracing adapter as the `cuprum.env_mode` span attribute, and the metrics
+  adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
+  phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
+  so it records no failure sample at all; the typed field is the only signal
+  available for it.
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.

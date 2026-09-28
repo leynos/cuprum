@@ -148,9 +148,11 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
 def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     """Return the failure, duration, and resource ops for an exit event."""
     operations: list[_MetricOp] = []
-    # The failure counter is the one that most needs the mode: a replacement
-    # policy that omits ``PATH`` fails at spawn, and without the label that
-    # failure sits in the same series as an ordinary overlay one.
+    # The failure counter carries the mode so that a non-zero exit under a
+    # replacement policy is distinguishable from an ordinary overlay one. A
+    # spawn failure never reaches this reducer at all: a bare program name that
+    # a replacement policy's missing ``PATH`` cannot resolve raises before
+    # ``start``, so no ``exit`` event follows and no failure sample is recorded.
     if event.exit_code is not None and event.exit_code != 0:
         operations.append(
             _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))

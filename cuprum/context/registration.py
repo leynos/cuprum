@@ -238,18 +238,33 @@ class EnvRegistration(_TokenRegistration):
     token-restoration discipline is documented on
     :class:`_TokenRegistration`.
 
-    The overlay itself is overlay-only. The live :func:`os.environ` is read at
-    subprocess spawn time, when :func:`~cuprum.context.env_overlay.render_env`
-    renders the composed policy, so any updates to the process environment
-    after the registration is created — for example via ``pytest``'s
-    ``monkeypatch.setenv`` — remain visible to subprocesses spawned inside the
-    scope. This is the behaviour the issue requires.
+    The overlay itself is overlay-only. For effective modes other than
+    :class:`~cuprum.context.EnvMode.REPLACE`, the live :func:`os.environ` is
+    read at subprocess spawn time, when
+    :func:`~cuprum.context.env_overlay.render_env` renders the composed policy,
+    so any updates to the process environment after the registration is created
+    — for example via ``pytest``'s ``monkeypatch.setenv`` — remain visible to
+    subprocesses spawned inside the scope. This is the behaviour the issue
+    requires. A ``REPLACE`` mode is the exception: it renders from an empty
+    environment, so the live process environment stays out of the child
+    entirely.
     """
 
     __slots__ = ("_overlay",)
 
     def __init__(self, overlay: EnvOverlay, mode: EnvMode = EnvMode.OVERLAY) -> None:
-        """Layer ``overlay`` onto the current context's env overlay."""
+        """Register an environment overlay in the current context.
+
+        Parameters
+        ----------
+        overlay:
+            Environment values to apply in the enclosing scope.
+        mode:
+            Policy for combining ``overlay`` with the current context.
+            ``EnvMode.OVERLAY`` (the default) layers it onto the overlay
+            already in scope; ``EnvMode.REPLACE`` discards that outer overlay
+            and renders from ``overlay`` alone.
+        """
         super().__init__()
         self._overlay = _coerce_env_overlay(overlay)
         self._install(current_context().with_env_overlay(self._overlay, mode))
@@ -267,10 +282,13 @@ def env(
     """Overlay environment variables on top of the live :func:`os.environ`.
 
     Mirrors :func:`dict` in how arguments are combined: positional mappings
-    are merged left-to-right and any keyword arguments win over them. Values
+    are merged left-to-right and any keyword arguments win over them. For
+    effective modes other than :class:`~cuprum.context.EnvMode.REPLACE`, values
     are not snapshot against ``os.environ`` — the live process environment is
     read at subprocess spawn time so that variables set after Cuprum is
-    imported (for example by ``monkeypatch.setenv``) remain visible.
+    imported (for example by ``monkeypatch.setenv``) remain visible. A
+    ``REPLACE`` mode renders from an empty environment instead, so the live
+    process environment stays out of the child.
 
     Parameters
     ----------
