@@ -2882,6 +2882,24 @@ appear as one more link of the same shape, and the invariant that matters is
 the shape — each sweep's `head_before` is the commit before it and its gated
 digest is the blob the commit after it shipped.
 
+That shape was re-checked mechanically at `611f0f2d`, where the chain has grown
+to nine links: `7cbc266a` (gated `433bb89d`), `aa30ced6` (`2d6e841c`),
+`a21b08a9` (`acec114d`), `c83b12a3` (`d1e88169`), `05140b65` (`cf276c88`),
+`a4ae2482` (`7c01fcc0`), `125c1bdd` (`52dad1f5`), `e3cb271c` (`d962d2e0`), and
+`611f0f2d` (`aa723ff8`) — with prefixes `chainbound2-`, `skylosfix-`, and
+`degrecord2-` added for the last three. All nine links MATCH, and the
+commit-to-sweep mapping is a bijection over `d98fb5c9..HEAD`: no commit above
+the full-suite revision lacks a sweep, and none is covered twice. Both facts
+were computed from the commits rather than read out of the logs, which matters
+for the digest comparison in a way worth stating plainly, because the obvious
+form of it is wrong: the recorded digest is a **content** SHA-256 (`sha256sum`
+over the file), not a git object id. Comparing it against
+`git rev-parse <commit>:<path>` — whose value is a SHA-1 over a length-prefixed
+`blob <n>\0` payload — reports MISMATCH on all nine links while the chain is in
+fact sound. Compare against `git show <commit>:<path> | sha256sum`. `degrecord`
+remains a failed attempt and is not part of the chain: it aborted on the
+spelling gate, and the `e3cb271c` link was re-run as `degrecord2`.
+
 That chain is why the two full-suite runs are the only ones the branch needs,
 and why neither is superseded by the documentation commits above them. The
 reason is narrower than "docs cannot affect a suite": **`make lint` does read
@@ -2894,10 +2912,16 @@ not on its own enough to prove it did not.
 
 The claim that it did not was tested rather than argued, because the failure
 mode is invisible to the sweeps. Running the pinned skylos (`4.33.2`) over
-`cuprum` at HEAD and again with these two documents reverted to `d98fb5c9`
-gives byte-identical verdicts: the same 22 liveness-credited symbols, the same
-zero `unused_functions`. As a control that the mechanism is live rather than
-dormant, the class-qualified mentions were then degraded to bare
+`cuprum` on the documentation content `611f0f2d` shipped (plan `aa723ff8`,
+report `cf276c88`) and again with these two documents reverted to `d98fb5c9`
+(plan `452fd262`, report `b910858d`) gives byte-identical verdicts: the same 22
+liveness-credited symbols, the same zero `unused_functions`. The two arms are
+anchored by content digest rather than by commit label, because the skylos JSON
+records no revision of its own — an earlier run of this experiment was filed
+under a commit name its output never carried, and is not cited here.
+
+As a control that the mechanism is live rather than dormant, the
+class-qualified mentions were then degraded to bare
 `LineEventEmitter.emit_line` in both files, whereupon
 `_LineEventEmitter.emit_line` lost its credit and `unused_functions` became 1 —
 an `SKY-U001` failure. The control was then taken one step further, because
