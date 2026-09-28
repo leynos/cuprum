@@ -1,21 +1,32 @@
 # Hoist invariant execution-event fields (5.2.1)
 
 Status: **COMPLETE — R3 met at the revised 30% target, all three milestones
-done and every gate green at `3315c5c3`.** EP-M2 is implemented, and the
-completed hoist measures **29.91%** (median of three matched pairs, candidate
-range 0.0423 points) against the **30%** bar approved on 2026-09-27. That is up
-from 28%, which the same captures missed by 1.90 points; the revision is the
-one this plan's Tolerances section required, and it was granted on the
-measurement rather than on a further projection (see "The 30% revision, and why
-the margin is thin" below). All four acceptance requirements R1–R4 are met.
-EP-M1 is complete; EP-M3's evidence artefact
-(`docs/tee-hotpath-line-event-emission-5-2-1.md`), documentation closeout
-(design §8.1.3, both guides, contents index), roadmap tick, and changelog entry
-are all committed. The pass is *not* a weakening of a met criterion for its own
-sake: the same collection shows the candidate 30.96% faster in median wall
-time, the three controls exceed the 30% bar by 4.04 to 5.35 points, and the
-margin over 30% is 0.0586 points against a 0.0423-point spread — thin, recorded
-as thin, and forecast to be inverted by 5.2.2.
+done, every deterministic gate green, and hosted CI green at the current
+head.** EP-M2 is implemented, and the completed hoist measures **29.91%**
+(median of three matched pairs, candidate range 0.0423 points) against the
+**30%** bar approved on 2026-09-27. That is up from 28%, which the same
+captures missed by 1.90 points; the revision is the one this plan's Tolerances
+section required, and it was granted on the measurement rather than on a
+further projection (see "The 30% revision, and why the margin is thin" below).
+All four acceptance requirements R1–R4 are met. EP-M1 is complete; EP-M3's
+evidence artefact (`docs/tee-hotpath-line-event-emission-5-2-1.md`),
+documentation closeout (design §8.1.3, both guides, contents index), roadmap
+tick, and changelog entry are all committed. The pass is *not* a weakening of a
+met criterion for its own sake: the same collection shows the candidate 30.96%
+faster in median wall time, the three controls exceed the 30% bar by 4.04 to
+5.35 points, and the margin over 30% is 0.0586 points against a 0.0423-point
+spread — thin, recorded as thin, and forecast to be inverted by 5.2.2.
+
+Two full local suite runs carry the deterministic evidence, both on frozen
+trees with nothing skipped or bounded: `3315c5c3` (the implementation and
+evidence, all eight gates including `test-act`) and `d98fb5c9` (the review
+dispositions, seven gates — `test-act` not re-run, justified as docstring-only
+in the delta). Every commit above `d98fb5c9` is a documentation edit behind its
+own hash-pinned docs-scoped sweep, so neither full run is superseded; the chain
+is verified as a bijection in the retrospective. Hosted CI is green at
+`e4a53306` — 19 checks pass, 3 deliberate skips, zero failures. The draft
+status of PR #433 and the `CodeRabbit` app's resulting no-op are recorded as
+open items, not as completed review.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -306,6 +317,58 @@ failure injection at that boundary.
   tree clean before and after, so the evidence is valid for that HEAD and no
   sub-check was bounded or skipped. Logs under
   `/tmp/closeout-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
+- [x] (2026-09-28) CodeRabbit review dispositions landed at `d98fb5c9`, and the
+  **full suite was re-run there** on a frozen tree: `check-fmt`, `markdownlint`
+  with `spelling`, `typecheck`, `lint` (interrogate 100.0%, pylint `10.00/10`),
+  `test` (`2549 passed, 63 skipped`; nextest `125 passed`), and `nixie` all
+  pass, with `make lint` reaching `github-actions-lint`'s final recipe line
+  unbounded. `make test-act` was not re-run and the omission is justified in
+  the retrospective: the delta's only Python hunks are inside docstrings, and
+  no workflow file or Rust source changed. Logs under
+  `/tmp/final-*-5-2-1-hoist-the-invariant-exec-event-and-event-details.out`.
+- [x] (2026-09-28) Ten documentation commits above `d98fb5c9`, each behind its
+  own hash-pinned docs-scoped gate sweep, forming a chain re-checked
+  **mechanically at `e4a53306`** rather than asserted: all ten links MATCH, and
+  the commit-to-sweep mapping is a bijection over `d98fb5c9..HEAD`. The
+  full-suite runs therefore remain the last word on `lint` for the code, with
+  the documentation delta covered separately by re-running the pinned `skylos`
+  over both documentation revisions — the sweeps alone do not cover it, because
+  `make lint` reads Markdown (see the lint discoveries below).
+- [x] (2026-09-28) PR description rewritten and applied to match the
+  implementation, then re-applied after the review-driven and chain-driven
+  revisions, each time verified by an independent read-back rather than by the
+  PATCH response. PR title de-prefixed from "Plan: " and the Lody session link
+  added to `## References`.
+- [x] (2026-09-28) Hosted CI observed green at `e4a53306`, the current head: 19
+  checks pass, 3 deliberate skips (`Kody Code Review`, `Loom model smoke test`,
+  `automerge`), zero failures — including `coverage`, `benchmark-ratchet`,
+  `lint-test`, all four `Typecheck and test` jobs, all five
+  `build-native-wheels` jobs, and `verify-wheel-install`. `CodeRabbit` reports
+  `pass` *because* the PR is still a draft and the app skips drafts; that is a
+  skip wearing a pass, and it is recorded as one rather than counted as review.
+
+  **Still outstanding, and owned by the user rather than this plan:** whether
+  to take PR #433 out of draft. Until that happens the CodeRabbit *app*
+  produces no GitHub-side threads, so the four review dispositions rest on the
+  CLI agent's JSON stream and cannot be cross-checked against a threads API
+  (see the caveat in the retrospective).
+- [x] (2026-09-28) One further documentation commit, closing the last stale
+  target reference: EP-M2's instruction still read "If it misses the **28%**
+  threshold, record BLOCKED" three revisions after the bar moved to 30%.
+  Corrected, with the revision noted inline; the dated quotation of the same
+  sentence in this Progress section was deliberately kept. It went in behind
+  the branch's eleventh docs-scoped sweep, whose gates are named and logged in
+  the chain paragraph under Outcomes & retrospective rather than counted here.
+  All five Markdown gates exited 0 with the gated file's digest identical
+  before and after — so no gate observed a mutation mid-run — and, because the
+  edit touches credit-bearing `_LineEventEmitter.emit_line` mentions, `skylos`
+  was re-run over both documentation revisions as the sweeps alone cannot cover
+  `lint`: control and edited give identical verdicts (2198 credited, 135
+  uncertain, `unused_functions: 0`). The digests and the chain link are in the
+  run logs rather than quoted here: a document cannot state its own content
+  hash, since writing the value in changes it (the `chain9`/`chain9b` trap
+  above). See the new Decision-log entry for why a stale number *in an
+  instruction* is a different defect from one in a record.
 
 ## Surprises & discoveries
 
@@ -2528,6 +2591,74 @@ them here is what makes 30% an honest number: the target moved because the
 measurement said the design's floor was real, not because no cheaper design
 existed.
 
+### 2026-09-28: `make lint` reads Markdown, so a docs-only edit is not out of scope
+
+This plan asserted, in the section now superseded below and in the PR
+description, that a documentation-only edit "cannot invalidate a suite whose
+scope excludes docs" except through the four Markdown gates. **That is false**,
+and it was one commit away from being the justification for not re-running the
+full suite after the documentation commits.
+
+`make lint` → `python-lint` → `skylos` reads the repository's `.md`, `.rst`, and
+`.txt` files to credit symbols as live, and this branch's *own* new class is
+on the receiving end: `cuprum._line_callbacks._LineEventEmitter.emit_line`
+carries `documented_public_api` evidence sourced from the class-qualified
+`` `_LineEventEmitter.emit_line` `` mentions in this plan and in the evidence
+report. A prose edit that disturbs such a mention changes the lint verdict —
+the failure mode is a rename or a reflow in a document, and it is invisible to
+every Markdown gate.
+
+The claim was tested rather than argued, with the pinned CLI (`4.33.2`) run over
+`cuprum` three ways: (1) on the content `611f0f2d` shipped → 22
+liveness-credited symbols, `unused_functions: 0`; (2) with both documents
+reverted to `d98fb5c9` → byte-identical verdict; (3) with the class-qualified
+mentions degraded to a bare `LineEventEmitter.emit_line` → credit lost,
+`unused_functions: 1`, an `SKY-U001` failure. Step 3 is the control that shows
+the mechanism is live rather than dormant; step 2 is what licenses the
+documentation-only delta.
+
+Step 3 also needed a **second** step, which is the part worth remembering. The
+raw `sed` degradation shortened some lines, so `mdtablefix` and `check-fmt`
+failed on *rewrapping* rather than on the semantic change — the first attempt
+at the control proved nothing. Only after re-canonicalizing both files with
+`mdtablefix --in-place` did the intended state appear: all four Markdown gates
+exit 0, and `skylos` still fails. That two-step form is the experiment; the
+one-step form is refuted by anyone who runs it.
+
+The practical rule: before calling a delta "docs-only, so gates are
+unnecessary", list the gates' actual inputs. Here the honest statement is
+narrower than the one first written — `lint` *does* read these documents, and
+the delta above the full-suite runs is covered by re-running `skylos` over both
+documentation revisions, not by the sweeps.
+
+### 2026-09-28: a content SHA-256 is not a git object id
+
+The ten-link sweep chain is verified by comparing each sweep's recorded digest
+against the revision it gated. The obvious way to do that is wrong in a way
+that reports failure on a sound chain:
+
+```bash
+git rev-parse "$commit:$path"      # 40-hex SHA-1 object id — NOT comparable
+git show "$commit:$path" | sha256sum   # content SHA-256 — the right form
+```
+
+`sha256sum` hashes the file's bytes; `git rev-parse <commit>:<path>` returns a
+SHA-1 over a length-prefixed payload (`blob <n>\0` + contents). Both are bare
+hex strings that a log presents as "the hash of this file", which is what makes
+this a trap rather than a typo. Comparing them reported MISMATCH on **every**
+link of a chain that was in fact sound — and that all-links-fail signature is
+itself the tell: ten independent regressions do not happen at once, so a
+uniform failure indicts the comparison, not the artefact.
+
+The chain record is also anchored by *content digests* rather than commit
+labels, and that choice was forced by a second near-miss. An earlier version of
+the `skylos` evidence cited a commit name for an arm whose output file carries
+no revision field at all — the label came from the filename it had been saved
+under, i.e. from the archivist rather than from the measurement. Both arms were
+re-run under a run window that logs the digest of each input, so the pairing is
+now checkable by a reader instead of trusted: plan `aa723ff8` + report
+`cf276c88` against plan `452fd262` + report `b910858d`.
+
 ### Earlier discoveries
 
 The roadmap's source line numbers are historical. Use the symbols and paths
@@ -2759,6 +2890,62 @@ require checking the explicit callback factory bodies as well.
   and this plan's decision log — are dated audit trails of each revision and
   were deliberately left alone; the distinction is between a live claim and a
   record of a past decision.
+- 2026-09-28: **Record a sweep chain as a shape plus a verified snapshot, never
+  as a count.** The paragraph recording this branch's docs-scoped gate sweeps
+  first said "five commits sit above `d98fb5c9`" — and committing it made the
+  count six, and every later documentation commit would have done the same to
+  any number written there. It is now a property claim (each sweep's
+  `head_before` is the commit before it; its gated digest is the blob the next
+  commit shipped) with the enumeration explicitly bounded as a reading at a
+  named revision, plus a note that the invariant is the shape. Applied to the
+  PR description too, which names the log-file pattern and points at this plan
+  rather than carrying a count of its own.
+- 2026-09-28: **A gate log's recorded digest is a content hash, and the
+  comparison must match it.** Verifying the chain by
+  `git rev-parse <commit>:<path>` reports MISMATCH on every sound link, because
+  that is a SHA-1 object id over a length-prefixed payload. Compare
+  `git show <commit>:<path> | sha256sum`. The failure signature is diagnostic
+  and was used as such: all links failing at once indicts the comparison, not
+  the chain.
+- 2026-09-28: **Anchor a measurement arm by a digest the run itself records, not
+  by the filename it was saved under.** A `skylos` arm was cited by commit name
+  when the tool's JSON contains no revision field, so the label was inherited
+  from the archivist's filename. Re-ran both arms with the input digests logged
+  beside the results; the plan now cites those digests. Generalized: a run
+  whose output does not name its input is not evidence until something does.
+- 2026-09-28: **Keep a class-qualified `Class.method` mention intact in prose.**
+  `skylos` credits `_LineEventEmitter.emit_line` as live from the
+  class-qualified mentions in this plan and the evidence report, and its rescue
+  patterns do not match a bare `emit_line`. So a reflow that splits the
+  qualifier across lines, or an edit that drops it, silently removes the credit
+  and fails `SKY-U001`. The mentions are load-bearing text, not formatting.
+- 2026-09-28: **Leave PR #433 as a draft until the user says otherwise, and do
+  not count the CodeRabbit app's `pass` as review.** The app skips drafts, so
+  its check reports `pass` with the detail "Review skipped: draft pull request"
+  — a skip wearing a pass. The four review dispositions therefore rest on the
+  CLI agent's JSON stream with no GitHub-side threads to cross-check, and
+  taking the PR out of draft is a decision the plan flags for the user rather
+  than takes itself.
+- 2026-09-28: **A stale number in a milestone instruction is a live defect, not
+  an audit record — and an amendment claim in a revision note must be checked
+  against the diff, not trusted.** EP-M2's instruction still read "If it misses
+  the **28%** threshold, record BLOCKED" while the 2026-09-27 revision note
+  claimed the Milestones section *had* been amended to 30%. Both could not be
+  true. `git show 75a777d9` settles it: that commit amended EP-M2's *narrative*
+  paragraph ("meet 28%" → "meet the bar") and the Validation section, but never
+  the instruction sentence, which `git log -S` shows untouched since
+  `01ec41bd`. The distinction the 2026-09-28 docstring entry draws — live claim
+  versus record of a past decision — applies, and this site is the former: the
+  instruction is unqualified and undated, so a worker following it at this
+  task's own measurement would record BLOCKED on a result that passes, because
+  29.91% misses 28% and clears 30%. Corrected to 30% with an inline note
+  recording what it said and why the revision missed it, which is the treatment
+  V5 itself already uses for its own stale "27-of-100" rewrite. The quoted
+  instruction at the 2026-09-27 Progress bullet stays as written: it is dated,
+  attributed, and marked "Resolved later the same day", which is what an audit
+  record looks like. The general lesson is the one the docstring entry already
+  states, applied to a third site it had not enumerated: when a target moves,
+  sweep for *instructions that cite it*, not only for claims about it.
 
 ## Outcomes & retrospective
 
@@ -2882,23 +3069,41 @@ appear as one more link of the same shape, and the invariant that matters is
 the shape — each sweep's `head_before` is the commit before it and its gated
 digest is the blob the commit after it shipped.
 
-That shape was re-checked mechanically at `611f0f2d`, where the chain has grown
-to nine links: `7cbc266a` (gated `433bb89d`), `aa30ced6` (`2d6e841c`),
-`a21b08a9` (`acec114d`), `c83b12a3` (`d1e88169`), `05140b65` (`cf276c88`),
-`a4ae2482` (`7c01fcc0`), `125c1bdd` (`52dad1f5`), `e3cb271c` (`d962d2e0`), and
-`611f0f2d` (`aa723ff8`) — with prefixes `chainbound2-`, `skylosfix-`, and
-`degrecord2-` added for the last three. All nine links MATCH, and the
-commit-to-sweep mapping is a bijection over `d98fb5c9..HEAD`: no commit above
-the full-suite revision lacks a sweep, and none is covered twice. Both facts
-were computed from the commits rather than read out of the logs, which matters
-for the digest comparison in a way worth stating plainly, because the obvious
-form of it is wrong: the recorded digest is a **content** SHA-256 (`sha256sum`
-over the file), not a git object id. Comparing it against
-`git rev-parse <commit>:<path>` — whose value is a SHA-1 over a length-prefixed
-`blob <n>\0` payload — reports MISMATCH on all nine links while the chain is in
-fact sound. Compare against `git show <commit>:<path> | sha256sum`. `degrecord`
-remains a failed attempt and is not part of the chain: it aborted on the
-spelling gate, and the `e3cb271c` link was re-run as `degrecord2`.
+That shape was re-checked mechanically at `e4a53306`, where the chain has grown
+to ten links: `7cbc266a` (gated `433bb89d`), `aa30ced6` (`2d6e841c`), `a21b08a9`
+(`acec114d`), `c83b12a3` (`d1e88169`), `05140b65` (`cf276c88`), `a4ae2482`
+(`7c01fcc0`), `125c1bdd` (`52dad1f5`), `e3cb271c` (`d962d2e0`), `611f0f2d`
+(`aa723ff8`), and `e4a53306` (`2dff1c41`) — with prefixes `chainbound2-`,
+`skylosfix-`, `degrecord2-`, and `chain9b-` added for the last four. All ten
+links MATCH, and the commit-to-sweep mapping is a bijection over
+`d98fb5c9..HEAD`: no commit above the full-suite revision lacks a sweep, and
+none is covered twice. Both facts were computed from the commits rather than
+read out of the logs, which matters for the digest comparison in a way worth
+stating plainly, because the obvious form of it is wrong: the recorded digest
+is a **content** SHA-256 (`sha256sum` over the file), not a git object id.
+Comparing it against `git rev-parse <commit>:<path>` — whose value is a SHA-1
+over a length-prefixed `blob <n>\0` payload — reports MISMATCH on every link
+while the chain is in fact sound. Compare against
+`git show <commit>:<path> | sha256sum`. Two prefixes remain failed attempts and
+are not part of the chain: `degrecord` aborted on the spelling gate, re-run as
+`degrecord2`; and `chain9` never ran its gates at all, because its wrapper
+passed `mdtablefix`'s flags through `make` rather than to the tool, so all four
+exited 2 without executing. Neither has a bearing on the links above — a failed
+sweep simply leaves no commit behind, which is why the bijection still holds.
+The sweep that closes the last stale target reference adds a third shape worth
+naming, because it decoys the obvious read-back: reaching its final content
+took several attempts, and the earlier ones gated content that was then edited
+again. Their shipping commits were then amended away, so those logs record
+digests that no commit in the current history ships — matching plan text, not a
+defect, and visible as such only to a reader who checks each recorded digest
+against a commit rather than trusting the prefix. The committed content was
+gated once, after the text settled, by the final sweep, whose logs are split
+one per gate so no `grep` can read the wrong arm.
+`git show <commit>:<path> | sha256sum` matches that sweep's recorded digest and
+no other. The lesson generalizes the one the failed attempts already teach — a
+prefix names a *session*, not a result, so a digest is only evidence when it is
+read from the arm that gated the blob actually shipped, which is what that
+comparison establishes independently of any log.
 
 That chain is why the two full-suite runs are the only ones the branch needs,
 and why neither is superseded by the documentation commits above them. The
@@ -3378,12 +3583,16 @@ and revert only the task's own uncommitted work.
 Implement the shared factory and update both production callers together. Make
 V1 green, then run V2–V4 and inspect adjacent hook ownership. Remove all
 experimental alternatives, temporary expected-failure markers, and probes. Run
-the representative profile gate before claiming R3. If it misses the **28%**
+the representative profile gate before claiming R3. If it misses the **30%**
 threshold, record BLOCKED and present the measured limitation for design
-revision. Correctness alone does not discharge R3. A successful plateau
-contains one production factory, unchanged dispatch, passing gates, and
-reproducible profile evidence; commit it as one atomic functional change.
-Recovery is an ordinary reviewed revert, not a force reset of unrelated work.
+revision. (This sentence read 28% until 2026-09-28: that was the live bar when
+EP-M2 ran, and the 2026-09-27 revision updated the paragraph below and the
+Validation section but not this line. Left alone it inverts the verdict at this
+task's own measurement, since 29.91% misses 28% and clears 30%.) Correctness
+alone does not discharge R3. A successful plateau contains one production
+factory, unchanged dispatch, passing gates, and reproducible profile evidence;
+commit it as one atomic functional change. Recovery is an ordinary reviewed
+revert, not a force reset of unrelated work.
 
 The feasibility stop condition was reached on 2026-09-27 against the original
 10% threshold, and the threshold was then revised with user approval rather
@@ -3594,6 +3803,20 @@ sections to the 30% target. The two earlier threshold sentences and every
 recorded miss remain in place as history — the revisions are recorded as
 changes of target, not as corrections of measurement. EP-M3's closeout is the
 remaining work.
+
+2026-09-28: EP-M3 closeout completed at `3315c5c3`; CodeRabbit review
+dispositions landed at `d98fb5c9` with the full suite re-run there; and ten
+documentation commits followed, each behind its own docs-scoped sweep. Added
+the Progress entries for that phase, two discoveries (`make lint` reads
+Markdown, so a docs-only edit is not out of scope; and a content SHA-256 is not
+a git object id), and five Decision-log entries. Amended the Status block to
+name both full-suite revisions rather than only the closeout, and to record the
+hosted CI state with the draft-PR caveat attached. Corrected the chain record
+from nine links to ten and added the `chain9b`/`chain9` distinction. No
+production, test, or build change was made in this revision: the sole
+production file, `cuprum/_line_callbacks.py`, is still `+119/−13` against the
+merge base `991dee64`, and every commit above `d98fb5c9` touches documentation
+only.
 
 [roadmap]: ../roadmap.md#52-make-per-line-event-emission-cheap-for-line-callback-workloads
 [design-events]: ../cuprum-design.md#813-structured-execution-events-observe-hooks
