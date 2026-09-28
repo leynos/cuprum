@@ -149,7 +149,9 @@ contract module under `tests/` and forgets to name it will be told so by
 - [x] (2026-09-26 17:30Z) Guard non-vacuity discharged: both negative controls
   are rejected. Renaming one module back out of the selector fails four guard
   tests and names the module; removing `tests/test_ci_*.py` from
-  `PYTEST_TARGETS` fails 52.
+  `PYTEST_TARGETS` fails the rest. The denominators in this entry were
+  re-measured at `df3c59ad`; see `Validation and acceptance` for the current
+  pair and for why the numbers drift.
 - [x] (2026-09-26 17:35Z) Pulled the branch forward through two gate failures.
   `make check-fmt` reformatted three files (two modules and the ExecPlan's own
   `python`-tagged sketches); `make lint` reported twelve errors across the two
@@ -245,9 +247,12 @@ contract module under `tests/` and forgets to name it will be told so by
   `/tmp/R3-*-issue-499.out`, deliberately distinct from the two earlier runs'
   log paths so those findings' logs were not overwritten. `make test` green in
   all three suites: Python 2467 passed / 63 skipped, of which the
-  `tests/test_ci_*.py` batch is 747 passed including all seven renamed modules
-  and this branch's own guard at 59 tests, with 2 syrupy snapshots passing;
-  Rust nextest 125 passed; Rust doctests ok.
+  `tests/test_ci_*.py` batch includes all seven renamed modules and this
+  branch's own guard, with 2 syrupy snapshots passing; Rust nextest 125 passed;
+  Rust doctests ok. The per-module counts quoted here — `test_ci_*.py` at 747
+  and the guard at 59 — were true at `5ccb4701` and are superseded; at
+  `df3c59ad` the same two are 750 and 58. Both revisions are green; only the
+  sizes moved.
 - [x] (2026-09-26 20:45Z) Gate evidence from here on is recorded on the pull
   request rather than in this document. The loop — edit the plan, run the
   gates, edit the plan again — invalidates each run as a citation, because a
@@ -356,26 +361,27 @@ contract module under `tests/` and forgets to name it will be told so by
 - Observation: `Path("tests") == "tests"` is `False`. The guard's first version
   filtered selector results with `path.parent == "tests"`, which excluded every
   module; 54 of 56 guard tests failed reporting modules as uncovered that the
-  selector plainly names. Evidence: the first Green run of
-  `tests/test_ci_test_selection_contract.py` reported 54 failures naming all 49
-  root modules. Impact: the comparison now uses a module-level
-  `_TESTS = Path ("tests")`, and the constant's comment records why a string
-  comparison cannot be used here.
+  selector plainly names. Evidence: reproduced at `f87139f3`, the revision that
+  introduced the guard, by re-injecting the bare comparison —
+  `54 failed, 2 passed`, the two survivors being the controls that touch
+  neither selector. That revision enumerated 50 root modules, which with its 6
+  fixed tests is the 56 the denominator names. Impact: the comparison now uses
+  a module-level `_TESTS_DIR = pth.Path(_TESTS)`, and the constant's comment
+  records why a string comparison cannot be used here.
 
 - Observation: the guard's own name puts it inside the selector it polices.
   `tests/test_ci_test_selection_contract.py` matches `tests/test_ci_*.py`, so
   removing that pattern also removes the guard. Evidence: negative control B,
-  which deleted the pattern, failed most of the guard suite rather than all of
-  it — the survivors include the seeded-fault control, which needs no selector.
-  The figures were re-derived at each revision as the suite grew, so the
-  current pair of controls reads 4 of 62 (rename one module out) and 54 failed
-  / 8 passed (pattern removed); the same revision measured 52 of 56 earlier,
-  and a reader comparing them is seeing the suite's growth, not a regression.
-  Impact: accepted and recorded in `Context and orientation` as a residual gap.
-  The alternative — putting the guard outside the selector — is not collected
-  either, so it would guard nothing. The `test_ci_` family is the right home; a
-  repository-wide selector rewrite is a bigger change than issue
-  #499 asks for.
+  which deleted the pattern, failed 54 of the suite's 58 cases rather than all
+  of them. The four survivors are three of the five controls that need no
+  selector, plus the single parametrized case the selector still resolves —
+  `test_each_root_module_matches_a_selector_pattern[tests/test_native_sdist.py]`,
+  which survives because that module is named in `PYTEST_TARGETS` as a literal
+  path rather than reached through the deleted glob. Impact: accepted and
+  recorded in `Context and orientation` as a residual gap. The alternative —
+  putting the guard outside the selector — is not collected either, so it would
+  guard nothing. The `test_ci_` family is the right home; a repository-wide
+  selector rewrite is a bigger change than issue #499 asks for.
 
 ## Decision log
 
@@ -455,14 +461,19 @@ contract module under `tests/` and forgets to name it will be told so by
 
 What was achieved. All seven modules issue #499 named now run under
 `make test-python`: `env -u BASH_ENV make test-python` passes with the
-`tests /test_ci_*.py` pattern collecting 688 tests, and each of the seven
+`tests/test_ci_*.py` pattern collecting 750 tests, and each of the seven
 appears in the collected set by name. `make test-dev-fast-contract` collects
 the renamed dev-fast module and its two snapshots. The guard,
-`tests/test_ci_test_selection_contract.py`, passes 56 tests and rejects both
+`tests/test_ci_test_selection_contract.py`, passes 58 tests and rejects both
 negative controls: renaming one module back out of the selector fails four of
 its tests naming that module, and deleting `tests/test_ci_*.py` from
-`PYTEST_TARGETS` fails 52. The rule is documented under "Test selection" in the
+`PYTEST_TARGETS` fails 54. The rule is documented under "Test selection" in the
 developers' guide.
+
+These counts are as measured at revision `df3c59ad`. The guard's own size grows
+whenever a root-level module is added, so a later reader who re-runs the
+commands in `Validation and acceptance` should expect a larger denominator and
+should not read the difference as a change in what the tests assert.
 
 What went differently from the plan. Task 1 was expected to need repairs;
 triage found none, so the only Task 1 work was the sampler's latent timeout
@@ -749,8 +760,19 @@ tree is the stronger artefact, because a reader can re-run them.
   git mv tests/test_setup_sccache_action.py tests/test_ci_setup_sccache_action.py
   ```
 
-  fails four tests. The named check and the per-module check both report, and
-  the message names the module and both fixes:
+  fails four of the 58 collected cases. The named check and the per-module
+  check both report, and the message names the module and both fixes:
+
+  The rename *target* decides the count, which matters for a reader reproducing
+  this. Renaming to a name that still matches the enumeration glob
+  `tests/test_*.py` — as the command above does — leaves the module visible to
+  `root_modules`, so the population check, the named check, the population
+  cross-check, and that module's own parametrized case all report. Renaming it
+  outside the glob instead, such as to `tests/setup_sccache_action_out.py`,
+  hides the module from the enumeration and only the named check fires: 1
+  failed, 56 passed. Both spellings are correct controls; they exercise
+  different halves of the machinery, and the four-test form is the one that
+  reaches the per-module report.
 
   ```plaintext
   AssertionError: these root-level modules are collected by no target the suite
@@ -764,11 +786,24 @@ tree is the stronger artefact, because a reader can re-run them.
   ```
 
 - Red, control B: delete the `tests/test_ci_*.py` pattern from
-  `PYTEST_TARGETS` and run the same command. It fails 52 of 56 tests. This is
-  the control that proves the covered set is not satisfied by some other
-  pattern, and it also demonstrates the residual gap recorded above: the guard
-  lives inside the selector it polices, so removing the pattern removes it too.
-  The four survivors are the controls that need no selector.
+  `PYTEST_TARGETS` and run the same command. It fails 54 of the 58 collected
+  cases. This is the control that proves the covered set is not satisfied by
+  some other pattern, and it also demonstrates the residual gap recorded above:
+  the guard lives inside the selector it polices, so removing the pattern
+  removes it too.
+
+  The four survivors are three of the five controls that need no selector —
+  `test_the_exception_mechanism_reports_an_uncovered_module`,
+  `test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected`, and
+  `test_a_module_the_selector_drops_is_reported_as_uncovered` — plus the
+  single parametrized case the selector still resolves. That last one is
+  `test_each_root_module_matches_a_selector_pattern[tests/test_native_sdist.py]`,
+  which survives because `tests/test_native_sdist.py` is named in
+  `PYTEST_TARGETS` as a literal path rather than reached through the deleted
+  glob. Its survival is what the pattern deletion does *not* reach, not an
+  artifact of the fixture. The suite collects 58 cases: 51 parametrized (one
+  per root-level `tests/test_*.py` module) and 7 fixed, five of which are
+  selector-independent.
 
 - Green: on the final tree,
 
@@ -778,8 +813,17 @@ tree is the stronger artefact, because a reader can re-run them.
   make test-dev-fast-contract
   ```
 
-  report 56 passed; a full pass collecting 688 tests under `tests/test_ci_*.py`
-  with all seven modules present by name; and 47 passed with 2 snapshots.
+  report 58 passed at revision `df3c59ad`; the full suite at 2467 passed and 63
+  skipped, within which the `tests/test_ci_*.py` batch is 750 passed with all
+  seven modules present by name; and 47 passed with 2 snapshots.
+
+  The figures in this section were re-measured at `df3c59ad` rather than
+  carried forward. They drift between revisions as the suite grows, and two of
+  them had gone stale in the previous revision of this document: the guard's
+  own count read 56 where the tree collected 58, and the batch read 688 where
+  it collected 750. A reader comparing the pairs is seeing that drift, not a
+  regression. Each figure here is what the command above printed at the head
+  named, and the exact commands are given so any of them can be re-derived.
 
 - Refactor: the helper was tidied after the first smoke test — continuation
   joining added, the `@` marker stripped from recipes, and the `Path`-versus-
@@ -923,6 +967,62 @@ Dependencies: `makeutil` 0.1.0, already pinned by
 `test-python`; no new dependency is introduced.
 
 ## Revision note
+
+2026-09-28, fourth revision. Every quantitative claim in this document that is
+not anchored to a revision was re-derived at `df3c59ad`, and the unanchored
+ones had drifted. Nothing about the change's behaviour is different; this
+revision corrects the record.
+
+- The three test counts in `Validation and acceptance` and `Outcomes` were
+  measured afresh: the guard reads 58 collected cases, the `tests/test_ci_*.py`
+  batch 750, the full Python suite 2467 passed / 63 skipped, and
+  `test-dev-fast-contract` 47 passed with 2 snapshots. The document previously
+  said 56, 688, and — correctly — 2467/63 and 47. The sentence claiming the
+  batch figure showed the guard's own size was also wrong about which command
+  reports which number; it now names each command against each figure.
+
+- The two negative controls were re-run rather than carried. Control B
+  measures 54 failed of 58, not "52 of 56"; the four survivors are now named,
+  including the one that survives because `tests/test_native_sdist.py` is a
+  literal `PYTEST_TARGETS` entry rather than a glob match. Control A measures
+  four failures or one, depending on whether the rename target still matches
+  the enumeration glob — a distinction the document did not make, and which a
+  reader reproducing it needs. Both spellings are recorded.
+
+- The third revision's note gave the controls as "4 of 62" and "54 failed / 8
+  passed". Both are right, and 62 is not a single module's size: it is the two
+  guard modules together, `test_ci_test_selection_contract.py` (58) plus
+  `test_ci_suite_wiring_contract.py` (4). Re-measured over that union, control
+  A is `4 failed, 58 passed` and control B is `54 failed, 8 passed` — the pair
+  the note recorded. The figures elsewhere in this document are scoped to the
+  selection module alone, where the same controls read 4 of 58 and 54 of 58;
+  the two scopes are both correct and differ only in which modules are
+  collected, which is why the counts in this document name their scope.
+
+  62 was briefly declared unreachable here, on the strength of a single-module
+  measurement. That was this revision's own error: the denominator was quoted
+  from a two-module run and checked against a one-module collection, and the
+  disagreement was attributed to the figure rather than to the scope. It is the
+  reason the corrected sentences name both the command and the modules it
+  collects.
+
+- One figure survived scrutiny and is now anchored rather than corrected. The
+  `Surprises` entry reporting that the bare `Path`-versus-`str` comparison
+  failed "54 of 56" guard tests is exactly right — reproduced at `f87139f3`, by
+  re-injecting the comparison, at `54 failed, 2 passed`. Its companion claim
+  that the failures named "all 49 root modules" was off by one: that revision
+  enumerated 50. The entry now records the reproduction, the revision it
+  applies to, and why 56 is the denominator there.
+
+- The parenthesised file sizes in `Progress` (97, 358, 181, 339, 226, 319
+  lines) were checked against the revisions that created each module and are
+  all exact at those revisions. They are provenance, not current sizes, and are
+  deliberately left as written.
+
+The lesson is the one `Prose numbers need re-derivation` already records, met
+again: a count copied forward through three revisions of a document that keeps
+growing is a claim about a tree that no longer exists. Each figure now either
+carries its revision or states the command that re-derives it.
 
 2026-09-28, third revision. A CodeRabbit pass over the pushed head reported
 seven findings, all of which were verified against the tree before any edit;
