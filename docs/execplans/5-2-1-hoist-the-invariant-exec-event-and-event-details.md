@@ -2898,13 +2898,25 @@ mode is invisible to the sweeps. Running the pinned skylos (`4.33.2`) over
 gives byte-identical verdicts: the same 22 liveness-credited symbols, the same
 zero `unused_functions`. As a control that the mechanism is live rather than
 dormant, the class-qualified mentions were then degraded to bare
-`LineEventEmitter.emit_line` in both files — a change the four Markdown gates
-would still pass — and `_LineEventEmitter.emit_line` immediately lost its
-credit and became `unused_functions: 1`, which is an `SKY-U001` failure. So:
-the sweeps honestly report what they cover, the full-suite runs at `d98fb5c9`
-are the last word on `lint` for the code, and the delta since is verified
-separately by re-running skylos over both documentation revisions rather than
-by assuming docs are out of scope.
+`LineEventEmitter.emit_line` in both files, whereupon
+`_LineEventEmitter.emit_line` lost its credit and `unused_functions` became 1 —
+an `SKY-U001` failure. The control was then taken one step further, because
+"the four gates would still pass this" is easy to assume and was in fact false
+on the first attempt: the raw `sed` edit also shortened the lines, so
+`mdtablefix` and `check-fmt` failed on *rewrapping*, not on the semantic
+change. Re-canonicalizing the degraded files with `mdtablefix --in-place` — the
+same reflow `make fmt` applies — made all four gates pass (`mdtablefix`,
+`check-fmt`, `markdownlint`, `nixie`, all exit 0) while the skylos failure
+remained. That is the exact state the claim describes: a documentation change
+that every Markdown gate accepts and `make lint` rejects.
+
+So: the sweeps honestly report what they cover, the full-suite runs at
+`d98fb5c9` are the last word on `lint` for the code, and the delta since is
+verified separately by re-running skylos over both documentation revisions
+rather than by assuming docs are out of scope. The degraded control's digests
+(`2f4bd119…` for this plan, `37a09dc7…` for the report) are recorded here only
+so the experiment is repeatable; the tree was restored to HEAD immediately
+after, and `git diff HEAD` was empty.
 
 The PR description states the same thing, so a reader of the PR does not have
 to open this plan to know the head is ahead of the last full-suite run.
