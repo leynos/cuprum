@@ -801,7 +801,7 @@ tree is the stronger artefact, because a reader can re-run them.
   which survives because `tests/test_native_sdist.py` is named in
   `PYTEST_TARGETS` as a literal path rather than reached through the deleted
   glob. Its survival is what the pattern deletion does *not* reach, not an
-  artifact of the fixture. The suite collects 58 cases: 51 parametrized (one
+  artefact of the fixture. The suite collects 58 cases: 51 parametrized (one
   per root-level `tests/test_*.py` module) and 7 fixed, five of which are
   selector-independent.
 
@@ -1014,10 +1014,20 @@ revision corrects the record.
   enumerated 50. The entry now records the reproduction, the revision it
   applies to, and why 56 is the denominator there.
 
-- The parenthesised file sizes in `Progress` (97, 358, 181, 339, 226, 319
+- The parenthesized file sizes in `Progress` (97, 358, 181, 339, 226, 319
   lines) were checked against the revisions that created each module and are
   all exact at those revisions. They are provenance, not current sizes, and are
   deliberately left as written.
+
+- The spellings in this note were themselves wrong on first writing. It
+  introduced the American spelling of "artefact", and the "-ised" form of
+  "parenthesized", into a document that had held neither; `make spelling`
+  failed on both at the same head — the repository's house style is British,
+  and the `typos` correction table maps the second token to the other spelling
+  outright. Both are now corrected. The lesson is narrower than the count one:
+  prose written *about* the corrections is still prose, and the gates read it
+  like any other. The tokens were found by re-running the spelling gate rather
+  than by reading the diff, which is why the fix carries its own gate evidence.
 
 The lesson is the one `Prose numbers need re-derivation` already records, met
 again: a count copied forward through three revisions of a document that keeps
