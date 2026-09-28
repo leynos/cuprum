@@ -1710,27 +1710,35 @@ it renders.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
-independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
-module owns this write-side policy; `_streams` retains the drain lifecycle and
-re-exports `_write_chunk` for existing internal callers. Its `_echo_chunk`
-helper catches `UnicodeEncodeError` only: the first failure disables echo for
-the rest of that drain, logs one `WARNING` on the `cuprum.stream` logger with
-structured `cuprum_*` extras, and lets every other error propagate unchanged.
-Capture (`buffer.extend`) always runs before the echo step, so a rejected echo
-write never loses captured bytes, and the binary `.buffer` fast path inside
-`_write_chunk` is unchanged.
+independently. The drain loop sends ordinary chunks through `_echo_chunk`,
+which applies the per-line byte bound; the bounded-line writer and the final
+decoder flush through `_flush_echo_decoder` call `_echo_write` directly.
+`_echo_write` in `cuprum/_stream_echo.py` owns this write-side policy;
+`_streams` retains the drain lifecycle and re-exports `_write_chunk` for
+existing internal callers. It catches `UnicodeEncodeError` unconditionally and
+`BrokenPipeError` only under `BrokenPipePolicy.BEST_EFFORT`: the first failure
+of either kind disables echo for the rest of that drain, logs one `WARNING` on
+the `cuprum.stream` logger with structured `cuprum_*` extras, and lets every
+other error propagate unchanged. The two recoveries share `_disable_echo`, so
+the guard flip and its three bounded projections cannot drift apart; only the
+`cuprum_error_category` differs. Capture (`buffer.extend`) always runs before
+the echo step, so a rejected echo write never loses captured bytes, and the
+binary `.buffer` fast path inside `_write_chunk` is unchanged. The catch is by
+`BrokenPipeError` name rather than `OSError`, which is what keeps a genuinely
+unreachable device propagating under both policies.
 
-The first failure is owned entirely by that one `_echo_chunk` transition: the
-`cuprum.stream` `WARNING` and the opt-in `cuprum.echo_observation.observe_echo`
-event are two projections of the same guard flip, emitted once per affected
-drain and never repeated by a later chunk or the final decoder flush. Because
-`ExecPhase` is a closed set that registered consumers match exhaustively, the
-echo channel carries its own `cuprum.echo_events.EchoEvent` type on its own
-hook registry rather than a new phase, so consumers opt in by registering and
-unregistered callers pay nothing. Hook failures are reported and skipped,
-mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
-what a run captures.
+The first failure is owned entirely by that one `_echo_write` transition: the
+`cuprum.stream` `WARNING`, the opt-in `cuprum.echo_observation.observe_echo`
+event, and the owned `RelayFallback` are three projections of the same guard
+flip, emitted once per affected drain and never repeated by a later chunk or
+the final decoder flush. Because `ExecPhase` is a closed set that registered
+consumers match exhaustively, the echo channel carries its own
+`cuprum.echo_events.EchoEvent` type on its own hook registry rather than a new
+phase, so consumers opt in by registering and unregistered callers pay nothing.
+`cuprum.echo_observation._emit_echo_event` reports and skips ordinary
+`Exception` failures, mirroring `cuprum.pump_observation`, while
+`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate
+untouched, so a broken metrics backend cannot change what a run captures.
 
 ### Result diagnostics ownership
 

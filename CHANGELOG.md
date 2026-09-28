@@ -5,13 +5,28 @@
 <!-- markdownlint-disable-next-line MD024 -->
 ### Fixed
 
+- **Opt-in recovery from a closed echo destination:** A presentation sink whose
+  destination has closed reports `BrokenPipeError`, which aborted the run and
+  took the otherwise-captured result with it. Passing
+  `RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)` now
+  disables echoing for the affected stream only, so capture, line observation,
+  and child reaping continue and `run_sync` still returns a `CommandResult`
+  carrying one `RelayFallback` whose `error_category` is `broken_pipe`. The
+  transition is reported once through `CommandResult.relay_fallbacks` /
+  `PipelineResult.stages[i].relay_fallbacks`, the echo observation channel, and
+  a structured `cuprum.stream` `WARNING`; `EchoMetricsHook` counts it on its own
+  `cuprum_echo_broken_pipe_total` series, so a sink that cannot encode stays
+  distinguishable from a reader that keeps disconnecting. Only
+  `BrokenPipeError` is affected — any other sink `OSError` still propagates —
+  and `BrokenPipePolicy.STRICT` remains the default, so every caller that does
+  not opt in keeps the existing behaviour byte-for-byte [^1].
 - **Capture preserved when echo sinks reject unicode:** A text-only echo sink
   whose encoding cannot represent the subprocess output (for example a Windows
   CP1252 console echoing UTF-8 `ś`/`ń`) no longer aborts stream draining with
   an escaping `UnicodeEncodeError`. Echoing is disabled for only the affected
   stream while capture completes, a `cuprum.stream` `WARNING` records the first
   failure, sinks exposing a binary `buffer` keep receiving the original bytes,
-  and other I/O errors still propagate [^1]. Registering `EchoMetricsHook` via
+  and other I/O errors still propagate [^2]. Registering `EchoMetricsHook` via
   `cuprum.echo_observation.observe_echo` additionally counts one
   `cuprum_echo_encoding_failures_total` increment per affected stream, labelled
   only by the bounded `stream` (`stdout` or `stderr`) and `error_category`
@@ -191,7 +206,7 @@
   `error_category`, reusing the existing echo vocabulary) describing the
   handled echo-disablement transitions of that command's own streams: one
   record per affected drain, ordered stdout-then-stderr, empty when nothing was
-  handled, and never affecting `exit_code` or `ok` [^2]. Diagnostics are
+  handled, and never affecting `exit_code` or `ok` [^3]. Diagnostics are
   collected without a registered observer and with capture disabled, are
   isolated per command, stage, and nested or concurrent run, and on a timeout
   or cancellation that prevents a result the already-emitted echo events stay
@@ -432,5 +447,6 @@
   evicts the oldest, ending it as failed
   ([#271](https://github.com/leynos/cuprum/pull/271)).
 
-[^1]: <https://github.com/leynos/cuprum/issues/348>
-[^2]: <https://github.com/leynos/cuprum/issues/356>
+[^1]: <https://github.com/leynos/cuprum/issues/435>
+[^2]: <https://github.com/leynos/cuprum/issues/348>
+[^3]: <https://github.com/leynos/cuprum/issues/356>

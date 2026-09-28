@@ -47,6 +47,7 @@ extend-ignore-re = [
     "How to organise your Rust tests",
     "Only the Linux debug route selects Cranelift and mold",
     "Upload main benchmark baseline artifact",
+    "[0-9][0-9a-f]{6,39}",
     "\\(\"ises\", \"izes\"\\)",
     "\\(\"teh\", \"(?:the|ten)\"\\)",
     "\\^mold \\$",

@@ -37,7 +37,15 @@ async def _drain_after_exit(
             await _discard_drain(run, pid, execution)
             raise
     try:
-        return await asyncio.gather(*run.tasks.consumers)
+        stdout_text, stderr_text = await asyncio.gather(*run.tasks.consumers)
     except BaseException:
         await _discard_drain(run, pid, execution)
         raise
+    # Settled here, on the one path that read every consumer to completion:
+    # the caller assembles its result from these collectors once this returns,
+    # and ``snapshot()`` reports ``()`` until a settle marks the drain done.
+    # The failure paths above re-raise, so no result is assembled after them
+    # and the collectors they leave unsettled are read by nobody.
+    for diagnostics in run.tasks.relay_diagnostics:
+        diagnostics.settle()
+    return stdout_text, stderr_text

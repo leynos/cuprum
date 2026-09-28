@@ -19,6 +19,7 @@ from cuprum._idle_heartbeat import _build_idle_monitor
 from cuprum._sink_lifecycle import _SinkBracket
 from cuprum._streams import _StreamConfig
 from cuprum._streams_pump import _current_read_size
+from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
@@ -51,6 +52,13 @@ class _PipelineRunConfig:
     sink_bracket: _SinkBracket
 
     on_line: _LineHookFn | None = None
+
+    # One policy for the whole pipeline, inherited by every stage's stdout and
+    # stderr config: the caller named it once on the options object, and a
+    # stage is not the place to second-guess which of its streams may tolerate
+    # a closed reader. Defaulted for the callers that build this config
+    # directly; the production path always resolves it from the options.
+    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
 
     idle: _IdleMonitor | None = None
 
@@ -117,6 +125,7 @@ class _PipelineRunConfig:
             capture_output=self.capture,
             echo_output=echo_output,
             echo_max_line_bytes=self.max_echo_line_bytes,
+            broken_pipe_policy=self.broken_pipe_policy,
             sink=framed,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
@@ -203,6 +212,7 @@ def _prepare_pipeline_config(
         echo_stdout=echo_stdout,
         echo_stderr=echo_stderr,
         max_echo_line_bytes=output.max_echo_line_bytes,
+        broken_pipe_policy=output.resolved_broken_pipe_policy,
         timeout=timeout,
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,

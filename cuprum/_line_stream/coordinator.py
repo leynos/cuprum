@@ -43,7 +43,11 @@ from cuprum._line_stream.telemetry import (
 )
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_execution import _spawn_subprocess, _SubprocessExecution
+from cuprum._subprocess_execution import (
+    _relay_fallbacks_for_result,
+    _spawn_subprocess,
+    _SubprocessExecution,
+)
 from cuprum._subprocess_timeout import (
     _emit_exit_event,
     _ExitEventDetails,
@@ -367,4 +371,5 @@ async def _run_to_command_result(
         pid=run.process.pid if run.process.pid is not None else -1,
         stdout=stdout_text,
         stderr=stderr_text,
+        relay_fallbacks=_relay_fallbacks_for_result(run.tasks.relay_diagnostics),
     )

@@ -892,6 +892,89 @@ teardown, while any `EchoEvent` emitted synchronously before the transition is
 still available through `observe_echo`. Observer failures remain isolated from
 capture and fallback collection.
 
+For screen readers: The following flowchart shows how one drain handles a
+broken-pipe echo failure. An echo is issued as a write or a flush; when that
+call does not raise `BrokenPipeError`, the drain simply continues. When it
+does, the configured `BrokenPipePolicy` decides. Under the default
+`BrokenPipePolicy.STRICT` the error propagates to the caller unchanged and no
+echo is disabled, so the caller gets no result. Under
+`BrokenPipePolicy.BEST_EFFORT`, `_disable_echo` runs: it stops echoing for the
+affected drain only, leaving the other stream's drain untouched, and emits the
+same three bounded projections as the unencodable-payload recovery — a
+`RelayFallback` appended to the drain's diagnostics, an `EchoEvent` on the
+`observe_echo` channel, and a structured warning on the `cuprum.stream` logger.
+Capture, line observation, and child reaping continue, and the run still
+returns a `CommandResult` carrying the recorded fallback. The clause matches
+`BrokenPipeError` by name rather than the wider `OSError`, so no other I/O
+failure is affected by this policy, and the unencodable-payload recovery above
+keeps its own unconditional handling.
+
+Figure 3: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
+the failing write or flush to the disabled drain and its bounded projections
+
+```mermaid
+flowchart TD
+    A[Echo write or flush] --> B{BrokenPipeError?}
+    B -->|No| C[Continue draining]
+    B -->|Yes| D{Policy is BEST_EFFORT?}
+    D -->|No| E[Propagate error]
+    D -->|Yes| F[_disable_echo]
+    F --> G[Disable affected drain echo]
+    F --> H[Append RelayFallback]
+    F --> I[Emit EchoEvent]
+    F --> J[Emit structured WARNING]
+    G --> K[Continue capture, line observation, and child reaping]
+    H --> L[Return CommandResult]
+    I --> L
+    J --> L
+    K --> L
+```
+
+For screen readers: The following sequence diagram retells the same broken-pipe
+recovery as a message exchange between the caller, `run_sync`, one stream's
+echo drain, the echo sink, and the returned `CommandResult`. The caller invokes
+`run_sync` with `RunOutputOptions`; the run starts a drain for the stream, and
+the drain writes or flushes to the echo sink. When the sink answers with
+`BrokenPipeError`, the configured `BrokenPipePolicy` selects one of two
+alternatives. Under `BrokenPipePolicy.BEST_EFFORT`, the drain calls
+`_disable_echo` with `EchoErrorCategory.BROKEN_PIPE`, which stops echoing for
+that stream, appends a `RelayFallback` to the caller-owned result diagnostics,
+and emits the `EchoEvent` and `cuprum.stream` warning; capture and line
+observation continue, the drain then completes normally, and `run_sync` returns
+a `CommandResult` carrying the recorded fallback. Under the default
+`BrokenPipePolicy.STRICT`, the drain instead propagates `BrokenPipeError` back
+through the run, so no result is produced and the caller receives the error.
+The two arms therefore differ in outcome rather than in detection: best-effort
+yields a result with a recorded fallback, strict yields an exception.
+
+Figure 4: Broken-pipe echo recovery as a message sequence, from the `run_sync`
+call through the drain and sink to the returned `CommandResult` or the
+propagated error
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Run as run_sync
+    participant Drain as Echo drain
+    participant Sink as Echo sink
+    participant Result as CommandResult
+
+    Caller->>Run: run_sync(output=RunOutputOptions(...))
+    Run->>Drain: drain stream
+    Drain->>Sink: write / flush
+    Sink-->>Drain: BrokenPipeError
+    alt broken_pipe_policy is BEST_EFFORT
+        Drain->>Drain: _disable_echo(error_category=BROKEN_PIPE)
+        Drain->>Drain: capture bytes and observe lines
+        Drain->>Result: append RelayFallback
+        Drain-->>Run: complete drain
+        Run-->>Caller: CommandResult
+    else broken_pipe_policy is STRICT
+        Drain-->>Run: propagate BrokenPipeError
+        Run-->>Caller: error
+    end
+```
+
 #### Aggregate Python stream-operation observation
 
 The pure-Python stream paths have a separate, opt-in completion channel for
@@ -1053,7 +1136,7 @@ stderr sink, resolved at emission time, so it never enters capture, echo, line
 observers, or the activity tracker. An `on_idle` callback is synchronous and
 replaces the built-in renderer rather than joining it.
 
-Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+Figure 5: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
 
 For screen readers: The following flowchart shows how per-stream echo
@@ -1352,7 +1435,7 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 3: Sequence of start/exit logging hook execution
+Figure 6: Sequence of start/exit logging hook execution
 
 ```mermaid
 sequenceDiagram
@@ -1407,7 +1490,7 @@ stderr, and the exit time. It then reads the process exit code through
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
 
-Figure 4: Subprocess timeout handling, from payload resolution to
+Figure 7: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
 
 ```mermaid
@@ -1518,7 +1601,7 @@ grace, captured text is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 5: Capturing drain EOF-grace sequence
+Figure 8: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -1664,7 +1747,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 9: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1851,7 +1934,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 7: Concurrent execution flow with allowlist validation and semaphore
+Figure 10: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1897,7 +1980,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 8: Fail-fast mode cancellation behaviour
+Figure 11: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -2066,7 +2149,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 12: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -2548,7 +2631,7 @@ the caller is cancelled — by tearing the child process down through the
 existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
 the stream closes. A bare `async for` break does not close the custom iterator.
 
-Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 13: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -2572,7 +2655,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 11: Line observation fan-out from decoded output to lifecycle events,
+Figure 14: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -2597,7 +2680,7 @@ values are enqueued and yielded as they arrive, and after the process exits the
 consumers are drained, the `CommandResult` is published, and iteration ends with
 `StopAsyncIteration` before the caller reads the `result` attribute.
 
-Figure 12: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 15: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid

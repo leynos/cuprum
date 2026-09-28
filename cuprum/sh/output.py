@@ -16,6 +16,7 @@ import warnings
 
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._idle_heartbeat import _validate_idle_options
+from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 
 # ``GitHubActionsSink`` comes from the same package surface rather than its
 # ``github_actions`` submodule: the package publishes it in ``__all__``, and the
@@ -87,6 +88,22 @@ class RunOutputOptions:
         Inclusive byte bound for every echoed line, including its retained
         bytes, truncation marker, and terminator. ``None`` restores unbounded,
         chunk-for-chunk mirroring; captured output always remains complete.
+    broken_pipe_policy : BrokenPipePolicy | str, keyword-only, default=STRICT
+        How echoing responds when a presentation sink reports
+        ``BrokenPipeError``, which is what a destination that has closed under
+        the run looks like from inside the drain. ``STRICT`` propagates the
+        error and aborts the run, preserving the behaviour of every caller
+        that does not name a policy. ``BEST_EFFORT`` disables echoing for the
+        affected stream only, so capture, line observation, and child reaping
+        continue and the caller still receives a result; the transition is
+        reported once through ``CommandResult.relay_fallbacks``, the echo
+        observation channel, and a structured ``cuprum.stream`` warning.
+        Either the member or its string value is accepted, and anything else
+        raises ``ValueError``. Only ``BrokenPipeError`` is affected: any other
+        sink ``OSError`` propagates under both policies, so an unreachable
+        device is never mistaken for a closed reader. The field is keyword-only
+        because it was inserted mid-list: accepting it positionally would have
+        taken ``on_line``'s slot and shifted every field after it.
     on_line : LineHook | None, default=None
         Optional synchronous callback invoked once per decoded output line
         with a ``LineEvent`` carrying the stream name, the monotonic seconds
@@ -179,6 +196,13 @@ class RunOutputOptions:
     echo_stdout: bool | None = None
     echo_stderr: bool | None = None
     max_echo_line_bytes: int | None = DEFAULT_ECHO_MAX_LINE_BYTES
+    # Keyword-only: inserted mid-list, it would otherwise take the position of
+    # ``on_line`` and shift every field after it, silently re-binding the
+    # positional arguments existing callers already pass.
+    broken_pipe_policy: BrokenPipePolicy | str = dc.field(
+        default=BrokenPipePolicy.STRICT,
+        kw_only=True,
+    )
     on_line: LineHook | None = None
     idle_after: float | None = None
     on_idle: cabc.Callable[[float, float], None] | None = None
@@ -212,6 +236,14 @@ class RunOutputOptions:
             self,
             "idle_after",
             _validate_idle_options(self.idle_after, self.on_idle),
+        )
+        # Normalized rather than merely checked, so the drain compares against
+        # a member even when the caller spelled the policy as a string, and an
+        # unknown value fails here rather than after a child has spawned.
+        object.__setattr__(
+            self,
+            "broken_pipe_policy",
+            _parse_broken_pipe_policy(self.broken_pipe_policy),
         )
         _validate_convenience_flags(self)
         self._synthesize_sink_from_flags()
@@ -259,6 +291,21 @@ class RunOutputOptions:
             synthesized_sink,
         )
         object.__setattr__(self, "_synthesized_sink", synthesized_sink)
+
+    @property
+    def resolved_broken_pipe_policy(self) -> BrokenPipePolicy:
+        """The policy behind the declared ``BrokenPipePolicy | str`` field.
+
+        ``__post_init__`` normalizes the field, but the declared type stays
+        wide because a caller may spell the policy as a string. This is the
+        narrow view the execution layer reads, so it never has to parse.
+
+        Returns
+        -------
+        BrokenPipePolicy
+            The normalized policy member, never a string and never ``None``.
+        """
+        return _parse_broken_pipe_policy(self.broken_pipe_policy)
 
     @property
     def resolved_echo(self) -> tuple[bool, bool]:
