@@ -219,6 +219,7 @@ def test_scoped_replacement_reaches_the_subprocess_and_its_events(
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bare-name PATH resolution")
 def test_replacement_path_resolves_a_bare_program_name(tmp_path: Path) -> None:
     """A replacement ``PATH`` is what makes a bare program name resolvable.
 
@@ -253,6 +254,7 @@ def test_replacement_path_resolves_a_bare_program_name(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bare-name PATH resolution")
 def test_replacement_without_path_cannot_resolve_a_bare_program_name(
     tmp_path: Path,
 ) -> None:

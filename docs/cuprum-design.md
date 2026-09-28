@@ -1247,8 +1247,11 @@ Implementation notes (current state):
   reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
-- Environment overrides are supplied via an `ExecutionContext` and merged on top
-  of `os.environ` without mutating global state.
+- Environment overrides are supplied via an `ExecutionContext` and composed
+  without mutating global state. The base they compose over depends on the
+  active `EnvMode`: `INHERIT` and `OVERLAY` merge the overrides on top of
+  `os.environ`, while `REPLACE` starts from an empty environment and keeps only
+  what the overlays supply.
 - Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
   child processes are not left running.
 
@@ -1375,7 +1378,10 @@ implemented with the following decisions:
   between subprocess spawn and subprocess exit.
 - **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
   `capture`/`echo`. Callers can attach additional tags via
-  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
+  `ExecutionContext.tags`; caller tags take precedence when keys overlap, with
+  one exception: `env_mode` is a reserved key, so a caller-supplied value is
+  stripped rather than honoured, and the effective policy is grafted by
+  production code alone.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.
