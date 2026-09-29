@@ -954,26 +954,33 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `cuprum/unittests/test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`
   and the verdict both times is
   `Failed: Timeout (>30.0s) from pytest-timeout` — the global bound at
-  `pyproject.toml:370`. Everything else in the run is green: **16 of 17** jobs
-  succeed, including `lint-test`, all four `Typecheck and test` interpreters,
-  both extension-gated lanes, `benchmark-ratchet` and every wheel build, and
-  the only failure is this one job. The first question is ownership, and it is
-  answered by three independent facts. The file is **byte-identical to base
-  `7f762870`** — `b8f96ae4` is its blob at both `b7d1b109` and `1714ac0d` — it
-  is absent from the branch's 18-file change surface
-  (`git diff --name-only b7d1b109 HEAD` lists only the Makefile, the two
-  property modules, the developers' guide and this plan), and `main` has not
-  touched it since the base either (`git log 7f762870..origin/main -- <path>`
-  is empty). It also passed in the coverage job at `b7d1b109` (`36356062517`)
-  on the same bytes.
+  `pyproject.toml:370`. Everything else in that attempt is green: the other
+  **16 of 17** jobs succeed, including `lint-test`, all four
+  `Typecheck and test` interpreters, both extension-gated lanes,
+  `benchmark-ratchet` and every wheel build, and the coverage job is the only
+  failure. The verdict is pinned to the **job**, not the run: job
+  `109509268252` still reports `conclusion=failure` for the window
+  `16:32:40Z–16:45:10Z`, while the run's own aggregate later became
+  `completed/cancelled` when the rerun was superseded — the concurrency group
+  cancels the run, but a job's first attempt keeps the conclusion it reached.
+  The first question is ownership, and it is answered by three independent
+  facts. The file is **byte-identical to base `7f762870`** — `b8f96ae4` is its
+  blob at both `b7d1b109` and `1714ac0d` — it is absent from the branch's
+  18-file change surface (`git diff --name-only b7d1b109 HEAD` lists only the
+  Makefile, the two property modules, the developers' guide and this plan), and
+  `main` has not touched it since the base either
+  (`git log 7f762870..origin/main -- <path>` is empty). It also passed in the
+  coverage job at `b7d1b109` (`36356062517`) on the same bytes.
 
   The second question is mechanism. The coverage job is the **only** lane that
   runs this test without `setup-dev-fast`:
   `grep -n setup-dev-fast .github/workflows/ci.yml` returns lines 290 and 791,
-  inside `lint-test` and `extension-tests`, and the coverage job's own 27-step
+  inside `lint-test` and `extension-tests`, and the coverage job's own 29-step
   list contains no such step — it installs Rust `1.85.0` and, on a tool-cache
   miss, the `nightly-2026-05-28` makeutil toolchain, but never
-  `nightly-2026-08-23`. The test hard-codes that toolchain as
+  `nightly-2026-08-23`. (Both the failing job and the green one report 29 steps
+  and an empty dev-fast selection, so the gap is structural rather than a
+  property of one run.) The test hard-codes that toolchain as
   `RUSTUP_TOOLCHAIN`, and rustup **auto-installs an uninstalled toolchain on
   demand** (confirmed directly:
   `RUSTUP_TOOLCHAIN=nightly-1999-01-01 cargo --version` begins
@@ -2049,6 +2056,25 @@ already compiles.
 Revision note (2026-09-19): initial draft adapts the roadmap wording to the
 current three-crate architecture and distinguishes native validation order from
 the Windows shim. Implementation remains pending approval.
+
+### Coverage-job evidence sources
+
+The coverage-job evidence is cited from saved logs rather than re-fetched HTML,
+so the citations survive the run's later state change. The failing coverage
+attempt is job `109509268252`, whose full log is at `/tmp/611-cov-fail2.log`
+(1,145,741 bytes); the timeout banner is the
+`Failed: Timeout (>30.0s) from pytest-timeout` line, and the `gh` query that
+reproduces the per-run figures is
+`gh run view 36593121369 -R leynos/cuprum --json jobs`. The green comparison is
+run `36356062517`, whose coverage job's rendering of the same test at 7.4 s is
+in `/tmp/611-green-full.log`. The local differential — 11.52 s and 12.71 s cold
+against 0.49 s warm — came from three invocations of
+`.venv/bin/python -m pytest
+cuprum/unittests/test_doctest_warning_contract.py -p no:randomly -q`
+with `RUSTUP_HOME` pointed at an empty directory, and the toolchain payload
+was measured by a cold
+`rustup toolchain install nightly-2026-08-23 --profile minimal` into an isolated
+`RUSTUP_HOME`, which reported 595 MB.
 
 [bdd-manifest]: https://docs.rs/crate/rstest-bdd/0.5.0/source/Cargo.toml
 [bdd-macros-manifest]: https://docs.rs/crate/rstest-bdd-macros/0.5.0/source/Cargo.toml
