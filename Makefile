@@ -168,6 +168,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_rust_consume_stream.py \
   cuprum/unittests/test_rust_streams_boundary_property.py \
+  cuprum/unittests/test_rust_streams_roundtrip_property.py \
   cuprum/unittests/test_rust_extension.py \
   cuprum/unittests/test_rust_splice.py \
   cuprum/unittests/test_rust_errno.py \
