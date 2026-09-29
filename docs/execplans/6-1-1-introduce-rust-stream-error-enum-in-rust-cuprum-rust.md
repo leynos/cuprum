@@ -25,11 +25,15 @@ split `test_rust_streams_boundary_property.py`, which the branch's own Windows
 fixes had grown to 431 lines, back under the 400-line cap; both resulting
 modules are registered in `EXTENSION_TEST_TARGETS`, and the split's third stale
 claim — a developers'-guide table row still credited with payload fuzzing that
-had moved away — was corrected with it. All six gates pass at the final head
-`49dae298` (`make check-fmt`, `make test`, `make typecheck`, `make lint`,
-`make markdownlint`, `make nixie`), each log recording that head. The branch
-stands at **18 of 18** files excluding the lockfile and this plan — at the
-tolerance, not over it.
+had moved away — was corrected with it. Three further stale figures in this
+plan were then found and corrected, and the gates re-run at the resulting head
+`9096c804`. Five pass there (`make check-fmt`, `make test`, `make typecheck`,
+`make markdownlint`, `make nixie`), each log recording that head; the sixth,
+`make lint`, reaches ten of its eleven sub-checks and then aborts in the final
+`actionlint` step — a host-only, non-reproducible-on-demand wedge in the
+shellcheck handshake, so `actionlint` is **unobserved locally, not failed**,
+and CI covers it. The branch stands at **18 of 18** files excluding the
+lockfile and this plan — at the tolerance, not over it.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -844,6 +848,54 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   quoted `PASSED`, not skipped, in the test log. `make lint` again regenerated
   `typos.toml` from the shared estate dictionary and it was again reverted, for
   the same reason as before.
+- [x] (2026-09-29) **Three further stale figures in this plan were corrected,
+      and the gates were re-run at the resulting head `9096c804`.** Reviewing
+      the record against the artefacts rather than against my own notes turned
+      up three claims that had never been true: the plan called `MAX_BUFFER_SIZE`
+      "merely re-exported" when it is private to `cuprum-streams`
+      (`rust/cuprum-streams/src/lib.rs:38`) and never re-exported at all, with
+      `cuprum-rust` inheriting the cap only indirectly through
+      `cuprum_streams::BufferSize::new`; it counted "all eight sub-checks" in
+      `make lint` where every local log enumerates **eleven**; and it dated the
+      `typos.toml` regeneration "across its seven commits" — a count that was 22
+      when written and 24 by the time it was read, so it had never been right in
+      any revision. The last of these is now stated as the fact it was standing
+      in for: `git log 7f762870..HEAD -- typos.toml` is empty, so this branch has
+      never carried the estate churn in a commit. Each correction is its own
+      commit (`59f326ad`, `999880dd`, `9096c804`) so the history shows what was
+      believed and when.
+
+  Because those commits followed the `49dae298` gate run, the run stopped being
+  a valid citation and the gates were re-run at `9096c804`. Five pass on the
+  frozen tree, each log recording the head: `make check-fmt` (676 formatted, 78
+  unchanged), `make test` (`cargo nextest` **160/160**;
+  `2543 passed, 1 skipped`, the skip a Windows-only case; both moved properties
+  `PASSED`, not skipped), `make typecheck` (`ty` 0.0.74, `All checks passed!`),
+  `make markdownlint` (0 errors across 78 files, spelling included), and
+  `make nixie` (all diagrams validated). **`make lint` reached ten of its
+  eleven sub-checks and then aborted**: ruff, interrogate, pylint,
+  df12-python-lints, ambrleaks, Skylos, Rustdoc+clippy, Whitaker, typos and
+  yamllint all pass, and the final `actionlint` sub-check hung until the outer
+  540 s bound terminated the recipe
+  (`make: *** [Makefile:387: github-actions-lint] Terminated`). The honest
+  reading is **actionlint UNOBSERVED, not passed** — it died before emitting a
+  verdict, so no pass may be claimed for it. This is the same host-only
+  deadlock M1 hit, not a regression. I measured it rather than inheriting it: a
+  SIGQUIT goroutine dump of a reproducing run shows the wedge as
+  `RuleShellcheck.VisitWorkflowPost` → `externalCommand.wait`, with the writer
+  goroutine parked in `os.File.Write` and **no child process spawned at all**.
+  Seventy runs of the identical command over identical bytes hung 11 times, in
+  batches ranging from 6-of-6 to 0-of-10, and adding eight CPU spinners changed
+  nothing, so host load is not the trigger. `ci.yml` is the workload: every
+  other workflow file returns in 0 s, and the hang disappears entirely
+  (`7 of 7`, exit 0, sub-second) when the shellcheck integration is disabled
+  with `-shellcheck=`. It is environmental on two grounds. First, that
+  contrast: the hung path is the shellcheck handshake specifically, not the
+  analysis. Second, and decisively, this branch cannot affect it at all:
+  `git diff --name-only 7f762870 HEAD -- .github/` is empty, so all ten
+  `.github/workflows/*.yml` files and `.github/actionlint.yaml` are
+  byte-identical to the base and every byte `actionlint` reads is `main`'s.
+  `make lint` again regenerated `typos.toml` and it was again reverted.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -1072,6 +1124,32 @@ when the abort happened, so their pass is real evidence rather than something
 the abort left unobserved. The converse is the trap
 `aborting-gate-leaves-later-checks-unobserved` warns about, and it does not
 apply here only because the aborting step is last.
+
+The mechanism was measured at `9096c804` rather than inferred.
+`actionlint 1.7.12` hangs in `RuleShellcheck.VisitWorkflowPost` →
+`externalCommand.wait` while its writer goroutine is parked in `os.File.Write`
+of a 9305-byte body — a `write(2)` that never returns because the reader is not
+draining. A SIGQUIT goroutine dump of a reproducing run, taken under this
+session's own process, shows exactly that stack pair and **no child process at
+all**: `pgrep` finds no `shellcheck` alongside the wedged `actionlint`, and the
+only `wchan` is `futex_wait_queue` on the Go scheduler. So it is not "a slow
+shellcheck" and not a large-workflow cost — the classifier's child is spawned,
+written to, and the handshake never completes. `ci.yml` is the workload that
+triggers it: run at file scope, the other nine workflow files return in 0 s
+every time while `ci.yml` is the one that wedges.
+
+Seventy probe runs of the same command over the same bytes, all at `9096c804`,
+settle the rate. With `shellcheck 0.10.0` on `PATH` it hung **11 times** — and
+in five separate batches the count varied from 6-of-6 to 0-of-10, so the
+outcome is not a function of the input. Host contention is not what tips it:
+ten runs under eight added CPU spinners and eight more at a load average of 2.7
+produced zero hangs. The contrast is the solid result — with the shellcheck
+integration disabled, **7 of 7** runs returned exit 0 in under a second, having
+never spawned the child that wedges. The word this record needs is the one
+`Surprises` keeps reaching for: the step is *not reproducible on demand*, which
+is worse for a gate than a reliable failure, because a step that can hang or
+succeed on identical input cannot be made to pass by re-running it — only by
+bounding it.
 
 **`mapsplice` cannot parse this repository's roadmap, and the failure is silent
 until you try it.** Every command fails, including one that would change
