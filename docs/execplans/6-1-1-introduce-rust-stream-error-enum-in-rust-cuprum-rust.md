@@ -20,7 +20,12 @@ which is fixed and recorded in Progress. The branch was then rebased onto `main`
 zero non-success, the required `coverage` check included. That rebase moved the
 Rust coverage figure from 87.92% to **88.11%**, because `main` added
 `cuprum-streams` code to the measured workspace; both measurements are recorded
-in Progress, each bound to the revision it measured.
+in Progress, each bound to the revision it measured. A final review pass then
+split `test_rust_streams_boundary_property.py`, which the branch's own Windows
+fixes had grown to 431 lines, back under the 400-line cap at head `bd41d2c4`;
+both resulting modules are registered in `EXTENSION_TEST_TARGETS` and all four
+commit gates pass at that head. The branch now stands at **18 of 18** files
+excluding the lockfile and this plan — at the tolerance, not over it.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -509,7 +514,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
      introduce the gap; it is the first change to close it. Established by
      downloading that job's log rather than inferring it from the run's
      success; log `/tmp/611-win-main.log`.
-- [ ] (2026-09-27) **The required `coverage` check was failing, and fixing it
+- [x] (2026-09-27) **The required `coverage` check was failing, and fixing it
       found a real test defect.** It had never run on this branch — the
       concurrency group cancelled it on three prior pushes — and its first
       observation failed at 86.05% against a baseline of 87.35% (±1.00 pp).
@@ -522,14 +527,14 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       produced and corrected, below. The figure was re-measured after the
       rebase onto `main` and is now **88.11%** — see the entry at the end of
       Progress.
-- [ ] (2026-09-27) Two self-corrections, both recorded rather than dropped: the
+- [x] (2026-09-27) Two self-corrections, both recorded rather than dropped: the
       scenario's error code was moved 9 → 8 on a justification not present in
       the code, and reverted; and the module docstring was rewritten to claim
       the lint sees these functions as test code, which is wrong —
       `no_expect_outside_tests` runs under `cargo check`, so a file-backed
       `#[cfg(test)] mod` gives no test ancestry. Original text restored. Both
       are in Surprises.
-- [ ] (2026-09-27) **`make check-fmt` cannot see markdownlint, so the plan's own
+- [x] (2026-09-27) **`make check-fmt` cannot see markdownlint, so the plan's own
       CI evidence block failed `lint-test` in CI.** The logged `coverage`
       transcript was fenced without a language (`MD040`). `check-fmt` runs
       `ruff format --check`, `rustfmt --check`, and `mdtablefix --check`; `lint`
@@ -742,6 +747,66 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       a 900 s bound). The nextest total is **160** where the pre-rebase head
       measured **154** — `main` added six tests — which is a second, independent
       signal that the coverage scope grew.
+- [x] (2026-09-29) **The boundary property module was split back under the
+      400-line limit, and the split exposed two stale claims.** Adding the
+      Windows buffer-window and i64-extraction properties grew
+      `cuprum/unittests/test_rust_streams_boundary_property.py` from 246 to
+      **431** lines, over the cap in `AGENTS.md` and in this plan. The two
+      round-trip properties and their pipe helpers (`_feed_pipe`,
+      `_consume_via_pipe`, `_pump_via_pipes`, `test_default_buffer_matches_explicit`,
+      `test_pump_default_buffer_matches_explicit`) moved to the new
+      `cuprum/unittests/test_rust_streams_roundtrip_property.py`; both modules
+      are now under the cap at **349** and **123** lines, and the split is
+      purely a move — the moved code is byte-identical and `_I32_MAX` stays
+      where it is used. The new module is registered in
+      `EXTENSION_TEST_TARGETS`, which is **required** rather than tidy: it
+      requests the root conftest's `rust_streams` fixture, which is one of the
+      three signals `test_extension_build_contract.py` derives the gated set
+      from, so omitting it fails
+      `test_every_extension_gated_module_is_a_declared_target`. Confirmed by
+      querying the contract test's own derivation (`_gated_modules()` reports
+      the new module with that reason; gated-but-undeclared is empty). The
+      registration is also what keeps the new module's two properties — the
+      only ones that assert the default really applies to a completed transfer
+      — executing in the guarded job instead of skipping wherever the extension
+      is absent.
+
+  The move corrected two claims that no gate can see. First, the local
+  `_safe_close` justified itself as wheel-local ("the packaged test module
+  stays importable from an installed wheel, which ships `cuprum/unittests`");
+  that is **false**. Both build backends exclude the directory —
+  `[tool.uv.build-backend] source-exclude` and `[tool.maturin] exclude` both
+  name `cuprum/unittests/**` — and the wheel-manifest snapshot agrees, listing
+  125 entries with none under `unittests/`. The rationale was simply dropped;
+  the duplicate helper was *not* deduplicated onto
+  `_rust_stream_test_support._safe_close` because that file is not in the
+  change surface and the PR is at its file-count tolerance (see below). Second,
+  the `_MAX_BUFFER_SIZE` mirror comment named `rust/cuprum-rust/src/lib.rs`, but
+  `MAX_BUFFER_SIZE` is defined in `rust/cuprum-streams/src/lib.rs` and merely
+  re-exported; corrected. Both were pre-existing on `main`, not introduced by
+  this branch.
+
+  The change lands the PR at **18 of 18** files excluding the lockfile and this
+  plan, exactly at the tolerance rather than over it. That budget is why the
+  fix is a split and two comment corrections rather than a wider deduplication:
+  touching a shared support module would have taken the count to 19 and tripped
+  a stop-and-ask trigger. `make lint` regenerated `typos.toml` from the live
+  shared estate dictionary (one entry reworded, unrelated to this branch); it
+  was reverted, because the branch has deliberately never carried that
+  generated file across its seven commits and committing it would both exceed
+  the tolerance and put unrelated churn in the diff.
+
+  All four commit gates pass on the frozen tree at `bd41d2c4` and each log
+  records that head: `make check-fmt` (676 formatted, 78 unchanged), `make test`
+  (`cargo nextest` **160/160**, and `2543 passed, 1 skipped`), `make typecheck`
+  (`ty` all checks passed), and `make lint` (52 s, all eight sub-checks
+  reached, actionlint included). The first `make test` attempt failed 13
+  release-workflow tests on the `BASH_ENV` git-shim trap — a host artefact, not
+  a code defect; the remedied re-run `env -u BASH_ENV make test` is the green
+  one, and both logs are kept so the failed attempt is not quietly discarded.
+  The split's own properties were also run directly with
+  `CUPRUM_REQUIRE_RUST_EXTENSION=1` (10 passed), which is what shows they
+  execute rather than skip.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -889,9 +954,11 @@ native OS codes. The missing piece is a typed error unifying argument and
 stream failures, not a new stream engine.
 
 `cuprum/unittests/test_rust_streams_boundary_property.py` already contains
-Hypothesis boundary coverage. Reuse it instead of creating a second generator
-suite. Its Windows exclusions reflect shim preparation order and must not be
-removed on the assumption that native and shim ordering are identical.
+Hypothesis boundary coverage; its accepted-argument half now lives in
+`cuprum/unittests/test_rust_streams_roundtrip_property.py` after the split.
+Reuse both instead of creating a second generator suite. The boundary module's
+Windows exclusions reflect shim preparation order and must not be removed on
+the assumption that native and shim ordering are identical.
 
 Two attempts to create a context pack failed because the server rejected an
 existing pack larger than its 524288-byte limit. Planning agents exchanged
@@ -1360,7 +1427,8 @@ accepts 1 through 1073741824 bytes and returns stable validation messages.
 
 `cuprum/_streams_rs.py` is the Python shim. Existing unit coverage includes
 `cuprum/unittests/test_rust_streams.py`, `test_rust_consume_stream.py`,
-`test_rust_streams_boundary_property.py`, `test_rust_errno.py`, and
+`test_rust_streams_boundary_property.py`,
+`test_rust_streams_roundtrip_property.py`, `test_rust_errno.py`, and
 `test_rust_errno_windows.py`. Behavioural coverage uses
 `tests/features/rust_streams.feature` and
 `tests/behaviour/test_rust_streams_behaviour.py`. Native consume's inert status

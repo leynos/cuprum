@@ -4395,6 +4395,7 @@ Table 1: modules gated on the compiled extension
 | `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                     |
 | `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
 | `test_rust_streams_boundary_property.py`                | randomized payloads across the boundary                                                                                                                              |
+| `test_rust_streams_roundtrip_property.py`               | the accepted-argument half: that the default buffer size applies to a completed transfer                                                                             |
 | `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                    |
 | `test_rust_extension.py`                                | extension availability and module surface                                                                                                                            |
 | `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                         |
@@ -5297,9 +5298,10 @@ guards against absurd allocations while comfortably exceeding any realistic
 transfer buffer (the default is 64 KiB). The Rust boundary cases are property
 tested in `rust/cuprum-streams/src/buffer_size_tests.rs`; the Python-side error
 mapping is exercised in
-`cuprum/unittests/test_rust_streams_boundary_property.py`. Keep the
-`_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the users'
-guide aligned with this contract when the cap changes.
+`cuprum/unittests/test_rust_streams_boundary_property.py`, and the accepted
+arguments in `cuprum/unittests/test_rust_streams_roundtrip_property.py`. Keep
+the `_streams_rs.py` wrapper docstrings, `docs/cuprum-design.md`, and the
+users' guide aligned with this contract when the cap changes.
 
 ## Development dependency pins
 
