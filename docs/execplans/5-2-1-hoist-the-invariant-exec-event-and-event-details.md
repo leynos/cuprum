@@ -3189,8 +3189,21 @@ Two rounds, three defect classes, one commit each. The pattern is worth
 recording rather than the individual errors: **a gate run that aborts early is
 not a cheap run, it is a deferred discovery**, and writing prose about a lint
 failure is itself a lint surface. The second round is what turned nine
-unobserved leaves into nine observed passes; only the spelling leaf was still
-red.
+unobserved leaves into nine observed passes.
+
+It is worth being exact about how many gates the second round left red, because
+this note previously gave the wrong count. **The one spelling defect turned two
+gates red, not one.** `make lint` aborted at the `spelling` recipe
+(`Makefile:405`) after reaching ruff, interrogate, pylint, df12-python-lints,
+ambrleaks, skylos, `cargo doc`, clippy and Whitaker — and never reaching
+`yamllint` or `actionlint`, which is why those two were re-run as a standalone
+`make github-actions-lint` afterwards rather than read as green.
+`make markdownlint` failed as well, and to the same word: its own check reported
+`Linting: 80 file(s)` / `Summary: 0 error(s)`, and the failure came from the
+`$(MAKE) spelling` line that `Makefile:402` runs *after* the check, so the
+Markdown gate's verdict is contingent on a spelling gate a reader would not
+expect to be inside it. "The spelling leaf" therefore names a recipe that two
+separate targets invoke, and one defect registered on both.
 
 ### 2026-09-29: the review's first point, priced but not spent
 
