@@ -331,9 +331,16 @@ because the roadmap's next item is exactly such a change.
 
 This already has a named successor. Roadmap item 5.2.2 removes the per-line
 `inspect.isawaitable` call, which is 589 samples, all D-only, in the candidate
-capture. Removing it moves the share from 29.9414% to 30.9686% — a worse number
-from work the roadmap explicitly wants done. Item 5.2.1's share gate therefore
-cannot be the acceptance instrument for 5.2.2.
+capture. Removing it **would** move the share from 29.9414% to **30.9686%** — a
+worse number from work the roadmap explicitly wants done. Item 5.2.1's share
+gate therefore cannot be the acceptance instrument for 5.2.2.
+
+That 30.9686% is a **conditional forecast**, not a measured result: it is
+29.9414% recomputed with 589 subtracted from D and N held, which assumes the
+removal touches nothing else in either term. No capture was taken with
+`inspect.isawaitable` absent, and 5.2.2 may well change D by more than that one
+frame's weight. Read it as the direction and rough size of the inversion, not
+as the number 5.2.2 will produce.
 
 **At the revised 30% target this stops being a caveat and becomes a dated
 forecast.** 5.2.1 now passes by 0.0586 points, and 5.2.2 would move the same
@@ -380,8 +387,18 @@ The descriptor variant preserves the full dataclass protocol surface — 27 slot
 `FrozenInstanceError` on write, and `dc.fields`, `dc.replace`, `dc.asdict`,
 `dc.astuple`, keyword construction, `pickle`, `copy`, `deepcopy`, hash and set
 membership, and `repr` all verified equal to the shipped type. Applied to the
-r2 counts it models a share of 22.42%; that figure is arithmetic on a
-microbenchmark, not a capture, and is recorded as such.
+r2 counts it **models** a share of **22.42%**; that figure is arithmetic on a
+microbenchmark, not a capture, and is recorded as such. It is a modelled share,
+never a measured workload result: the same three-pair V5 protocol that produced
+the 29.91% would have to be re-run before it could be cited as one.
+
+_On the field-drift objection._ This variant's constructor is generated from
+`dc.fields()` and then checked against an added field — the signature grew to
+match, `dc.replace` worked on the new field, and `asdict` keys stayed equal to
+the field set (see the plan's 2026-09-27 descriptor entry). Generation
+therefore **does** answer the drift objection; what it does not answer is the
+cost of maintaining a hand-rolled generator, or the plan's own constraints. The
+variant stays excluded, but on those grounds rather than on drift.
 
 `frozen=True` is pre-existing public API on `ExecEvent` (introduced with the
 structured-event work, well before this branch) and three test suites assert

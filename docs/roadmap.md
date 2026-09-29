@@ -324,9 +324,11 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
     detect a small regression. And the metric **inverts** — 100% of the
     numerator is the retained `ExecEvent.__init__`, so removing pre-constructor
     work lowers the denominator and *raises* the share. Item 5.2.2 would move
-    29.9414% to 30.9686% **by succeeding**, which is why 5.2.2 must be judged
-    on its own criterion and why a future re-run of this gate after 5.2.2
-    should be read as this known inversion rather than as a regression.
+    29.9414% to 30.9686% **by succeeding** — a conditional forecast
+    (D recomputed with 589 subtracted, N held), not a measured result — which
+    is why 5.2.2 must be judged on its own criterion and why a future re-run of
+    this gate after 5.2.2 should be read as this known inversion rather than as
+    a regression.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying
   each hook as sync or async once at registration.

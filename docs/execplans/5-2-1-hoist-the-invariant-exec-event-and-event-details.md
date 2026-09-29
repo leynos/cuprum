@@ -110,11 +110,16 @@ the plan was set to BLOCKED in between rather than re-sited unilaterally. Both
 revisions changed an unmeetable criterion explicitly and on the record; neither
 weakened a criterion the implementation had already met.
 
-Because both revisions were granted, the two refinements this section budgets
-were **not spent**: no argument-passing or local-binding variant of the
-constructor was tried, and the two design changes that would have closed the
-28% gap were rejected on other grounds and are recorded in the discovery entry
-"The 30% revision, and why the margin is thin".
+Because both revisions were granted, neither refinement this section budgets
+was **needed to reach the criterion**: the two design changes that would have
+closed the 28% gap were rejected on other grounds and are recorded in the
+discovery entry "The 30% revision, and why the margin is thin". This is a
+weaker statement than "not tried", and the earlier wording overstated it:
+argument passing *was* priced — `ExecEvent(**kw)` at 2735 ns against 2431 ns
+positional — in the entry that rules both refinements out, which is why that
+entry, not this paragraph, is the authority on what was measured. Local binding
+was reasoned about rather than measured, the cost being the 16 optional fields
+that must be passed explicitly either way.
 
 The two refinements are limited to argument-passing and local-binding variants
 of ordinary `ExecEvent` construction. Neither may change public signatures or
@@ -2570,14 +2575,19 @@ as a regression.
 the grounds matter for the retrospective.** Neither was rejected for cost:
 
 - A handwritten descriptor `__init__` on `ExecEvent` measures 0.68× the stock
-  constructor (1278.3 vs 1890.3 ns/ctor), which the artefact computed as
-  sufficient to reach 22.42% — under even the original 28% bar with room. It
-  was rejected because it replaces the generated constructor with
-  hand-maintained code that must reproduce field order, defaults, `__eq__`,
-  `__repr__`, and `dataclasses.fields()` introspection exactly, and re-breaks
-  silently whenever a field is added. That is a public-API correctness surface
-  traded for a percentage the user has since granted by revising the target
-  instead.
+  constructor (1278.3 vs 1890.3 ns/ctor), which the artefact **models** as
+  reaching **22.42%** — under even the original 28% bar with room. It was
+  rejected because it replaces the generated constructor with hand-maintained
+  code that must reproduce field order, defaults, `__eq__`, `__repr__`, and
+  `dataclasses.fields()` introspection exactly. The field-drift objection does
+  **not** apply: the variant's constructor is generated from `dc.fields()` and
+  was checked against an added field (signature grew to match, `dc.replace`
+  worked on the new field, `asdict` keys stayed equal to the field set), so a
+  field addition is caught rather than missed. What remains is the ongoing cost
+  of a hand-rolled generator — a public-API code surface traded for a
+  percentage the user has since granted by revising the target instead. Note
+  also that 22.42% is a modelled share derived from a microbenchmark, not a
+  measured workload result.
 - Reopening `ExecEvent`'s `frozen=True` measures 0.18× (341.6 ns/ctor) and is
   the single largest available lever, because `frozen=True` dominates the cost:
   it emits 27 `object.__setattr__` calls per construction. It was rejected as a
@@ -2947,6 +2957,123 @@ require checking the explicit callback factory bodies as well.
   states, applied to a third site it had not enumerated: when a target moves,
   sweep for *instructions that cite it*, not only for claims about it.
 
+### 2026-09-29: an independent review falsifies two of this plan's own rejection reasons
+
+An independent review of this branch reproduced all six committed
+classifications, recalculated the unprofiled medians, and confirmed the
+29.9087% candidate median and the 26.28% callback-workload improvement. It then
+found that this plan's constructor rationale rested on two claims that are
+**false**, and that one permitted refinement was recorded as untried when it
+had in fact been measured. The corrections are in the artefact, the report, and
+the roadmap; the findings are recorded here because a wrong rejection reason is
+worse than no reason: it forecloses a route a later reader would otherwise
+re-open on evidence.
+
+**Claim one, falsified: "a handwritten `__init__` re-breaks silently whenever a
+field is added."** The descriptor variant's constructor is itself generated from
+`dc.fields()`, and the 2026-09-27 entry above records exactly the check that
+rules this out: rebuilt with an extra field, the signature grew to match,
+`dc.replace` worked on the new field, and `asdict` keys stayed equal to the
+field set. Drift is *answered by generation*, not merely asserted away. The
+variant stays excluded — but on the grounds that remain true: maintaining a
+hand-rolled generator, and the re-baseline it forces (a handwritten `__init__`
+renders as `__init__ (cuprum/events.py:N)`, so the classifier's `<string>` rule
+stops matching), are a real and ongoing cost. The plan previously stated both
+of those correctly elsewhere; only the drift sentence was wrong.
+
+**Claim two, falsified: `dataclasses.replace` bypasses constructor
+invariants.** It does not. `replace` calls `ExecEvent(**{...})` — the ordinary
+constructor — so `__init__` and any `__post_init__` run again. Verified on this
+host (3.12.13) by instrumenting a `__post_init__` and by confirming that a
+validating one still rejects a bad value routed through `replace`. The
+practical consequence is that `replace` was never a route around the "single
+place invariants are checked" reasoning, and it is not faster either, since it
+performs the same `__init__` call plus a field copy. The decline of
+constructor-bypass routes stands on other grounds; the sentence that listed
+`replace` among the faster bypassing options did not.
+
+**One refinement was recorded as unspent when it had been measured.** The
+Tolerances section says both permitted refinements "were not spent" and that no
+argument-passing variant was tried; the same document records, at the
+"refinements are both already ruled out" entry, a measured `ExecEvent(**kw)`
+2735 ns against 2431 ns positional. The two statements cannot both be true.
+They are reconciled as: the *ruled-out* entry measured argument passing, the
+*unspent* entry means neither refinement was needed to reach the criterion as
+finally revised. That is a weaker claim than "not tried", and the text is
+corrected to say what was actually done.
+
+**The review's own candidate, recorded as unmeasured.** The best remaining
+alternative it identifies is to specialize the observe-only path at preparation
+time: when `on_line` is absent, `_compose_line_callbacks` could return
+`emitter.emit_line` directly instead of wrapping it in a closure that re-tests
+both `emitter` and `context.on_line` on every line. That is the branch's
+measured workload — the benchmark's callback scenario uses `sh.observe` — and
+it removes a Python call and two repeated invariant checks per line without
+duplicating dispatch, changing task ownership, or sacrificing named constructor
+arguments. **It is not accepted and not claimed as a win here.** It removes
+denominator-only work, and this plan's own structural finding says what that
+does: 100% of the numerator is the retained `ExecEvent.__init__`, so lowering D
+while holding N **raises** the share. The specialization could therefore breach
+a criterion this branch passes by 0.0586 points, by succeeding at exactly the
+kind of change the plan endorses. It needs the full three-pair V5 protocol
+before it can be judged, and the outcome is genuinely uncertain in direction of
+magnitude, not sign. A separate microbenchmark the reviewer ran on this host
+(MicroPython-free CPython 3.14.4, nine rotated rounds of 150 000 calls, real
+synchronous dispatcher) priced two further variants: positional-required
+arguments at 0.9571× the shipped emitter and captured-locals-named at 1.0143×.
+Both are microbenchmarks of the emitter, not workload measurements, and neither
+is V5 evidence; the positional variant's eleven positional arguments, two pairs
+of them adjacent `None`s, are the legibility cost it would carry.
+
+**What this changes about the plan's conclusion.** Nothing about the shipped
+implementation or its verdict: the two falsified claims are rejection reasons
+for roads not taken, and the review's candidate is explicitly unmeasured. What
+it changes is the record's honesty about *why* those roads were not taken, and
+it adds one live candidate that a future reader should price before assuming
+the design space is closed.
+
+### 2026-09-29: a completed-review finding on the spelling policy, and how it was falsified
+
+CodeRabbit returned **CHANGES_REQUESTED** on `31d45cb7` with one actionable
+finding: that the narrowed spelling exception at `typos.toml:83` is a hand edit
+to a generated file, which the next generator run would discard, and that it
+therefore belongs in `typos.local.toml`. (That exception is anchored on the
+generator's own longer phrase, `` `var.iamge_id` instead of `var.image_id` ``,
+so only that full phrase is masked; a bare mention of the identifier alone
+would still trip the spelling gate.) The finding reads plausibly — `typos.toml`
+carries a "Generated … do not edit by hand" banner, the commit touches only
+that file, and the repository rule does say repository-specific exceptions
+belong in the overlay.
+
+**It is false, and the check that settles it is cheap.** Delete the line, run
+the generator, and see whether it comes back:
+
+```text
+typos.toml with the entry removed          a414704b…
+after `make spelling` (generator ran)     ecb670c6…   (entry restored at :83)
+```
+
+Restoring `typos.toml` from `origin/main` instead (`bc7c1418…`) and running the
+generator yields `ecb670c6…` — the branch's exact committed file, narrowed
+entry included. So the commit is not a hand edit at all: it is the output of
+running the project's own generator against a newer shared dictionary, and
+moving the entry to `typos.local.toml` would be *wrong* in two ways — it would
+put generated content in the overlay, and the next regeneration would restore
+the generated form anyway, leaving a duplicate.
+
+**The generalizable point.** "Generated file, do not edit by hand" establishes
+that a file's content *should* come from a generator; it does not establish
+that an unfamiliar diff into it *did* come from a hand. Those are different
+claims, and only the second is a defect. The distinguishing check is not
+reading the banner but re-running the generator and diffing — the same
+discipline this plan already applies to gate logs, where a recorded digest is
+evidence only against the blob actually shipped. A reviewer enforcing a real
+project rule from a diff alone will misfire exactly here, on the commit that
+did the right thing by regenerating.
+
+**Disposition.** The finding is disputed with the reproduction above rather
+than applied. The commit stands unamended.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
@@ -3164,13 +3291,17 @@ one).** The numerator cannot fall further without deleting the per-line
 `ExecEvent.__init__`. Two levers were measured and both were declined:
 
 - A handwritten descriptor `__init__` at **0.68×** the stock constructor
-  (1278.3 vs 1890.3 ns/ctor), sufficient for **22.42%** — under even the
-  original 28% bar. Declined because it replaces the generated constructor with
-  hand-maintained code that must reproduce field order, defaults, `__eq__`,
-  `__repr__`, and `dataclasses.fields()` introspection exactly, and would
-  re-break silently on the next field added to a public 27-field dataclass. The
-  trade is a permanent correctness surface on a public API for a percentage
-  that the user has since granted by moving the target.
+  (1278.3 vs 1890.3 ns/ctor), **modelled** as sufficient for **22.42%** — under
+  even the original 28% bar. Declined because it replaces the generated
+  constructor with hand-maintained code that must reproduce field order,
+  defaults, `__eq__`, `__repr__`, and `dataclasses.fields()` introspection
+  exactly — an ongoing generator to maintain on a public 27-field dataclass.
+  The drift objection specifically does not hold: that constructor is itself
+  generated from `dc.fields()` and was verified against an added field, so a
+  new field is caught rather than missed. The trade is a permanent code surface
+  on a public API for a percentage that the user has since granted by moving
+  the target; 22.42% is a modelled share, not a measured workload result, and
+  would need the full V5 protocol before it could be cited.
 - Reopening `ExecEvent`'s `frozen=True` at **0.18×** (341.6 ns/ctor) — the
   largest single lever available, because `frozen=True` costs 27
   `object.__setattr__` calls per construction and dominates the constructor.
@@ -3561,9 +3692,19 @@ scheduling; repeated runs and raw evidence expose this limitation.
 Primary references checked with Firecrawl on 2026-09-19 are
 [Python dataclasses][dataclasses], [Python profiling][profiling], and
 [py-spy documentation](https://github.com/benfred/py-spy). Frozen
-initialization uses `object.__setattr__`, and `dataclasses.replace` calls
-initialization again; neither a cached template nor renamed construction
-establishes a speedup.
+initialization uses `object.__setattr__`. `dataclasses.replace` does **not**
+bypass the constructor: it calls
+`ExecEvent(**{f.name: getattr(self, f.name) …})`, so `__init__` and any
+`__post_init__` run again, verified on this host (3.12.13 and 3.14.4) by
+instrumenting a `__post_init__` and by confirming that a validating
+`__post_init__` still rejects a bad value passed through `replace`. It is
+therefore never a route around construction invariants, and this plan does not
+rest on it being one. What the invalidation rests on is narrower: a cached
+template and renamed construction establish no speedup, and `replace` is not
+itself a faster constructor, since it performs the same `__init__` call plus
+the field copy. Reopening construction is a public-API decision this plan
+declines; it is not declined on the false premise that `replace` skips
+validation.
 
 ## Milestones and plateaus
 
