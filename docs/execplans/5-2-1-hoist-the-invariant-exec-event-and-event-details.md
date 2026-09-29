@@ -3252,7 +3252,7 @@ That leaves the two gates which read Markdown, plus `lint`:
 | -------------- | --------------------- | -------------------------------------------------------------------------------------------- |
 | `check-fmt`    | green                 | rc=0; `ruff format --check` 691 files, `cargo fmt` clean, `mdtablefix --check` 80 unchanged  |
 | `markdownlint` | green                 | rc=0; `Linting: 80 file(s)` / `Summary: 0 error(s)`, then its own `make spelling` line clean |
-| `lint`         | green                 | ten of eleven leaves visible in the log; the eleventh verified separately                    |
+| `lint`         | green                 | eleven leaves passed; the twelfth, `actionlint`, wedged and was verified separately          |
 
 **`actionlint` was verified, not inherited.** The delegated `make lint` hung on
 it — the host wedge this plan documents above, and it is intermittent, so a
