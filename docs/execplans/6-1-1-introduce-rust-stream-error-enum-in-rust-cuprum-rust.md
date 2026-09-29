@@ -1096,10 +1096,16 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `36610325211` at `58ce2f66` is `completed/success`, **17 of 17**, **zero**
   non-success. Its `coverage` job runs `18:21:06Z → 18:32:16Z`, i.e. **11 m 10
   s** wall clock against its own `timeout-minutes: 65` bound — a fifth of the
-  budget, consistent with the 7.4 s and 8.7 s the single doctest test took on
-  the three green heads rather than with the 30 s that killed it at `1714ac0d`.
-  Four heads now bracket the question: one failure, three passes, the passes at
-  7.4 s, 8.7 s and a full-job 11 m 10 s that never approached its ceiling.
+  budget, so that lane is nowhere near its ceiling either.
+
+  Four heads now bracket the question. The one failure is `1714ac0d`, where the
+  test hit the 30 s bound twice. The three passes are `b7d1b109` (the test at
+  **7.4 s**), the cancelled rerun at `1714ac0d` (**8.7 s**, the same head and
+  bytes, so it cannot be cited as a head-level pass even though the test itself
+  completed), and `58ce2f66` (the whole coverage job at 11 m 10 s — a job-level
+  figure covering far more than this one test, so it bounds the cost rather
+  than measuring it). One head failed, two completed cleanly, and no passing
+  observation is anywhere near the bound.
 - [x] (2026-09-29) **A second CodeRabbit review was requested at `c99807ce`.**
   The round-1 review (`5354955377`) stands `CHANGES_REQUESTED` and
   `mergeStateStatus` is `BLOCKED`, so a fresh review is required to clear the
