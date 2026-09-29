@@ -1185,16 +1185,24 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   *"your pull request is larger than the review limit of 150,000 diff
   characters"* (`15:33:10Z`, against `e7d4fa45`). The limit is real and the
   diagnosis is measurable: this branch's diff from its merge base is
-  **279,201** characters, of which the execplan alone is **148,191** — 53% of
-  the whole surface from one file. Two consequences follow, and they point
-  opposite ways. The PR body's claim that CI is green "at each head" is true of
-  CI and silent about *this* reviewer, which never rendered the diff at all.
-  But trimming the execplan would not lift the gate: at 279,201 characters the
-  branch is 86% over a limit no rearrangement of its own text can reach, and
-  the execplan is a mandated living artefact of this plan. Sourcery is
-  therefore **out of scope for this branch** rather than a finding to fix, and
-  it is recorded here so that a skipped check is not later mistaken for a
-  passing one.
+  **293,899** characters, of which the execplan alone is **162,889** — 55% of
+  the whole surface from one file. The PR body's claim that CI is green "at
+  each head" is true of CI and silent about *this* reviewer, which never
+  rendered the diff at all.
+
+  A later revision of this entry said trimming the execplan "would not lift the
+  gate", because the branch was "86% over a limit no rearrangement of its own
+  text can reach". The figures have moved against that sentence and the
+  sentence should have been re-derived rather than carried. The non-plan
+  remainder is now **131,010** characters — **87% of the 150,000 cap, and under
+  it by 18,990**. So it is no longer true that no trimming could help; a
+  sufficiently aggressive rewrite of the execplan could bring this branch
+  inside a limit it currently exceeds by 96%. That said, the conclusion does
+  not change, for a reason worth stating precisely: the trimmable text is the
+  mandated living artefact of this plan, and cutting 163 KB of it to satisfy a
+  reviewer that has never read this branch would destroy the record the plan
+  exists to keep. Sourcery remains **out of scope for this branch** — now as a
+  measured budget statement rather than as an impossibility claim.
 
   Codex is the mirror case: it did run — *"Code Review ✅ Completed,
   `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and it did signal clean, with the 👍
