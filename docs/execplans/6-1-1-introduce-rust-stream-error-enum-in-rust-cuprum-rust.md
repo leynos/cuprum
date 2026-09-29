@@ -37,7 +37,19 @@ CodeRabbit (it had been reporting `skipped` while the PR was a draft); its one
 finding — deduplicate a local `_safe_close` onto the shared helper — was
 correct and was applied in `b3ae9f20`, disproving in the process a file-count
 premise this plan had asserted without testing. The branch stands at **18 of
-18** files excluding the lockfile and this plan — at the tolerance, not over it.
+18** files excluding the lockfile and this plan — at the tolerance, not over
+it. At `1714ac0d` the required `coverage` job failed twice on a test this
+branch does not touch,
+`test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`.
+The failure is **environmental and measured, not a branch defect**: the
+coverage job is the only lane that runs that test without provisioning
+`nightly-2026-08-23`, so rustup downloads the 595 MB toolchain *inside* the
+test's own `subprocess.run`, under the global 30 s `pytest-timeout`. Reproduced
+locally by pointing `RUSTUP_HOME` at an empty directory: **11.5–12.7 s cold
+versus 0.49 s warm**, a 23–26× differential, on a 6-core idle host — the same
+download on a loaded 2-vCPU runner exceeds the bound. The test file is
+byte-identical to base `7f762870` (`b8f96ae4`), is outside the branch's 18-file
+set, and the job passed at `b7d1b109` (`36356062517`) with the same bytes.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -936,6 +948,53 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       gate could not: the duplication was invisible to every lint here, and the
       false premise was invisible to everything, because nothing measures a
       claim until someone acts on it.
+- [x] (2026-09-29) **The required `coverage` job failed twice at `1714ac0d`, on
+  a test this branch does not touch, for a reason that is environmental and now
+  measured rather than assumed.** The failing test is
+  `cuprum/unittests/test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`
+  and the verdict both times is
+  `Failed: Timeout (>30.0s) from pytest-timeout` — the global bound at
+  `pyproject.toml:370`. Everything else in the run is green: **16 of 17** jobs
+  succeed, including `lint-test`, all four `Typecheck and test` interpreters,
+  both extension-gated lanes, `benchmark-ratchet` and every wheel build, and
+  the only failure is this one job. The first question is ownership, and it is
+  answered by three independent facts. The file is **byte-identical to base
+  `7f762870`** — `b8f96ae4` is its blob at both `b7d1b109` and `1714ac0d` — it
+  is absent from the branch's 18-file change surface
+  (`git diff --name-only b7d1b109 HEAD` lists only the Makefile, the two
+  property modules, the developers' guide and this plan), and `main` has not
+  touched it since the base either (`git log 7f762870..origin/main -- <path>`
+  is empty). It also passed in the coverage job at `b7d1b109` (`36356062517`)
+  on the same bytes.
+
+  The second question is mechanism. The coverage job is the **only** lane that
+  runs this test without `setup-dev-fast`:
+  `grep -n setup-dev-fast .github/workflows/ci.yml` returns lines 290 and 791,
+  inside `lint-test` and `extension-tests`, and the coverage job's own 27-step
+  list contains no such step — it installs Rust `1.85.0` and, on a tool-cache
+  miss, the `nightly-2026-05-28` makeutil toolchain, but never
+  `nightly-2026-08-23`. The test hard-codes that toolchain as
+  `RUSTUP_TOOLCHAIN`, and rustup **auto-installs an uninstalled toolchain on
+  demand** (confirmed directly:
+  `RUSTUP_TOOLCHAIN=nightly-1999-01-01 cargo --version` begins
+  `syncing channel updates` rather than failing). So when the nightly is
+  absent, the download happens inside the test's own `subprocess.run`, under
+  the 30 s pytest bound, and the download is **595 MB**. Reproduced locally by
+  pointing `RUSTUP_HOME` at an empty directory: the test takes **11.52 s and
+  12.71 s cold** against **0.49 s warm**, a 23–26× differential measured on an
+  idle 6-core host. That is already a third of the bound before the runner is
+  loaded at all; on the job's 2-vCPU Ubicloud runner with a concurrent compile,
+  the same download crosses it. The passing run is consistent with this rather
+  than against it: in `36356062517` the test took **7.4 s** (22:52:34.10 →
+  22:52:41.49), fifteen times its warm local time but inside the bound — a
+  warm-but-slow path, not a cold download. What falsifies "this is a branch
+  regression" is the combination: unchanged bytes, an unchanged toolchain pin,
+  and a cost that is purely a download. The correct fix — provisioning the
+  nightly in the coverage job, or raising that test's timeout — belongs to
+  `main` and not to this branch, which is why it is recorded here rather than
+  patched. One nearby failure was checked and is **not** the same defect: the
+  coverage job on `d7037cc41` (a different branch) fails with
+  `sccache: error: Timed out waiting for server startup`, an unrelated cause.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -1215,7 +1274,52 @@ partial signal. `mapsplice` is not "broken for phase 9"; it is inert for the
 entire roadmap, so a later phase-6 or phase-8 edit would have failed the same
 way, and would have looked like a problem with *that* edit.
 
+**A pinned toolchain name in a test is a hidden network dependency, and the
+failure it produces looks exactly like a flake.** The `coverage` job failed
+twice at `1714ac0d` on
+`test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`,
+with `Failed: Timeout (>30.0s) from pytest-timeout` and no other diagnostic.
+The test shells out to Cargo with `RUSTUP_TOOLCHAIN=nightly-2026-08-23`
+hard-coded, and `coverage` is the one lane that never runs `setup-dev-fast` —
+that action's `rustup toolchain install "${toolchain}" --profile minimal` is
+what puts the nightly on disk, and it appears only at `ci.yml:290` and
+`ci.yml:791`, in `lint-test` and `extension-tests`. rustup does not fail when
+the named toolchain is missing; it silently **downloads** it, and the download
+lands inside the test's own `subprocess.run`, where `capture_output=True` hides
+it from the log entirely. Measured with `RUSTUP_HOME` pointed at an empty
+directory, the same test goes from **0.49 s warm to 11.5–12.7 s cold** — a
+23–26× differential, entirely network, on an idle 6-core host, for a 595 MB
+payload. A reader seeing only the failure gets no clue that a toolchain
+download is involved: the test's own output is captured, and the surrounding
+lines in the log are ordinary `PASSED` entries. The general lesson is that a
+timeout in a test whose body shells out to a pinned tool is a *provisioning*
+symptom first and a performance symptom second, and the cheap discriminator is
+to point the tool manager's home at an empty directory and re-time it.
+
+The second surprise is that a fast lane can be green for a reason that makes
+the slow lane's failure look inconsistent when it is not. The passing coverage
+run took 7.4 s for this test against a 0.48 s local time — fifteen times
+slower, already a third of the way to the bound — which is a warm-but-loaded
+runner, not a cold download. The gap between 7.4 s and 30 s is small enough
+that it is crossed by ordinary runner variance rather than by a code change,
+which is precisely why the failure appeared and disappeared without the branch
+changing anything between the runs that disagreed.
+
 ## Decision log
+
+- (2026-09-29) **The `coverage` job's doctest-contract timeout is a `main`
+  defect and is deliberately not patched here.** The branch is at its 18-file
+  tolerance and the failing test is byte-identical to base and outside the
+  change surface, so a fix would (a) exceed the tolerance, (b) enlarge the
+  branch into an unrelated CI concern, and (c) require editing
+  `.github/workflows/ci.yml`, which this branch has deliberately never touched
+  and whose every byte `actionlint` reads is `main`'s. Two fixes are available
+  and both belong to a separate change: provision `nightly-2026-08-23` in the
+  coverage job, or raise this single test's timeout above the global 30 s. The
+  first is better — it removes the download rather than accommodating it —
+  because the same latent cost is paid by any lane that runs the test without
+  the prerequisite action. Recorded in Progress with the measurements, and left
+  for `main`.
 
 - (2026-09-26) **The `rstest-bdd` dev-dependency must be locked at
   `textwrap 0.16.2`, not re-resolved freely.** Adding `rstest-bdd` pulls in
