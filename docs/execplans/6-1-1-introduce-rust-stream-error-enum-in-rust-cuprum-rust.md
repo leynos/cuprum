@@ -1292,11 +1292,45 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   reading the comment's own text.** The check-run rollup at the head lists **
   `Kody Code Review` as `skipped`** — CodeRabbit's own check declining to run,
   which is the same fact the paused banner asserts, reached from a different
-  API. The `kody-ai[bot]` identity also added a 👀 reaction to the pull request
-  at `19:22:34Z`, 86 seconds after the body update, which is a reaction to the
-  edit rather than a review of it. A skipped check plus a watching reaction is
-  what a paused reviewer looks like; neither is a verdict, and neither changes
-  the sentence above about the failed rows.
+  API. A skipped check is a verdict the reviewer publishes about itself, and it
+  agrees with the paused banner.
+
+  The 👀 reaction is a weaker witness than it looks, because its timestamp is a
+  mutable field that this plan caught mid-change. An earlier version of this
+  entry recorded `kody-ai[bot]` reacting at `19:22:34Z`; the reaction now reads
+  `20:27:19Z`, with id `534438116`. A reaction is a toggle — one row per
+  identity and content, never two — so the timestamp can only ever record the
+  *latest* time the identity looked. The earlier reading was accurate when it
+  was taken and is stale now; the plan keeps both so that a reader can tell a
+  moved field from a changed one.
+
+  The `20:27:18Z` walkthrough edit, by contrast, left the content alone, and
+  the evidence for that is a clean attribution rather than an assumption. Two
+  captures bracket it: one taken at `19:34:34Z` and one at `20:38:03Z`. They
+  are **byte-identical**, SHA-256 `8306c4cb…`, 14,729 bytes, and a third fetch
+  at `20:41:19Z` hashes the same. `updated_at` names the *last* write rather
+  than a count of writes, so this does not prove the comment was touched only
+  once in that hour — it proves something sufficient all the same: the last
+  write fell at `20:27:18Z`, inside a window whose two endpoints are
+  byte-identical, so whatever that write did, the rendered comment at
+  `20:38:03Z` was byte-for-byte the comment at `19:34:34Z`. Attribution is what
+  makes this safe to claim, and it is also what the first draft of this entry
+  got wrong: it diffed the current comment against a capture from `17:50:20Z` —
+  which straddles the *`19:25:51Z`* edit recorded above — found the two moved
+  `✅ Passed` rows, and blamed them on `20:27:18Z`. The window was wrong, so
+  the finding was wrong; both captures have to sit outside a single edit's
+  window, and once they do the conclusion dissolves.
+
+  What survives is the point. Every assessment field still names
+  `e7d4fa457f73a63750bc23c8c7da2d1a9f77c588`, the paused banner stands, and the
+  pre-merge table still reads "❌ Failed checks (1 error, 1 warning)" with
+  `Testing (Overall)` ❌ and `Developer Documentation` ⚠️.
+
+  That settles the queue question negatively for the third time. `ac1c5052` is
+  **still pending** — `comenq list` shows it, and no new CodeRabbit review
+  exists; the newest are still `15:42:06Z` and `17:42:16Z`. A watching reaction
+  and a no-op edit are neither a review nor a verdict, and the failed rows are
+  refreshed by a review and by nothing else.
 - [x] (2026-09-29) **One figure in this plan's prose was wrong, and it was
   written where no gate looks.** Commit `3bd057d1`'s subject reads "the
   **four** non-CodeRabbit reviewers". The count is **five** — CodeScene, Gecko,
