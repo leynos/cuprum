@@ -292,43 +292,23 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
     callback scenario's dataclass-construction share falls to no more than 30%
     of the consume subtree in a committed profiler artefact, and emitted event
     payloads are unchanged.
-  - The threshold was 10%, measured against a "39% baseline". Both were
-    revised on 2026-09-27 with user approval: the 39% traces to one table row
-    in `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5 that states no
-    denominator, and the current control capture measures 34.73% (consume
-    subtree) and 32.97% (all parent), so no revision of this design could
-    demonstrate a fall "from 39%". The 10% was unreachable because V2/V4's
-    observation contract retains the per-line `ExecEvent` construction, which
-    floors the achievable share near 24-27%. The derivation is in
-    `docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md`;
-    the residual gap against "no longer reconstructs invariant fields" is
-    recorded there too, since the per-line `ExecEvent` still remains.
-  - 28% was revised to 30% on 2026-09-27, also with user approval, on the
-    completed implementation rather than a projection. The hoist measured
-    **29.9087%** (median of three matched control/candidate pairs; the
-    candidate range across them is 0.0423 points, so the result is stable, and
-    the control measures 34.2928%). It missed 28% because the projection that
-    sited that bar assumed the share's denominator would fall 13.7% when it
-    actually fell 31.0% — the hoist improved the denominator faster than
-    predicted, and a smaller denominator leaves the surviving numerator at a
-    higher share. The numerator fell 39.8% against the projected 39.5%, so the
-    numerator estimate was sound and the bar, not the implementation, sat in
-    the wrong place. The measurement, its decomposition, and the two rejected
-    ways of meeting 28% by changing the design (a handwritten descriptor
-    `__init__` at 0.68x construction cost, and reopening `ExecEvent`'s
-    `frozen=True`) are in `docs/tee-hotpath-line-event-emission-5-2-1.md`.
-  - Two properties of this criterion are recorded so they are not
-    rediscovered as defects. The margin is thin: the tightest pair clears 30%
-    by 0.0586 points, larger than the 0.0423-point spread across pairs but the
-    same order of magnitude, so the measurement should not be relied on to
-    detect a small regression. And the metric **inverts** — 100% of the
-    numerator is the retained `ExecEvent.__init__`, so removing pre-constructor
-    work lowers the denominator and *raises* the share. Item 5.2.2 would move
-    29.9414% to 30.9686% **by succeeding** — a conditional forecast
-    (D recomputed with 589 subtracted, N held), not a measured result — which
-    is why 5.2.2 must be judged on its own criterion and why a future re-run of
-    this gate after 5.2.2 should be read as this known inversion rather than as
-    a regression.
+  - Met, with one residual. The invariant fields are genuinely precomputed, but
+    a per-line `ExecEvent` construction still remains — that is precisely what
+    floors the achievable share, and it is recorded as a residual against this
+    criterion rather than counted as met in full.
+  - Met at **29.9087%** — the median of three matched control/candidate pairs,
+    against a control measuring 34.2928%, with a candidate spread of 0.0423
+    points. The threshold was 10%, then 28%, then 30%, revised each time with
+    user approval; the derivations behind both revisions are in
+    `docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md`.
+  - The criterion has two properties that must not be rediscovered as defects
+    when this gate is next re-run. Its **margin is thin** — the tightest pair
+    clears by 0.0586 points — and the metric **inverts**, because removing
+    pre-constructor work shrinks the denominator and so *raises* the share. In
+    particular item 5.2.2 would move the share to 30.9686% **by succeeding**,
+    which is why it must be judged on its own criterion rather than this one.
+    The analysis, the rejected designs, and the full decomposition are in
+    `docs/tee-hotpath-line-event-emission-5-2-1.md`.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying
   each hook as sync or async once at registration.

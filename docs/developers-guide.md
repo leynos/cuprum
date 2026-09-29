@@ -5703,6 +5703,39 @@ consumer path. Changes to termination or task ownership belong in the shared
 lifecycle modules so timeout and cancellation behaviour remains aligned with
 `run()`.
 
+### The construction-share gate, and why it is not monotonic
+
+Roadmap item 5.2.1 accepted its hoist against a profiled **construction
+share**, not a wall-clock speedup. The metric is a share `N/D` over py-spy
+samples: `D` counts weighted samples whose stack contains
+`_consume_stream_with_lines`, and `N` counts those samples that also contain a
+matched construction frame. The denominator is therefore the *whole consume
+subtree*, not just the code the change edits.
+
+That shape gives the gate a property worth knowing before touching this path:
+**it can get worse when the code gets faster.** Anything that removes general
+consume work shrinks `D` without shrinking `N`, so a genuinely faster emission
+path can score a higher share. The share is an attribution metric, not a
+stopwatch, and it must not be used as an acceptance instrument for a change
+whose goal is speed.
+
+The concrete instance is roadmap item 5.2.2, which removes the per-line
+`inspect.isawaitable` call — 589 samples, all denominator-only. Deleting it
+moves the share from 29.9414% to a **conditional forecast** of 30.9686%, which
+is worse by the gate's own criterion while being faster in fact. Read that
+number as the direction and rough size of the inversion, not as a measurement:
+no capture exists with the call absent. The full analysis, including the
+sampling caveats, is in
+[`docs/tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md).
+
+To re-run or re-judge the gate, the committed captures and the classifier rules
+are in `docs/profiling/5-2-1-line-event-emission/`, whose `README.md` documents
+the layout and the reproduction command. Note that the captures were collected
+against a 28% limit and were later re-judged unchanged at 30%; both verdicts
+are kept, and `verdict.txt` carries a header saying which is standing. Because
+`N` and `D` are sample counts, re-judging at a new limit changes only
+`limit_percent` and `status` — never the measured share.
+
 ## Subprocess execution module boundaries
 
 The subprocess execution implementation is split by lifecycle concern across

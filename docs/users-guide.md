@@ -966,10 +966,7 @@ That is not a universal speedup. The gain is confined to line-callback
 workloads that emit events per line: a run with no observe hook and no
 `on_line` callback creates no line callback at all, and is unaffected. Treat
 the figure as a property of the emission path, not a promise about an
-application. The construction-share gate that accepted the change is likewise
-sensitive to how much other work a change on this path removes, because the
-share is measured against the whole consume subtree; a later optimization here
-can raise that share while making the path faster.
+application.
 
 #### Aggregate Python stream-operation events
 

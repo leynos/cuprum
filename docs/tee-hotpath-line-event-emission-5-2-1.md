@@ -332,8 +332,8 @@ because the roadmap's next item is exactly such a change.
 This already has a named successor. Roadmap item 5.2.2 removes the per-line
 `inspect.isawaitable` call, which is 589 samples, all D-only, in the candidate
 capture. Removing it **would** move the share from 29.9414% to **30.9686%** — a
-worse number from work the roadmap explicitly wants done. Item 5.2.1's share
-gate therefore cannot be the acceptance instrument for 5.2.2.
+worse number from work the roadmap explicitly requires. Item 5.2.1's share gate
+therefore cannot be the acceptance instrument for 5.2.2.
 
 That 30.9686% is a **conditional forecast**, not a measured result: it is
 29.9414% recomputed with 589 subtracted from D and N held, which assumes the

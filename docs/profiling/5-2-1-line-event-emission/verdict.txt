@@ -1,3 +1,11 @@
+HISTORICAL: collected against the 28% limit, before its revision to 30%.
+The FAIL lines below are the collection-time verdict and are NOT the standing
+one. The same six captures re-judged at 30% are in reclassified-at-30/summary.txt,
+where all three candidates pass; every construction_share_percent is identical
+between the two, only limit_percent and status differ. Kept unaltered so both
+verdicts remain legible as history: the revision moved the target, not the
+measurement. See ./README.md for the directory layout.
+
 PROFILED: 6 capture(s)
 label            variant      share %        D status                      lines   wall s rev      
 r1-candidate     candidate    29.8991    17539 fail_above_limit         28256364    180.2 f4d1010aa

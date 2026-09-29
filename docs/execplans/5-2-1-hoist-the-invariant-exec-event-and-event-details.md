@@ -3046,6 +3046,41 @@ it changes is the record's honesty about *why* those roads were not taken, and
 it adds one live candidate that a future reader should price before assuming
 the design space is closed.
 
+### 2026-09-29: the classifier's caller rule cannot separate a hook's own dataclass, and why that is not a defect here
+
+The post-ready review raised a second classifier concern: `_caller_depth` in
+`benchmarks/_line_event_profile_classifier.py` accepts *any* frame below the
+construction frame that matches a rule's caller pattern, so a synchronous
+observe hook that builds its own dataclass per event would have that
+construction counted as `ExecEvent`. The mechanism is real — a hook runs below
+`emit_line` on the stack, so its generated `__init__` sees the same caller —
+and no rule can distinguish the two cases, because a hook body is not
+identifiable from a folded capture.
+
+**Priced against the committed captures rather than argued.** Re-running the
+classifier's own functions over `r2-candidate` reproduces the committed figures
+exactly (`N` 5317, `D` 17758, 29.9414%), which is what licenses reading the
+breakdown off the same pass. In **all three** candidate captures, every counted
+construction frame is a *direct* call from `emit_line` — stack gap exactly 1,
+zero intervening frames — accounting for the whole of `N` (5244 + 5317 + 5208 =
+15,769 weighted samples):
+
+```text
+r1-candidate  N=5244  gap distribution {1: 5244}  no intervening frames
+r2-candidate  N=5317  gap distribution {1: 5317}  no intervening frames
+r3-candidate  N=5208  gap distribution {1: 5208}  no intervening frames
+```
+
+So the committed measurement contains no misattributed sample. The benchmark's
+hook (`observe_line` in `benchmarks/_tee_profile_worker_execution.py`) only
+increments a counter and constructs nothing, which is why the exposure is
+latent rather than realized. It is **documented as a limit of the metric in
+`benchmarks/_line_event_profile_model.py`, not repaired**: the rule cannot be
+tightened to exclude the case without also excluding legitimate ones, and a
+capture whose hook does allocate would inflate `N` and must be read knowing
+that. Changing the classifier would invalidate the committed gate, so the
+honest disposition is a recorded limitation with evidence, not a code change.
+
 ### 2026-09-29: a completed-review finding on the spelling policy, and how it was falsified
 
 CodeRabbit returned **CHANGES_REQUESTED** on `31d45cb7` with one actionable
@@ -3380,6 +3415,30 @@ The honest statement is that the mismatch is real and unaddressed. A follow-up
 should either make the helper genuinely concurrent, if the interleaving
 property is wanted, or rename the scenario to say what it checks.
 
+**Resolved.** A later automated review of a newer revision re-raised this
+finding, and the second time it was actioned rather than deferred. The helper
+now launches both runs through `asyncio.gather`, so they genuinely overlap,
+under a single shared `sh.observe` hook that routes each event into the bucket
+named by that event's own `run_id` tag. One hook is used deliberately: a
+per-run hook would have masked a shared emitter, which is the leak the scenario
+exists to catch.
+
+The repair is not merely "the loop now uses `gather`". Concurrency is
+*witnessed*, not assumed. Collapsing both runs onto one tag makes the scenario
+fail with `run 'first' must use exactly one execution token, got {…, …}` — a
+2-versus-1 assertion failure. That mutation is what separates a genuinely
+concurrent scenario from one that merely looks concurrent. Without it the suite
+was equally green before and after the repair, which is exactly the vacuity
+this plan's "tag tests do not witness the emitted event" lesson warns about.
+
+One residual gap is recorded rather than closed: the scenario now *executes*
+concurrently, but no assertion yet asserts that the runs overlapped in time.
+Token and tag distinctness is what the feature step specifies, and sequential
+completion satisfies that just as well as interleaving does. Closing the last
+gap would need an explicit interleaving witness — a barrier both runs must
+reach, say, so that a regression to sequential completion deadlocks instead of
+passing quietly.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
@@ -3680,19 +3739,40 @@ called after decoding each complete stdout or stderr line, or its final
 unterminated fragment. A stage observation holds the command, resolved context,
 hooks, clock, execution identifier, and list of pending observer tasks.
 
-`cuprum/events.py::ExecEvent` defines the public payload.
-`cuprum/_pipeline_types.py::_EventDetails` currently transports optional
-per-event fields into `_StageObservation.emit`, which constructs `ExecEvent`.
-`cuprum/sh.py::SafeCmd.argv_with_program` creates the full argument tuple on
-access. That tuple need not be reconstructed for every output line.
+> **Historical baseline, superseded — read this with §Surprises & discoveries
+> (2026-09-26: implementation-target re-baseline).** The paragraphs below are
+> the
+> planning-baseline description, kept so the change of target stays legible.
+> They are *not* a description of the tree the hoist landed in. The corrections
+> are in that discovery; the two that bear on this section are restated here so
+> a reader starting at this heading is not misled.
+>
+> - The per-line callback construction does not happen in the two named
+>   factories. It happens in
+>   `cuprum/_line_callbacks.py::_compose_line_callbacks`,
+>   which both of them call. `_create_stage_line_observer` **does not exist
+>   anywhere in the tree** — it is named only by this plan.
+> - `cuprum/sh.py` is now the package `cuprum/sh/`, so the path
+>   `cuprum/sh.py::SafeCmd.argv_with_program` is stale; the property lives at
+>   `cuprum/sh/safe_cmd.py:75`.
+> - The per-line `_EventDetails(pid=..., line=...)` construction this section
+>   describes has been removed by the hoist. No production site constructs
+>   `_EventDetails` per output line any more; every remaining site is a
+>   lifecycle event (plan, start, exit, timeout, stdin, fail-fast).
 
-The two production callback entry points are
+`cuprum/events.py::ExecEvent` defines the public payload.
+`cuprum/_pipeline_types.py::_EventDetails` transports optional per-event fields
+into `_StageObservation.emit`, which constructs `ExecEvent`.
+`cuprum/sh/safe_cmd.py::SafeCmd.argv_with_program` creates the full argument
+tuple on access. That tuple need not be reconstructed for every output line.
+
+The two production callback entry points named at planning time were
 `cuprum/_subprocess_streams.py::_create_stream_callback` and
-`cuprum/_pipeline_stage_streams.py::_create_stage_line_observer`. Both
-currently construct `_EventDetails(pid=..., line=...)` before generic emission.
-Their callers create them after spawn, when PID is known. Keep their return
-contract: no observe hooks means no line callback, preserving the cheaper
-consume path.
+`cuprum/_pipeline_stage_streams.py::_create_stage_line_observer`; both were
+expected to construct `_EventDetails(pid=..., line=...)` before generic
+emission. Their callers create them after spawn, when PID is known. Keep their
+return contract: no observe hooks means no line callback, preserving the
+cheaper consume path.
 
 `_StageObservation._emit_event` invokes
 `cuprum/_observability.py::_emit_exec_event` and retains tasks even when a
@@ -4273,6 +4353,31 @@ production, test, or build change was made in this revision: the sole
 production file, `cuprum/_line_callbacks.py`, is still `+119/−13` against the
 merge base `991dee64`, and every commit above `d98fb5c9` touches documentation
 only.
+
+2026-09-29: Actioned the remaining still-valid findings from the post-ready
+review. The retrospective moved from the users' guide to the developers' guide
+(`### The construction-share gate, and why it is not monotonic`), the roadmap's
+5.2.1 entry was shortened to its criterion and evidence without losing a claim
+— each cut figure is preserved in the execplan, verified before cutting. The
+stale `## Context and orientation` paragraphs now carry a superseded banner
+naming the three corrections. `verdict.txt` gained a historical header. The
+classifier's caller-rule limitation is measured (100% of `N` across all three
+candidate captures is a direct `emit_line` call) and documented in
+`benchmarks/_line_event_profile_model.py` rather than "fixed", since tightening
+the rule would invalidate the committed gate. Two findings were **falsified,
+not actioned**: the `typos.toml:83` entry alleged to be a hand edit is
+generator output present in the shared base dictionary, and the observe-only
+"removes denominator-only work" reason was corrected in an earlier revision.
+
+2026-09-29: Actioned the first still-valid finding from the post-ready review:
+`run_twice_with_distinct_contexts` in
+`tests/behaviour/_structured_events_support.py` is now genuinely concurrent
+(`asyncio.gather` under one shared observe hook) rather than a sequential loop,
+so the scenario named *"Concurrent runs of one command keep their events
+separate"* exercises the interleaving it advertises. Recorded the mutation test
+that witnesses it and the residual gap that no assertion yet proves the runs
+overlapped. The section that had deferred this finding is amended in place
+rather than rewritten, so the deferral and its reversal both remain legible.
 
 [roadmap]: ../roadmap.md#52-make-per-line-event-emission-cheap-for-line-callback-workloads
 [design-events]: ../cuprum-design.md#813-structured-execution-events-observe-hooks
