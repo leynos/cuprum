@@ -1426,9 +1426,15 @@ anywhere else on the host**. A process writing to a pipe it holds the write end
 of, whose read end it also holds and never reads, blocks forever: `SIGPIPE` is
 only raised when *no* descriptor references a read end, and the kernel's write
 end is full. So the write never returns, no error is ever raised, and the
-process is not exiting *late* — it is not exiting at all. This is why no
-`timeout` value is a fix and why no poll can observe a resolution: only
-external constraint terminates it.
+process is not exiting *late* — it is not exiting at all. For an instance that
+has genuinely reached this deadlock, no `timeout` value is a fix and no poll
+can observe a resolution: only external constraint terminates it. The scoping
+matters, and it is not pedantry. **A parked instance is not automatically a
+deadlocked one**, and the two are indistinguishable from the log — run seven's
+hung `lint` ends on the same bare `actionlint` line as the two green runs that
+preceded it. The zero-CPU, self-held-pipe forensics above establish that a
+*deadlocked* instance cannot self-resolve; they do not establish that every
+instance ending on that line is deadlocked.
 
 **Two of this branch's own `make lint` runs hung, and neither was bounded.**
 This corrects an earlier reading of the logs in this plan. The `521b` run was
