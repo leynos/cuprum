@@ -948,6 +948,67 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       gate could not: the duplication was invisible to every lint here, and the
       false premise was invisible to everything, because nothing measures a
       claim until someone acts on it.
+
+  The finding is **fixed after the review, not stale**, and the distinction
+  matters because it is what the standing verdict turns on. The review is
+  `5354955377`, submitted `2026-09-29T15:42:06Z` against commit `e7d4fa45`
+  (`2026-09-29T17:31:05+02:00` = `15:31:05Z`), and the fix `b3ae9f20` lands at
+  `15:47:23Z` — five minutes *after* the reviewed head. So the comment was
+  accurate when written and describes a tree that no longer exists;
+  `git merge-base --is-ancestor b3ae9f20 e7d4fa45` returns false. Re-verified
+  against the current head: exactly one `_safe_close` definition remains in
+  `cuprum/` (in `_rust_stream_test_support.py:29`), and all six stream-test
+  modules import it rather than defining their own, so the requested change is
+  fully applied. The thread `PRRT_kwDOQgt8686nLngt` is `isResolved=true` and
+  `isOutdated=true`, the latter being GitHub's own record that the line it was
+  anchored to has moved. What remains is the reviewer's **decision**, not its
+  factual claim: `reviewDecision` stays `CHANGES_REQUESTED` and
+  `mergeStateStatus` `BLOCKED` until a fresh pass re-decides, which is why
+      a second review was queued rather than the first one argued with.
+- [x] (2026-09-29) **CodeRabbit's walkthrough carried one error and one
+      warning, and both were still valid against the current head — they are a
+      different surface from the inline finding above, so clearing one proves
+      nothing about the other.** The walkthrough is issue comment `5745365959`,
+      `updated=2026-09-29T17:23:54Z`, and its own markers name the evaluated
+      commit: `change_assessment_commit` and `final_review_risk_coverage`
+      both read `e7d4fa45`. So its rows describe the same pre-fix tree the
+      inline finding did, and each had to be re-checked rather than assumed
+      either stale or live.
+
+  **Finding 1 — `Testing (Overall)`, ❌ Error.** *"…changing only the
+  `InvalidDescriptor` arm to produce `OSError` would remain undetected by these
+  tests."* **Valid, and the best finding of the round.** Every direct-native
+  descriptor test paired the invalid descriptor with `buffer_size=0`, so the
+  buffer validator answered first and `convert_fd` was never reached; the Rust
+  unit tests pin the `RustStreamError::InvalidDescriptor` variant but never
+  exercise `From<RustStreamError> for PyErr`. The claim was verified by
+  construction rather than by reading: flipping that one arm to
+  `PyOSError::new_err` and rebuilding left **every** existing test green. Fixed
+  by adding two tests to the already-registered, already-in-surface
+  `cuprum/unittests/test_rust_stream_native_order.py` — one per export, each
+  using the valid `_VALID_BUFFER_SIZE = 65536` so descriptor conversion is
+  genuinely the failing step. Both then fail under the same mutation with
+  `OSError: file descriptor must be non-negative`, and pass once it is
+  reverted, so the gap is closed and demonstrably so. The suite went from 8 to
+  10 tests (`10 passed in 0.06s`) and the file from 226 to 275 lines, inside
+  the 400-line limit. The pump case is included because the two exports reach
+  the conversion through different call paths, so pinning only
+  `rust_consume_stream` would leave the pump's mapping unwitnessed.
+
+  **Finding 2 — `Developer Documentation`, ⚠️ Warning.** *"…
+  `docs/ developers-guide.md` still states that
+  `stream_pyfunctions:: run_stream_operation` owns '`PumpError` conversion'."*
+  **Valid and purely textual.** Line 3501 still named the superseded boundary.
+  The error-taxonomy section (`## Rust error taxonomy`) had already been
+  updated to describe `From<RustStreamError> for PyErr`, so the guide
+  contradicted itself — accurate in one section, stale in another. The
+  paragraph now names the typed `RustStreamError` conversion and the single
+  `From<RustStreamError> for PyErr` impl, keeping the existing do-not-reuse
+  guidance intact.
+
+  Both repairs land in files already inside the 18-file change surface
+  (`git diff --name-only 7f762870 HEAD` lists both), so the count holds at 18
+  and neither repair needed a new file.
 - [x] (2026-09-29) **The required `coverage` job failed twice at `1714ac0d`, on
   a test this branch does not touch, for a reason that is environmental and now
   measured rather than assumed.** The failing test is

@@ -224,3 +224,52 @@ def test_out_of_i64_buffer_keeps_pyo3_overflow_error(
     """
     with pytest.raises(OverflowError):
         native_streams.rust_consume_stream(-1, buffer_size=beyond_i64)
+
+
+# A valid buffer size is what lets descriptor conversion be the step that
+# fails. Every other invalid-descriptor test here pairs the descriptor with an
+# invalid buffer, so the buffer validator answers first and the
+# `InvalidDescriptor` arm of the conversion is never reached.
+_VALID_BUFFER_SIZE = 65536
+
+
+@_unix_only
+def test_consume_maps_an_invalid_descriptor_to_value_error(
+    native_streams: ModuleType,
+) -> None:
+    """``InvalidDescriptor`` reaches Python as ``ValueError``, not ``OSError``.
+
+    The buffer size is valid and the descriptor is not, so validation passes
+    the first check and the reader is the step that fails. That is the only
+    way to exercise ``RustStreamError::InvalidDescriptor`` through
+    ``From<RustStreamError> for PyErr``: with an invalid buffer the earlier
+    validator exits before the converter runs, and a native unit test can pin
+    the Rust variant without ever showing which exception a caller sees.
+
+    The two classes are disjoint, so ``pytest.raises(ValueError)`` would not
+    mask a regression that routed this arm through the ``OSError`` mapping.
+    """
+    with pytest.raises(ValueError, match="file descriptor"):
+        native_streams.rust_consume_stream(-1, buffer_size=_VALID_BUFFER_SIZE)
+
+
+@_unix_only
+def test_pump_maps_an_invalid_reader_descriptor_to_value_error(
+    native_streams: ModuleType,
+) -> None:
+    """``rust_pump_stream`` maps an invalid reader to ``ValueError`` too.
+
+    The writer is a genuinely open descriptor, so the failure can only come
+    from the reader, and the valid buffer size keeps the buffer validator out
+    of the way. The pump has its own conversion path through
+    ``run_stream_operation``, so asserting only the consume path would leave
+    the pump export's mapping unpinned.
+    """
+    with contextlib.ExitStack() as stack:
+        writer_fd = _open_writer()
+        stack.callback(_safe_close, writer_fd)
+
+        with pytest.raises(ValueError, match="file descriptor"):
+            native_streams.rust_pump_stream(
+                -1, writer_fd, buffer_size=_VALID_BUFFER_SIZE
+            )

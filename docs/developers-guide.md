@@ -3582,11 +3582,17 @@ across normal return, error, or real unwind.
 
 The private `stream_pyfunctions::run_stream_operation` helper is limited to the
 two PyO3 stream exports. It owns their shared buffer validation, reader
-descriptor preparation, GIL release, and `PumpError` conversion; the pump
-export alone prepares its ownership-consuming writer and both exports supply
-their stream operation. Do not reuse it outside this FFI adapter boundary or
-move writer ownership into the helper, because that would blur the distinct
-borrow-versus-consume contract.
+descriptor preparation, GIL release, and the typed `RustStreamError`
+conversion; the pump export alone prepares its ownership-consuming writer and
+both exports supply their stream operation. The conversion itself is not
+written here: the helper wraps a stream failure as `RustStreamError::Stream`
+and reaches Python through `map_err(PyErr::from)`, so the classification a
+caller branches on is decided by the single `From<RustStreamError> for PyErr`
+impl in `rust/cuprum-rust/src/errors.rs`. The same impl answers the validator's
+`InvalidBufferSize` and `InvalidDescriptor` arms, so argument failures and
+stream failures are separated in one place rather than at the call sites. Do
+not reuse the helper outside this FFI adapter boundary or move writer ownership
+into it, because that would blur the distinct borrow-versus-consume contract.
 
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
