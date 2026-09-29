@@ -1240,6 +1240,54 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   will re-run at the new head anyway. The alternative — never recording an
   observed result because recording it makes the record one commit stale —
   would leave the plan permanently describing a tree `main` can no longer reach.
+- [x] (2026-09-29) **A walkthrough edit timestamp is not a walkthrough
+  re-assessment, and the two failed rows survived one.** Issue comment
+  `5745365959` was edited at `19:25:51Z`, 35 seconds after the PR body update
+  and long after the run that had been cited as the queue's trigger. Read as a
+  timestamp it looks like the walkthrough re-examining the branch. Read as
+  content it is nothing of the kind: the edit changed **exactly two lines**,
+  both `✅ Passed` rows. The Title check moved from "clearly describes the main
+  change" to "accurately describes the central RustStreamError change", and the
+  Description check from "tests, and validation results" to "testing, and
+  validation" — the prose a body rewrite would move, and only that.
+
+  Everything that would have to change for the edit to mean a re-assessment did
+  not change. `change_assessment_commit` and `final_review_risk_coverage` both
+  still name `e7d4fa457f73a63750bc23c8c7da2d1a9f77c588`, the branch is still
+  marked "review paused by coderabbit.ai", and the pre-merge table still reads
+  "❌ Failed checks (1 error, 1 warning)" with `Testing (Overall)` ❌ and
+  `Developer Documentation` ⚠️. A diff of the whole comment against the copy
+  taken before the edit is six lines long, all of it inside that one table.
+
+  This is the general shape of a trap this plan has hit from several
+  directions: an artefact's *mtime* is not its *content*, and a surface that
+  moves is not a surface that re-decided. It also settles a question the queue
+  left open. A body edit **can** provoke a walkthrough re-render without
+  provoking a review, so the re-render is not evidence that `ac1c5052` has been
+  consumed; the failed rows are refreshed by a review and by nothing else,
+  which is exactly why they are still waiting.
+- [x] (2026-09-29) **The head after the correction is green, so the two
+  substance changes are covered by a run rather than resting on the argument
+  that they could not matter.** Run `36619125194` at `7c5059eb` is
+  `completed/success`: **17 of 17** jobs, **zero** failure markers in the
+  `gh run watch --exit-status` log, `EXIT=0`. The `coverage` job this work
+  existed to fix ran **11 m 4 s** against its `timeout-minutes: 65`, the fourth
+  consecutive green observation of it against the single failing head
+  `1714ac0d`. That run carries the Codex correction and the PR-body change,
+  where `36613396061` predated both; it does not carry this paragraph, which
+  was written after it and will be covered by the next run, in the same way as
+  every recording commit before it.
+
+  Two claims made in the plan's own prose were re-verified against the
+  committed tree rather than against the copy they were written from, and both
+  hold at `HEAD`: `docs/developers-guide.md` contains no "`PumpError`
+  conversion" attribution and three `From<RustStreamError> for PyErr`
+  references, the two property modules are **345** and **119** lines, the
+  roundtrip module is in `EXTENSION_TEST_TARGETS`, and `def _safe_close`
+  appears in exactly one file under `cuprum/`. The plan had asserted each of
+  these before; asserting them a second time against a different artefact is
+  what turns them from a record of what was done into a measurement of what is
+  there.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
