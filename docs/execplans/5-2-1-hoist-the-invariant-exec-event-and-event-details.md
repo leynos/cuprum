@@ -3074,6 +3074,94 @@ did the right thing by regenerating.
 **Disposition.** The finding is disputed with the reproduction above rather
 than applied. The commit stands unamended.
 
+### 2026-09-29: the two oversized test modules are split to the 400-line rule
+
+The independent review's fourth point was that two of this branch's own new
+test modules breach the repository's 400-line rule:
+`test_line_event_profile.py` at 626 lines and
+`test_line_event_emission_properties.py` at 529. Both are new files added by
+this branch, so the rule applies to them squarely. **Both were split**, and no
+test was renamed, deleted, or added. Line counts below are `wc -l`:
+
+| File                                        | Lines | Contains                                                     |
+| ------------------------------------------- | ----- | ------------------------------------------------------------ |
+| `test_line_event_profile.py`                | 117   | Scoring: limit boundaries, denominator scope, once-per-stack |
+| `test_line_event_profile_callers.py`        | 227   | Caller attribution, drift detection, overlap resolution      |
+| `test_line_event_profile_verdicts.py`       | 159   | Every route into the inconclusive verdict                    |
+| `test_line_event_profile_parsing.py`        | 119   | Frame parsing, shipped rules, module split                   |
+| `test_line_event_profile_support.py`        | 109   | Shared frame constants, capture builders, rules fixture      |
+| `test_line_event_emission_properties.py`    | 259   | The four properties and the boundary examples                |
+| `test_line_event_emission_support_props.py` | 302   | Generators, pinned clock, oracle-parity helpers              |
+
+Splitting by *subject* rather than by line count keeps each module's docstring
+honest: the scoring module now says what it scores, the callers module says why
+caller proximity is the disambiguator, and the verdicts module says why an
+unreadable capture must never score as zero. The alternative — trimming prose
+to fit — would have removed exactly the reasoning these tests exist to carry.
+
+**A correction to the framing, not to the work.** An earlier draft of this note
+justified splitting only these two files on the grounds that the surrounding
+`cuprum/unittests` population is "consistent-with-house-norm" and therefore not
+this branch's business. That compares the wrong thing twice. There are **33
+files over 400 lines across 285 in `cuprum/unittests/`** — up to 993 — so an
+over-400 test module is nearer the house norm than an exception, and
+"consistent-with-house-norm" cannot do the work the sentence asked of it. The
+claim that survives measurement is narrower and sufficient: these two are
+modules *this branch created*, so the rule binds them without needing any
+opinion about the other 33. The remaining 33 are left alone as a pre-existing
+repository-wide question, not as a precedent this branch endorses.
+
+**Verified by inventory, not by count.** Collection was compared both ways
+rather than asserted, because the "before" figure cannot be read off the
+worktree once the split has happened:
+
+- Current modules: **33** tests across the four profile modules, **21** across
+  the two emission modules.
+- The pre-split pair, materialized from `git show HEAD:` into a scratch
+  directory and collected with the repository on `PYTHONPATH`: **54** — equal
+  to 33 + 21, so the split neither lost nor duplicated a test.
+- Sorted test-method names are byte-identical between the pre-split pair and
+  their successors: **27** for the profile file, **8** for the emission file. A
+  line-count fall only proves the files shrank; it does not prove the tests
+  survived, so the check is the name set.
+
+`pytest --collect-only` over the whole `cuprum/unittests/` scope reports
+**2612**, which is the `make test` figure for that glob — note that `make test`
+runs pytest once per `PYTEST_TARGETS` entry, so 2612 is one invocation and not
+a whole-suite total.
+
+One improvement rode along: `TestShippedRulesFile` built the same four-segment
+path twice, with a function-local `import pathlib` in each test. Both now call
+a single `_shipped_rules_path()` helper beside the other fixtures. That is the
+one place the split is not a pure move.
+
+`cuprum/unittests/` is not a package, so the new modules import their helpers
+by full path, matching the existing `from cuprum.unittests.…` convention that
+`test_line_event_emission_support.py` already established. `PYTEST_TARGETS`
+wants `cuprum/unittests/test_*.py` as a glob, so all four new modules are
+collected without any allow-list edit — the trap the plan records elsewhere for
+targets named one by one does not apply here.
+
+**The first gate run after the split came back red, on the split itself.** Four
+of the new modules carried an extra blank line at EOF
+(`too-many-newlines-at-end-of-file` for both `ruff check` and
+`ruff format --check`), and `test_line_event_emission_support_props.py` imported
+`ExecEvent` and `ExecId` at runtime although only annotations referenced them
+(`typing-only-first-party-import`). Both are the failure mode this repository
+already has a note for: a hand-written module split ships annotation-only
+imports, and because `check-fmt` aborts at its first failing step and
+`python-lint` at its first failing leaf, one edit hides everything behind it —
+`make check-fmt` reached 1 of 3 steps and `make lint` 1 of 12 leaves, so
+rustfmt, mdtablefix, `interrogate`, pylint, Whitaker, yamllint and actionlint
+were all unobserved in that run and had to be re-established afterwards. The
+imports now sit in the `typ.TYPE_CHECKING` block beside the module's other
+annotation-only imports, which is safe here because nothing calls
+`get_type_hints` on these annotations.
+
+Worth stating plainly: `make test` was green on the pre-fix tree, so the split
+was behaviourally correct the whole time. The red was purely lint and format.
+That is exactly why the gate set is not optional even when the tests pass.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
