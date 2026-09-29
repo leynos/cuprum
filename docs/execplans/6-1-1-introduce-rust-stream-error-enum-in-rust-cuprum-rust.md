@@ -1322,19 +1322,19 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   rendering is the same document: two writes, zero bytes of change, and the
   contrast with the `19:25:51Z` write, which did move two rows, is the finding.
 
-  A caveat belongs here rather than in a footnote, because the first draft of
-  this paragraph got it wrong in exactly this way. Comparing the two earliest
-  captures, `17:32:35Z` and `17:50:20Z`, also yields a six-line diff — the same
-  two `✅ Passed` rows, there reordered and reworded. So the claim cannot be
-  "only one edit ever changed content": at least two writes did, and the
-  `19:25:51Z` write recorded above is the later of them, since everything from
-  `19:34:34Z` onward is one unchanged document.
+  A caveat belongs here rather than in a footnote, because it is easy to get
+  wrong in exactly this way. Comparing the two earliest captures, `17:32:35Z`
+  and `17:50:20Z`, also yields a six-line diff — the same two `✅ Passed` rows,
+  there reordered and reworded. That window has no `updated_at` of its own,
+  since the field reports only the last write, so the claim cannot be "only one
+  edit ever changed content": at least two writes did, and the later of them is
+  the `19:25:51Z` edit recorded above.
 
-  What the record actually supports is narrower and is enough. Every write
-  *after* `19:34:34Z` — the `20:27:18Z` and `20:45:35Z` edits — is bracketed by
-  identical captures, so neither changed a byte. The last write that changed
-  anything is the `19:25:51Z` edit, and its entire effect is two `✅ Passed`
-  row descriptions tracking prose this plan itself rewrote.
+  The rule this yields is worth stating, because a first draft of this entry
+  broke it: **a diff witnesses an edit only when both captures sit outside that
+  edit's window.** Straddle the edit and the diff reports the change but
+  misnames its cause, which is how two moved rows came to be blamed on the
+  `20:27:18Z` edit. Pin the window first; the finding follows or it does not.
 
   That is the whole edit history of this comment over the ten days it has
   existed (`created_at` `2026-09-19T21:17:11Z`, last write
@@ -1343,14 +1343,6 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   touched an assessment field — not `change_assessment_commit`, not
   `final_review_risk_coverage`, not the failed-check table. The reviewers'
   dispositions have not been revisited; only the prose around them has.
-
-  Attribution is what makes that safe to claim, and it is what the first draft
-  of this entry got wrong. That draft diffed the current comment against a
-  capture from `17:50:20Z` — which straddles the `19:25:51Z` edit — found the
-  two moved `✅ Passed` rows, and blamed them on `20:27:18Z`. The window was
-  wrong, so the finding was wrong. A diff witnesses an edit only when both
-  captures sit outside that edit's window; where they do, the conclusion
-  dissolves.
 
   What survives is the point. Every assessment field still names
   `e7d4fa457f73a63750bc23c8c7da2d1a9f77c588`, the paused banner stands (twice,
