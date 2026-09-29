@@ -2218,14 +2218,16 @@ through the hook dispatcher rather than through the constructor.
 
 **Removing it subtracts 589 from D and 0 from N.** At the r2 candidate's
 D=17758 and N=5317, that moves the share from 29.9414% to **30.9686%**, a rise
-of **+1.03 points** — a *worse* number on this gate than the one 5.2.1 is
-currently blocked on, from work the roadmap explicitly wants done. That is not
-an argument against 5.2.2; the work is worth doing and the 0-frame goal in its
-own success criterion is stated on the frame count, which 5.2.2 will meet
-cleanly. It is an argument that **5.2.1's construction-share gate cannot be the
-acceptance instrument for 5.2.2**, and more sharply, that a threshold sited
-just above a predecessor's measured result is a threshold the next optimization
-will breach by succeeding.
+of **+1.03 points**. That figure is a **conditional forecast**, not a measured
+result: it is arithmetic performed on this branch's capture, and it becomes
+true only if 5.2.2 later removes those 589 samples as predicted. It is a
+*worse* number on this gate than the one 5.2.1 is currently blocked on, from
+work the roadmap explicitly wants done. That is not an argument against 5.2.2;
+the work is worth doing and the 0-frame goal in its own success criterion is
+stated on the frame count, which 5.2.2 will meet cleanly. It is an argument
+that **5.2.1's construction-share gate cannot be the acceptance instrument for
+5.2.2**, and more sharply, that a threshold sited just above a predecessor's
+measured result is a threshold the next optimization will breach by succeeding.
 
 **The structural reason, restated once more in its most general form.** The
 numerator counts samples *inside* `ExecEvent.__init__` and nothing else
@@ -2563,7 +2565,9 @@ generated `ExecEvent.__init__`, so *removing pre-constructor work lowers D
 while holding N and raises the share*. Item 5.2.2 removes `inspect.isawaitable`
 from the per-line path — 589 denominator-only samples — which by succeeding
 would move this same number from 29.9414% to **30.9686%**, i.e. 0.9686 points
-*above* the bar. So this criterion is met at this commit and will be
+*above* the bar — a **conditional forecast** rather than a measurement, since
+it is arithmetic on this branch's capture and holds only if 5.2.2 removes those
+samples as predicted. So this criterion is met at this commit and will be
 contradicted by the next roadmap item. That is not a reason to withhold the
 pass — 5.2.1's Success text is written as a state, not a trend — but it is why
 5.2.2 must be judged on its own criterion (`inspect.isawaitable` contributes 0
@@ -2797,8 +2801,9 @@ require checking the explicit callback factory bodies as well.
   close to undecidable on this instrument. State that in the artefact, and
   state alongside it that the metric inverts: 100% of the numerator is the
   retained `ExecEvent.__init__`, so removing pre-constructor work raises the
-  share. Item 5.2.2 would move 29.9414% to 30.9686% by succeeding. A pass that
-  will be contradicted by the next scheduled item is recorded with the forecast
+  share. Item 5.2.2 would move 29.9414% to 30.9686% **by succeeding** — a
+  conditional forecast, not a measurement, recorded as such. A pass that will
+  be contradicted by the next scheduled item is recorded with the forecast
   attached, so the contradiction is not later mistaken for a regression.
 - 2026-09-27: Record the two **corrected projections** in the BLOCKED entry
   rather than leaving the earlier draft's numbers. Both corrections were
@@ -3166,11 +3171,19 @@ That is exactly why the gate set is not optional even when the tests pass.
 two.** `make lint` reached much further this time — ruff, `interrogate`, pylint,
 `df12-pylint`, `ambrleaks`, skylos, `cargo doc`, clippy and Whitaker all
 passed — and died on the spelling leaf, over one hyphenated word in the
-paragraph above. The fix is at the source: `typos.toml` carries the
-unhyphenated form as a correction, so this is a spelling the policy already
-knows, not a missing allow-list entry. Masking it with a `typos.local.toml`
-exception would have been the wrong move — it is an en-GB-oxendict spelling the
-repository wants.
+paragraph above. The fix is at the source: the unhyphenated form is an
+en-GB-oxendict spelling the repository wants, so a `typos.local.toml` exception
+would have been the wrong move. Where the correction is enforced is worth
+recording precisely, because the obvious reading is wrong. `typos.toml`'s
+`[default.extend-words]` table carries `"handwritten" = "handwritten"` — a
+known-word entry whose two sides happen to be equal, which looks vacuous and is
+**not** the correction — and the file mentions the hyphenated form nowhere at
+all. Cite the section rather than a line number: `typos.toml` is regenerated
+from the live shared dictionary on every `make spelling` run, so a line number
+is a fact about one run rather than about the file. The hyphenated →
+unhyphenated correction is not a repository entry either way; it belongs to the
+gate's shared policy, which is precisely why the right response was to fix the
+prose rather than enumerate anything locally.
 
 Two rounds, three defect classes, one commit each. The pattern is worth
 recording rather than the individual errors: **a gate run that aborts early is
