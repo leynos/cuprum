@@ -1176,13 +1176,13 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   the count from three to four, is scoped to CodeRabbit's own surfaces. Five
   further reviewer identities post to this PR and none was recorded:
 
-  | Reviewer  | Surface                                 | State at `778f8e67`                      |
-  | --------- | --------------------------------------- | ---------------------------------------- |
-  | CodeScene | 28 `APPROVED` reviews, plus a check-run | `APPROVED` at `778f8e67`, `18:38:24Z`    |
-  | Gecko     | `Gecko Security Review` check-run       | `success`, "No vulnerabilities found"    |
-  | Loom      | `Loom model smoke test` check-run       | `success`                                |
-  | Sourcery  | `Sourcery review` check-run             | `skipped` — **never reviewed**           |
-  | Codex     | summary issue comment `5893419759`      | assessed `e7d4fa4`, **10 commits** stale |
+  | Reviewer  | Surface                                 | State at `778f8e67`                   |
+  | --------- | --------------------------------------- | ------------------------------------- |
+  | CodeScene | 28 `APPROVED` reviews, plus a check-run | `APPROVED` at `778f8e67`, `18:38:24Z` |
+  | Gecko     | `Gecko Security Review` check-run       | `success`, "No vulnerabilities found" |
+  | Loom      | `Loom model smoke test` check-run       | `success`                             |
+  | Sourcery  | `Sourcery review` check-run             | `skipped` — **never reviewed**        |
+  | Codex     | summary issue comment `5893419759`      | assessed `e7d4fa4`; stale (see below) |
 
   One is adverse, and it stops short of being a review. Sourcery declined with
   *"your pull request is larger than the review limit of 150,000 diff
@@ -1232,12 +1232,22 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   negative claim across surfaces rather than a measurement of one.
 
   The corrected verdict is narrower but still adverse, and the distinction
-  matters. Codex *did* finish clean. It finished clean **at `e7d4fa4`**, ten
-  commits behind the head, and the ten intervening commits include `c07671e8`,
-  which closed both of the walkthrough's rows, and `b3ae9f20`, the
-  `_safe_close` deduplication the inline thread raised. A clean signal at a
-  stale head is a statement about that head, so nothing is claimed here from it
-  about the current tree in either direction.
+  matters. Codex *did* finish clean. It finished clean **at `e7d4fa4`**, and
+  the share of this branch that postdates that head includes `c07671e8`, which
+  closed both of the walkthrough's rows, and `b3ae9f20`, the `_safe_close`
+  deduplication the inline thread raised. A clean signal at a stale head is a
+  statement about that head, so nothing is claimed here from it about the
+  current tree in either direction.
+
+  The gap was written as "ten commits" and re-measured on 2026-09-30 as
+  `git rev-list --count e7d4fa45..HEAD` = **22**, because every push since
+  widened it. The count is deliberately no longer stated as a number: an
+  interval that grows with each commit is the same self-invalidating figure as
+  this plan's own size
+  (`[[plan-self-growth-invalidates-its-own-budget-claims]]`), and what the
+  argument actually needs is the *set* of commits that postdate the reviewed
+  head, not its cardinality. `git rev-list --count e7d4fa45..<head>` reproduces
+  the current value for any head that cares to ask.
 
   CodeScene is the opposite again, and it is the only current-head approval on
   the PR: it approved **every** head from `c07671e8` through `778f8e67`, five
