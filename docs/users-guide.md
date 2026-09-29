@@ -239,8 +239,8 @@ for bytes; specify only one. `ExecutionContext.env` composes over the live
 parent environment under the default `EnvMode.OVERLAY`; an empty mapping still
 inherits it. `EnvMode.REPLACE` instead starts the child from an empty
 environment, so only the supplied mapping is visible (see
-[the environment policy](#choose-how-a-child-environment-is-composed)).
-`cwd` changes the child's working directory. A call-level `timeout` overrides
+[the environment policy](#choose-how-a-child-environment-is-composed)). `cwd`
+changes the child's working directory. A call-level `timeout` overrides
 `ExecutionContext.timeout`.
 
 <!-- tested-example: input-and-context -->
@@ -384,8 +384,9 @@ flags positional unless the tool accepts `--name=value`. Replace
 `subprocess.run(..., check=True)` with a result check according to the
 application's error policy. A replacement environment is selected with
 `EnvMode.REPLACE` on the `ExecutionContext`, not implemented by the caller. The
-[0.2.0 migration guide](v0-2-0-migration-guide.md) covers line observation,
-result measurements, heartbeats, and presentation sinks.
+[0.2.0 migration guide](v0-2-0-migration-guide.md)
+covers line observation, result measurements, heartbeats, and presentation
+sinks.
 
 ## Troubleshoot a run
 
