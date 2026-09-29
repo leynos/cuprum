@@ -5703,6 +5703,35 @@ consumer path. Changes to termination or task ownership belong in the shared
 lifecycle modules so timeout and cancellation behaviour remains aligned with
 `run()`.
 
+### The per-stream line-event emitter
+
+`_LineEventEmitter` in `cuprum/_line_callbacks.py` is a frozen slotted private
+dataclass holding the invariant half of a line `ExecEvent`.
+`_line_event_emitter` builds it once per observed stream, after spawn, so the
+pid is known; the dispatcher then calls `emit_line` per decoded line.
+Everything bound at preparation time — the program, the full argv, cwd, the
+environment overlay, the pid, the stream, the observation's tags, the project
+name, the execution id, and the observation's own `_emit_event` — is fixed for
+the life of that stream, so a line event needs only a line and one fresh clock
+read to complete. The per-line `_EventDetails` construction and the per-line
+`argv_with_program` walk are what this type exists to remove.
+
+The emitter holds `observation._emit_event` **bound rather than called**. That
+method catches `_ExecEventEmissionError`, retains the observation's
+pending-task list, and owns the tasks of hooks that already ran when a later
+hook failed. Re-implementing the dispatch inside the emitter — or reaching past
+it to `_emit_exec_event` — would silently drop that ownership, so the private
+access is deliberate and confined to the factory that builds the emitter. Any
+change to emission policy belongs in `_emit_event`, not here.
+
+`_line_event_emitter` returns `None` when no observe hook is installed, and
+`_compose_line_callbacks` returns `None` outright when neither an observe hook
+nor a caller `on_line` needs the stream. Both guards exist to keep the
+zero-callback drain path at its previous cost: a stream nobody observes must
+prepare nothing. Preserve them when touching the composition.
+
+See [Cuprum design](cuprum-design.md) §8.1.3 for the accepted rationale.
+
 ### The construction-share gate, and why it is not monotonic
 
 Roadmap item 5.2.1 accepted its hoist against a profiled **construction
