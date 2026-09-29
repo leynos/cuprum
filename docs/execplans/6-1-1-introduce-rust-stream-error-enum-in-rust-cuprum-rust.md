@@ -32,8 +32,12 @@ plan were then found and corrected, and the gates re-run at the resulting head
 `make lint`, reaches ten of its eleven sub-checks and then aborts in the final
 `actionlint` step — a host-only, non-reproducible-on-demand wedge in the
 shellcheck handshake, so `actionlint` is **unobserved locally, not failed**,
-and CI covers it. The branch stands at **18 of 18** files excluding the
-lockfile and this plan — at the tolerance, not over it.
+and CI covers it. The PR was then marked ready for review, which un-blocked
+CodeRabbit (it had been reporting `skipped` while the PR was a draft); its one
+finding — deduplicate a local `_safe_close` onto the shared helper — was
+correct and was applied in `b3ae9f20`, disproving in the process a file-count
+premise this plan had asserted without testing. The branch stands at **18 of
+18** files excluding the lockfile and this plan — at the tolerance, not over it.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -764,7 +768,8 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       `_consume_via_pipe`, `_pump_via_pipes`, `test_default_buffer_matches_explicit`,
       `test_pump_default_buffer_matches_explicit`) moved to the new
       `cuprum/unittests/test_rust_streams_roundtrip_property.py`; both modules
-      are now under the cap at **349** and **123** lines, and the split is
+      are now under the cap at **349** and **123** lines (they stand at 345 and
+      119 after the later `_safe_close` deduplication), and the split is
       purely a move — the moved code is byte-identical and `_I32_MAX` stays
       where it is used. The new module is registered in
       `EXTENSION_TEST_TARGETS`, which is **required** rather than tidy: it
@@ -785,28 +790,40 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   that is **false**. Both build backends exclude the directory —
   `[tool.uv.build-backend] source-exclude` and `[tool.maturin] exclude` both
   name `cuprum/unittests/**` — and the wheel-manifest snapshot agrees, listing
-  125 entries with none under `unittests/`. The rationale was simply dropped;
-  the duplicate helper was *not* deduplicated onto
-  `_rust_stream_test_support._safe_close` because that file is not in the
-  change surface and the PR is at its file-count tolerance (see below). Second,
-  the `_MAX_BUFFER_SIZE` mirror comment named `rust/cuprum-rust/src/lib.rs`, but
-  `MAX_BUFFER_SIZE` is defined in `rust/cuprum-streams/src/lib.rs`. The const
-  is private to that crate and is not re-exported anywhere; `cuprum-rust`
-  inherits the same 1 GiB cap indirectly, through
-  `cuprum_streams::BufferSize::new`, which is why the comment looked plausible
-  where it was. Corrected to name the defining file. Both were pre-existing on
-  `main`, not introduced by this branch.
+  125 entries with none under `unittests/`. The rationale was simply dropped at
+  that point; see the entry below for why the duplicate itself was deduplicated
+  two commits later rather than here. Second, the `_MAX_BUFFER_SIZE` mirror
+  comment named `rust/cuprum-rust/src/lib.rs`, but `MAX_BUFFER_SIZE` is defined
+  in `rust/cuprum-streams/src/lib.rs`. The const is private to that crate and
+  is not re-exported anywhere; `cuprum-rust` inherits the same 1 GiB cap
+  indirectly, through `cuprum_streams::BufferSize::new`, which is why the
+  comment looked plausible where it was. Corrected to name the defining file.
+  Both were pre-existing on `main`, not introduced by this branch.
 
   The change lands the PR at **18 of 18** files excluding the lockfile and this
-  plan, exactly at the tolerance rather than over it. That budget is why the
-  fix is a split and two comment corrections rather than a wider deduplication:
-  touching a shared support module would have taken the count to 19 and tripped
-  a stop-and-ask trigger. `make lint` regenerated `typos.toml` from the live
-  shared estate dictionary (one entry reworded, unrelated to this branch); it
-  was reverted, because the branch has deliberately never carried that
-  generated file in any of its commits — `git log 7f762870..HEAD -- typos.toml`
-  is empty — and committing it would both exceed the tolerance and put
-  unrelated churn in the diff.
+  plan, exactly at the tolerance rather than over it. `make lint` regenerated
+  `typos.toml` from the live shared estate dictionary (one entry reworded,
+  unrelated to this branch); it was reverted, because the branch has
+  deliberately never carried that generated file in any of its commits —
+  `git log 7f762870..HEAD -- typos.toml` is empty — and committing it would
+  both exceed the tolerance and put unrelated churn in the diff.
+
+  The record above first read "that budget is why the fix is a split and two
+  comment corrections rather than a wider deduplication: touching a shared
+  support module would have taken the count to 19 and tripped a stop-and-ask
+  trigger." **That premise was wrong, and it is disproved by inspection.** Both
+  files the deduplication touches —
+  `cuprum/unittests/test_rust_streams_roundtrip_property.py` and the module
+  holding the local copy — are *already* in the branch's changed set, so
+  neither adds a file. `_rust_stream_test_support.py` needs no edit at all: it
+  already imports `contextlib` and `os`, and its `_safe_close` is identical in
+  behaviour to the copies being removed. The count therefore stays at **18**
+  either way. The real cost was zero and had been all along; the file-count
+  argument was a premise I asserted from memory and never tested until
+  CodeRabbit's review forced the question. That is the same class of error the
+  three stale figures above belong to, and it is worth naming as one: a
+  *constraint* claim deserves the same evidence as a *result* claim, and this
+  one was never measured.
 
   All four commit gates pass on the frozen tree at `bd41d2c4` and each log
   records that head: `make check-fmt` (676 formatted, 78 unchanged), `make test`
@@ -896,6 +913,29 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `.github/workflows/*.yml` files and `.github/actionlint.yaml` are
   byte-identical to the base and every byte `actionlint` reads is `main`'s.
   `make lint` again regenerated `typos.toml` and it was again reverted.
+- [x] (2026-09-29) **CodeRabbit's first review of this branch raised one
+      finding, and it disproved a constraint this plan had asserted without
+      testing.** The PR was marked ready for review at `e7d4fa45` and the review
+      that had been `skipped` as a draft immediately ran and returned
+      `CHANGES_REQUESTED` with a single actionable comment: the new
+      `test_rust_streams_roundtrip_property.py` should import the shared
+      `_safe_close` from `cuprum.unittests._rust_stream_test_support` rather
+      than defining its own copy. The finding is correct, and acting on it
+      showed the plan's stated reason for declining it was false — both
+      affected files were already in the change surface and the shared module
+      needed no edit, so the cost was zero rather than the 19th file the plan
+      claimed. Deduplicated in `b3ae9f20`, which removes the copy from the
+      round-trip module **and** the identical one left in the boundary module
+      (the same duplication the split had carried across two files), and brings
+      the boundary module to 345 lines and the round-trip module to 119. The
+      file count stays at 18. `ruff check` and `ruff format --check` are clean
+      on all three modules, and the two property modules run `10 passed` under
+      `CUPRUM_REQUIRE_RUST_EXTENSION=1`, as does
+      `test_extension_build_contract.py`, so the gated registration still
+      holds. This is a case where a reviewer found something a deterministic
+      gate could not: the duplication was invisible to every lint here, and the
+      false premise was invisible to everything, because nothing measures a
+      claim until someone acts on it.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
