@@ -3269,6 +3269,44 @@ so a green `Summary: 0 error(s)` is not by itself a green gate — the same
 coupling that turned one word red on two targets earlier in this work. The tree
 was clean and `HEAD` unmoved immediately after the run, so the citation holds.
 
+### 2026-09-29: a deferred finding worth naming — "concurrent" runs that are not
+
+An automated review of an earlier revision left one finding that was **not
+rejected and not actioned**, which is the least comfortable of the three
+dispositions and so is recorded rather than dropped. It concerns
+`tests/features/structured_events.feature`, whose scenario is named
+*"Concurrent runs of one command keep their events separate"*.
+
+The bound helper is not concurrent. `run_twice_with_distinct_contexts` in
+`tests/behaviour/_structured_events_support.py` iterates
+`for run_id in ("first", "second")` — a **sequential** loop. The `Then` steps in
+`tests/behaviour/test_structured_events.py` assert that the two runs' tokens
+and tags are distinct, which sequential execution satisfies exactly as well as
+interleaved execution would. So the scenario name promises an interleaving
+property the test does not exercise and could not detect.
+
+Two observations keep this proportionate. First, the file contains a
+`make_hook` helper that deliberately binds the sink *"so the loop variable is
+not captured"* — someone thought about this helper's closure semantics — so the
+sequential form looks settled rather than accidental. Second, the production
+guarantee under test is token isolation, not scheduling, and the step text
+asserts precisely that.
+
+The one thing that *is* a defect is the name. **The observation is about a
+scenario title, not the hoist.** Nothing in `_line_callbacks.py` is implicated:
+no code path this branch changed participates in the concurrency claim, and the
+emission property tests cover interleaving directly, by driving two stream
+emitters through one observation and asserting the two streams' lines and PIDs
+never cross (`test_line_event_emission_support_props.py`).
+
+It is deferred rather than fixed because renaming a scenario is a behavioural
+test's contract with its feature file, and doing that at a green stopping point
+— after the task's stated verdict, with no measurement behind the change —
+would be scope creep of exactly the kind this plan has been careful to avoid.
+The honest statement is that the mismatch is real and unaddressed. A follow-up
+should either make the helper genuinely concurrent, if the interleaving
+property is wanted, or rename the scenario to say what it checks.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
