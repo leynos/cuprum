@@ -1471,6 +1471,43 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   while the two cancelled-and-rerun attempts kept their own `failure`
   conclusions. This plan already documents exactly that semantics. The phrase
   survives; the numbers beside it did not.
+- [x] (2026-09-30) **The re-derivation commit is gated and green, and the
+  `nixie` failure from the previous pass was resource pressure rather than a
+  defect.** Commit `11039493` carries every correction above. All three docs
+  gates exit `0` against it, with the tree clean before and after and `HEAD`
+  unchanged across the run: `make check-fmt` (ruff
+  `676 files already formatted`, `cargo fmt` clean, mdtablefix
+  `78 files left unchanged`), `make markdownlint` (markdownlint-cli2
+  `0 issues in 0 files`, spelling sub-gate regenerating `typos.toml`
+  **byte-identically**), and `make nixie` (all diagrams validated,
+  `docs/cuprum-design.md` included). No gate aborted, so no sub-check was left
+  unobserved.
+
+  The gate citation is for `11039493` and does **not** carry this paragraph,
+  which was written after it — the same self-recording regress this plan notes
+  elsewhere, resolved the same way: the paragraph is covered by the next run,
+  as every recording commit before it was. The `nixie` and `check-fmt` verdicts
+  are unaffected by prose appended to a Markdown file that neither gate parses
+  for diagram content; `markdownlint` re-reads it, and the reflow it demands is
+  `make fmt`'s job.
+
+  The earlier `can't start new thread` inside `docs/cuprum-design.md` did not
+  recur, and the surrounding numbers say why it should not be recorded as a
+  Mermaid finding. That failing run had the shared cgroup at
+  `pids.current=8072` against `pids.max=8192` — within 120 slots of the ceiling
+  — while the passing re-run saw ~1052 processes and `loadavg 3.46`. The nixie
+  log carries no parse error in either pass, and the same file's diagrams
+  validated both times. The one thing the counter does *not* do is cleanly
+  separate pass from fail: the failing pass sampled 7963 and a *passing* pass
+  sampled 8072, so a **sampled** PID count is not by itself the discriminator.
+  It is recorded as a plausible mechanism, corroborated by the absence of any
+  content error, rather than as a diagnosed cause.
+
+  A pre-existing label detail is noted so it is not mistaken for a regression:
+  the `stateDiagram-v2` block at `docs/cuprum-design.md:2555` is reported by
+  nixie as `<unknown>`, meaning the fence carries no recognisable Mermaid type
+  keyword. The identical pair appears in the prior green run and nixie exits
+  `0` on it, so this predates the branch.
 - [x] (2026-09-30) **Both walkthrough rows are stale, and the two commits that
   closed them are the proof.** The comment was captured again at
   `2026-09-29T22:23:31Z` (`/tmp/611-walkthrough-2131.md`, 14,729 bytes, SHA-256
