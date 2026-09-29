@@ -22,10 +22,14 @@ Rust coverage figure from 87.92% to **88.11%**, because `main` added
 `cuprum-streams` code to the measured workspace; both measurements are recorded
 in Progress, each bound to the revision it measured. A final review pass then
 split `test_rust_streams_boundary_property.py`, which the branch's own Windows
-fixes had grown to 431 lines, back under the 400-line cap at head `bd41d2c4`;
-both resulting modules are registered in `EXTENSION_TEST_TARGETS` and all four
-commit gates pass at that head. The branch now stands at **18 of 18** files
-excluding the lockfile and this plan — at the tolerance, not over it.
+fixes had grown to 431 lines, back under the 400-line cap; both resulting
+modules are registered in `EXTENSION_TEST_TARGETS`, and the split's third stale
+claim — a developers'-guide table row still credited with payload fuzzing that
+had moved away — was corrected with it. All six gates pass at the final head
+`49dae298` (`make check-fmt`, `make test`, `make typecheck`, `make lint`,
+`make markdownlint`, `make nixie`), each log recording that head. The branch
+stands at **18 of 18** files excluding the lockfile and this plan — at the
+tolerance, not over it.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -807,6 +811,35 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   The split's own properties were also run directly with
   `CUPRUM_REQUIRE_RUST_EXTENSION=1` (10 passed), which is what shows they
   execute rather than skip.
+- [x] (2026-09-29) **The split's third stale claim was in the developers'
+      guide, and the four commit gates were re-run at the final head.** The
+      extension-gated module table still described
+      `test_rust_streams_boundary_property.py` as "randomized payloads across
+      the boundary", but every payload-fuzzing property had just moved out of
+      it; the row now reads "the rejection boundary: invalid buffer sizes and
+      descriptors", and the row for the new module names the payload fuzzing
+      and the default-equivalence claim it actually carries. The row was
+      already inaccurate before the split — it was written when the module held
+      both halves — but the split is what made it a misdescription of the
+      present tense, so it is repaired here rather than deferred. No gate can
+      see this class of defect: `markdownlint` checks the table's shape, not
+      its truth, and the prose is neither a link nor an identifier. The column
+      widths are fixed-width per table, so both rows were rewritten to the
+      existing 57/166 split (226 columns) and verified row by row.
+
+  Because the earlier green run was recorded at `72595015` and two commits
+  followed it, the gates were re-run at the new head `49dae298`; a commit after
+  a gate run invalidates that run as a citation. All six pass on the frozen
+  tree and each log records the head: `make check-fmt` (676 formatted, 78
+  unchanged), `make test` (`cargo nextest` **160/160**, and
+  `2543 passed, 1 skipped`, the sole skip being a Windows-only case),
+  `make typecheck` (`ty`, 60 packages), `make lint` (51 s, all **eleven**
+  sub-checks reached through to `actionlint`, so nothing is unobserved),
+  `make markdownlint` (0 errors across 78 files, spelling included), and
+  `make nixie` (all diagrams validated). The new module's two properties are
+  quoted `PASSED`, not skipped, in the test log. `make lint` again regenerated
+  `typos.toml` from the shared estate dictionary and it was again reverted, for
+  the same reason as before.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
