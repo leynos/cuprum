@@ -800,13 +800,14 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   a stop-and-ask trigger. `make lint` regenerated `typos.toml` from the live
   shared estate dictionary (one entry reworded, unrelated to this branch); it
   was reverted, because the branch has deliberately never carried that
-  generated file across its seven commits and committing it would both exceed
-  the tolerance and put unrelated churn in the diff.
+  generated file in any of its commits — `git log 7f762870..HEAD -- typos.toml`
+  is empty — and committing it would both exceed the tolerance and put
+  unrelated churn in the diff.
 
   All four commit gates pass on the frozen tree at `bd41d2c4` and each log
   records that head: `make check-fmt` (676 formatted, 78 unchanged), `make test`
   (`cargo nextest` **160/160**, and `2543 passed, 1 skipped`), `make typecheck`
-  (`ty` all checks passed), and `make lint` (52 s, all eight sub-checks
+  (`ty` all checks passed), and `make lint` (52 s, all eleven sub-checks
   reached, actionlint included). The first `make test` attempt failed 13
   release-workflow tests on the `BASH_ENV` git-shim trap — a host artefact, not
   a code defect; the remedied re-run `env -u BASH_ENV make test` is the green
