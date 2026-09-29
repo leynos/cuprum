@@ -1288,6 +1288,32 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   these before; asserting them a second time against a different artefact is
   what turns them from a record of what was done into a measurement of what is
   there.
+- [x] (2026-09-29) **A second artefact corroborates the paused state without
+  reading the comment's own text.** The check-run rollup at the head lists **
+  `Kody Code Review` as `skipped`** — CodeRabbit's own check declining to run,
+  which is the same fact the paused banner asserts, reached from a different
+  API. The `kody-ai[bot]` identity also added a 👀 reaction to the pull request
+  at `19:22:34Z`, 86 seconds after the body update, which is a reaction to the
+  edit rather than a review of it. A skipped check plus a watching reaction is
+  what a paused reviewer looks like; neither is a verdict, and neither changes
+  the sentence above about the failed rows.
+- [x] (2026-09-29) **One figure in this plan's prose was wrong, and it was
+  written where no gate looks.** Commit `3bd057d1`'s subject reads "the
+  **four** non-CodeRabbit reviewers". The count is **five** — CodeScene, Gecko,
+  Loom, Sourcery and Codex — and the table this plan commits carries five data
+  rows. The plan body and the PR body both say five and both list five, so the
+  error is confined to an immutable commit subject, where nothing checks it and
+  where a future reader grepping the log would meet it. It is recorded here
+  rather than rewritten, because the branch is shared and an amended subject
+  would invalidate the hashes this plan's evidence cites throughout.
+
+  The failure is the one this plan keeps rediscovering, in a new place: the
+  number was composed while writing the commit message rather than read off the
+  table that had just been written, and a commit subject is the one document in
+  the change surface that no gate, no reviewer and no test will ever open. It
+  is the latest figure in a session that has now needed four re-derivations,
+  after the coverage-evidence split, the three stale plan figures, and the two
+  coverage-job numbers.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
