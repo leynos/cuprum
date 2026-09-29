@@ -1197,15 +1197,24 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   passing one.
 
   Codex is the mirror case: it did run — *"Code Review ✅ Completed,
-  `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and its verdict is only as good as that
-  commit. `e7d4fa4` is **10 commits** behind the head, and the ten intervening
-  commits include `c07671e8`, which closed both of the walkthrough's rows, and
-  `b3ae9f20`, the `_safe_close` deduplication the inline thread raised. It
-  posted no findings comment and its summary carries **no reaction at all** —
-  not the 👍 the comment's own help text describes for "all reviews finish with
-  no findings". A completed review at a stale head, with no completion signal,
-  is not evidence about the current tree, so nothing is claimed from it in
-  either direction.
+  `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and it did signal clean, with the 👍
+  its own help text reserves for "all reviews finish with no findings". The
+  first version of this entry said its summary carried **no reaction at all**.
+  That was wrong, and wrong in the way this plan has been wrong before: the
+  reaction is real and is simply not where the sentence looked. It sits on the
+  **pull request** (`+1`, `chatgpt-codex-connector[bot]`,
+  `2026-09-29T15:36:40Z`), not on Codex's summary comment, whose own reaction
+  list is genuinely empty. A search that returns nothing is only evidence of
+  absence when it is a search of the right thing, and "no reaction at all" is a
+  negative claim across surfaces rather than a measurement of one.
+
+  The corrected verdict is narrower but still adverse, and the distinction
+  matters. Codex *did* finish clean. It finished clean **at `e7d4fa4`**, ten
+  commits behind the head, and the ten intervening commits include `c07671e8`,
+  which closed both of the walkthrough's rows, and `b3ae9f20`, the
+  `_safe_close` deduplication the inline thread raised. A clean signal at a
+  stale head is a statement about that head, so nothing is claimed here from it
+  about the current tree in either direction.
 
   CodeScene is the opposite again, and it is the only current-head approval on
   the PR: it approved **every** head from `c07671e8` through `778f8e67`, five
