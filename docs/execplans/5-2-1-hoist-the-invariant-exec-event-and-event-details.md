@@ -3179,6 +3179,24 @@ failure is itself a lint surface. The second round is what turned nine
 unobserved leaves into nine observed passes; only the spelling leaf was still
 red.
 
+### 2026-09-29: the review's first point, priced but not spent
+
+The independent review's strongest suggestion was to specialize the
+observe-only path at preparation time — return `emitter.emit_line` directly from
+`_compose_line_callbacks` when `on_line` is absent, instead of wrapping it in
+a closure that re-tests `emitter` and `context.on_line` on every line. It is
+recorded in this plan as a live candidate with its reasoning, and **it is not
+implemented here**. The review itself supplied the reason: it removes
+denominator-only work, and this branch's own structural finding says that
+lowering `D` while holding `N` *raises* the share. The criterion is cleared by
+0.0586 points, so a change with the right sign in every other respect has the
+wrong sign here, and it would need the full three-pair V5 protocol to be
+judged. Semantic equivalence is not in question — `emitter is None` and
+`context.on_line is None` are the same condition in the reachable path — but
+equivalence is not the acceptance criterion. The task is closed on its stated
+verdict; a future task should price this before assuming the design space is
+closed.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
@@ -3280,8 +3298,17 @@ rest on the agent's JSON stream rather than on a threads API that could be
 cross-checked. Should the PR later leave draft, the app's findings will be a
 *fresh* surface, not a re-derivation of the ones disposed here.
 
-**Every commit above `d98fb5c9` is a documentation edit** — to this plan or to
-its evidence report, never to production code, tests, or build configuration.
+**The commits above `d98fb5c9` are documentation edits with two exceptions**,
+both named here because the earlier blanket form of this sentence was already
+false when it was written. `31d45cb7` refreshes the generated `typos.toml`, and
+`996e9e12` splits two test modules to the 400-line rule — a behaviourally inert
+but structurally real change to `cuprum/unittests/`. The sentence previously
+read "every commit above `d98fb5c9` is a documentation edit," which `31d45cb7`
+had already contradicted; the sweep chain below still accounts for every one of
+them, so the correction is to the summary line rather than to the chain. It is
+recorded rather than quietly reworded because the overbroad version is exactly
+the kind of claim a later reader would use to skip re-running a suite.
+
 Each went in behind its own docs-scoped gate sweep, and the sweeps compose into
 a single verified chain rather than a set of unrelated assertions: each
 recorded the commit it started from as `head_before` and the SHA-256 of the
