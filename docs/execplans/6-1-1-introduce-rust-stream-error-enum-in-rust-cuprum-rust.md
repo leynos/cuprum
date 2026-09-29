@@ -1081,6 +1081,16 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   rerun is logged `cancelled` because pushing the plan commit superseded it
   through the `ci-${{ github.ref }}` concurrency group; the test had already
   passed by then, so the cancellation is not a verdict on it.
+
+  A later head settles it without relying on that cancelled attempt. Run
+  `36607134592` at `3dec047b` is `completed/success` with **17 of 17** jobs
+  green and **zero** non-success, `coverage` included. This is the cleanest
+  evidence of the three, because the run itself is not cancelled and the job
+  completed inside its own `timeout-minutes: 65`, so the pass is a verdict
+  rather than an interrupted attempt. The `coverage` job failing twice at
+  `1714ac0d` and passing at both `b7d1b109` and `3dec047b` — three heads, two
+  of them this branch's own — is the pattern a wall-clock-sensitive cost
+  produces, not the pattern a branch defect produces.
 - [x] (2026-09-29) **A second CodeRabbit review was requested at `c99807ce`.**
   The round-1 review (`5354955377`) stands `CHANGES_REQUESTED` and
   `mergeStateStatus` is `BLOCKED`, so a fresh review is required to clear the
@@ -1095,6 +1105,44 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   an approval; the commit CodeRabbit inspects must be verified after it runs.
   Only the execplan changed since the `1714ac0d` gate run, so the code gates
   from that run still hold; the docs gates were re-run at `c99807ce` and pass.
+
+  **The round-1 surface count was three, and it is four.** The inline finding,
+  the walkthrough's two rows and the second review `5356273356` were already
+  dispositioned, but a fourth surface existed and was missed: issue comment
+  `5890588184`, the **focused reply** to `5890555008` ("assess the
+  implementation in this PR for completeness and correctness"). That reply is
+  where the file-size finding first appeared — *"the boundary property module
+  grew from 246 to **431 lines**"* — and it is a **different surface from the
+  review walkthrough**, which is why the walkthrough's rows never carried it.
+  It is also the origin of the first sentence of the governing request, so its
+  disposition matters beyond bookkeeping.
+
+  Its verdict is **valid when written, and superseded by construction.** The
+  comment was last edited `2026-09-29T13:53:10Z`; the split landed in
+  `bd41d2c4` at `14:31:42Z` (**+38 minutes**) and the deduplication in
+  `b3ae9f20`. At the current head the two modules are **345** and **119**
+  lines, both well under the cap, and the new module is registered in
+  `EXTENSION_TEST_TARGETS` as the reply required — so all three of its
+  instructions (split a cohesive group, register if extension-required, rerun
+  the gates) were carried out. The file-count half of the reply is *also*
+  correct and no longer live: it said "the PR currently changes 17 files … so
+  one new file remains within the plan's 18-file tolerance", and the surface
+  now stands at exactly **18 of 18**. Two of the reply's three forward-looking
+  numbers therefore describe the pre-split tree; the third, the destination,
+  was reached exactly.
+
+  **CodeRabbit has since re-confirmed the inline half of that reporting and
+  withdrawn the other half's warrant.** Reply `4136525485` (`17:42:16Z`, posted
+  against `c07671e8`) re-ran the `_safe_close` search at the current head,
+  reported the one definition in `cuprum/`, the two module sizes at 119 and 345
+  lines, and retracted its own earlier claim that verification was unavailable:
+  *"I was wrong to say verification was unavailable in my previous reply."* It
+  then marked the thread **✅ Review thread resolved.** That is the
+  builder-satisfied condition the recovery guide names for a documentation/row
+  dispute, so no further tagged request is outstanding for it. The walkthrough
+  rows remain the only unresolved surface, and they are addressed by the queued
+  review `ac1c5052` rather than by argument, because a row's disposition is the
+  reviewer's to reissue.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
