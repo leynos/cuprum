@@ -3148,7 +3148,7 @@ of the new modules carried an extra blank line at EOF
 `ruff format --check`), and `test_line_event_emission_support_props.py` imported
 `ExecEvent` and `ExecId` at runtime although only annotations referenced them
 (`typing-only-first-party-import`). Both are the failure mode this repository
-already has a note for: a hand-written module split ships annotation-only
+already has a note for: a handwritten module split ships annotation-only
 imports, and because `check-fmt` aborts at its first failing step and
 `python-lint` at its first failing leaf, one edit hides everything behind it —
 `make check-fmt` reached 1 of 3 steps and `make lint` 1 of 12 leaves, so
@@ -3161,6 +3161,23 @@ annotation-only imports, which is safe here because nothing calls
 Worth stating plainly: `make test` was green on the pre-fix tree, so the split
 was behaviourally correct the whole time. The red was purely lint and format.
 That is exactly why the gate set is not optional even when the tests pass.
+
+**The re-run then found a third defect, in the prose that recorded the first
+two.** `make lint` reached much further this time — ruff, `interrogate`, pylint,
+`df12-pylint`, `ambrleaks`, skylos, `cargo doc`, clippy and Whitaker all
+passed — and died on the spelling leaf, over one hyphenated word in the
+paragraph above. The fix is at the source: `typos.toml` carries the
+unhyphenated form as a correction, so this is a spelling the policy already
+knows, not a missing allow-list entry. Masking it with a `typos.local.toml`
+exception would have been the wrong move — it is an en-GB-oxendict spelling the
+repository wants.
+
+Two rounds, three defect classes, one commit each. The pattern is worth
+recording rather than the individual errors: **a gate run that aborts early is
+not a cheap run, it is a deferred discovery**, and writing prose about a lint
+failure is itself a lint surface. The second round is what turned nine
+unobserved leaves into nine observed passes; only the spelling leaf was still
+red.
 
 ## Outcomes & retrospective
 
