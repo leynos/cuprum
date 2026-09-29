@@ -995,6 +995,29 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   patched. One nearby failure was checked and is **not** the same defect: the
   coverage job on `d7037cc41` (a different branch) fails with
   `sccache: error: Timed out waiting for server startup`, an unrelated cause.
+
+  The rerun settles it. `gh run rerun --failed` over the same job re-executed
+  the same test on the same bytes at the same head and it **passed in 8.7 s**
+  (17:14:22.54 → 17:14:31.27, job `109524590630`) — matching the earlier green
+  run's 7.4 s rather than the 30 s that killed it, which is the signature of a
+  cost that varies with the runner rather than of a deterministic failure. That
+  rerun is logged `cancelled` because pushing the plan commit superseded it
+  through the `ci-${{ github.ref }}` concurrency group; the test had already
+  passed by then, so the cancellation is not a verdict on it.
+- [x] (2026-09-29) **A second CodeRabbit review was requested at `c99807ce`.**
+  The round-1 review (`5354955377`) stands `CHANGES_REQUESTED` and
+  `mergeStateStatus` is `BLOCKED`, so a fresh review is required to clear the
+  decision rather than merely to re-read the fix. Its single inline thread
+  (`PRRT_kwDOQgt8686nLngt`, on `test_rust_streams_roundtrip_property.py`)
+  already reads `isResolved=true` / `isOutdated=true`, so the disposition is
+  recorded on the thread as well as in the fix commit. The request was queued
+  through the managed route — `comenq put leynos/cuprum 432 …` → **`ac1c5052`,
+  ETA ~7h 57m** — after confirming no request for this PR was already pending
+  and that the round-1 rate limit (1 review/hour) had cleared. The queue is the
+  mechanism, so delivery of the comment is not the review and the review is not
+  an approval; the commit CodeRabbit inspects must be verified after it runs.
+  Only the execplan changed since the `1714ac0d` gate run, so the code gates
+  from that run still hold; the docs gates were re-run at `c99807ce` and pass.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
