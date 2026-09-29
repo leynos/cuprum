@@ -1091,6 +1091,15 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `1714ac0d` and passing at both `b7d1b109` and `3dec047b` — three heads, two
   of them this branch's own — is the pattern a wall-clock-sensitive cost
   produces, not the pattern a branch defect produces.
+
+  The current head repeats it, so no green run in this record is stale. Run
+  `36610325211` at `58ce2f66` is `completed/success`, **17 of 17**, **zero**
+  non-success. Its `coverage` job runs `18:21:06Z → 18:32:16Z`, i.e. **11 m 10
+  s** wall clock against its own `timeout-minutes: 65` bound — a fifth of the
+  budget, consistent with the 7.4 s and 8.7 s the single doctest test took on
+  the three green heads rather than with the 30 s that killed it at `1714ac0d`.
+  Four heads now bracket the question: one failure, three passes, the passes at
+  7.4 s, 8.7 s and a full-job 11 m 10 s that never approached its ceiling.
 - [x] (2026-09-29) **A second CodeRabbit review was requested at `c99807ce`.**
   The round-1 review (`5354955377`) stands `CHANGES_REQUESTED` and
   `mergeStateStatus` is `BLOCKED`, so a fresh review is required to clear the
