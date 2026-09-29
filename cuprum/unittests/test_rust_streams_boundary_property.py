@@ -40,6 +40,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from cuprum.unittests._rust_stream_test_support import _safe_close
+
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
@@ -72,12 +74,6 @@ _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
     max_examples=50,
 )
-
-
-def _safe_close(fd: int) -> None:
-    """Close ``fd``, ignoring an already-closed or invalid descriptor."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
 
 
 class _BufferSizeEntryPoint(typ.Protocol):
