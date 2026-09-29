@@ -290,7 +290,7 @@ jobs:
         uses: ./.github/actions/setup-dev-fast
 
       - name: Install Whitaker
-        uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/install-whitaker@774cc5a01e457714aede66e14a97b3e257812fc2
         with:
           installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
 
