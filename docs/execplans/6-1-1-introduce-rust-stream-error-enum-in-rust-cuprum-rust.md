@@ -1165,8 +1165,11 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   anywhere in it) rather than from a summary. The `coverage` job this work
   existed to fix ran **11 m 6 s** against its `timeout-minutes: 65`, and both
   extension-gated lanes, Windows included, passed inside 1 m 25 s. That is the
-  fourth green head at which the coverage job has run, against the single
-  failing head `1714ac0d`.
+  third green head at which the coverage job has run, against the single
+  failing head `1714ac0d`. (This read "fourth" until 2026-09-30, when the
+  ordinals in this plan were re-derived together and found to be three
+  different counts; see the seventh-observation entry below for the
+  enumeration.)
 
   **"Four surfaces" was a CodeRabbit count, and this PR has other reviewers
   besides CodeRabbit.** Every entry above, including the correction that raised
@@ -1203,6 +1206,18 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   reviewer that has never read this branch would destroy the record the plan
   exists to keep. Sourcery remains **out of scope for this branch** — now as a
   measured budget statement rather than as an impossibility claim.
+
+  Re-derived again at committed head `97f51d41` on 2026-09-30, and the
+  interesting result is *which* figures moved. Total is now **295,517** and
+  this plan's share is **164,507** — both up by exactly **1,618**, which is the
+  plan growth since the previous reading. The non-plan remainder is
+  **131,010**, *unchanged*. That is the self-growth principle demonstrated
+  cleanly rather than asserted: the figure derived from the growing artefact
+  drifts one-for-one with it, while the load-bearing figure — the one the
+  budget argument actually rests on — is a property of the code and does not
+  move at all. So the conclusion above is stable, and only the two numbers that
+  describe the plan's own bulk are revision-dependent and need re-deriving
+  whenever they are quoted.
 
   Codex is the mirror case: it did run — *"Code Review ✅ Completed,
   `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and it did signal clean, with the 👍
@@ -1377,8 +1392,10 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `completed/success`: **17 of 17** jobs `success` and **zero** non-success,
   read from the jobs API rather than inferred from the run's own conclusion. The
   `coverage` job this work existed to fix ran `21:10:07Z`→`21:21:38Z`, or **11
-  m 31 s** against its `timeout-minutes: 65` — the fifth consecutive green
-  observation of it against the single failing head `1714ac0d`.
+  m 31 s** against its `timeout-minutes: 65` — the sixth consecutive green
+  observation of it against the single failing head `1714ac0d`. (This read
+  "fifth" until 2026-09-30; the increment had skipped the observation at
+  `dbbe9ee6`, which sits between `7c5059eb` and this head.)
 
   Locally, `make check-fmt` and `make markdownlint` both exited `0` on the
   committed tree. `make lint` reached its final `actionlint` step and wedged
@@ -1392,7 +1409,101 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   than failed** locally, and covered by CI, where it passed inside the 17.
   Every sub-check before it — ruff, interrogate, pylint, df12-python-lints,
   ambrleaks, Skylos, Rustdoc+clippy, Whitaker, typos, yamllint — completed
-  clean on this tree, which is the part carrying these edits' risk.
+  clean on this tree, which is the part carrying these edits' risk. Skylos is
+  worth naming specifically: this branch rewrites a good deal of
+  `docs/developers-guide.md`, a 363 KB file, and this plan records elsewhere
+  that Skylos skips an oversized document and can then report a
+  documentation-derived symbol as dead (`SKY-U001`). The scan ran, emitted
+  **zero** `SKY-` findings, and the chain advanced past it to Rustdoc, which is
+  what proves it ran rather than skipped. The hazard did not fire.
+- [x] (2026-09-30) **The next head is green, and this time with a job rollup
+  rather than a run verdict.** Run `36633831081` at `97f51d41` is
+  `completed/success` with **17 of 17** jobs `success` and **zero**
+  non-success, read from the jobs API. Its `coverage` job ran `21:42:23Z`→
+  `21:53:32Z`, or **11 m 9 s** against its `timeout-minutes: 65`.
+
+  **The size and surface claims were re-derived rather than carried.** At the
+  committed head `git diff --name-only <base> HEAD` lists **18** files once the
+  lockfile and this plan are excluded, so the plan's `18 of 18` tolerance claim
+  holds. The Sourcery figures re-derive exactly too: total **303,426**
+  characters, of which this plan is **171,885** and the non-plan remainder is
+  **131,541** — but **531** of that remainder is the uncommitted `typos.toml`
+  regeneration (gate churn, never drift-checked in CI), so the committed
+  remainder is `131,541 − 531 =`**`131,010`**, precisely the figure the
+  Sourcery entry quotes. Reading the working tree without subtracting that
+  churn would have shown 19 files and a 131,541 remainder, and produced a
+  "correction" that was itself the error. The lesson from
+  `[[plan-self-growth-invalidates-its-own-budget-claims]]` cuts both ways: the
+  plan's size does drift, but a re-derivation must be taken at the same
+  revision as the claim, not across an uncommitted working tree.
+
+  This entry was first drafted while the Lody GitHub credential broker was down
+  session-wide
+  (`Cannot verify GitHub identity preferences with Lody… no GitHub
+  operation was attempted`;
+  the failure reached even `gh auth status` and `gh api /rate_limit`). The
+  draft asserted the rollup could not be obtained and offered the run verdict
+  as a weaker substitute. The broker recovered before that draft was committed,
+  both queued retries landed (`JOBS success:17`), and the assertion became
+  false — so it is recorded here as a falsified draft rather than quietly
+  replaced. The general form: a *transient tool outage* is not evidence about
+  the artefact being measured, and an entry written from one ages into a false
+  claim the moment the tool returns.
+
+  **Re-deriving the coverage streak found three different counts in this
+  plan.** The seven observations of the `coverage` job at or after the
+  `1714ac0d` failures, in branch-history order, are: `3dec047b` (1, success),
+  `58ce2f66` (2), `778f8e67` (3), `7c5059eb` (4), `dbbe9ee6` (5), `184c5b65`
+  (6), `97f51d41` (7). Against that enumeration the earlier entries in this
+  plan had `778f8e67` reading "fourth" when it is the third, `184c5b65` reading
+  "fifth" when it is the sixth, and only `7c5059eb` reading "fourth" correctly
+  — because the increment to "fifth" skipped `dbbe9ee6`, a green run this plan
+  had never mentioned at all (`grep -n dbbe9ee6` returned nothing). A count
+  incremented by hand across a hand-maintained list failed the same way the
+  diff attributions did: the arithmetic was never re-derived from the source
+  list. Both wrong ordinals are corrected above, with the correction dated in
+  place rather than silently rewritten.
+
+  The `1714ac0d` half of the phrase was checked too, because its `coverage` job
+  reads `cancelled` in the jobs API and the plan calls it the failing head.
+  Both are right: that run is at `run_attempt: 3`, the concurrency group
+  cancelled the later attempt, and the jobs API reports the latest attempt —
+  while the two cancelled-and-rerun attempts kept their own `failure`
+  conclusions. This plan already documents exactly that semantics. The phrase
+  survives; the numbers beside it did not.
+- [x] (2026-09-30) **Both walkthrough rows are stale, and the two commits that
+  closed them are the proof.** The comment was captured again at
+  `2026-09-29T22:23:31Z` (`/tmp/611-walkthrough-2131.md`, 14,729 bytes, SHA-256
+  `3d9d50c1…`) — the **first content change** after four consecutive captures at
+  `8306c4cb…` (`19:34:34Z`, `20:38:03Z`, `20:41:19Z`, `20:48:47Z`). The diff
+  against the last of those, `/tmp/611-walkthrough-2045.md`, is six lines, both
+  of them the `Title check` / `Description check` rows reworded; the
+  failed-checks table, the paused banner and the `e7d4fa45` markers are
+  untouched. So this was a body-driven re-render, not a review, exactly as the
+  plan's own rule says: **a row's disposition is the reviewer's to reissue, and
+  only a review reissues it.**
+
+  The two rows it still shows both name a defect that has since been fixed, and
+  the fix commit is the same one for each. `c07671e8` — *"Close CodeRabbit's
+  two walkthrough findings"* — modifies exactly two tracked files:
+
+  | Row                          | Claim                                                                                                                                                                               | State on this tree                                                                                                                                                                                                                                                                                               |
+  | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `Testing (Overall)` ❌       | "they do not guard the native `InvalidDescriptor` to `ValueError` conversion… add an extension-required direct-native test that calls `rust_consume_stream(-1, buffer_size=65536)`" | The test exists: `test_rust_stream_native_order.py:236-253`, `pytest.raises(ValueError, match="file descriptor")` on `rust_consume_stream(-1, buffer_size=_VALID_BUFFER_SIZE)` — the row's own prescription, including the valid-buffer detail that makes the converter reachable. Registered at `Makefile:175`. |
+  | `Developer Documentation` ⚠️ | "`docs/developers-guide.md` still states that `run_stream_operation` owns '`PumpError` conversion' (around line 3501)"                                                              | `git grep "PumpError conversion" -- docs/` returns **nothing**. The paragraph at 3499-3509 describes the typed conversion and the single `From<RustStreamError> for PyErr` impl in the reviewer's own terms, and says *"The conversion itself is not written here"*.                                             |
+
+  Both were true of `e7d4fa45` and are false of `97f51d41`:
+  `git merge-base --is-ancestor e7d4fa45 c07671e8` confirms the fix commit is
+  19 commits downstream of the head the walkthrough still evaluates. This is the
+  `change_assessment_commit` staleness the plan records elsewhere, reached now
+  from the rows' own text rather than from the markers — and it is why the
+  entries treating these rows as the "only unresolved surface" should be read
+  as *unrefreshed*, not as *substantiated*.
+
+  One caveat this does not discharge: a body edit can re-render a walkthrough
+  without provoking a review, so nothing here demonstrates the queued review
+  `ac1c5052` has been consumed. The rows will clear when a review runs against
+  a commit at or after `c07671e8`, and by nothing else.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
