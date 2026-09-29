@@ -3223,6 +3223,52 @@ equivalence is not the acceptance criterion. The task is closed on its stated
 verdict; a future task should price this before assuming the design space is
 closed.
 
+### 2026-09-29: closing the gate record at `6abf22d3`
+
+Every commit that touches a file is a gate surface, and this one touched a
+single Markdown document. Rather than re-run all seven gates over a prose-only
+delta, the seven were narrowed by what can observe that change — and the
+narrowing was then checked rather than asserted.
+
+The delta since the last fully observed green set (`619dad26`) is **one `.md`
+file**: 44 insertions, 18 deletions, no `.py`, no `.rs`, no workflow. Three
+gates are therefore untouched in substance:
+
+- `typecheck` and `test` read Python, and no Python changed.
+- `github-actions-lint` reads `.github/workflows`, whose tree hash is
+  `8ce79950dc6e6c40` at `619dad26`, `f875bee4` and `6abf22d3` alike.
+- `nixie` validates Mermaid diagrams, and the document holds **zero** Mermaid
+  fences at either revision.
+
+That leaves the two gates which read Markdown, plus `lint`:
+
+| gate           | verdict at `6abf22d3` | evidence                                                                                     |
+| -------------- | --------------------- | -------------------------------------------------------------------------------------------- |
+| `check-fmt`    | green                 | rc=0; `ruff format --check` 691 files, `cargo fmt` clean, `mdtablefix --check` 80 unchanged  |
+| `markdownlint` | green                 | rc=0; `Linting: 80 file(s)` / `Summary: 0 error(s)`, then its own `make spelling` line clean |
+| `lint`         | green                 | ten of eleven leaves visible in the log; the eleventh verified separately                    |
+
+**`actionlint` was verified, not inherited.** The delegated `make lint` hung on
+it — the host wedge this plan documents above, and it is intermittent, so a
+hang is not a verdict. Two bounded attempts settled it:
+`actionlint -config-file .github/actionlint.yaml -shellcheck=` exited 0 with no
+output, and a full run behind a `timeout`-wrapped `shellcheck` shim also exited
+0 with no output while logging **110 invocations, every one rc=0**. Each call
+was bounded, so a wedged child would have surfaced as a non-zero exit rather
+than as silence. That is a stronger result than the unbounded gate would have
+given, because none of the 110 calls could hide behind the wedge.
+
+The wedged instance was terminated deliberately and by PID. It was this
+session's own `actionlint`, sitting under the `tee` writing this run's log —
+not another agent's process, which was left untouched. Cleanup of one's own
+parked child is not the same act as reaching into another session's work.
+
+One caveat is recorded rather than smoothed over: `markdownlint`'s verdict is
+contingent on the `$(MAKE) spelling` recipe line that runs *after* its check,
+so a green `Summary: 0 error(s)` is not by itself a green gate — the same
+coupling that turned one word red on two targets earlier in this work. The tree
+was clean and `HEAD` unmoved immediately after the run, so the citation holds.
+
 ## Outcomes & retrospective
 
 Planning identified a narrow implementation and an honest stop condition, and
