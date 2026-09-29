@@ -1009,6 +1009,15 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   Both repairs land in files already inside the 18-file change surface
   (`git diff --name-only 7f762870 HEAD` lists both), so the count holds at 18
   and neither repair needed a new file.
+
+  Committed as `c07671e8` and pushed; the inline thread `4135406026` was
+  answered at the same time, so all three of CodeRabbit's surfaces — the inline
+  finding and both walkthrough rows — now carry an explicit disposition. Note
+  the walkthrough was **paused** when it produced these rows, and its
+  `change_assessment_commit` markers still read `e7d4fa45`. A paused
+  walkthrough is not a fresh assessment of the current candidate, which is why
+  every row had to be re-derived against the live tree rather than read as a
+  verdict on this head.
 - [x] (2026-09-29) **The required `coverage` job failed twice at `1714ac0d`, on
   a test this branch does not touch, for a reason that is environmental and now
   measured rather than assumed.** The failing test is
