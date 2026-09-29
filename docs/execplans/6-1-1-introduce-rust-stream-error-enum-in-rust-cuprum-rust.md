@@ -1296,37 +1296,61 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   agrees with the paused banner.
 
   The 👀 reaction is a weaker witness than it looks, because its timestamp is a
-  mutable field that this plan caught mid-change. An earlier version of this
-  entry recorded `kody-ai[bot]` reacting at `19:22:34Z`; the reaction now reads
-  `20:27:19Z`, with id `534438116`. A reaction is a toggle — one row per
-  identity and content, never two — so the timestamp can only ever record the
-  *latest* time the identity looked. The earlier reading was accurate when it
-  was taken and is stale now; the plan keeps both so that a reader can tell a
-  moved field from a changed one.
+  mutable field that this plan caught moving twice. The reaction first read
+  `19:22:34Z`, then `20:27:19Z` (id `534438116`), and now reads `20:45:35Z` (id
+  `534479908`). A reaction is a toggle — one row per identity and content,
+  never two — so each id is a fresh row replacing the last, and the field can
+  only ever record the *latest* time the identity looked. Each reading was
+  accurate when taken; the plan keeps all three so a reader can tell a moved
+  field from a changed one, and stops quoting it as though it were stable. The
+  reaction is a heartbeat, not a ledger.
 
-  The `20:27:18Z` walkthrough edit, by contrast, left the content alone, and
-  the evidence for that is a clean attribution rather than an assumption. Two
-  captures bracket it: one taken at `19:34:34Z` and one at `20:38:03Z`. They
-  are **byte-identical**, SHA-256 `8306c4cb…`, 14,729 bytes, and a third fetch
-  at `20:41:19Z` hashes the same. `updated_at` names the *last* write rather
-  than a count of writes, so this does not prove the comment was touched only
-  once in that hour — it proves something sufficient all the same: the last
-  write fell at `20:27:18Z`, inside a window whose two endpoints are
-  byte-identical, so whatever that write did, the rendered comment at
-  `20:38:03Z` was byte-for-byte the comment at `19:34:34Z`. Attribution is what
-  makes this safe to claim, and it is also what the first draft of this entry
-  got wrong: it diffed the current comment against a capture from `17:50:20Z` —
-  which straddles the *`19:25:51Z`* edit recorded above — found the two moved
-  `✅ Passed` rows, and blamed them on `20:27:18Z`. The window was wrong, so
-  the finding was wrong; both captures have to sit outside a single edit's
-  window, and once they do the conclusion dissolves.
+  The walkthrough edits are the opposite case, and the distinction is the whole
+  point. Three `updated_at` values are now on record for comment `5745365959`:
+  `19:25:51Z`, then `20:27:18Z`, then `20:45:35Z`. Four captures sit at or
+  after the first of those — at `19:34:34Z`, `20:38:03Z`, `20:41:19Z` and
+  `20:48:47Z` — and all four are **byte-identical at 14,729 bytes, SHA-256
+  `8306c4cb…`**. So two recorded edits landed inside a span whose every sampled
+  rendering is the same document: two writes, zero bytes of change, and the
+  contrast with the `19:25:51Z` write, which did move two rows, is the finding.
+
+  A caveat belongs here rather than in a footnote, because the first draft of
+  this paragraph got it wrong in exactly this way. Comparing the two earliest
+  captures, `17:32:35Z` and `17:50:20Z`, also yields a six-line diff — the same
+  two `✅ Passed` rows, there reordered and reworded. So the claim cannot be
+  "only one edit ever changed content": at least two writes did, and the
+  `19:25:51Z` write recorded above is the later of them, since everything from
+  `19:34:34Z` onward is one unchanged document.
+
+  What the record actually supports is narrower and is enough. Every write
+  *after* `19:34:34Z` — the `20:27:18Z` and `20:45:35Z` edits — is bracketed by
+  identical captures, so neither changed a byte. The last write that changed
+  anything is the `19:25:51Z` edit, and its entire effect is two `✅ Passed`
+  row descriptions tracking prose this plan itself rewrote.
+
+  That is the whole edit history of this comment over the ten days it has
+  existed (`created_at` `2026-09-19T21:17:11Z`, last write
+  `2026-09-29T20:45:35Z`), as far as captures can witness it: writes that moved
+  two passed-check descriptions, and writes that moved nothing. No write has
+  touched an assessment field — not `change_assessment_commit`, not
+  `final_review_risk_coverage`, not the failed-check table. The reviewers'
+  dispositions have not been revisited; only the prose around them has.
+
+  Attribution is what makes that safe to claim, and it is what the first draft
+  of this entry got wrong. That draft diffed the current comment against a
+  capture from `17:50:20Z` — which straddles the `19:25:51Z` edit — found the
+  two moved `✅ Passed` rows, and blamed them on `20:27:18Z`. The window was
+  wrong, so the finding was wrong. A diff witnesses an edit only when both
+  captures sit outside that edit's window; where they do, the conclusion
+  dissolves.
 
   What survives is the point. Every assessment field still names
-  `e7d4fa457f73a63750bc23c8c7da2d1a9f77c588`, the paused banner stands, and the
-  pre-merge table still reads "❌ Failed checks (1 error, 1 warning)" with
-  `Testing (Overall)` ❌ and `Developer Documentation` ⚠️.
+  `e7d4fa457f73a63750bc23c8c7da2d1a9f77c588`, the paused banner stands (twice,
+  in the comment), and the pre-merge table still reads "❌ Failed checks (1
+  error, 1 warning)" with `Testing (Overall)` ❌ and `Developer Documentation`
+  ⚠️.
 
-  That settles the queue question negatively for the third time. `ac1c5052` is
+  That settles the queue question negatively for the fourth time. `ac1c5052` is
   **still pending** — `comenq list` shows it, and no new CodeRabbit review
   exists; the newest are still `15:42:06Z` and `17:42:16Z`. A watching reaction
   and a no-op edit are neither a review nor a verdict, and the failed rows are
