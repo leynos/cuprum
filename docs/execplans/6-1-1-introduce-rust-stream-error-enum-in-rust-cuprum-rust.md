@@ -1372,6 +1372,27 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   is the latest figure in a session that has now needed four re-derivations,
   after the coverage-evidence split, the three stale plan figures, and the two
   coverage-job numbers.
+- [x] (2026-09-29) **The run carrying these corrections is green, and the local
+  gates were run against the same tree.** Run `36630471791` at `184c5b65` is
+  `completed/success`: **17 of 17** jobs `success` and **zero** non-success,
+  read from the jobs API rather than inferred from the run's own conclusion. The
+  `coverage` job this work existed to fix ran `21:10:07Z`→`21:21:38Z`, or **11
+  m 31 s** against its `timeout-minutes: 65` — the fifth consecutive green
+  observation of it against the single failing head `1714ac0d`.
+
+  Locally, `make check-fmt` and `make markdownlint` both exited `0` on the
+  committed tree. `make lint` reached its final `actionlint` step and wedged
+  there until its 1500-second bound killed it (`LINT_RC=124`) — the host-only
+  wedge already recorded in this plan, not a finding. Two facts keep that from
+  being a silent gap: the branch changes **no** `.github/` file at all
+  (`git diff --name-only <base> HEAD -- .github/` is empty, so every byte
+  `actionlint` reads is `main`'s), and re-running it with the shellcheck
+  integration disabled — the workaround this plan documents — exits `0` with no
+  findings in under a second. `actionlint` is therefore **unobserved rather
+  than failed** locally, and covered by CI, where it passed inside the 17.
+  Every sub-check before it — ruff, interrogate, pylint, df12-python-lints,
+  ambrleaks, Skylos, Rustdoc+clippy, Whitaker, typos, yamllint — completed
+  clean on this tree, which is the part carrying these edits' risk.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
