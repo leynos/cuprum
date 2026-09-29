@@ -1213,6 +1213,24 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   clear `BLOCKED`. A CodeScene `APPROVED` and a CodeRabbit `CHANGES_REQUESTED`
   are separate reviewer decisions, and a merge gate consults the one that is
   adverse, so the CodeRabbit re-decision remains the single outstanding item.
+- [x] (2026-09-29) **The PR body now carries the same reviewer model, and the
+  commit that recorded it was pushed after the green run rather than before.**
+  The body's Review state section listed CodeRabbit alone; it now adds the four
+  other reviewers with their measured states, and its Validation section leads
+  with `778f8e67` / run `36613396061` and the coverage job's 11 m 6 s. The
+  update was sent as a JSON `--input` payload because `gh api -f body=@file`
+  posts the literal path, and read back non-vacuously: both sides asserted over
+  12,000 characters before comparison, and they match modulo the single
+  trailing newline GitHub appends (15,662 against 15,663). Seven probes of the
+  new claims were each confirmed present in the live body.
+
+  Pushing `3bd057d1` supersedes run `36613396061` through the concurrency
+  group, so the green run now describes the parent of the head rather than the
+  head. That is deliberate and recorded rather than left implicit: `3bd057d1`
+  changes only this execplan, which no test, lint or build target reads, and CI
+  will re-run at the new head anyway. The alternative — never recording an
+  observed result because recording it makes the record one commit stale —
+  would leave the plan permanently describing a tree `main` can no longer reach.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
