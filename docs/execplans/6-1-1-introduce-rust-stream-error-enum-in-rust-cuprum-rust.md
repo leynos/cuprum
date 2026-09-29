@@ -1158,6 +1158,61 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   rows remain the only unresolved surface, and they are addressed by the queued
   review `ac1c5052` rather than by argument, because a row's disposition is the
   reviewer's to reissue.
+- [x] (2026-09-29) **The branch is green at `778f8e67`, and Sourcery is the one
+  reviewer that never rendered the diff.** Run `36613396061` at the current
+  head is `completed/success`: **17 of 17** jobs and **zero** non-success,
+  taken from the `gh run watch --exit-status` log (`EXIT=0`, no failure marker
+  anywhere in it) rather than from a summary. The `coverage` job this work
+  existed to fix ran **11 m 6 s** against its `timeout-minutes: 65`, and both
+  extension-gated lanes, Windows included, passed inside 1 m 25 s. That is the
+  fourth green head at which the coverage job has run, against the single
+  failing head `1714ac0d`.
+
+  **"Four surfaces" was a CodeRabbit count, and this PR has other reviewers
+  besides CodeRabbit.** Every entry above, including the correction that raised
+  the count from three to four, is scoped to CodeRabbit's own surfaces. Five
+  further reviewer identities post to this PR and none was recorded:
+
+  | Reviewer  | Surface                                 | State at `778f8e67`                      |
+  | --------- | --------------------------------------- | ---------------------------------------- |
+  | CodeScene | 28 `APPROVED` reviews, plus a check-run | `APPROVED` at `778f8e67`, `18:38:24Z`    |
+  | Gecko     | `Gecko Security Review` check-run       | `success`, "No vulnerabilities found"    |
+  | Loom      | `Loom model smoke test` check-run       | `success`                                |
+  | Sourcery  | `Sourcery review` check-run             | `skipped` — **never reviewed**           |
+  | Codex     | summary issue comment `5893419759`      | assessed `e7d4fa4`, **10 commits** stale |
+
+  One is adverse, and it stops short of being a review. Sourcery declined with
+  *"your pull request is larger than the review limit of 150,000 diff
+  characters"* (`15:33:10Z`, against `e7d4fa45`). The limit is real and the
+  diagnosis is measurable: this branch's diff from its merge base is
+  **279,201** characters, of which the execplan alone is **148,191** — 53% of
+  the whole surface from one file. Two consequences follow, and they point
+  opposite ways. The PR body's claim that CI is green "at each head" is true of
+  CI and silent about *this* reviewer, which never rendered the diff at all.
+  But trimming the execplan would not lift the gate: at 279,201 characters the
+  branch is 86% over a limit no rearrangement of its own text can reach, and
+  the execplan is a mandated living artefact of this plan. Sourcery is
+  therefore **out of scope for this branch** rather than a finding to fix, and
+  it is recorded here so that a skipped check is not later mistaken for a
+  passing one.
+
+  Codex is the mirror case: it did run — *"Code Review ✅ Completed,
+  `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and its verdict is only as good as that
+  commit. `e7d4fa4` is **10 commits** behind the head, and the ten intervening
+  commits include `c07671e8`, which closed both of the walkthrough's rows, and
+  `b3ae9f20`, the `_safe_close` deduplication the inline thread raised. It
+  posted no findings comment and its summary carries **no reaction at all** —
+  not the 👍 the comment's own help text describes for "all reviews finish with
+  no findings". A completed review at a stale head, with no completion signal,
+  is not evidence about the current tree, so nothing is claimed from it in
+  either direction.
+
+  CodeScene is the opposite again, and it is the only current-head approval on
+  the PR: it approved **every** head from `c07671e8` through `778f8e67`, five
+  consecutive heads, and its check-run at the head is `success`. That does not
+  clear `BLOCKED`. A CodeScene `APPROVED` and a CodeRabbit `CHANGES_REQUESTED`
+  are separate reviewer decisions, and a merge gate consults the one that is
+  adverse, so the CodeRabbit re-decision remains the single outstanding item.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
