@@ -133,9 +133,7 @@ def given_observed_pipeline(
     "an observed command that echoes its own stdin",
     target_fixture="observed_command",
 )
-def given_stdin_echoing_command(
-    behaviour_state: dict[str, object],
-) -> dict[str, object]:
+def given_stdin_echoing_command() -> dict[str, object]:
     """Build a command that echoes back exactly what it reads on stdin.
 
     Returns

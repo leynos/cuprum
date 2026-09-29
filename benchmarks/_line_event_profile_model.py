@@ -32,6 +32,24 @@ of the frames preceding it on the same stack agrees with one of the rule's
 callers. Initialization that a refactor moves into a helper still matches, as
 long as some caller in the rule's list remains on the path — which is why the
 caller lists name every production site, not just the immediate one.
+
+What the caller rule cannot tell apart
+--------------------------------------
+The caller requirement rules out an unrelated dataclass constructed anywhere else
+in the process, but it does not exclude every constructor reached *through* the
+event path. An observe hook runs below ``emit_line`` on the stack, so a hook
+that builds its own dataclass per event renders as a generated ``__init__``
+whose nearest matching caller is still ``emit_line`` — and it would be counted
+toward ``N`` as though it were ``ExecEvent``. Hook bodies are not identifiable
+from a capture, so no rule can separate the two cases in general.
+
+This is a known limit of the metric, not a defect in the committed measurement.
+The benchmark's own hook only increments a counter and constructs nothing, so
+no such sample exists in the gate's captures: in all three candidate captures
+every counted construction frame is a *direct* call from ``emit_line``, with no
+intervening frame, accounting for the whole of ``N`` (15,769 weighted samples
+across ``r1``-``r3``). A capture whose hook does allocate per event would
+inflate ``N``, and should be read with that in mind.
 """
 
 from __future__ import annotations

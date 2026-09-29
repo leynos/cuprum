@@ -13,18 +13,23 @@ so the assertion helpers live in ``test_structured_events.py`` instead.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import io
 import typing as typ
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.events import ExecEvent
-from cuprum.sh import ExecutionContext, RunOutputOptions, SafeCmdBuilder, StdinInput
+from cuprum.sh import (
+    ExecutionContext,
+    RunOutputOptions,
+    SafeCmd,
+    SafeCmdBuilder,
+    StdinInput,
+)
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from cuprum.catalogue import ProgramCatalogue
     from cuprum.program import Program
 
@@ -142,34 +147,38 @@ def run_twice_with_distinct_contexts(
     catalogue: CommandCatalogue,
     cmd: Runnable,
 ) -> None:
-    """Run one command twice, tagging each run differently.
+    """Run one command twice concurrently, tagging each run differently.
 
-    The two runs share a process-wide event loop boundary but not state: each
-    gets its own observation, and so its own execution token.
+    The two executions genuinely overlap, so a leak of hook or emitter state
+    from one run into the other is observable rather than hidden behind
+    sequential completion. Both runs share one observe hook, which is what
+    makes the leak visible: a per-run hook would mask a shared emitter.
+
+    The hook routes each event to the bucket named by its own ``run_id`` tag,
+    so an event carrying another run's tag lands somewhere the assertions
+    inspect rather than being quietly absorbed. A tag no run set fails the
+    lookup, which is the loud outcome we want.
     """
-    runs: dict[str, list[ExecEvent]] = {}
+    runs: dict[str, list[ExecEvent]] = {run_id: [] for run_id in ("first", "second")}
+    command = typ.cast("SafeCmd", cmd)
 
-    for run_id in ("first", "second"):
-        events: list[ExecEvent] = []
+    def hook(ev: ExecEvent) -> None:
+        """Route one event to the bucket its own tag names."""
+        runs[typ.cast("str", ev.tags["run_id"])].append(ev)
 
-        def make_hook(sink: list[ExecEvent]) -> cabc.Callable[[ExecEvent], None]:
-            """Bind the sink explicitly so the loop variable is not captured."""
+    async def execute(run_id: str) -> None:
+        """Run the command once under its own tagged context."""
+        _ = await command.run(
+            context=ExecutionContext(tags={"run_id": run_id}),
+            stdin=StdinInput(text=f"{run_id}-input\n"),
+        )
 
-            def hook(ev: ExecEvent) -> None:
-                """Collect execution events emitted during the run."""
-                sink.append(ev)
+    async def both_runs() -> None:
+        """Launch both runs before awaiting either, so they overlap."""
+        await asyncio.gather(execute("first"), execute("second"))
 
-            return hook
-
-        with (
-            scoped(ScopeConfig(allowlist=catalogue.allowlist)),
-            sh.observe(make_hook(events)),
-        ):
-            _ = cmd.run_sync(
-                context=ExecutionContext(tags={"run_id": run_id}),
-                stdin=StdinInput(text=f"{run_id}-input\n"),
-            )
-        runs[run_id] = events
+    with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+        asyncio.run(both_runs())
 
     behaviour_state["runs"] = runs
 
