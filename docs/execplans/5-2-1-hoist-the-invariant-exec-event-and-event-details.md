@@ -3021,16 +3021,19 @@ both `emitter` and `context.on_line` on every line. That is the branch's
 measured workload — the benchmark's callback scenario uses `sh.observe` — and
 it removes a Python call and two repeated invariant checks per line without
 duplicating dispatch, changing task ownership, or sacrificing named constructor
-arguments. **It is not accepted and not claimed as a win here.** It removes
-denominator-only work, and this plan's own structural finding says what that
-does: 100% of the numerator is the retained `ExecEvent.__init__`, so lowering D
-while holding N **raises** the share. The specialization could therefore breach
-a criterion this branch passes by 0.0586 points, by succeeding at exactly the
-kind of change the plan endorses. It needs the full three-pair V5 protocol
-before it can be judged, and the outcome is genuinely uncertain in direction of
-magnitude, not sign. A separate microbenchmark the reviewer ran on this host
-(MicroPython-free CPython 3.14.4, nine rotated rounds of 150 000 calls, real
-synchronous dispatcher) priced two further variants: positional-required
+arguments. **It is not accepted and not claimed as a win here.** The reason
+first recorded at this point — that it "removes denominator-only work", so that
+lowering `D` while holding `N` would raise the share — was **withdrawn as
+inaccurate** once the candidate was actually priced against the committed
+captures; see
+[the pricing section](#2026-09-29-the-observe-only-candidate-priced--and-its-stated-reason-corrected)
+below. In short: the closure's frames are not load-bearing for either `D` or
+`N`, so the edit moves neither, and the real exposure is the closure's
+self-time relocating into the numerator — a bracket of `+0.0000` to `+0.92`
+points per pair, never a decrease. It needs the full three-pair V5 protocol
+before it can be judged. A separate microbenchmark the reviewer ran on this
+host (MicroPython-free CPython 3.14.4, nine rotated rounds of 150 000 calls,
+real synchronous dispatcher) priced two further variants: positional-required
 arguments at 0.9571× the shipped emitter and captured-locals-named at 1.0143×.
 Both are microbenchmarks of the emitter, not workload measurements, and neither
 is V5 evidence; the positional variant's eleven positional arguments, two pairs
@@ -3228,6 +3231,70 @@ judged. Semantic equivalence is not in question — `emitter is None` and
 equivalence is not the acceptance criterion. The task is closed on its stated
 verdict; a future task should price this before assuming the design space is
 closed.
+
+### 2026-09-29: the observe-only candidate, priced — and its stated reason corrected
+
+The section above declined the specialization on a **sign** argument: that it
+"removes denominator-only work", and that lowering `D` while holding `N` raises
+the share. The sign is right. The mechanism is not, and the difference matters
+enough to record, because the stated reason is the one a future reader would
+otherwise reuse.
+
+The candidate was priced against the six committed captures rather than argued
+about again. The probe rebuilds each classification with the closure's own
+frames removed, reusing the shipped classifier's `_matching_rule` and
+`_in_consume_subtree` so the result is not a reimplementation. Its first duty
+is faithfulness, and it reproduces all six committed shares exactly — 29.8991,
+29.9414, 29.9087 for the candidates and 35.3533, 34.2928, 34.0388 for the
+controls.
+
+**The closure frame is not load-bearing for either count.** Deleting it removes
+9142, 9318 and 9173 weighted samples from the three candidate captures — so the
+drop is not vacuous — and moves `D` and `N` by **exactly zero** in all six
+(`+0.0000` every row). Two independent reasons:
+
+- `D` is anchored on `_consume_stream_with_lines`, the consumer that *calls*
+  the closure. The specialization does not touch it, and work relocated from
+  the closure to the bound method still runs beneath it.
+- `N` needs a generated `__init__ (<string>)` frame with a nearer caller
+  matching `emit_line (cuprum/_line_callbacks.py)` — a pattern that sets **no
+  line**, so it matches the bound method at `:135` as readily as the closure at
+  `:213`. The bound method is already on every stack beneath the closure, and
+  it is the winning caller in **5317 of 5317** weighted samples. `LOST` —
+  stacks that resolve before the drop and fail to after — is **0** on all six
+  captures.
+
+So the specialization does **not** lower `D`. The "denominator-only work" it
+removes is work the classifier never attributed to `D` in the first place.
+
+**The real exposure is the closure's self-time.** Samples whose innermost frame
+is the closure's own bytecode number 147, 163 and 140 on r1/r2/r3 candidate,
+and every one of them currently sits **outside** `N` (already-in-`N`: 0, 0, 0).
+That work does not vanish when the closure does; it is absorbed by the call it
+was making, which is the bound method's `ExecEvent(...)`. What follows is a
+bracket, not a forecast:
+
+| capture      | share now | self-time | if none relocates | if all relocates |
+| ------------ | --------- | --------- | ----------------- | ---------------- |
+| r1-candidate | 29.8991%  | 147       | 29.8991%          | 30.7372%         |
+| r2-candidate | 29.9414%  | 163       | 29.9414%          | 30.8593%         |
+| r3-candidate | 29.9087%  | 140       | 29.9087%          | 30.7127%         |
+
+The lower bound is the current value exactly, so **the metric is monotone
+non-decreasing under this edit** — there is no scenario in which it helps. The
+upper bound breaches on all three pairs. The margin on the tightest pair, r2,
+is 0.0586 points, and breach begins once more than ~35 of its 163 self-time
+samples land in `N` — roughly 21%. That is a small fraction to bet a
+0.0586-point pass on, and there is no upside to weigh against it.
+
+**Scope.** This is a classification-level projection on captures already held,
+not a fresh three-pair V5 collection: it holds each capture's sample
+distribution fixed and asks what the classifier would report. A re-profile
+could shift the distribution, so this bounds the outcome rather than finally
+settling it. The *no-benefit* half is distribution-independent, though — `D`
+cannot rise when a frame that does not define it is deleted, and `N` cannot
+fall when the caller satisfying the rule survives. The candidate is declined on
+measurement, and the earlier stated reason is withdrawn as inaccurate.
 
 ### 2026-09-29: closing the gate record at `6abf22d3`
 
