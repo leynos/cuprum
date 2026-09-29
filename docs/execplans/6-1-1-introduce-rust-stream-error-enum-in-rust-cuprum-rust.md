@@ -786,9 +786,12 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `_rust_stream_test_support._safe_close` because that file is not in the
   change surface and the PR is at its file-count tolerance (see below). Second,
   the `_MAX_BUFFER_SIZE` mirror comment named `rust/cuprum-rust/src/lib.rs`, but
-  `MAX_BUFFER_SIZE` is defined in `rust/cuprum-streams/src/lib.rs` and merely
-  re-exported; corrected. Both were pre-existing on `main`, not introduced by
-  this branch.
+  `MAX_BUFFER_SIZE` is defined in `rust/cuprum-streams/src/lib.rs`. The const
+  is private to that crate and is not re-exported anywhere; `cuprum-rust`
+  inherits the same 1 GiB cap indirectly, through
+  `cuprum_streams::BufferSize::new`, which is why the comment looked plausible
+  where it was. Corrected to name the defining file. Both were pre-existing on
+  `main`, not introduced by this branch.
 
   The change lands the PR at **18 of 18** files excluding the lockfile and this
   plan, exactly at the tolerance rather than over it. That budget is why the
