@@ -427,7 +427,9 @@ Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
 `coverage-upload`, and every `typecheck-test` leg. The matrix has no 3.13 leg:
 the coverage job runs that interpreter's suite and `extension-tests` runs its
-`make typecheck`, so every leg compiles and none is gated. A job that installs
+`make typecheck`, so no leg is gated by `python-suite`. The 3.15a leg still
+skips every step on pull requests through `LEG_RUNS`, so each other leg
+compiles on every event and that one compiles when it runs. A job that installs
 sccache and then reports zero compile requests looks exactly like one whose
 `RUSTC_WRAPPER` never reached the compiler, which is a failure this repository
 has already had, and a leftover `matrix.python-suite` guard would now skip its

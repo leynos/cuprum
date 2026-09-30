@@ -192,8 +192,9 @@ interpreter's suite and `extension-tests` runs its typechecker, so a leg would
 only start a runner to repeat one of them. `extension-tests` therefore owns
 both 3.13 families: the unoptimized compiler family, which it compiles, and the
 3.13 tool family, which it saves on `main` after a miss. Every remaining matrix
-leg compiles, so none of them can freeze a rolling generation by republishing
-it unchanged.
+leg compiles when it runs (the 3.15a leg is skipped on pull requests), and
+compiler-cache publication happens on `main` pushes, so none of them can freeze
+a rolling generation by republishing it unchanged.
 
 `tests/helpers/ci_cache_families.py` resolves the family each save step
 actually publishes, expanding matrix legs and honouring a save condition that
