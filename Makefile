@@ -219,7 +219,7 @@ PYLINT_CACHE ?= .cache/pylint
 PYLINT_ENV = PYLINTHOME=$(PYLINT_CACHE)
 PYLINT = $(PYLINT_ENV) $(UV_RUN_ENV) uv tool run --python $(PYLINT_PYTHON) \
   --from 'pylint==$(PYLINT_VERSION)' pylint
-TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.2
+TYPOS_CONFIG_BUILDER_VERSION ?= v0.1.3
 TYPOS_CONFIG_BUILDER = $(UV_RUN_ENV) uv tool run --python 3.14 --from \
   "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" \
   typos-config-builder
