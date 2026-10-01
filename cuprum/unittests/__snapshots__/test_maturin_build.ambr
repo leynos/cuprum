@@ -53,6 +53,7 @@
       'cuprum/_process_exit.py',
       'cuprum/_process_lifecycle.py',
       'cuprum/_result_assembly.py',
+      'cuprum/_result_types.py',
       'cuprum/_rusage.py',
       'cuprum/_rust_backend.py',
       'cuprum/_rust_backend_native.<abi3-extension>',

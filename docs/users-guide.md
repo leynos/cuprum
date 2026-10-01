@@ -231,6 +231,66 @@ independent. `RunOutputOptions.on_line` observes decoded lines even when
 capture and echo are off. Its callback runs synchronously and should return
 promptly; line order is guaranteed within each stream, not across streams.
 
+### Binary output
+
+Capture decodes by default, so `stdout` and `stderr` are strings and bytes the
+child wrote that are not valid UTF-8 arrive with each offending byte replaced by
+`U+FFFD`. That is the right answer for text and the wrong one for anything else:
+a decoded capture cannot be turned back into the bytes the child wrote, so a
+caller who needs the original would have to pick a surrogate encoding and undo
+it afterwards.
+
+`SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
+counterparts, are the same runs as `run()` and `run_sync()` with capture left
+undecoded. They take the same `output`, `timeout`, `context`, and (for a single
+command) `stdin` arguments, and return `BytesCommandResult` or
+`BytesPipelineResult` instead of their text-mode counterparts. Those two classes
+declare the same fields as `CommandResult` and `PipelineResult`, including the
+full set of measurements (`pid`, `started_at`, `duration`, `max_rss_bytes`,
+`user_cpu_seconds`, `system_cpu_seconds`, and `relay_fallbacks`), so a caller
+that needs the byte-exact value does not lose the diagnostics. The output fields
+of a `BytesCommandResult` are `bytes | None`, and each stage of a
+`BytesPipelineResult` is a `BytesCommandResult`.
+
+Text remains the default, and the mode is explicit: `run()` never returns bytes
+and `run_bytes()` never returns text, so a mismatch is a bug rather than a
+runtime surprise. Everything the text-mode entry points promise still holds —
+timeout partial output is carried through in the same field, `capture=False`
+still yields `None` rather than `b""`, and `cancelled` is reported the same way.
+
+Binary mode covers capture. A run that asks for `on_line` cannot be given one:
+line observation is defined on decoded text, and the line-boundary and encoding
+bookkeeping would have to decode exactly the bytes the mode exists to preserve.
+`run_bytes(on_line=...)` is rejected with `ValueError` before the child is
+spawned. Echoing, sinks, and idle heartbeats are unaffected, since they mirror
+output rather than report it; a sink that cannot encode the child's bytes
+records a `relay_fallback` exactly as it does in text mode.
+
+For a pipeline, the same rule applies to each stage: only the final stage's
+stdout is captured, interior stdout feeds the next stage and is reported as
+`None`, and each stage reports its own `stderr`.
+
+<!-- tested-example: binary-output -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="binary-output")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+result = python(
+    "-c", f"import sys; sys.stdout.buffer.write({payload!r})"
+).run_bytes_sync()
+assert result.ok
+assert result.stdout == payload
+```
+
+The same command through `run_sync()` reports `stdout` as text: a `str` of the
+same length whose invalid bytes have each become `U+FFFD`, which is why the
+comparison above can only pass in binary mode.
+
 ### Line-level output
 
 <!-- tested-example: output -->

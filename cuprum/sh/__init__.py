@@ -8,9 +8,11 @@ The implementation is split across submodules by responsibility:
 
 - ``argv`` builds argument vectors.
 - ``execution`` holds the execution context, stdin, and timeout types.
-- ``results`` holds ``CommandResult`` and ``PipelineResult``.
+- ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
+  counterparts ``BytesCommandResult`` and ``BytesPipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
-- ``safe_cmd`` holds the ``SafeCmd`` and ``Pipeline`` execution primitives.
+- ``safe_cmd`` holds the ``SafeCmd`` execution primitive and its builder.
+- ``pipeline`` holds the ``Pipeline`` execution primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``
