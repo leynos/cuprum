@@ -131,6 +131,46 @@ would produce `--check=True`. `None` raises `TypeError` in either position, so
 decide whether to omit or substitute an optional flag before building. An
 argument containing spaces remains one argument.
 
+Names that configure _how_ a command runs are reserved: the fields of
+`ExecutionContext` (`env`, `cwd`, `cancel_grace`, `native_pump_cleanup_grace`,
+`timeout`, `stdout_sink`, `stderr_sink`, `encoding`, `errors`, `tags`) and the
+parameters of `run_sync` (`output`, `timeout`, `context`, `stdin`). Passing one
+as a keyword raises `TypeError` instead of rendering it as a child flag.
+
+<!-- tested-example: reserved-execution-options -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="reserved")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+try:
+    python("-c", "print('unused')", cwd="/tmp")
+except TypeError as exc:
+    assert str(exc) == (
+        "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
+    )
+else:
+    raise AssertionError("cwd should not become a child flag")
+try:
+    python("-c", "print('unused')", timeout=5)
+except TypeError as exc:
+    assert str(exc) == "timeout is an execution option; pass timeout=... to run_sync"
+else:
+    raise AssertionError("timeout should not become a child flag")
+```
+
+Otherwise `cwd=repo_dir` would quietly become `--cwd=<path>` in the child's
+argv, and a run that rejected the flag would fail loudly while one that ignored
+it would run in the wrong directory. Pass the value where it belongs —
+`run_sync(context=ExecutionContext(cwd=...), timeout=..., stdin=...)`, as
+[Supply input, environment, and a deadline](#supply-input-environment-and-a-deadline)
+shows. A tool whose command line genuinely takes such a flag still receives it
+positionally, as `"--cwd=<dir>"`. Names merely resembling the reserved ones,
+such as `working_dir` or `stdin_file`, are unaffected.
+
 <!-- tested-example: arguments -->
 
 ```python

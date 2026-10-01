@@ -335,6 +335,22 @@
 
 ### Breaking changes
 
+- **Builder keywords named after execution options are rejected:** `sh.make()`
+  builders serialized every keyword into a child `--name=value` argument, so
+  `python("-c", script, cwd=repo_dir)` produced `--cwd=<path>` instead of
+  changing the child's working directory — `git("tag", cwd=repo_dir)` ran in
+  the ambient directory, and a tool that ignores unknown flags succeeded in the
+  wrong place with no error. The builder now raises `TypeError` for the
+  `ExecutionContext` field names (`env`, `cwd`, `cancel_grace`,
+  `native_pump_cleanup_grace`, `timeout`, `stdout_sink`, `stderr_sink`,
+  `encoding`, `errors`, `tags`) and for `run_sync`'s parameters (`output`,
+  `timeout`, `context`, `stdin`), with a message naming the correct spelling:
+  `cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync`.
+  Pass the value to `run_sync(context=..., timeout=..., stdin=...)` instead. A
+  command line that genuinely takes such a flag still receives it positionally
+  (`python("--cwd=<dir>")`), and names merely resembling the reserved ones —
+  `working_dir`, `stdin_file` — keep rendering as flags
+  ([#513](https://github.com/leynos/cuprum/issues/513)).
 - **`ProgramCatalogue.visible_settings` is now a property:** Prefer
   `catalogue.visible_settings` over the former callable spelling. Existing
   `catalogue.visible_settings()` callers remain supported during the next-minor
