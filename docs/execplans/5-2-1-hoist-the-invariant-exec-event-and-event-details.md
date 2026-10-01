@@ -1,21 +1,22 @@
 # Hoist invariant execution-event fields (5.2.1)
 
 Status: **COMPLETE — R3 met at the revised 30% target, all three milestones
-done, every deterministic gate green, and hosted CI green at the current
-head.** EP-M2 is implemented, and the completed hoist measures **29.91%**
-(median of three matched pairs, candidate range 0.0423 points) against the
-**30%** bar approved on 2026-09-27. That is up from 28%, which the same
-captures missed by 1.90 points; the revision is the one this plan's Tolerances
-section required, and it was granted on the measurement rather than on a
-further projection (see "The 30% revision, and why the margin is thin" below).
-All four acceptance requirements R1–R4 are met. EP-M1 is complete; EP-M3's
-evidence artefact (`docs/tee-hotpath-line-event-emission-5-2-1.md`),
-documentation closeout (design §8.1.3, both guides, contents index), roadmap
-tick, and changelog entry are all committed. The pass is *not* a weakening of a
-met criterion for its own sake: the same collection shows the candidate 30.96%
-faster in median wall time, the three controls exceed the 30% bar by 4.04 to
-5.35 points, and the margin over 30% is 0.0586 points against a 0.0423-point
-spread — thin, recorded as thin, and forecast to be inverted by 5.2.2.
+done, every deterministic gate green, and the hosted status checks that failed
+mid-branch since repaired.** EP-M2 is implemented, and the completed hoist
+measures **29.91%** (median of three matched pairs, candidate range 0.0423
+points) against the **30%** bar approved on 2026-09-27. That is up from 28%,
+which the same captures missed by 1.90 points; the revision is the one this
+plan's Tolerances section required, and it was granted on the measurement
+rather than on a further projection (see "The 30% revision, and why the margin
+is thin" below). All four acceptance requirements R1–R4 are met. EP-M1 is
+complete; EP-M3's evidence artefact
+(`docs/tee-hotpath-line-event-emission-5-2-1.md`), documentation closeout
+(design §8.1.3, both guides, contents index), roadmap tick, and changelog entry
+are all committed. The pass is *not* a weakening of a met criterion for its own
+sake: the same collection shows the candidate 30.96% faster in median wall
+time, the three controls exceed the 30% bar by 4.04 to 5.35 points, and the
+margin over 30% is 0.0586 points against a 0.0423-point spread — thin, recorded
+as thin, and forecast to be inverted by 5.2.2.
 
 Two full local suite runs carry the deterministic evidence, both on frozen
 trees with nothing skipped or bounded: `3315c5c3` (the implementation and
@@ -23,10 +24,17 @@ evidence, all eight gates including `test-act`) and `d98fb5c9` (the review
 dispositions, seven gates — `test-act` not re-run, justified as docstring-only
 in the delta). Every commit above `d98fb5c9` is a documentation edit behind its
 own hash-pinned docs-scoped sweep, so neither full run is superseded; the chain
-is verified as a bijection in the retrospective. Hosted CI is green at
-`e4a53306` — 19 checks pass, 3 deliberate skips, zero failures. The draft
-status of PR #433 and the `CodeRabbit` app's resulting no-op are recorded as
-open items, not as completed review.
+is verified as a bijection in the retrospective. Hosted CI was green at
+`e4a53306` — 19 checks pass, 3 deliberate skips, zero failures — and the two
+status checks that failed at the intermediate head `0783e78f` were repaired
+afterwards, as the 2026-10-01 entry records. PR #433 has since been taken out
+of draft and marked ready for review as `leynos`; the `CodeRabbit` app reviewed
+the branch and returned `CHANGES_REQUESTED`. Both of its pre-merge rows were
+verified accurate for the revision they were pinned to (`2f9519f0`) and are
+fixed on the branch: the invalid-UTF-8 read gap in `_load_rules_json`
+(`e905951f`) and the stale EP-M1 checklist marker (`2b61189d`). All five review
+threads are resolved; the pre-merge table itself is refreshed by a focused
+reconciliation request rather than a new review.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -2699,6 +2707,58 @@ listing because an existing pack exceeded its 524288-byte limit. Investigators
 exchanged source paths and findings instead. No shared service files were
 modified. CodeGraph indexing succeeded, but dynamic callback relationships
 require checking the explicit callback factory bodies as well.
+
+### 2026-10-01: the two hosted-check failures, and what each one indicted
+
+These are *hosted status checks*, not CodeRabbit's "pre-merge checks" table
+further down, which is a separate surface with its own two failed rows. A
+hosted run at the intermediate head `0783e78f` failed two status checks,
+`lint-test` and `CodeScene Code Health Review (main)`. Both are repaired, and
+each is recorded with the measurement that located it, because they failed for
+unrelated reasons and only one of them was a defect in this branch's production
+code.
+
+**`lint-test` aborted at its `pylint` leaf, on two findings in a test module
+this branch added.** `C1803` flagged `assert captured == []` in
+`cuprum/unittests/test_line_event_emission_parity.py`, and `R0917` flagged five
+positional arguments against pylint's limit of four in
+`test_construction_is_counted_only_when_it_precedes_the_dispatcher`
+(`pyproject.toml:247`). The label and dispatcher parameters are independent
+axes — three emission entry points crossed with two dispatcher frames plus the
+direct row — so the cross product cannot fold into one parameter. Both were
+repaired in `ada86e6f`. The folded `hook_owned` case parameter was dropped as a
+derived duplicate of `dispatcher`, leaving all nine cases and their ids
+unchanged.
+
+**`CodeScene Code Health Review (main)` failed at the same head on one
+finding.** `Overall Code Complexity` in
+`benchmarks/_line_event_profile_model.py` — a mean cyclomatic complexity of
+4.07 across 14 functions against a threshold of 4, score 9.38. It was
+reproduced locally with `cs delta origin/main --output-format json`, so the
+finding was located before it was argued with. A bisect over the file's four
+commits placed the regression at `e905951f`, whose third `except` arm in
+`_load_rules_json` — a `UnicodeDecodeError` handler — pushed the score from
+10.00 to 9.38; the docstring added in the same commit scored a clean 10.00 on
+its own, so the arm rather than the prose is what moved the mean. The repair in
+`456a711a` folds the arm into `except (OSError, UnicodeDecodeError)`, which
+keeps the required exit-2 contract and restores the file to 10.00, with
+`cs delta origin/main` then reporting nothing for the branch.
+
+CodeScene is **not** in the required status-check ruleset — verified against the
+`main-required-checks` ruleset — but every recent merged PR passes it, so it
+is treated as a real bar rather than as ambient noise that can be waited out.
+
+**One citation moved under the merge with main.** The two dispatcher frames the
+hook-dispatch guard matches are cited by name and module rather than by line
+number precisely so a merge cannot silently drop the guard, and the merge did
+move both bodies. The classifier's comment now cites
+`cuprum/_pipeline_types.py:220` and `cuprum/_observability.py:88`, which is
+where the definitions sit at this head.
+
+**No committed number moved.** All six committed captures reclassify
+byte-identically to `reclassified-at-30/` after these changes, which is the
+check that the repairs touched the lint surface and the guard's citation rather
+than the measurement.
 
 ## Decision log
 
