@@ -2210,10 +2210,18 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
   Both figures are path counts, so neither decays as this plan grows: the plan
   contributes one path to each frame whether it is long or short, and the two
-  frames differ by the lockfile and the two now-inert typos files. The count is
-  therefore expected to hold at **20 and 18** for the rest of the branch, and a
-  future reader can re-run the two commands above to confirm it rather than
-  trusting this paragraph.
+  frames differed by the two now-inert typos files. The count was therefore
+  expected to hold at **20 and 18** for the rest of the branch. **The rebase
+  recorded below falsified that prediction, and the mechanism is worth
+  keeping.** Measured at `9e97c797`, both commands list the *same* 20 paths —
+  the two lists are identical, verified by diffing them directly — so the
+  branch frame is **18 files**, not 20, and the landing surface is **18**, as
+  it always was. Both typos files left *both* frames at once, because the
+  rebase made them byte-identical to `main`. The prediction assumed the
+  branch's own `typos.toml` edit would keep that file permanently in the branch
+  frame; the rebase removed the edit, and with it the divergence. A future
+  reader should re-run the two commands rather than trust either the prediction
+  or this correction.
 
 - [x] (2026-10-01) **Two claims that a check was supposed to support were
   re-tested, and both checks failed to witness what they asserted.** Found by
@@ -2246,6 +2254,89 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   as its scope. Prefer citing the exact command beside every count, scoped to
   the frame the claim is about, so the next reader re-derives rather than
   trusts.
+
+- [x] (2026-10-01) **The branch was rebased onto `main` at `81efc928`, and the
+  replay falsified the frame-count prediction above it.** The rewrite took the
+  branch from `3937b8b4` to `9e97c797`, replaying 69 commits. No merge driver
+  participated: the repository has no tracked `.gitattributes`, the user-level
+  attributes file is empty, and the rebase ran under a command-scoped
+  `core.attributesFile=/dev/null`. `rerere` was disabled for the rewrite
+  because its cache is shared across worktrees, where a resolution recorded by
+  an unrelated session can be replayed without appearing in the range.
+
+  Exactly one conflict occurred, at `6a17857c` (59 of 69), in
+  `typos.local.toml`. `main` was inserting its pylint and Astroid ignore
+  entries at the same position where that commit added a narrow `'6871ba35'`
+  SHA entry. Resolution took `main`'s side of that file. That is worth
+  justifying rather than asserting, because discarding a branch commit's intent
+  is exactly the failure this entry exists to catch. Three measurements make it
+  safe. The two insertions are independent additions at one site, so neither
+  side's intent contradicts the other. The superseding commit is the
+  *immediately following* one: `e2846439`, replayed next as `d517df9e`, deletes
+  the narrow SHA entry and inserts `main`'s general `'[0-9][0-9a-f]{6,39}'`
+  rule at that same site, so the dropped entry has a working lifetime of one
+  commit. And the final tree is unaffected either way, because
+  `typos.local.toml` at the rebased head is byte-identical to `main`'s.
+
+  **The two frame counts have converged, so the sentence predicting they would
+  hold at 20 and 18 is dead.** Re-measured at `9e97c797`,
+  `git diff --name-only origin/main HEAD` lists 20 paths and
+  `git diff --name-only <merge-tree> origin/main` lists the same 20. The two
+  lists are identical — verified by diffing them directly, not by comparing
+  counts — and both typos files have dropped out of *both* frames. The branch
+  frame is therefore **18 files**, not 20, and the landing surface is **18**,
+  as it always was. The mechanism is that the rebase made the typos files
+  byte-identical to `main`, so they left both frames at once rather than
+  lingering in the branch frame as the prediction assumed. The paragraph above
+  now records the falsification beside the prediction.
+
+  The replay was accepted on an exact oracle rather than on a `range-diff`
+  reading. `git merge-tree --write-tree 3937b8b4 81efc928` yields tree
+  `0a339209`, and `git rev-parse 9e97c797^{tree}` is the same object, so the
+  rebased result is byte-for-byte what a clean merge of the old head and the new
+  `main` would have written. `range-diff` reports 65 of 69 commits identical
+  and four marked `!`. Two of those four are the conflict pair, where the
+  commit legitimately changes: `6a17857c` loses the `typos.local.toml` hunk it
+  can no longer apply, and `e2846439` drops the `typos.toml` insertion already
+  present in its target. The other two are context reformulations with
+  identical net effect — `46f71857` loses a one-line `...` to `pass` hunk that
+  `main` had already applied to the same file, and `11039493` loses a
+  `typos.toml` insertion `main` had by then made itself. In both cases the
+  file's content at the rebased head matches the oracle, so nothing was dropped.
+  `git cherry` confirms the framing: all 69 replayed commits are `+` and none
+  is `-`, against a `main` that carries 20 commits the branch did not have.
+
+  The semantic audit of the completed rebase was clean on every check. Zero
+  conflict markers remain (`git grep -E '^(<<<<<<<|>>>>>>>)'` finds none). All
+  243 target-only paths are byte-identical at the rebased head, so no target
+  change was reverted. Every deletion against the target in a branch-touched
+  file maps to a branch-intended deletion, with matching counts: 117, 38 and 1
+  for the boundary module, the developers' guide and the roadmap, and zero for
+  the remaining shared paths. That is why the `Makefile` now shows three
+  additions and no deletions — `main`'s pylint and PyPy 3.12 overhaul landed
+  intact and this branch's three `EXTENSION_TEST_TARGETS` entries sit on top. A
+  repeated-block scan that flags only blocks occurring more often at the
+  rebased head than on *either* input side reports zero findings, which is the
+  check that would catch reconstruction duplication.
+
+  The rebased head changes the verification surface, so the gate evidence
+  gathered for `3937b8b4` does not carry over and the four gates were re-run
+  against the rebased tree. All four passed at `9e97c797` with a clean tree
+  before and after each, and each log records its own `HEAD_BEFORE` and
+  `HEAD_AFTER` as that same commit, so no result is invalidated by a later HEAD
+  move. `make test` ran 10 `pytest` invocations (2716 passed and 8 skipped in
+  the largest, 3639 passed and 8 skipped across all ten), 160 of 160 `nextest`
+  cases, and three doctest crates. `make check-fmt` reported 702 files
+  formatted, the Rust formatter clean, and 83 Markdown files unchanged.
+  `make typecheck` passed under `ty 0.0.74`. `make lint` reached all sixteen of
+  its sub-checks: both pylint leaves scored 10.00/10, the coverage check
+  reported `PASSED (minimum: 100.0%, actual: 100.0%)`, and the Actions leaf ran
+  `yamllint` and `actionlint` rather than aborting at `ensure_tool`. The
+  `pylint-classic` PyPy 3.12 bootstrap was served from the worktree cache, so
+  the predicted download risk did not materialize. Logs live under `/tmp` as
+  `{check-fmt,test,typecheck,lint}-74fbe974-<branch>.out`; per this plan's
+  practice a gate log is cited by the `HEAD_BEFORE` recorded inside it, not by
+  its filename, because a filename does not record which revision produced it.
 
 ## Surprises & discoveries
 
