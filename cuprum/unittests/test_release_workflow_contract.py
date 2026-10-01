@@ -15,7 +15,6 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from tests.helpers.ci_codescene import CREDENTIAL_CHECK_COMMAND, CREDENTIAL_CHECK_ID
 from tests.helpers.ci_workflows import ROOT, jobs, workflow_document
 from tests.helpers.release_workflow import WORKFLOW, step, step_script
 from tests.helpers.strict_yaml import load
@@ -42,9 +41,16 @@ _EXPECTED_PERMISSIONS: typ.Final = {
 }
 _FETCH_INDEX = "Fetch the PyPI index"
 
+#: The `id` of the publisher step that reports whether the CodeScene token
+#: exists, and that step's whole command.
+CREDENTIAL_CHECK_ID: typ.Final = "codescene-token"
+CREDENTIAL_CHECK_COMMAND: typ.Final = (
+    'echo "available=${{ secrets.CS_ACCESS_TOKEN != \'\' }}" >> "$GITHUB_OUTPUT"'
+)
+
 #: The one reviewed template expansion inside a shell script. It renders only
-#: `true` or `false`, and the CodeScene contract requires the secret to be read
-#: there rather than through an `env` value (see `tests/helpers/ci_codescene.py`).
+#: `true` or `false`, and the shared CV-005 contract (`token.check-step`)
+#: requires the secret to be read there rather than through an `env` value.
 _ALLOWED_EXPANSIONS: typ.Final = frozenset({
     ("coverage-main.yml", CREDENTIAL_CHECK_ID, CREDENTIAL_CHECK_COMMAND)
 })

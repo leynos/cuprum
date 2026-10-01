@@ -22,7 +22,7 @@ import yaml
 from tests.helpers.docs import repo_root
 
 _MAKEUTIL_COMMAND: typ.Final = ("makeutil", "parse", "Makefile")
-_TYPOS_CONFIG_BUILDER_VERSION_TOKENS: typ.Final = ("v0.1.2",)
+_TYPOS_CONFIG_BUILDER_VERSION_TOKENS: typ.Final = ("v0.1.3",)
 _TYPOS_CONFIG_BUILDER_TOKENS: typ.Final = (
     "$(UV_RUN_ENV)",
     "uv",

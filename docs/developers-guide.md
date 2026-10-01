@@ -579,38 +579,36 @@ supersedes it. The properties worth pinning are these:
   The shared action already defaults to `upload`, so that input is not
   load-bearing today, but the sibling `check` mode is the pull-request
   comparison, and switching to it would silently retire main-branch publication.
-- **Both contracts are pinned.** `tests/test_ci_ratchet_publication.py`
-  evaluates the publication expression per event rather than matching its text,
-  `tests/test_ci_codescene_boundary.py` asserts the upload mode by value, and
-  `tests/test_ci_codescene_publisher.py` holds the token check, the direct
-  input, the absence of the token from anywhere else in the workflow, and the
-  exact concurrency. It splits the upload guard on `&&` and refuses any unquoted
-  `||`: an alternative hidden in an extra narrowing conjunct, as in
+- **The publication expression and the rest are pinned.**
+  `tests/test_ci_ratchet_publication.py` evaluates the publication expression
+  per event rather than matching its text. The shared CV-005 contract
+  (`cv005-contracts`, run by `make test-workflow-contracts` from a full commit
+  named by `CV005_CONTRACTS_REF` in the Makefile) holds the upload mode, the
+  token check, the direct input, the absence of the token from anywhere else in
+  the workflow, and the exact concurrency. It splits the upload guard on `&&`
+  and refuses any unquoted `||`: an alternative hidden in an extra narrowing
+  conjunct, as in
   `<guard> && github.actor != 'x' || github.event_name == 'workflow_dispatch'`,
   leaves both required conjuncts whole while making them optional.
 
 Nothing a pull request can run may contact CodeScene or reach its token, and
-"can run" is a closure rather than a trigger list.
-`tests/helpers/ci_closure.py` starts from every workflow triggered by
-`pull_request` or `pull_request_target` and follows same-repository
-reusable-workflow calls transitively, because a `workflow_call` workflow runs
-on its caller's pull request and `secrets: inherit` hands it the token. It reads
-`on:` as a scalar, a sequence, or a mapping, under the string key or the
-boolean `True`, and it matches a local call by shape: strip a leading `./` or
-`$/` and ask whether the rest names a file directly under `.github/workflows/`.
-A local call it cannot resolve fails the contract rather than shrinking the
-set, and so does a call to `leynos/cuprum/.github/workflows/...@ref`, which
-names this repository at a revision the contract cannot read. A workflow
-triggered by `workflow_run` on a reached workflow's `name:` joins the closure
-too: it runs downstream with the repository's secrets.
-`tests/helpers/ci_codescene.py` then walks every key and string value of each
-reached document, so a `run` body, an action input, an `env` value at any
-scope, and a `secrets:` forwarding are all read, along with `secrets: inherit`
-and `toJSON(secrets)`. Secret names are matched case-insensitively, as GitHub
-resolves them. Both helpers serve these contracts only;
-`tests/test_ci_codescene_closure.py` proves each reader against constructed
-workflows, including a called workflow that curls the CodeScene API with an
-inherited token, which the earlier single-job contract passed.
+"can run" is a closure rather than a trigger list. The shared contract starts
+from every workflow triggered by `pull_request` or `pull_request_target` and
+follows same-repository reusable-workflow calls transitively, because a
+`workflow_call` workflow runs on its caller's pull request and
+`secrets: inherit` hands it the token. A local call it cannot resolve fails the
+contract rather than shrinking the set, and so does a call to
+`leynos/cuprum/.github/workflows/...@ref`, which names this repository at a
+revision the contract cannot read. A workflow triggered by `workflow_run` on a
+reached workflow's `name:` joins the closure too: it runs downstream with the
+repository's secrets. Every key and string value of each reached document is
+read, so a `run` body, an action input, an `env` value at any scope and a
+`secrets:` forwarding are all seen, along with `secrets: inherit` and
+`toJSON(secrets)`. The library's own suite proves each reader against
+constructed workflows, so this repository keeps no copy of them. The target
+needs `uv`, which fetches the Python 3.13 the library runs under; the
+repository's one parameter is its `repository` name in `.github/cv005.toml`,
+and CI runs the target as its own step in `lint-test`.
 
 Every workflow and composite-action reader in the suite parses through
 `tests/helpers/strict_yaml.py`, a `SafeLoader` that refuses a mapping declaring
@@ -658,12 +656,12 @@ change the Makefile when changing the formatter toolchain. Coverage, release,
 verification, MSRV, and Whitaker commands, together with macOS and Windows,
 retain their prescribed fragment-free or separately pinned toolchains. The
 stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
-maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
-job environment (`0.2.7`, the workflow's configured installer version). The
-Makefile runs `lint-clippy`, `lint-whitaker`, and spelling sequentially;
-`lint-whitaker` passes Cargo `--package` arguments for `cuprum-rust`,
-`cuprum-streams`, and `cuprum-native-io` after Whitaker's `--` separator.
-Whitaker's `--all` chooses lint libraries, not workspace packages.
+maintenance. The Whitaker action takes no installer-version input: it pins its
+own installer version (0.2.9 or later), and refuses a caller-supplied one below
+that. The Makefile runs `lint-clippy`, `lint-whitaker`, and spelling
+sequentially; `lint-whitaker` passes Cargo `--package` arguments for
+`cuprum-rust`, `cuprum-streams`, and `cuprum-native-io` after Whitaker's `--`
+separator. Whitaker's `--all` chooses lint libraries, not workspace packages.
 
 Whitaker's lint suite is a rolling release, and that is the distribution model
 rather than a defect. Its `rolling-release.yml` runs on every push to `main`
