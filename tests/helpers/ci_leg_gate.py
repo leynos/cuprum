@@ -12,10 +12,13 @@ is absent. The strip is exact rather than tolerant so that no other guard can
 hide behind it. Scope: `typecheck-test` only; every other job's guard is
 returned unchanged.
 
-The two readings compose into the question a caller usually has — "would this
-job run that command on a pull request?" — which is :func:`pull_request_legs`:
-the job's flag decides whether the leg is enabled for the event, and the
-stripped guard decides whether the step admits it.
+The readings compose into the question a caller usually has — "would this job
+run that command on a pull request?" — which is :func:`pull_request_legs`: the
+job's flag decides whether the leg is enabled for the event, and the stripped
+guard decides whether the step admits it. That last part is
+`ci_leg_matrix.admits_event` rather than `ci_leg_matrix.admits`, because the
+question names an event and a guard may be gated on one; see that function for
+why the permissive reading is unsafe in this direction.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from __future__ import annotations
 import re
 import typing as typ
 
-from tests.helpers.ci_leg_matrix import admits, matrix_legs
+from tests.helpers.ci_leg_matrix import admits_event, matrix_legs
 from tests.helpers.ci_workflows import job_env, steps
 from tests.helpers.workflow_shell import script_runs_command
 
@@ -235,13 +238,20 @@ def pull_request_legs(
     """Return the pull-request legs a workflow's job would run a target on.
 
     The suite selector is only evaluated if some job step runs the target on a
-    lane a pull request actually schedules, and "runs" has two conditions that
-    a reader of the step's text alone cannot separate: the step's own guard
-    admits the leg, and the job's leg flag leaves the leg enabled for this
-    event. A job whose suite step is gated on a pre-release-only matrix key,
-    or whose every admitting leg is switched off by a flag, still contains the
+    lane a pull request actually schedules, and "runs" has three conditions
+    that a reader of the step's text alone cannot separate: the step's own
+    guard admits the leg, the guard's event clauses hold for a pull request,
+    and the job's leg flag leaves the leg enabled for this event. A job whose
+    suite step is gated on a pre-release-only matrix key, on another event, or
+    whose every admitting leg is switched off by a flag, still contains the
     command text and would satisfy a text-only check while CI collected
     nothing on the branch that merges.
+
+    The event half is why this reads the guard through
+    `ci_leg_matrix.admits_event` rather than `ci_leg_matrix.admits`: the latter
+    resolves a guard over the leg alone and treats an unmodellable clause as
+    satisfied, which is the safe direction for the cache-ownership caller and
+    the unsafe one here.
 
     Parameters
     ----------
@@ -267,7 +277,9 @@ def pull_request_legs(
     Raises
     ------
     AssertionError
-        If the job or its steps are not the shape the readers narrow them to.
+        If the job or its steps are not the shape the readers narrow them to,
+        or if a step running ``target`` carries a guard clause this reader
+        cannot resolve for a pull request; see `ci_leg_matrix.admits_event`.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the readers this composes
     found: list[StepLanes] = []
     for step in steps(workflow_name, job_name):
@@ -275,11 +287,15 @@ def pull_request_legs(
         if not isinstance(script, str) or not script_runs_command(script, target):
             continue
         guard = ungated(workflow_name, job_name, step.get("if"))
+        subject = (
+            f"{workflow_name}:{job_name} step "
+            f"{step.get('name', step.get('uses', '?'))!r}"
+        )
         lanes = [
             tuple(f"{key}={leg[key]}" for key in sorted(leg))
             for leg in matrix_legs(workflow_name, job_name)
             if flag_holds_on(workflow_name, job_name, leg, _PULL_REQUEST)
-            and admits(guard, leg)
+            and admits_event(guard, leg, _PULL_REQUEST, subject=subject)
         ]
         if lanes:
             found.append((str(step.get("name", step.get("uses", "?"))), tuple(lanes)))

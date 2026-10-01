@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from tests.helpers.ci_leg_gate import flag_holds_on, pull_request_legs
 from tests.helpers.ci_leg_matrix import matrix_legs
 from tests.helpers.ci_run_scripts import run_scripts
@@ -32,8 +34,6 @@ from tests.helpers.suite_selection import SELECTOR
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
-    import pytest
-
     from tests.helpers.workflow_types import Step
 
 #: The workflow, job, and target that run the Python suite for a pull request.
@@ -197,6 +197,91 @@ def test_a_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
         "a step gated on a key a pull-request leg does set must be reported, "
         "or the previous assertion holds for a reader that finds nothing"
     )
+
+
+def test_an_event_guarded_suite_step_is_not_counted_as_a_pull_request_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show a step gated on another event is not reported as a PR lane.
+
+    The finding this closes: the lane check read `admits`, which resolves a
+    guard over the leg alone, so a clause naming no matrix key — including
+    ``github.event_name == 'push'`` — counted as satisfied. A suite step gated
+    that way ran only on pushes, and the check certified it as running on every
+    pull request.
+
+    The seeded fault is the exact guard from that report:
+    ``github.event_name == 'push' && matrix.python-suite && env.LEG_RUNS ==
+    'true'``. The matrix half and the leg flag are satisfied on a pull request,
+    so only the event clause decides the answer, and the check must report
+    nothing. The second half re-gates the same step on the pull-request event
+    and requires it back, so the first half cannot hold for a reader that had
+    simply stopped finding the command.
+    """
+    flag = "env.LEG_RUNS == 'true'"
+    real_steps = steps(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+
+    def suite_step_gated_on(event_clause: str) -> list[Step]:
+        """Return this job's steps with the suite step guarded by an event."""
+        faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
+        suite = next(
+            step
+            for step in faulted
+            if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
+        )
+        suite["if"] = f"{event_clause} && matrix.python-suite && {flag}"
+        return faulted
+
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "the estate must already satisfy this check, or the seeded fault is "
+        "not the difference under test"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_gated_on("github.event_name == 'push'"),
+    )
+    assert not pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on a push must not be reported as running on a pull "
+        "request; reading the event clause as satisfied is the defect this "
+        "check exists to catch"
+    )
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps",
+        lambda _workflow, _job: suite_step_gated_on(
+            "github.event_name == 'pull_request'"
+        ),
+    )
+    assert pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET), (
+        "a step gated on the pull-request event must be reported, or the "
+        "previous assertion holds for a reader that finds nothing"
+    )
+
+
+def test_an_unmodellable_context_guard_is_refused_rather_than_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show a context clause the reader cannot resolve fails loudly.
+
+    `admits_event` admits a clause by recognizing it, not by escaping
+    recognition, and the refusal has to be exercised: otherwise a later reader
+    could quietly restore the permissive behaviour and only the one event
+    spelling above would notice. ``github.ref`` is a context value no leg and
+    no event name resolves, so it is the shape the refusal exists for.
+    """
+    flag = "env.LEG_RUNS == 'true'"
+    real_steps = steps(CI_SUITE_WORKFLOW, CI_SUITE_JOB)
+    faulted = typ.cast("list[Step]", [dict(step) for step in real_steps])
+    suite = next(
+        step
+        for step in faulted
+        if script_runs_command(str(step.get("run", "")), CI_SUITE_TARGET)
+    )
+    suite["if"] = f"github.ref == 'refs/heads/main' && {flag}"
+    monkeypatch.setattr(
+        "tests.helpers.ci_leg_gate.steps", lambda _workflow, _job: faulted
+    )
+    with pytest.raises(AssertionError, match=r"reads a value this reader cannot"):
+        pull_request_legs(CI_SUITE_WORKFLOW, CI_SUITE_JOB, CI_SUITE_TARGET)
 
 
 def test_the_suite_target_recipe_consumes_the_selector() -> None:

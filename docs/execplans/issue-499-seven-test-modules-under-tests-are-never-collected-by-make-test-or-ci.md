@@ -326,6 +326,40 @@ contract module under `tests/` and forgets to name it will be told so by
   `tests/test_ci_workflow_bash_env_contract.py`, the remedy the guard's own
   failure message prescribes, which keeps `EXCEPTIONS` empty as designed. All
   54 guard assertions pass.
+- [x] (2026-10-01) Reconciled three review findings on the published head.
+  Each was verified against the tree before repair, and each repair is a
+  behaviour change rather than a comment edit:
+  - *Reject unevaluated PR guard clauses* (the load-bearing one). The lane check
+    read guards through `ci_leg_matrix.admits`, which resolves a clause over the
+    leg alone and treats an unmodellable clause as **satisfied** — the safe
+    superset direction for the cache-ownership caller, and exactly the wrong one
+    for a check that asks "does this run on a pull request". A suite step gated
+    `github.event_name == 'push' && matrix.python-suite && env.LEG_RUNS ==
+    'true'` was therefore reported as running on two pull-request lanes while
+    running on none. Fixed by giving the event-aware question its own resolver,
+    `ci_leg_gate.admits_event`, which evaluates `github.event_name` comparisons
+    against the event, reads matrix clauses over the leg, admits the status
+    functions, and **refuses** any other clause rather than trusting it.
+    `admits` is unchanged, because
+    `tests/test_ci_cache_families_helper.py` pins its permissive contract as
+    deliberate. The hole is now closed by two tests in
+    `test_ci_suite_wiring_contract.py`: the report's own `push` guard must
+    report no lane, the pull-request spelling of the same guard must report the
+    lanes back, and an unmodellable `github.ref` clause must fail loudly.
+  - *Non-mapping matrix `include` entries were dropped silently.* `matrix_legs`
+    now refuses an entry that is not a mapping, naming the workflow, the job,
+    and the index. A list of such entries previously expanded to zero legs,
+    which makes every "some leg admits this" question vacuously false rather
+    than loud.
+  - *The ExecPlan's `Interfaces and dependencies` block had drifted from the
+    code*: it attributed `selected_paths` to `tests/helpers/makefile.py` (it
+    lives in `tests/helpers/suite_selection.py`), named a `_remedy` that is
+    public as `remedy`, and cited a test name retired by the rebase. Corrected
+    against the modules rather than the prose.
+  The negative control for the first finding was run as a probe before the fix
+  and recorded: the old reader returns `True` for the `push`-guarded step
+  evaluated for a pull request, which is precisely the false certification the
+  report describes.
 
 ## Surprises & discoveries
 
@@ -984,9 +1018,6 @@ reader is not misled by the earlier version:
 ```python
 def makeutil_document(*, makefile: str = "Makefile") -> dict[str, Any]: ...
 def variable_expansion(name: str, *, makefile: str = "Makefile") -> tuple[str, ...]: ...
-def selected_paths(
-    patterns: Iterable[str], *, root: Path | None = None
-) -> tuple[Path, ...]: ...
 def recipe_of(name: str, *, makefile: str = "Makefile") -> str: ...
 ```
 
@@ -997,10 +1028,21 @@ tuple, not one string — after collapsing `\`-newline continuations the way
 an empty string. The `makefile` keyword exists so the helper's own tests can
 parse a temporary Makefile; the guard never passes it.
 
-`selected_paths` resolves patterns against the repository root and returns the
-files they name, sorted and deduplicated. A pattern without a `.py` suffix
-contributes nothing, and a pattern matching nothing contributes nothing — the
-same behaviour as `make test-python`, whose loop skips a pattern whose first
+`selected_paths` lives in `tests/helpers/suite_selection.py`, not in the
+Makefile reader, because resolving patterns needs the root-module enumeration's
+view of the tree rather than the Makefile's. Its signature:
+
+```python
+# In tests/helpers/suite_selection.py:
+def selected_paths(
+    patterns: Iterable[str], *, root: Path | None = None
+) -> tuple[Path, ...]: ...
+```
+
+It resolves patterns against the repository root and returns the files they
+name, sorted and deduplicated. A pattern without a `.py` suffix contributes
+nothing, and a pattern matching nothing contributes nothing — the same
+behaviour as `make test-python`, whose loop skips a pattern whose first
 expansion does not exist. A bare word in the selector is therefore a mistake
 rather than a file, and the guard's
 `test_the_selector_resolves_the_whole_root_module_population` is what makes
@@ -1019,16 +1061,40 @@ EXCEPTIONS: Final[dict[str, Exemption]] = {}  # module -> (selector, target, rea
 
 def test_every_root_level_module_has_a_ci_route() -> None: ...
 def test_the_exception_mechanism_reports_an_uncovered_module() -> None: ...
-def test_the_seven_reported_modules_are_now_collected() -> None: ...
+def test_the_six_reported_modules_are_now_collected() -> None: ...
 def test_the_selector_resolves_the_whole_root_module_population() -> None: ...
 def test_each_root_module_matches_a_selector_pattern(module: str) -> None: ...
 def test_ci_invokes_the_target_that_consumes_the_selector() -> None: ...
 def test_the_suite_target_recipe_consumes_the_selector() -> None: ...
 ```
 
+The two guard readings of a step guard both live in `ci_leg_matrix.py` as
+built, because the second is the first plus one more resolved value rather than
+a different subject:
+
+```python
+# In tests/helpers/ci_leg_matrix.py:
+def matrix_legs(workflow_name: str, job_name: str) -> list[dict[str, object]]: ...
+def clauses(condition: str) -> list[str]: ...
+def admits(condition: object, leg: Mapping[str, object]) -> bool: ...
+def admits_event(
+    condition: str, leg: Mapping[str, object], event: str, *, subject: str
+) -> bool: ...
+```
+
+`admits` resolves a clause over the leg alone and reads anything else as
+satisfied — the superset direction the cache-ownership caller needs, pinned as
+deliberate by `tests/test_ci_cache_families_helper.py`. `admits_event` is the
+reading the pull-request question needs: it evaluates `github.event_name`
+comparisons against the event, delegates the matrix clauses to `admits`, admits
+the status functions (`always()` and siblings), and **refuses** any clause
+outside those three forms. `ci_leg_gate.py` keeps the leg flag — `ungated`,
+`flag_holds_on` — and composes the two in `pull_request_legs`, which is the
+only caller of `admits_event`.
+
 Two tests beyond the plan's sketch are worth naming.
 `test_the_exception_mechanism_reports_an_uncovered_module` is the seeded-fault
-control: it drives `_remedy` with a module that cannot exist so the empty
+control: it drives `remedy` with a module that cannot exist so the empty
 exception table is exercised rather than assumed.
 `test_the_suite_target_recipe_consumes_the_selector` closes the gap between the
 Makefile and the workflow from the other side: a target named `test-python`

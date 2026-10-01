@@ -19,14 +19,21 @@ does this guard mean" for every reader that needs it: the cache-ownership rule
 asks whether a *save* step fires on a leg, and the selection contract asks
 whether the suite *runs* on one. Both questions are the same evaluation.
 
-An unmodellable clause is not a failure. A guard naming
-``steps.tool-cache.outputs.cache-hit`` reads a value no matrix leg settles, and
-a rule that refused it would reject ordinary workflows. Those clauses are
-treated as satisfied, so the set of admitted legs is a **superset** of the legs
-that really run. That direction is the safe one for every caller here: a
-contract asking "does this step run on a pull-request leg" is answered yes only
-when some leg's own values make it so, and an unknown clause can never turn a
-leg that genuinely runs into one that appears not to.
+:func:`admits` resolves a clause over the leg alone, so a value a leg does not
+carry — an unmodellable ``steps.`` output, or the event name — is treated as
+satisfied and the set of admitted legs is a **superset** of the legs that
+really run. That direction is the safe one for the cache-ownership caller,
+which asks "could this save step fire on this leg" and must not drop a writer.
+
+It is the wrong direction for the caller that asks "does this step run on a
+pull request". There, an event clause is exactly what decides the answer, and
+reading ``github.event_name == 'push'`` as satisfied would certify a suite on a
+lane that never runs it. That caller needs the clause evaluated rather than
+trusted, which the leg alone cannot do: :func:`admits_event` folds in the event
+name and refuses the clauses it still cannot settle. The split is the point —
+`admits` stays a conservative superset over legs, and the event-aware reading
+that the pull-request question actually needs is stated beside it rather than
+weakened into it.
 """
 
 from __future__ import annotations
@@ -41,7 +48,10 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = (
+    "MATRIX_CLAUSE_PATTERN",
     "admits",
+    "admits_event",
+    "clauses",
     "matrix_legs",
 )
 
@@ -51,7 +61,11 @@ __all__ = (
 #: belong in the character class; a pattern without them matches neither the
 #: hyphenated key nor its own tail, which is how a guard gated on the
 #: typecheck-only leg reads as gated on nothing.
-_MATRIX_CLAUSE = re.compile(
+#:
+#: Public because a caller resolving *more* than the leg has to recognize this
+#: clause before replacing it with its own evaluation; :func:`admits_event`
+#: does exactly that.
+MATRIX_CLAUSE_PATTERN: typ.Final = re.compile(
     r"\Amatrix\.(?P<key>[a-z0-9-]+)"
     r"(?:\s*(?P<operator>==|!=)\s*'(?P<literal>[^']*)')?\Z",
     re.IGNORECASE,
@@ -82,8 +96,13 @@ def matrix_legs(workflow_name: str, job_name: str) -> list[dict[str, object]]:
         that is present but not an ``include`` list is refused rather than
         read as "no matrix": that shape would report one leg for a job that
         really runs several, and every "some leg admits this" question over it
-        would then be answered from a leg GitHub never schedules. The refusal
-        is by name, so the reader is extended rather than trusted when a
+        would then be answered from a leg GitHub never schedules. An
+        ``include`` entry that is not a mapping is refused for the same
+        reason: dropping it reports fewer legs than the workflow declares, and
+        a list that is entirely malformed would report none at all, which
+        makes every "some leg admits this" question vacuously false rather
+        than loud. Both refusals name the workflow, the job, and (for an
+        entry) its index, so the reader is extended rather than trusted when a
         workflow adopts a shape it does not model.
 
     Notes
@@ -109,11 +128,18 @@ def matrix_legs(workflow_name: str, job_name: str) -> list[dict[str, object]]:
             "event schedules"
         ),
     )
-    return [
-        typ.cast("dict[str, object]", leg)
-        for leg in typ.cast("list[object]", include)
-        if isinstance(leg, dict)
-    ]
+    legs = typ.cast("list[object]", include)
+    for index, leg in enumerate(legs):
+        require(
+            condition=isinstance(leg, dict),
+            message=(
+                f"{workflow_name}:{job_name} declares a matrix `include` entry "
+                f"at index {index} that is not a mapping; dropping it would "
+                "report fewer legs than the workflow declares, and a list of "
+                "such entries would report none"
+            ),
+        )
+    return [typ.cast("dict[str, object]", leg) for leg in legs]
 
 
 def _admitted_clause(clause: str, leg: cabc.Mapping[str, object]) -> bool:
@@ -135,7 +161,7 @@ def _admitted_clause(clause: str, leg: cabc.Mapping[str, object]) -> bool:
         docstring. ``False`` for a bare ``matrix.<key>`` the leg does not
         carry, since GitHub reads an absent property as falsy.
     """
-    match = _MATRIX_CLAUSE.match(clause.strip())
+    match = MATRIX_CLAUSE_PATTERN.match(clause.strip())
     if match is None:
         return True
     key = match.group("key")
@@ -190,10 +216,10 @@ def admits(condition: object, leg: cabc.Mapping[str, object]) -> bool:
     """
     if not isinstance(condition, str):
         return True
-    return all(_admitted_clause(clause, leg) for clause in _split_clauses(condition))
+    return all(_admitted_clause(clause, leg) for clause in clauses(condition))
 
 
-def _split_clauses(condition: str) -> list[str]:
+def clauses(condition: str) -> list[str]:
     """Split a guard into its top-level ``&&`` clauses.
 
     A ``${{ ... }}`` wrapper is unwrapped first: GitHub accepts the expression
@@ -201,6 +227,11 @@ def _split_clauses(condition: str) -> list[str]:
     unmodellable clause and admit every leg. The step guards in this repository
     are mostly bare, which is exactly why the wrapped form has to be handled
     rather than assumed away.
+
+    Public because a reader that resolves a guard against more than the leg —
+    :func:`admits_event` resolves the event name too — has to walk the same
+    clauses `admits` does. Splitting them twice would let the two readers
+    disagree about where one clause ends and the next begins.
 
     Parameters
     ----------
@@ -210,10 +241,129 @@ def _split_clauses(condition: str) -> list[str]:
     Returns
     -------
     list of str
-        The clauses, trimmed, with the wrapper removed and empty clauses
-        dropped.
+        The clauses, each stripped of surrounding whitespace, with the wrapper
+        removed and empty clauses dropped.
+
+    Examples
+    --------
+    >>> clauses("${{ matrix.python-suite && env.LEG_RUNS == 'true' }}")
+    ['matrix.python-suite', "env.LEG_RUNS == 'true'"]
     """
     text = condition.strip()
     if text.startswith("${{") and text.endswith("}}"):
         text = text[3:-2]
-    return [clause for clause in text.split("&&") if clause.strip()]
+    return [clause.strip() for clause in text.split("&&") if clause.strip()]
+
+
+#: A clause of the shape ``github.event_name == 'pull_request'``, and the event
+#: it compares against. Only truthiness so far: a bare ``github.event_name``,
+#: or a ``!=``, is a guard this reader does not model, and treating an
+#: unrecognized shape as satisfied is the error the function exists to refuse.
+_EVENT_CLAUSE: typ.Final = re.compile(
+    r"\Agithub\.event_name\s*==\s*'(?P<event>[^']*)'\Z", re.IGNORECASE
+)
+
+#: The status functions GitHub evaluates from the run's own history rather
+#: than from context. They answer "should this step run given what came
+#: before", so they are satisfied on every leg and every event; admitting one
+#: is a reading, not a concession. Anything outside this set and the two
+#: clause forms above is a value no leg and no event name settles.
+_STATUS_FUNCTION: typ.Final = re.compile(
+    r"\A(?:always|success|failure|cancelled)\s*\(\s*\)\Z", re.IGNORECASE
+)
+
+
+def admits_event(
+    condition: str,
+    leg: cabc.Mapping[str, object],
+    event: str,
+    *,
+    subject: str,
+) -> bool:
+    """Report whether a guard admits a leg *and* runs on the named event.
+
+    :func:`admits` answers with a superset over legs, which is the safe
+    direction for the cache-ownership caller and the wrong one here. A guard
+    such as ``github.event_name == 'push'`` names no matrix key, so `admits`
+    reads it as satisfied and every leg is admitted; a pull-request contract
+    built on that would certify a suite on a lane no pull request schedules.
+    This evaluates the event clauses `admits` leaves unread, and refuses the
+    ones neither can settle, rather than assuming them true.
+
+    Parameters
+    ----------
+    condition : str
+        A step's ``if:`` value, as `ci_leg_gate.ungated` returns it, so the
+        trailing leg flag is already stripped.
+    leg : Mapping of str to object
+        One leg, as :func:`matrix_legs` returns it.
+    event : str
+        The event name to decide against, such as ``"pull_request"``.
+    subject : str
+        What the guard belongs to, named in the failure so a reader is sent to
+        the step rather than to this helper.
+
+    Returns
+    -------
+    bool
+        Whether every clause holds. Matrix clauses are read over the leg, event
+        comparisons against ``event``, and the status functions as satisfied.
+
+    Raises
+    ------
+    AssertionError
+        When a clause is neither a matrix reference, an event-name comparison,
+        nor a status function. The contract this feeds asks which lanes a pull
+        request runs `make test-python` on, and a clause read as satisfied
+        would answer that with a lane that may never run it; the shape is
+        reported instead of guessed at.
+
+    Notes
+    -----
+    Only the top-level ``&&`` split :func:`clauses` performs is modelled; a
+    guard whose top level is ``||`` reduces to one clause matching no form and
+    is refused rather than read as one of its branches.
+
+    The refusal is the difference from :func:`admits`, so it is deliberately the
+    default: a clause is admitted here by being *recognized*, not by escaping
+    recognition. An ``inputs.`` reference is the shape that makes this matter —
+    empty on a pull-request event, so a guard reading it excludes every lane —
+    and it is refused rather than read as satisfied for the same reason the
+    event clause is evaluated.
+
+    Examples
+    --------
+    >>> admits_event(
+    ...     "matrix.python-suite", {"python-suite": True}, "pull_request", subject="s"
+    ... )
+    True
+    >>> admits_event(
+    ...     "github.event_name == 'push'", {"python-suite": True}, "pull_request",
+    ...     subject="s",
+    ... )
+    False
+    """  # ruff: ignore[docstring-extraneous-exception] - the refusal is raised by require()
+    for clause in clauses(condition):
+        event_match = _EVENT_CLAUSE.match(clause)
+        if event_match is not None:
+            if event_match.group("event") != event:
+                return False
+            continue
+        require(
+            condition=(
+                MATRIX_CLAUSE_PATTERN.match(clause) is not None
+                or _STATUS_FUNCTION.match(clause) is not None
+            ),
+            message=(
+                f"{subject} is guarded by {clause!r}, which reads a value this "
+                f"reader cannot resolve for the {event!r} event. Whether the "
+                "step runs on a pull request is not decidable from the leg "
+                "alone, and treating the clause as satisfied would certify a "
+                "lane that may never run it; model the term or drop it"
+            ),
+        )
+    # Every clause is now one of the three recognized forms, and `admits`
+    # settles the matrix ones over the leg while reading the status functions
+    # as satisfied. The event clauses are already known to hold, since a
+    # mismatch returned above, so re-reading them there as satisfied is exact.
+    return admits(condition, leg)
