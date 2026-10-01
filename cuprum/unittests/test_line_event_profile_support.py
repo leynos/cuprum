@@ -28,8 +28,24 @@ CONSUME = "_consume_stream_with_lines (cuprum/_stream_line_consumer.py:69)"
 GENERATED_INIT = "__init__ (<string>:3)"
 # The line-callback frame that reaches the constructors.
 EMIT_LINE = "emit_line (cuprum/_line_callbacks.py:104)"
-# The generic observation emit, reached by non-line phases.
+# The generic observation emit, reached by the per-line hook closure and the
+# non-line phases alike. It is a *sibling* of `emit_line`, not a dispatcher.
 OBSERVATION_EMIT = "emit (cuprum/_pipeline_types.py:120)"
+# The observe-hook dispatch seam, in call order. A construction reached
+# through either of these is hook-owned work, not event emission.
+EMIT_EVENT = "_emit_event (cuprum/_pipeline_types.py:203)"
+EMIT_EXEC_EVENT = "_emit_exec_event (cuprum/_observability.py:90)"
+# A hook body, i.e. arbitrary user code the dispatcher invoked.
+HOOK_BODY = "observe_line (benchmarks/_tee_profile_worker_execution.py:100)"
+# The stream consumer's per-line helper. py-spy renders its leading
+# underscore intact, so this is a *different* function name -- the capture
+# proves that, with `_emit_line (cuprum/_stream_line_consumer.py:...)` and
+# `emit_line (cuprum/_line_callbacks.py:...)` both present and distinct.
+CONSUMER_EMIT_LINE = "_emit_line (cuprum/_stream_line_consumer.py:39)"
+# A frame carrying the dispatcher's *name* from another module: a vendored
+# or relocated copy. A boundary keyed on the bare name would mistake it for
+# the real seam and drop everything constructed beneath it.
+FOREIGN_EMIT_EXEC_EVENT = "_emit_exec_event (vendor/observability.py:64)"
 # An unrelated caller that must never resolve a generated frame.
 UNRELATED = "build (cuprum/context.py:41)"
 

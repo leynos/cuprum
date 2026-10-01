@@ -33,23 +33,16 @@ callers. Initialization that a refactor moves into a helper still matches, as
 long as some caller in the rule's list remains on the path — which is why the
 caller lists name every production site, not just the immediate one.
 
-What the caller rule cannot tell apart
---------------------------------------
-The caller requirement rules out an unrelated dataclass constructed anywhere else
-in the process, but it does not exclude every constructor reached *through* the
-event path. An observe hook runs below ``emit_line`` on the stack, so a hook
-that builds its own dataclass per event renders as a generated ``__init__``
-whose nearest matching caller is still ``emit_line`` — and it would be counted
-toward ``N`` as though it were ``ExecEvent``. Hook bodies are not identifiable
-from a capture, so no rule can separate the two cases in general.
-
-This is a known limit of the metric, not a defect in the committed measurement.
-The benchmark's own hook only increments a counter and constructs nothing, so
-no such sample exists in the gate's captures: in all three candidate captures
-every counted construction frame is a *direct* call from ``emit_line``, with no
-intervening frame, accounting for the whole of ``N`` (15,769 weighted samples
-across ``r1``-``r3``). A capture whose hook does allocate per event would
-inflate ``N``, and should be read with that in mind.
+What the caller rule alone cannot tell apart
+--------------------------------------------
+An observe hook runs below the dispatcher and so below ``emit_line``, so a hook
+that builds its own dataclass per event renders as a generated ``__init__`` whose
+nearest matching caller is still ``emit_line`` — and it would be counted as
+``ExecEvent`` construction. No frame pattern can separate the two, because hook
+bodies are not identifiable from a capture. ``_crosses_hook_dispatch`` in
+:mod:`benchmarks._line_event_profile_classifier` rejects that path shape instead,
+bounding the claim without proving it; the committed measurement is unchanged,
+and ``docs/profiling/5-2-1-line-event-emission`` records the re-run.
 """
 
 from __future__ import annotations
@@ -327,11 +320,33 @@ def _rule_from_json(raw: object, *, index: int) -> ClassificationRule:
 
 
 def _load_rules_json(rules_path: pth.Path) -> object:
-    """Decode the rules file, rejecting unreadable or malformed input."""
+    """Decode the rules file, rejecting unreadable or malformed input.
+
+    The encoding is pinned rather than inherited from the locale, so a rules
+    file cannot decode one way here and another way in Continuous Integration.
+    Reading is strict on purpose: a mangled rule silently matching fewer frames
+    would understate the share. ``UnicodeDecodeError`` descends from
+    ``ValueError`` rather than ``OSError``, so it needs its own arm below --
+    without one it escapes as a traceback and exits 1, the status this gate
+    reserves for "share above the limit", instead of the documented 2.
+
+    Returns
+    -------
+    object
+        The decoded JSON document, not yet validated into rule shapes.
+
+    Raises
+    ------
+    _ProfileInputError
+        If the file cannot be read, cannot be decoded, or is not valid JSON.
+    """
     try:
-        return json.loads(rules_path.read_text())
+        return json.loads(rules_path.read_text(encoding="utf-8"))
     except OSError as exc:
         msg = f"cannot read rules at {rules_path}: {exc}"
+        raise _ProfileInputError(msg) from exc
+    except UnicodeDecodeError as exc:
+        msg = f"rules at {rules_path} are not valid UTF-8: {exc}"
         raise _ProfileInputError(msg) from exc
     except json.JSONDecodeError as exc:
         msg = f"rules at {rules_path} are not valid JSON: {exc}"

@@ -17,10 +17,14 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from benchmarks._line_event_profile_model import FramePattern
+
 # These appear only in annotations. Unlike the model's public dataclasses,
 # nothing here is resolved through ``typing.get_type_hints`` by a consumer, so
 # the imports can stay type-checking-only; this matches the sibling model
-# module's handling of ``pathlib``.
+# module's handling of ``pathlib``. ``FramePattern`` is deliberately *not*
+# here: the hook-dispatch boundary is a module-level tuple of live instances
+# rather than an annotation, so it needs the real class at import time.
 if typ.TYPE_CHECKING:
     from benchmarks._line_event_profile_model import (
         Capture,
@@ -43,6 +47,32 @@ if typ.TYPE_CHECKING:
 # derivation, the measured miss, and the options for closing it are in
 # docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md.
 CONSTRUCTION_SHARE_LIMIT_PERCENT = 30.0
+
+# The observe-hook dispatch boundary: a frame whose *matching emission caller*
+# sits above one of these on the same stack is reached by way of hook dispatch.
+#
+# A rule's caller requirement alone cannot exclude this case. An observe hook
+# runs below the dispatcher and so below every emission caller, which means a
+# hook body that builds its own per-event dataclass still has that emission
+# caller as its *nearest* match. Such a construction is hook-owned work, not
+# event emission, and must not enter the numerator.
+#
+# Matching both fields matters. Neither boundary function recurs elsewhere in
+# the tree today, so the location is defensive rather than load-bearing: it
+# keeps a future same-named frame -- a plugin, a vendored copy, a second
+# dispatcher -- from tripping the guard. Same-name recurrence is a live hazard
+# here rather than a hypothetical, since `emit` is already defined in both
+# `cuprum/_pipeline_types.py` and `cuprum/_line_stream/telemetry.py`.
+#
+# These are the two frames the observe path passes through, taken from the
+# definitions rather than from a capture so an inlined or re-laid-out
+# dispatcher cannot quietly drop the guard:
+# `_emit_event` at `cuprum/_pipeline_types.py:200` and `_emit_exec_event`, a
+# module-level function, at `cuprum/_observability.py:64`.
+_HOOK_DISPATCH_BOUNDARY: tuple[FramePattern, ...] = (
+    FramePattern(function="_emit_event", location="cuprum/_pipeline_types.py"),
+    FramePattern(function="_emit_exec_event", location="cuprum/_observability.py"),
+)
 
 
 def _caller_depth(
@@ -69,6 +99,35 @@ def _caller_depth(
     return None
 
 
+def _crosses_hook_dispatch(
+    frames: tuple[Frame, ...],
+    index: int,
+    caller_index: int,
+) -> bool:
+    """Return whether a hook-dispatch frame intervenes on the caller path.
+
+    The path runs from a matched caller at ``caller_index`` down to the
+    candidate frame at ``index``. A boundary frame anywhere strictly between
+    them means the candidate is reached by way of hook dispatch rather than by
+    direct emission, so it is hook-owned construction and not event emission.
+
+    The boundary is the two-frame dispatch seam, not one frame. ``_emit_event``
+    normally hands off to ``_emit_exec_event``, which is what invokes the
+    hooks, but ``_emit_exec_event`` can also be reached without it, so either
+    frame alone marks the boundary.
+
+    Returns
+    -------
+    bool
+        True when the candidate must not count toward construction.
+    """
+    return any(
+        boundary.matches(frames[inner_index])
+        for inner_index in range(caller_index + 1, index)
+        for boundary in _HOOK_DISPATCH_BOUNDARY
+    )
+
+
 def _matching_rule(
     frames: tuple[Frame, ...],
     index: int,
@@ -88,11 +147,17 @@ def _matching_rule(
     sorted. Resolving by order alone would let a broadly-called rule silently
     absorb a narrower one's frames.
 
+    A near match is rejected outright when the observe-hook dispatcher sits
+    between the caller and the frame. That keeps the *nearest matching caller*
+    criterion honest: the caller the search latches onto must be one that
+    actually reaches the constructor, not one stranded above a boundary.
+
     Returns
     -------
     ClassificationRule | None
         The winning rule, or ``None`` when no rule both matches the frame and
-        has a caller earlier on the stack.
+        has a caller earlier on the stack that reaches it without crossing the
+        observe-hook dispatch boundary.
     """
     frame = frames[index]
     best: ClassificationRule | None = None
@@ -102,6 +167,8 @@ def _matching_rule(
             continue
         depth = _caller_depth(frames, index, rule)
         if depth is None:
+            continue
+        if _crosses_hook_dispatch(frames, index, depth):
             continue
         if depth > best_depth:
             best = rule

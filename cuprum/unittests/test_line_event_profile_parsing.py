@@ -13,10 +13,18 @@ not read its input or its rules at all.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
 from benchmarks import summarize_line_event_profile as classifier
-from cuprum.unittests.test_line_event_profile_support import _shipped_rules_path
+from cuprum.unittests.test_line_event_profile_support import (
+    _shipped_rules_path,
+    _write,
+)
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
 
 
 class TestFrameParsing:
@@ -86,6 +94,30 @@ class TestShippedRulesFile:
             assert rule.frame.function is not None, (
                 f"rule {rule.name!r} must name the frame it classifies"
             )
+
+
+class TestRulesDecoding:
+    """A rules file that cannot be decoded fails as inconclusive, not as a crash."""
+
+    def test_undecodable_rules_file_is_inconclusive(self, tmp_path: pth.Path) -> None:
+        """A non-UTF-8 rules file exits 2 rather than escaping as a traceback.
+
+        ``UnicodeDecodeError`` descends from ``ValueError``, not ``OSError``,
+        so it needs its own arm in ``_load_rules_json``. Without one the
+        exception escapes the CLI boundary and the command exits 1 -- which
+        this gate reserves for "share exceeds the limit", the opposite
+        meaning. A mangled rules file must read as unmeasurable.
+        """
+        capture = _write(tmp_path, "stacks.folded", "a;_consume_x 5\n")
+        rules = tmp_path / "rules.json"
+        rules.write_bytes(b'{"consume_frames": [], "construction_rules": "\xff\xfe"}')
+        output = tmp_path / "result.json"
+
+        status = classifier.main(
+            [str(capture), "--rules", str(rules), "--output", str(output)],
+        )
+
+        assert status == 2
 
 
 class TestModuleSplit:
