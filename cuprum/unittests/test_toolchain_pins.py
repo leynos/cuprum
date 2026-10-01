@@ -401,18 +401,63 @@ def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
     )
 
 
+def _pylint_targets(command: str) -> frozenset[str]:
+    """Return the target operands of one classic-Pylint command line."""
+    _, _, operands = command.partition(" -m pylint ")
+    return frozenset(token for token in operands.split() if not token.startswith("-"))
+
+
+#: The test roots classic Pylint must name directly: none is a package, so the
+#: recursive walk would otherwise skip every module beneath it.
+NON_PACKAGE_TEST_ROOTS = frozenset({
+    "cuprum/unittests",
+    "scripts/tests",
+    "tests/behaviour",
+    "tests/features",
+})
+
+
 def test_pylint_contract_covers_non_package_test_directories() -> None:
-    """The Makefile supplies skipped test directories as direct Pylint targets."""
+    """The Makefile supplies skipped test directories as direct Pylint targets.
+
+    Each pass is read from its own command line. Searching their combined
+    output cannot tell which contributed a target: dropping
+    ``cuprum/unittests`` from the strict pass would leave the relaxed pass
+    still naming it, so the contract would pass while the strict pass quietly
+    stopped inspecting the package. The two passes are told apart by the
+    ``--disable=too-many-lines`` exemption, the only flag that separates them.
+    """
     recipes = _expanded_make_recipes(repo_root(), targets=("pylint-classic",))
-    for target in (
-        "cuprum/unittests",
-        "tests/behaviour",
-        "tests/features",
-        "scripts/tests",
-    ):
-        assert target in recipes, f"classic Pylint must inspect {target} directly"
     assert "pylint-pypy" not in recipes
     assert "--jobs=1" in recipes
+
+    commands = [line for line in recipes.splitlines() if " -m pylint " in line]
+    relaxed = [line for line in commands if "--disable=too-many-lines" in line]
+    strict = [line for line in commands if "--disable=too-many-lines" not in line]
+    assert len(relaxed) == 1, (
+        f"classic Pylint must run exactly one relaxed pass; found {len(relaxed)} "
+        f"of {len(commands)} invocations"
+    )
+    assert len(strict) == 1, (
+        f"classic Pylint must run exactly one strict pass; found {len(strict)} "
+        f"of {len(commands)} invocations"
+    )
+
+    strict_targets = _pylint_targets(strict[0])
+    relaxed_targets = _pylint_targets(relaxed[0])
+    assert NON_PACKAGE_TEST_ROOTS.issubset(relaxed_targets), (
+        "the relaxed pass must name each non-package test root directly; "
+        f"missing {sorted(NON_PACKAGE_TEST_ROOTS - relaxed_targets)}"
+    )
+    repeated = NON_PACKAGE_TEST_ROOTS & strict_targets
+    assert not repeated, (
+        "the strict pass must not repeat the relaxed pass's roots; they are "
+        f"filtered out of it, but found {sorted(repeated)}"
+    )
+    assert "cuprum" in strict_targets, (
+        "the strict pass must still inspect the package root, which is what "
+        "reaches every module under the real packages"
+    )
 
 
 def test_df12_retains_its_separate_package_root_target_scope() -> None:
