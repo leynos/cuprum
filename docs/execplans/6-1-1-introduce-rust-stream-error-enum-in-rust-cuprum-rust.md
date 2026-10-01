@@ -1953,10 +1953,43 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   with a ~1-day lag, so any head written into its body is ~23 hours stale by
   the time it posts. The fix is not to chase the head — that is a treadmill,
   since recording each correction moves the head again — but to write a body
-  that is true at *any* head: `67f60c91` names no SHA, and instead states the
-  invariant that makes any head acceptable, namely that every commit after the
-  fix `b3ae9f20` is execplan-only, so the current head exercises the same code.
-  That claim is checkable and does not decay.
+  that names no SHA and states an invariant instead.
+
+  **Naming no SHA is necessary but not sufficient, and `67f60c91` is the
+  proof.** Its body claimed that "every commit after it is execplan-only …,
+  touching no code, test, build-config or manifest byte". That claim was false,
+  and false when it was written rather than decayed since. The entry was
+  enqueued at `17:45:56Z` on 2026-10-01, when the head was `7f33b0be`, and
+  `git diff --name-only b3ae9f20 7f33b0be` already returned
+  `cuprum/unittests/test_rust_stream_native_order.py`,
+  `docs/developers-guide.md`, `typos.toml` and the execplan itself. The words
+  "execplan-only" carried an invariant the tree never satisfied. A SHA-free
+  body does not decay because of the clock; it decays because of the tree, and
+  this one was stale on arrival.
+
+  The defect was not the deferral, so the remedy was not to re-time the
+  enqueue. It was to state the invariant at a scope that is actually true. The
+  claim that survives every check is the narrower one — *no production code has
+  changed since the fix*:
+
+  - `git diff --name-only b3ae9f20 HEAD -- cuprum rust ':!cuprum/unittests'`
+    returns nothing, so no file outside `cuprum/unittests/` changed under either
+    source tree.
+  - `git diff --stat b3ae9f20 HEAD -- cuprum/unittests/test_rust_streams_roundtrip_property.py`
+    is empty, so the file the finding named is untouched.
+  - `git grep -c 'def _safe_close' -- .` reports exactly one definition in the
+    package, `cuprum/unittests/_rust_stream_test_support.py`.
+  - `git diff --numstat b3ae9f20 HEAD -- '*.py'` reports `49 0`, so the single
+    Python edit since the fix is additive and no reviewed line was removed or
+    rewritten.
+
+  `67f60c91` was deleted and replaced by `11645ed5`, whose body states that
+  narrower invariant *and* records the correction, so the supersession is
+  visible to a reader of the posted comment and not only to a reader of this
+  file. The reusable rule: an invariant is still a claim about the tree, so
+  check it against the tree at the head you are about to leave, and prefer the
+  narrowest scope that is true — "execplan-only" asserts far more than "the
+  reviewed code is unchanged", and is correspondingly easier to falsify.
 
   The gating record is now closed as far as the repository can close it. What
   the branch's own artefacts establish, each independently of this file's prose:
