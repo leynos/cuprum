@@ -21,6 +21,7 @@ from cuprum.context.env_overlay import EnvMode, EnvOverlay
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from cuprum.events import ExecEvent, ExecHook
     from cuprum.sh import SafeCmd
@@ -65,6 +66,35 @@ def _resolve_env_overlay(
         context.env_mode,
         extra,
         env_mode,
+    )
+
+
+def _resolve_executable_for(cmd: SafeCmd, *, cwd: Path | None) -> str | None:
+    """Return the executable bound to ``cmd``'s program, or ``None``.
+
+    The third of the stage-observation inputs this module owns, alongside
+    :func:`_resolve_env_overlay` and :func:`_base_stage_tags`: each answers a
+    question the observation carries the answer to, so they are computed where
+    a reader of the observation will look for them.
+
+    ``cwd`` is the same ``Path`` the observation holds rather than a string,
+    so callers hand over what they already have and the one conversion to the
+    public method's spelling lives here.
+
+    Call this strictly *after* allowlist enforcement, never before: the
+    allowlist decides whether the program may run at all, and this decides only
+    which file a permitted program runs. The two are independent by design, so
+    a binding can never admit a program the allowlist rejects — and a resolver
+    with side effects is not invoked for a command that is about to be refused.
+
+    Returns
+    -------
+    str | None
+        The executable string, or ``None`` when the program is unbound and
+        should run under its catalogued name.
+    """
+    return current_context().resolve_executable(
+        cmd.program, cwd=None if cwd is None else str(cwd)
     )
 
 
@@ -241,6 +271,7 @@ __all__ = [
     "_emit_exec_event",
     "_merge_tags",
     "_resolve_env_overlay",
+    "_resolve_executable_for",
     "_wait_for_exec_hook_tasks",
 ]
 
