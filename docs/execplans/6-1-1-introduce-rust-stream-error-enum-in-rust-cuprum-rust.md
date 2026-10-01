@@ -1905,12 +1905,22 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   claimed here.
 
   **It is enqueued, and the ETA is the thing a reader needs to know.**
-  `comenq put leynos/cuprum 432 …` returned identifier `de71c44b` with an
-  estimated post time of **~23 h 11 m**, because the shared queue is **63**
+  `comenq put leynos/cuprum 432 …` returned identifier `f33ee725` with an
+  estimated post time of **~23 h 09 m**, because the shared queue is **63**
   entries deep — not rate-limited, just busy, and the delay is the queue's. So
   "awaiting review" here means a real, tracked, ~1-day wait, not a request that
   silently failed. A future reader who finds the `CHANGES_REQUESTED` still
   standing should read that queue depth before concluding the request was lost.
+
+  The identifier is `f33ee725` and not the `de71c44b` first enqueued, and the
+  reason is worth keeping: `de71c44b` named head `89336b01` in its body, and a
+  commit landed afterwards, so the queued text would have asked the bot to
+  review a head that was no longer the tip. It was deleted with
+  `comenq del de71c44b` and re-queued against the final head. A queued comment
+  is a *deferred* artefact with a ~1-day lag, which means the ordinary habit of
+  enqueueing and moving on reliably produces a request pinned to a superseded
+  SHA — the fix is to enqueue only once the head is genuinely final, and to put
+  the head in the body so the staleness is visible rather than silent.
 
   The gating record is now closed as far as the repository can close it. What
   the branch's own artefacts establish, each independently of this file's prose:
@@ -1924,11 +1934,32 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   plainly, because it is the difference between "cannot merge" and "will not
   merge without an updated review", and only the second is true.
 
-  Two CI runs for `89336b01` are in flight and neither is a verdict yet: run
-  `36901334814` (`CI`, 14 jobs, `in_progress`, 0 failing) and `36901334242`
-  (`Rust boundary verification`, 5 jobs, `queued`, 0 failing). They are named
-  so that a later reader can tell which runs the push created rather than
-  having to reconstruct it, and they are explicitly **not** claimed as passing.
+  Two CI runs for `89336b01` were observed in flight and neither was a verdict:
+  run `36901334814` (`CI`, 14 jobs, `in_progress`, 0 failing) and `36901334242`
+  (`Rust boundary verification`, 5 jobs, `in_progress`, 0 failing, having
+  advanced from `queued`). They are named so that a later reader can tell which
+  runs a push created rather than having to reconstruct it, and they were
+  explicitly **not** claimed as passing.
+
+  The ETA commit `3de1c64b` then landed on top of them, and
+  `.github/workflows/ci.yml:32-34` sets `cancel-in-progress` to true for
+  `pull_request`, so both are expected to be cancelled rather than completed.
+  That prediction is recorded as a prediction: **at the time of writing both
+  were still `in_progress`**, and a first draft of this paragraph wrongly
+  stated the cancellation as accomplished fact. It was not — the runs were
+  mid-flight, and the push had in fact created two fresh ones, `36901601851`
+  (`CI`) and `36901601193` (`Rust boundary verification`), both `pending`. The
+  error is recorded rather than quietly fixed because it is the same class this
+  plan keeps catching: reading an expected transition as an observed one.
+
+  So the honest end state: every green CI verdict in this plan belongs to
+  `10abccad` or earlier, and **no completed CI verdict exists for the final head
+  `3de1c64b`**. The code-gate evidence that does hold is the `10abccad`-era CI
+  run plus the local documentation gates at each later head. The commits after
+  `10abccad` are execplan-only, which is what makes that substitution sound
+  rather than convenient — and the claim is checkable with
+  `git diff --stat 10abccad 3de1c64b`, which is the check a sceptical reader
+  should run rather than trusting this sentence.
 
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
