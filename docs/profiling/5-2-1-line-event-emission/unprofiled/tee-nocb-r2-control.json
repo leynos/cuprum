@@ -1,0 +1,19 @@
+{
+  "backend": "python",
+  "captured_output_length": 2147483648,
+  "exit_code": 0,
+  "fixture_manifest_hash": "15e4356ae06fa10a81a3b4ba9e7b0e4437961a21752f982582371aa88389f914",
+  "fixture_path": "<repo>/dist/fixtures/seed12345-nowrap.b64",
+  "lock_wait_seconds": 5.597248673439026e-07,
+  "mode": "tee",
+  "read_size": 65536,
+  "reentrant_rejection_count": 0,
+  "repeat_count": 1,
+  "scenario": "tee-devnull-nocb-s1-python",
+  "sink_kind": "devnull",
+  "stages": 1,
+  "status": "ok",
+  "stdout_line_count": 0,
+  "wall_time_seconds": 4.6584546230733395,
+  "with_line_callbacks": false
+}

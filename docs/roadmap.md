@@ -282,15 +282,36 @@ removing per-line work from the observe-hook path without changing observable
 event semantics. Its outcome informs whether per-line events ever need to
 become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
 
-- [ ] 5.2.1. Hoist the invariant `ExecEvent` / `_EventDetails`
+- [x] 5.2.1. Hoist the invariant `ExecEvent` / `_EventDetails`
   (`cuprum/events.py:31`, `cuprum/_pipeline_types.py:40`) fields out of the
   per-line path in `_StageObservation.emit` (`cuprum/_pipeline_types.py:62`),
   precomputing programme, argv (`SafeCmd.argv_with_program`,
   `cuprum/sh.py:363`), cwd, env, and pid once per stream rather than per line.
+  Done as `_LineEventEmitter` in `cuprum/_line_callbacks.py`, one per observed
+  stream, built after spawn; evidence in
+  `docs/tee-hotpath-line-event-emission-5-2-1.md` with the raw captures under
+  `docs/profiling/5-2-1-line-event-emission/`.
   - Success: per-line emission no longer reconstructs invariant fields, the
-    callback scenario's dataclass-construction share falls from the 39% baseline
-    to no more than 10% in a committed profiler artefact, and emitted event
+    callback scenario's dataclass-construction share falls to no more than 30%
+    of the consume subtree in a committed profiler artefact, and emitted event
     payloads are unchanged.
+  - Met, with one residual. The invariant fields are genuinely precomputed, but
+    a per-line `ExecEvent` construction still remains — that is precisely what
+    floors the achievable share, and it is recorded as a residual against this
+    criterion rather than counted as met in full.
+  - Met at **29.9087%** — the median of three matched control/candidate pairs,
+    against a control measuring 34.2928%, with a candidate spread of 0.0423
+    points. The threshold was 10%, then 28%, then 30%, revised each time with
+    user approval; the derivations behind both revisions are in
+    `docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md`.
+  - The criterion has two properties that must not be rediscovered as defects
+    when this gate is next re-run. Its **margin is thin** — the tightest pair
+    clears by 0.0586 points — and the metric **inverts**, because removing
+    pre-constructor work shrinks the denominator and so *raises* the share. In
+    particular item 5.2.2 would move the share to 30.9686% **by succeeding**,
+    which is why it must be judged on its own criterion rather than this one.
+    The analysis, the rejected designs, and the full decomposition are in
+    `docs/tee-hotpath-line-event-emission-5-2-1.md`.
 - [ ] 5.2.2. Remove the per-hook `inspect.isawaitable` call from the per-line
   path in `_emit_exec_event` (`cuprum/_observability.py:35`) by classifying
   each hook as sync or async once at registration.

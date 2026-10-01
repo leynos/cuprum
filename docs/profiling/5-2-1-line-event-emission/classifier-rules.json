@@ -1,0 +1,132 @@
+{
+  "$comment": [
+    "Construction-share classifier rules for roadmap 5.2.1.",
+    "",
+    "The denominator is every py-spy raw stack containing a frame matching",
+    "consume_frames. The numerator is those stacks that also contain a frame",
+    "resolved by one of construction_rules, counted once per stack.",
+    "",
+    "dataclasses.dataclass generates __init__ via exec(), so a generated",
+    "constructor's frame has location '<string>' and carries no class",
+    "identity in a py-spy capture -- every generated constructor in the",
+    "process renders the same way. Each rule therefore pairs its frame",
+    "pattern with the callers that reach it. The frame pattern for a",
+    "generated constructor deliberately leaves 'line' unset: the line number",
+    "shifts whenever the class gains a field, and pinning it would turn a",
+    "harmless field addition into a silently unresolved frame.",
+    "",
+    "Callers name every production site that reaches the constructor, not",
+    "only the immediate one, so initialization moved into a helper still",
+    "resolves. Verified against the 5.2.1 baseline tree; re-verify with",
+    "grep before trusting an edit to the production call paths.",
+    "",
+    "Callers name *emission* sites only. An observe hook runs below the",
+    "dispatcher and therefore below every emission caller, so a hook that",
+    "builds its own dataclass per event would otherwise render with an",
+    "emission caller as its nearest match and be counted as ExecEvent",
+    "construction. The classifier rejects such a candidate structurally:",
+    "_crosses_hook_dispatch in benchmarks/_line_event_profile_classifier.py",
+    "discards a match whenever _emit_event or _emit_exec_event sits on the",
+    "path between the caller and the frame. The guard matches on function",
+    "and module location together, so a future frame that reuses either",
+    "bare name in another module cannot trip it. That boundary is not",
+    "configurable here -- it is a property of the production dispatch call",
+    "graph, so it lives with the code that implements the guard rather than",
+    "in a rule file that could disagree with it.",
+    "",
+    "RE-BASELINED for EP-M2 (the hoist itself). What changed and why:",
+    "",
+    "1. There is now ONE construction rule, not two. Before the hoist the",
+    "   two rules split by caller: the per-line ExecEvent came through `emit`",
+    "   and the per-line _EventDetails came through the `_event_details`",
+    "   helper. The hoist deletes that helper, so the rule naming it can",
+    "   never match again, and a rule whose callers still run while it matches",
+    "   nothing is exactly what _drifted_rules reports -- the whole run would",
+    "   exit 2 as inconclusive_drifted_rules.",
+    "",
+    "   The replacement cannot simply be a differently-named second rule.",
+    "   _matching_rule gives a generated-constructor frame to the rule whose",
+    "   nearest matching caller is closest to it, so two rules over the frame",
+    "   `__init__ (<string>)` do not partition the samples by caller set: the",
+    "   one with the nearer caller takes every frame both could claim. A rule",
+    "   that therefore matches nothing while its callers still run is exactly",
+    "   what _drifted_rules reports, and the run exits 2.",
+    "",
+    "   This was measured, not reasoned: a two-rule split over a stack of the",
+    "   post-hoist shape (`emit_line` at _line_callbacks.py, then at",
+    "   _pipeline_types.py, then `__init__`) gives the nearer-caller rule all",
+    "   100 samples and reports the other as drifted with 100 caller samples.",
+    "   The pre-hoist split only worked because `_event_details` was genuinely",
+    "   the nearest caller for its own 4230 frames; the hoist removes it, and",
+    "   with it any per-frame population the second rule could still win.",
+    "",
+    "   Merging them is also the stricter option, since N is meant to count",
+    "   every constructor the emission path performs, whether or not it is per",
+    "   line.",
+    "",
+    "2. The surviving rule's callers were corrected. `_LineEventEmitter` and",
+    "   `_emit_line_event` named nothing that exists in the production tree",
+    "   and were dropped. `emit_line` at `cuprum/_pipeline_types.py` was also",
+    "   dropped, and the reason is worth recording: it was never where the",
+    "   hoist put the emitter. The emitter landed as a `_LineEventEmitter`",
+    "   method in `cuprum/_line_callbacks.py`, where py-spy renders it with a",
+    "   bare name as `emit_line`. Measured against the control capture: zero",
+    "   frames carry `_pipeline_types.py` in an `emit_line` frame, and 111",
+    "   carry `_line_callbacks.py`. Re-running the classifier with the entry",
+    "   removed leaves every field of the control result identical, so the",
+    "   entry was inert on the capture as well as absent from the tree.",
+    "",
+    "   `emit_line` at `cuprum/_line_callbacks.py` is the entry that does the",
+    "   work, and it is the right one for a durable reason: the hoisted",
+    "   construction happens in that method, and the un-hoisted construction",
+    "   happened in the composed `emit_line` closure in the same file. One",
+    "   entry therefore counts the per-line construction whether the hoist is",
+    "   in place or has been reverted, instead of the measurement silently",
+    "   scoring zero constructed events as absent work.",
+    "",
+    "   py-spy renders these frames with bare function names and a file",
+    "   location -- `emit_line (cuprum/_line_callbacks.py:132)`, never",
+    "   `_LineEventEmitter.emit_line`. Caller patterns must match that",
+    "   rendering, and the line number in any example is illustrative only:",
+    "   generated-constructor frames deliberately omit it because it shifts,",
+    "   and the same caution applies to a handwritten frame.",
+    "",
+    "The hoist's success is measured as: the per-line construction still",
+    "matches through `emit_line`, and its share falls. That no _EventDetails is",
+    "constructed per line is not provable from a capture at all -- the frame is",
+    "indistinguishable from every other generated constructor -- so it is",
+    "asserted directly by the tests that patch the constructor. See the",
+    "execplan's EP-M2 entry."
+  ],
+
+  "consume_frames": [
+    {
+      "function": "_consume_stream_with_lines",
+      "location": "cuprum/_stream_line_consumer.py"
+    }
+  ],
+
+  "construction_rules": [
+    {
+      "name": "ExecEvent.__init__ reachable from the event-emission path",
+      "frame": {
+        "function": "__init__",
+        "location": "<string>"
+      },
+      "callers": [
+        {
+          "function": "emit",
+          "location": "cuprum/_pipeline_types.py"
+        },
+        {
+          "function": "emit_fail_fast",
+          "location": "cuprum/_pipeline_types.py"
+        },
+        {
+          "function": "emit_line",
+          "location": "cuprum/_line_callbacks.py"
+        }
+      ]
+    }
+  ]
+}

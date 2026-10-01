@@ -1317,6 +1317,32 @@ The following design decisions were made during implementation:
 
 ### 8.1.3 Structured execution events (observe hooks)
 
+Implemented as `_LineEventEmitter`, a frozen slotted private dataclass in
+`cuprum/_line_callbacks.py`, built once per observed stream, after spawn, when
+the pid is known. It binds the invariant half of a line event — program, argv
+with the program name first, cwd, env, pid, stream, tags, project, and exec_id
+— together with the observation's own `_emit_event` dispatcher. The factory
+returns `None` when no observe hook is installed, so a stream nobody emits
+events for prepares nothing. Every line then needs only itself: `emit_line`
+passes a fresh frozen `ExecEvent`, one fresh clock read, and the line to that
+unchanged dispatcher. The per-line `_EventDetails` construction and the per-line
+`argv_with_program` walk are gone.
+
+**The construction share is measured, not projected.** Pre-hoist the median was
+34.2928%; post-hoist it is 29.9087%, over three matched capture pairs with a
+candidate spread of 0.0423 points, against a limit of 30.0 that was revised
+from 10% to 28% and then to 30%, both on 2026-09-27 with user approval, the
+second revision on the measurement rather than a further projection. 100% of
+the residual numerator now sits inside the generated `ExecEvent.__init__`, whose
+`frozen=True` guard makes 27 `object.__setattr__` calls per construction; two
+faster constructions were measured and declined as public-API or correctness
+trades. The evidence is in
+[`tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md),
+with raw captures under
+[`profiling/5-2-1-line-event-emission/`](profiling/5-2-1-line-event-emission/README.md)
+and the plan in
+[the 5.2.1 plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md).
+
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 

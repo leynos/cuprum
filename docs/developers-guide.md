@@ -3377,6 +3377,51 @@ recursion or inlined duplicate symbols). This matches the convention used by
 most sampling profilers: a recursive frame inflates the wall-time cost of the
 leaf, not the inclusive tally of every caller on the path.
 
+## Construction-share classification (roadmap 5.2.1)
+
+Roadmap item 5.2.1's gate is reproduced with
+`benchmarks/summarize_line_event_profile.py`, which classifies one py-spy raw
+capture against a rule set:
+
+```bash
+python -m benchmarks.summarize_line_event_profile <stacks.folded> \
+  --rules <rules.json> --output <out.json>
+```
+
+`--output` is required; the result document is written there as well as
+printed. Exit status 0 means the share is within the limit, 1 that it is above
+it, and 2 that the input was malformed, insufficient, or contained unresolved
+frames. A control capture is expected to exit 1. The committed rule set is
+`docs/profiling/5-2-1-line-event-emission/classifier-rules.json`, and committed
+inputs and results live beside it under
+`docs/profiling/5-2-1-line-event-emission/`; the 2 GiB fixtures are
+deliberately kept in the gitignored `dist/`.
+
+The limit applies to `N/D`. `D` is the weighted samples of stacks containing
+`_consume_stream_with_lines`; `N` is those that also contain a matched
+construction frame, counted once per stack. The limit constant is
+`CONSTRUCTION_SHARE_LIMIT_PERCENT` in
+`benchmarks/_line_event_profile_classifier.py`.
+
+**The metric is structurally non-monotonic, and that is a property to design
+around rather than a defect to fix.** 100% of the numerator sits inside the
+retained generated `ExecEvent.__init__`, so an optimization that removes work
+*outside* the constructor lowers `D` while holding `N`, and therefore
+**raises** the share. A higher share after a successful optimization is this
+metric's known behaviour, not a regression; judge such work by the per-frame
+contributions the classifier reports instead. The 5.2.1 measurement records the
+case concretely, and its successor is already forecast: item 5.2.2's
+`inspect.isawaitable` removal is expected to move the share 0.9686 points
+*above* the bar by succeeding. See
+[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
+
+**Shared Cargo cache.** This repository never creates an isolated Cargo cache.
+Measurement helpers and builds use the shared default cache and let Cargo's
+package-cache lock serialize access, so concurrent worktrees do not each refill
+a private registry. Do not redirect `CARGO_HOME` to a scratch directory, and do
+not work around the lock: if another Cargo job holds it, wait for the lock to
+clear.
+
 ## Makefile tooling changes
 
 On POSIX platforms, `LOCAL_TOOL_ENV` prepends `~/.local/bin` and `~/.bun/bin` to
@@ -5748,6 +5793,68 @@ Changes to line delivery should keep both public entry points on the shared
 consumer path. Changes to termination or task ownership belong in the shared
 lifecycle modules so timeout and cancellation behaviour remains aligned with
 `run()`.
+
+### The per-stream line-event emitter
+
+`_LineEventEmitter` in `cuprum/_line_callbacks.py` is a frozen slotted private
+dataclass holding the invariant half of a line `ExecEvent`.
+`_line_event_emitter` builds it once per observed stream, after spawn, so the
+pid is known; the dispatcher then calls `emit_line` per decoded line.
+Everything bound at preparation time — the program, the full argv, cwd, the
+environment overlay, the pid, the stream, the observation's tags, the project
+name, the execution id, and the observation's own `_emit_event` — is fixed for
+the life of that stream, so a line event needs only a line and one fresh clock
+read to complete. The per-line `_EventDetails` construction and the per-line
+`argv_with_program` walk are what this type exists to remove.
+
+The emitter holds `observation._emit_event` **bound rather than called**. That
+method catches `_ExecEventEmissionError`, retains the observation's
+pending-task list, and owns the tasks of hooks that already ran when a later
+hook failed. Re-implementing the dispatch inside the emitter — or reaching past
+it to `_emit_exec_event` — would silently drop that ownership, so the private
+access is deliberate and confined to the factory that builds the emitter. Any
+change to emission policy belongs in `_emit_event`, not here.
+
+`_line_event_emitter` returns `None` when no observe hook is installed, and
+`_compose_line_callbacks` returns `None` outright when neither an observe hook
+nor a caller `on_line` needs the stream. Both guards exist to keep the
+zero-callback drain path at its previous cost: a stream nobody observes must
+prepare nothing. Preserve them when touching the composition.
+
+See [Cuprum design](cuprum-design.md) §8.1.3 for the accepted rationale.
+
+### The construction-share gate, and why it is not monotonic
+
+Roadmap item 5.2.1 accepted its hoist against a profiled **construction
+share**, not a wall-clock speedup. The metric is a share `N/D` over py-spy
+samples: `D` counts weighted samples whose stack contains
+`_consume_stream_with_lines`, and `N` counts those samples that also contain a
+matched construction frame. The denominator is therefore the *whole consume
+subtree*, not just the code the change edits.
+
+That shape gives the gate a property worth knowing before touching this path:
+**it can get worse when the code gets faster.** Anything that removes general
+consume work shrinks `D` without shrinking `N`, so a genuinely faster emission
+path can score a higher share. The share is an attribution metric, not a
+stopwatch, and it must not be used as an acceptance instrument for a change
+whose goal is speed.
+
+The concrete instance is roadmap item 5.2.2, which removes the per-line
+`inspect.isawaitable` call — 589 samples, all denominator-only. Deleting it
+moves the share from 29.9414% to a **conditional forecast** of 30.9686%, which
+is worse by the gate's own criterion while being faster in fact. Read that
+number as the direction and rough size of the inversion, not as a measurement:
+no capture exists with the call absent. The full analysis, including the
+sampling caveats, is in
+[`docs/tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md).
+
+To re-run or re-judge the gate, the committed captures and the classifier rules
+are in `docs/profiling/5-2-1-line-event-emission/`, whose `README.md` documents
+the layout and the reproduction command. Note that the captures were collected
+against a 28% limit and were later re-judged unchanged at 30%; both verdicts
+are kept, and `verdict.txt` carries a header saying which is standing. Because
+`N` and `D` are sample counts, re-judging at a new limit changes only
+`limit_percent` and `status` — never the measured share.
 
 ## Subprocess execution module boundaries
 
