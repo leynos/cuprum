@@ -217,6 +217,50 @@ escalation, not a workaround.
   measures the code at `5d1e762f` exactly.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
   changelog, migration guide, roadmap note.
+  - [x] (2026-10-01 22:40Z) The O2 non-vacuity guard is in place. `_FACTORIES`
+        gains `bind`, `bind-nested`, and `bind-two`; the two `bind` spellings
+        differ (absolute vs `allow_relative=True` relative), so a sequence
+        sampling both exercises the layer merge on two path shapes. Recording
+        is driven by `_record_binding`'s `isinstance` test on the returned
+        handle rather than by the factory entries, so a binding factory added
+        later is covered without editing the recorder.
+        `test_binding_factories_are_sampled` runs the machine through
+        `run_state_machine_as_test` with `database=None`, so it cannot pass by
+        replaying a stored example. Negative control: with the three binding
+        entries deleted, the guard trips with "no generated sequence installed
+        an executable binding".
+  - [x] (2026-10-01 22:50Z) O4's adapter surface is locked. The generator in
+        `test_adapter_projection.py` now emits `resolved_path`, and two named
+        tests pin the literal key each adapter publishes plus the unbound
+        omission. Mutation control: deleting the `resolved_path` entry from
+        `_verbatim_fields` fails the handwritten expectation. See the
+        Surprises entry for the hole this exposed in the sibling identity
+        check.
+  - [x] (2026-10-01 22:58Z) The behavioural scenarios are in place and
+        non-vacuous. `tests/features/catalogue.feature` gains the identity and
+        the unapproved-name scenarios; their steps live in
+        `tests/behaviour/_catalogue_binding_support.py`, which
+        `tests/behaviour/test_catalogue_behaviour.py` re-binds because
+        pytest-bdd resolves a step against the fixtures visible to the module
+        declaring the scenario. Two negative controls were run: dropping the
+        `bind_executable` scope fails with "the child must have been started as
+        the bound file, reported '-c im…'", and widening the allowlist fails
+        by executing `/opt/tools/sccache` (`FileNotFoundError`), proving the
+        refusal is the allowlist's rather than the binding's.
+  - [x] (2026-10-01 23:06Z) Documentation is written and its examples execute:
+        `docs/cuprum-design.md` section 5.1.2 plus its TOCTOU limits,
+        `docs/users-guide.md`, `docs/v0-2-0-migration-guide.md`,
+        `CHANGELOG.md`, and the `docs/roadmap.md` note under item 3.3.1. The
+        suite's documentation-example runner picked the new
+        `tested-example: migration-executable-bindings` fence up on its own
+        (behaviour count 44 -> 45).
+  - [x] (2026-10-01 23:24Z) `make fmt`, `make check-fmt`, `make typecheck`,
+        `make lint`, `make test`, `make markdownlint`, and `make nixie` all
+        exit 0 on the uncommitted EP-M4 tree at `4cec4a30`. Two real defects
+        were found and fixed on the way: the module-length ceiling (see
+        Surprises) and an ambrleaks `[snapshot-posix-path]` finding on 21
+        fictional `/opt/tools/echo` snapshot values, allowlisted narrowly in
+        `ambrleaks.toml`.
 - [ ] EP-M5: gates green, push, draft pull request, CodeRabbit review.
 
 ## Surprises & discoveries
@@ -372,6 +416,64 @@ escalation, not a workaround.
   `relay_fallbacks`, which satisfies both readings without weakening a test
   that exists to protect a public contract. A keyword-only field's declaration
   order still communicates the wire shape to anyone reading `dc.fields()`.
+- Observation: the two artefacts this plan names for O2 and O4 —
+  `test_executable_binding_context.py` and
+  `test_executable_binding_telemetry.py` — were never created under those
+  names. The coverage landed in `test_executable_context.py` and
+  `test_executable_binding_execution.py`, and O4's adapter surface belongs to
+  `test_adapter_projection.py`, which already owns the projection contract.
+  Impact: the plan's artefact lines are corrected rather than new modules
+  conjured; splitting a module to match a name would be work with no behaviour
+  behind it.
+- Observation: widening `test_adapter_projection.py`'s generator to emit
+  `resolved_path` exposed a hole in that module. The sibling
+  `test_adapters_agree_on_common_keys_modulo_prefix` derives its expectation
+  from `_event_common_fields` itself, so it is an identity check that passes
+  whatever the projection carries or drops. `_OPTIONAL_FIELDS` likewise listed
+  neither `resolved_path` nor `project`, `operation`, `error_type`, `note`,
+  `timeout_s`, `timeout_mode`, `eof_grace_s`, or `pending_readers`, so the
+  generator could not reach them at all. Evidence: a seeded mutation removing
+  `("resolved_path", event.resolved_path)` from `_verbatim_fields` fails
+  `test_projection_includes_exactly_the_non_none_fields`, whose expected
+  dictionary is handwritten, yet is invisible to the sibling identity check.
+  Impact: the literal key each adapter publishes is pinned by
+  `test_the_executed_path_reaches_every_adapter_but_the_labels` and the unbound
+  case by `test_the_unbound_case_emits_no_path_key_at_all`; the per-phase
+  snapshots lock the bound wire shape.
+- Observation: the 400-line module ceiling reaches behaviour tests after all,
+  but only *outside* the `test_*` naming convention. `pylint-classic` runs
+  twice: a strict pass over `PYLINT_STRICT_TARGETS` and a second pass that
+  disables `too-many-lines` for `PYLINT_TEST_TARGETS`. Adding
+  `tests/behaviour/test_catalogue_behaviour.py` to the second list does *not*
+  exempt it, because Pylint's recursive walk descends from the named roots and
+  `tests/` already pulls the whole tree into the strict pass. Evidence:
+  `make lint` failed with `C0302: Too many lines in module (485/400)` on a file
+  whose own root is in `PYLINT_TEST_TARGETS`. Impact: the executable-binding
+  steps moved to `tests/behaviour/_catalogue_binding_support.py` (241 lines),
+  leaving the scenario module at 331. A support module is not named `test_*`,
+  so it also loses ruff's `assert` exemption; its assertions go through a
+  `_require` helper that calls `pytest.fail`, matching
+  `_telemetry_adapter_tracing_steps.py`.
+- Observation: a plain `import` of a step support module is not enough to make
+  its steps resolvable. Each decorator plants a pytest fixture in the
+  *defining* module's locals, so the importing module must re-bind every step
+  it wants. Re-binding with `when(name)(impl)` also silently drops
+  `target_fixture`, which surfaces as `fixture 'refusal_outcome' not found`
+  rather than as a missing step. Evidence: after the split,
+  `pytest_bdd.exceptions.StepDefinitionNotFoundError` for both binding steps;
+  after a naive re-bind, `fixture ... not found` for the two target fixtures.
+  Impact: the re-bindings carry `target_fixture=` and use `parsers.parse` for
+  parameterized names, following `tests/behaviour/test_telemetry_adapters.py`.
+- Observation: the `ambrleaks` snapshot scanner has no notion of fixture data,
+  so a deterministic fictional path in a snapshot trips `[snapshot-posix-path]`
+  exactly as a real host path would. Evidence: 21 findings, one per
+  `/opt/tools/echo` line added to `test_adapter_projection.ambr`. Impact: the
+  value is allowlisted narrowly in `ambrleaks.toml` as `^/opt/tools/[^/]+$`
+  rather than redacted in the snapshot, because the snapshot exists to pin the
+  exact spelling each adapter publishes the path under and a placeholder would
+  erode that. Verified non-vacuous: the pattern admits `/opt/tools/echo` and
+  `/opt/tools/sccache` but rejects `/home/leynos/...`, `/etc/passwd`,
+  `/opt/tools/`, and `/opt/tools/a/b`.
 
 ## Decision log
 
@@ -578,7 +680,7 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
   supply.
 - Artefact: `cuprum/unittests/test_token_registration_stateful.py` (extended
   `_FACTORIES`), `cuprum/unittests/test_context_isolation.py`,
-  `cuprum/unittests/test_executable_binding_context.py`.
+  `cuprum/unittests/test_executable_context.py`.
 - Evidence: `make test-python` passes; the state machine's
   `active_context_matches_stack_top` invariant holds across generated sequences
   that include the new `bind` factory.
@@ -619,7 +721,9 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 - Method: named pytest examples, one per adapter, driving a real subprocess.
 - Rationale: this is a finite set of surface-by-surface assertions over a
   record shape, which examples express more readably than a generator.
-- Artefact: `cuprum/unittests/test_executable_binding_telemetry.py`.
+- Artefact: `cuprum/unittests/test_executable_binding_execution.py` (the
+  per-phase event assertions driven by a real spawn), with the adapter surface
+  locked in `cuprum/unittests/test_adapter_projection.py`.
 - Evidence: `make test-python` passes; the metrics test asserts the label set
   equals `{"program", "project"}` and would fail if a path were added.
 - Non-vacuity: the same test asserts the *unbound* case carries
