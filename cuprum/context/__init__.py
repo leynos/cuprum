@@ -91,6 +91,9 @@ from cuprum.context.env_overlay import (
     merge_env_overlays,
     resolve_env,
 )
+from cuprum.context.executable_overlay import (
+    merge_executable_bindings,
+)
 from cuprum.context.registration import (
     AllowRegistration,
     EnvRegistration,
@@ -128,6 +131,7 @@ __all__ = [
     "env",
     "get_context",
     "merge_env_overlays",
+    "merge_executable_bindings",
     "observe",
     "resolve_env",
     "scoped",
