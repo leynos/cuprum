@@ -2,22 +2,26 @@
 //! drain: full transfer between pipes, fallback signalling for
 //! unsupported descriptor types, and broken-pipe draining.
 
-use std::{
-    io::{self, Write},
-    os::fd::OwnedFd,
-};
+use std::io;
+#[cfg(not(miri))]
+use std::{io::Write, os::fd::OwnedFd};
 
 use proptest::prelude::*;
-use rstest::{fixture, rstest};
+#[cfg(not(miri))]
+use rstest::fixture;
+use rstest::rstest;
+#[cfg(not(miri))]
 use tempfile::NamedTempFile;
 
-use super::{accumulate_splices, drain_reader, splice_once_with, try_splice_pump};
-use crate::{
-    errors::PumpError,
-    test_support::{make_pipe, read_all_from, unwrap_ok, write_all_to},
-};
+use super::{accumulate_splices, splice_once_with};
+#[cfg(not(miri))]
+use super::{drain_reader, try_splice_pump};
+#[cfg(not(miri))]
+use crate::test_support::{make_pipe, read_all_from, write_all_to};
+use crate::{errors::PumpError, test_support::unwrap_ok};
 
 /// A connected `pipe(2)` pair: `(read_end, write_end)`.
+#[cfg(not(miri))]
 type PipePair = (OwnedFd, OwnedFd);
 
 /// A `pipe(2)` pair as an [`rstest`] fixture wrapping
@@ -29,6 +33,7 @@ type PipePair = (OwnedFd, OwnedFd);
 // `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
 // form that triggers `unused_braces` under Rust 1.85. Remove this skip when
 // that formatter/rstest combination compiles the configured profile cleanly.
+#[cfg(not(miri))]
 #[rustfmt::skip]
 #[fixture]
 fn pipe() -> io::Result<PipePair> {
@@ -37,6 +42,11 @@ fn pipe() -> io::Result<PipePair> {
 
 /// A pipe payload reaches the sink intact through the splice loop.
 #[rstest]
+#[cfg_attr(
+    miri,
+    ignore = "Miri cannot execute unshimmed libc::splice on real descriptors"
+)]
+#[cfg(not(miri))]
 fn splice_transfers_all_bytes_between_pipes(
     #[from(pipe)] source_result: io::Result<PipePair>,
     #[from(pipe)] sink_result: io::Result<PipePair>,
@@ -63,6 +73,11 @@ fn splice_transfers_all_bytes_between_pipes(
 }
 
 #[rstest]
+#[cfg_attr(
+    miri,
+    ignore = "Miri cannot execute unshimmed libc::splice on real descriptors"
+)]
+#[cfg(not(miri))]
 fn unsupported_descriptors_signal_fallback() {
     // Unique temp files avoid name collisions between concurrent test
     // runs; each `NamedTempFile` removes itself on drop, so a mid-test
@@ -86,6 +101,11 @@ fn unsupported_descriptors_signal_fallback() {
 
 /// A broken sink drains the source and reports zero delivered bytes.
 #[rstest]
+#[cfg_attr(
+    miri,
+    ignore = "Miri cannot execute unshimmed libc::splice on real descriptors"
+)]
+#[cfg(not(miri))]
 fn broken_pipe_drains_reader_and_reports_transferred_bytes(
     #[from(pipe)] source_result: io::Result<PipePair>,
     #[from(pipe)] sink_result: io::Result<PipePair>,
@@ -115,6 +135,11 @@ fn broken_pipe_drains_reader_and_reports_transferred_bytes(
 
 /// Draining a reader consumes all pending bytes through EOF.
 #[rstest]
+#[cfg_attr(
+    miri,
+    ignore = "Miri cannot execute unshimmed libc::splice on real descriptors"
+)]
+#[cfg(not(miri))]
 fn drain_reader_consumes_to_eof(#[from(pipe)] pipe_result: io::Result<PipePair>) {
     let (read_end, write_end) = unwrap_ok(pipe_result);
     unwrap_ok(write_all_to(&write_end, b"residual data"));
@@ -146,6 +171,8 @@ fn splice_once_retries_after_interruption() {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// Across any number of leading `EINTR`s and either terminal outcome,
     /// `splice_once_with` issues exactly one syscall per attempt and
     /// returns the first non-interrupted result. This exercises the retry
@@ -205,6 +232,8 @@ enum Terminal {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// The unified loop sums every `Ok(n)` before the terminal outcome,
     /// drains exactly on a broken pipe, and propagates a fatal error
     /// without draining. Covers the `Ok(0)` / `Ok(n)` / non-fatal / fatal

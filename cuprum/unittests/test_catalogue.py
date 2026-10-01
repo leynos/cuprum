@@ -168,8 +168,8 @@ def test_project_settings_defaults_to_empty_metadata() -> None:
     """A project may declare only a name and its programs."""
     project = ProjectSettings(name="bare", programs=(Program("tool"),))
 
-    assert project.documentation_locations == (), "Docs links should default to empty"
-    assert project.noise_rules == (), "Noise rules should default to empty"
+    assert not project.documentation_locations, "Docs links should default to empty"
+    assert not project.noise_rules, "Noise rules should default to empty"
 
 
 def test_from_programs_builds_single_project_catalogue() -> None:

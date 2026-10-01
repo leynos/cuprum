@@ -579,38 +579,36 @@ supersedes it. The properties worth pinning are these:
   The shared action already defaults to `upload`, so that input is not
   load-bearing today, but the sibling `check` mode is the pull-request
   comparison, and switching to it would silently retire main-branch publication.
-- **Both contracts are pinned.** `tests/test_ci_ratchet_publication.py`
-  evaluates the publication expression per event rather than matching its text,
-  `tests/test_ci_codescene_boundary.py` asserts the upload mode by value, and
-  `tests/test_ci_codescene_publisher.py` holds the token check, the direct
-  input, the absence of the token from anywhere else in the workflow, and the
-  exact concurrency. It splits the upload guard on `&&` and refuses any unquoted
-  `||`: an alternative hidden in an extra narrowing conjunct, as in
+- **The publication expression and the rest are pinned.**
+  `tests/test_ci_ratchet_publication.py` evaluates the publication expression
+  per event rather than matching its text. The shared CV-005 contract
+  (`cv005-contracts`, run by `make test-workflow-contracts` from a full commit
+  named by `CV005_CONTRACTS_REF` in the Makefile) holds the upload mode, the
+  token check, the direct input, the absence of the token from anywhere else in
+  the workflow, and the exact concurrency. It splits the upload guard on `&&`
+  and refuses any unquoted `||`: an alternative hidden in an extra narrowing
+  conjunct, as in
   `<guard> && github.actor != 'x' || github.event_name == 'workflow_dispatch'`,
   leaves both required conjuncts whole while making them optional.
 
 Nothing a pull request can run may contact CodeScene or reach its token, and
-"can run" is a closure rather than a trigger list.
-`tests/helpers/ci_closure.py` starts from every workflow triggered by
-`pull_request` or `pull_request_target` and follows same-repository
-reusable-workflow calls transitively, because a `workflow_call` workflow runs
-on its caller's pull request and `secrets: inherit` hands it the token. It reads
-`on:` as a scalar, a sequence, or a mapping, under the string key or the
-boolean `True`, and it matches a local call by shape: strip a leading `./` or
-`$/` and ask whether the rest names a file directly under `.github/workflows/`.
-A local call it cannot resolve fails the contract rather than shrinking the
-set, and so does a call to `leynos/cuprum/.github/workflows/...@ref`, which
-names this repository at a revision the contract cannot read. A workflow
-triggered by `workflow_run` on a reached workflow's `name:` joins the closure
-too: it runs downstream with the repository's secrets.
-`tests/helpers/ci_codescene.py` then walks every key and string value of each
-reached document, so a `run` body, an action input, an `env` value at any
-scope, and a `secrets:` forwarding are all read, along with `secrets: inherit`
-and `toJSON(secrets)`. Secret names are matched case-insensitively, as GitHub
-resolves them. Both helpers serve these contracts only;
-`tests/test_ci_codescene_closure.py` proves each reader against constructed
-workflows, including a called workflow that curls the CodeScene API with an
-inherited token, which the earlier single-job contract passed.
+"can run" is a closure rather than a trigger list. The shared contract starts
+from every workflow triggered by `pull_request` or `pull_request_target` and
+follows same-repository reusable-workflow calls transitively, because a
+`workflow_call` workflow runs on its caller's pull request and
+`secrets: inherit` hands it the token. A local call it cannot resolve fails the
+contract rather than shrinking the set, and so does a call to
+`leynos/cuprum/.github/workflows/...@ref`, which names this repository at a
+revision the contract cannot read. A workflow triggered by `workflow_run` on a
+reached workflow's `name:` joins the closure too: it runs downstream with the
+repository's secrets. Every key and string value of each reached document is
+read, so a `run` body, an action input, an `env` value at any scope and a
+`secrets:` forwarding are all seen, along with `secrets: inherit` and
+`toJSON(secrets)`. The library's own suite proves each reader against
+constructed workflows, so this repository keeps no copy of them. The target
+needs `uv`, which fetches the Python 3.13 the library runs under; the
+repository's one parameter is its `repository` name in `.github/cv005.toml`,
+and CI runs the target as its own step in `lint-test`.
 
 Every workflow and composite-action reader in the suite parses through
 `tests/helpers/strict_yaml.py`, a `SafeLoader` that refuses a mapping declaring
@@ -658,12 +656,12 @@ change the Makefile when changing the formatter toolchain. Coverage, release,
 verification, MSRV, and Whitaker commands, together with macOS and Windows,
 retain their prescribed fragment-free or separately pinned toolchains. The
 stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
-maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
-job environment (`0.2.7`, the workflow's configured installer version). The
-Makefile runs `lint-clippy`, `lint-whitaker`, and spelling sequentially;
-`lint-whitaker` passes Cargo `--package` arguments for `cuprum-rust`,
-`cuprum-streams`, and `cuprum-native-io` after Whitaker's `--` separator.
-Whitaker's `--all` chooses lint libraries, not workspace packages.
+maintenance. The Whitaker action takes no installer-version input: it pins its
+own installer version (0.2.9 or later), and refuses a caller-supplied one below
+that. The Makefile runs `lint-clippy`, `lint-whitaker`, and spelling
+sequentially; `lint-whitaker` passes Cargo `--package` arguments for
+`cuprum-rust`, `cuprum-streams`, and `cuprum-native-io` after Whitaker's `--`
+separator. Whitaker's `--all` chooses lint libraries, not workspace packages.
 
 Whitaker's lint suite is a rolling release, and that is the distribution model
 rather than a defect. Its `rolling-release.yml` runs on every push to `main`
@@ -762,10 +760,17 @@ Each has exactly one group: a catch-all matching `*`, limited to `minor` and
 ecosystem, and every major update arrives in its own pull request, where it can
 be reviewed and built on its own.
 
-`tests/test_ci_dependabot_config.py` enforces this. It also checks that each
-stanza's `directory` holds its manifest, that each stanza carries its labels,
-and that each stanza bounds its open pull requests. A new ecosystem needs a new
-entry in `EXPECTED_STANZAS` as well as a stanza.
+The `github-actions` stanza lists `/.github/actions/*` beside `/`, because
+Dependabot does not descend from `/` into `.github/actions`, and the composite
+actions there would otherwise keep stale pins.
+
+`tests/test_ci_dependabot_config.py` enforces this, including a check that
+every composite action under `.github/actions`, at any depth, is reached by one
+of the stanza's directory globs. It also checks that each stanza lists exactly
+its expected directories, whether under `directory` or `directories`, that the
+primary directory holds the stanza's manifest, that each stanza carries its
+labels, and that each stanza bounds its open pull requests. A new ecosystem
+needs a new entry in `EXPECTED_STANZAS` as well as a stanza.
 
 ## Linux debug-build acceleration
 
@@ -980,8 +985,9 @@ contracts stay aligned.
 different audiences and change cadences, so it is now a package whose context
 surface is re-exported from `cuprum/context/__init__.py`:
 
-- `cuprum/context/env_overlay.py` — pure overlay merging
-  (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
+- `cuprum/context/env_overlay.py` — pure overlay merging and rendering
+  (`EnvMode`, `UNSET`/`UnsetType`, `merge_env_overlays`, `render_env`,
+  `_render_env_base`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
   dependency.
 - `cuprum/context/core.py` — the `CuprumContext` domain dataclass and timeout
   validation. It re-exports `ScopeConfig`, the `ContextError` package-level
@@ -1710,27 +1716,35 @@ it renders.
 
 Each `_drain` call builds one frozen `_DrainState` carrying a mutable
 `_EchoGuard` payload, so concurrent stdout and stderr drains disable echoing
-independently. Every echo write, including the final decoder flush through
-`_flush_echo_decoder`, routes via `_echo_chunk`. The private `_echo_relay`
-module owns this write-side policy; `_streams` retains the drain lifecycle and
-re-exports `_write_chunk` for existing internal callers. Its `_echo_chunk`
-helper catches `UnicodeEncodeError` only: the first failure disables echo for
-the rest of that drain, logs one `WARNING` on the `cuprum.stream` logger with
-structured `cuprum_*` extras, and lets every other error propagate unchanged.
-Capture (`buffer.extend`) always runs before the echo step, so a rejected echo
-write never loses captured bytes, and the binary `.buffer` fast path inside
-`_write_chunk` is unchanged.
+independently. The drain loop sends ordinary chunks through `_echo_chunk`,
+which applies the per-line byte bound; the bounded-line writer and the final
+decoder flush through `_flush_echo_decoder` call `_echo_write` directly.
+`_echo_write` in `cuprum/_stream_echo.py` owns this write-side policy;
+`_streams` retains the drain lifecycle and re-exports `_write_chunk` for
+existing internal callers. It catches `UnicodeEncodeError` unconditionally and
+`BrokenPipeError` only under `BrokenPipePolicy.BEST_EFFORT`: the first failure
+of either kind disables echo for the rest of that drain, logs one `WARNING` on
+the `cuprum.stream` logger with structured `cuprum_*` extras, and lets every
+other error propagate unchanged. The two recoveries share `_disable_echo`, so
+the guard flip and its three bounded projections cannot drift apart; only the
+`cuprum_error_category` differs. Capture (`buffer.extend`) always runs before
+the echo step, so a rejected echo write never loses captured bytes, and the
+binary `.buffer` fast path inside `_write_chunk` is unchanged. The catch is by
+`BrokenPipeError` name rather than `OSError`, which is what keeps a genuinely
+unreachable device propagating under both policies.
 
-The first failure is owned entirely by that one `_echo_chunk` transition: the
-`cuprum.stream` `WARNING` and the opt-in `cuprum.echo_observation.observe_echo`
-event are two projections of the same guard flip, emitted once per affected
-drain and never repeated by a later chunk or the final decoder flush. Because
-`ExecPhase` is a closed set that registered consumers match exhaustively, the
-echo channel carries its own `cuprum.echo_events.EchoEvent` type on its own
-hook registry rather than a new phase, so consumers opt in by registering and
-unregistered callers pay nothing. Hook failures are reported and skipped,
-mirroring `cuprum.pump_observation`, so a broken metrics backend cannot change
-what a run captures.
+The first failure is owned entirely by that one `_echo_write` transition: the
+`cuprum.stream` `WARNING`, the opt-in `cuprum.echo_observation.observe_echo`
+event, and the owned `RelayFallback` are three projections of the same guard
+flip, emitted once per affected drain and never repeated by a later chunk or
+the final decoder flush. Because `ExecPhase` is a closed set that registered
+consumers match exhaustively, the echo channel carries its own
+`cuprum.echo_events.EchoEvent` type on its own hook registry rather than a new
+phase, so consumers opt in by registering and unregistered callers pay nothing.
+`cuprum.echo_observation._emit_echo_event` reports and skips ordinary
+`Exception` failures, mirroring `cuprum.pump_observation`, while
+`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate
+untouched, so a broken metrics backend cannot change what a run captures.
 
 ### Result diagnostics ownership
 
@@ -1992,10 +2006,12 @@ The observation tag schema is a wire contract for observability, so the
 env-overlay resolution and base tag construction shared by the single-command
 and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 
-- `_resolve_env_overlay(extra)` layers the per-call overlay (typically
-  `ExecutionContext.env`) over the scoped overlay from the active
-  `CuprumContext` and returns the immutable merge result. It stays overlay-only
-  — `os.environ` is merged separately at spawn time by `resolve_env`.
+- `_resolve_env_overlay(extra, env_mode)` layers the per-call overlay
+  (typically `ExecutionContext.env`) over the scoped overlay from the active
+  `CuprumContext`, delegating to `_resolve_env_policy`, and returns the
+  immutable merge result together with its effective `EnvMode`. It stays
+  overlay-only — `os.environ` is rendered separately at spawn time by
+  `render_env`, not here.
 - `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
   (`project`, `capture`, `echo`). The pipeline observation builder grafts on
   only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
@@ -2011,7 +2027,8 @@ diverge between the single-command and pipeline telemetry.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
-semantics and stays immutable; both paths agree on the shared tag keys) and a
+semantics and stays immutable; both paths agree on the shared tag keys), a
+check that only a `REPLACE` policy publishes the reserved `env_mode` tag, and a
 syrupy snapshot of representative single-command and pipeline tag dictionaries.
 
 ## Context allowlist internals
@@ -2049,8 +2066,8 @@ replacement allowlist is empty, and a non-empty replacement establishes an
 explicit policy by setting restriction. So direct replacement cannot turn a
 deny-all context into the permissive default.
 
-The allowlist, hook, and timeout rules are split into pure helpers in
-`cuprum/context/_policy.py` so the invariants can be tested directly:
+The allowlist, hook, timeout, and environment-policy rules are split into pure
+helpers in `cuprum/context/_policy.py` so the invariants can be tested directly:
 
 - `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
   narrowed allowlist for the three parent/config cases without mutating either
@@ -2068,6 +2085,13 @@ The allowlist, hook, and timeout rules are split into pure helpers in
   non-finite values (NaN and positive or negative infinity).
 - `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
   the scoped config is silent and otherwise uses the scoped value.
+- `_resolve_env_policy(parent_overlay, parent_mode, child_overlay, child_mode)`
+  composes two environment policies without rendering them. A `REPLACE` child
+  discards the parent overlay and selects `REPLACE`; an `OVERLAY` or `INHERIT`
+  child keeps the parent's effective mode and merges its values over the parent
+  overlay, so the two are indistinguishable in every mode combination. It
+  rejects non-`EnvMode` arguments with `TypeError`, and `UNSET` markers survive
+  composition until render time.
 
 Core context tests live in `cuprum/unittests/test_context.py`. Context policy
 property tests live in `cuprum/unittests/test_context_narrowing.py` and
@@ -2233,36 +2257,49 @@ failure — back to the command they submitted:
 
 The user-facing `env(...)` context manager and the related `ScopeConfig` field
 carry an *overlay-only* mapping that is layered on top of the live `os.environ`
-at subprocess spawn time. The implementation sits in
-`cuprum/context/env_overlay.py` and is built on three cooperating helpers:
+at subprocess spawn time, under a policy selected by an `EnvMode` of `INHERIT`,
+`OVERLAY`, or `REPLACE` (`OVERLAY` is the default). The implementation sits in
+`cuprum/context/env_overlay.py` and is built on these cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
   layer may be `None`, in which case the result is whichever layer is set (or
   `None`); empty mappings are treated as "no contribution".
-- `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
-  every non-empty layer, in left-to-right order. When every layer is `None` or
-  empty, the helper returns `None` so the caller can pass it straight through to
-  `subprocess.Popen` to mean *inherit the parent environment unchanged* — this
-  is also the path that avoids the redundant `os.environ` copy.
+- `render_env(overlay, mode=EnvMode.OVERLAY)` (public) renders a composed
+  policy for spawning. `REPLACE` starts from `{}` and every other mode from a
+  live `os.environ` copy; in a non-`REPLACE` mode a policy with no entries
+  renders to `None` so the caller can pass it straight through to
+  `subprocess.Popen` to mean *inherit the parent environment unchanged*, which
+  is also the path that avoids the redundant `os.environ` copy. Any `UnsetType`
+  value (`UNSET`) removes its key from the rendered mapping, in every mode.
+- `_render_env_base(overlay, mode)` (internal) is the only place that calls
+  `os.environ.copy()`, and the only place that returns `{}` for `REPLACE`.
 - `_coerce_env_overlay(overlay)` (internal) wraps any caller-supplied
   mapping in `MappingProxyType(dict(overlay))` so the stored overlay cannot be
   mutated through the original reference.
+- `resolve_env(*layers)` (public) is a thin convenience wrapper over
+  `merge_env_overlays` and `render_env`: it merges the layers left-to-right and
+  renders the result in the default `OVERLAY` mode. It returns `None` when
+  every layer is `None` or empty.
 
-The split between `merge_env_overlays` and `resolve_env` is deliberate.
+The split between `merge_env_overlays` and `render_env` is deliberate.
 `merge_env_overlays` is the overlay-only merge used by observation tagging
 (`_StageObservation.env_overlay` and the `ExecEvent.env` field) — it must not
 include a snapshot of `os.environ`, otherwise structured event logs would carry
-the entire parent process environment on every emission. `resolve_env` is the
-spawn-time merge that *does* include `os.environ`; it is called from
-`_merge_env` (`cuprum/_process_lifecycle.py`) for both the single-command and
-pipeline paths.
+the entire parent process environment on every emission. `render_env` is the
+spawn-time render that *does* include `os.environ`, except under `REPLACE`; the
+spawn path reaches it through `_merge_env` (`cuprum/_process_lifecycle.py`),
+which composes the ambient and per-call policies and their modes via
+`_resolve_env_policy` (`cuprum/context/_policy.py`) and is shared by both the
+single-command (`cuprum/_subprocess_execution.py`) and pipeline
+(`cuprum/_pipeline_spawn.py`) paths. `resolve_env` renders only in the default
+`OVERLAY` mode and is not on the spawn path.
 
 The live-view contract from issue #100 is enforced at one place only:
-`resolve_env` reads `os.environ` at call time, not when the overlay is
+`render_env` reads `os.environ` at call time, not when the overlay is
 registered. Any code that touches the spawn path must therefore route through
-`resolve_env` (directly or via `_merge_env`) — never via a captured snapshot of
-`os.environ` at registration time.
+`render_env` (via `_merge_env`) — never via a captured snapshot of `os.environ`
+at registration time.
 
 The `CuprumContext.env_overlay` field is a `MappingProxyType` (or `None`) and
 is itself part of the immutable context dataclass.
@@ -2272,11 +2309,13 @@ token, and reset it on scope exit; nested scopes therefore behave as a stack
 and are restricted by the same LIFO detach rule as `AllowRegistration` and
 `HookRegistration`.
 
-Property tests for the merge and resolve invariants live in
+Property tests for the merge, render, and policy-composition invariants live in
 `cuprum/unittests/test_env_context_properties.py`. They use
 [Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary layer
-counts, payload contents, and overlap patterns, and to confirm that the helpers
-never mutate caller-supplied mappings.
+counts, payload contents, overlap patterns, and mode pairs, confirming that
+`OVERLAY` and `INHERIT` children preserve the parent mode, that a `REPLACE`
+child discards the parent overlay, and that the helpers never mutate
+caller-supplied mappings.
 
 ## Building the native extension
 
@@ -3692,13 +3731,32 @@ symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
 three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
 four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
 the final prefix harness. These are bounded results, not an unbounded proof.
-Round 27 Miri passed all 13 isolated native tests with zero ignored; see
-`/tmp/issue379-round27-miri.log`. The Miri run excludes PyO3, unshimmed
-`libc::splice`, and unsupported operating-system representations. Round 33's
-prior local checkpoint passed, and Round 35's integrated local run passed the
-native and repository gates. Windows and macOS runtime tests are no longer
-pending hosted execution. On 2026-09-15, `Rust boundary verification` run
-35004943625 succeeded with its `Native contracts (windows-2022)`,
+The pinned `make boundary-miri` target runs separate Miri invocations for
+`cuprum-native-io` and `cuprum-streams`. The observed results were 13 native
+tests passed with zero ignored and 67 stream tests passed with zero ignored.
+Miri interprets the stream crate's pure fallback read/write progress and
+short-I/O policy, deterministic retry/error classification, UTF-8 decoder chunk
+handling, progress accounting, and the `with_owned_writer` normal/error drop
+crossing through an in-memory writer. No Miri UB check is disabled.
+
+The stream run compiles out tests requiring real pipes or descriptors:
+`consume_snapshot_tests`'s four fixed decoder tests and two property tests; the
+five real-descriptor `io_utils` tests; the six real-pipe `lib_tests` tests; and
+the three `test_support_tests` descriptor tests. The four real-descriptor
+splice tests (`splice_transfers_all_bytes_between_pipes`,
+`unsupported_descriptors_signal_fallback`,
+`broken_pipe_drains_reader_and_reports_transferred_bytes`, and
+`drain_reader_consumes_to_eof`) remain excluded because Miri has no unshimmed
+`libc::splice` support. PyO3/CPython is excluded at the `cuprum-rust` boundary
+and has no tests in `cuprum-streams`. Proptest uses 16 cases under Miri and
+disables failure persistence only because Miri isolation has no current
+directory; these are runtime bounds only.
+
+Round 27's native Miri result is retained in `/tmp/issue379-round27-miri.log`.
+Round 33's prior local checkpoint passed, and Round 35's integrated local run
+passed the native and repository gates. Windows and macOS runtime tests are no
+longer pending hosted execution. On 2026-09-15, `Rust boundary verification`
+run 35004943625 succeeded with its `Native contracts (windows-2022)`,
 `Native contracts (macos-latest)`, and `Native contracts (ubuntu-latest)` jobs,
 and `CI` run 35004943782 succeeded with its
 `Extension-gated tests (Windows Python/Rust boundary)` and
@@ -4236,6 +4294,13 @@ consume the parsed model directly, while the behavioural tests use both
 fixtures to exercise the gate and its summary against the checked-in
 configuration.
 
+The shared `run_bash` helpers in `tests/helpers/release_workflow.py` and
+`tests/helpers/workflow_steps.py` remove inherited `BASH_ENV` before layering
+an explicit `env` mapping, so a caller-provided `env["BASH_ENV"]` remains
+honoured. Both helpers capture standard output and error as text. The
+regression contract for ambient and explicit values is in
+`tests/test_ci_workflow_step_bash_env.py`.
+
 The support is split by responsibility: `workflow_types.py` defines the narrow
 `TypedDict` shapes; `workflow.py` parses the workflow and provides queries over
 its jobs and steps; `workflow_gate.py` contains the pure path matching and
@@ -4425,7 +4490,7 @@ docstring *style*, security checks, naming, complexity, and Ruff's native
 Pylint-derived rules. `interrogate` is the second stage and enforces docstring
 *presence* at 100 per cent across every Python scope: `benchmarks`,
 `conftest.py`, `cuprum`, `scripts`, and `tests`. Built-in Pylint checks run
-third under PyPy 3.12, which uv resolves directly for `--python pypy`; no
+third under the checksum-verified PyPy 8.0.0 Python 3.12 binary, so no
 parser-patching shim is required. The pinned `df12-python-lints` plugin runs
 fourth under CPython 3.14, and `ambrleaks` scans Syrupy snapshots fifth under
 the same interpreter.
@@ -4446,9 +4511,15 @@ The short version is:
   handling, subprocess safety, and selected readability checks.
 - Pylint runs under PyPy so that the third tier is isolated from the project
   virtual environment and matches the lint approach used by `leynos/episodic`.
-- `$(PYLINT)` pins Pylint itself with
-  `--from 'pylint==$(PYLINT_VERSION)'`, currently 4.0.9, which runs on PyPy
-  3.12 without the former `pylint-pypy-shim` patch.
+- `$(PYLINT)` uses vanilla `python -m pylint --jobs=1` in an isolated PyPy
+  tool environment seeded from the checksum-verified binary above. It pins
+  Pylint with `--from 'pylint==$(PYLINT_VERSION)'` and Astroid with
+  `--with 'astroid==$(ASTROID_VERSION)'`, currently 4.0.9 and 4.0.4, and
+  verifies PyPy 8.0.0, Python 3.12, and both package versions before analysing
+  source. One worker is used deliberately, so the pass is reproducible and its
+  resource use stays bounded on shared builders.
+- `$(DF12_PYLINT)` keeps its own `PYLINTHOME` under CPython 3.14, so the two
+  Pylint passes never share cache state.
 - `$(DF12_PYLINT)` enables every message shipped by
   `df12-python-lints` v0.3.0 under CPython 3.14 while retaining Cuprum's
   `py-version = "3.12"` semantic baseline.
@@ -4515,10 +4586,13 @@ make lint
 1. `$(RUFF) check`
 2. `$(INTERROGATE)` — `$(UV_RUN_ENV) uv run interrogate --fail-under 100`
    `benchmarks conftest.py cuprum scripts tests`
-3. The PyPy-backed Pylint command stored in `$(PYLINT)`, with
-   `$(PYLINT_TARGETS)` appended.
+3. The PyPy-backed vanilla Pylint command stored in `$(PYLINT)`, run twice
+   over `$(PYLINT_TARGETS)`: once over `$(PYLINT_STRICT_TARGETS)` and once over
+   `$(PYLINT_TEST_TARGETS)`, where only `too-many-lines` is disabled.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
-   the same targets.
+   `$(DF12_PYLINT_TARGETS)` — a narrower set than `$(PYLINT_TARGETS)`. DF12
+   keeps its established package-root discovery, so the non-package test roots
+   named directly for the classic pass are absent from it.
 5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
    test roots.
 6. `$(SKYLOS)` scanning `$(SKYLOS_PRODUCTION_TARGETS)` for dead code, excluding
@@ -4598,31 +4672,33 @@ the ceilings and what to do about them.
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
 available before running the test suite. In CI the pin lives only in
-`.github/actions/install-makeutil`, and a job runs that action only when its
-tool cache missed. The tool family's key hashes the action, and `~/.cargo/bin`
-is in the family, so an exact hit already holds the pinned build and skips the
-nightly toolchain and the compile. Changing the pin changes the key, so the
-next run misses and rebuilds. Before building, the action fetches makeutil's
-`main` history and refuses a pin that `main` does not reach: a commit no branch
-reaches builds only until GitHub garbage-collects it, and the previous pin was
-one. Pin a full 40-hex commit from makeutil's `main`.
-`tests/test_ci_makeutil_install.py` holds the arrangement as text,
-`tests/test_ci_install_makeutil_action.py` runs the action's step against
-stand-in `git`, `rustup` and `cargo`, and
+`.github/actions/install-makeutil`: a release version, its musl target, and the
+release binary's SHA-256. The action downloads the binary into a scratch
+directory, checks it against that digest, and only then installs it into
+`~/.cargo/bin`. The digest is pinned here rather than read from the release's
+own `.sha256` file, which comes from the same place as the binary. A job runs
+the action only when its tool cache missed. The tool family's key hashes the
+action, and `~/.cargo/bin` is in the family, so an exact hit already holds the
+pinned release, and changing the pin changes the key so the next run misses and
+downloads. `tests/test_ci_makeutil_install.py` holds the arrangement as text,
+`tests/test_ci_install_makeutil_action.py` runs the action's step against a
+stand-in download with the real digest check, and
 `tests/integration/test_makeutil_cache_integration.py` (in `make test-act`)
 evaluates each consumer's guard under `act` for an exact hit, a restore-key hit
 and a miss.
 
-For local test runs, install the same pinned parser and toolchain before running
-`make test`:
+For local test runs, install the same pinned release before running
+`make test`. Each command runs only if the one before it succeeded, so a
+rejected checksum installs nothing:
 
 ```bash
-rustup toolchain install nightly-2026-05-28 --profile minimal
-RUSTFLAGS="-Zpolonius=next" cargo +nightly-2026-05-28 install \
-  --git https://github.com/leynos/makeutil \
-  --rev 6e64f4fe84419705badc30baa5649cbb6f69a298 \
-  --locked --force makeutil
-make test
+curl --fail --location --output makeutil \
+  https://github.com/leynos/makeutil/releases/download/v0.1.0/makeutil-x86_64-unknown-linux-musl &&
+  printf '%s  %s\n' \
+    99dd28a138dbe07e88e4dc5dd3954e6b29b46cc959635311d326cb537253115d makeutil |
+  sha256sum --check &&
+  install -D --mode=0755 makeutil ~/.cargo/bin/makeutil &&
+  make test
 ```
 
 ### Spelling policy
@@ -4704,10 +4780,18 @@ Table: Lint-related Makefile variables and their defaults.
 | `TY`                        | `$(UV_RUN_ENV) uv tool run --from 'ty==$(TY_VERSION)' ty`                   | Pinned ty command used by `typecheck`.                                                                                      |
 | `INTERROGATE_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files interrogated for docstring coverage.                                                                  |
 | `INTERROGATE`               | Derived command                                                             | Docstring-coverage command used by `make lint` at `--fail-under 100`.                                                       |
-| `PYLINT_PYTHON`             | `pypy`                                                                      | Python interpreter requested by `uv tool run` for the Pylint tier.                                                          |
-| `PYLINT_TARGETS`            | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files passed to the PyPy-backed Pylint tier.                                                                |
+| `PYPY312_VERSION`           | `8.0.0`                                                                     | PyPy release whose Linux x86_64 archive seeds the classic Pylint tier.                                                      |
+| `PYPY312_SHA256`            | Pinned digest                                                               | SHA-256 the downloaded PyPy archive must match before extraction.                                                           |
+| `PYPY312_PYTHON`            | `$(abspath .pypy/pypy3.12-v8.0.0-linux64/bin/pypy3.12)`                     | Explicit interpreter path handed to `uv tool run` for the classic tier.                                                     |
+| `PYLINT_PYTHON`             | `$(PYPY312_PYTHON)`                                                         | Python interpreter requested by `uv tool run` for the classic Pylint tier.                                                  |
+| `PYLINT_TARGETS`            | Broad roots plus the non-package test directories                           | Directories and files passed to the classic Pylint pass; `$(DF12_PYLINT_TARGETS)` governs the DF12 pass instead.            |
+| `PYLINT_TEST_TARGETS`       | `cuprum/unittests scripts/tests tests/behaviour tests/features`             | Test roots analysed with only `too-many-lines` disabled.                                                                    |
+| `PYLINT_STRICT_TARGETS`     | `$(PYLINT_TARGETS)` minus `$(PYLINT_TEST_TARGETS)`                          | Targets held to the full classic diagnostic set, including the line cap.                                                    |
+| `DF12_PYLINT_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files passed to the DF12 Pylint pass; narrower than `$(PYLINT_TARGETS)`.                                    |
 | `PYLINT_VERSION`            | `4.0.9`                                                                     | Pylint package version supplied to `uv tool run` through `--from`.                                                          |
-| `PYLINT_CACHE`              | `.cache/pylint`                                                             | Worktree-local cache shared by both Pylint passes.                                                                          |
+| `ASTROID_VERSION`           | `4.0.4`                                                                     | Astroid package version pinned between the classic and DF12 Pylint passes.                                                  |
+| `PYLINT_CACHE`              | `.cache/pylint/pypy312`                                                     | Worktree-local cache for the classic PyPy Pylint pass.                                                                      |
+| `DF12_PYLINT_CACHE`         | `.cache/pylint/cpython314`                                                  | Worktree-local cache for the DF12 CPython Pylint pass, kept separate.                                                       |
 | `PYLINT`                    | Derived command                                                             | Full PyPy-backed Pylint command used by `make lint`.                                                                        |
 | `DF12_PYTHON_LINTS_REF`     | `v0.3.0`                                                                    | Controlled release tag selected for DF12 lint tooling.                                                                      |
 | `DF12_PYTHON`               | `3.14`                                                                      | CPython runtime used for df12 Pylint and `ambrleaks`.                                                                       |
@@ -4726,18 +4810,24 @@ Table: Lint-related Makefile variables and their defaults.
 <!-- markdownlint-enable MD013 -->
 
 Override these variables only for local diagnosis. For example, to lint a
-single module with the configured second tier:
+single module with the classic Pylint pass:
 
 ```bash
 PYLINT_TARGETS=cuprum/sh make lint
 ```
 
-Do not change `PYLINT_VERSION` casually. A new Pylint release can change lint
-behaviour without any repository change, so treat it like any other toolchain
-update. Update the `df12-python-lints` development dependency and
-`DF12_PYTHON_LINTS_REF` together so the Pylint plugin and standalone scanner
-select the same controlled release tag. When adopting a new release, update
-both references to that tag.
+Overriding `PYLINT_TARGETS` does not narrow the DF12 pass, which reads
+`DF12_PYLINT_TARGETS`. Set both to restrict either pass to one module.
+
+Do not change the PyPy, Pylint, or Astroid pins casually. Their runtime
+identities are part of the lint contract, `verify-classic-pylint` and
+`verify-df12-pylint` assert them before each pass, and
+`make pylint-integration` exercises the assertions. A new Pylint release can
+change lint behaviour without any repository change, so treat the whole trio
+like any other toolchain update. Update the `df12-python-lints` development
+dependency and `DF12_PYTHON_LINTS_REF` together so the Pylint plugin and
+standalone scanner select the same controlled release tag. When adopting a new
+release, update both references to that tag.
 
 ### Episodic lint policy
 
@@ -4750,7 +4840,8 @@ a separate house style. The imported policy consists of:
 - Test-file exceptions for assertion-heavy tests and pytest method conventions.
 - A focused Pylint configuration that disables all messages by default, then
   enables only the selected messages that complement Ruff.
-- A PyPy-backed Pylint invocation, pinned to a specific Pylint release.
+- A PyPy-backed vanilla Pylint invocation in an isolated tool environment,
+  pinned to specific PyPy, Pylint, and Astroid releases.
 - Every `df12-python-lints` v0.3.0 message, including `R9112`, executed under
   CPython 3.14.
 - `ambrleaks` coverage for unit, script, and behavioural Syrupy snapshots.

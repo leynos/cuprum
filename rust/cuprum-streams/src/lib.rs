@@ -4,7 +4,7 @@
 mod buffer;
 #[cfg(test)]
 mod buffer_size_tests;
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, not(miri)))]
 mod consume_snapshot_tests;
 mod errors;
 mod io_utils;
@@ -13,6 +13,8 @@ mod lib_tests;
 #[cfg(loom)]
 #[doc(hidden)]
 pub mod loom_support;
+#[cfg(test)]
+mod ownership_tests;
 mod pump_machine;
 #[cfg(target_os = "linux")]
 mod splice;
@@ -34,6 +36,27 @@ use utf8::{FinalChunk, decode_utf8_replace};
 /// comfortably exceeding any realistic transfer buffer — the default is
 /// 64 KiB and even multi-megabyte buffers stay far below this cap.
 const MAX_BUFFER_SIZE: usize = 1 << 30;
+
+/// Configure generated tests for Miri's isolated interpreter.
+#[cfg(test)]
+pub(crate) fn miri_proptest_config() -> proptest::test_runner::Config {
+    #[cfg(miri)]
+    {
+        // Miri exposes no working directory under isolation. Keep generated
+        // inputs small and avoid proptest's failure-persistence filesystem path;
+        // this changes test runtime only, not any Miri undefined-behaviour check.
+        proptest::test_runner::Config {
+            cases: 16,
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        }
+    }
+
+    #[cfg(not(miri))]
+    {
+        proptest::test_runner::Config::default()
+    }
+}
 
 /// Validate and convert a raw `buffer_size` into a bounded `usize`.
 ///

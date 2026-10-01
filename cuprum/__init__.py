@@ -57,6 +57,7 @@ from cuprum.context import (
     scoped,
 )
 from cuprum.echo_events import (
+    BrokenPipePolicy,
     EchoErrorCategory,
     EchoEvent,
     EchoHook,
@@ -119,6 +120,7 @@ __all__ = [
     "AfterHook",
     "AllowRegistration",
     "BeforeHook",
+    "BrokenPipePolicy",
     "CommandResult",
     "ConcurrentConfig",
     "ConcurrentResult",

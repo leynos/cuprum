@@ -142,7 +142,7 @@ SETUP_RUST = (
 #: request from publishing.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "77ea10341249024e22ec5d9069e3caa7596e0d4f"
+    "a5765019912a8ab6882b12db049c7cde635f3a85"
 )
 OBSERVATION_STEP = "Record cache observations"
 

@@ -13,7 +13,7 @@ import pytest
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-DEV_FAST_TOOLCHAIN = "nightly-2026-08-23"
+DEV_FAST_TOOLCHAIN = os.environ.get("DEV_FAST_TOOLCHAIN", "nightly-2026-08-23")
 DOCTEST_RUSTDOC_FLAGS = (
     "--cfg docsrs -D warnings -Zunstable-options --display-doctest-warnings "
     "--doctest-build-arg=-D --doctest-build-arg=warnings"

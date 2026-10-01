@@ -180,8 +180,8 @@ def test_drain_empty_capture_returns_empty_text() -> None:
     sink = io.StringIO()
     captured = asyncio.run(_drain(_reader(()), _config(sink)))
 
-    assert captured == "", "empty captured streams must decode to empty text"
-    assert sink.getvalue() == "", "non-echoing empty streams must not write to sink"
+    assert not captured, "empty captured streams must decode to empty text"
+    assert not sink.getvalue(), "non-echoing empty streams must not write to sink"
 
 
 def test_drain_forwards_explicit_read_size_to_every_reader_call() -> None:

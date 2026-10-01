@@ -1,25 +1,30 @@
 //! Direct tests for descriptor-backed I/O helper contracts.
 
-use std::{io, os::fd::OwnedFd};
+use std::io;
+#[cfg(not(miri))]
+use std::os::fd::OwnedFd;
 
 use proptest::prelude::*;
-use rstest::{fixture, rstest};
+#[cfg(not(miri))]
+use rstest::fixture;
+use rstest::rstest;
 
 use super::{
     PumpError,
     WriteOutcome,
     classify_write_outcome,
     classify_write_with,
-    handle_write,
     map_short_write_error,
-    read_raw_fd,
     read_raw_fd_with,
-    read_stream,
     write_all_unix_with,
 };
+#[cfg(not(miri))]
+use super::{handle_write, read_raw_fd, read_stream};
+#[cfg(not(miri))]
+use crate::test_support::{make_pipe, write_all_to};
 use crate::{
     pump_machine::WriteEvent,
-    test_support::{make_pipe, unwrap_err, unwrap_ok, write_all_to},
+    test_support::{unwrap_err, unwrap_ok},
 };
 
 /// A fresh `pipe(2)` pair (`read_end`, `write_end`) for descriptor-backed
@@ -28,12 +33,12 @@ use crate::{
 // `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
 // form that triggers `unused_braces` under Rust 1.85. Remove this skip when
 // that formatter/rstest combination compiles the configured profile cleanly.
+#[cfg(not(miri))]
 #[rustfmt::skip]
 #[fixture]
 fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     make_pipe()
 }
-
 /// Representative error kinds spanning the non-fatal and fatal partitions.
 const ERROR_KINDS: [io::ErrorKind; 7] = [
     io::ErrorKind::BrokenPipe,
@@ -51,15 +56,15 @@ const fn is_nonfatal_kind(kind: io::ErrorKind) -> bool {
         io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
     )
 }
-
 fn ssize(len: usize) -> libc::ssize_t {
     // Test buffers are a handful of bytes, so the saturating fallback is
     // never reached; it merely avoids an `expect`/`unwrap` in test code.
     libc::ssize_t::try_from(len).unwrap_or(libc::ssize_t::MAX)
 }
-
 /// Reading from a pipe copies the complete payload into the supplied buffer.
 #[rstest]
+#[cfg_attr(miri, ignore = "Miri cannot emulate real pipe descriptor I/O")]
+#[cfg(not(miri))]
 fn read_stream_reads_pipe_bytes(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     let (read_end, write_end) = unwrap_ok(pipe);
     unwrap_ok(write_all_to(&write_end, b"chunk"));
@@ -74,6 +79,8 @@ fn read_stream_reads_pipe_bytes(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd
 
 /// Passing a pipe's write end to the reader reports the underlying I/O error.
 #[rstest]
+#[cfg_attr(miri, ignore = "Miri cannot emulate real pipe descriptor I/O")]
+#[cfg(not(miri))]
 fn read_stream_reports_unreadable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     let (_read_end, write_end) = unwrap_ok(pipe);
     let mut buffer = [0_u8; 8];
@@ -85,6 +92,8 @@ fn read_stream_reports_unreadable_descriptor(#[from(pipe)] pipe: io::Result<(Own
 
 /// A closed pipe writer is surfaced as a zero-byte read at EOF.
 #[rstest]
+#[cfg_attr(miri, ignore = "Miri cannot emulate real pipe descriptor I/O")]
+#[cfg(not(miri))]
 fn read_raw_fd_reports_eof(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     let (read_end, write_end) = unwrap_ok(pipe);
     drop(write_end);
@@ -116,6 +125,8 @@ fn read_raw_fd_retries_after_interruption() {
 
 /// Writing to an open pipe reports a complete write with its byte count.
 #[rstest]
+#[cfg_attr(miri, ignore = "Miri cannot emulate real pipe descriptor I/O")]
+#[cfg(not(miri))]
 fn handle_write_returns_complete_outcome(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     let (read_end, write_end) = unwrap_ok(pipe);
 
@@ -127,6 +138,8 @@ fn handle_write_returns_complete_outcome(#[from(pipe)] pipe: io::Result<(OwnedFd
 
 /// Passing a pipe's read end to the writer propagates the fatal I/O error.
 #[rstest]
+#[cfg_attr(miri, ignore = "Miri cannot emulate real pipe descriptor I/O")]
+#[cfg(not(miri))]
 fn handle_write_reports_unwritable_descriptor(#[from(pipe)] pipe: io::Result<(OwnedFd, OwnedFd)>) {
     let (read_end, _write_end) = unwrap_ok(pipe);
 
@@ -226,6 +239,8 @@ fn write_all_unix_with_propagates_fatal_error() {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// Only broken-pipe and connection-reset kinds are non-fatal writes.
     #[test]
     fn nonfatal_classification_matches_kind(

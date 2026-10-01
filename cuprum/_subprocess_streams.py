@@ -188,6 +188,10 @@ def _build_stream_config(
         capture_output=execution.capture,
         echo_output=execution.echo_stdout,
         echo_max_line_bytes=execution.max_echo_line_bytes,
+        # Set on the stdout config and inherited by the stderr one, which this
+        # module derives with ``dc.replace``: one policy governs the run, as
+        # the caller specified on the options object.
+        broken_pipe_policy=execution.broken_pipe_policy,
         sink=stdout_sink,
         encoding=execution.ctx.encoding,
         errors=execution.ctx.errors,

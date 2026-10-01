@@ -1,0 +1,111 @@
+# serializer version: 1
+# name: test_broken_pipe_projections_lock_the_diagnostics_contract[stderr-best_effort]
+  dict({
+    'echo_events': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stderr',
+      }),
+    ]),
+    'log_extras': list([
+      dict({
+        'cuprum_error_category': 'broken_pipe',
+        'cuprum_operation': 'echo_chunk',
+        'cuprum_stream': 'stderr',
+        'cuprum_transition': 'echo_disabled',
+      }),
+    ]),
+    'metrics': list([
+      tuple(
+        'cuprum_echo_broken_pipe_total',
+        dict({
+          'error_category': 'broken_pipe',
+          'stream': 'stderr',
+        }),
+      ),
+    ]),
+    'relay_fallbacks': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stderr',
+      }),
+    ]),
+  })
+# ---
+# name: test_broken_pipe_projections_lock_the_diagnostics_contract[stderr-strict]
+  dict({
+    'echo_events': list([
+    ]),
+    'log_extras': list([
+    ]),
+    'metrics': list([
+    ]),
+    'relay_fallbacks': list([
+    ]),
+  })
+# ---
+# name: test_broken_pipe_projections_lock_the_diagnostics_contract[stdout-best_effort]
+  dict({
+    'echo_events': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stdout',
+      }),
+    ]),
+    'log_extras': list([
+      dict({
+        'cuprum_error_category': 'broken_pipe',
+        'cuprum_operation': 'echo_chunk',
+        'cuprum_stream': 'stdout',
+        'cuprum_transition': 'echo_disabled',
+      }),
+    ]),
+    'metrics': list([
+      tuple(
+        'cuprum_echo_broken_pipe_total',
+        dict({
+          'error_category': 'broken_pipe',
+          'stream': 'stdout',
+        }),
+      ),
+    ]),
+    'relay_fallbacks': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stdout',
+      }),
+    ]),
+  })
+# ---
+# name: test_broken_pipe_projections_lock_the_diagnostics_contract[stdout-strict]
+  dict({
+    'echo_events': list([
+    ]),
+    'log_extras': list([
+    ]),
+    'metrics': list([
+    ]),
+    'relay_fallbacks': list([
+    ]),
+  })
+# ---
+# name: test_result_records_project_to_the_snapshot_locked_shape[stderr]
+  dict({
+    'relay_fallbacks': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stderr',
+      }),
+    ]),
+  })
+# ---
+# name: test_result_records_project_to_the_snapshot_locked_shape[stdout]
+  dict({
+    'relay_fallbacks': list([
+      dict({
+        'error_category': 'broken_pipe',
+        'stream': 'stdout',
+      }),
+    ]),
+  })
+# ---

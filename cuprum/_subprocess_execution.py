@@ -42,6 +42,11 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
 
+# Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
+# dataclass's own default value, so the name must resolve when the class body
+# executes.
+from cuprum.echo_events import BrokenPipePolicy
+
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._rusage import _ChildRusageSnapshot
@@ -76,6 +81,10 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
     on_line: _LineHookFn | None = None
+    # Defaulted for the tests that build this bundle directly, and resolved by
+    # ``RunOutputOptions.__post_init__`` on the production path, so the value
+    # reaching the stream config is always a member, never a raw spelling.
+    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
     # Monotonic reference the per-line ``at`` stamps are measured from; taken
     # once at spawn so every line of a run shares one time base.
     started_at: float = 0.0
@@ -173,7 +182,7 @@ async def _spawn_subprocess(
                 else asyncio.subprocess.DEVNULL
             ),
             stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
-            env=_merge_env(execution.ctx.env),
+            env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
             cwd=_cwd_arg(execution.ctx.cwd),
         )
     )

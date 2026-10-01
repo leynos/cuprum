@@ -247,8 +247,8 @@ print('err1', file=sys.stderr)""",
 
         metrics.reset()
 
-        assert metrics.counters == {}, "reset should clear in-memory counters"
-        assert metrics.histograms == {}, "reset should clear in-memory histograms"
+        assert not metrics.counters, "reset should clear in-memory counters"
+        assert not metrics.histograms, "reset should clear in-memory histograms"
 
     def test_plan_phase_does_not_project_labels(self, metrics_hook: Metered) -> None:
         """The plan phase is a no-op without touching event label fields."""

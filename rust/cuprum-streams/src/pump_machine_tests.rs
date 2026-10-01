@@ -118,6 +118,8 @@ fn write_event() -> impl Strategy<Value = WriteEvent> {
 }
 
 proptest! {
+    #![proptest_config(crate::miri_proptest_config())]
+
     /// Across any script of iterations the running total never decreases, the
     /// writer never reopens once closed, a closed writer accrues no further
     /// bytes, and the loop stops exactly on a zero-length read.
