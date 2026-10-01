@@ -782,9 +782,6 @@ design, "The backend protocol" and "Where it is called".
 
 - [ ] 11.1.1. Add `cuprum/backend.py` with the `Invocation` record, the
   `ExecutionBackend` protocol, and `_DirectBackend`.
-  - Move, rather than duplicate, the post-spawn body of
-    `_execute_subprocess()` (`cuprum/_subprocess_execution.py:295`) into
-    `_DirectBackend.execute()`.
   - `Invocation` carries the resolved programme, `argv_with_program`,
     environment, cwd, stdin input, `RunOutputOptions`, `ExecutionContext`, and
     tags.
@@ -793,19 +790,46 @@ design, "The backend protocol" and "Where it is called".
   - Success: the existing unit and behavioural suites pass unchanged with no
     backend configured, and `make typecheck` accepts the protocol however the
     `Self`-returning sketch in the RFC is finally spelled.
-- [ ] 11.1.2. Consult the backend in `_execute_subprocess()` after the
-  catalogue and allowlist checks and before `_spawn_subprocess()`, passing the
-  production backend as the `real` argument.
+- [ ] 11.1.2. Move the spawn into `_DirectBackend.execute()`, moved rather than
+  duplicated from `_execute_subprocess()`
+  (`cuprum/_subprocess_execution.py:295`).
   - Requires 11.1.1.
-  - Success: a forbidden programme is still rejected by the catalogue, with no
-    backend consulted, while a permitted invocation reaches the substitute
-    carrying the same environment the real path would have spawned with.
-- [ ] 11.1.3. Keep the observable surface identical on the substituted path:
-    the same `ExecEvent` sequence, the same `BeforeHook` and `AfterHook` calls,
-    and a `CommandResult` whose `pid` is the documented `-1` "unavailable"
-    sentinel with `max_rss_bytes`, `user_cpu_seconds`, and
-    `system_cpu_seconds` at their documented "not measured" value of `None`.
+  - Take the two reads that need the live process with it: the `start` event
+    with the real `pid`, and the rusage measurement off the process object.
+    Neither is producible without one.
+  - Return a normalized outcome record rather than assembling a
+    `CommandResult`, so the exit event and the result stay on the calling side
+    and are shared by every backend.
+  - Success: with the production backend installed, the emitted event sequence
+    and the assembled result are byte-identical to the current path.
+- [ ] 11.1.3. Re-check a delegated programme against the active scope inside
+  `_DirectBackend.execute()` and raise `ForbiddenProgramError` for one outside
+  the allowlist.
   - Requires 11.1.2.
+  - The check that admitted the original invocation does not cover a
+    replacement a substitute supplied, so delegation is a second entry into the
+    production path and needs its own.
+  - Success: a passthrough that rewrites `program` to an unpermitted path fails
+    with the same error a direct run raises, a passthrough that leaves the
+    programme alone is unaffected, and the check is exercised for both a named
+    programme and an absolute path.
+- [ ] 11.1.4. Consult the backend in `_execute_subprocess()` after the
+  catalogue and allowlist checks and before the spawn it now delegates, passing
+  the production backend as the `real` argument.
+  - Requires 11.1.3.
+  - Success: a forbidden programme is still rejected by the catalogue, with no
+    backend consulted, while a permitted invocation reaches the substitute with
+    the effective environment the real path would have spawned with derivable
+    from the record, whether the record exposes it as one field or as the
+    overlay and the base it composes with.
+  - Deliberately neutral on that representation: 11.5.2 settles it from
+    adoption evidence. See RFC 0001 §"Open questions".
+- [ ] 11.1.5. Keep the observable surface identical on the substituted path:
+  the same `ExecEvent` sequence, the same `BeforeHook` and `AfterHook` calls,
+  and a `CommandResult` whose `pid` is the documented `-1` "unavailable"
+  sentinel with `max_rss_bytes`, `user_cpu_seconds`, and `system_cpu_seconds`
+  at their documented "not measured" value of `None`.
+  - Requires 11.1.4.
   - See RFC 0001 §"Where it is called" and §"Compatibility and migration".
   - Success: parity assertions cover the event sequence and the result fields,
     not only the returned value.
@@ -819,7 +843,7 @@ worth its ergonomic cost, or whether scoping alone suffices. See RFC 0001
 
 - [ ] 11.2.1. Thread `backend` through `ScopeConfig` and both `SafeCmd` run
   methods, with innermost-wins resolution and `None` meaning "no substitute".
-  - Requires 11.1.2.
+  - Requires 11.1.4.
   - Success: an override in a nested scope or on one call replaces the outer
     substitute for that scope or call only, the default of `None` leaves the
     production path untouched, and the parameter appears in no positional
@@ -839,7 +863,7 @@ port type. Its outcome is the evidence behind the claim that the seam removes
 the reason to bypass Cuprum. See RFC 0001 §"The reference double".
 
 - [ ] 11.3.1. Add `cuprum/testing.py` with `RecordingBackend`.
-  - Requires 11.1.2.
+  - Requires 11.1.4.
   - Record every invocation in arrival order; consume scripted results in the
     same order; fail an unscripted invocation with an `AssertionError` naming
     the argv, so a test cannot pass by accident.
@@ -875,9 +899,11 @@ settles the deferred scope explicitly rather than by omission.
   three commands, the double records all three with their resolved
   environments, and no process is created.
   - Requires 11.3.1.
-  - Success: the scenario asserts "no process" from the `ExecEvent` `pid`
-    rather than from the absence of output, and the three recorded invocations
-    arrive in call order.
+  - Success: the scenario fails the run at the spawn boundary — the spawn entry
+    point is replaced by one that fails the test if it is reached — and the
+    `ExecEvent` `pid` observation is asserted alongside it, not in place of it.
+    The three recorded invocations also arrive in call order.
+  - See RFC 0001 §"Implementation steps".
 - [ ] 11.4.2. Raise `NotImplementedError`, naming the pipeline's `parts`, when
   a pipeline runs in a scope that carries a backend, and test that path.
   - Requires 11.2.1.

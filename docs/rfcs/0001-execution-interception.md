@@ -75,7 +75,9 @@ Goals:
   `BeforeHook`/`AfterHook` calls, and the same `CommandResult` shape as a real
   run.
 - Support passthrough: a substitute may decide, per invocation, to delegate to
-  the real backend with an altered environment or executable path.
+  the real backend with an altered environment, or with a permitted programme
+  resolved to a different path. Delegation is re-validated, so a substitute
+  cannot widen what the scope allows.
 - Ship a reference in-memory double in `cuprum.testing` that records
   invocations and returns scripted results.
 
@@ -117,6 +119,16 @@ class ExecutionBackend(Protocol):
 parameter is what makes cmd-mox passthrough expressible: the substitute
 resolves the executable, filters `PATH`, and hands the rest back.
 
+Delegation is a *second* entry into the production path, and the allowlist
+check that admitted the original invocation does not cover a replacement the
+substitute substituted in. `_DirectBackend.execute` therefore re-checks the
+programme it is given against the active scope before it spawns, and rejects a
+delegated executable outside the allowlist with the same
+`ForbiddenProgramError` a direct run raises. Without that, a passthrough that
+rewrote `program` to an absolute path would withdraw the guarantee that a scope
+runs only what it permits. A substitute that does not change the programme is
+unaffected by the re-check.
+
 ### Where it is configured
 
 - `ScopeConfig(backend=...)`, inherited by nested scopes like the allowlist and
@@ -124,18 +136,46 @@ resolves the executable, filters `PATH`, and hands the rest back.
 - `run_sync(..., backend=...)` and `run(..., backend=...)` for one call.
 
 The catalogue and scope allowlist checks run *before* the backend is consulted,
-so a substitute cannot be used to run a forbidden program; the substitute sees
-only invocations cuprum would have spawned.
+so the substitute sees only invocations cuprum would have spawned. That bounds
+what it is offered, not what it may hand back: a substitute that returns a
+result without delegating runs nothing, and a substitute that delegates can
+change the programme on the way. The re-check in `_DirectBackend.execute`,
+above, is what extends the original guarantee across the delegation boundary.
 
 ### Where it is called
 
 `_execute_subprocess()` gains one branch: after the pre-spawn readings and
-before `_spawn_subprocess()`, if a backend is configured it builds the
-`Invocation` and awaits `backend.execute(invocation, real=_DirectBackend())`.
-`_DirectBackend.execute` is the existing body of the function from the spawn
-onwards, moved rather than duplicated. Hooks, events, telemetry and the result
-assembly stay where they are, so a substituted run emits the same `plan`,
-`start` and terminal events as a real one, with `pid=-1` and no resource usage.
+before the spawn, if a backend is configured it builds the `Invocation` and
+awaits `backend.execute(invocation, real=_DirectBackend())`.
+
+The events and the result are a second question, because in the current code
+they do not sit outside the spawn. `_spawn_subprocess()` returns the process,
+and `_execute_subprocess()` then emits `start`, waits, emits `exit`, and
+assembles the `CommandResult` — every one of those steps reads `process.pid`,
+`process.pid` having been the only source of the identifier. A substituted run
+has no such object, so "the assembly stays where it is" cannot hold as written.
+
+What moves and what does not:
+
+- `_DirectBackend.execute` takes the spawn, the wait that follows it, and the
+  two reads of the live process: `start` with the real `pid`, and the rusage
+  measurement off the process object. None of these is producible without one,
+  and the wait is what drives the streams, the timeout and the idle monitor.
+- The `plan` event stays on the calling side. It is emitted before the backend
+  is consulted and already carries `pid=None`, on all three entry points.
+- The terminal `exit` event and the `CommandResult` are assembled by a shared
+  helper on the calling side, from an outcome record the backend returns. That
+  record carries an exit code, the exit instant, the captured streams, the CPU
+  and RSS figures (or their absence), and, when the backend ran a child, the
+  identifier it observed.
+
+`_DirectBackend` returns `pid` from the process it spawned, which is what makes
+a passthrough transparent. A backend that ran no process returns no identifier,
+and the shared helper renders that as the existing `-1` "unavailable" sentinel
+and `None` for the resource figures. Both paths then emit the same `exit` event
+with the same field population, so the observable sequence is identical and the
+"not measured" values carry exactly the meanings they already carry for a
+platform without `wait4`.
 
 ### The reference double
 
@@ -191,9 +231,12 @@ cmd-mox passthrough through a small backend instead of bypassing the runner.
 ## Implementation steps
 
 1. Add `cuprum/backend.py` with `Invocation`, `ExecutionBackend`, and
-   `_DirectBackend`; move the post-spawn body of `_execute_subprocess()` into
-   `_DirectBackend.execute()`. Existing unit and behavioural suites must pass
-   unchanged.
+   `_DirectBackend`; move the spawn and the two process reads of
+   `_execute_subprocess()` into `_DirectBackend.execute()`, which re-checks the
+   programme it is given before spawning, and return a normalized outcome
+   record that the shared exit-event and result assembly consumes. Existing
+   unit and behavioural suites must pass unchanged, and a delegation to an
+   unpermitted programme must fail with `ForbiddenProgramError`.
 2. Thread `backend` through `ScopeConfig`, the scope state, and the two run
    methods, with innermost-wins resolution and a property test that nesting
    behaves like the allowlist.
@@ -202,7 +245,11 @@ cmd-mox passthrough through a small backend instead of bypassing the runner.
    with a modified environment.
 4. Add a behavioural scenario: a caller under test issues three commands, the
    double records all three with the resolved environment, and no process is
-   created (assert on the `ExecEvent` `pid`).
+   created. The `pid` sentinel is part of what the scenario asserts, but it is
+   not the evidence: `-1` is also what a run that spawned and failed to observe
+   its child would report. Fail the scenario at the spawn boundary instead, by
+   substituting the spawn entry point with one that fails the test if it is
+   reached.
 5. Raise `NotImplementedError` from the pipeline path when a backend is set,
    with a test.
 6. Document the seam in the users' guide ("Testing callers without a process")
