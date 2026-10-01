@@ -33,8 +33,13 @@ the branch and returned `CHANGES_REQUESTED`. Both of its pre-merge rows were
 verified accurate for the revision they were pinned to (`2f9519f0`) and are
 fixed on the branch: the invalid-UTF-8 read gap in `_load_rules_json`
 (`e905951f`) and the stale EP-M1 checklist marker (`2b61189d`). All five review
-threads are resolved; the pre-merge table itself is refreshed by a focused
-reconciliation request rather than a new review.
+threads are resolved. A focused reconciliation request was used to refresh the
+pre-merge table rather than queueing a new review, and CodeRabbit confirmed at
+`47990427` that both rows are **resolved** — "completed repairs, not withdrawn
+findings" — with no further work or follow-up issue required. That confirmation
+is deliberately narrow: it reports those two rows only, and states that hosted
+checks were still queued at the time, so it does not itself establish a green
+check rollup.
 
 This ExecPlan is a living execution plan. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -2759,6 +2764,16 @@ where the definitions sit at this head.
 byte-identically to `reclassified-at-30/` after these changes, which is the
 check that the repairs touched the lint surface and the guard's citation rather
 than the measurement.
+
+**Two surface distinctions worth keeping separate.** The hosted status checks
+above are not CodeRabbit's pre-merge checks table, and vice versa: at one point
+both surfaces held two failed rows, for different reasons, and a reader
+conflating them would attribute each repair to the wrong surface. The
+CodeRabbit rows were the invalid-UTF-8 read gap and the stale EP-M1 marker,
+both since confirmed resolved by the reviewer at `47990427`. The hosted rows
+were `lint-test` and CodeScene, repaired in `ada86e6f` and `456a711a`. Neither
+confirmation implies the other, and neither is a statement about the final
+check rollup.
 
 ## Decision log
 
