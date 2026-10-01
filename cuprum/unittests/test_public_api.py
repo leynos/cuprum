@@ -90,8 +90,12 @@ def test_bytes_result_classes_are_exported_from_their_definition_site() -> None:
     assert c.BytesPipelineResult is results.BytesPipelineResult, (
         "cuprum.BytesPipelineResult must be cuprum.sh.results' record"
     )
-    assert sh.BytesCommandResult is results.BytesCommandResult
-    assert sh.BytesPipelineResult is results.BytesPipelineResult
+    assert sh.BytesCommandResult is results.BytesCommandResult, (
+        "cuprum.sh.BytesCommandResult must be cuprum.sh.results' record"
+    )
+    assert sh.BytesPipelineResult is results.BytesPipelineResult, (
+        "cuprum.sh.BytesPipelineResult must be cuprum.sh.results' record"
+    )
 
 
 def test_bytes_result_type_hints_carry_bytes_not_text() -> None:
@@ -117,7 +121,10 @@ def test_bytes_result_type_hints_carry_bytes_not_text() -> None:
     )
     # The text-mode record keeps its own annotation: the two classes draw the
     # distinction, and widening the binary one must not have widened this.
-    assert typ.get_type_hints(sh.CommandResult)["stdout"] == str | None
+    assert typ.get_type_hints(sh.CommandResult)["stdout"] == str | None, (
+        f"CommandResult.stdout must stay str | None, got "
+        f"{typ.get_type_hints(sh.CommandResult)['stdout']!r}"
+    )
 
     pipeline_hints = typ.get_type_hints(sh.BytesPipelineResult)
     assert pipeline_hints["stages"] == tuple[sh.BytesCommandResult, ...], (

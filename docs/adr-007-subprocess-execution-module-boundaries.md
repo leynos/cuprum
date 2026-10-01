@@ -471,3 +471,28 @@ boundary re-takes the narrower class it promised, and `_require_bytes`/
 rather than reporting a replacement character as the child's output. No
 existing result class, and no `TimeoutExpired`, is subclassed or modified;
 `BytesCommandResult` and `BytesPipelineResult` are separate frozen types.
+
+### Guard against shadowed sibling definitions
+
+Moving these seams left one hazard the refactor's own tools could not see. The
+module split landed a second copy of `_build_stream_config` in
+`cuprum/_subprocess_streams.py`, and every gate passed: by the time the
+duplicate was noticed, the only definition reachable was the later one, and the
+earlier body had been unreachable since the commit that added it.
+
+Neither linter the project runs reports it, on exactly the nouns this codebase
+uses. Ruff 0.16.4's F811 and Pylint 4.0.9's E0102 both decline to report a
+redefinition of an underscore-prefixed name, and private helpers here are
+underscore-prefixed by convention. Upstream Pyflakes *does* report it
+(`redefinition of unused '_foo' from line 1`), so this is a deviation in the
+two linters actually installed rather than a defensible reading of the rule.
+
+`cuprum/unittests/test_no_duplicate_module_definitions.py` closes the gap by
+parsing each scanned module and reporting a name bound twice within one
+statement list. The unit of the check is the statement list rather than the
+module, which is what keeps the branch idiom out of the findings without
+special-casing it: the two arms of an `if`/`else` are separate lists, so a
+platform-specific `_probe` defined once per arm stays legal, while two
+definitions in one arm — or two methods in one class body — are reported. The
+rule is deliberately structural and said so in its own docstring, so a future
+reader can tell which redefinitions it refuses and which it permits.
