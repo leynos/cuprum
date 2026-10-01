@@ -36,6 +36,10 @@ from cuprum.echo_events import (
     EchoStream,
     RelayFallback,
 )
+from cuprum.unittests._stream_drain_support import (
+    CapturedOrNone,
+    CapturedPair,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -269,7 +273,7 @@ async def _drain_case(
     case: tuple[bytes, tuple[bytes, ...], int, _FailingCall],
     error: cabc.Callable[[], BaseException],
     policy: BrokenPipePolicy,
-) -> tuple[str | None, _FailingWriteSink, tuple[RelayFallback, ...]]:
+) -> tuple[CapturedOrNone, _FailingWriteSink, tuple[RelayFallback, ...]]:
     """Drain one generated partition into a sink that fails at one echo."""
     _payload, chunks, failing_write, mode = case
     sink = _FailingWriteSink(failing_write, error, mode)

@@ -15,6 +15,7 @@ import codecs
 import dataclasses as dc
 import typing as typ
 
+from cuprum._result_assembly import _require_text
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
 
 if typ.TYPE_CHECKING:
@@ -22,6 +23,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._streams import _LineSink, _RelayDiagnostics, _StreamConfig
+    from cuprum._subprocess_wait_types import _StreamPayload
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -30,7 +32,7 @@ class _LineConsumption:
 
     config: _StreamConfig
     on_line: _LineSink
-    drain: cabc.Callable[..., cabc.Awaitable[str | None]]
+    drain: cabc.Callable[..., cabc.Awaitable[_StreamPayload | None]]
     relay_diagnostics: _RelayDiagnostics | None
 
 
@@ -70,7 +72,13 @@ async def _consume_stream_with_lines(
     stream: asyncio.StreamReader | None,
     consumption: _LineConsumption,
 ) -> str | None:
-    """Drain a stream while incrementally decoding and emitting complete lines."""
+    """Drain a stream while incrementally decoding and emitting complete lines.
+
+    Always text: line observation is refused in byte-exact mode, so a stream
+    reaching here has a text config. The drain still reports the widened
+    payload its shared signature promises, so the text guarantee is re-taken
+    rather than assumed.
+    """
     if stream is None:
         return "" if consumption.config.capture_output else None
 
@@ -97,7 +105,7 @@ async def _consume_stream_with_lines(
     )
     if pending_text:
         await _emit_line(consumption.on_line, _strip_line_ending(pending_text))
-    return captured
+    return _require_text(captured, "line-observed stream")
 
 
 def _incremental_decoder(config: _StreamConfig) -> codecs.IncrementalDecoder:

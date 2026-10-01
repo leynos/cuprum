@@ -35,6 +35,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
     _StageWaitContext,
 )
+from cuprum.sh import BytesCommandResult, CommandResult
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -131,7 +132,7 @@ def _build(
     exit_codes: tuple[int, ...],
     ended_at: tuple[float | None, ...],
     observe: tuple[ExecHook, ...] = (),
-) -> list[CommandResult]:
+) -> list[CommandResult | BytesCommandResult]:
     """Assemble the published stage results for a synthetic pipeline."""
     observations = _observations(len(exit_codes), observe)
     return _build_pipeline_stage_results(

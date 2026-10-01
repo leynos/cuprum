@@ -37,6 +37,7 @@ from cuprum._process_lifecycle import (
     _shielded_cleanup,
     _terminate_timed_out_stages,
 )
+from cuprum._result_assembly import _require_bytes, _require_text
 
 if typ.TYPE_CHECKING:
     import types
@@ -182,10 +183,25 @@ def _build_timeout_expired_error(
         The ``TimeoutExpired`` to raise, carrying whatever partial output the
         terminated stages had produced.
     """
+    # Branched rather than joining under a mode-selected separator: the two
+    # joins are different methods on different types, and narrowing the
+    # generator to match a dynamically chosen empty value is not something a
+    # type checker can follow. The duplication is one short expression and
+    # buys both branches an honest type. Each branch also narrows the chunks
+    # it joins: a stage payload in the wrong mode is an internal contradiction,
+    # and the helpers that say so are the same ones the result builders use.
     stderr_text: _StreamPayload | None = None
     if outputs.capture:
-        empty = b"" if outputs.capture_bytes else ""
-        stderr_text = empty.join(text or empty for text in outputs.stderr_by_stage)
+        if outputs.capture_bytes:
+            stderr_text = b"".join(
+                _require_bytes(chunk, "stderr") or b""
+                for chunk in outputs.stderr_by_stage
+            )
+        else:
+            stderr_text = "".join(
+                _require_text(chunk, "stderr") or ""
+                for chunk in outputs.stderr_by_stage
+            )
     output = outputs.final_stdout if outputs.capture else None
     return _sh_module().TimeoutExpired(
         cmd=tuple(cmd.argv_with_program for cmd in parts),

@@ -16,6 +16,7 @@ from cuprum import Program, TimeoutExpired, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.context import ScopeConfig, scoped
 from cuprum.sh import RunOutputOptions
+from cuprum.unittests._stream_drain_support import ConsumerTask
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import child_argv, python_interpreter
 
@@ -46,7 +47,7 @@ def readers_that_expire_grace_immediately(
         return None
 
     async def expire_immediately(
-        _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        _consumers: tuple[ConsumerTask, ConsumerTask],
     ) -> None:
         """Close the test-only grace window without elapsed wall-clock time."""
 
@@ -134,7 +135,7 @@ def test_readers_reaching_eof_emit_no_grace_event_or_metric(
     """Readers that finish inside grace leave no expiry telemetry behind."""
 
     async def wait_for_readers(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        consumers: tuple[ConsumerTask, ConsumerTask],
     ) -> None:
         """Wait for the closed process pipes to deliver EOF to both readers."""
         await asyncio.gather(*consumers)

@@ -22,6 +22,10 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _RelayDiagnostics, _StreamConfig
 from cuprum.echo_events import EchoErrorCategory, EchoStream, RelayFallback
+from cuprum.unittests._stream_drain_support import (
+    CapturedOrNone,
+    CapturedPair,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -174,7 +178,7 @@ def test_drain_propagates_non_encoding_sink_errors() -> None:
 def test_flush_after_disabled_echo_does_not_raise() -> None:
     """A disabled echo never re-attempts the final decoder flush write."""
 
-    async def run_case() -> tuple[str | None, _Cp1252TextOnlySink]:
+    async def run_case() -> CapturedPair[_Cp1252TextOnlySink]:
         """Reject one decoded character, then cancel holding an incomplete one."""
         reader = asyncio.StreamReader()
         reader.feed_data("ś".encode())
