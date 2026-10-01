@@ -75,7 +75,6 @@ jobs:
     env:
       MBAKE_VERSION: '1.4.6'
       MDTABLEFIX_VERSION: '0.6.0'
-      WHITAKER_INSTALLER_VERSION: '0.2.7'
       UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
       UV_TOOL_DIR: ${{ github.workspace }}/.uv-tools
       UV_TOOL_BIN_DIR: ${{ github.workspace }}/.uv-bin
@@ -293,9 +292,7 @@ jobs:
         uses: ./.github/actions/setup-dev-fast
 
       - name: Install Whitaker
-        uses: leynos/shared-actions/.github/actions/install-whitaker@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
-        with:
-          installer-version: ${{ env.WHITAKER_INSTALLER_VERSION }}
+        uses: leynos/shared-actions/.github/actions/install-whitaker@6dea5677a84fec60ca51b07202570e3af12ffdb4
 
       - name: Validate Mermaid diagrams
         run: make nixie

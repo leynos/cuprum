@@ -656,12 +656,12 @@ change the Makefile when changing the formatter toolchain. Coverage, release,
 verification, MSRV, and Whitaker commands, together with macOS and Windows,
 retain their prescribed fragment-free or separately pinned toolchains. The
 stable pin declares `rustfmt`, `clippy`, and `rust-analyzer` for local
-maintenance. The Whitaker action receives `WHITAKER_INSTALLER_VERSION` from the
-job environment (`0.2.7`, the workflow's configured installer version). The
-Makefile runs `lint-clippy`, `lint-whitaker`, and spelling sequentially;
-`lint-whitaker` passes Cargo `--package` arguments for `cuprum-rust`,
-`cuprum-streams`, and `cuprum-native-io` after Whitaker's `--` separator.
-Whitaker's `--all` chooses lint libraries, not workspace packages.
+maintenance. The Whitaker action takes no installer-version input: it pins its
+own installer version (0.2.9 or later), and refuses a caller-supplied one below
+that. The Makefile runs `lint-clippy`, `lint-whitaker`, and spelling
+sequentially; `lint-whitaker` passes Cargo `--package` arguments for
+`cuprum-rust`, `cuprum-streams`, and `cuprum-native-io` after Whitaker's `--`
+separator. Whitaker's `--all` chooses lint libraries, not workspace packages.
 
 Whitaker's lint suite is a rolling release, and that is the distribution model
 rather than a defect. Its `rolling-release.yml` runs on every push to `main`

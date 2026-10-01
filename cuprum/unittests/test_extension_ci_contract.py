@@ -252,13 +252,13 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
         "use-sccache": "false",
     }
     whitaker_installer = step_named(workflow_data, "lint-test", "Install Whitaker")
-    assert whitaker_installer.get("with") == {
-        "installer-version": "${{ env.WHITAKER_INSTALLER_VERSION }}"
-    }
+    # The action pins its own installer version; a caller-supplied one below
+    # the action's floor is refused, so no input is passed.
+    assert whitaker_installer.get("with") is None
 
     lint_environment = job(workflow_data, "lint-test").get("env")
     assert isinstance(lint_environment, dict), "lint-test must declare an environment"
-    assert lint_environment.get("WHITAKER_INSTALLER_VERSION") == "0.2.7"
+    assert "WHITAKER_INSTALLER_VERSION" not in lint_environment
 
     step_names = [step.get("name") for step in steps(workflow_data, "lint-test")]
     nixie_gate, _ = first_step_running(

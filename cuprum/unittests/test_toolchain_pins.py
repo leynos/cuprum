@@ -285,9 +285,9 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     assert whitaker_uses.startswith(
         "leynos/shared-actions/.github/actions/install-whitaker@"
     ), "the Install Whitaker CI step must use the shared installer"
-    assert whitaker_installer.get("with") == {
-        "installer-version": "${{ env.WHITAKER_INSTALLER_VERSION }}"
-    }, "the shared Whitaker installer must receive the configured version"
+    assert whitaker_installer.get("with") is None, (
+        "the shared Whitaker installer pins its own installer version"
+    )
 
 
 def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
