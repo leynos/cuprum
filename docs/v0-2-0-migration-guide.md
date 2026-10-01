@@ -80,6 +80,15 @@ its programs. Keep using `scoped(ScopeConfig(...))` when the scope also needs
 hook or policy configuration. For examples and nesting behaviour, see the
 [policy section](users-guide.md#apply-a-policy) in the users' guide.
 
+Such a scope also activates the catalogue for `sh.make()`, so call sites inside
+the block may drop the repeated `catalogue=` argument. Review call sites that
+build inside a catalogue scope for a different catalogue, or that rely on
+`DEFAULT_CATALOGUE` while a catalogue scope is active: `sh.make()` now resolves
+the scoped catalogue and raises `UnknownProgramError` at construction when it
+does not list the program. Pass an explicit `catalogue=` argument where that is
+the intent. The two enforcement points are described under
+[Two enforcement points](users-guide.md#two-enforcement-points).
+
 ## Environment policies
 
 `EnvMode`, `UNSET`, and the `env_mode` fields on `ScopeConfig`,

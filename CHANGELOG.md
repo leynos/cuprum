@@ -401,8 +401,29 @@
   `cuprum` or its definition site, `cuprum.events`. The former
   `cuprum.context.ExecHook` re-export has been removed; only the import path
   changes, not the hook signature or registration behaviour.
+- **`sh.make` resolves the active scoped catalogue (breaking):** When no
+  `catalogue` argument is supplied, `sh.make` now resolves the innermost active
+  `scoped(catalogue=...)` before falling back to `DEFAULT_CATALOGUE`, which
+  applies only outside any catalogue scope. A call that previously inherited
+  `DEFAULT_CATALOGUE` inside a catalogue scope which does not contain the
+  program now raises `UnknownProgramError` when the builder is created, rather
+  than at run time. Code that builds from a catalogue the enclosing scope does
+  not allow, or that relies on the default catalogue inside a catalogue scope,
+  needs an explicit `catalogue=` argument. A scope carrying only an allowlist
+  (`ScopeConfig(allowlist=...)`) leaves the active catalogue unchanged
+  ([#514](https://github.com/leynos/cuprum/issues/514)).
 
 ### Changed
+
+- **`sh.make` resolves the active scoped catalogue:** The `catalogue` parameter
+  now defaults to `None` and is resolved as an explicit argument, then the
+  innermost active `scoped(catalogue=...)`, then `DEFAULT_CATALOGUE`. Call
+  sites inside a catalogue scope no longer repeat the same catalogue object,
+  and the resolved catalogue is bound to the builder, so it survives the
+  scope's exit. See
+  [Two enforcement points](docs/users-guide.md#two-enforcement-points) for how
+  this interacts with the allowlist check at run time
+  ([#514](https://github.com/leynos/cuprum/issues/514)).
 
 - **Benchmark ratchet measures the pipeline, not worker start-up:** The
   `benchmark-ratchet` job compared a within-run Rust-to-Python ratio over

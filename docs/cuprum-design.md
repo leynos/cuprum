@@ -162,6 +162,8 @@ Cuprum maintains a per‑execution **context** backed by a `ContextVar`. A
 context holds:
 
 - the current allowlist of permitted `Program` values;
+- the catalogue activated by the innermost `scoped(catalogue=...)`, if any,
+  which `sh.make` resolves builders against;
 - the registered pre‑ and post‑execution hooks;
 - configuration related to logging and observability.
 
@@ -462,19 +464,33 @@ The `sh` facade provides the main entry point for safe usage.
 #### 6.2.1 Creating commands
 
 The primary constructor is
-`sh.make(program: Program) -> Callable[..., SafeCmd[str]]`:
+`sh.make(program: Program, *, catalogue: ProgramCatalogue | None = None) ->
+Callable[…, SafeCmd[str]]`:
 
 ```python
-from cuprum import RunOutputOptions, sh, Program
-from cmds import LS, GREP  # curated Program values
+from cuprum import RunOutputOptions, scoped, sh, Program
+from cmds import LS, GREP, CATALOGUE  # curated Program values
 
-ls = sh.make(LS)
-grep = sh.make(GREP)
+with scoped(catalogue=CATALOGUE):
+    ls = sh.make(LS)
+    grep = sh.make(GREP)
 
 cmd = ls("-l", "/var/log")
 result = cmd.run_sync(output=RunOutputOptions(echo=True))
 print(result)  # `result` is text output by default
 ```
+
+The catalogue is resolved once, in this order: the explicit `catalogue`
+argument, then the catalogue of the innermost active `scoped(catalogue=...)`,
+then `DEFAULT_CATALOGUE` outside any catalogue scope. A scope that carries only
+an allowlist does not change the active catalogue. The resolved catalogue is
+bound to the returned builder, so the builder keeps working after the scope
+that supplied it exits.
+
+Catalogue lookup happens at construction, and is a separate check from the
+allowlist enforced at run time. A builder constructed from a catalogue the
+active scope does not allow therefore constructs successfully and raises
+`ForbiddenProgramError` when the command runs.
 
 `sh.make` returns a callable that accepts positional/keyword arguments to be
 converted into argv strings according to internal rules (e.g. str() with basic
@@ -1335,6 +1351,25 @@ The following design decisions were made during implementation:
 - After hooks are prepended and thus execute in reverse order (LIFO): child
   hooks run before parent hooks. This enables cleanup patterns similar to
   context managers.
+
+**Catalogue activation:**
+
+- `CuprumContext.catalogue` holds the catalogue the innermost
+  `scoped(catalogue=...)` activated, or `None` outside any catalogue scope. The
+  default context never carries a catalogue, so "no scope" stays
+  distinguishable from "a scope activating `DEFAULT_CATALOGUE`".
+- `_resolve_narrowed_catalogue` in `cuprum/context/_policy.py` replaces rather
+  than intersects: a scope naming a catalogue wins outright, because a
+  catalogue supplies program metadata as well as permissions, and entries from
+  two catalogues cannot be merged. A `ScopeConfig` that names no catalogue
+  inherits the active one.
+- The field is `dc.field(default=None, compare=False)`. It is excluded from
+  equality because it carries no permission semantics: two contexts that allow
+  the same programs are equivalent for enforcement regardless of which
+  catalogue supplied them.
+- `sh.make` reads it through `_resolve_catalogue`, but the catalogue is
+  consulted only at construction. The allowlist check at run time is a separate
+  enforcement point and is unaffected by which catalogue built the command.
 
 **ContextVar usage:**
 
