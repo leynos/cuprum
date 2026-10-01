@@ -1,9 +1,9 @@
 # Bind catalogue identity to a validated executable path
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
-`Verification plan` must be kept up to date as work proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision log`,
+`Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
+be kept up to date as work proceeds.
 
 Status: IN PROGRESS
 
@@ -72,11 +72,11 @@ escalation, not a workaround.
 - **Resolution happens after enforcement.** Every spawn path resolves the bound
   executable strictly after `_enforce_allowlist` has run for that command. A
   binding therefore cannot admit a program the allowlist would reject.
-- **Identity is unchanged everywhere it is already reported.** `ExecEvent.program`,
-  `ExecEvent.project`, the metrics `program` label, the logging `program`
-  extra, the tracing `program` attribute, the sink session start record, and
-  `CommandResult.program` all keep carrying the logical `Program`. The executed
-  path is *additional*, never a replacement.
+- **Identity is unchanged everywhere it is already reported.**
+  `ExecEvent.program`, `ExecEvent.project`, the metrics `program` label, the
+  logging `program` extra, the tracing `program` attribute, the sink session
+  start record, and `CommandResult.program` all keep carrying the logical
+  `Program`. The executed path is *additional*, never a replacement.
 - **`ExecEvent` is append-only after `exec_id`.** `ExecEvent` is a public
   dataclass with positional fields, and
   `cuprum/unittests/test_public_api.py::test_exec_id_keeps_its_positional_slot`
@@ -136,9 +136,8 @@ escalation, not a workaround.
   when the stage observation is built, and the resolved string is carried on
   `_StageObservation`. A test counts resolver invocations across a spawn.
 - Risk: documenting a filesystem check overstates the guarantee. Severity:
-  medium. Likelihood: medium. Mitigation: the docstrings and the design
-  section state TOCTOU explicitly and name the residual operator
-  responsibility.
+  medium. Likelihood: medium. Mitigation: the docstrings and the design section
+  state TOCTOU explicitly and name the residual operator responsibility.
 - Risk: a relative bound path behaves differently once `cwd` is supplied.
   Severity: medium. Likelihood: medium. Mitigation: `resolve_binding` is a pure
   function with an explicit rule, tested against both `cwd=None` and a real
@@ -151,8 +150,8 @@ escalation, not a workaround.
 - [x] (2026-10-01 15:24Z) ExecPlan written.
 - [x] (2026-10-01 16:05Z) EP-M1 complete. The module split into
   `cuprum/executable_paths.py` (path vocabulary) and
-  `cuprum/executable_binding.py` (binding + resolution) after the single
-  module reached 426 lines. 99 tests pass.
+  `cuprum/executable_binding.py` (binding + resolution) after the single module
+  reached 426 lines. 99 tests pass.
 - [ ] EP-M2: `cuprum/context/executable_overlay.py`, `CuprumContext` and
   `ScopeConfig` fields, `resolve_executable`, `bind_executable`, exports.
 - [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
@@ -166,87 +165,81 @@ escalation, not a workaround.
 - Observation: there are three spawn call sites but only two `argv[0]`
   constructions. `cuprum/_line_stream/coordinator.py` reuses
   `cuprum._subprocess_execution._spawn_subprocess`, so resolving in that one
-  helper covers both the direct and the line-stream paths.
-  Evidence: `grep -rn "argv_with_program" cuprum/` shows only
-  `_subprocess_execution.py:173` and `_pipeline_spawn.py:98` building a
-  child's argument vector.
-  Impact: EP-M3 has two edits, not three.
+  helper covers both the direct and the line-stream paths. Evidence:
+  `grep -rn "argv_with_program" cuprum/` shows only
+  `_subprocess_execution.py:173` and `_pipeline_spawn.py:98` building a child's
+  argument vector. Impact: EP-M3 has two edits, not three.
 - Observation: `_StageObservation` is already the per-stage carrier of
   execution-wide policy (`env_overlay`, `env_mode`, `cwd`), and both spawn
-  sites already hold one. Resolving into it gives a single resolution point
-  per execution and one obvious place to read the effective path from.
-  Evidence: `cuprum/_pipeline_spawn.py:97` and
-  `cuprum/_subprocess_execution.py:171` both receive the observation.
-  Impact: `_StageObservation` gains `resolved_path`; the spawn sites read it.
+  sites already hold one. Resolving into it gives a single resolution point per
+  execution and one obvious place to read the effective path from. Evidence:
+  `cuprum/_pipeline_spawn.py:97` and `cuprum/_subprocess_execution.py:171` both
+  receive the observation. Impact: `_StageObservation` gains `resolved_path`;
+  the spawn sites read it.
 - Observation: the task packet names `docs/migration-0.2.0.md`, which does not
   exist. The real file is `docs/v0-2-0-migration-guide.md`, and its Python
   fences are executed by the behavioural suite via `tested-example` markers.
   Evidence: `ls docs/` and the `<!-- tested-example: ... -->` markers in that
-  file.
-  Impact: the migration note goes there, and any code fence added must
+  file. Impact: the migration note goes there, and any code fence added must
   actually run.
 - Observation: the single planned module reached 426 lines against pylint's
   400-line ceiling, because mandatory NumPy docstrings dominate it. Trimming
   prose to fit would have removed the TOCTOU warning the issue requires.
-  Impact: the plan's Task 1 module split into `cuprum/executable_paths.py`
-  (219 lines: `ExecutablePath`, `PathBindingRejection`,
+  Impact: the plan's Task 1 module split into `cuprum/executable_paths.py` (219
+  lines: `ExecutablePath`, `PathBindingRejection`,
   `InvalidExecutableBindingError`, `classify_executable_path`,
   `executable_path`, `coerce_path_string`, `advisory_path_rejection`) and
   `cuprum/executable_binding.py` (326 lines: `ExecutableResolver`,
   `ExecutableBinding`, `executable_binding`, `resolve_binding`, re-exports).
   The error type moved *down* into the paths module so the dependency stays
-  acyclic: the paths module raises it, and the binding module imports it.
-  Both are still pure and still import no context module.
+  acyclic: the paths module raises it, and the binding module imports it. Both
+  are still pure and still import no context module.
 - Observation: `type X = typ.NewType("X", str)` produces a `TypeAliasType`,
   which is not callable. Only the plain assignment form
-  `X = typ.NewType("X", str)` yields a callable newtype.
-  Evidence: the first green run failed 27 tests with
-  `TypeError: 'typing.TypeAliasType' object is not callable`.
-  Impact: `ExecutablePath` uses the assignment form, matching the sibling
-  `SafePath` in `cuprum/builders/args.py`. The repository's `type` statements
-  are reserved for genuine alias shapes such as `ExecutableResolver`.
+  `X = typ.NewType("X", str)` yields a callable newtype. Evidence: the first
+  green run failed 27 tests with
+  `TypeError: 'typing.TypeAliasType' object is not callable`. Impact:
+  `ExecutablePath` uses the assignment form, matching the sibling `SafePath` in
+  `cuprum/builders/args.py`. The repository's `type` statements are reserved
+  for genuine alias shapes such as `ExecutableResolver`.
 - Observation: `os.access(path, os.X_OK)` returns true for a directory, so the
-  obvious advisory probe accepts a directory as an executable.
-  Evidence: a test asserting a directory is reported `NOT_EXECUTABLE` failed
-  with `None` before `os.path.isfile` was added to the condition.
-  Impact: the probe requires a regular file as well as an execute bit.
+  obvious advisory probe accepts a directory as an executable. Evidence: a test
+  asserting a directory is reported `NOT_EXECUTABLE` failed with `None` before
+  `os.path.isfile` was added to the condition. Impact: the probe requires a
+  regular file as well as an execute bit.
 - Observation: `get_type_hints` is called on public dataclasses by the
   repository's API-contract tests, so a `Program` annotation must stay
-  resolvable at runtime.
-  Evidence: `cuprum/unittests/test_public_api.py:349-396` resolves
-  `CommandResult`, `SafeCmd`, `sh.make`, and `Pipeline.concat`.
-  Impact: `ExecutableBinding`'s annotations must remain resolvable, which the
-  two-module split preserves because nothing in a TYPE_CHECKING block is
-  referenced at runtime.
+  resolvable at runtime. Evidence:
+  `cuprum/unittests/test_public_api.py:349-396` resolves `CommandResult`,
+  `SafeCmd`, `sh.make`, and `Pipeline.concat`. Impact: `ExecutableBinding`'s
+  annotations must remain resolvable, which the two-module split preserves
+  because nothing in a TYPE_CHECKING block is referenced at runtime.
 
 ## Decision log
 
 - Decision: bindings live on `CuprumContext`/`ScopeConfig`, not on
-  `ProgramCatalogue` or on `SafeCmd`.
-  Rationale: the issue asks for a specified *scope lifetime*. The context is
-  the only existing mechanism with a defined lifetime, a `ContextVar`-backed
-  isolation story, and a registration handle (`bind_executable`) that mirrors
-  `env`/`allow`/`before`. A catalogue field would be global and immutable; a
-  `SafeCmd` field would be per-command and unshareable.
-  Date/Author: 2026-10-01, implementing agent.
+  `ProgramCatalogue` or on `SafeCmd`. Rationale: the issue asks for a specified
+  *scope lifetime*. The context is the only existing mechanism with a defined
+  lifetime, a `ContextVar`-backed isolation story, and a registration handle
+  (`bind_executable`) that mirrors `env`/`allow`/`before`. A catalogue field
+  would be global and immutable; a `SafeCmd` field would be per-command and
+  unshareable. Date/Author: 2026-10-01, implementing agent.
 - Decision: resolution happens once, in the stage-observation builder, and the
-  resolved string travels on `_StageObservation`.
-  Rationale: one resolution point per execution keeps a lazy resolver from
-  being called twice, gives both spawn sites and every `CommandResult`
-  construction site the same value, and keeps the allowlist gate ahead of it
-  on every path.
-  Date/Author: 2026-10-01, implementing agent.
+  resolved string travels on `_StageObservation`. Rationale: one resolution
+  point per execution keeps a lazy resolver from being called twice, gives both
+  spawn sites and every `CommandResult` construction site the same value, and
+  keeps the allowlist gate ahead of it on every path. Date/Author: 2026-10-01,
+  implementing agent.
 - Decision: `resolved_path` is projected into the logging and tracing adapters
-  but never into metrics.
-  Rationale: the issue requires the executed path to stay inspectable, and
-  both adapters already carry unbounded fields such as `argv`. Metrics labels
-  are explicitly low-cardinality by documented policy.
+  but never into metrics. Rationale: the issue requires the executed path to
+  stay inspectable, and both adapters already carry unbounded fields such as
+  `argv`. Metrics labels are explicitly low-cardinality by documented policy.
   Date/Author: 2026-10-01, implementing agent.
 - Decision: the plan is executed without a separate approval round trip.
   Rationale: the task packet that commissioned this plan already directs
   implementation, gates, and review; the ExecPlan is the recorded contract for
-  that work rather than a separate decision to be approved.
-  Date/Author: 2026-10-01, implementing agent.
+  that work rather than a separate decision to be approved. Date/Author:
+  2026-10-01, implementing agent.
 - Decision: split the value types across `cuprum/executable_paths.py` and
   `cuprum/executable_binding.py` rather than trimming the single module.
   Rationale: the tolerance says to extract rather than trim when a module would
@@ -256,19 +249,16 @@ escalation, not a workaround.
   The error type moved into the paths module so the dependency runs one way.
   Date/Author: 2026-10-01, implementing agent.
 - Decision: `advisory_path_rejection` requires a regular file, not just an
-  execute bit.
-  Rationale: directories carry an execute bit, so the bit alone would report a
-  directory as a usable executable, which is never what a caller binding an
-  executable means. `NOT_EXECUTABLE` is a rejection category, not a claim that
-  the path is a file.
-  Date/Author: 2026-10-01, implementing agent.
+  execute bit. Rationale: directories carry an execute bit, so the bit alone
+  would report a directory as a usable executable, which is never what a caller
+  binding an executable means. `NOT_EXECUTABLE` is a rejection category, not a
+  claim that the path is a file. Date/Author: 2026-10-01, implementing agent.
 - Decision: `executable_path` raises `InvalidExecutableBindingError` with
-  `program=None` rather than a plain `ValueError`.
-  Rationale: one error type with one message shape is easier to document and
-  catch than two, and the optional `program` is what distinguishes standalone
-  path validation from binding construction. `executable_path` remains a
-  subtype of `ValueError`, so callers written against the sibling `safe_path`
-  contract keep working.
+  `program=None` rather than a plain `ValueError`. Rationale: one error type
+  with one message shape is easier to document and catch than two, and the
+  optional `program` is what distinguishes standalone path validation from
+  binding construction. `executable_path` remains a subtype of `ValueError`, so
+  callers written against the sibling `safe_path` contract keep working.
   Date/Author: 2026-10-01, implementing agent.
 
 ## Outcomes & retrospective
@@ -326,8 +316,8 @@ accepted decisions it must not contradict:
 - `docs/adr-007-subprocess-execution-module-boundaries.md` — the private
   subprocess module boundaries the spawn edits live inside.
 - `docs/adr-018-typed-environment-policies.md` — the nearest precedent for a
-  typed, scoped policy carried on `CuprumContext` and projected into
-  telemetry. This change deliberately mirrors its shape.
+  typed, scoped policy carried on `CuprumContext` and projected into telemetry.
+  This change deliberately mirrors its shape.
 
 Trace:
 
@@ -384,21 +374,21 @@ O2 — Binding isolation across nested scopes, threads, and tasks.
   `threading.Barrier` and with `asyncio.gather` for the concurrency cases.
 - Rationale: the nesting behaviour is a small finite set of transitions that
   the existing Hypothesis state machine already models for every other handle
-  type, so extending it is cheaper and stronger than enumerating cases by
-  hand; the concurrency claims need real threads and real tasks, which a model
-  cannot supply.
+  type, so extending it is cheaper and stronger than enumerating cases by hand;
+  the concurrency claims need real threads and real tasks, which a model cannot
+  supply.
 - Artefact: `cuprum/unittests/test_token_registration_stateful.py` (extended
   `_FACTORIES`), `cuprum/unittests/test_context_isolation.py`,
   `cuprum/unittests/test_executable_binding_context.py`.
 - Evidence: `make test-python` passes; the state machine's
-  `active_context_matches_stack_top` invariant holds across generated
-  sequences that include the new `bind` factory.
+  `active_context_matches_stack_top` invariant holds across generated sequences
+  that include the new `bind` factory.
 - Non-vacuity: the state machine's `_FACTORIES` tuple gains `bind` and
   `bind-nested` entries, and a check asserts that at least one generated
-  sequence actually installed a binding (a generator that never samples the
-  new entry would otherwise pass vacuously). The concurrency examples
-  deliberately assert the *other* context's binding is absent, so a test that
-  leaked a binding would fail rather than pass.
+  sequence actually installed a binding (a generator that never samples the new
+  entry would otherwise pass vacuously). The concurrency examples deliberately
+  assert the *other* context's binding is absent, so a test that leaked a
+  binding would fail rather than pass.
 
 O3 — Resolution ordering: enforcement precedes resolution.
 
@@ -434,8 +424,8 @@ O4 — Telemetry projection: identity preserved, path added, metrics untouched.
 - Evidence: `make test-python` passes; the metrics test asserts the label set
   equals `{"program", "project"}` and would fail if a path were added.
 - Non-vacuity: the same test asserts the *unbound* case carries
-  `resolved_path is None` and that no `cuprum_resolved_path` key is present,
-  so an adapter that unconditionally emitted the key would fail.
+  `resolved_path is None` and that no `cuprum_resolved_path` key is present, so
+  an adapter that unconditionally emitted the key would fail.
 
 O5 — Resolver invocation count and relative-path resolution.
 
@@ -480,8 +470,8 @@ Complete. See `Context and orientation` and `Surprises & discoveries`.
 
 ### Stage B — red tests
 
-For each milestone, add the failing test first, run it, and record the
-failure. The exact commands are in `Concrete steps`.
+For each milestone, add the failing test first, run it, and record the failure.
+The exact commands are in `Concrete steps`.
 
 ### Stage C — implementation
 
@@ -495,17 +485,18 @@ must not import `cuprum.context` at runtime. Define:
   messages: `EMPTY`, `NUL`, `PARENT_SEGMENT`, `NOT_ABSOLUTE`. Declared in check
   order, mirroring `PathRejection` in `cuprum/builders/args.py`.
 - `classify_executable_path(raw_value, *, allow_relative)`, returning a
-  `PathBindingRejection | None`, mirroring `classify_path_string` including
-  its Windows absolute-path regex.
+  `PathBindingRejection | None`, mirroring `classify_path_string` including its
+  Windows absolute-path regex.
 - `executable_path(value, *, allow_relative=False) -> ExecutablePath`, which
   normalizes through `PurePath(...).as_posix()` like `safe_path` does.
 - `advisory_rejection(path) -> PathBindingRejection | None`, the bounded
   filesystem check: returns a rejection when the path is absolute and either
   does not exist or carries no executable bit. Named `advisory_` so no caller
   can read it as a guarantee. (New member `NOT_FOUND` / `NOT_EXECUTABLE`.)
-- `ExecutableBinding`, a frozen slots dataclass with `path: ExecutablePath | None`
-  and `resolver: ExecutableResolver | None`, exactly one of which must be set;
-  `__post_init__` rejects both-set and neither-set.
+- `ExecutableBinding`, a frozen slots dataclass with
+  `path: ExecutablePath | None` and `resolver: ExecutableResolver | None`,
+  exactly one of which must be set; `__post_init__` rejects both-set and
+  neither-set.
 - `resolve_binding(binding, *, cwd) -> str`, the single resolution rule.
 - `InvalidExecutableBindingError(ValueError)` carrying `program`, `path`, and
   `reason`, building its message once into `msg` and passing it to
@@ -558,8 +549,8 @@ EP-M1 — the pure binding modules exist and are fully tested.
 
 - Requirements and gaps: the issue's "explicit typed binding" and "specify
   validation authority" clauses, at the value-type level.
-- Acceptance evidence: `make test-python` passes with `test_executable_paths.py`,
-  `test_executable_binding.py`, and
+- Acceptance evidence: `make test-python` passes with
+  `test_executable_paths.py`, `test_executable_binding.py`, and
   `test_executable_binding_property_based.py` present; all three failed before
   the modules existed. 99 tests, 25 named examples for the path vocabulary, 34
   for the binding types, and 15 properties.
@@ -583,8 +574,8 @@ EP-M2 — bindings are installable, inheritable, and isolated.
   `bind` factories; per-thread and per-task isolation examples pass.
 - Conformance check: `resolve_executable` is not consulted by `is_allowed` or
   `check_allowed`, proven by a test that binds an unallowlisted program and
-  still gets `ForbiddenProgramError`; `cuprum/context/core.py` stays within
-  400 lines.
+  still gets `ForbiddenProgramError`; `cuprum/context/core.py` stays within 400
+  lines.
 - Recovery: revertable independently; the context fields are additive with
   `None` defaults, so the previous behaviour is the absent-binding behaviour.
 - Remaining gaps: bindings have no effect on what is executed.
@@ -596,8 +587,8 @@ EP-M3 — the bound executable is what runs, and the path is observable.
 - Requirements and gaps: "configured approved paths run exactly", "keep the
   executed path inspectable", and "telemetry representation".
 - Acceptance evidence: `make test-python` passes; a real subprocess spawned
-  through a binding reports its own `sys.executable`; the observe stream
-  carries `resolved_path`; the metrics labels are unchanged.
+  through a binding reports its own `sys.executable`; the observe stream carries
+  `resolved_path`; the metrics labels are unchanged.
 - Conformance check: on every path the resolution call site is textually after
   the enforcement call site for the same command, verified by reading the two
   functions and by the resolver-counting test; `ExecEvent` gains no field ahead
@@ -686,9 +677,8 @@ each is asserted by a named test:
    attribute `cuprum.resolved_path` is present, and no metric label carries a
    path.
 5. TOCTOU limits are documented. Assert `docs/cuprum-design.md` contains a
-   section stating that the check is advisory and naming filesystem
-   ownership, permissions, and read-only deployment as the operator's
-   responsibility.
+   section stating that the check is advisory and naming filesystem ownership,
+   permissions, and read-only deployment as the operator's responsibility.
 
 Quality criteria:
 
@@ -706,14 +696,14 @@ Quality criteria:
 ## Idempotence and recovery
 
 Every step is additive and re-runnable. `make test-python` and the other gates
-may be re-run at any time. If a gate fails, read the captured log under
-`/tmp/` rather than re-running it blind; the repository convention is that a
-gate log records the head commit it ran against.
+may be re-run at any time. If a gate fails, read the captured log under `/tmp/`
+rather than re-running it blind; the repository convention is that a gate log
+records the head commit it ran against.
 
-Each milestone is a separate commit and can be reverted independently. If
-EP-M3 proves wrong — for example if the single-resolution-point design needs
-more touch points than the tolerance allows — revert EP-M3's commit, keep
-EP-M1 and EP-M2, and re-plan the resolution point.
+Each milestone is a separate commit and can be reverted independently. If EP-M3
+proves wrong — for example if the single-resolution-point design needs more
+touch points than the tolerance allows — revert EP-M3's commit, keep EP-M1 and
+EP-M2, and re-plan the resolution point.
 
 ## Artefacts and notes
 
@@ -731,10 +721,7 @@ return await _wait4_process.spawn_direct_process(
 
 ```python
 # cuprum/_pipeline_spawn.py:97
-process = await asyncio.create_subprocess_exec(
-    *observation.cmd.argv_with_program,
-    ...
-)
+process = await asyncio.create_subprocess_exec(*observation.cmd.argv_with_program, ...)
 ```
 
 Both read a `SafeCmd` property that hard-codes `str(self.program)` as the first
@@ -785,8 +772,8 @@ def advisory_path_rejection(
 ) -> PathBindingRejection | None: ...
 ```
 
-`cuprum/executable_binding.py` (shipped), which re-exports the six public
-names above:
+`cuprum/executable_binding.py` (shipped), which re-exports the six public names
+above:
 
 ```python
 type ExecutableResolver = cabc.Callable[[], str]
@@ -831,9 +818,7 @@ class CuprumContext:
         self, program: Program, binding: ExecutableBinding
     ) -> CuprumContext: ...
 
-    def executable_binding(
-        self, program: Program
-    ) -> ExecutableBinding | None: ...
+    def executable_binding(self, program: Program) -> ExecutableBinding | None: ...
 
     def resolve_executable(
         self, program: Program, *, cwd: str | None = None

@@ -276,6 +276,7 @@ def test_resolver_is_invoked_once_per_resolution(
     calls: list[int] = []
 
     def resolver() -> str:
+        """Record each call so the count is observable."""
         calls.append(len(calls) + 1)
         return path
 
