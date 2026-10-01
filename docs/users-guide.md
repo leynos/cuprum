@@ -235,22 +235,23 @@ promptly; line order is guaranteed within each stream, not across streams.
 
 Capture decodes by default, so `stdout` and `stderr` are strings and bytes the
 child wrote that are not valid UTF-8 arrive with each offending byte replaced by
-`U+FFFD`. That is the right answer for text and the wrong one for anything else:
-a decoded capture cannot be turned back into the bytes the child wrote, so a
-caller who needs the original would have to pick a surrogate encoding and undo
-it afterwards.
+`U+FFFD`. That is the right answer for text and the wrong one for anything
+else: a decoded capture cannot be turned back into the bytes the child wrote,
+so a caller who needs the original would have to pick a surrogate encoding and
+undo it afterwards.
 
 `SafeCmd.run_bytes()` and `Pipeline.run_bytes()`, with their `run_bytes_sync()`
 counterparts, are the same runs as `run()` and `run_sync()` with capture left
 undecoded. They take the same `output`, `timeout`, `context`, and (for a single
 command) `stdin` arguments, and return `BytesCommandResult` or
-`BytesPipelineResult` instead of their text-mode counterparts. Those two classes
-declare the same fields as `CommandResult` and `PipelineResult`, including the
-full set of measurements (`pid`, `started_at`, `duration`, `max_rss_bytes`,
-`user_cpu_seconds`, `system_cpu_seconds`, and `relay_fallbacks`), so a caller
-that needs the byte-exact value does not lose the diagnostics. The output fields
-of a `BytesCommandResult` are `bytes | None`, and each stage of a
-`BytesPipelineResult` is a `BytesCommandResult`.
+`BytesPipelineResult` instead of their text-mode counterparts. Those two
+classes declare the same fields as `CommandResult` and `PipelineResult`,
+including the full set of measurements (`pid`, `started_at`, `duration`,
+`max_rss_bytes`, `user_cpu_seconds`, `system_cpu_seconds`, and
+`relay_fallbacks`), so a caller that needs the byte-exact value does not lose
+the diagnostics. The output fields of a `BytesCommandResult` are
+`bytes | None`, and each stage of a `BytesPipelineResult` is a
+`BytesCommandResult`.
 
 Text remains the default, and the mode is explicit: `run()` never returns bytes
 and `run_bytes()` never returns text, so a mismatch is a bug rather than a

@@ -211,7 +211,7 @@ def test_line_observation_is_refused_before_the_child_spawns(
     with pytest.raises(ValueError, match="on_line"):
         _run_bytes_async(bytes_cmd, {"output": RunOutputOptions(on_line=observe)})
 
-    assert observed == [], "the rejection must happen before any line is observed"
+    assert not observed, "the rejection must happen before any line is observed"
 
 
 def test_line_observation_is_refused_before_the_sync_entry_point_runs(
