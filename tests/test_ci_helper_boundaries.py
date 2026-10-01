@@ -246,7 +246,7 @@ class TestWorkflowSweep:
         with pytest.raises(AssertionError, match=r"not a workflow directory|holds no"):
             run_scripts(tmp_path)
 
-    def test_the_success_path_finds_this_repositorys_scripts(self) -> None:
+    def test_the_success_path_finds_the_estates_scripts(self) -> None:
         """The estate sweep finds scripts, so the refusals are not blanket."""
         found = run_scripts()
         assert found, "this repository's workflows must hold at least one run: step"

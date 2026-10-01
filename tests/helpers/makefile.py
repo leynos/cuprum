@@ -1,19 +1,25 @@
-"""Read this repository's Makefile the way the suite selector reads it.
+"""Read what this repository's Makefile says, the way the selector reads it.
 
 The selector lives in `PYTEST_TARGETS` as a list of shell glob patterns, and
-the pattern that decides whether a contract module is collected is the one
-that names it. Reading that variable by hand, or by a regex over the source,
+the pattern that decides whether a contract module is collected is the one that
+names it. Reading that variable by hand, or by a regex over the source,
 under-reports it in ways that look like a clean result: a missed continuation,
 a comment mistaken for an assignment, or a `$(VAR)` reference returned as its
 own literal text all shrink the set, and a set that is too small makes every
 "nothing is uncovered" assertion pass for the wrong reason.
 
-So the parse is not hand-rolled. `makeutil`, the pinned parser the repository
-already depends on, reports each assignment's `raw_value` with its
-continuations and each rule's recipe text, and this module reads that. Its
-consumers are `tests/helpers/suite_selection.py` and
-`tests/test_ci_suite_wiring_contract.py`, which need both the resolved
-selector and the recipes that consume it.
+So the parse is not hand-rolled; it is not here either. Getting the parsed
+document — reaching for `makeutil`, running it, and reporting a process that
+never started — is `tests/helpers/makeutil.py`, whose `makeutil_document`
+returns the `variables`, `rules`, and `includes` this module reads. The split
+follows `workflow_shell` and `workflow_recipe`: reaching for a thing the caller
+named, versus deriving from a thing it already holds.
+
+What lives here is `make`'s own semantics for the document that parse returns:
+which assignment wins, how continuations collapse, how `$(VAR)` references
+resolve, and what a target's recipe says. Its consumers are
+`tests/helpers/suite_selection.py` and `tests/test_ci_suite_wiring_contract.py`,
+which need both the resolved selector and the recipes that consume it.
 
 This module reads the Makefile; it does not decide what a selector *means*.
 Resolving a pattern against the repository, and refusing a pattern that could
@@ -24,44 +30,35 @@ the selection policy.
 
 from __future__ import annotations
 
-import json
 import re
 import shlex
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv
 import typing as typ
 
-from tests.helpers.docs import repo_root
+from tests.helpers.ci_documents import require
+from tests.helpers.makeutil import (
+    DEFAULT_RUNNER,
+    MAKEFILE,
+    Runner,
+    makeutil_document,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
+# `MAKEFILE`, `Runner`, and `makeutil_document` are re-exported rather than
+# defined here: a caller reading a variable or a recipe names one module, and
+# the two halves of that read are not a distinction it should have to hold.
+# `makeutil.py` remains their definition, so a change to the process boundary
+# has exactly one place to land.
 __all__ = (
     "MAKEFILE",
-    "MAKEUTIL_TIMEOUT_SECONDS",
     "Runner",
     "makeutil_document",
     "recipe_of",
     "recipe_tokens",
     "variable_expansion",
 )
-
-#: The Makefile this module reads. One definition, so a test that needs to
-#: name it and a helper that needs to read it cannot disagree.
-MAKEFILE = "Makefile"
-
-#: How long the parser may take before the read is abandoned. `makeutil` parses
-#: one file in well under a second, so this only fires on a wedged process; the
-#: bound exists to turn "the suite hangs" into a named contract failure.
-MAKEUTIL_TIMEOUT_SECONDS: typ.Final = 60
-
-#: The process boundary, as a type rather than as an import. The parser is the
-#: one thing here that reads the outside world, so it is the one thing worth
-#: substituting: a test that has to install `makeutil` to exercise a malformed
-#: document is testing the toolchain, and cannot exercise a missing binary or a
-#: timeout at all. The parameter list is `subprocess.run`'s, narrowed to the
-#: keywords `_parse_with` passes.
-type Runner = cabc.Callable[..., subprocess.CompletedProcess[str]]
 
 #: Operators that always take effect, so the last of them wins. The empty
 #: string is a recipe-line assignment: `makeutil` reports the bodies of
@@ -72,12 +69,6 @@ _PLAIN_OPERATORS = frozenset({"", "=", ":=", "::="})
 #: defined by that point in the file. A `?=` below an earlier assignment to the
 #: same name therefore changes nothing.
 _CONDITIONAL_OPERATOR = "?="
-
-
-def _require(*, condition: bool, message: str) -> None:
-    """Raise a contract failure when ``condition`` does not hold."""
-    if not condition:
-        raise AssertionError(message)
 
 
 def _assignments(document: dict[str, typ.Any]) -> cabc.Iterator[tuple[str, str, str]]:
@@ -151,9 +142,9 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
     selector's closure reaches it, and resolving it would mean evaluating
     `make`'s ``strip``, ``filter``, and ``call``; ``_expand`` reports such a
     function rather than returning a plausible wrong answer.
-    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     declared = document.get("variables")
-    _require(
+    require(
         condition=isinstance(declared, list),
         message="the makeutil document must carry a `variables` list",
     )
@@ -162,7 +153,7 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
         if operator == _CONDITIONAL_OPERATOR:
             records.setdefault(name, raw_value)
         else:
-            _require(
+            require(
                 condition=operator in _PLAIN_OPERATORS,
                 message=(
                     f"the Makefile assigns {name} with {operator!r}, which this "
@@ -171,135 +162,11 @@ def _variable_records(document: dict[str, typ.Any]) -> dict[str, str]:
                 ),
             )
             records[name] = raw_value
-    _require(
+    require(
         condition=bool(records),
         message="the makeutil document must report at least one assignment",
     )
     return records
-
-
-def _parse_with(
-    runner: Runner,
-    *,
-    makefile: str,
-    root: pth.Path,
-) -> subprocess.CompletedProcess[str]:
-    """Run the parser, reporting a process that never started as a contract error.
-
-    `makeutil` is installed by CI and by `make`, so an environment without it
-    is a genuine failure the caller must see. `subprocess.run` reports it as
-    `FileNotFoundError`, which is a *different* type from the `AssertionError`
-    the read API documents — so a caller catching the documented error would
-    miss it, and one catching everything would not know which tool was absent.
-    Translating here keeps the module's contract honest: every way the read can
-    fail arrives as the documented failure, naming the binary and the directory
-    it was looked for in.
-
-    A timeout is translated for the same reason, and matters more: an
-    unhandled `TimeoutExpired` would escape as a traceback from a library the
-    caller never invoked.
-
-    Parameters
-    ----------
-    runner : Runner
-        The process boundary, as :func:`makeutil_document` received it.
-    makefile : str
-        Path to the Makefile, relative to the working directory.
-    root : pathlib.Path
-        The working directory the parser is run in.
-
-    Returns
-    -------
-    subprocess.CompletedProcess
-        The completed process, whatever its exit status; a non-zero status is
-        the caller's to report, because it carries the parser's own diagnostic.
-
-    Raises
-    ------
-    AssertionError
-        If the binary cannot be started, or does not finish within
-        :data:`MAKEUTIL_TIMEOUT_SECONDS`.
-    """
-    try:
-        return runner(
-            ["makeutil", "parse", makefile],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            check=False,
-            timeout=MAKEUTIL_TIMEOUT_SECONDS,
-        )
-    except FileNotFoundError as error:
-        message = (
-            f"makeutil is not on PATH, so {makefile} could not be parsed; the "
-            "selector is unreadable rather than empty. Install it the way CI "
-            "does (`make` does this as a prerequisite), or pass a `runner` "
-            "that supplies a parsed document"
-        )
-        raise AssertionError(message) from error
-    except subprocess.TimeoutExpired as error:
-        message = (
-            f"makeutil did not parse {makefile} within "
-            f"{MAKEUTIL_TIMEOUT_SECONDS}s; the process was still running, so "
-            "this is a wedged parser rather than a malformed Makefile"
-        )
-        raise AssertionError(message) from error
-
-
-def makeutil_document(
-    *,
-    makefile: str = MAKEFILE,
-    root: pth.Path | None = None,
-    runner: Runner = subprocess.run,
-) -> dict[str, typ.Any]:
-    """Parse one Makefile with the pinned `makeutil` binary.
-
-    Parameters
-    ----------
-    makefile : str
-        Path to the Makefile, relative to the working directory.
-    root : pathlib.Path, optional
-        The directory to parse in, defaulting to the repository root. Named
-        rather than assumed so a caller reading a different tree does not have
-        its path silently resolved against this one.
-    runner : Runner, optional
-        The process boundary, defaulting to `subprocess.run`. Injected so the
-        parser's own behaviour — a non-zero exit, malformed JSON, a missing
-        binary, a timeout — is exercised without installing `makeutil`, which
-        is what makes those cases testable at all.
-
-    Returns
-    -------
-    dict
-        The parsed JSON document, with `variables`, `rules`, and `includes`.
-
-    Raises
-    ------
-    AssertionError
-        If `makeutil` cannot be started, does not finish within
-        :data:`MAKEUTIL_TIMEOUT_SECONDS`, exits non-zero, or emits something
-        other than a JSON object. Each means the parse did not happen, and a
-        caller that read the empty result as "the selector names nothing"
-        would fail later with a misleading message.
-    """
-    completed = _parse_with(runner, makefile=makefile, root=root or repo_root())
-    _require(
-        condition=completed.returncode == 0,
-        message=(
-            f"makeutil failed to parse {makefile} with exit "
-            f"{completed.returncode}: {completed.stderr.strip()}"
-        ),
-    )
-    try:
-        parsed = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        message = f"makeutil did not emit JSON for {makefile}: {error}"
-        raise AssertionError(message) from error
-    _require(
-        condition=isinstance(parsed, dict),
-        message=f"makeutil must emit a JSON object for {makefile}",
-    )
-    return typ.cast("dict[str, typ.Any]", parsed)
 
 
 def _join_continuations(value: str) -> str:
@@ -352,7 +219,7 @@ def _expand(
         If a reference names a variable the Makefile does not assign, or if a
         reference cycle is found. Neither is recoverable: substituting an
         empty string would shrink the selector and turn the guard vacuous.
-    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from _require()
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     value = _join_continuations(value)
     resolved: list[str] = []
     index = 0
@@ -362,20 +229,20 @@ def _expand(
             resolved.append(value[index:])
             break
         closer = value.find(")", opener)
-        _require(
+        require(
             condition=closer != -1,
             message=f"unbalanced `$(` in {value!r}",
         )
         resolved.append(value[index:opener])
         name = value[opener + 2 : closer]
-        _require(
+        require(
             condition=name in records,
             message=(
                 f"the Makefile expands $({name}) but never assigns it; the "
                 "selector cannot be resolved"
             ),
         )
-        _require(
+        require(
             condition=name not in seen,
             message=f"$({name}) expands itself: {sorted(seen)}",
         )
@@ -389,7 +256,7 @@ def variable_expansion(
     *,
     makefile: str = MAKEFILE,
     root: pth.Path | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = DEFAULT_RUNNER,
 ) -> tuple[str, ...]:
     """Expand a Makefile variable into the whitespace-separated words it names.
 
@@ -423,11 +290,11 @@ def variable_expansion(
         If the variable is not assigned, if it references an undefined
         variable, or if it references itself; or if the parse itself fails, as
         :func:`makeutil_document` reports.
-    """  # ruff: ignore[docstring-extraneous-exception] - contract errors propagate from _require()
+    """  # ruff: ignore[docstring-extraneous-exception] - contract errors propagate from require()
     records = _variable_records(
         makeutil_document(makefile=makefile, root=root, runner=runner)
     )
-    _require(
+    require(
         condition=name in records,
         message=f"the Makefile must assign {name}",
     )
@@ -439,7 +306,7 @@ def recipe_of(
     *,
     makefile: str = MAKEFILE,
     root: pth.Path | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = DEFAULT_RUNNER,
 ) -> str:
     """Return one target's recipe text.
 
@@ -471,7 +338,7 @@ def recipe_of(
     """
     document = makeutil_document(makefile=makefile, root=root, runner=runner)
     declared = document.get("rules")
-    _require(
+    require(
         condition=isinstance(declared, list),
         message="the makeutil document must carry a `rules` list",
     )
@@ -487,7 +354,7 @@ def recipe_of(
             ).removeprefix("@")
             for step in recipes
         )
-    _require(condition=False, message=f"the Makefile must declare a {name} target")
+    require(condition=False, message=f"the Makefile must declare a {name} target")
     raise AssertionError
 
 
@@ -517,7 +384,7 @@ def recipe_tokens(recipe: str) -> tuple[str, ...]:
 
     Examples
     --------
-    >>> recipe_tokens("@echo hi # $(PYTEST)")
+    >>> recipe_tokens("echo hi # $(PYTEST)")
     ('echo', 'hi')
     >>> recipe_tokens("echo '# $(PYTEST)'")
     ('echo', '# $(PYTEST)')
