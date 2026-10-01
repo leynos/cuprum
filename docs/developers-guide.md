@@ -496,6 +496,41 @@ a regex over the source can miss a continuation or read a comment as an
 assignment, and either mistake shrinks the selector to a set that makes every
 coverage assertion pass for the wrong reason.
 
+That reader exposes its process boundary rather than reaching for the ambient
+tool. `makeutil_document` takes a `root` and a `runner`, so a test supplies the
+working directory and the parsed document instead of shelling out, and
+`variable_expansion` and `recipe_of` take the same two arguments and pass them
+through. A `FileNotFoundError` or a timeout at the process boundary becomes the
+`AssertionError` the read API documents, because the alternative — leaking the
+raw exception — reports a broken toolchain as if the Makefile were at fault.
+`recipe_of` joins a target's recipe onto one line, so it is read back with
+`recipe_tokens`, which honours shell quoting and comment markers: a single `#`
+comments out every command after it while the words stay in the string, and a
+substring check would keep certifying a recipe the shell runs as nothing.
+
+The rest of the reader family is split the way the questions are.
+`tests/helpers/ci_documents.py` operates on text and on parsed documents —
+`parse_document` for YAML that must be a mapping, `document_jobs` and
+`narrow_steps` for the shapes beneath it, `step_inputs` and `cache_paths` for a
+step's `with:` — and validates each shape it narrows, so a malformed document
+fails with a named diagnostic rather than an opaque `TypeError` deep in a test.
+The load-bearing distinction is `narrow_steps`: a reusable-workflow call
+declares `uses:` where a step list would go and legitimately yields no steps,
+while `steps:` of the wrong shape is a malformed job, and reporting the second
+as "no steps" would let every "no step does X" contract over it pass having
+read nothing. `tests/helpers/ci_run_scripts.py` sweeps workflows, jobs, and
+steps for `run:` scripts, returning each script with the location that holds
+it, and reports its own emptiness for the same reason.
+
+These boundaries have their own contracts in
+`tests/test_ci_helper_boundaries.py`, driven with synthetic input. The
+repository-wide contracts above read this repository's real Makefile and
+workflows, which is the right way to assert what the repository does and the
+wrong way to test a *reader*: every case they can express is a case the estate
+already satisfies, so malformed input, refusals, and empty-input behaviour are
+never exercised. A reader could stop refusing anything and every contract above
+it would keep passing on a healthy tree.
+
 The companion question — whether anything *runs* that selector — is
 `tests/test_ci_suite_wiring_contract.py`. It asserts that a workflow step
 actually invokes `make test-python` and that the target's recipe expands

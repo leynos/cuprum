@@ -5,7 +5,8 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IMPLEMENTED, awaiting pull request
+Status: IMPLEMENTED; pull request #505 open for review at `3d1408c0`, with the
+post-rebase review findings reconciled
 
 ## Purpose / big picture
 
@@ -272,8 +273,12 @@ contract module under `tests/` and forgets to name it will be told so by
   run checks out the **merge ref**, so this certifies the head *merged with
   main*, not the bare head. The two agree here because `git merge-tree` reports
   no conflicted path.
-- [ ] Push `ca5fb1fb`, `1e968b86`, and the deadlock record; update the pull
-  request body; run CodeRabbit on the final head.
+- [x] (2026-10-01) Pushed the branch and opened it for review. The SHAs this
+  marker originally named — `ca5fb1fb`, `1e968b86` — were rewritten by the
+  rebase onto `7b86b904` and no longer exist; the published head is the rebased
+  one, `3d1408c0`, which is what `origin` records for this branch. Pull request
+  #505 was marked ready for review (it had been a draft) and a full review was
+  queued against that head.
 
 - Observation: the guard as first written passed every local gate and CI's
   `typecheck-test`, and still failed CodeScene's delta review. The check-run is
@@ -360,6 +365,42 @@ contract module under `tests/` and forgets to name it will be told so by
   and recorded: the old reader returns `True` for the `push`-guarded step
   evaluated for a pull request, which is precisely the false certification the
   report describes.
+- [x] (2026-10-01) Reconciled the three failed pre-merge rows (Testing,
+  Unit Architecture, Developer Documentation) on the same head. The walkthrough
+  was evaluated at `19be7820`, which the rebase rewrote, so every row was
+  re-tested against the current tree rather than trusted either way — a stale
+  anchor proves neither that a finding needs work nor that it does not. Two
+  rows were live; the third was half stale.
+  - *Unit Architecture — live, repaired.* `makeutil_document` leaked
+    `FileNotFoundError` from `subprocess.run` although it documents only
+    `AssertionError`, so a missing `makeutil` reported a broken toolchain as
+    though the Makefile were at fault. Reproduced with a probe before the fix.
+    `makeutil_document` now takes `root` and `runner`, translates process-start
+    and timeout failures at that boundary, and `variable_expansion` and
+    `recipe_of` propagate both through.
+  - *Testing — live, repaired.* Two blind spots, each reproduced. A resolver
+    that returned `frozenset(root_modules())` satisfied every guard assertion
+    (`uncovered() -> 0`), because after #499 the enumerated population and the
+    selector's expansion coincide, so an equality check cannot separate
+    "reads the selector" from "returns the tree"; the discriminating control
+    narrows the selector and requires the resolver to follow it. And
+    `recipe_of` joins the recipe onto one line, so a `#` disables it while the
+    words survive a substring check. `recipe_tokens` now tokenizes with comment
+    markers honoured, and
+    `test_a_commented_out_recipe_does_not_satisfy_the_endpoint_check` seeds
+    that fault on the reader. Focused parsing-boundary tests for
+    `makefile.py`, `ci_documents.py`, and `ci_run_scripts.py` live in
+    `tests/test_ci_helper_boundaries.py`.
+  - *Developer Documentation — partly stale, remainder repaired.* The
+    `selected_paths` misattribution had already been corrected by the previous
+    entry, so that half needed no work. Still live: `ci_documents` and
+    `ci_run_scripts` were undocumented, and the interface block claimed
+    "four names" while the module exports seven and omits `MAKEFILE`. Both
+    corrected; the stale `Status:` line and the unchecked push marker are
+    updated above.
+  Every repair was re-tested with a negative control that was shown to
+  discriminate: injecting the fault produced exactly the intended failure, and
+  the injection was reverted before the next gate run.
 
 ## Surprises & discoveries
 
@@ -1011,22 +1052,65 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 
 ## Interfaces and dependencies
 
-`tests/helpers/makefile.py` exports four names; these are the signatures as
+`tests/helpers/makefile.py` exports seven names; these are the signatures as
 built, which differ from the plan's first sketch and are recorded here so a
 reader is not misled by the earlier version:
 
 ```python
-def makeutil_document(*, makefile: str = "Makefile") -> dict[str, Any]: ...
-def variable_expansion(name: str, *, makefile: str = "Makefile") -> tuple[str, ...]: ...
-def recipe_of(name: str, *, makefile: str = "Makefile") -> str: ...
+MAKEFILE: Final[str] = "Makefile"
+MAKEUTIL_TIMEOUT_SECONDS: Final[int] = 60
+type Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def makeutil_document(
+    *,
+    makefile: str = MAKEFILE,
+    root: Path | None = None,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any]: ...
+def variable_expansion(
+    name: str,
+    *,
+    makefile: str = MAKEFILE,
+    root: Path | None = None,
+    runner: Runner = subprocess.run,
+) -> tuple[str, ...]: ...
+def recipe_of(
+    name: str,
+    *,
+    makefile: str = MAKEFILE,
+    root: Path | None = None,
+    runner: Runner = subprocess.run,
+) -> str: ...
+def recipe_tokens(recipe: str) -> tuple[str, ...]: ...
 ```
 
 `variable_expansion` returns the *words* of a named Makefile variable — a
 tuple, not one string — after collapsing `\`-newline continuations the way
 `make` does and expanding `$(VAR)` references recursively. It raises
 `AssertionError` on an undefined reference or a cycle rather than substituting
-an empty string. The `makefile` keyword exists so the helper's own tests can
-parse a temporary Makefile; the guard never passes it.
+an empty string.
+
+The `makefile` keyword exists so the helper's own tests can parse a temporary
+Makefile; the guard never passes it, and `MAKEFILE` names the default so a
+second reader cannot hard-code the same string. `root` and `runner` expose the
+process boundary: `root` is the directory the parse runs in, defaulting to the
+repository root, and `runner` is the process callable, defaulting to
+`subprocess.run`. Both exist so `makeutil_document`'s failure modes — a
+non-zero exit, malformed JSON, a missing binary, a wedge that outlives
+`MAKEUTIL_TIMEOUT_SECONDS` — are exercised with a fake process rather than by
+installing or breaking the real `makeutil`. Process-start and timeout failures
+are translated at that boundary into the documented `AssertionError`, because
+`subprocess.run` raises `FileNotFoundError` for a binary it cannot start and
+that is not the error a read API may leak; `variable_expansion` and `recipe_of`
+propagate the same failure through the `root` and `runner` they accept.
+
+`recipe_tokens` exists for the recipe contract in
+`tests/test_ci_suite_wiring_contract.py`. `recipe_of` joins a target's recipe
+onto one line, so a single `#` comments out every command after it while the
+words stay in the string; tokenizing with `shlex` and comment markers honoured
+is what makes the endpoint assertion a claim about what the shell would run
+rather than about text that happens to survive.
 
 `selected_paths` lives in `tests/helpers/suite_selection.py`, not in the
 Makefile reader, because resolving patterns needs the root-module enumeration's
