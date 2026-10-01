@@ -15,9 +15,9 @@ its descriptor *after* the run.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import io
 import os
-import stat
 import typing as typ
 
 import pytest
@@ -139,58 +139,98 @@ def test_path_target_receives_the_children_bytes(
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class DescriptorLog:
+    """Descriptors cuprum opened for one path target, and those closed again."""
+
+    opened: list[int]
+    closed: list[int]
+
+
+@pytest.fixture
+def target_descriptor_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> cabc.Callable[[Path], DescriptorLog]:
+    """Track descriptor opens and closes for a named owned path.
+
+    Both hooks are process-wide, so they also see asyncio's own pipe
+    descriptors and the interpreter's file writes; narrowing to the descriptors
+    opened *for this target* is what makes the comparison mean what it says. A
+    leaked target descriptor still fails, since it is counted as opened and then
+    never appears among the closes.
+
+    Returns
+    -------
+    collections.abc.Callable[[Path], DescriptorLog]
+        A starter that installs the hooks for one target path and returns the
+        log they fill for it.
+    """
+
+    def track(log: Path) -> DescriptorLog:
+        """Install the hooks and return the lists they fill."""
+        opened: list[int] = []
+        closed: list[int] = []
+        real_open = os.open
+        real_close = os.close
+
+        def tracking_open(path: object, flags: int, *args: object) -> int:
+            """Open the file, recording a descriptor the target owns."""
+            fd = real_open(path, flags, *args)  # ty: ignore[invalid-argument-type]
+            if str(path) == str(log):
+                opened.append(fd)
+            return fd
+
+        def tracking_close(fd: int) -> None:
+            """Close a descriptor, recording it when the target opened it."""
+            if fd in opened:
+                closed.append(fd)
+            real_close(fd)
+
+        monkeypatch.setattr(os, "open", tracking_open)
+        monkeypatch.setattr(os, "close", tracking_close)
+        return DescriptorLog(opened, closed)
+
+    return track
+
+
+def _assert_no_descriptor_leak(descriptors: DescriptorLog) -> None:
+    """Fail unless the target was opened and every open was matched by a close.
+
+    Reopening the file and checking it is a regular file would not show this:
+    both a closed and a leaked descriptor leave the path intact. Only counting
+    the closes against the opens distinguishes them.
+    """
+    assert descriptors.opened, "the path target must actually have been opened"
+    assert sorted(descriptors.closed) == sorted(descriptors.opened), (
+        "every descriptor cuprum opened for the target must be closed again; "
+        f"opened={descriptors.opened} closed={descriptors.closed}"
+    )
+
+
 @_posix_only
 def test_path_target_does_not_leak_the_descriptor(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
 ) -> None:
     """Cuprum's copy of a path descriptor is closed once the child has it.
 
     The run is observed from the spawn layer, which is the only place the
     descriptor exists: :func:`_spawn_subprocess` opens it, hands it to the
-    child, and closes its own copy. Both hooks are process-wide, so they also
-    see asyncio's own pipe descriptors and the interpreter's file writes;
-    narrowing to the descriptors opened *for this target* is what makes the
-    comparison mean what it says. A leaked target descriptor still fails, since
-    it is counted as opened and then never appears among the closes.
+    child, and closes its own copy.
     """
     _, execute = execution_strategy
     log = tmp_path / "out.log"
     command = python_builder("-c", _WRITE_STDOUT)
-
-    opened: list[int] = []
-    closed: list[int] = []
-    real_open = os.open
-    real_close = os.close
-
-    def tracking_open(path: object, flags: int, *args: object) -> int:
-        """Open the file, recording a descriptor the target owns."""
-        fd = real_open(path, flags, *args)  # ty: ignore[invalid-argument-type]
-        if str(path) == str(log):
-            opened.append(fd)
-        return fd
-
-    def tracking_close(fd: int) -> None:
-        """Close a descriptor, recording it when the target opened it."""
-        if fd in opened:
-            closed.append(fd)
-        real_close(fd)
-
-    monkeypatch.setattr(os, "open", tracking_open)
-    monkeypatch.setattr(os, "close", tracking_close)
+    descriptors = target_descriptor_log(log)
 
     result = execute(
         command, {"output": _redirect_options(stdout=StdioTarget.path(log))}
     )
 
     assert result.exit_code == 0, "a redirected run should exit cleanly"
-    assert opened, "the path target must actually have been opened"
-    assert sorted(closed) == sorted(opened), (
-        "every descriptor cuprum opened for the target must be closed again; "
-        f"opened={opened} closed={closed}"
-    )
+    _assert_no_descriptor_leak(descriptors)
     assert log.read_text(encoding="utf-8") == "out\n", (
         "the child's bytes must survive the descriptor being closed"
     )
@@ -420,21 +460,23 @@ def test_path_target_closed_after_a_failing_run(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
+    target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
 ) -> None:
     """A non-zero exit closes the owned descriptor just the same."""
     _, execute = execution_strategy
     log = tmp_path / "out.log"
     command = python_builder("-c", _WRITE_THEN_FAIL)
+    descriptors = target_descriptor_log(log)
 
     result = execute(
         command, {"output": _redirect_options(stdout=StdioTarget.path(log))}
     )
 
+    _assert_no_descriptor_leak(descriptors)
     assert result.exit_code == 3, "the child's own exit code must be reported"
     assert log.read_text(encoding="utf-8") == "out\n", (
         "output written before the failure must still be in the file"
     )
-    assert stat.S_ISREG(log.stat().st_mode), "the file must be a plain closed file"
 
 
 @_posix_only
@@ -442,11 +484,13 @@ def test_path_target_closed_after_a_timeout(
     python_builder: cabc.Callable[..., SafeCmd],
     execution_strategy: tuple[str, ExecuteFn],
     tmp_path: Path,
+    target_descriptor_log: cabc.Callable[[Path], DescriptorLog],
 ) -> None:
     """A timed-out run still closes the descriptor cuprum opened."""
     _, execute = execution_strategy
     log = tmp_path / "out.log"
     command = python_builder("-c", "import time; time.sleep(30)")
+    descriptors = target_descriptor_log(log)
 
     with pytest.raises(TimeoutError):
         execute(
@@ -457,7 +501,7 @@ def test_path_target_closed_after_a_timeout(
             },
         )
 
-    # The window that proves the close: the file must be reopenable and empty.
+    _assert_no_descriptor_leak(descriptors)
     assert not log.read_text(encoding="utf-8"), (
         "a timed-out child wrote nothing, and the file must still be closed"
     )
