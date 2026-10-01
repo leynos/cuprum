@@ -19,18 +19,26 @@ import typing as typ
 import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    invariant,
+    precondition,
+    rule,
+    run_state_machine_as_test,
+)
 
-from cuprum import ECHO, LS
+from cuprum import ECHO, LS, Program
 from cuprum.context import (
     AllowRegistration,
     CuprumContext,
     EnvRegistration,
+    ExecutableBindingRegistration,
     HookRegistration,
     ScopeConfig,
     after,
     allow,
     before,
+    bind_executable,
     current_context,
     env,
     observe,
@@ -53,8 +61,43 @@ def _noop_observe(_event: object) -> None:
     """Observe-hook that records nothing."""
 
 
-type _Handle = AllowRegistration | HookRegistration | EnvRegistration
+type _Handle = (
+    AllowRegistration
+    | HookRegistration
+    | EnvRegistration
+    | ExecutableBindingRegistration
+)
 type _HandleFactory = cabc.Callable[[], _Handle]
+
+# Programs recorded whenever a generated sequence installs a binding. The
+# alphabet is sampled at random, so a run can legitimately never reach a
+# binding factory; `test_binding_factories_are_sampled` asserts this list is
+# populated rather than trusting that the alphabet was reached. Recording is
+# driven by the handle type rather than by the factory entries, so a binding
+# factory added later is covered without editing this list.
+_bound_programs: list[Program] = []
+
+
+def _record_binding(handle: _TokenRegistration) -> None:
+    """Record a binding handle, so the non-vacuity check can observe sampling."""
+    if isinstance(handle, ExecutableBindingRegistration):
+        _bound_programs.append(handle.program)
+
+
+def _bind_echo() -> ExecutableBindingRegistration:
+    """Bind ``ECHO`` to an absolute executable."""
+    return bind_executable(ECHO, "/opt/tools/echo")
+
+
+def _bind_echo_nested() -> ExecutableBindingRegistration:
+    """Bind ``ECHO`` to a relative executable, resolved against the cwd."""
+    return bind_executable(ECHO, "tools/echo", allow_relative=True)
+
+
+def _bind_ls() -> ExecutableBindingRegistration:
+    """Bind ``LS``, so a sequence sampling both exercises the layer merge."""
+    return bind_executable(LS, "/opt/tools/ls")
+
 
 _FACTORIES: tuple[tuple[str, _HandleFactory], ...] = (
     ("allow", lambda: allow(ECHO)),
@@ -64,6 +107,11 @@ _FACTORIES: tuple[tuple[str, _HandleFactory], ...] = (
     ("observe", lambda: observe(_noop_observe)),
     ("env", lambda: env(CUPRUM_TEST_FLAG="1")),
     ("env-mapping", lambda: env({"CUPRUM_TEST_OTHER": "2"})),
+    # Two bindings for distinct programs, so a generated sequence that samples
+    # the pair exercises the layer merge rather than only a key replacement.
+    ("bind", _bind_echo),
+    ("bind-nested", _bind_echo_nested),
+    ("bind-two", _bind_ls),
 )
 
 
@@ -83,6 +131,7 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         prior = current_context()
         _name, factory = factory_entry
         handle = factory()
+        _record_binding(handle)
         installed = current_context()
         assert installed is not prior, (
             "registering a handle must install a derived context"
@@ -98,6 +147,7 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         _name, factory = factory_entry
 
         with factory() as handle:
+            _record_binding(handle)
             assert current_context() is not prior, (
                 "registering a handle must install a derived context"
             )
@@ -184,6 +234,43 @@ class TokenRegistrationMachine(RuleBasedStateMachine):
         assert current_context() is self._baseline, (
             "teardown must restore the exact baseline context"
         )
+
+
+def test_binding_factories_are_sampled() -> None:
+    """The generated sequences must actually reach a binding factory.
+
+    This is the non-vacuity guard for the binding entries in ``_FACTORIES``.
+    The alphabet is sampled at random, so a run that never reaches
+    ``bind``/``bind-nested``/``bind-two`` would satisfy every invariant in the
+    machine while proving nothing about bindings. The machine is therefore run
+    separately with a small pinned budget, and the run is asserted to have
+    recorded at least one installed binding; ``_bound_programs`` is cleared
+    first so the result describes this run and not a previous one. The
+    budget deliberately exceeds the alphabet size: a binding factory can only
+    be missed when *every* generated step selects a non-binding entry, which
+    needs 7 consecutive misses per step.
+
+    The recorded programs are checked to be a subset of the bound ones, which
+    fails if ``_record_binding`` ever records a program no entry binds.
+    """
+    _bound_programs.clear()
+    run_state_machine_as_test(
+        TokenRegistrationMachine,
+        settings=settings(
+            max_examples=15,
+            stateful_step_count=10,
+            deadline=None,
+            database=None,
+        ),
+    )
+    assert _bound_programs, (
+        "no generated sequence installed an executable binding, so the "
+        "binding entries of _FACTORIES went unexercised and this suite proves "
+        "nothing about them"
+    )
+    assert set(_bound_programs) <= {ECHO, LS}, (
+        f"a binding factory recorded an unexpected program, got {_bound_programs!r}"
+    )
 
 
 TestTokenRegistrationMachine = TokenRegistrationMachine.TestCase
