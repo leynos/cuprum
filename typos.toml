@@ -41,6 +41,7 @@ extend-ignore-re = [
     "--color(?:[=,\\s\"]|$)",
     "-fuse-ld=mold",
     "/artifacts(?:[/?#\"`]|$)",
+    "6871ba35",
     "Azure\\s+Architecture\\s+Center\\s*\\|\\s*Microsoft\\s+Learn\\b",
     "GitHub\\s+Flavored\\s+Markdown\\b(?:\\s\\(GFM\\))?",
     "HashiCorp",
