@@ -2091,6 +2091,65 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   still covers this branch's code. That check is the reason no further local
   gate run was needed for this change.
 
+- [x] (2026-10-01) **Adjudicated the three CodeRabbit findings on this PR
+  against the tree, and found one of them re-committed by this plan's own
+  prose.** Each was verified by an independent read-only sweep of the current
+  head rather than against the revision it was assessed at, because two of the
+  three had already been addressed by later commits and a finding's age is not
+  evidence either way.
+
+  | Finding                                      | Verdict                                                                                    |
+  | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+  | `:1224` first- and second-person phrasing    | **Still valid** — one residual, newly introduced by the passage recorded immediately above |
+  | `:1518` "recognisable" → "recognizable"      | **Already fixed** — no prose occurrence remains                                            |
+  | Failed check: private `validate_buffer_size` | **Refuted** — legal, deliberate, and the gap it names is closed in Python                  |
+
+  The privacy finding repays a careful reading, because its *observation* is
+  accurate and its *conclusion* is not. `validate_buffer_size`, `convert_fd` and
+  `RustStreamError` are declared without `pub` in `lib.rs`, and
+  `stream_error_behaviour.rs` is declared as `#[cfg(test)] mod …` in that same
+  file — a **child of the crate root**. An item private to a module is visible
+  to that module *and its descendants*, so the access is legal for the ordinary
+  reason, not by any special dispensation. Nor is it accidental: the module's
+  own docstring says it lives in-crate "so the steps can reach the crate-private
+  `RustStreamError` without widening its visibility", and
+  `docs/developers-guide.md:4213-4221` explains that the integration crate
+  builds with `pyo3/extension-module`, so no `cargo test` binary can link an
+  interpreter and "anything asserting a `PyErr` or a Python exception class
+  cannot live in them at all". No repository rule forbids a test calling a
+  private item.
+
+  The real concern underneath — that nothing witnesses the `PyErr` conversion —
+  is closed, but in Python: `test_rust_stream_native_order.py:236-253` calls
+  the exported `rust_consume_stream(-1, buffer_size=65536)` and asserts
+  `pytest.raises(ValueError, match="file descriptor")`, with the *valid* buffer
+  size being what lets the descriptor conversion be the failing step. The
+  module is registered in `EXTENSION_TEST_TARGETS` (`Makefile:175`), and
+  `make test-extension` sets `CUPRUM_REQUIRE_RUST_EXTENSION=1`, so it cannot
+  silently skip. The finding asked the Rust suite to do something the build
+  makes structurally impossible, which is the same category of error the
+  `2026-09-30` entry above had already identified.
+
+  The first-person sweep is the one that produced a defect, and its shape is
+  the lesson. `docs/documentation-style-guide.md:32` forbids first and second
+  person outside `README.md`, with no execplan exemption. The sweep found
+  exactly one authorial violation — in the paragraph added minutes earlier by
+  this plan, whose closing imperative addressed the reader directly and so
+  reintroduced the construction the `:1224` finding had removed. Re-reading the
+  changed hunks had not revealed it, because the sentence reads naturally in
+  isolation. The general rule: a prose edit can silently re-add a construction
+  the file was already scrubbed of, so the audit must cover the whole file and
+  not the diff. Every other pronoun hit in the file is either quoted
+  third-party speech (Sourcery's decline message at `:1195`, CodeRabbit's
+  retraction) or the letter in "I/O".
+
+  A second, self-referential trap followed. The paragraph recording this lesson
+  first quoted the offending phrase verbatim in order to explain it — which
+  left a second-person pronoun in the file and tripped the very sweep it
+  described. Quoting one's own prose is not third-party speech, so the phrase
+  was removed rather than defended. Fixed by `f30c1be4`; the sweeps above are
+  the proof that the file is now clean.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
