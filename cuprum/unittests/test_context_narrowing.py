@@ -1,4 +1,4 @@
-"""Unit tests for context allowlist narrowing and hook merging."""
+"""Unit tests for context narrowing: allowlists, catalogues, and hooks."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest import mock
 import pytest
 from hypothesis import given
 
-from cuprum.catalogue import ECHO, LS
+from cuprum.catalogue import ECHO, LS, ProgramCatalogue
 from cuprum.context import (
     AfterHook,
     BeforeHook,
@@ -20,6 +20,7 @@ from cuprum.context._policy import (
     _is_narrowed_allowlist_restricted,
     _merge_hooks,
     _narrow_allowlist,
+    _resolve_narrowed_catalogue,
 )
 from cuprum.program import Program
 from cuprum.unittests import strategies as cuprum_st
@@ -241,6 +242,26 @@ def test_is_narrowed_allowlist_restricted(
     )
     assert result is expected, (
         "narrowing restriction must follow the parent flag and supplied config"
+    )
+
+
+def test_resolve_narrowed_catalogue_names_the_scope_catalogue() -> None:
+    """A scope that names a catalogue replaces the inherited one outright."""
+    parent = ProgramCatalogue.from_programs(ECHO)
+    config = ProgramCatalogue.from_programs(LS)
+
+    assert _resolve_narrowed_catalogue(parent, config) is config, (
+        "a scope catalogue must replace, not merge with, the inherited one"
+    )
+
+
+@pytest.mark.parametrize("parent", [None, ProgramCatalogue.from_programs(ECHO)])
+def test_resolve_narrowed_catalogue_inherits_without_a_scope_catalogue(
+    parent: ProgramCatalogue | None,
+) -> None:
+    """A scope that names no catalogue leaves the inherited one untouched."""
+    assert _resolve_narrowed_catalogue(parent, None) is parent, (
+        "an unnamed scope catalogue must leave the inherited catalogue in place"
     )
 
 

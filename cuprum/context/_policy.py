@@ -113,3 +113,10 @@ def _resolve_env_policy(
     if child_mode is EnvMode.REPLACE:
         return merge_env_overlays(None, child_overlay), EnvMode.REPLACE
     return merge_env_overlays(parent_overlay, child_overlay), parent_mode
+
+
+def _resolve_narrowed_catalogue[CatalogueT](
+    parent: CatalogueT | None, config: CatalogueT | None
+) -> CatalogueT | None:
+    """Return the catalogue named by a scope, or the inherited one when none."""
+    return parent if config is None else config

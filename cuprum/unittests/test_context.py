@@ -10,7 +10,7 @@ import pytest
 from hypothesis import settings
 
 from cuprum import sh
-from cuprum.catalogue import ECHO, LS, ProgramCatalogue
+from cuprum.catalogue import ECHO, LS, ProgramCatalogue, UnknownProgramError
 from cuprum.context import (
     AfterHook,
     BeforeHook,
@@ -186,12 +186,106 @@ def test_scoped_catalogue_narrows_to_its_allowlist() -> None:
             "catalogue scope should activate its narrowed context"
         )
         ctx.check_allowed(ECHO)
-        with pytest.raises(ForbiddenProgramError, match="ls"):
-            sh.make(LS)("--version").run_sync()
 
     assert current_context() is original, (
         "catalogue scope should restore the previous context after normal exit"
     )
+
+
+def test_scoped_catalogue_blocks_unrelated_builder_construction() -> None:
+    """A catalogue scope resolves builders, so unknown programs fail early."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+
+    with (
+        scoped(catalogue=catalogue),
+        pytest.raises(UnknownProgramError, match="ls"),
+    ):
+        sh.make(LS)
+
+
+def test_scoped_catalogue_denies_a_foreign_catalogue_at_run_time() -> None:
+    """A builder from another catalogue constructs, then the scope denies it."""
+    scoped_catalogue = ProgramCatalogue.from_programs(ECHO)
+    foreign_catalogue = ProgramCatalogue.from_programs(LS)
+    original = current_context()
+
+    with scoped(catalogue=scoped_catalogue) as ctx:
+        # Construction consults the named catalogue, not the active scope.
+        command = sh.make(LS, catalogue=foreign_catalogue)("--version")
+        assert ctx.is_allowed(LS) is False, (
+            "the scope allowlist should exclude the foreign catalogue's program"
+        )
+        with pytest.raises(ForbiddenProgramError, match="ls"):
+            command.run_sync()
+
+    assert current_context() is original, (
+        "catalogue scope should restore the previous context after normal exit"
+    )
+
+
+def test_scoped_catalogue_is_exposed_on_the_active_context() -> None:
+    """A catalogue scope records the catalogue sh.make resolves against."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+
+    assert current_context().catalogue is None, (
+        "the default context must not carry a catalogue"
+    )
+
+    with scoped(catalogue=catalogue) as ctx:
+        assert ctx.catalogue is catalogue, (
+            "catalogue scope should expose its catalogue on the derived context"
+        )
+        assert current_context().catalogue is catalogue, (
+            "the active context should carry the scope's catalogue"
+        )
+
+    assert current_context().catalogue is None, (
+        "leaving the scope should drop the catalogue"
+    )
+
+
+def test_scope_without_catalogue_inherits_the_active_one() -> None:
+    """An allowlist-only scope leaves the inherited catalogue in place."""
+    catalogue = ProgramCatalogue.from_programs(ECHO, LS)
+
+    with (
+        scoped(catalogue=catalogue),
+        scoped(ScopeConfig(allowlist=frozenset([ECHO]))) as inner,
+    ):
+        assert inner.catalogue is catalogue, (
+            "a scope that names no catalogue should inherit the active one"
+        )
+
+
+def test_nested_catalogue_scope_replaces_and_then_restores() -> None:
+    """The innermost catalogue wins, and the outer one returns on exit."""
+    outer_catalogue = ProgramCatalogue.from_programs(ECHO)
+    inner_catalogue = ProgramCatalogue.from_programs(LS)
+
+    with scoped(catalogue=outer_catalogue):
+        assert current_context().catalogue is outer_catalogue
+        with scoped(catalogue=inner_catalogue):
+            assert current_context().catalogue is inner_catalogue, (
+                "the innermost catalogue scope should replace the outer one"
+            )
+        assert current_context().catalogue is outer_catalogue, (
+            "exiting the inner scope should restore the outer catalogue"
+        )
+
+
+def test_allow_registration_preserves_the_scoped_catalogue() -> None:
+    """Registering extra programs does not disturb the active catalogue."""
+    catalogue = ProgramCatalogue.from_programs(ECHO)
+
+    with scoped(catalogue=catalogue):
+        registration = allow(LS)
+        assert current_context().catalogue is catalogue, (
+            "allow() should derive a context that keeps the scoped catalogue"
+        )
+        registration.detach()
+        assert current_context().catalogue is catalogue, (
+            "detaching an allow registration should keep the scoped catalogue"
+        )
 
 
 def test_scoped_catalogue_restores_context_after_exception() -> None:
