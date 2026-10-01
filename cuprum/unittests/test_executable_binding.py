@@ -376,6 +376,7 @@ def test_resolver_invocation_count_is_the_caller_s_choice() -> None:
     calls: list[int] = []
 
     def resolver() -> str:
+        """Record each call so the count is observable."""
         calls.append(len(calls) + 1)
         return "/opt/tools/bin/tool"
 
@@ -405,6 +406,7 @@ def test_resolver_type_alias_accepts_a_zero_argument_callable() -> None:
     """The resolver protocol is a zero-argument callable returning ``str``."""
 
     def resolver() -> str:
+        """Stand in for any zero-argument callable returning a path."""
         return "/opt/tools/bin/tool"
 
     typed: cabc.Callable[[], str] = resolver
