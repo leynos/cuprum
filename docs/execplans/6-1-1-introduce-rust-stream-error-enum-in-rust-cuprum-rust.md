@@ -1986,10 +1986,19 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   `67f60c91` was deleted and replaced by `11645ed5`, whose body states that
   narrower invariant *and* records the correction, so the supersession is
   visible to a reader of the posted comment and not only to a reader of this
-  file. The reusable rule: an invariant is still a claim about the tree, so
-  check it against the tree at the head you are about to leave, and prefer the
+  file. The reusable rule: an invariant is still a claim about the tree, so it
+  must be verified against the tree at the head being left, and stated at the
   narrowest scope that is true — "execplan-only" asserts far more than "the
   reviewed code is unchanged", and is correspondingly easier to falsify.
+
+  That rule is easy to trip even whilst documenting it. The first draft of this
+  very passage addressed the reader in the second person, reintroducing the
+  construction the `:1224` finding had removed. An independent sweep of the
+  file for first- and second-person pronouns caught it; re-reading only the
+  changed lines had not, which is the argument for sweeping the whole file
+  after any prose edit rather than inspecting the hunks that were touched.
+  Every remaining pronoun hit in this file sits inside quoted third-party
+  speech or is the letter in "I/O".
 
   The gating record is now closed as far as the repository can close it. What
   the branch's own artefacts establish, each independently of this file's prose:
