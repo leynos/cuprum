@@ -148,11 +148,11 @@ escalation, not a workaround.
 - [x] (2026-10-01 15:24Z) Reconnaissance complete: spawn sites, context
   plumbing, event/adapter projection, and positional contracts identified.
 - [x] (2026-10-01 15:24Z) ExecPlan written.
-- [x] (2026-10-01 16:05Z) EP-M1 complete. The module split into
+- [x] (2026-10-01 15:51Z) EP-M1 complete. The module split into
   `cuprum/executable_paths.py` (path vocabulary) and
   `cuprum/executable_binding.py` (binding + resolution) after the single module
   reached 426 lines. 99 tests pass.
-- [x] (2026-10-01 17:52Z) EP-M2 complete.
+- [x] (2026-10-01 15:59Z) EP-M2 complete.
   `cuprum/context/executable_overlay.py` (95 lines) carries
   `merge_executable_bindings`; `cuprum/context/_executable.py` (148 lines)
   carries the bindings field, coercion, `with_executable_binding`, and
@@ -160,7 +160,7 @@ escalation, not a workaround.
   live in `cuprum/context/registration.py`, re-exported through
   `cuprum/context/__init__.py`. `resolve_executable` is pinned as independent
   of the allowlist. 96 focused tests pass.
-- [x] (2026-10-01 18:20Z) EP-M2 gate sweep. Five defects sat behind the
+- [x] (2026-10-01 16:16Z) EP-M2 gate sweep. Five defects sat behind the
   environmental abort: two spelling errors (an Oxford-spelling slip and a
   hyphenation slip, both since reworded out of this document), the R9110
   executable-overlay delegate, four `ty` diagnostics in the
@@ -170,7 +170,7 @@ escalation, not a workaround.
   gates, so `cargo +nightly-2026-05-28 fmt --check`, rustdoc, clippy, whitaker,
   the typos gate, `yamllint`, and `actionlint` all passed as well;
   `make markdownlint` and `make nixie` passed too.
-- [x] (2026-10-01 18:20Z) `make test` run for the first time on this branch, at
+- [x] (2026-10-01 16:25Z) `make test` run for the first time on this branch, at
   `cfc784db`. Exit 0, no `FAILED` or `ERROR` line in the log
   (`/tmp/test-cuprum-issue-440-bind-catalogue-identity-to-a-validated-executable-path.out`).
   The Python suite, the Rust `nextest` legs, and the separate Cargo doctest
@@ -179,7 +179,15 @@ escalation, not a workaround.
   exit status is the evidence. The working tree was clean at that commit, so
   the log measures exactly what `cfc784db` contains. Every gate this branch can
   run is now green at a recorded revision.
-- [x] (2026-10-01 21:40Z) EP-M3 complete at `5d1e762f`. Resolution now happens
+- [x] (2026-10-01 16:54Z) Eleven tests pin the binding join in
+  `cuprum/unittests/test_executable_binding_execution.py`. Both claimed
+  regressions were confirmed to fail them for the intended reason: `argv0`
+  ignoring the binding fails eight of eleven (the decoy's marker, or a
+  missing-file error), and resolving ahead of enforcement fails the refusal
+  test with a resolver call recorded. The suite is arranged so a name-based
+  fallback would *succeed* rather than error — the catalogued program names a
+  real executable decoy — so the approved marker can only come from the binding.
+- [x] (2026-10-01 17:02Z) EP-M3 complete at `5d1e762f`. Resolution now happens
   at spawn time. `_StageObservation` gained a `resolved_path` field and an
   `argv0` property that is the single home of the fallback rule, so both spawn
   sites read one implementation instead of each rebuilding the argument vector.
@@ -189,21 +197,13 @@ escalation, not a workaround.
   cannot reach a metric label by construction — the plan's highest-severity
   risk is closed structurally rather than by inspection.
   `CommandResult.resolved_path` is keyword-only, so no positional slot moved.
-- [x] (2026-10-01 21:40Z) Eleven tests pin the binding join in
-  `cuprum/unittests/test_executable_binding_execution.py`. Both claimed
-  regressions were confirmed to fail them for the intended reason: `argv0`
-  ignoring the binding fails eight of eleven (the decoy's marker, or a
-  missing-file error), and resolving ahead of enforcement fails the refusal
-  test with a resolver call recorded. The suite is arranged so a name-based
-  fallback would *succeed* rather than error — the catalogued program names a
-  real executable decoy — so the approved marker can only come from the binding.
-- [x] (2026-10-01 21:40Z) `make check-fmt lint typecheck` exits 0 at
+- [x] (2026-10-01 17:02Z) `make check-fmt lint typecheck` exits 0 at
   `5d1e762f` (`/tmp/gates-cuprum-issue-440-m3i.out`). The maturin wheel
   snapshot was re-recorded: `cuprum/_context_policy.py` is a new wheel member,
   and the recorded payload grew by exactly that one entry (verified by diffing
   the snapshot's entries against the built wheel's, not by reading the diff
   output, which truncates).
-- [x] (2026-10-01 22:05Z) `make test` exits 0 at `5d1e762f`
+- [x] (2026-10-01 17:06Z) `make test` exits 0 at `5d1e762f`
   (`/tmp/test-cuprum-issue-440-m3.out`), so the whole tree — the new binding
   execution module included — is green under the full suite, not merely under
   the focused run. The main Python group reports
@@ -217,7 +217,7 @@ escalation, not a workaround.
   measures the code at `5d1e762f` exactly.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
   changelog, migration guide, roadmap note.
-  - [x] (2026-10-01 22:40Z) The O2 non-vacuity guard is in place. `_FACTORIES`
+  - [x] (2026-10-01 17:18Z) The O2 non-vacuity guard is in place. `_FACTORIES`
         gains `bind`, `bind-nested`, and `bind-two`; the two `bind` spellings
         differ (absolute vs `allow_relative=True` relative), so a sequence
         sampling both exercises the layer merge on two path shapes. Recording
@@ -229,14 +229,14 @@ escalation, not a workaround.
         replaying a stored example. Negative control: with the three binding
         entries deleted, the guard trips with "no generated sequence installed
         an executable binding".
-  - [x] (2026-10-01 22:50Z) O4's adapter surface is locked. The generator in
+  - [x] (2026-10-01 17:19Z) O4's adapter surface is locked. The generator in
         `test_adapter_projection.py` now emits `resolved_path`, and two named
         tests pin the literal key each adapter publishes plus the unbound
         omission. Mutation control: deleting the `resolved_path` entry from
         `_verbatim_fields` fails the handwritten expectation. See the
         Surprises entry for the hole this exposed in the sibling identity
         check.
-  - [x] (2026-10-01 22:58Z) The behavioural scenarios are in place and
+  - [x] (2026-10-01 17:20Z) The behavioural scenarios are in place and
         non-vacuous. `tests/features/catalogue.feature` gains the identity and
         the unapproved-name scenarios; their steps live in
         `tests/behaviour/_catalogue_binding_support.py`, which
@@ -247,14 +247,14 @@ escalation, not a workaround.
         the bound file, reported '-c im…'", and widening the allowlist fails
         by executing `/opt/tools/sccache` (`FileNotFoundError`), proving the
         refusal is the allowlist's rather than the binding's.
-  - [x] (2026-10-01 23:06Z) Documentation is written and its examples execute:
+  - [x] (2026-10-01 17:25Z) Documentation is written and its examples execute:
         `docs/cuprum-design.md` section 5.1.2 plus its TOCTOU limits,
         `docs/users-guide.md`, `docs/v0-2-0-migration-guide.md`,
         `CHANGELOG.md`, and the `docs/roadmap.md` note under item 3.3.1. The
         suite's documentation-example runner picked the new
         `tested-example: migration-executable-bindings` fence up on its own
         (behaviour count 44 -> 45).
-  - [x] (2026-10-01 23:24Z) `make fmt`, `make check-fmt`, `make typecheck`,
+  - [x] (2026-10-01 17:54Z) `make fmt`, `make check-fmt`, `make typecheck`,
         `make lint`, `make test`, `make markdownlint`, and `make nixie` all
         exit 0 on the uncommitted EP-M4 tree at `4cec4a30`. Two real defects
         were found and fixed on the way: the module-length ceiling (see
@@ -262,6 +262,30 @@ escalation, not a workaround.
         fictional `/opt/tools/echo` snapshot values, allowlisted narrowly in
         `ambrleaks.toml`.
 - [ ] EP-M5: gates green, push, draft pull request, CodeRabbit review.
+  - [x] (2026-10-01 17:56Z) The EP-M4 work landed as seven atomic commits
+        (`22fe3311`, `6dc2c66a`, `d6728ec7`, `73943bc9`, `79193636`, `22a609b4`,
+        `896677e3`), taking the branch from `4cec4a30` to `896677e3`. Seven
+        gates were green on the immediately preceding tree (entry above), and
+        the committed content is byte-identical to it — the commits were made
+        from that tree with no edits in between, so no post-gate edit can have
+        invalidated them.
+  - [x] (2026-10-01 17:56Z) Branch pushed and draft PR opened as
+        [cuprum#571][pr-571] with `(#440)` in the title and `Closes #440` in the
+        body. The reference session URL is in the body's `## References`
+        section. The CodeRabbit GitHub App reports `Review skipped: draft pull
+        request`, which is expected and is why the CLI review below is the
+        operative one.
+  - [x] (2026-10-01 17:58Z) The Progress timestamps were re-derived. Thirteen
+        entries recorded times that had not yet happened — several hours ahead
+        of the wall clock — so they cannot have been observed when written.
+        Every entry now carries a time taken from an authoritative artefact:
+        the commit that produced the work, or the modification time of the gate
+        log the entry cites. Two are anchored to the gate log rather than the
+        commit because the log was written before the commit it measures. The
+        eleven-test entry now precedes the milestone summary it belongs to,
+        because its artefact genuinely predates it. See the Surprises entry.
+  - [ ] GitHub Actions green at `896677e3`.
+  - [ ] `coderabbit review --agent` returns no unresolved finding.
 
 ## Surprises & discoveries
 
@@ -474,6 +498,21 @@ escalation, not a workaround.
   erode that. Verified non-vacuous: the pattern admits `/opt/tools/echo` and
   `/opt/tools/sccache` but rejects `/home/leynos/...`, `/etc/passwd`,
   `/opt/tools/`, and `/opt/tools/a/b`.
+- Observation: thirteen of this plan's own Progress timestamps were in the
+  future when checked, so they cannot have recorded observed events. Evidence:
+  at 17:59Z the entries claimed times up to 23:24Z, while the commits that did
+  the work were authored 15:31Z-17:56Z and `/tmp` log mtimes fall in the same
+  window. The entries had been labelled `Z` (UTC) while carrying a time derived
+  from a local-time reading, so they were uniformly ahead of reality by the
+  machine's offset, and further drifted because they were written from memory
+  rather than from an artefact. Impact: every Progress timestamp was re-derived
+  from a primary source — the commit that produced the work, or the mtime of
+  the gate log the entry cites — and then re-checked for both future-dating and
+  ordering. The lesson generalizes to every plan in this repository: a
+  timestamp is a claim like any other and needs a source; recording one from
+  recollection produces a figure that is unfalsifiable until someone measures
+  the wall clock against it. Note the local zone is CEST (UTC+2), so a
+  `--date=format-local` reading is not UTC and must not be written with a `Z`.
 
 ## Decision log
 
@@ -564,10 +603,40 @@ escalation, not a workaround.
 
 ## Outcomes & retrospective
 
-Not yet complete. To be filled in at EP-M5, comparing the shipped surface
-against the issue's acceptance list: unapproved same-basename path rejected,
-configured approved path run exactly, nested and concurrent bindings isolated,
-TOCTOU limits documented.
+Filled in at EP-M5, comparing the shipped surface against the issue's
+acceptance list.
+
+The two authorities are now separate in code and not merely in prose. The
+allowlist from `ProgramCatalogue` still decides which logical programs may run;
+a scoped `ExecutableBinding` decides which executable a permitted program runs.
+`resolve_executable` takes no part in `is_allowed`/`check_allowed`, and the
+refusal path is tested to resolve nothing at all, so a binding cannot widen the
+allowlist even accidentally. The issue's rejected workaround — accepting any
+executable with a matching basename — is absent: the basename plays no part in
+any decision, and the execution suite is arranged so a basename-based fallback
+would *succeed* rather than error, which means the passing test can only be
+explained by the binding having been honoured.
+
+Each acceptance clause is discharged by a named test or a named documentation
+section. An unapproved path is refused before its resolver runs
+(`test_executable_binding_execution.py`, the refusal case, asserting a recorded
+call count of zero, plus the `catalogue.feature` scenario whose counting
+resolver must never fire). A configured approved path runs exactly, witnessed
+from both sides — the library's `resolved_path` and the child's own report of
+`sys.executable` — because checking only the former could not distinguish the
+two. Nested and concurrent bindings stay isolated, covered by the stateful
+property test and the context-isolation suite. The filesystem-replacement limit
+is documented rather than papered over: `docs/users-guide.md` and section 5.1.2
+of `docs/cuprum-design.md` state that a path binding narrows the window between
+validation and `exec` without closing it, so it is not an immutable binary
+identity.
+
+The retrospective lesson is the one recorded under Surprises: the plan's own
+Progress timestamps were the least trustworthy artefact in it. Every other
+number in this document was derived from a command's output or a commit, while
+the timestamps were written from recollection and were wrong by hours. A living
+document that records progress is only as good as the provenance of what it
+records.
 
 ## Context and orientation
 
@@ -1157,3 +1226,5 @@ resolved_path: str | None = dc.field(default=None, kw_only=True)
 
 Dependencies: none added. `os.access` and `pathlib.PurePath` are standard
 library. No Rust component is touched.
+
+[pr-571]: https://github.com/leynos/cuprum/pull/571
