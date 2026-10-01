@@ -206,6 +206,30 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-01) Ninth review finding, actioned after a full re-verification
+  of all nine CodeRabbit inline comments rather than only the newest.
+  `Pipeline.run_sync` calls `self.run(...)`, which calls
+  `_reject_stdio_targets` at line 204, so the stdio-target `ValueError` does
+  propagate out of `run_sync` — but only `run`'s `Raises` section said so;
+  `run_sync`'s named the deprecated-flag case alone. Behaviour was already
+  correct and already covered by `test_run_sync_refuses_a_named_target`, so the
+  fix is one sentence: `run_sync`'s `ValueError` entry now mirrors `run`'s. The
+  other eight comments needed no code change, and each was checked against the
+  tree rather than assumed from its `original_commit_id` being old: the
+  resolver re-raises `io.UnsupportedOperation` (which is both a `ValueError`
+  and an `OSError`, the stronger of the two options the reviewer offered),
+  `_subprocess_context.py` names `_subprocess_stdin_stream`, `pipes` delegates
+  to `self.stdio.pipes`, the stdin writer is bounded by
+  `_STDIN_SETTLE_GRACE_S = 0.25`, `_reject_stdio_targets` is called, the
+  unobserved-stream default is documented, the developers-guide paragraph
+  separates the payload writer's early-close tolerance from the producer
+  writer's fatal `StdinSourceError`, and `_reject_contested_stdin` is wired into
+  `_build_subprocess_execution`. The developers-guide one is worth noting as a
+  case where the fix and the suggestion differ in wording: the reviewer
+  proposed a specific diff, the tree implements the same separation as two
+  sentences about the two writers, and a keyword search for the proposed
+  phrasing finds nothing. Reading the finding rather than grepping its
+  suggested text is what distinguishes "already fixed" from "never applied".
 - [x] (2026-10-01) Third rebase onto `origin/main`, taken for a reason the
   first two did not have: a CI failure that was *not reproducible on the branch
   head at all*. `lint-test` failed on the merge ref for `e3384618`, and
