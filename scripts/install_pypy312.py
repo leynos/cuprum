@@ -97,6 +97,27 @@ def _extract(archive: Path, destination: Path) -> None:
         release.extractall(destination, filter="data")
 
 
+def _ensure_extracted(installation: PyPyInstallation) -> None:
+    """Extract the verified archive, or reject a root it cannot repair.
+
+    A destination that exists without the expected interpreter is the residue
+    of an extraction that failed partway, and unpacking over it would not
+    restore the missing files, so the operator is told to remove the
+    directory and retry instead.
+
+    Raises
+    ------
+    RuntimeError
+        If the destination directory exists without the expected executable.
+    """
+    if installation.root.is_dir():
+        if not _is_executable(installation.python):
+            msg = "PyPy extraction is incomplete; remove .pypy and retry"
+            raise RuntimeError(msg)
+    else:
+        _extract(installation.archive, installation.root.parent)
+
+
 def install(installation: PyPyInstallation) -> None:
     """Download, verify, and extract PyPy unless the matching binary exists.
 
@@ -123,12 +144,7 @@ def install(installation: PyPyInstallation) -> None:
     if installation.root.is_dir() and _is_executable(installation.python):
         return
     checked_download(installation.url, installation.archive, installation.digest)
-    if installation.root.is_dir():
-        if not _is_executable(installation.python):
-            msg = "PyPy extraction is incomplete; remove .pypy and retry"
-            raise RuntimeError(msg)
-    else:
-        _extract(installation.archive, installation.root.parent)
+    _ensure_extracted(installation)
     if not _is_executable(installation.python):
         msg = "PyPy extraction did not provide the expected executable"
         raise RuntimeError(msg)
