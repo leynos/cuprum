@@ -494,7 +494,12 @@ each exemption's claim. Other contracts read the Makefile through
 `tests/helpers/makefile.py`, which parses it with the pinned `makeutil` binary:
 a regex over the source can miss a continuation or read a comment as an
 assignment, and either mistake shrinks the selector to a set that makes every
-coverage assertion pass for the wrong reason.
+coverage assertion pass for the wrong reason. That reader is split in two on
+the family's usual seam. `tests/helpers/makeutil.py` owns the process — running
+the parser, and reporting the ways a process fails — while `makefile.py` owns
+`make`'s own semantics for the document it returns: which assignment wins, how
+continuations collapse, how `$(VAR)` references resolve, and what a target's
+recipe says.
 
 That reader exposes its process boundary rather than reaching for the ambient
 tool. `makeutil_document` takes a `root` and a `runner`, so a test supplies the

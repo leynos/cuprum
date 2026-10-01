@@ -401,6 +401,34 @@ contract module under `tests/` and forgets to name it will be told so by
   Every repair was re-tested with a negative control that was shown to
   discriminate: injecting the fault produced exactly the intended failure, and
   the injection was reverted before the next gate run.
+- [x] (2026-10-01) Cleared two gate failures the repairs introduced, both
+  caught by the first full gate run at `2bb733f9`.
+  - *`make lint` / pylint-classic C0302.* The repairs took
+    `tests/helpers/makefile.py` to 528 lines against pylint's 400-line module
+    cap. `tests` is in `PYLINT_STRICT_TARGETS`, and the exemption list
+    (`cuprum/unittests`, `scripts/tests`, `tests/behaviour`, `tests/features`)
+    does not cover it. The gate aborted there, so the checks after it in the
+    recipe — ruff, interrogate, DF12 pylint, ambrleaks, Skylos, rust-lint, and
+    the workflow lint — were *unobserved* at that candidate rather than
+    passing; they only regained evidence on the re-run.
+    Fixed by splitting on the family's usual seam, as `workflow_shell` and
+    `workflow_recipe` already do and as the plan's own risk table
+    (`AGENTS/400-line-limit -> EP-M3 -> tests/helpers/makefile.py line count`)
+    anticipated. `tests/helpers/makeutil.py` (196 lines) owns the process
+    boundary — `MAKEFILE`, `MAKEUTIL_TIMEOUT_SECONDS`, `Runner`,
+    `DEFAULT_RUNNER`, and `makeutil_document` — while `makefile.py`
+    (390 lines) owns `make`'s semantics for the parsed document and
+    re-exports the three names a caller of either half needs. `DEFAULT_RUNNER`
+    exists so the semantics half can default to `subprocess.run` without
+    importing `subprocess`. The shared `require` is `ci_documents.require`
+    rather than a local copy, per the export-and-reuse sweep `AGENTS.md`
+    requires; it is a leaf (`strict_yaml` only), so no cycle closes. The split
+    is behaviour-preserving: the same 86 contract assertions pass unchanged.
+  - *`make markdownlint` / spelling.*
+    `test_the_success_path_finds_this_repositorys_scripts`
+    tripped the en-GB gate on `repositorys`. Renamed to
+    `test_the_success_path_finds_the_estates_scripts`, which is the term the
+    surrounding modules already use.
 
 ## Surprises & discoveries
 
@@ -1052,36 +1080,48 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
 
 ## Interfaces and dependencies
 
-`tests/helpers/makefile.py` exports seven names; these are the signatures as
-built, which differ from the plan's first sketch and are recorded here so a
-reader is not misled by the earlier version:
+The reader is split across two modules, on the family's usual seam:
+`tests/helpers/makeutil.py` owns the process — reaching for the parser, running
+it, and reporting the ways a process fails — while `tests/helpers/makefile.py`
+owns `make`'s own semantics for the document it returns. These are the
+signatures as built, which differ from the plan's first sketch and are recorded
+here so a reader is not misled by the earlier version:
 
 ```python
+# In tests/helpers/makeutil.py:
 MAKEFILE: Final[str] = "Makefile"
 MAKEUTIL_TIMEOUT_SECONDS: Final[int] = 60
 type Runner = Callable[..., subprocess.CompletedProcess[str]]
+DEFAULT_RUNNER: Runner = subprocess.run
 
 
 def makeutil_document(
     *,
     makefile: str = MAKEFILE,
     root: Path | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = DEFAULT_RUNNER,
 ) -> dict[str, Any]: ...
+
+
+# In tests/helpers/makefile.py:
 def variable_expansion(
     name: str,
     *,
     makefile: str = MAKEFILE,
     root: Path | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = DEFAULT_RUNNER,
 ) -> tuple[str, ...]: ...
+
+
 def recipe_of(
     name: str,
     *,
     makefile: str = MAKEFILE,
     root: Path | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = DEFAULT_RUNNER,
 ) -> str: ...
+
+
 def recipe_tokens(recipe: str) -> tuple[str, ...]: ...
 ```
 
@@ -1096,14 +1136,16 @@ Makefile; the guard never passes it, and `MAKEFILE` names the default so a
 second reader cannot hard-code the same string. `root` and `runner` expose the
 process boundary: `root` is the directory the parse runs in, defaulting to the
 repository root, and `runner` is the process callable, defaulting to
-`subprocess.run`. Both exist so `makeutil_document`'s failure modes — a
-non-zero exit, malformed JSON, a missing binary, a wedge that outlives
-`MAKEUTIL_TIMEOUT_SECONDS` — are exercised with a fake process rather than by
-installing or breaking the real `makeutil`. Process-start and timeout failures
-are translated at that boundary into the documented `AssertionError`, because
-`subprocess.run` raises `FileNotFoundError` for a binary it cannot start and
-that is not the error a read API may leak; `variable_expansion` and `recipe_of`
-propagate the same failure through the `root` and `runner` they accept.
+`DEFAULT_RUNNER` — `subprocess.run`, aliased so the semantics half can default
+to it without importing `subprocess` itself. Both exist so
+`makeutil_document`'s failure modes — a non-zero exit, malformed JSON, a
+missing binary, a wedge that outlives `MAKEUTIL_TIMEOUT_SECONDS` — are
+exercised with a fake process rather than by installing or breaking the real
+`makeutil`. Process-start and timeout failures are translated at that boundary
+into the documented `AssertionError`, because `subprocess.run` raises
+`FileNotFoundError` for a binary it cannot start and that is not the error a
+read API may leak; `variable_expansion` and `recipe_of` propagate the same
+failure through the `root` and `runner` they accept.
 
 `recipe_tokens` exists for the recipe contract in
 `tests/test_ci_suite_wiring_contract.py`. `recipe_of` joins a target's recipe
