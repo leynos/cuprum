@@ -65,6 +65,7 @@ from cuprum._subprocess_execution import (
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode, current_context
+from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import (
@@ -175,11 +176,27 @@ def _build_subprocess_execution(
     existed, and a redirected stream has to be resolved against whether
     anything still needs to read it.
 
+    Being the first point where both are in hand is also what makes this the
+    place to check that they agree. ``RunOutputOptions`` validates its own
+    targets when it is constructed, but whether the run *also* carries a stdin
+    source is not known there — the source arrives on the run call, which is
+    what built the state. Establishing that the two answer the same question
+    once is cheap; discovering it from a caller who watched their explicit
+    ``inherit()`` lose to a payload is not.
+
     Returns
     -------
     _SubprocessExecution
         The resolved execution bundle, ready for ``_execute_with_hooks``.
-    """
+
+    Raises
+    ------
+    ValueError
+        If the run's output options name an inherited stdin while its
+        ``stdin=`` argument supplies a source, so the two disagree about where
+        the child's input comes from.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the stdio checker.
+    _reject_contested_stdin(state.output.stdin, has_source=state.stdin_data is not None)
     return _SubprocessExecution(
         cmd=cmd,
         ctx=state.context,

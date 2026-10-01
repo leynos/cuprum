@@ -79,6 +79,45 @@ def _resolve_pipeline_output(
     )
 
 
+def _reject_stdio_targets(output: RunOutputOptions) -> None:
+    """Refuse standard-stream targets a pipeline cannot honour.
+
+    ``RunOutputOptions`` carries ``stdin``/``stdout``/``stderr`` targets
+    wherever it is accepted, but a pipeline reads only the capture, echo,
+    sink, idle, and line-hook fields: the stage wiring that would carry a
+    target to the right stage does not exist. Accepting one would be the
+    silent loss ``RunOutputOptions`` refuses everywhere else — the run
+    succeeds, exits ``0``, and the file the caller named is never created.
+
+    Refusing is deliberately the whole fix. Making a target *mean* something
+    for a pipeline is a design decision about which stage a stream belongs to,
+    and that decision belongs with the stage wiring rather than being guessed
+    here.
+
+    Parameters
+    ----------
+    output : RunOutputOptions
+        The resolved options a pipeline run was given.
+
+    Raises
+    ------
+    ValueError
+        If any of the three standard streams names a target.
+    """
+    named = [
+        stream
+        for stream in ("stdin", "stdout", "stderr")
+        if getattr(output, stream) is not None
+    ]
+    if not named:
+        return
+    msg = (
+        f"Pipeline.run does not support RunOutputOptions "
+        f"{', '.join(named)} targets; redirect a single SafeCmd instead"
+    )
+    raise ValueError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class Pipeline:
     """A sequence of SafeCmd stages connected via stdout/stdin piping."""
@@ -153,13 +192,16 @@ class Pipeline:
         Raises
         ------
         ValueError
-            If ``output`` is combined with deprecated flags.
+            If ``output`` is combined with deprecated flags, or if it names a
+            ``stdin``/``stdout``/``stderr`` target, which pipeline stages do
+            not honour.
         PermissionError
             If a pipeline command is not allowed by the active scope.
         TimeoutError
             If execution exceeds the effective timeout.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through pipeline helpers
         out = _resolve_pipeline_output(output, deprecated_flags)
+        _reject_stdio_targets(out)
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
         config = _prepare_pipeline_config(
             output=out,

@@ -550,8 +550,10 @@ def test_descriptorless_file_object_is_refused_with_the_stream_named(
     ``io.UnsupportedOperation`` is a subclass of both ``OSError`` and
     ``ValueError``, so re-raising as a plain ``ValueError`` is the one choice
     that would silently drop the ``OSError`` arm for callers catching that.
-    Both are asserted, which is what makes this test about the contract rather
-    than about the message alone.
+    The raised type is asserted directly, not merely through ``__cause__``: a
+    caller writing ``except OSError`` catches only what is raised, so pinning
+    the cause alone would let the broad arm be dropped while the test stayed
+    green. Both arms are checked for that reason.
     """
     command = python_builder("-c", _WRITE_STDOUT)
 
@@ -561,10 +563,10 @@ def test_descriptorless_file_object_is_refused_with_the_stream_named(
     assert "StringIO" in str(info.value), (
         "the message must name the offending object type, not just the stream"
     )
+    assert isinstance(info.value, OSError), (
+        "callers catching OSError must see the refusal itself; only the "
+        "raised type decides that, which is why __cause__ is not enough"
+    )
     assert isinstance(info.value.__cause__, io.UnsupportedOperation), (
         "the original fileno failure must stay reachable as __cause__"
-    )
-    assert isinstance(info.value.__cause__, OSError), (
-        "callers catching OSError must still see this, which a plain "
-        "ValueError would silently drop"
     )

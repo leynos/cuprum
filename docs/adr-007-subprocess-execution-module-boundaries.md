@@ -668,3 +668,56 @@ The public surface is unchanged: `cuprum.sh` still exports `StdioTarget`,
 names with the same object identity, and the wheel snapshot is regenerated for
 the two new modules. No public API changes, and the module-size suppression
 remains unnecessary.
+
+## Addendum (2026-10-01): a third `cuprum.sh` split, for the same ceiling
+
+The 2026-09-27 addendum records `cuprum/sh/stdio.py` taking `StdioTarget` and
+"the validation policing it" when `output.py` crossed the ceiling. That
+description was accurate when written, and is now out of date for the same
+reason as its predecessors: this round's review fixes pushed `stdio.py` itself
+to 427 lines, against the same unsuppressible `max-module-lines` rule.
+
+The overrun is branch-introduced. Against `origin/main` the module does not
+exist at all — it is new in this work — so nothing here is a pre-existing
+violation being inherited; it is the same class of growth the two prior addenda
+record, one module further along.
+
+The split follows the seam the 2026-09-27 addendum did not have to name,
+because at that point the two responsibilities were still in one file. A
+`StdioTarget` _is_ a statement about one target: which of the four variants it
+is, which payload that variant may carry, and how a `path` payload is
+normalized. Policing a _combination_ of targets is a statement about a whole
+run: two answers to where stdin comes from, one stream told to be both captured
+and redirected, one file named for both streams. The first is per-variant and
+answerable from a single target; the second needs the assembled
+`RunOutputOptions` and cannot be answered from any one target at all.
+
+`cuprum/sh/stdio_rules.py` now owns the second. It holds
+`_validate_stdio_targets`, the four `_reject_*` helpers,
+`_share_one_owned_path`, and the `_STDIN_KINDS` set those rules consult.
+`cuprum/sh/stdio.py` keeps the vocabulary and the per-variant rules and falls
+from 427 to 246 lines; `stdio_rules.py` is 213. The corrected roster entries
+are:
+
+- `cuprum/sh/stdio.py` — `StdioTarget` and the per-variant rules: which payload
+  each kind carries, and the normalization a `path` payload undergoes.
+- `cuprum/sh/stdio_rules.py` — the rules policing _combinations_ of targets
+  (`_validate_stdio_targets` and the `_reject_*` helpers, including the
+  contested-stdin guard), which read a whole `RunOutputOptions`. Split out of
+  `stdio.py` when the #445 review fixes pushed that module to 427 lines against
+  the 400-line ceiling; `output.py` re-exports `_validate_stdio_targets`, so
+  `__post_init__` still calls it by its old name.
+
+The public surface is unchanged, and so is the call graph. `output.py` imports
+`_validate_stdio_targets` from the new module and re-exports it under the same
+name, so `RunOutputOptions.__post_init__` — which names that helper directly —
+is untouched and the rules still fire at construction rather than at spawn.
+`_command_internals.py` now imports `_reject_contested_stdin` from
+`stdio_rules.py` instead of `stdio.py`; it is the one rule in the module that
+cannot run at construction and is therefore called from the run's preparation.
+The new module imports `StdioTarget`, `PipeStream`, and `RunOutputOptions` only
+under `typing.TYPE_CHECKING`, so it adds no runtime import edge: no cycle is
+introduced between `stdio`, `stdio_rules`, and `output`. The wheel-manifest
+snapshot is regenerated for the new module, and `cuprum.sh`'s exports are
+unchanged. No public API changes, and the module-size suppression still remains
+unnecessary.

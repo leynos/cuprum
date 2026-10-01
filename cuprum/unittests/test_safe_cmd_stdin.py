@@ -20,7 +20,7 @@ import pytest
 
 from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, TimeoutExpired, scoped
 from cuprum._subprocess_stdin import _write_stdin as _real_write_stdin
-from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
+from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput, StdioTarget
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.execution import assert_capture_disabled
 from tests.helpers.stream_pipes import drain_blocking_payload_size
@@ -377,3 +377,66 @@ def test_stdin_input_cancellation_cleans_up_task(
         )
 
     asyncio.run(_orchestrate())
+
+
+_ECHO_STDIN = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
+
+
+def test_an_inherited_stdin_beside_a_source_is_refused(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """Two answers to "where does stdin come from" are refused, not resolved.
+
+    ``RunOutputOptions.stdin`` and the run call's ``stdin=`` each claim to say
+    what the child reads. Supplying both leaves no honest rule: whichever the
+    implementation honours, the other is silently dropped. The resolver reads a
+    source first and consults the target only when there is none, so an
+    explicit ``StdioTarget.inherit()`` beside a payload would quietly deliver
+    the payload instead of the caller's stream — the same silent loss the
+    construction-time rules exist to prevent, reached by a route those rules
+    cannot see, because ``RunOutputOptions`` is built before the run call and
+    never learns whether a source was supplied.
+
+    The refusal is asserted through both entry points: they share the
+    preparation path, but a caller meets each separately.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _ECHO_STDIN)
+
+    with pytest.raises(ValueError, match="also supplies a stdin source"):
+        execute(
+            command,
+            {
+                "stdin": StdinInput("payload"),
+                "output": RunOutputOptions(
+                    capture=False,
+                    stdin=StdioTarget.inherit(),
+                ),
+            },
+        )
+
+
+def test_an_explicit_stdin_pipe_beside_a_source_is_accepted(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """The near-miss: naming the pipe a payload travels through is coherent.
+
+    ``StdioTarget.pipe()`` and a supplied source agree — the source is written
+    through the pipe the target names — so refusing this would break the
+    ordinary spelling for no reason. Without this case the refusal above would
+    be satisfied by rejecting every combination of target and source.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _ECHO_STDIN)
+
+    result = execute(
+        command,
+        {
+            "stdin": StdinInput("payload"),
+            "output": RunOutputOptions(capture=False, stdin=StdioTarget.pipe()),
+        },
+    )
+
+    assert result.exit_code == 0, "a payload through an explicit pipe must run"

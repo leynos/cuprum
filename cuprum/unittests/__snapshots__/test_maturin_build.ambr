@@ -128,6 +128,7 @@
       'cuprum/sh/results.py',
       'cuprum/sh/safe_cmd.py',
       'cuprum/sh/stdio.py',
+      'cuprum/sh/stdio_rules.py',
       'cuprum/sinks/__init__.py',
       'cuprum/sinks/base.py',
       'cuprum/sinks/github_actions.py',
