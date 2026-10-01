@@ -12,16 +12,6 @@ accepted = []
 
 [patterns]
 ignore = [
-  # Abbreviated Git commit SHAs, which the ExecPlans cite constantly. Typos
-  # tokenizes before applying this list, so a SHA such as `a6b8ba14` splits into
-  # letter runs and `ba` is read as a misspelling of "be"/"by" — any SHA whose
-  # letters happen to spell a dictionary word collides, which makes this a
-  # recurring class rather than a one-off. The leading digit is what keeps the
-  # rule narrow: no English word begins with a digit, so ordinary prose stays
-  # checked, unlike a bare `[0-9a-f]{7,40}`. Typos' regex engine has no
-  # lookahead, so the leading digit is expressed by consuming it rather than by
-  # asserting it.
-  '[0-9][0-9a-f]{6,39}',
   # markdownlint-cli2 follows this fixed external environment variable.
   '\bFORCE_COLOR\b',
   # GitHub's Actions API and the established CLI expose these literal names.
@@ -99,12 +89,12 @@ ignore = [
   'upstream mold binaries',
   'downloaded mold',
   '\btools/mold/',
-  # Astroid is Pylint's external package name and its conventional pin name.
-  '\bAstroid\b',
-  '\bastroid\b',
-  '\bASTROID_VERSION\b',
-  '\b_ASTROID\b',
-  '\btest_classic_astroid_[a-z0-9_]+\b',
+  # Commit SHAs cited in the execplan. An abbreviated SHA is quoted verbatim
+  # where it appears, so it cannot be reworded to satisfy a dictionary, and a
+  # hex pair inside one can read as a standalone word: `6871ba35` contains the
+  # token `ba`. Cited SHAs are the record, so the identifier stays literal and
+  # the entry stays narrow — it matches this one SHA, not every hex string.
+  '6871ba35',
 ]
 
 # ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
