@@ -26,7 +26,13 @@ class CommandResult:
     Attributes
     ----------
     program:
-        Program that was executed.
+        Program that was executed, as the catalogue identity policy was
+        checked against.
+    resolved_path:
+        The executable that actually ran, when a scope bound ``program`` to a
+        specific path. ``None`` when no binding applied, in which case the
+        child ran under the catalogued name. Filesystem replacement after
+        validation is not detected; see ``cuprum.executable_binding``.
     argv:
         Argument vector (excluding the program name) passed to the process.
     exit_code:
@@ -89,6 +95,11 @@ class CommandResult:
     user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     relay_fallbacks: tuple[RelayFallback, ...] = ()
+    # ``kw_only`` for the same reason the measurements are: ``relay_fallbacks``
+    # holds the seventh positional slot, which main established and
+    # ``test_public_api`` pins, so a new field must not take a positional slot
+    # beside it.
+    resolved_path: str | None = dc.field(default=None, kw_only=True)
 
     @property
     def ok(self) -> bool:

@@ -286,6 +286,19 @@ class ExecEvent:
         failure and cannot tell it apart from an overlay run. ``None`` only on
         legacy or manually constructed events; the execution paths always
         resolve a mode.
+    resolved_path:
+        The executable this execution actually ran, when a scope bound the
+        program's logical identity to a specific path. ``None`` when no
+        binding applied, in which case the child ran under the name in
+        ``argv[0]``.
+
+        It is the *executable*, not the command: ``argv`` still carries the
+        arguments, and ``program`` still carries the catalogue identity that
+        policy was checked against. Keeping all three means a consumer can see
+        what was permitted, what was asked for, and what ran, without having
+        to infer one from another. The path is a string rather than a
+        resolved file identity, so a replaced binary is not detected; see the
+        TOCTOU note in ``cuprum.executable_binding``.
 
     New optional fields are appended to the end of the declaration to preserve
     existing positional argument slots. In particular, inserting one ahead of
@@ -327,6 +340,7 @@ class ExecEvent:
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
     terminal_outcome: TerminalOutcome | None = None
+    resolved_path: str | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]

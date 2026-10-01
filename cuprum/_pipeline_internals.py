@@ -22,6 +22,12 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum._context_policy import (
+    _collect_hooks as _collect_hooks,
+)
+from cuprum._context_policy import (
+    _enforce_allowlist as _enforce_allowlist,
+)
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
@@ -37,12 +43,6 @@ from cuprum._pipeline_collect import (
 from cuprum._pipeline_observation import (
     _build_pipeline_observations,
     _emit_plan_events_and_run_before_hooks,
-)
-from cuprum._pipeline_observation import (
-    _collect_hooks as _collect_hooks,
-)
-from cuprum._pipeline_observation import (
-    _enforce_allowlist as _enforce_allowlist,
 )
 from cuprum._pipeline_results import (
     _build_pipeline_stage_results,
@@ -74,10 +74,15 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum.sh import CommandResult, PipelineResult, SafeCmd
 
+# ``_collect_hooks`` and ``_enforce_allowlist`` are re-exported from
+# ``cuprum._context_policy``, which they moved to when this module reached
+# pylint's 400-line ceiling. Callers still reach them through here.
 __all__ = [
     "_await_pipeline_wait_result",
     "_build_timeout_expired_error",
+    "_collect_hooks",
     "_collect_pipeline_inputs",
+    "_enforce_allowlist",
     "_gather_pipeline_outputs",
     "_sh_module",
 ]

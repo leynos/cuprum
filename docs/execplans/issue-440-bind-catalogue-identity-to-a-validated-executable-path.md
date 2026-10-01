@@ -161,8 +161,9 @@ escalation, not a workaround.
   `cuprum/context/__init__.py`. `resolve_executable` is pinned as independent
   of the allowlist. 96 focused tests pass.
 - [x] (2026-10-01 18:20Z) EP-M2 gate sweep. Five defects sat behind the
-  environmental abort: two spelling errors (`concretised`, `hand-written`), the
-  R9110 executable-overlay delegate, four `ty` diagnostics in the
+  environmental abort: two spelling errors (an Oxford-spelling slip and a
+  hyphenation slip, both since reworded out of this document), the R9110
+  executable-overlay delegate, four `ty` diagnostics in the
   deliberate-wrong-type tests, and a ruff PT012 trip introduced while fixing the
   `ty` findings. At `0e177d29`, `make check-fmt lint typecheck` exited clean
   (`/tmp/make-code-cuprum-issue-440.out`). That target chain includes the Rust
