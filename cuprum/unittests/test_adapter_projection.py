@@ -27,6 +27,7 @@ from cuprum.adapters.logging_adapter import _build_extra
 from cuprum.adapters.metrics_adapter import MetricsHook
 from cuprum.adapters.tracing_adapter import TracingHook
 from cuprum.adapters.tracing_memory import InMemoryTracer
+from cuprum.context import EnvMode
 from cuprum.events import ExecEvent, ExecPhase, ResourceUsageMode, new_exec_id
 from cuprum.program import Program
 
@@ -45,6 +46,7 @@ _OPTIONAL_FIELDS = (
     "user_cpu_seconds",
     "system_cpu_seconds",
     "resource_usage_mode",
+    "env_mode",
 )
 _PHASES = typ.get_args(ExecPhase.__value__)
 _REDACTED_FIELDS = frozenset({"pid", "duration_s", "cwd"})
@@ -91,6 +93,7 @@ def _events(draw: st.DrawFn) -> ExecEvent:
         user_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
         system_cpu_seconds=draw(st.none() | st.floats(min_value=0.0, max_value=60.0)),
         resource_usage_mode=draw(st.none() | st.sampled_from(ResourceUsageMode)),
+        env_mode=draw(st.none() | st.sampled_from(EnvMode)),
     )
 
 
@@ -194,6 +197,7 @@ class TestAdapterProjection:
             "operation",
             "eof_grace_s",
             "pending_readers",
+            "env_mode",
         )
         return {"program"} | {
             field for field in trusted_fields if getattr(event, field) is not None
@@ -331,6 +335,10 @@ class TestAdapterProjection:
             user_cpu_seconds=0.375 if is_exit else None,
             system_cpu_seconds=0.125 if is_exit else None,
             resource_usage_mode=ResourceUsageMode.WAIT4_CHILD if is_exit else None,
+            # Present on every phase, unlike the resource mode: the policy is
+            # known before the child is spawned and describes the whole
+            # execution rather than one measurement.
+            env_mode=EnvMode.REPLACE,
         )
 
     @staticmethod

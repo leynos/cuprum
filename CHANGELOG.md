@@ -88,6 +88,25 @@
 
 ### Added
 
+- **`EnvMode`:** Select inherited, additive-overlay, or replacement child
+  environments without mutating process-global state
+  ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`UNSET`:** Explicitly remove an inherited variable while composing a child
+  environment ([#434](https://github.com/leynos/cuprum/issues/434)).
+- **`env_mode` fields:** `ScopeConfig`, `CuprumContext`, and
+  `ExecutionContext` now carry the selected environment policy
+  ([#434](https://github.com/leynos/cuprum/issues/434)). The effective policy
+  also reaches observers: `ExecEvent` carries an `env_mode` field on every
+  phase, which the logging and tracing adapters project as an extra and a span
+  attribute. The metrics adapter labels `cuprum_executions_total` and
+  `cuprum_failures_total` with it, so a non-zero exit under a replacement
+  policy is distinguishable from an ordinary overlay one. A spawn failure is
+  not counted: when a replacement policy's missing `PATH` leaves a bare program
+  name unresolvable, the failure is raised before `start`, so no `exit` event
+  and no `cuprum_failures_total` sample follow. Use the typed `env_mode` field
+  on the corresponding `ExecEvent` for that case. The per-line stream counters
+  deliberately omit the label, because a line's environment says nothing that
+  its execution's mode does not already carry.
 - **`ProgramCatalogue.from_project()`:** Build a single-project catalogue from
   an existing `ProjectSettings` without repeating the
   `ProgramCatalogue(projects=(...))` wrapper

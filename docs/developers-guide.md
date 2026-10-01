@@ -985,8 +985,9 @@ contracts stay aligned.
 different audiences and change cadences, so it is now a package whose context
 surface is re-exported from `cuprum/context/__init__.py`:
 
-- `cuprum/context/env_overlay.py` — pure overlay merging
-  (`merge_env_overlays`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
+- `cuprum/context/env_overlay.py` — pure overlay merging and rendering
+  (`EnvMode`, `UNSET`/`UnsetType`, `merge_env_overlays`, `render_env`,
+  `_render_env_base`, `resolve_env`, `_coerce_env_overlay`); no `ContextVar`
   dependency.
 - `cuprum/context/core.py` — the `CuprumContext` domain dataclass and timeout
   validation. It re-exports `ScopeConfig`, the `ContextError` package-level
@@ -2005,10 +2006,12 @@ The observation tag schema is a wire contract for observability, so the
 env-overlay resolution and base tag construction shared by the single-command
 and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 
-- `_resolve_env_overlay(extra)` layers the per-call overlay (typically
-  `ExecutionContext.env`) over the scoped overlay from the active
-  `CuprumContext` and returns the immutable merge result. It stays overlay-only
-  — `os.environ` is merged separately at spawn time by `resolve_env`.
+- `_resolve_env_overlay(extra, env_mode)` layers the per-call overlay
+  (typically `ExecutionContext.env`) over the scoped overlay from the active
+  `CuprumContext`, delegating to `_resolve_env_policy`, and returns the
+  immutable merge result together with its effective `EnvMode`. It stays
+  overlay-only — `os.environ` is rendered separately at spawn time by
+  `render_env`, not here.
 - `_base_stage_tags(cmd, capture=…, echo=…)` builds the shared tag schema
   (`project`, `capture`, `echo`). The pipeline observation builder grafts on
   only its stage-specific keys (`pipeline_stage_index`, `pipeline_stages`);
@@ -2024,7 +2027,8 @@ diverge between the single-command and pipeline telemetry.
 
 `cuprum/unittests/test_stage_observation_builder.py` pins the contract with
 Hypothesis properties (overlay resolution matches `merge_env_overlays`
-semantics and stays immutable; both paths agree on the shared tag keys) and a
+semantics and stays immutable; both paths agree on the shared tag keys), a
+check that only a `REPLACE` policy publishes the reserved `env_mode` tag, and a
 syrupy snapshot of representative single-command and pipeline tag dictionaries.
 
 ## Context allowlist internals
@@ -2062,8 +2066,8 @@ replacement allowlist is empty, and a non-empty replacement establishes an
 explicit policy by setting restriction. So direct replacement cannot turn a
 deny-all context into the permissive default.
 
-The allowlist, hook, and timeout rules are split into pure helpers in
-`cuprum/context/_policy.py` so the invariants can be tested directly:
+The allowlist, hook, timeout, and environment-policy rules are split into pure
+helpers in `cuprum/context/_policy.py` so the invariants can be tested directly:
 
 - `_narrow_allowlist(parent, config, parent_is_restricted=...)` returns the
   narrowed allowlist for the three parent/config cases without mutating either
@@ -2081,6 +2085,13 @@ The allowlist, hook, and timeout rules are split into pure helpers in
   non-finite values (NaN and positive or negative infinity).
 - `_resolve_narrowed_timeout(parent, config)` inherits the parent timeout when
   the scoped config is silent and otherwise uses the scoped value.
+- `_resolve_env_policy(parent_overlay, parent_mode, child_overlay, child_mode)`
+  composes two environment policies without rendering them. A `REPLACE` child
+  discards the parent overlay and selects `REPLACE`; an `OVERLAY` or `INHERIT`
+  child keeps the parent's effective mode and merges its values over the parent
+  overlay, so the two are indistinguishable in every mode combination. It
+  rejects non-`EnvMode` arguments with `TypeError`, and `UNSET` markers survive
+  composition until render time.
 
 Core context tests live in `cuprum/unittests/test_context.py`. Context policy
 property tests live in `cuprum/unittests/test_context_narrowing.py` and
@@ -2246,36 +2257,49 @@ failure — back to the command they submitted:
 
 The user-facing `env(...)` context manager and the related `ScopeConfig` field
 carry an *overlay-only* mapping that is layered on top of the live `os.environ`
-at subprocess spawn time. The implementation sits in
-`cuprum/context/env_overlay.py` and is built on three cooperating helpers:
+at subprocess spawn time, under a policy selected by an `EnvMode` of `INHERIT`,
+`OVERLAY`, or `REPLACE` (`OVERLAY` is the default). The implementation sits in
+`cuprum/context/env_overlay.py` and is built on these cooperating helpers:
 
 - `merge_env_overlays(parent, child)` (public) returns an immutable
   `MappingProxyType` whose entries are `parent` updated by `child`. Either
   layer may be `None`, in which case the result is whichever layer is set (or
   `None`); empty mappings are treated as "no contribution".
-- `resolve_env(*layers)` (public) returns `os.environ.copy()` updated by
-  every non-empty layer, in left-to-right order. When every layer is `None` or
-  empty, the helper returns `None` so the caller can pass it straight through to
-  `subprocess.Popen` to mean *inherit the parent environment unchanged* — this
-  is also the path that avoids the redundant `os.environ` copy.
+- `render_env(overlay, mode=EnvMode.OVERLAY)` (public) renders a composed
+  policy for spawning. `REPLACE` starts from `{}` and every other mode from a
+  live `os.environ` copy; in a non-`REPLACE` mode a policy with no entries
+  renders to `None` so the caller can pass it straight through to
+  `subprocess.Popen` to mean *inherit the parent environment unchanged*, which
+  is also the path that avoids the redundant `os.environ` copy. Any `UnsetType`
+  value (`UNSET`) removes its key from the rendered mapping, in every mode.
+- `_render_env_base(overlay, mode)` (internal) is the only place that calls
+  `os.environ.copy()`, and the only place that returns `{}` for `REPLACE`.
 - `_coerce_env_overlay(overlay)` (internal) wraps any caller-supplied
   mapping in `MappingProxyType(dict(overlay))` so the stored overlay cannot be
   mutated through the original reference.
+- `resolve_env(*layers)` (public) is a thin convenience wrapper over
+  `merge_env_overlays` and `render_env`: it merges the layers left-to-right and
+  renders the result in the default `OVERLAY` mode. It returns `None` when
+  every layer is `None` or empty.
 
-The split between `merge_env_overlays` and `resolve_env` is deliberate.
+The split between `merge_env_overlays` and `render_env` is deliberate.
 `merge_env_overlays` is the overlay-only merge used by observation tagging
 (`_StageObservation.env_overlay` and the `ExecEvent.env` field) — it must not
 include a snapshot of `os.environ`, otherwise structured event logs would carry
-the entire parent process environment on every emission. `resolve_env` is the
-spawn-time merge that *does* include `os.environ`; it is called from
-`_merge_env` (`cuprum/_process_lifecycle.py`) for both the single-command and
-pipeline paths.
+the entire parent process environment on every emission. `render_env` is the
+spawn-time render that *does* include `os.environ`, except under `REPLACE`; the
+spawn path reaches it through `_merge_env` (`cuprum/_process_lifecycle.py`),
+which composes the ambient and per-call policies and their modes via
+`_resolve_env_policy` (`cuprum/context/_policy.py`) and is shared by both the
+single-command (`cuprum/_subprocess_execution.py`) and pipeline
+(`cuprum/_pipeline_spawn.py`) paths. `resolve_env` renders only in the default
+`OVERLAY` mode and is not on the spawn path.
 
 The live-view contract from issue #100 is enforced at one place only:
-`resolve_env` reads `os.environ` at call time, not when the overlay is
+`render_env` reads `os.environ` at call time, not when the overlay is
 registered. Any code that touches the spawn path must therefore route through
-`resolve_env` (directly or via `_merge_env`) — never via a captured snapshot of
-`os.environ` at registration time.
+`render_env` (via `_merge_env`) — never via a captured snapshot of `os.environ`
+at registration time.
 
 The `CuprumContext.env_overlay` field is a `MappingProxyType` (or `None`) and
 is itself part of the immutable context dataclass.
@@ -2285,11 +2309,13 @@ token, and reset it on scope exit; nested scopes therefore behave as a stack
 and are restricted by the same LIFO detach rule as `AllowRegistration` and
 `HookRegistration`.
 
-Property tests for the merge and resolve invariants live in
+Property tests for the merge, render, and policy-composition invariants live in
 `cuprum/unittests/test_env_context_properties.py`. They use
 [Hypothesis](https://hypothesis.readthedocs.io/) to exercise arbitrary layer
-counts, payload contents, and overlap patterns, and to confirm that the helpers
-never mutate caller-supplied mappings.
+counts, payload contents, overlap patterns, and mode pairs, confirming that
+`OVERLAY` and `INHERIT` children preserve the parent mode, that a `REPLACE`
+child discards the parent overlay, and that the helpers never mutate
+caller-supplied mappings.
 
 ## Building the native extension
 

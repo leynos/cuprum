@@ -14,9 +14,9 @@ import dataclasses as dc
 import typing as typ
 from pathlib import Path
 
-from cuprum.context import _validate_timeout
+from cuprum.context import EnvMode, UnsetType, _validate_timeout
 
-type _EnvMapping = cabc.Mapping[str, str] | None
+type _EnvMapping = cabc.Mapping[str, str | UnsetType] | None
 type _CwdType = str | Path | None
 
 _DEFAULT_CANCEL_GRACE = 0.5
@@ -69,6 +69,8 @@ class ExecutionContext:
         Error handling strategy applied during decoding.
     tags:
         Optional metadata attached to structured execution events.
+    env_mode:
+        Environment policy applied when rendering ``env`` for the subprocess.
 
     """
 
@@ -82,6 +84,7 @@ class ExecutionContext:
     encoding: str = _DEFAULT_ENCODING
     errors: str = _DEFAULT_ERROR_HANDLING
     tags: cabc.Mapping[str, object] | None = None
+    env_mode: EnvMode = EnvMode.OVERLAY
 
     def __post_init__(self) -> None:
         """Validate the native-pump cleanup grace after initialization."""

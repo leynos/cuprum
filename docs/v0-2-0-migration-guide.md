@@ -13,6 +13,14 @@ its programs. Keep using `scoped(ScopeConfig(...))` when the scope also needs
 hook or policy configuration. For examples and nesting behaviour, see the
 [policy section](users-guide.md#apply-a-policy) in the users' guide.
 
+## Environment policies
+
+`EnvMode`, `UNSET`, and the `env_mode` fields on `ScopeConfig`,
+`CuprumContext`, and `ExecutionContext` are opt-in. Existing callers retain the
+live environment-overlay behaviour and require no changes. Use
+`EnvMode.REPLACE` only where a child must receive an explicitly supplied
+environment, and use `UNSET` to remove an inherited variable from an overlay.
+
 ## Line-level output observation
 
 Cuprum 0.2.0 adds `SafeCmd.lines()` and the `RunOutputOptions.on_line` callback
