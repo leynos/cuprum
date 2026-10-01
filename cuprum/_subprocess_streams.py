@@ -170,46 +170,6 @@ def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
 ) -> _StreamConfig:
-    """Build the stdout _StreamConfig for an execution context.
-
-    When a presentation-sink session is active, mirrored stdout is routed
-    through the session's log destination so it lands inside the adapter's
-    framing (for example, inside the GitHub Actions group) in the order the
-    adapter received it.
-
-    Returns
-    -------
-    _StreamConfig
-        The stream configuration for the run's stdout drain.
-    """
-    stdout_sink = _resolve_stream_sink(
-        execution.sink_session, execution.ctx.stdout_sink, sys.stdout
-    )
-    return _StreamConfig(
-        capture_output=execution.capture,
-        echo_output=execution.echo_stdout,
-        echo_max_line_bytes=execution.max_echo_line_bytes,
-        # Set on the stdout config and inherited by the stderr one, which this
-        # module derives with ``dc.replace``: the drain's mode governs both
-        # streams of a run, exactly as the caller asked for it once.
-        capture_bytes=execution.capture_bytes,
-        # Set on the stdout config and inherited by the stderr one, which this
-        # module derives with ``dc.replace``: one policy governs the run, as
-        # the caller specified on the options object.
-        broken_pipe_policy=execution.broken_pipe_policy,
-        sink=stdout_sink,
-        encoding=execution.ctx.encoding,
-        errors=execution.ctx.errors,
-        discard_on_cancel=discard_on_cancel,
-        read_size=_current_read_size(),
-        activity=execution.idle.note_activity if execution.idle is not None else None,
-    )
-
-
-def _build_stream_config(
-    execution: _SubprocessExecution,
-    discard_on_cancel: asyncio.Event,
-) -> _StreamConfig:
     """Build the stdout ``_StreamConfig`` for an execution context.
 
     When a presentation-sink session is active, mirrored stdout is routed
