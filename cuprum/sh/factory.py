@@ -10,8 +10,9 @@ call's arguments into an immutable :class:`~cuprum.sh.safe_cmd.SafeCmd`.
 # eagerly and ``Program`` and ``ProgramCatalogue`` are genuine runtime imports.
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProgramCatalogue
 from cuprum.program import Program
-from cuprum.sh.argv import _ArgValue, build_argv
-from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
+from cuprum.sh.argv import ArgValue, build_argv
+from cuprum.sh.builder import SafeCmdBuilder
+from cuprum.sh.safe_cmd import SafeCmd
 
 __all__ = ["make"]
 
@@ -34,7 +35,9 @@ def make(
     Returns
     -------
     SafeCmdBuilder
-        A callable that builds ``SafeCmd`` instances for ``program``.
+        A callable that builds ``SafeCmd`` instances for ``program``. It
+        accepts the same positional and keyword values the runtime validates:
+        ``str``, ``int``, ``float``, ``bool``, or :class:`pathlib.Path`.
 
     Raises
     ------
@@ -43,7 +46,7 @@ def make(
     """  # ruff: ignore[docstring-extraneous-exception] - UnknownProgramError propagates from catalogue.lookup
     entry = catalogue.lookup(program)
 
-    def builder(*args: _ArgValue, **kwargs: _ArgValue) -> SafeCmd:
+    def builder(*args: ArgValue, **kwargs: ArgValue) -> SafeCmd:
         """Coerce ``args``/``kwargs`` into a ``SafeCmd`` for the program."""
         argv = build_argv(*args, **kwargs)
         return SafeCmd(program=entry.program, argv=argv, project=entry.project)

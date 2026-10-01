@@ -123,13 +123,22 @@ path or the child's inherited `PATH`.
 
 ## Build arguments deliberately
 
-The builder that `sh.make()` returns accepts strings, numbers, booleans, and
-paths as positional arguments. Keyword arguments become `--name=value`;
-underscores in names become hyphens. This suits tools that actually accept that
-form. For flags such as `--check`, pass a positional argument: `check=True`
-would produce `--check=True`. `None` raises `TypeError` in either position, so
-decide whether to omit or substitute an optional flag before building. An
-argument containing spaces remains one argument.
+The builder that `sh.make()` returns accepts `str | int | float | bool | Path`
+in positional and keyword positions alike. Keyword arguments become
+`--name=value`; underscores in names become hyphens. This suits tools that
+actually accept that form. For flags such as `--check`, pass a positional
+argument: `check=True` would produce `--check=True`. Booleans are values, not
+presence switches: `porcelain=True` produces `--porcelain=True`, and
+`porcelain=False` produces `--porcelain=False`. `None` raises `TypeError` in
+either position, so decide whether to omit or substitute an optional flag
+before building. An argument containing spaces remains one argument.
+
+Any other unsupported type raises `TypeError` naming the offending type, not
+rendering it with `str()`: `bytes`, `list`, and a user-defined `os.PathLike`
+all fail, and only `pathlib.Path` itself is accepted. That domain is the
+`ArgValue` alias, importable from both `cuprum` and `cuprum.sh`; the builder
+`sh.make()` returns is a `SafeCmdBuilder`, and this is the contract a static
+type checker enforces at the call site.
 
 <!-- tested-example: arguments -->
 
