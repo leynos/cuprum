@@ -390,11 +390,11 @@ def test_resolver_invocation_count_is_the_caller_s_choice() -> None:
 def test_binding_is_immutable_and_hashable() -> None:
     """The value type is a frozen dataclass, so it can cross scope boundaries."""
     binding = executable_binding(PROGRAM, "/opt/tools/bin/tool")
+    # The attribute is read-only by design, so the assignment has to go
+    # through ``Any`` to reach the runtime guard under test.
+    mutable = typ.cast("typ.Any", binding)
     with pytest.raises(dc.FrozenInstanceError):
-        # ``setattr`` rather than an assignment: the attribute is read-only by
-        # design, so a checked assignment could not be written at all. This is
-        # the runtime half of that guarantee.
-        setattr(binding, "path", executable_path("/bin/sh"))
+        mutable.path = executable_path("/bin/sh")
     assert isinstance(hash(binding), int)
 
 
