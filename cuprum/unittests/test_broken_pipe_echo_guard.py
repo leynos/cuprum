@@ -27,13 +27,14 @@ from cuprum.echo_events import (
     EchoStream,
     RelayFallback,
 )
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        CapturedPair,
+    )
 
 _BROKEN_PIPE = "closed presentation destination"
 

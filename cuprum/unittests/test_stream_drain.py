@@ -19,13 +19,14 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        CapturedPair,
+    )
 
 _PROPERTY_MAX_EXAMPLES = 24
 _LINE_BOUNDARY_CHARACTERS = (

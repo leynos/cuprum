@@ -29,7 +29,6 @@ from cuprum._result_assembly import (
     _require_text,
     _RunMeasurements,
 )
-from cuprum._result_types import _AnyCommandResult
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stream_run import (
     # Imported, not merely re-exported: the direct run path below is the caller.
@@ -58,12 +57,13 @@ from cuprum.echo_events import BrokenPipePolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
+    from cuprum._result_types import _AnyCommandResult
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
-    from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
+    from cuprum.sh import ExecutionContext, SafeCmd
     from cuprum.sinks.base import OutputSession
 
 

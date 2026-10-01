@@ -26,14 +26,14 @@ from cuprum._pipeline_stream_results import (
     _surface_unexpected_pipe_failures,
 )
 from cuprum._pipeline_streams import _create_pipe_tasks
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-    ConsumerTask,
-)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        ConsumerTask,
+    )
 
 _SUPPRESSED_PIPE_ERRORS = (BrokenPipeError, ConnectionResetError)
 

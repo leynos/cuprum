@@ -23,11 +23,12 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
 from cuprum._subprocess_wait import _drain_stream_consumers, _DrainContext
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-    ConsumerTask,
-)
+
+if typ.TYPE_CHECKING:
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+        ConsumerTask,
+    )
 
 _EXAMPLES = 25
 
