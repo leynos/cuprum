@@ -225,6 +225,36 @@ likelihood, and mitigation.
   three-check semantic audit then ran clean: target-only paths byte-identical,
   every deletion explained by this branch's own relocations, no new duplicated
   blocks.
+- [x] (2026-10-01) Second rebase onto `origin/main`, which had advanced from
+  `2733ffc6` to `104c680c` while the PR was open. This replay's `OLD_BASE` is
+  `2733ffc6` — the *previous* rebase's target, which had contained none of this
+  branch's work, so it is a genuine exclusive boundary and no squash analysis
+  was needed to re-establish it. The range is `2733ffc6..a3083984`, 46 commits
+  (round 1 replayed 43 from `991dee64`, having absorbed 16 commits that are now
+  inside this boundary). Same command, same `zdiff3`, `rerere` still disabled.
+  `git merge-tree --write-tree
+  --name-only` predicted exactly two conflicts and the replay hit exactly two,
+  which is the oracle earning its keep: `cuprum/_subprocess_execution.py` and
+  `CHANGELOG.md`. Only those two commits have content-different patches in
+  `git range-diff`; the other 44 are `=`.
+  `_subprocess_execution.py` conflicted because main's only change to the
+  *relocated* function was one line — `env=_merge_env(execution.ctx.env)` →
+  `env=_merge_env(execution.ctx.env, execution.ctx.env_mode)` — and this branch
+  had moved that function to `cuprum/_subprocess_spawn.py`. Resolved by taking
+  the branch's deletion of the old copy and applying main's `env_mode` argument
+  at the new home, so the fix survives at the site that actually spawns.
+  `CHANGELOG.md` was a both-added conflict with an empty base (main's `EnvMode`
+  bullets against this branch's streaming-stdin and redirection bullets), under
+  one `### Added` heading; resolved by keeping both, main's entries first.
+  Verified afterwards: main's *entire* delta to `_subprocess_execution.py` was
+  that one line, and every one of main's added lines in
+  `cuprum/_command_internals.py` (6), `docs/cuprum-design.md` (30), and
+  `docs/developers-guide.md` (47) is present at the rebased head. The
+  three-check semantic audit ran clean again against the new target: 32 of 32
+  target-only paths byte-identical, no file deleting more than the branch series
+  itself deleted, no duplicated blocks. The three module-cap-repair files
+  (`cuprum/sh/output.py`, `cuprum/sh/pipeline.py`, `cuprum/sh/__init__.py`) came
+  through the replay byte-identical to the round-1 result.
 - [x] (2026-09-29) Module-size repair after the rebase, `6d7a5362`. The rebased
   tree failed `make lint` with `C0302: Too many lines in module (410/400)` at
   `cuprum/sh/output.py`, aborting the recipe before eight later leaves ran.
@@ -235,11 +265,12 @@ likelihood, and mitigation.
   so every plus-line this branch contributed survives: `_DeprecatedOutputFlags`
   and `_resolve_pipeline_output` moved to `cuprum/sh/pipeline.py`, which this
   branch had just created as that concern's home and which holds their only
-  production caller. `cuprum/sh/output.py` went 410 → 369 lines,
-  `cuprum/sh/pipeline.py` 179 →
-  1. `cuprum.sh` re-exports both names unchanged, so object identity is
-  preserved and `test_pipeline_output_options.py` — which imports them from
-  `cuprum.sh` — needed no edit.
+  production caller. `cuprum/sh/output.py` went 410 → 368 lines,
+  `cuprum/sh/pipeline.py` 179 → 220. `cuprum.sh` re-exports both names
+  unchanged, so object identity is preserved and
+  `test_pipeline_output_options.py` — which imports them from `cuprum.sh` —
+  needed no edit. The `410` was the *rebased* figure the ceiling tripped on;
+  plain `origin/main` carries 379 and the branch alone adds the rest.
 - [x] (2026-09-27 22:05Z) Re-gate after the round-4 repair. The first attempt
   aborted at `python-lint`: the new regression test's `_collect_stdout_lines`
   helper used `# noqa: ANN401`, which this repository no longer honours
@@ -914,8 +945,49 @@ likelihood, and mitigation.
   comparing *targets*, so an unnormalized `str` would have slipped past the
   shared-path refusal that exists to stop two independent offsets interleaving
   into one file.
+- Observation (rebasing): a conflict in a file this branch has *relocated code
+  out of* looks like a large deletion conflict even when the target's real
+  contribution to that file is tiny. The `_subprocess_execution.py` conflict
+  showed 33 target lines going missing, but diffing the target against the base
+  proved that main's **entire** change to that file was a single argument added
+  to one `_merge_env` call, and the other 32 lines were the function body this
+  branch had moved. The generalizable move is to diff `base → target` for the
+  disputed file rather than reasoning about the conflict hunk: it tells you what
+  you actually owe the target, which for a relocation can be one line. Left
+  unchecked, the temptation is to accept the target's copy wholesale, which here
+  would have resurrected the old `_spawn_subprocess` alongside the new module.
+- Observation (evidence): a conflict-time scan for "target lines absent from the
+  working tree" produces false positives while the replay is mid-flight, because
+  later commits have not been applied yet. Four files were flagged; all four
+  cleared once checked properly against `base → target` deltas. Treat that scan
+  as a lead generator only, and confirm each hit against the target's real
+  delta before acting on it.
 
 ## Decision log
+
+- Decision: on the second rebase, resolve the `_subprocess_execution.py`
+  conflict by taking this branch's deletion of `_spawn_subprocess` **and**
+  porting main's one-line `env_mode` change to the function's new home in
+  `cuprum/_subprocess_spawn.py`, rather than by restoring main's copy of the
+  function. Rationale: the branch's purpose is that the spawn layer owns stdio
+  resolution and descriptor lifetime, and the new module is where every stdio
+  binding now reaches `Popen`; keeping the old copy would have left two spawn
+  paths and resurrected code the branch removed on purpose. Main's change was
+  fully preserved at the surviving site, which was verified by diffing
+  `2733ffc6 → 104c680c` for that file and confirming the `env_mode` argument is
+  the only addition. Options considered: (a) take the target's version of the
+  function and delete the new module's copy — rejected, it reverses the branch's
+  central refactor; (b) keep both spawn functions under a conditional —
+  rejected as compatibility theatre with no external consumer. Date/Author:
+  2026-10-01, implementation agent.
+- Decision: resolve the `CHANGELOG.md` conflict by keeping both sides' bullets
+  under the single `### Added` heading, with main's `EnvMode`/`UNSET`/`env_mode`
+  entries first. Rationale: the two sets describe different features and neither
+  supersedes the other; the conflict exists only because both branches appended
+  to the same section for the same unreleased version. Main's ordering is kept
+  so the file's history reads as target-then-branch, which matches how the
+  rebase composed the rest of the tree. Date/Author: 2026-10-01, implementation
+  agent.
 
 - Decision: repay the post-rebase module-length overrun by moving
   `_DeprecatedOutputFlags` and `_resolve_pipeline_output` into
