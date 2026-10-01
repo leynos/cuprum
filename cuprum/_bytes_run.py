@@ -24,8 +24,10 @@ rather than asserting it away.
 
 Keeping them together is what stops the command and pipeline paths from
 growing two slightly different answers to "what may a binary run be asked
-for". This module is imported by :mod:`cuprum._bytes_run_mixin`, where the
-public entry points live.
+for". The public entry points that ask the question live in
+:mod:`cuprum.sh.safe_cmd` and :mod:`cuprum.sh.pipeline`, which is why this
+module imports its options from :mod:`cuprum.sh.output` rather than from the
+package facade that those modules belong to.
 """
 
 from __future__ import annotations
