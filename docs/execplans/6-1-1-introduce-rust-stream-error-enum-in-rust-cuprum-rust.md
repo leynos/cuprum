@@ -1912,6 +1912,39 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   silently failed. A future reader who finds the `CHANGES_REQUESTED` still
   standing should read that queue depth before concluding the request was lost.
 
+  **A correction to the paragraph above, because its stated reason was wrong
+  even though its conclusion survived.** That paragraph said `main` is "not
+  branch-protected" because
+  `gh api repos/leynos/cuprum/branches/main/protection` returns 404. The 404 is
+  real but it only means the *legacy* branch-protection API has nothing
+  configured. This repository protects `main` through a **ruleset** —
+  `main-required-checks`, id `18427980`, `target=branch`,
+  `enforcement=active` — visible via `gh api repos/leynos/cuprum/rulesets` and
+  `gh api repos/leynos/cuprum/rules/branches/main`, a separate mechanism the
+  legacy endpoint does not report. So the premise was false and the reasoning
+  that rested on it was invalid.
+
+  The conclusion nonetheless holds, for a different and now-measured reason:
+  the ruleset's rules are exactly `required_status_checks` and `deletion`. It
+  requires **12 status checks** — `lint-test`, three `Typecheck and test` legs,
+  `coverage`, `benchmark-ratchet`, five `build-native-wheels` legs and
+  `verify-wheel-install`, plus `Extension-gated tests (Python/Rust boundary)` —
+  and carries **no `pull_request` review rule**. So a `CHANGES_REQUESTED`
+  review genuinely does not gate the merge here, which is what the earlier
+  paragraph claimed; it was right by accident and wrong in its evidence. This
+  is worth recording precisely because the two mechanisms disagree: a reader
+  who checks only the legacy API will conclude the branch is unprotected and be
+  misled about *why* the merge button is or is not live.
+
+  `mergeStateStatus` was also observed as **`CLEAN`** (at `10abccad`) and then
+  as **`BLOCKED`** (at `6871ba35`), and the difference is not the review: at
+  the later head the 12 required checks were still `in_progress`, so the merge
+  was blocked by pending required checks and nothing else. `mergeable` stayed
+  `MERGEABLE` throughout. An earlier reading of `BLOCKED` as review-driven
+  would have been a misattribution, and the check-run inventory
+  (`gh api repos/leynos/cuprum/commits/<sha>/check-runs`) is what distinguishes
+  the two causes.
+
   The identifier is `67f60c91`, the third enqueued, and the two supersessions
   are the reusable lesson. `de71c44b` named head `89336b01` in its body and was
   invalidated when a later commit landed; `f33ee725` named `3de1c64b` and was
@@ -1927,15 +1960,20 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
   The gating record is now closed as far as the repository can close it. What
   the branch's own artefacts establish, each independently of this file's prose:
-  `mergeStateStatus` is `CLEAN`; `mergeable` is `MERGEABLE`; `main` is **not**
-  branch-protected (`gh api branches/main/protection` returns 404), so
-  `CHANGES_REQUESTED` is a bot-held signal rather than a technical gate; and
-  the review's sole finding is genuinely repaired — `b3ae9f20` deleted the
-  local copy and `test_rust_streams_roundtrip_property.py:27` now imports the
-  shared `_safe_close` from `cuprum.unittests._rust_stream_test_support`, where
-  it is defined at `:29`. The fact that `main` is unprotected is worth stating
-  plainly, because it is the difference between "cannot merge" and "will not
-  merge without an updated review", and only the second is true.
+  `mergeable` is `MERGEABLE`; `main` is protected by ruleset
+  `main-required-checks`, whose rules are `required_status_checks` and
+  `deletion` only and which contains **no review rule**, so `CHANGES_REQUESTED`
+  is a bot-held signal rather than a technical gate; and the review's sole
+  finding is genuinely repaired — `b3ae9f20` deleted the local copy and
+  `test_rust_streams_roundtrip_property.py:27` now imports the shared
+  `_safe_close` from `cuprum.unittests._rust_stream_test_support`, where it is
+  defined at `:29`. The absence of a review rule is the load-bearing fact: it
+  is the difference between "cannot merge" and "will not merge without an
+  updated review", and only the second is true. `mergeStateStatus` is
+  deliberately not listed, because it is time-varying — it read `CLEAN` at
+  `10abccad` and `BLOCKED` at `6871ba35` purely because the required checks
+  were still running at the later head. Quoting it as a settled property is
+  exactly the error the paragraphs above record.
 
   Two CI runs for `89336b01` were observed in flight and neither was a verdict:
   run `36901334814` (`CI`, 14 jobs, `in_progress`, 0 failing) and `36901334242`
