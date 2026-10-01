@@ -146,10 +146,13 @@ escalation, not a workaround.
 
 ## Progress
 
-- [ ] (2026-10-01 15:24Z) Reconnaissance complete: spawn sites, context
+- [x] (2026-10-01 15:24Z) Reconnaissance complete: spawn sites, context
   plumbing, event/adapter projection, and positional contracts identified.
-- [ ] (2026-10-01 15:24Z) ExecPlan written.
-- [ ] EP-M1: `cuprum/executable_binding.py` plus its unit and property tests.
+- [x] (2026-10-01 15:24Z) ExecPlan written.
+- [x] (2026-10-01 16:05Z) EP-M1 complete. The module split into
+  `cuprum/executable_paths.py` (path vocabulary) and
+  `cuprum/executable_binding.py` (binding + resolution) after the single
+  module reached 426 lines. 99 tests pass.
 - [ ] EP-M2: `cuprum/context/executable_overlay.py`, `CuprumContext` and
   `ScopeConfig` fields, `resolve_executable`, `bind_executable`, exports.
 - [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
@@ -182,6 +185,39 @@ escalation, not a workaround.
   file.
   Impact: the migration note goes there, and any code fence added must
   actually run.
+- Observation: the single planned module reached 426 lines against pylint's
+  400-line ceiling, because mandatory NumPy docstrings dominate it. Trimming
+  prose to fit would have removed the TOCTOU warning the issue requires.
+  Impact: the plan's Task 1 module split into `cuprum/executable_paths.py`
+  (219 lines: `ExecutablePath`, `PathBindingRejection`,
+  `InvalidExecutableBindingError`, `classify_executable_path`,
+  `executable_path`, `coerce_path_string`, `advisory_path_rejection`) and
+  `cuprum/executable_binding.py` (326 lines: `ExecutableResolver`,
+  `ExecutableBinding`, `executable_binding`, `resolve_binding`, re-exports).
+  The error type moved *down* into the paths module so the dependency stays
+  acyclic: the paths module raises it, and the binding module imports it.
+  Both are still pure and still import no context module.
+- Observation: `type X = typ.NewType("X", str)` produces a `TypeAliasType`,
+  which is not callable. Only the plain assignment form
+  `X = typ.NewType("X", str)` yields a callable newtype.
+  Evidence: the first green run failed 27 tests with
+  `TypeError: 'typing.TypeAliasType' object is not callable`.
+  Impact: `ExecutablePath` uses the assignment form, matching the sibling
+  `SafePath` in `cuprum/builders/args.py`. The repository's `type` statements
+  are reserved for genuine alias shapes such as `ExecutableResolver`.
+- Observation: `os.access(path, os.X_OK)` returns true for a directory, so the
+  obvious advisory probe accepts a directory as an executable.
+  Evidence: a test asserting a directory is reported `NOT_EXECUTABLE` failed
+  with `None` before `os.path.isfile` was added to the condition.
+  Impact: the probe requires a regular file as well as an execute bit.
+- Observation: `get_type_hints` is called on public dataclasses by the
+  repository's API-contract tests, so a `Program` annotation must stay
+  resolvable at runtime.
+  Evidence: `cuprum/unittests/test_public_api.py:349-396` resolves
+  `CommandResult`, `SafeCmd`, `sh.make`, and `Pipeline.concat`.
+  Impact: `ExecutableBinding`'s annotations must remain resolvable, which the
+  two-module split preserves because nothing in a TYPE_CHECKING block is
+  referenced at runtime.
 
 ## Decision log
 
@@ -210,6 +246,29 @@ escalation, not a workaround.
   Rationale: the task packet that commissioned this plan already directs
   implementation, gates, and review; the ExecPlan is the recorded contract for
   that work rather than a separate decision to be approved.
+  Date/Author: 2026-10-01, implementing agent.
+- Decision: split the value types across `cuprum/executable_paths.py` and
+  `cuprum/executable_binding.py` rather than trimming the single module.
+  Rationale: the tolerance says to extract rather than trim when a module would
+  exceed 400 lines. The split is also a genuine responsibility boundary — "is
+  this string an acceptable path?" is answerable without knowing anything about
+  bindings — and it lets the rejection enum and the error type sit together.
+  The error type moved into the paths module so the dependency runs one way.
+  Date/Author: 2026-10-01, implementing agent.
+- Decision: `advisory_path_rejection` requires a regular file, not just an
+  execute bit.
+  Rationale: directories carry an execute bit, so the bit alone would report a
+  directory as a usable executable, which is never what a caller binding an
+  executable means. `NOT_EXECUTABLE` is a rejection category, not a claim that
+  the path is a file.
+  Date/Author: 2026-10-01, implementing agent.
+- Decision: `executable_path` raises `InvalidExecutableBindingError` with
+  `program=None` rather than a plain `ValueError`.
+  Rationale: one error type with one message shape is easier to document and
+  catch than two, and the optional `program` is what distinguishes standalone
+  path validation from binding construction. `executable_path` remains a
+  subtype of `ValueError`, so callers written against the sibling `safe_path`
+  contract keep working.
   Date/Author: 2026-10-01, implementing agent.
 
 ## Outcomes & retrospective
@@ -289,26 +348,30 @@ each obligation carries a non-vacuity argument.
 
 O1 — Classification totality and first-match order.
 
-- Statement: for every `str` input and every `allow_relative`, `classify_executable_path`
-  returns either `None` or exactly one `PathBindingRejection`, and when it
-  returns a rejection that member's `value` is the message
-  `executable_path` raises for the same input.
+- Statement: for every `str` input and every `allow_relative`,
+  `classify_executable_path` returns either `None` or exactly one
+  `PathBindingRejection`, and when it returns a rejection that member's `value`
+  is the message `executable_path` raises for the same input.
 - Method: property test over generated strings, plus a parameterized table for
   the boundaries that a generator reaches only by luck.
 - Rationale: the classifier is a pure total function over an infinite domain,
   which is exactly the shape property testing covers; the table pins the
   documented check order that a generator cannot assert.
 - Artefact: `cuprum/unittests/test_executable_binding_property_based.py`,
+  `cuprum/unittests/test_executable_paths.py`,
   `cuprum/unittests/test_executable_binding.py`.
 - Evidence: `make test-python` passes; the construction round trip is asserted
   with `pytest.raises(InvalidExecutableBindingError)` and the raised `reason`
   compared to the classifier's answer.
-- Non-vacuity: the generator is a mixed strategy that samples from the empty
-  string, strings containing NUL, strings with `..` segments, relative
-  candidates, and absolute candidates, and it records a classification
-  histogram asserting every rejection member is reached. A seeded mutation
-  that reorders the NUL check after the absolute check must be rejected by the
-  table.
+- Non-vacuity: the generator's alphabet includes NUL, both path separators, and
+  the parent-segment dot, and dedicated properties pin `EMPTY`, `NUL`,
+  `PARENT_SEGMENT`, and `NOT_ABSOLUTE` individually. The two
+  filesystem-dependent members are pinned by a witness table in
+  `test_executable_binding.py` that asserts coverage of the *entire* enum, so a
+  newly added member fails that guard until it is given a witness. A mutation
+  that reordered the NUL check after the absolute check would be caught by
+  `test_nul_check_precedes_the_parent_segment_check` and by
+  `test_nul_pins_the_nul_category`.
 
 O2 — Binding isolation across nested scopes, threads, and tasks.
 
@@ -491,20 +554,25 @@ Re-run every gate through `scrutineer`, then request the CodeRabbit review.
 
 ## Milestones and plateaus
 
-EP-M1 — the pure binding module exists and is fully tested.
+EP-M1 — the pure binding modules exist and are fully tested.
 
 - Requirements and gaps: the issue's "explicit typed binding" and "specify
   validation authority" clauses, at the value-type level.
-- Acceptance evidence: `make test-python` passes with
-  `test_executable_binding.py` and `test_executable_binding_property_based.py`
-  present; both fail before the module exists.
-- Conformance check: the module imports no `cuprum` module at runtime; the
-  `Program` type is untouched; no new dependency is added.
+- Acceptance evidence: `make test-python` passes with `test_executable_paths.py`,
+  `test_executable_binding.py`, and
+  `test_executable_binding_property_based.py` present; all three failed before
+  the modules existed. 99 tests, 25 named examples for the path vocabulary, 34
+  for the binding types, and 15 properties.
+- Conformance check: neither module imports a `cuprum` module at runtime other
+  than their own pair — `Program` is referenced only under `TYPE_CHECKING` —
+  and neither imports the context package at all; the `Program` type is
+  untouched; no new dependency is added; both modules are under pylint's
+  400-line ceiling.
 - Recovery: the milestone is additive and self-contained; `git revert` of its
   single commit restores the prior state with no other file affected.
-- Remaining gaps: nothing consumes the module yet, which is deliberate — the
+- Remaining gaps: nothing consumes the modules yet, which is deliberate — the
   value types must exist and be proven before they are wired in.
-- Compatibility decision: none required. The module is new and unreleased.
+- Compatibility decision: none required. Both modules are new and unreleased.
 
 EP-M2 — bindings are installable, inheritable, and isolated.
 
@@ -675,11 +743,10 @@ back to that same expression when no binding is in scope.
 
 ## Interfaces and dependencies
 
-`cuprum/executable_binding.py`:
+`cuprum/executable_paths.py` (shipped):
 
 ```python
-type ExecutablePath = typ.NewType("ExecutablePath", str)
-type ExecutableResolver = cabc.Callable[[], str]
+ExecutablePath = typ.NewType("ExecutablePath", str)
 
 
 class PathBindingRejection(enum.Enum):
@@ -691,16 +758,10 @@ class PathBindingRejection(enum.Enum):
     NOT_EXECUTABLE = "ExecutablePath is not executable"
 
 
-@dc.dataclass(frozen=True, slots=True)
-class ExecutableBinding:
-    path: ExecutablePath | None = None
-    resolver: ExecutableResolver | None = None
-
-
 class InvalidExecutableBindingError(ValueError):
     def __init__(
         self,
-        program: Program,
+        program: Program | None,
         path: str,
         reason: PathBindingRejection,
     ) -> None: ...
@@ -712,13 +773,40 @@ def classify_executable_path(
 
 
 def executable_path(
-    value: str, *, allow_relative: bool = False
+    value: str | Path, *, allow_relative: bool = False
 ) -> ExecutablePath: ...
+
+
+def coerce_path_string(value: str | Path) -> str: ...
 
 
 def advisory_path_rejection(
     value: str,
 ) -> PathBindingRejection | None: ...
+```
+
+`cuprum/executable_binding.py` (shipped), which re-exports the six public
+names above:
+
+```python
+type ExecutableResolver = cabc.Callable[[], str]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ExecutableBinding:
+    path: ExecutablePath | None = None
+    resolver: ExecutableResolver | None = None
+
+    @property
+    def is_lazy(self) -> bool: ...
+
+
+def executable_binding(
+    program: Program,
+    path_or_resolver: str | Path | ExecutableResolver,
+    *,
+    allow_relative: bool = False,
+) -> ExecutableBinding: ...
 
 
 def resolve_binding(binding: ExecutableBinding, *, cwd: str | None) -> str: ...
