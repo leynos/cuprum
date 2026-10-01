@@ -483,7 +483,7 @@ earlier body had been unreachable since the commit that added it.
 Neither linter the project runs reports it, on exactly the nouns this codebase
 uses. Ruff 0.16.4's F811 and Pylint 4.0.9's E0102 both decline to report a
 redefinition of an underscore-prefixed name, and private helpers here are
-underscore-prefixed by convention. Upstream Pyflakes *does* report it
+underscore-prefixed by convention. Upstream Pyflakes _does_ report it
 (`redefinition of unused '_foo' from line 1`), so this is a deviation in the
 two linters actually installed rather than a defensible reading of the rule.
 
