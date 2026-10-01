@@ -15,7 +15,7 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin import _settle_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -115,7 +115,7 @@ async def _await_stdin_writer_and_reconcile_consumers(
     if tasks.stdin_task is None:
         return
     try:
-        await tasks.stdin_task
+        await _settle_stdin_writer(tasks.stdin_task)
     except BaseException:
         await _shielded_cleanup(
             _drain_stream_consumers(

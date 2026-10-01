@@ -34,6 +34,16 @@ if typ.TYPE_CHECKING:
 
 _LOGGER = logging.getLogger("cuprum.stdin")
 
+# How long a stdin writer is given to notice it should stop — both when the
+# child it was feeding has exited and when the writer is being cancelled. Fixed
+# and short for the same reason the readers' EOF grace is (see
+# ``_CAPTURE_EOF_GRACE_S`` in ``cuprum._subprocess_wait``): the bytes are
+# already written and the child that would read them is gone, so the only thing
+# still being waited for is a pipe end held open by the child's own
+# descendants. A writer that can finish at all finishes in well under this; one
+# that cannot will never finish, however long it is given.
+_STDIN_SETTLE_GRACE_S = 0.25
+
 
 def _emit_stdin_error(
     process: asyncio.subprocess.Process,
@@ -109,11 +119,38 @@ async def _close_stdin(
     stdin: asyncio.StreamWriter,
     observation: _StageObservation,
 ) -> None:
-    """Close the child's stdin pipe, reporting any failure to close it."""
+    """Close the child's stdin pipe, reporting any failure to close it.
+
+    The wait is bounded, and deliberately so. ``wait_closed`` does not merely
+    flush what cuprum wrote: it waits for the transport's ``connection_lost``,
+    which needs the child-side pipe end to reach EOF. A grandchild that
+    inherited the child's stdin read end holds that pipe open past the child's
+    own exit, so the callback never fires and the wait never returns.
+
+    That would be survivable if the wait were interruptible, but it is not:
+    this coroutine runs inside the writer task's ``finally``, and a
+    cancellation delivered there does not skip the ``await`` — it schedules
+    one more cancellation, so ``close()`` still runs and the ``await`` still
+    blocks. A caller could therefore cancel the writer and still wait forever
+    for it, which is what turned a stalled run's deadline into an endless one.
+    The descriptors themselves are released when the loop tears the transport
+    down, so refusing to outlive the run costs no resource the run still owns.
+    """
     try:
         _LOGGER.debug("stdin_writer_close_start pid=%s", process.pid)
         stdin.close()
-        await stdin.wait_closed()
+        await asyncio.wait_for(stdin.wait_closed(), _STDIN_SETTLE_GRACE_S)
+    except TimeoutError:
+        # Ordered before the ``OSError`` handler deliberately: the builtin
+        # ``TimeoutError`` that ``wait_for`` raises *is* an ``OSError``, so the
+        # broader handler would otherwise report every expired window as a pipe
+        # failure. It is not one: cuprum wrote everything it was given, and the
+        # pipe's reader outliving the child is a fact about the child's own
+        # descendants rather than a fault in this pipe.
+        _LOGGER.debug(
+            "stdin_writer_close_abandoned pid=%s reason=reader_still_open",
+            process.pid,
+        )
     except (OSError, RuntimeError) as exc:
         _emit_stdin_error(process, observation, exc, operation="close")
 
@@ -124,11 +161,65 @@ async def _cancel_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
     Used on the timeout and cancellation paths to reclaim a writer that may be
     blocked draining bytes into an unread pipe, so its cleanup cannot delay the
     surrounding failure work.
+
+    Draining it is bounded: a task can absorb cancellation in its own
+    ``finally`` and go on blocking there, which is exactly what the writer's
+    pipe close used to do. Reclaiming a writer is meant to *bound* the wait for
+    it, so an unbounded drain here would hand that guarantee back to the thing
+    it was written to contain.
     """
     if stdin_task is None:
         return
     stdin_task.cancel()
-    await asyncio.gather(stdin_task, return_exceptions=True)
+    await asyncio.wait((stdin_task,), timeout=_STDIN_SETTLE_GRACE_S)
+
+
+async def _settle_stdin_writer(stdin_task: asyncio.Task[None] | None) -> None:
+    """Reclaim the stdin writer once the child it was feeding has exited.
+
+    The exit path is the one place a writer can outlive what it writes to. A
+    timeout or a cancellation reclaims the writer through
+    :func:`_cancel_stdin_writer`, and an ordinary run has the producer exhaust
+    and the writer close the pipe *before* the child is done — so by the time
+    an exit settles, a writer that is still pending is one whose remaining work
+    can reach nobody: the child is reaped and its end of the pipe is gone.
+
+    Awaiting such a writer unconditionally is what this replaces. A producer
+    parked in ``anext`` has no continuation that would ever end the wait, so an
+    unbounded await made a stalled producer indistinguishable from a stalled
+    child and outlasted the run's own deadline: the terminator fired, the child
+    was killed, and the caller kept waiting on the producer.
+
+    A writer that already finished is awaited, so a failure it raised before
+    the exit settled still reaches the caller. One that is still pending is
+    given the settle window, which is what lets a write already in flight fail
+    with ``EPIPE`` and take the early-close path, and is then cancelled and
+    reclaimed exactly as the teardown paths reclaim it. A producer that would
+    have failed after that window loses the report, which is the same trade
+    every other teardown path already makes; the alternative is a run that
+    never ends.
+
+    Parameters
+    ----------
+    stdin_task : asyncio.Task[None] | None
+        The run's stdin writer. ``None`` for an inherited stdin, which has no
+        pipe of cuprum's and so nothing to reclaim.
+
+    Raises
+    ------
+    BaseException
+        Whatever the writer raised, when it failed before or within the
+        window. A writer this helper cancels reports nothing: it was reclaimed,
+        not broken.
+    """  # ruff: ignore[docstring-extraneous-exception] - the writer's own exception propagates.
+    if stdin_task is None:
+        return
+    if not stdin_task.done():
+        await asyncio.wait((stdin_task,), timeout=_STDIN_SETTLE_GRACE_S)
+    if stdin_task.done():
+        await stdin_task
+        return
+    await _cancel_stdin_writer(stdin_task)
 
 
 def _spawn_payload_writer(
@@ -211,6 +302,7 @@ __all__ = [
     "_cancel_stdin_writer",
     "_close_stdin",
     "_emit_stdin_error",
+    "_settle_stdin_writer",
     "_spawn_stdin_writer",
     "_write_stdin",
 ]

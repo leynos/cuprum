@@ -225,6 +225,69 @@ likelihood, and mitigation.
   three-check semantic audit then ran clean: target-only paths byte-identical,
   every deletion explained by this branch's own relocations, no new duplicated
   blocks.
+- [x] (2026-10-01) Post-rebase review round: eight CodeRabbit findings actioned
+  against the tree at `c796d885`, each verified before acting, plus a ninth
+  defect found by probing rather than by review. The eight were the two Majors
+  (the pipeline stdio-target refusal and the borrowed-file flush ordering), the
+  `io.UnsupportedOperation` re-raise, the documented default for unset
+  stdout/stderr, the duplicated `pipes` property, the `_subprocess_context`
+  docstring, the developers-guide split of the two stdin writers' failure
+  policies, and the `RunOutputOptions` field comment. Two of those became
+  judgment calls rather than applied suggestions: `_resolve_stdio_binding` now
+  re-raises `io.UnsupportedOperation` *itself* (the existing test's own
+  docstring argued for that while its assertion accepted the weaker outcome
+  through `__cause__`), and `_reject_redirected_stdin`'s message dropped a
+  spurious `f` prefix and a `sorted(_STDIN_KINDS)` fragment that rendered as a
+  bare `.`.
+- [x] (2026-10-01) Ninth defect found, proven, and fixed: the stdin writer's
+  teardown could outlive the run that requested it. `_write_stdin` closes the
+  pipe in a `finally`, and a task cancelled *inside* a `finally` does not skip
+  the `await` — it schedules one more cancellation, so `close()` still runs and
+  `wait_closed()` still blocks. `wait_closed` needs the protocol's
+  `connection_lost`, which needs the child-side stdin pipe end to reach EOF, so
+  a grandchild that inherited that read end held the wait open indefinitely and
+  `_cancel_stdin_writer` was defeated by the very `finally` it relied on. This
+  is pre-existing on `main` (proven with
+  `git show main:cuprum/_subprocess_stdin.py`) and squarely inside #445's
+  "bounded cancellation" scope. Isolation was decisive at each step: raw
+  `asyncio` returned in 0.02 s, cuprum with a 3 s deadline hung past 15 s, a
+  stack dump pinned it to `_close_stdin`, and a coroutine-chain walk gave the
+  full `_settle_stdin_writer → _cancel_stdin_writer → finally → wait_closed`
+  path. Fixed by bounding both waits with one `_STDIN_SETTLE_GRACE_S` (0.25 s).
+  After the fix the deadline case returns in 0.52 s and the no-deadline case
+  exits 0. The regression test uses `ThreadPoolExecutor` +
+  `.result(timeout=...)` rather than a bare call, because a regression hangs
+  the writer in an uninterruptible await and the test must *fail* rather than
+  hang the suite.
+- [x] (2026-10-01) Gate repair round. The first `scrutineer` sweep after the
+  review fixes returned red on three of four gates. `make check-fmt` failed on
+  mdtablefix (six prose paragraphs hand-wrapped wider than mdtablefix's own
+  width — reflowed with `--in-place`, not hand-edited). `make typecheck`
+  returned 13 `ty` diagnostics in the new `test_pipeline_stdio_targets.py`,
+  twelve of them from one `**{stream: target}` unpacking that asked the checker
+  to bind every `RunOutputOptions` keyword at once; replaced with an explicit
+  three-arm builder. `make lint` returned 14 ruff errors across nine files —
+  docstring sections that no longer matched the raised types,
+  `asyncio.TimeoutError` where the builtin `TimeoutError` is required, an
+  unused import, and a set literal. One important ordering detail surfaced
+  here: on Python 3.11+ the builtin `TimeoutError` *is* `asyncio.TimeoutError`
+  **and** is an `OSError`, so the `TimeoutError` handler in `_close_stdin` must
+  come *before* the `(OSError, RuntimeError)` one or every expired window is
+  misreported as a pipe failure. The opposite ordering of Ruff's TRY-family
+  defaults.
+- [x] (2026-10-01) Second gate repair: `make lint` then failed pylint
+  `C0302: Too many lines in module (427/400)` at `cuprum/sh/stdio.py`, caused
+  by this round's own docstring additions. Repaired by extraction, matching the
+  pattern ADR-007 already records: the rules policing *combinations* of targets
+  (`_validate_stdio_targets` and the `_reject_*` helpers) moved to a new
+  `cuprum/sh/stdio_rules.py`, leaving `stdio.py` with the vocabulary and the
+  per-variant payload rules. `stdio.py` went 427 → 246 lines, `stdio_rules.py`
+  is 214. `cuprum.sh.output` re-exports `_validate_stdio_targets` under its old
+  name, so its `__post_init__` call site is unchanged, and
+  `_command_internals.py` now imports `_reject_contested_stdin` from the new
+  module. The split also drifted the maturin wheel-manifest snapshot, which was
+  updated with the new module entry. `make lint` then passed in full — every
+  sub-check observed, including skylos, clippy, whitaker and actionlint.
 - [x] (2026-10-01) Second rebase onto `origin/main`, which had advanced from
   `2733ffc6` to `104c680c` while the PR was open. This replay's `OLD_BASE` is
   `2733ffc6` — the *previous* rebase's target, which had contained none of this
@@ -232,11 +295,10 @@ likelihood, and mitigation.
   was needed to re-establish it. The range is `2733ffc6..a3083984`, 46 commits
   (round 1 replayed 43 from `991dee64`, having absorbed 16 commits that are now
   inside this boundary). Same command, same `zdiff3`, `rerere` still disabled.
-  `git merge-tree --write-tree
-  --name-only` predicted exactly two conflicts and the replay hit exactly two,
-  which is the oracle earning its keep: `cuprum/_subprocess_execution.py` and
-  `CHANGELOG.md`. Only those two commits have content-different patches in
-  `git range-diff`; the other 44 are `=`.
+  `git merge-tree --write-tree --name-only` predicted exactly two conflicts and
+  the replay hit exactly two, which is the oracle earning its keep:
+  `cuprum/_subprocess_execution.py` and `CHANGELOG.md`. Only those two commits
+  have content-different patches in `git range-diff`; the other 44 are `=`.
   `_subprocess_execution.py` conflicted because main's only change to the
   *relocated* function was one line — `env=_merge_env(execution.ctx.env)` →
   `env=_merge_env(execution.ctx.env, execution.ctx.env_mode)` — and this branch
@@ -251,10 +313,10 @@ likelihood, and mitigation.
   `cuprum/_command_internals.py` (6), `docs/cuprum-design.md` (30), and
   `docs/developers-guide.md` (47) is present at the rebased head. The
   three-check semantic audit ran clean again against the new target: 32 of 32
-  target-only paths byte-identical, no file deleting more than the branch series
-  itself deleted, no duplicated blocks. The three module-cap-repair files
-  (`cuprum/sh/output.py`, `cuprum/sh/pipeline.py`, `cuprum/sh/__init__.py`) came
-  through the replay byte-identical to the round-1 result.
+  target-only paths byte-identical, no file deleting more than the branch
+  series itself deleted, no duplicated blocks. The three module-cap-repair files
+  (`cuprum/sh/output.py`, `cuprum/sh/pipeline.py`, `cuprum/sh/__init__.py`)
+  came through the replay byte-identical to the round-1 result.
 - [x] (2026-09-29) Module-size repair after the rebase, `6d7a5362`. The rebased
   tree failed `make lint` with `C0302: Too many lines in module (410/400)` at
   `cuprum/sh/output.py`, aborting the recipe before eight later leaves ran.
@@ -952,15 +1014,16 @@ likelihood, and mitigation.
   proved that main's **entire** change to that file was a single argument added
   to one `_merge_env` call, and the other 32 lines were the function body this
   branch had moved. The generalizable move is to diff `base → target` for the
-  disputed file rather than reasoning about the conflict hunk: it tells you what
-  you actually owe the target, which for a relocation can be one line. Left
-  unchecked, the temptation is to accept the target's copy wholesale, which here
-  would have resurrected the old `_spawn_subprocess` alongside the new module.
+  disputed file rather than reasoning about the conflict hunk: it tells you
+  what you actually owe the target, which for a relocation can be one line.
+  Left unchecked, the temptation is to accept the target's copy wholesale,
+  which here would have resurrected the old `_spawn_subprocess` alongside the
+  new module.
 - Observation (evidence): a conflict-time scan for "target lines absent from the
-  working tree" produces false positives while the replay is mid-flight, because
-  later commits have not been applied yet. Four files were flagged; all four
-  cleared once checked properly against `base → target` deltas. Treat that scan
-  as a lead generator only, and confirm each hit against the target's real
+  working tree" produces false positives while the replay is mid-flight,
+  because later commits have not been applied yet. Four files were flagged; all
+  four cleared once checked properly against `base → target` deltas. Treat that
+  scan as a lead generator only, and confirm each hit against the target's real
   delta before acting on it.
 
 ## Decision log
@@ -976,18 +1039,18 @@ likelihood, and mitigation.
   fully preserved at the surviving site, which was verified by diffing
   `2733ffc6 → 104c680c` for that file and confirming the `env_mode` argument is
   the only addition. Options considered: (a) take the target's version of the
-  function and delete the new module's copy — rejected, it reverses the branch's
-  central refactor; (b) keep both spawn functions under a conditional —
-  rejected as compatibility theatre with no external consumer. Date/Author:
+  function and delete the new module's copy — rejected, it reverses the
+  branch's central refactor; (b) keep both spawn functions under a conditional
+  — rejected as compatibility theatre with no external consumer. Date/Author:
   2026-10-01, implementation agent.
 - Decision: resolve the `CHANGELOG.md` conflict by keeping both sides' bullets
-  under the single `### Added` heading, with main's `EnvMode`/`UNSET`/`env_mode`
-  entries first. Rationale: the two sets describe different features and neither
-  supersedes the other; the conflict exists only because both branches appended
-  to the same section for the same unreleased version. Main's ordering is kept
-  so the file's history reads as target-then-branch, which matches how the
-  rebase composed the rest of the tree. Date/Author: 2026-10-01, implementation
-  agent.
+  under the single `### Added` heading, with main's `EnvMode`/`UNSET`/
+  `env_mode` entries first. Rationale: the two sets describe different features
+  and neither supersedes the other; the conflict exists only because both
+  branches appended to the same section for the same unreleased version. Main's
+  ordering is kept so the file's history reads as target-then-branch, which
+  matches how the rebase composed the rest of the tree. Date/Author:
+  2026-10-01, implementation agent.
 
 - Decision: repay the post-rebase module-length overrun by moving
   `_DeprecatedOutputFlags` and `_resolve_pipeline_output` into

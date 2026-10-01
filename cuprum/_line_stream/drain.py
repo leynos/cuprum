@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import typing as typ
 
+from cuprum._subprocess_stdin import _settle_stdin_writer
 from cuprum._subprocess_wait import _consumer_awaitable
 
 if typ.TYPE_CHECKING:
@@ -34,7 +35,7 @@ async def _drain_after_exit(
 
     if run.tasks.stdin_task is not None:
         try:
-            await run.tasks.stdin_task
+            await _settle_stdin_writer(run.tasks.stdin_task)
         except BaseException:
             await _discard_drain(run, pid, execution)
             raise

@@ -358,6 +358,110 @@ def test_no_producer_failure_is_invented_when_the_child_exits_early(
     assert result.exit_code == 0, "an early child-side close is a clean exit"
 
 
+# A child that exits at once, so the run's only remaining work is its writer.
+_EXITS_IMMEDIATELY = "pass"
+
+# How long the parked-producer cases allow a run that has *already* ended to
+# finish unwinding. Every wait here is measured from a child that has exited,
+# so this is not a scheduling tolerance: it is the whole window the callers
+# get to notice. Anything comparable to it means the caller is waiting on the
+# producer rather than on the child.
+_UNWIND_WINDOW_S = 3.0
+
+
+def _parked_after_first_chunk() -> cabc.AsyncIterator[bytes]:
+    """Yield one chunk, then park forever waiting for a next one.
+
+    This is the shape that makes an unbounded post-exit await observable. A
+    producer that *raises* is caught by the existing producer-failure tests,
+    and one that keeps yielding hits the pipe's own capacity and returns an
+    error — both end on their own. Parking produces neither: the writer is
+    suspended in ``anext``, so no ``EPIPE`` is possible and no failure exists
+    to report, and the wait has nothing to end it but a deadline.
+
+    The first chunk is what gets the writer as far as the ``anext`` call. An
+    empty producer would exhaust before the child had even exited and the case
+    would prove nothing.
+
+    Returns
+    -------
+    collections.abc.AsyncIterator[bytes]
+        The parked producer, holding its single chunk.
+    """
+
+    async def parked() -> cabc.AsyncIterator[bytes]:
+        """Yield one chunk, then suspend with no continuation."""
+        yield b"first\n"
+        await asyncio.Event().wait()
+
+    return parked()
+
+
+def test_a_parked_producer_does_not_outlive_the_child(
+    python_builder: cabc.Callable[..., SafeCmd],
+    execution_strategy: tuple[str, ExecuteFn],
+) -> None:
+    """A run whose child has exited returns, however stalled its producer is.
+
+    This is the streaming feature's central promise: the writer's lifetime is
+    the *child's* lifetime. A producer that is pulled, written, and then
+    parked must not hold the run open, because the run has already finished by
+    every other measure — the exit code is known, the child is reaped, and
+    nothing cuprum owns is still being written to.
+
+    The deadline is what makes this go red rather than hang. It is deliberately
+    generous relative to the work (a child that exits immediately), so the
+    assertion is "the callers are not waiting on the producer", not a timing
+    bound that a loaded host could fail.
+    """
+    _, execute = execution_strategy
+    command = python_builder("-c", _EXITS_IMMEDIATELY)
+
+    started = time.perf_counter()
+    result = execute(
+        command,
+        {"stdin": StdinStream(chunks=_parked_after_first_chunk()), "timeout": 60},
+    )
+    elapsed = time.perf_counter() - started
+
+    assert result.exit_code == 0, "a child that exits at once should exit cleanly"
+    assert elapsed < _UNWIND_WINDOW_S, (
+        "the run must end with its child, not with a producer that never "
+        f"yields again; took {elapsed:.2f}s against a "
+        f"{_UNWIND_WINDOW_S:.1f}s window"
+    )
+
+
+def test_a_parked_producer_does_not_defeat_the_deadline(
+    python_builder: cabc.Callable[..., SafeCmd],
+) -> None:
+    """The deadline still ends a run whose producer is parked.
+
+    Distinct from the case above: that one asserts the exit path does not wait
+    on the producer, and this one asserts the *deadline* path is not defeated
+    by a producer that will never honour it. A child that outlives its
+    deadline is exactly where an unbounded post-exit await used to escape the
+    timeout entirely — the terminator fired, the child was killed, and the
+    caller was still waiting on a parked ``anext``.
+    """
+    command = python_builder("-c", _NEVER_READS)
+    started = time.perf_counter()
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(
+            command.run(
+                stdin=StdinStream(chunks=_parked_after_first_chunk()),
+                timeout=1.0,
+            )
+        )
+
+    elapsed = time.perf_counter() - started
+    assert elapsed < _UNWIND_WINDOW_S, (
+        "a deadline must be reported without waiting on a parked producer; "
+        f"took {elapsed:.2f}s against a 1.0s timeout"
+    )
+
+
 def test_timeout_leaves_no_stdin_writer_behind(
     python_builder: cabc.Callable[..., SafeCmd],
 ) -> None:
