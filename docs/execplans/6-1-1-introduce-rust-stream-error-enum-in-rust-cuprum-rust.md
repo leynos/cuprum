@@ -2005,6 +2005,50 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
+- [x] (2026-10-01) Diagnosed and cleared a merge conflict that silently
+  suppressed CI for the branch's last two commits. `6a17857c` had **no**
+  `pull_request` runs at all — only the third-party review apps and a skipped
+  `dependabot-automerge` (a `pull_request_target` workflow, which runs against
+  the base ref and so is unaffected). The cause was not a trigger misfire: the
+  branch genuinely conflicted with `main` in `typos.local.toml`, because both
+  sides appended to the same `[patterns] ignore` anchor, `'\btools/mold/',`.
+
+  The mechanism chain is worth recording, because the symptom names nothing. A
+  conflicting pull request has no buildable synthetic merge commit, so GitHub
+  creates no `refs/pull/432/merge` to run against and **no `pull_request`
+  workflow starts**. The stale ref was direct evidence: `refs/pull/432/merge`
+  still pointed at `f7e8e13a`, whose second parent was `6871ba35` — it had
+  never been rebuilt for `6a17857c`. A controlled comparison in
+  `git merge-tree` confirmed the causal step exactly: `6871ba35` exits 0 with
+  zero conflicts and had CI runs; `6a17857c` exits 1 with one conflict and had
+  none. The two heads differ only by three files, one of which is that
+  `typos.local.toml` hunk.
+
+  The fix needed no rebase. `main` had independently added
+  `'[0-9][0-9a-f]{6,39}'`, a **general** rule for exactly the collision the
+  narrow `'6871ba35'` entry was written for: typos tokenizes before matching, so
+  `6871ba35` splits into letter runs, and the hex pair inside it is then read
+  as a misspelling of "be" or "by". Main's comment records the deliberately
+  general treatment of that collision on the grounds that it recurs. Taking
+  main's `typos.local.toml` verbatim therefore both supersedes the narrow entry
+  and removes the conflict — one change, not two. `make spelling` regenerated
+  `typos.toml` (exit 0), and it is now byte-identical to main's.
+
+  Committed as `e2846439`. The prediction was then confirmed by observation
+  rather than assumed: `mergeable` went `CONFLICTING` → `MERGEABLE`,
+  `refs/pull/432/merge` was rebuilt to `8f10d35d` (parents `7b86b904`,
+  `e2846439`), and CI run `36904261529` started. No rebase was needed because
+  the merge settings are squash-only (`allow_merge_commit` and
+  `allow_rebase_merge` both false) and the ruleset sets
+  `strict_required_status_checks_policy: false`, so the branch is not required
+  to be up to date with `main`. Rebase-on-push would have been a fabricated
+  requirement, and was avoided.
+
+  Scope held throughout: `git diff --name-only 10abccad e2846439` lists no code
+  file at all, only `.md` and typos config, so the CI verdict at `10abccad`
+  still covers this branch's code. That check is the reason no further local
+  gate run was needed for this change.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
