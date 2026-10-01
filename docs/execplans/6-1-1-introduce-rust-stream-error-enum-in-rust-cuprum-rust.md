@@ -235,8 +235,8 @@ There is no time limit. Tool failures do not justify lowering acceptance.
          already wrong before this branch — six skipped at the merge-base —
          and `test_rust_extension_availability` deliberately *passes* either
          way, since it asserts the absent case rather than skipping.
-  - [x] (2026-09-27) Post-documentation gate run surfaced two defects of mine,
-    both introduced by `727484e2` and both traced to
+  - [x] (2026-09-27) Post-documentation gate run surfaced two self-inflicted
+    defects, both introduced by `727484e2` and both traced to
     `rust/cuprum-rust/src/stream_error_behaviour.rs`. `make test-rust` had been
     run after that commit but `make lint` and the Python formatter ratchet had
     not, so neither defect had been observed. Both are fixed:
@@ -274,7 +274,8 @@ There is no time limit. Tool failures do not justify lowering acceptance.
        Rust 1.85 are both satisfied and the exception set stays at three. This
        is the outcome the ratchet's assertion message is asking for — the
        preferred fix is not to grow the set.
-    3. **`make test`'s 13 failures are environmental, not mine.** They come from
+    3. **`make test`'s 13 failures are environmental, not branch defects.**
+       They come from
        Lody's `BASH_ENV=/home/leynos/.lody/bashenv`, which re-prepends
        `~/.lody/bin` inside every `bash -c`, so the fake `gh` stand-in in
        `tmp_path/tools` is shadowed by the real `gh` and the release tests fail
@@ -712,9 +713,9 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       sub-checks observed), but it was not re-run after this Markdown edit.
       The test module's blob `a1015c40` is unchanged from the run that gated
       it (`4 passed` in the extension-gated module, `3 passed` in its
-      neighbour), so that evidence still stands. The recording entry you are
-      reading is itself the next edit, so these verdicts pin the commit that
-      precedes it, not this file's final revision.
+      neighbour), so that evidence still stands. This recording entry is itself
+      the next edit, so these verdicts pin the commit that precedes it, not this
+      file's final revision.
 - [x] (2026-09-28) **Rebased onto `main` (`7f762870`) as a pure replay, and the
       gates were re-run at the new head.** The boundary was `991dee64`,
       corroborated three ways rather than assumed: `ab58a3d6^` is that commit,
@@ -831,7 +832,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   already imports `contextlib` and `os`, and its `_safe_close` is identical in
   behaviour to the copies being removed. The count therefore stays at **18**
   either way. The real cost was zero and had been all along; the file-count
-  argument was a premise I asserted from memory and never tested until
+  argument was a premise asserted from memory and never tested until
   CodeRabbit's review forced the question. That is the same class of error the
   three stale figures above belong to, and it is worth naming as one: a
   *constraint* claim deserves the same evidence as a *result* claim, and this
@@ -879,7 +880,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   the same reason as before.
 - [x] (2026-09-29) **Three further stale figures in this plan were corrected,
       and the gates were re-run at the resulting head `9096c804`.** Reviewing
-      the record against the artefacts rather than against my own notes turned
+      the record against the artefacts rather than against personal notes turned
       up three claims that had never been true: the plan called `MAX_BUFFER_SIZE`
       "merely re-exported" when it is private to `cuprum-streams`
       (`rust/cuprum-streams/src/lib.rs:38`) and never re-exported at all, with
@@ -909,7 +910,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   (`make: *** [Makefile:387: github-actions-lint] Terminated`). The honest
   reading is **actionlint UNOBSERVED, not passed** — it died before emitting a
   verdict, so no pass may be claimed for it. This is the same host-only
-  deadlock M1 hit, not a regression. I measured it rather than inheriting it: a
+  deadlock M1 hit, not a regression. It was measured rather than inherited: a
   SIGQUIT goroutine dump of a reproducing run shows the wedge as
   `RuleShellcheck.VisitWorkflowPost` → `externalCommand.wait`, with the writer
   goroutine parked in `os.File.Write` and **no child process spawned at all**.
@@ -1515,7 +1516,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
   A pre-existing label detail is noted so it is not mistaken for a regression:
   the `stateDiagram-v2` block at `docs/cuprum-design.md:2555` is reported by
-  nixie as `<unknown>`, meaning the fence carries no recognisable Mermaid type
+  nixie as `<unknown>`, meaning the fence carries no recognizable Mermaid type
   keyword. The identical pair appears in the prior green run and nixie exits
   `0` on it, so this predates the branch.
 - [x] (2026-09-30) **Both walkthrough rows are stale, and the two commits that
@@ -1551,6 +1552,145 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   without provoking a review, so nothing here demonstrates the queued review
   `ac1c5052` has been consumed. The rows will clear when a review runs against
   a commit at or after `c07671e8`, and by nothing else.
+- [x] (2026-09-30) **The prediction above was borne out and the stale
+  `CHANGES_REQUESTED` is what remains.** Review `5360266033` (`00:59:02Z`,
+  `coderabbitai[bot]`, state `COMMENTED`) is the first review against a commit
+  at or after `c07671e8` — it assesses the head `005d358f` — and the
+  walkthrough re-rendered with it. `change_assessment_commit` is now
+  `005d358fd26383c3be6c713c2c44af7a770e60e6`, **not** `e7d4fa45`, and the two
+  rows the entries above proved stale are **gone**. They cleared by the
+  mechanism those entries named, and by nothing else. The `Failed checks` table
+  now carries a *different*, freshly-assessed row (below), which is the proof
+  that this is a re-decision rather than the staleness it replaced.
+
+  Two review-body findings arrived with it, both `🔵 Trivial`, both tagged
+  `[type:docstyle]` / `[type:spelling]`, and both against this file:
+
+  - `:1518` — use the en-GB-oxendict "recognizable". **This one was already a
+    hard CI failure, not a style preference.** Run `36641187043` at `005d358f`
+    failed `lint-test` at step 33, *"Run lint, including Skylos dead-code
+    detection"*, erroring in the `spelling` sub-gate on exactly this token:
+
+    ```text
+    error: `recognisable` should be `recognizable`
+       ╭▸ docs/execplans/6-1-1-…-cuprum-rust.md:1518:54
+    make: *** [Makefile:408: spelling] Error 2
+    ```
+
+    The word entered in `843370d2`. Fixed by the mechanical substitution; the
+    job log is `/tmp/611-linttest-005d.log` (105,092 bytes, 731 lines) fetched
+    via `gh run view 36641187043 --log-failed`, after a direct
+    `gh api …/jobs/<id>/logs` download returned **0 bytes** — worth recording,
+    because an empty download is indistinguishable from a grep that matched
+    nothing, and only the `--log-failed` route revealed the failure.
+
+  - `:1224` — remove first- and second-person phrasing, "including the
+    identified occurrence outside the diff hunk and the additional noted
+    locations". One correction to the finding's own coordinates, recorded
+    because it changes what "the additional noted locations" means: its worked
+    example is right — `834` carried a first-person assertion of memory at the
+    assessed head — but its two "also applies to" lines, `1197` and `1370`, have
+    no first- or second-person pronoun at *any* revision checked (neither at the
+    assessed base `e7d4fa45` nor at this head). The two extra sites the finding
+    implies do not exist where it says they do; the real ones were found by
+    sweeping. The rule is real and repo-local: *"Avoid first and second person
+    personal pronouns outside the `README.md` file"*
+    (`docs/documentation-style-guide.md:32`), with no execplan exemption. The
+    review's own worked example was one site, and its two "also applies to"
+    lines are not sites at all; a full-file sweep found **nine** occurrences
+    (`grep -oE` over the assessed head, counted rather than hand-summed), of
+    which **seven are authorial voice and are rewritten**, and **two are
+    verbatim quotations deliberately left word-for-word**, because editing a
+    quotation to satisfy a style rule would falsify the record. Those two are
+    CodeRabbit's retraction of its own earlier claim (line 1155) and Sourcery's
+    decline message quoting the 150,000-character review limit (line 1189);
+    their text is quoted in place and deliberately not repeated here, so the
+    sweep this entry describes stays reproducible.
+
+    One of the seven is a *user's* quoted question — the "why did my throughput
+    change" wording that `5.1.1`'s changelog entry answered — preserved by naming
+    its speaker rather than deleted or reworded, since the voice is the
+    user's, not the author's.
+
+    The sweep also caught one site the review did **not** name: a
+    second-person address to the reader in the 2026-09-28 rebase entry, since
+    rewritten in the third person. That is the argument for sweeping rather
+    than fixing a supplied list.
+
+  The substantive third finding is not in the review body at all; it is the
+  walkthrough's replacement row. It is assessed and dispositioned separately
+  below.
+- [x] (2026-09-30) **The walkthrough's new failed row is mostly refuted, and the
+  part that survives is already covered and deliberate.** The row —
+  `Testing (Unit And Behavioural)` ❌, now carried in `change_assessment_commit`
+  `005d358f`'s walkthrough — claims that
+  `rust/cuprum-rust/src/stream_error_behaviour.rs` "calls private
+  `validate_buffer_size`, `convert_fd`, and `RustStreamError::from` directly.
+  It never creates a `PyErr` or calls an exported PyO3 function", and that
+  therefore it "can pass when `From<RustStreamError> for PyErr` is incorrect".
+
+  | #   | Claim                                                        | Verdict                                                                                        |
+  | --- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+  | 1   | Calls the three private symbols directly                     | **CONFIRMED** — `:30, :96, :101, :109, :120`; all three are crate-private at `lib.rs:34,49,79` |
+  | 2   | Never constructs a `PyErr` / calls exported PyO3             | **CONFIRMED** — the only `PyErr` hits are prose at `:12, :49`                                  |
+  | 3   | A repository rule forbids this                               | **REFUTED** — no such rule exists                                                              |
+  | 4   | The Rust suite should be classified as unit, not behavioural | **REFUTED** — the plan mandates this shape                                                     |
+
+  The *observation* is accurate. The *rule* it invokes is not a repository
+  rule, and the suggested resolution contradicts a design the repo states
+  explicitly and the plan adopted deliberately:
+
+  - `docs/developers-guide.md:4213-4221`: the integration crate builds with
+    `pyo3/extension-module`, "so no `cargo test` binary can link an
+    interpreter. Rust tests therefore assert typed values … and anything
+    asserting a `PyErr` or a Python exception class cannot live in them at
+    all; it belongs in the extension-required Python suite."
+  - Plan decision log (`2026-09-19`): "Retain Python exception construction in
+    the host interpreter. Pure Rust tests verify typed values; Python tests
+    verify conversion through real entry points."
+  - Plan V2: "Reuse production validators and conversions, not a test-only
+    classifier", with behavioural scenarios bound by an internal module — and
+    the module must be in-crate to reach the crate-private enum "without
+    widening its visibility".
+
+  So asking the Rust suite to construct a `PyErr` asks for something the build
+  makes structurally impossible, and asking it to move to a public boundary
+  asks it to abandon the crate-private access the plan required. The gap the
+  row describes — nothing in the Rust layer can witness the `PyErr` conversion
+  — is real and *is* closed, but in Python:
+  `cuprum/unittests/test_rust_stream_native_order.py:236-275` pins the
+  `InvalidDescriptor` → `ValueError` arm through real entry points, and is in
+  `EXTENSION_TEST_TARGETS` (`Makefile:175`). The plan records that module
+  failing under the `errors.rs` mutation and passing on revert.
+
+  **One claim is partly true and worth stating precisely rather than disputing
+  wholesale.** The row's explanation continues: "the shared `rust_streams`
+  fixture returns the `_streams_rs` shim. Its zero-buffer validation runs in
+  Python before the native call, so those behavioural rows do not exercise the
+  changed Rust boundary." The fixture does return the shim
+  (`conftest.py:180-197`), and for the **pump** zero-buffer row this is exactly
+  right — the shim raises first (`_streams_rs.py:164-170`) and the native call
+  never runs. But for the **consume** row it is false: `rust_consume_stream`
+  has no Python guard (`_streams_rs.py:383-387`) and delegates straight to
+  native, where `run_stream_operation` runs
+  `validate_buffer_size(buffer_size)?` and reaches Python through
+  `result.map_err(PyErr::from)`
+  (`rust/cuprum-rust/src/stream_pyfunctions.rs:40-47`). The consume zero-buffer
+  row therefore traverses **both** changed code paths. As a statement about
+  "those rows" collectively the sentence is wrong; the plan's own decision log
+  already records the distinction — the consume path "has no writer and so no
+  pre-adoption check" — and the V3 mutation evidence independently confirms it,
+  producing exactly **one** failing row in this module under a native-only
+  mutation.
+
+  The remaining sub-claim, that the zero-buffer cases should "use valid open
+  descriptors", is already satisfied: both rows open `os.devnull`
+  (`test_rust_streams_errors_behaviour.py:158, :167`) — a real descriptor, not
+  a placeholder — and the file is registered in `EXTENSION_TEST_TARGETS`
+  (`Makefile:180`), so it runs under `CUPRUM_REQUIRE_RUST_EXTENSION=1` rather
+  than skipping silently. No code change is warranted; the disposition is a
+  reasoned reply.
+
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
@@ -1807,7 +1947,7 @@ succeed on identical input cannot be made to pass by re-running it — only by
 bounding it.
 
 **`mapsplice` cannot parse this repository's roadmap, and the failure is silent
-until you try it.** Every command fails, including one that would change
+until it is tried.** Every command fails, including one that would change
 nothing, with a message that names the symptom and not the site:
 
 ```text
@@ -2075,20 +2215,20 @@ changing anything between the runs that disagreed.
   Makefile target naming it), so this is a judgement call, and the comparable
   landed work is the evidence for it. `5.1.1` (`b84a30b5`) did add entries,
   because it changed a *default* users can observe — the pure-Python read size
-  — so the entry answered "why did my throughput change". `6.1.1` changes no
-  default, no public signature, and no documented input. Its user-visible
-  surface is a restatement of the contract the branch tested rather than a new
-  contract: `rust_pump_stream`'s docstring in `cuprum/_streams_rs.py` (the
-  `buffer_size` parameter section, and the `Raises` section that names
-  `ValueError` for "not positive or exceeds 1 GiB") already documents rejection
-  above `1 << 30`, and the wrapper validates `buffer_size` before the native
-  call, so a refusal of `0` or `-1` is a shape the code already had. The one
-  genuinely new observable — that an out-of-`i64` size raises `OverflowError`,
-  not `ValueError` — is written into the users' guide instead, where a caller
-  checking the exception contract will look. Revisit at release time if
-  `0.2.0-beta1` ships without 6.1.2: a release note is the right home for
-  "errors are now classified at one boundary point", which is an internal
-  statement with no user-visible consequence today.
+  — so the entry answered the user's question "why did my throughput change".
+  `6.1.1` changes no default, no public signature, and no documented input. Its
+  user-visible surface is a restatement of the contract the branch tested
+  rather than a new contract: `rust_pump_stream`'s docstring in
+  `cuprum/_streams_rs.py` (the `buffer_size` parameter section, and the
+  `Raises` section that names `ValueError` for "not positive or exceeds 1 GiB")
+  already documents rejection above `1 << 30`, and the wrapper validates
+  `buffer_size` before the native call, so a refusal of `0` or `-1` is a shape
+  the code already had. The one genuinely new observable — that an out-of-`i64`
+  size raises `OverflowError`, not `ValueError` — is written into the users'
+  guide instead, where a caller checking the exception contract will look.
+  Revisit at release time if `0.2.0-beta1` ships without 6.1.2: a release note
+  is the right home for "errors are now classified at one boundary point",
+  which is an internal statement with no user-visible consequence today.
 - (2026-09-27) **The roadmap tick is a one-line hand edit, not a `mapsplice`
   run — a deviation from M2's stated method, approved before it was taken.** M2
   says to "use the `mapsplice` skill to mark exactly 6.1.1 `[x]`". That is not
