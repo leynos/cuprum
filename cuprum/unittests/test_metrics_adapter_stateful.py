@@ -79,7 +79,6 @@ def _event(
     byte_count: int | None = None,
     exit_code: int | None = None,
     duration_s: float | None = None,
-    terminal_outcome: TerminalOutcome | None = None,
 ) -> ExecEvent:
     """Build an ``ExecEvent`` carrying only the fields the reducer reads."""
     return ExecEvent(
@@ -95,15 +94,20 @@ def _event(
         duration_s=duration_s,
         tags={},
         byte_count=byte_count,
-        terminal_outcome=terminal_outcome,
     )
+
+
+def _with_terminal_outcome(
+    event: ExecEvent,
+    outcome: TerminalOutcome | None,
+) -> ExecEvent:
+    """Return ``event`` with its terminal category set for reducer tests."""
+    return dc.replace(event, terminal_outcome=outcome)
 
 
 def _with_mode(event: ExecEvent, mode: EnvMode) -> ExecEvent:
     """Return ``event`` carrying ``mode`` as its effective policy."""
-    # Set by replacement rather than as a fifth parameter on ``_event``, which
-    # CodeScene's advisory limit holds at four arguments. Replacement also
-    # states what these tests vary: the policy label, with the event held fixed.
+    # Replacement varies only the policy label, with the event held fixed.
     return dc.replace(event, env_mode=mode)
 
 
@@ -134,9 +138,9 @@ def test_failure_counter_carries_the_environment_mode() -> None:
     """A settled non-zero exit attributes its failure to the effective policy."""
     operations = _metric_operations(
         _with_mode(
-            _event(
-                "settled",
-                terminal_outcome=TerminalOutcome.EXIT_NONZERO,
+            _with_terminal_outcome(
+                _event("settled"),
+                TerminalOutcome.EXIT_NONZERO,
             ),
             EnvMode.REPLACE,
         )
@@ -224,12 +228,11 @@ def _events(draw: st.DrawFn) -> ExecEvent:
     terminal_outcome = (
         draw(st.sampled_from(list(TerminalOutcome))) if phase == "settled" else None
     )
-    return _event(
-        phase,
-        byte_count=byte_count,
-        exit_code=exit_code,
-        duration_s=duration_s,
-        terminal_outcome=terminal_outcome,
+    return _with_terminal_outcome(
+        _event(
+            phase, byte_count=byte_count, exit_code=exit_code, duration_s=duration_s
+        ),
+        terminal_outcome,
     )
 
 
@@ -342,10 +345,9 @@ def test_a_failing_second_operation_leaves_the_first_applied() -> None:
     """
     collector = _FailingHistogramCollector()
     hook = MetricsHook(collector)
-    event = _event(
-        "settled",
-        duration_s=1.5,
-        terminal_outcome=TerminalOutcome.ERROR,
+    event = _with_terminal_outcome(
+        _event("settled", duration_s=1.5),
+        TerminalOutcome.ERROR,
     )
 
     with pytest.raises(_MetricsBackendError, match="rejected cuprum_duration_seconds"):

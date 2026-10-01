@@ -293,6 +293,39 @@ async def _execute_with_hooks(
     return result
 
 
+async def _finalize_prepared_command_failure(
+    tracking: _ExecutionTracking,
+    observation: _StageObservation | None,
+    run_error: BaseException,
+) -> None:
+    """Close, settle, and drain a command that failed before ownership passed on."""
+    # Close before the drain: a hook failure is grouped with the run error, and
+    # closing afterwards would record that aggregate instead of a timeout.
+    outcome = _outcome_for_error(run_error)
+    tracking.sink_bracket.close(outcome=outcome)
+    if observation is not None:
+        _safe_emit_terminal(
+            observation,
+            outcome.outcome,
+            _EventDetails(
+                pid=(
+                    None
+                    if outcome.outcome is TerminalOutcome.CANCELLED
+                    else observation.started_pid
+                ),
+            ),
+        )
+    # A plan observer or before-hook can schedule tasks before execution starts.
+    # This layer still owns them, so it must drain them before re-raising.
+    await _shielded_cleanup(
+        _drain_tasks_during_cleanup(
+            tracking.pending_tasks,
+            run_error,
+            message=_COMMAND_FINALIZATION_ERROR,
+        )
+    )
+
+
 async def _run_prepared_command(
     cmd: SafeCmd,
     state: _ExecutionState,
@@ -355,34 +388,5 @@ async def _run_prepared_command(
             tracking,
         )
     except BaseException as run_error:
-        # Close before the drain, for the reason _execute_with_hooks gives: the
-        # drain aggregates a hook failure with the error that ended the run, so
-        # closing afterwards would record the aggregate — an ``error``
-        # annotation standing in for a timeout.
-        outcome = _outcome_for_error(run_error)
-        tracking.sink_bracket.close(outcome=outcome)
-        if observation is not None:
-            _safe_emit_terminal(
-                observation,
-                outcome.outcome,
-                _EventDetails(
-                    pid=(
-                        None
-                        if outcome.outcome is TerminalOutcome.CANCELLED
-                        else observation.started_pid
-                    ),
-                ),
-            )
-        # The plan event above can schedule observe tasks before a later
-        # observer or before-hook raises, and no downstream helper owns them
-        # yet, so the run owes the drain here. The path that already drained in
-        # _execute_with_hooks finds an empty list and returns immediately, so
-        # this cannot double-drain.
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                tracking.pending_tasks,
-                run_error,
-                message=_COMMAND_FINALIZATION_ERROR,
-            )
-        )
+        await _finalize_prepared_command_failure(tracking, observation, run_error)
         raise

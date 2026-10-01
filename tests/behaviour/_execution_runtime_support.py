@@ -116,6 +116,20 @@ async def _wait_for_pid(pid_file: Path, timeout: float = 5.0) -> int:
     raise TimeoutError(msg)
 
 
+async def _repeat_cancellation_during_terminal_cleanup(
+    task: asyncio.Task[typ.Any],
+    terminal_hook_started: asyncio.Event,
+    release_terminal_hook: asyncio.Event,
+    options: _CancellationOptions,
+) -> None:
+    """Interrupt a run repeatedly while its terminal hook is held open."""
+    await asyncio.wait_for(terminal_hook_started.wait(), timeout=5.0)
+    for _ in range(options.repeat_cancellations):
+        task.cancel()
+        await asyncio.sleep(0)
+    release_terminal_hook.set()
+
+
 def _cancel_command_with_grace(
     command: SafeCmd,
     pid_file: Path,
@@ -171,11 +185,12 @@ def _cancel_command_with_grace(
             task.cancel()
             try:
                 if run_options.events is not None:
-                    await asyncio.wait_for(terminal_hook_started.wait(), timeout=5.0)
-                    for _ in range(run_options.repeat_cancellations):
-                        task.cancel()
-                        await asyncio.sleep(0)
-                    release_terminal_hook.set()
+                    await _repeat_cancellation_during_terminal_cleanup(
+                        task,
+                        terminal_hook_started,
+                        release_terminal_hook,
+                        run_options,
+                    )
                 with pytest.raises(asyncio.CancelledError):
                     await task
             finally:
