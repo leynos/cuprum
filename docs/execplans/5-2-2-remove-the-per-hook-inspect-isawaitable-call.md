@@ -1,11 +1,11 @@
 # Remove the per-hook `inspect.isawaitable` call from per-line event dispatch
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & discoveries`,
-`Decision log`, `Outcomes & retrospective`, `Conformance basis`, and
-`Verification plan` must be kept up to date as work proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & discoveries`, `Decision log`,
+`Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
+be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: DRAFT (awaiting approval, including the choice recorded in Decision D1)
 
 Roadmap item: 5.2.2 in `docs/roadmap.md` (phase 5, "Reclaim the pure-Python
 consume hot path"; step 5.2, "Make per-line event emission cheap for
@@ -22,154 +22,146 @@ also asks for per-line output events, Cuprum emits one `ExecEvent` per output
 line, so the dispatcher that hands each event to each hook runs once per line
 per hook. The tee profiling baseline
 (`docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5, Table 4) found that
-the dispatcher spends a measurable share of that per-line time asking
-`inspect.isawaitable(result)` of every hook's return value, even though almost
+this dispatcher spends a measurable share of the per-line time asking
+`inspect.isawaitable(result)` of every hook's return value, although almost
 every hook is an ordinary function that returns `None`. In the post-5.2.1
-profile the call accounts for 589 py-spy samples under the per-line path
-(`docs/tee-hotpath-line-event-emission-5-2-1.md`, around line 333).
+captures the call and the `abc.__instancecheck__` work beneath it weigh 787 to
+1,065 py-spy samples per capture under the per-line emitter, about 4.6% of the
+consume samples, or roughly 0.29 µs per line.
 
-After this change, Cuprum decides once, when an execution binds its hooks,
-whether each hook is *detectably asynchronous*. The per-line dispatcher then
-uses that decision instead of re-asking `inspect.isawaitable` for every result:
-a synchronous hook that returns `None` is finished with a single identity
-comparison, and a hook declared `async def` has its coroutine scheduled
-directly. A plain function that happens to return an awaitable (for example a
-lambda that returns a coroutine) keeps working exactly as before, through a
-rare fallback that is off the hot path for every hook that honours its own
-declared shape.
+After this change, the dispatcher stops paying that cost for the shapes that
+dominate real use. A hook result of `None` — the only result a synchronous hook
+ever returns — is dismissed by one identity comparison, and a native coroutine
+— the only result an `async def` hook ever returns — is recognized by one
+exact-type comparison. Only a result that is neither (an `asyncio.Future`, an
+object with `__await__`, a generator-based coroutine, or a non-awaitable value
+returned against the type) reaches the unchanged `inspect.isawaitable` test.
+Every hook shape that works today keeps working identically, including a plain
+function or lambda that returns a coroutine.
 
 A user observes three things:
 
-1. Event payloads, hook ordering, failure semantics, and async-hook scheduling
-   are unchanged; the existing behavioural and snapshot suites pass
+1. Event payloads, hook ordering, failure semantics, and async-hook
+   scheduling are unchanged; the existing behavioural and snapshot suites pass
    unmodified.
 2. A committed py-spy capture of the line-callback scenario shows
    `inspect.isawaitable` contributing exactly 0 sampled frames under the
-   per-line hot path, while a matched control capture of the pre-change tree
+   per-line emitter, while a matched control capture of the pre-change tree
    shows it contributing hundreds.
-3. The line-callback scenario is no slower, and is expected to be modestly
-   faster; the measured change is recorded rather than promised.
+3. The line-callback scenario is no slower and is expected to be a few per
+   cent faster; the measured change is reported with a confidence interval
+   rather than promised.
 
 ## Constraints
 
-These are hard invariants. Violating one requires escalation, not a
-workaround.
+These are hard invariants. Violating one requires escalation, not a workaround.
 
 - C1. Observable event semantics must not change. Every `ExecEvent` emitted
   for every phase keeps the same field values, the same per-hook delivery
   order, and the same per-line freshness (one new event and one clock read per
   delivered line, as established by 5.2.1).
-- C2. Async-hook scheduling must be identical for every hook whose result is
-  an awaitable: the same `asyncio.create_task` call shape, the same task name
+- C2. Async-hook scheduling must be identical for every hook result that is
+  awaitable today: the same `asyncio.create_task` call shape, the same task name
   `cuprum.observe.<phase>`, the same `_await_awaitable` wrapper and its
   `observe_hook_task_started`, `observe_hook_task_failed`, and
-  `observe_hook_task_finished` DEBUG/ERROR records, the same
-  `observe_hook_task_scheduled` DEBUG record with the same `extra` keys, and
-  the same position in the returned task list.
+  `observe_hook_task_finished` records, the same `observe_hook_task_scheduled`
+  DEBUG record with the same message arguments and `extra` *values* (including
+  `cuprum_scheduled_task_count`, which counts the task just appended), and the
+  same position in the returned task list.
 - C3. Failure semantics must not change. A hook raising `CancelledError` is
-  wrapped in `_ExecEventEmissionError` with no log; any other
-  `BaseException` is logged as `observe_hook_failed` with the same `extra`
-  keys and wrapped; both carry exactly the tasks scheduled by earlier hooks
-  in the same emission (the *scheduled prefix*).
+  wrapped in `_ExecEventEmissionError` with no log; any other `BaseException`
+  is logged as `observe_hook_failed` with the same `extra` values and wrapped;
+  both carry exactly the tasks scheduled by earlier hooks in the same emission
+  (the *scheduled prefix*). An exception raised by the awaitable check itself
+  (possible today, see `Surprises & discoveries`) keeps escaping unwrapped from
+  outside the `try` block; fixing that is out of scope.
 - C4. The public observe-hook contract in `docs/users-guide.md` ("Awaitable
-  hook results are scheduled as `asyncio.Task` instances and awaited before
-  the run completes") remains true for every callable shape that satisfies
-  the `ExecHook` type alias in `cuprum/events.py`, including plain callables
-  that return an awaitable. The plan must not narrow that contract.
-- C5. Public surfaces stay byte-for-byte stable: `cuprum.observe`,
-  `HookRegistration`, `CuprumContext.observe_hooks`,
-  `ScopeConfig.observe_hooks`, the `ExecHook` alias, and the identity of the
-  hook objects stored in those tuples. Detach-by-identity
-  (`CuprumContext.without_observe_hook`) and the `_PipelineWaitReporter`
-  `isinstance` dispatch in `_StageObservation.report_pipeline_wait` must keep
-  seeing the caller's own hook objects.
+  hook results are scheduled as `asyncio.Task` instances and awaited before the
+  run completes") remains true for every callable that satisfies the `ExecHook`
+  alias in `cuprum/events.py:296`, including plain callables that return an
+  awaitable. This plan must not narrow that contract.
+- C5. Public surfaces stay stable: `cuprum.observe`, `HookRegistration`,
+  `CuprumContext.observe_hooks`, `ScopeConfig.observe_hooks`, the `ExecHook`
+  alias, and the identity of the hook objects stored in those tuples
+  (detach-by-identity in `CuprumContext.without_observe_hook` and the
+  `_PipelineWaitReporter` `isinstance` dispatch in
+  `_StageObservation.report_pipeline_wait` depend on it).
 - C6. No Rust, native-extension, dependency, or packaging-metadata change.
   Phase 5 is deliberately Rust-free (roadmap phase 5 "Idea").
-- C7. The per-line path must keep routing through
+- C7. The per-line path keeps routing through
   `_StageObservation._emit_event`, which owns `pending_tasks` (see the
   `_line_event_emitter` docstring in `cuprum/_line_callbacks.py`).
-- C8. Production modules stay at or under 400 lines (AGENTS.md; enforced for
-  production code by pylint). `cuprum/_observability.py` is 259 lines today.
-- C9. Every quality gate in `AGENTS.md` passes before each commit: `make
-  check-fmt`, `make typecheck`, `make lint`, `make test`, and for Markdown
-  edits `make markdownlint` and `make nixie`.
+- C8. Production and benchmark modules stay at or under 400 lines.
+  `cuprum/_observability.py` is 259 lines;
+  `benchmarks/_line_event_profile_model.py` is 397 lines and must not grow.
+  Test modules that are already over the cap
+  (`cuprum/unittests/test_cqrs_helpers.py` at 449 and
+  `cuprum/unittests/test_cqrs_hook_behaviour.py` at 444) must not grow.
+- C9. Every quality gate in `AGENTS.md` passes before each commit:
+  `make check-fmt`, `make typecheck`, `make lint`, `make test`, and for
+  Markdown edits `make markdownlint` and `make nixie`.
 - C10. The 5.2.1 construction-share gate is not an acceptance criterion for
-  this item. Removing work outside `ExecEvent.__init__` is forecast to raise
-  that share from 29.9414% towards 30.9686% *by succeeding*
-  (`docs/developers-guide.md`, "Construction-share classification (roadmap
-  5.2.1)"). A re-run that crosses 30% after this change is the documented
-  inversion, not a regression, and must be reported as such.
+  this item. Removing work outside `ExecEvent.__init__` raises that share *by
+  succeeding* (`docs/developers-guide.md`, "Construction-share classification
+  (roadmap 5.2.1)"). The re-run in EP-M5 replaces the 5.2.1 forecast with a
+  measurement; a value above 30% is the documented inversion, not a regression.
 
 ## Tolerances (exception triggers)
 
-- Scope: stop and escalate if production changes touch more than four modules
-  under `cuprum/` (planned: `cuprum/_observability.py`,
-  `cuprum/_pipeline_types.py`, `cuprum/_idle_heartbeat.py`, and the new
-  `cuprum/_callable_kinds.py`), or exceed 150 net production lines.
+- Scope (Option A): stop and escalate if production changes touch any module
+  other than `cuprum/_observability.py`, or exceed 30 net production lines.
+  (Option B, if chosen: four modules and 120 net lines.)
 - Interface: stop if any public signature, public attribute, or the contents
   of `CuprumContext.observe_hooks` / `ScopeConfig.observe_hooks` would need to
   change.
-- Contract: stop if any existing test in `cuprum/unittests/` or
-  `tests/behaviour/` must have its *assertions* changed (as opposed to its
-  call into the private `_emit_exec_event` signature) to pass, or if any
-  committed syrupy snapshot changes.
-- Measurement: stop if, after two complete collection attempts, a candidate
-  capture still shows a non-zero `inspect.isawaitable` count under the
-  per-line anchor, or if any capture's anchor weight is below 10,000 samples.
-- Performance: stop if any unprofiled paired scenario's candidate median is
-  more than 5% slower than its control median.
+- Contract: stop if any existing test's *assertions* must change to pass, or
+  if any committed syrupy snapshot changes.
+- Measurement: stop if, after two complete collection attempts, any candidate
+  capture shows a non-zero `isawaitable` weight under the anchor, or any
+  capture's anchor weight is below the derived floor of 14,000 samples (see V6).
+- Performance: stop if the upper bound of the 95% confidence interval for the
+  `cb` scenario's candidate/control wall-time ratio exceeds 1.05.
 - Iterations: stop if a red test cannot be made green within three attempts
   without breaching another tolerance.
 - Dependencies: stop if any new runtime or development dependency appears to
   be required.
-- Ambiguity: stop if the expert review or implementation evidence shows that a
-  hook shape the users' guide supports today would be scheduled differently.
+- Ambiguity: stop if implementation evidence shows that any hook shape the
+  users' guide supports today would be scheduled differently.
 
 ## Risks
 
-- R1. Registration-time classification is unsound if used as a gate.
-  Severity: high. Likelihood: certain if implemented literally.
-  `inspect.iscoroutinefunction` cannot see a plain callable that *returns* an
-  awaitable. The local probe recorded in `Surprises & discoveries` shows that
-  on CPython 3.12.13, 3.13.13, 3.14.4, and 3.15.0b2 a lambda returning a
-  coroutine, a plain function returning one, and a `functools.wraps` sync
-  wrapper around an `async def` all classify as not-a-coroutine-function yet
-  return awaitables. Mitigation: the classification selects a fast path; it
-  never suppresses scheduling. Non-`None` results from hooks classified
-  synchronous still reach `inspect.isawaitable` (Decision D1).
-- R2. `inspect.markcoroutinefunction` lets a plain function declare itself a
-  coroutine function. If such a hook lies and returns a non-awaitable,
-  skipping detection on the async path would turn today's silent no-op into a
-  `TypeError` raised when the run awaits its tasks. Severity: low.
-  Likelihood: low. Mitigation: Decision D2 keeps the guard for the residual
-  case so behaviour is identical; the property suite includes a lying-marker
-  class.
-- R3. The profiler cannot prove a zero at low sample counts. Severity:
-  medium. Likelihood: low. Mitigation: the control capture must show a
-  non-zero count of the same frame under the same anchor (expected in the
-  hundreds), every capture's anchor weight must be at least 10,000, and three
-  matched pairs are collected.
-- R4. Adding `cuprum/_callable_kinds.py` changes the wheel file manifest and
-  breaks `cuprum/unittests/__snapshots__/test_maturin_build.ambr`. Severity:
-  low. Likelihood: certain. Mitigation: update that snapshot in the same
-  commit that adds the module, and confirm the diff names only the new file.
-- R5. Changing the private `_emit_exec_event` signature breaks tests that call
-  it with raw hook tuples (`cuprum/unittests/test_cqrs_helpers.py` around
-  lines 120, 138, 169; `cuprum/unittests/test_cqrs_hook_behaviour.py` around
-  lines 248 and 256). Severity: low. Likelihood: certain. Mitigation: update
-  those calls in the same commit to pass `_classify_observe_hooks(...)`; do not
-  add a compatibility overload (the function is private).
-- R6. CodeScene and pylint complexity limits on `_emit_exec_event`. One extra
-  branch previously tipped CodeScene's mean cyclomatic complexity over its
-  threshold (5.2.1 plan, around lines 2716-2750). Severity: medium.
-  Likelihood: medium. Mitigation: extract scheduling into a named helper
-  `_schedule_hook_result`, keep the loop body flat, and run `cs delta
-  origin/main` before pushing.
-- R7. Variant mix-up during profiling (a candidate run importing the control
-  tree, or vice versa). Severity: high. Likelihood: low. Mitigation: each
-  capture records `cuprum.__file__` and a variant probe (the presence or
-  absence of `cuprum._observability._classify_observe_hooks`) in
-  `variant.txt`, as 5.2.1 did.
+- R1. The roadmap's mechanism clause ("by classifying each hook as sync or
+  async once at registration") cannot be implemented both literally and
+  soundly. Severity: high. Likelihood: certain. A classifier that *decides*
+  scheduling drops the coroutines returned by lambdas, plain wrappers, and
+  `functools.wraps` decorators (probe in `Artefacts and notes`); a classifier
+  that merely *hints* changes no behaviour and no cost that a result test
+  cannot change more cheaply (expert review, `Decision log`). Mitigation:
+  Decision D1 puts the choice to the approver, with Option A recommended.
+- R2. A future maintainer "optimizes" the result test into a hook test,
+  silently dropping coroutines returned by decorated hooks. Severity: high.
+  Likelihood: low. Mitigation: the named invariant test
+  `test_sync_callable_returning_coroutine_is_still_scheduled` and the
+  behavioural scenario outline both pin the shape, with docstrings that state
+  the rule; `docs/cuprum-design.md` §8.1.3 records it.
+- R3. The profile proves zero by matching nothing (the target frame renders
+  differently, for example with a full `inspect.py` path, or the anchor moves).
+  Severity: high. Likelihood: low. Mitigation: the census reports both a
+  location-qualified and a name-only target weight and refuses a result where
+  they differ; the control capture must show a non-zero target under the same
+  anchor; one pinned interpreter runs every capture and `sys.version` is
+  recorded.
+- R4. Variant mix-up during profiling. Severity: high. Likelihood: low.
+  Mitigation: each capture records `cuprum.__file__` and `git rev-parse HEAD`
+  of the directory that holds the imported package in `variant.txt`.
+- R5. The unprofiled timing comparison is noisy (5.2.1 `cb` runs ranged
+  167.5-210.9 s, about ±12%) against an expected gain of about 4.5%. Severity:
+  medium. Likelihood: high. Mitigation: ABBA ordering, a discarded warm-up, a
+  paired geometric-mean ratio with a bootstrap 95% interval, and an in-process
+  microbenchmark as the precise per-event figure.
+- R6. CodeScene or pylint complexity on `_emit_exec_event`. Severity: medium.
+  Likelihood: low under Option A (one extra early `continue`). Mitigation: keep
+  the scheduling block's shape, and run `cs delta origin/main` before pushing.
 
 ## Progress
 
@@ -178,132 +170,167 @@ workaround.
 - [x] (2026-10-01) Reconnaissance: hook registration and dispatch paths,
   tests, documentation contract, and 5.2.1 profiling method surveyed.
 - [x] (2026-10-01) Classification probe run on CPython 3.12-3.15.
-- [x] (2026-10-01) Draft plan written.
-- [ ] Expert design review completed and incorporated.
-- [ ] Plan approved by the user.
-- [ ] EP-M1: shared async-callable classifier extracted.
-- [ ] EP-M2: red tests committed.
-- [ ] EP-M3: classified dispatch implemented; red tests green.
-- [ ] EP-M4: frame-census tool implemented and tested.
-- [ ] EP-M5: profiler artefacts collected and evidence document written.
+- [x] (2026-10-01) First draft written (classification as a fast-path
+  selector).
+- [x] (2026-10-01) Expert design review (three panels) completed; plan
+  revised to recommend Option A and correct the measurement plan.
+- [ ] Plan approved, with Option A or Option B chosen.
+- [ ] EP-M1: red tests committed.
+- [ ] EP-M2: result-guarded dispatch implemented; red tests green.
+- [ ] EP-M3: frame-census command implemented and tested.
+- [ ] EP-M4: dispatch microbenchmark added.
+- [ ] EP-M5: profiler and timing evidence collected; evidence document
+  written.
 - [ ] EP-M6: documentation, changelog, and roadmap updated; item marked done.
 
 ## Surprises & discoveries
 
 - Observation: static classification cannot identify every hook that returns
-  an awaitable.
-  Evidence: `/tmp/probe-5-2-2-classify.py`, output in
-  `/tmp/probe-classify-cuprum-5-2-2.out`, reproduced in `Artefacts and notes`.
-  On all four interpreters, `async def`, `functools.partial` of an `async
-  def` or bound async method, a bound async method, and
-  `inspect.markcoroutinefunction` are recognized by
-  `inspect.iscoroutinefunction`; an instance with `async def __call__` is
-  recognized only by the `type(obj).__call__` rule that
-  `cuprum/_idle_heartbeat.py:_is_async_callback` already applies; a lambda or
-  plain function returning a coroutine and a `functools.wraps` sync wrapper of
-  an `async def` are recognized by neither.
-  Impact: classification can only select a fast path; Decision D1.
-- Observation: `inspect.isawaitable(None)` costs roughly 230-480 ns per call
-  on these interpreters against roughly 11-14 ns for `result is None`.
-  Evidence: same probe (`timeit`, 2,000,000 iterations each).
-  Impact: the fast path for synchronous hooks should be an identity test, not
-  a cheaper detector.
+  an awaitable. Evidence: probe output in `Artefacts and notes`, identical on
+  CPython 3.12.13, 3.13.13, 3.14.4, and 3.15.0b2. A lambda or plain function
+  returning a coroutine and a `functools.wraps` sync wrapper of an `async def`
+  are invisible to both `inspect.iscoroutinefunction(hook)` and the
+  `type(hook).__call__` rule in `cuprum/_idle_heartbeat.py:356`. The expert
+  review added that `unittest.mock.create_autospec(async_fn)` classifies as
+  async on 3.13 and 3.14 but not on 3.12. Impact: classification can at best
+  select a fast path; Decision D1.
+- Observation: a sound classification removes no work that the result does
+  not already reveal. `type(result) is types.CoroutineType` is the first test
+  `inspect.isawaitable` itself makes, `types.CoroutineType` cannot be subclassed
+  (`TypeError: type 'coroutine' is not an acceptable base type`), and `None`
+  is never awaitable. Evidence: structure-and-contracts review probe, 14 result
+  shapes crossed with both classifications, all agreeing with today's
+  `inspect.isawaitable`. Impact: Option A.
+- Observation: measured per-event dispatch cost, one hook, median of 15
+  pinned rounds (ns): today 422 (3.12) / 353 (3.14) for a sync hook returning
+  `None` and 265 / 232 for an `async def` hook; Option A 123 / 99.6 and 241 /
+  205; the draft's `NamedTuple`-slot classifier 173 / 136 and 286 / 246 (slower
+  than today on the async path, because unpacking a tuple subclass misses
+  CPython's exact-tuple fast path); plain-tuple slots 129 / 103 and 247 / 217.
+  Evidence: alternatives-and-cost review microbenchmarks. Impact: Option A is
+  the fastest variant measured; Option B, if chosen, must use plain tuples.
+- Observation: `inspect.isawaitable` can raise (a result whose `__class__`
+  property raises propagates it). Today the check sits outside the `try` block
+  at `cuprum/_observability.py:132`, so such an exception escapes unwrapped and
+  the scheduled prefix never reaches `pending_tasks`. Impact: preserved
+  deliberately (C3) and pinned by a V1 class; record as a candidate follow-up
+  issue rather than changing behaviour here.
+- Observation: in Option B, `inspect.iscoroutinefunction(hook)` raises for a
+  proxy hook whose `__getattr__` raises, although calling the hook works.
+  Classifying in `_collect_hooks` would fail every command in the scope before
+  the `plan` event, unlogged and unwrapped. Impact: Option B must catch and
+  fall back to the guarded path.
+- Observation: the 5.2.1 figure of 589 samples counts `isawaitable` leaf
+  frames only; counting every stack that contains the frame gives 787-1,065 per
+  capture (828 in r2-candidate; the remainder sits in `abc.__instancecheck__`).
+  The forecast inversion is therefore larger than the 30.9686% recorded in
+  5.2.1: 5,317 / (17,758 − 828) ≈ 31.41%. Impact: the evidence document must
+  not compare census output with 589, and EP-M5 replaces the forecast with a
+  measurement.
+- Observation: the per-line anchor `emit_line (cuprum/_line_callbacks.py)`
+  weighs only 9,142, 9,318, and 9,173 samples in the 5.2.1 candidate captures
+  (this plan's control). The "D ≥ 10,000" figure in 5.2.1 is the whole consume
+  region (about 17,400), not this anchor. Impact: captures use
+  `--repeat-count 2`, and the floor is derived (V6).
+- Observation: every `isawaitable` sample in all six 5.2.1 captures sits under
+  `emit_line (cuprum/_line_callbacks.py)` via `_emit_exec_event`, with none
+  outside. A second `emit_line` exists in `cuprum/_stream_line_consumer.py:39`,
+  and the `inspect.py` line number varies (366-371) by interpreter. Impact: the
+  anchor pattern includes the location; the target pattern omits the line
+  number.
 - Observation: the roadmap's citation `cuprum/_observability.py:35` is stale;
-  the call is at line 132 in `_emit_exec_event` (defined at line 88).
-  Impact: correct the citation when the roadmap entry is ticked.
-- Observation: the 5.2.1 collection script was never committed; only the
-  capture and classifier commands survive in
-  `docs/tee-hotpath-line-event-emission-5-2-1.md` and
-  `docs/profiling/5-2-1-line-event-emission/README.md`.
-  Impact: this plan restates every command it needs and commits its own
-  README with them.
-- Observation: `benchmarks/summarize_folded.py` ranks the top `--limit` frames
-  and therefore cannot prove that a frame is absent; the 5.2.1 classifier
-  computes a construction share with a hard-wired 30% limit and cannot be
-  repurposed as a presence census without changing its meaning.
-  Impact: EP-M4 adds a small frame-census command that reuses the 5.2.1
-  capture model (`benchmarks/_line_event_profile_model.py`).
+  the call is at line 132 in `_emit_exec_event` (line 88). Impact: correct it
+  when the roadmap entry is ticked.
+- Observation: the 5.2.1 collection script was never committed, and
+  `benchmarks/summarize_folded.py` cannot prove absence (it keys on full frame
+  text including line numbers, has no anchor filter, and truncates to
+  `--limit`). Impact: EP-M3 adds a small census command and this plan restates
+  every capture command.
+- Observation: `observe_hook_task_scheduled` builds its `extra` dictionary and
+  calls `str(event.program)` for every scheduled line even when DEBUG logging
+  is disabled; on the async path that likely costs more than the call this item
+  removes. Impact: out of scope; record as a candidate roadmap follow-up in
+  EP-M6.
 
 ## Decision log
 
-- Decision D1 (proposed; subject to expert review and user approval):
-  interpret "classify each hook as sync or async once at registration" as
-  selecting a per-hook *dispatch path* once, never as deciding whether a
-  result may be scheduled.
-  Hooks classified *async* (detectably asynchronous by the shared rule) have
-  their result scheduled. Hooks classified *sync* finish on `result is None`
-  with no awaitable detection; a non-`None` result from a sync-classified hook
-  falls back to the unchanged `inspect.isawaitable` test, so a lambda that
-  returns a coroutine is still scheduled.
-  Rationale: the literal reading (never inspect a sync-classified hook's
-  result) silently drops the coroutines returned by lambdas, plain wrappers,
-  and `functools.wraps` decorators, violating C2 and C4 and leaving "coroutine
-  was never awaited" warnings. The success criterion is phrased over
-  *known-sync* hooks, and a hook returning `None` is the only shape whose
-  synchrony is known; the fallback runs only when a hook has just
-  demonstrated that it is not the shape it was classified as.
-  Alternative considered: no classification, only `if result is not None and
-  inspect.isawaitable(result)`. It meets the frame criterion for synchronous
-  hooks but keeps detection on the async path and departs from the roadmap's
-  stated mechanism. It remains the fallback if the expert review rejects D1.
+- Decision D1 (requires approver choice): recommend **Option A**, a
+  result-guarded dispatcher with no per-hook classification, over **Option B**,
+  a per-execution classification used only as a speed hint. Option A replaces
+  the `inspect.isawaitable(result)` test in `_emit_exec_event` with: skip a
+  `None` result; schedule a result whose type is exactly `types.CoroutineType`;
+  otherwise schedule if `inspect.isawaitable(result)`. Rationale: all three
+  review panels found independently that a sound classification cannot remove
+  any work the result does not already reveal, while adding a new failure point
+  (a classifier that raises on proxy hooks), a new module, a private signature
+  change, edits to two over-cap test files, and a field that invites a future,
+  unsound "optimization" (R2). Option A satisfies success clauses S1
+  ("known-sync hooks dispatch without per-line awaitable detection" — a
+  synchronous hook's result is `None` and never reaches detection), S2
+  (scheduling is identical for every result shape), and S3, and it is the
+  fastest variant measured. It departs from mechanism clause M: the roadmap
+  entry is to be reworded on completion to "by dismissing `None` results and
+  recognizing native coroutines by exact type before awaitable detection".
+  Option B, if the approver requires clause M literally, is specified under
+  `Option B deltas`; it narrows no contract, so it still needs no ADR, but it
+  must document `is_async` as a hint that never decides whether a result is
+  scheduled. Date/Author: 2026-10-01, planning agent after expert review;
+  awaiting the user.
+- Decision D2: test native coroutines by exact type
+  (`type(result) is types.CoroutineType`), not with `asyncio.iscoroutine`.
+  Rationale: `asyncio.iscoroutine(None)` measured 610 / 516 ns (it caches only
+  positive types) and accepts any registered `collections.abc.Coroutine`, which
+  is broader than needed; the exact-type test costs about 17-21 ns, is the
+  first branch inside `inspect.isawaitable`, and so can never disagree with it.
   Date/Author: 2026-10-01, planning agent.
-- Decision D2 (proposed): on the async path, schedule a non-`None` result
-  directly when it is a coroutine object, testing with
-  `type(result) is types.CoroutineType`, and fall back to `inspect.isawaitable`
-  only for any other non-`None` result; skip a `None` result exactly as today.
-  Rationale: a genuine `async def` call always returns a native coroutine, so
-  the exact-type test discharges every honest async hook in one C-level
-  comparison, while the fallback keeps today's behaviour for awaitable objects
-  that are not native coroutines (futures, objects with `__await__`) and for
-  a lying `markcoroutinefunction` marker (R2). This keeps C2 exact rather than
-  "identical except for pathological hooks".
+- Decision D3: keep the awaitable check outside the `try` block and keep the
+  scheduling block's logging inline, with the scheduled count read *after* the
+  append. Rationale: C2 and C3. The first draft's
+  `_schedule_hook_result(result, event, len(scheduled))` would have logged the
+  count before the append, an off-by-one in `cuprum_scheduled_task_count`.
+  Option A needs no helper. Date/Author: 2026-10-01, planning agent.
+- Decision D4: write the dispatch property (V1) against a *specification*
+  oracle, not a verbatim copy of the old dispatcher. Rationale: a frozen copy
+  rots and duplicates item 5.2.3's parity suite. The specification is short and
+  already used in `cuprum/unittests/test_cqrs_hook_behaviour.py:226-262`: up to
+  the first failing hook, exactly the hooks whose result satisfies
+  `inspect.isawaitable` are scheduled, in order. Item 5.2.3's plan should name
+  V1 as the property it extends. Date/Author: 2026-10-01, planning agent.
+- Decision D5: no ADR. Option A changes no contract and is recorded in
+  `docs/cuprum-design.md` §8.1.3. Option B also narrows nothing. Only the
+  literal, contract-narrowing reading (never inspect a sync-classified hook's
+  result) would warrant ADR 019, and this plan rejects it under C4.
   Date/Author: 2026-10-01, planning agent.
-- Decision D3 (proposed): classify where an execution binds its hooks, in
-  `_ExecutionHooks.__post_init__` (`cuprum/_pipeline_types.py`), and store the
-  result in a derived field `observe_dispatch`, rather than in
-  `CuprumContext`, `ScopeConfig`, or `observe()`.
-  Rationale: hooks reach an execution through four construction paths
-  (`observe()` → `with_observe_hook`, `ScopeConfig`, direct `CuprumContext(...)`
-  construction, and `narrow` merging) but leave the context through exactly
-  one seam, `_collect_hooks` (`cuprum/_pipeline_internals.py:87`), which
-  builds `_ExecutionHooks` once per command or pipeline stage. Classifying
-  there covers every path, costs well under a microsecond per hook per stage,
-  is never per event, and leaves C5 untouched because the context keeps the
-  caller's own hook objects. Classifying inside the public context would add a
-  derived field to a public frozen dataclass for no behavioural gain.
-  This is a recorded deviation from the roadmap's literal word "registration";
-  the roadmap entry is to be reworded on completion to "once per execution,
-  when hooks are bound".
-  Date/Author: 2026-10-01, planning agent.
-- Decision D4 (proposed): extract the existing `_is_async_callback` rule from
-  `cuprum/_idle_heartbeat.py` into a new dependency-free module
-  `cuprum/_callable_kinds.py` as `_is_async_callable`, and use it from both the
-  idle heartbeat validator and the observe-hook classifier.
-  Rationale: AGENTS.md requires sweeping for an existing helper before adding
-  one. The sweep found exactly one (`_is_async_callback`, the only
-  `inspect.iscoroutinefunction` user in `cuprum/`). Importing it from
-  `_idle_heartbeat` would couple observability to heartbeat code; a leaf
-  module avoids that coupling and any import cycle. Scope and reuse policy:
-  `_callable_kinds` answers only "is this callable detectably asynchronous?";
-  it must not grow per-result detection.
-  Date/Author: 2026-10-01, planning agent.
-- Decision D5 (proposed): no ADR. The change preserves every public contract
-  and is recorded in `docs/cuprum-design.md` §8.1.3 instead. If the expert
-  review or the user prefers the literal (contract-narrowing) reading of the
-  roadmap, that *would* be a substantive decision and would require ADR 019.
-  Date/Author: 2026-10-01, planning agent.
-- Decision D6 (proposed): no Rust, Verus, Kani, or `proptest` work. The
-  obligations concern CPython callable semantics and asyncio scheduling, which
-  cannot be modelled in a Rust extension without moving the hot path across
-  the foreign function interface, contrary to C6. Hypothesis differential
-  testing against a frozen oracle is the proportionate instrument
-  (`Verification plan`).
-  Date/Author: 2026-10-01, planning agent.
+- Decision D6: no Rust, Verus, Kani, or `proptest` work, and no CrossHair.
+  Rationale: the obligations concern CPython result types and asyncio
+  scheduling, which a Rust extension could only model by moving the hot path
+  across the foreign function interface, contrary to C6; the dispatcher is
+  impure (it schedules tasks and logs), which CrossHair does not model
+  usefully. Hypothesis over a specification oracle is the proportionate
+  instrument. Date/Author: 2026-10-01, planning agent.
+- Decision D7: add a dedicated census command
+  (`benchmarks/summarize_hot_path_frames.py`) with flags rather than a rules
+  file, reusing `parse_capture` and `FramePattern` from
+  `benchmarks/_line_event_profile_model.py` without modifying that module.
+  Rationale: the 5.2.1 classifier computes a share with a hard-wired limit,
+  `summarize_folded` cannot prove absence, and the model module is at 397
+  lines. Scope and reuse policy: the command answers only "how much sampled
+  weight does a target frame carry inside stacks containing an anchor frame?";
+  it must not grow share or verdict logic. Date/Author: 2026-10-01, planning
+  agent.
+- Decision D8: do not profile an async-hook line-callback scenario at full
+  scale. Rationale: finished observe tasks stay in `pending_tasks` until the
+  run ends (`cuprum/_command_internals.py:251`), at about 813 bytes each; the
+  28-million-line fixture would need roughly 23 GB. The exact-type fast path
+  saves about 25 ns of a roughly 4,000 ns async path, so a profile would show
+  "unchanged", which V1 and the microbenchmark already establish. Date/Author:
+  2026-10-01, planning agent.
 
 ## Outcomes & retrospective
 
-Not yet started. Record the measured frame counts, the unprofiled timing
-pairs, and any deviation here at each milestone.
+Not yet started. Record the measured census weights, the timing ratio and its
+interval, the microbenchmark figures, and the re-measured construction share
+here at each milestone.
 
 ## Context and orientation
 
@@ -314,424 +341,430 @@ Everything this plan touches is pure Python under `cuprum/`, `benchmarks/`,
 
 Terms used below:
 
-- *Observe hook*: a callable of type `ExecHook = Callable[[ExecEvent],
-  Awaitable[None] | None]` (`cuprum/events.py:296`) registered with
-  `cuprum.observe(hook)` (`cuprum/context/registration.py:340`) or supplied in
-  `ScopeConfig.observe_hooks` (`cuprum/context/_scope.py:91`). Hooks are
-  stored as a plain tuple on the frozen dataclass
-  `CuprumContext.observe_hooks` (`cuprum/context/core.py:74`), appended by
-  `with_observe_hook` (around line 282) and removed by identity in
-  `without_observe_hook` (around line 310).
+- *Observe hook*: a callable of type
+  `ExecHook = Callable[[ExecEvent], Awaitable[None] | None]`
+  (`cuprum/events.py:296`), registered with `cuprum.observe(hook)`
+  (`cuprum/context/registration.py:340`) or supplied in
+  `ScopeConfig.observe_hooks` (`cuprum/context/_scope.py:91`), and stored as a
+  plain tuple on `CuprumContext.observe_hooks` (`cuprum/context/core.py:74`).
 - *Execution hooks*: `_ExecutionHooks` (`cuprum/_pipeline_types.py:66`), a
-  frozen, slotted private dataclass holding the before, after, and observe
-  hook tuples for one command or pipeline stage. It is built by
-  `_collect_hooks(ctx)` (`cuprum/_pipeline_internals.py:87`), the only place
-  hooks leave the context, called from `cuprum/_command_internals.py:291`,
-  `cuprum/sh/safe_cmd.py:191`, and per stage in
-  `cuprum/_pipeline_internals.py:106`. Tests also construct it directly with
-  raw tuples.
+  frozen, slotted private dataclass of the before, after, and observe hook
+  tuples for one command or pipeline stage, built by `_collect_hooks`
+  (`cuprum/_pipeline_internals.py:87`).
 - *Stage observation*: `_StageObservation` (`cuprum/_pipeline_types.py`) owns
   one stage's hooks and its `pending_tasks` list. Its `_emit_event` method
   (around line 220) is the only production caller of `_emit_exec_event`.
 - *Dispatcher*: `_emit_exec_event(hooks, event)`
-  (`cuprum/_observability.py:88`). For each hook in order it calls the hook,
-  wraps failures in `_ExecEventEmissionError` together with the tasks
-  scheduled so far, and, if `inspect.isawaitable(result)` (line 132), schedules
-  the result as `asyncio.create_task(_await_awaitable(result, event.phase),
-  name=f"cuprum.observe.{event.phase}")` and logs
-  `observe_hook_task_scheduled`.
+  (`cuprum/_observability.py:88`). For each hook in order it calls the hook
+  inside a `try` block that wraps failures in `_ExecEventEmissionError`
+  together with the tasks scheduled so far; then, outside the `try`, if
+  `inspect.isawaitable(result)` (line 132), it appends
+  `asyncio.create_task(_await_awaitable(result, event.phase),
+  name=f"cuprum.observe.{event.phase}")`
+  and logs `observe_hook_task_scheduled`.
 - *Per-line hot path*: `_LineEventEmitter.emit_line`
-  (`cuprum/_line_callbacks.py`, around line 139), built by `_line_event_emitter`
-  once per observed stream in 5.2.1, calls the bound
-  `_StageObservation._emit_event` once per delivered line. In a py-spy capture
-  the chain renders as `emit_line (cuprum/_line_callbacks.py:…)` →
-  `_emit_event (cuprum/_pipeline_types.py:…)` →
-  `_emit_exec_event (cuprum/_observability.py:…)` → `isawaitable
-  (inspect.py:…)`.
-- *Detectably asynchronous*: `inspect.iscoroutinefunction(hook)` is true, or
-  `inspect.iscoroutinefunction(type(hook).__call__)` is true. This is the rule
-  `cuprum/_idle_heartbeat.py:356` (`_is_async_callback`) already uses to reject
-  async `on_idle` callbacks.
+  (`cuprum/_line_callbacks.py`, around line 139), built once per observed
+  stream by `_line_event_emitter` in 5.2.1, calls the bound
+  `_StageObservation._emit_event` once per delivered line.
 - *py-spy raw capture* (`stacks.folded`): one line per distinct stack, frames
   separated by `;`, each frame rendered `function (path:line)`, followed by a
   space and an integer sample weight.
-- *Anchor*: a frame whose presence in a stack marks that stack as belonging to
-  the per-line hot path. This plan's anchor is `emit_line` in
-  `cuprum/_line_callbacks.py`.
+- *Anchor*: a frame whose presence marks a stack as belonging to the per-line
+  hot path; here `emit_line` in `cuprum/_line_callbacks.py`.
+- *Target*: the frame whose weight inside anchored stacks must be zero; here
+  `isawaitable` in `inspect.py`. A stack's whole weight counts once if the
+  target appears anywhere in it ("inclusive" weight).
 
 Related prior work: item 5.2.1 hoisted the invariant event fields; its plan
 (`docs/execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md`),
-evidence (`docs/tee-hotpath-line-event-emission-5-2-1.md`), and raw captures
-(`docs/profiling/5-2-1-line-event-emission/`) define the profiling method this
-plan reuses. Item 5.2.3 will later add a combinatorial event-parity suite over
-the hook-type and stream-mode matrix; this plan's differential property is
-scoped to the dispatcher and must not pre-empt that suite.
+evidence (`docs/tee-hotpath-line-event-emission-5-2-1.md`), and captures
+(`docs/profiling/5-2-1-line-event-emission/`) define the profiling method
+reused here. Item 5.2.3 will add a combinatorial event-parity suite over hook
+type and stream mode; V1 is scoped to the dispatcher so that 5.2.3 can extend
+it rather than duplicate it.
 
 ### Documentation and skills signposts
 
 Read before starting:
 
 - `AGENTS.md` (quality gates, file-size cap, commit rules).
-- `docs/roadmap.md` §5 and §5.2 (the item and its neighbours).
+- `docs/roadmap.md` §5 and §5.2.
 - `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5, Table 4.
-- `docs/tee-hotpath-line-event-emission-5-2-1.md` (method, inversion warning).
+- `docs/tee-hotpath-line-event-emission-5-2-1.md` (method and inversion).
 - `docs/profiling/5-2-1-line-event-emission/README.md` (artefact layout).
 - `docs/cuprum-design.md` §7.1 and §8.1.3 (event model, async observers).
-- `docs/users-guide.md`, the observe-hook section and "When an observe hook
-  raises".
-- `docs/developers-guide.md`: "Choosing a test shape per observe hook",
-  "Profiling harness overview", "Construction-share classification (roadmap
-  5.2.1)", and "Line observation".
-- `docs/adr-002-additional-rust-components.md` (line-callback workloads are
-  optimized in Python, not Rust) and
-  `docs/adr-008-rust-pump-observation-channel.md` (the separate synchronous
-  pump-hook channel; do not conflate it with observe hooks).
+- `docs/users-guide.md`, the observe-hook section (around lines 960-1062)
+  and "When an observe hook raises" (around lines 1109-1129).
+- `docs/developers-guide.md`: "Choosing a test shape per observe hook"
+  (around line 1160), "Profiling harness overview" (around line 2961),
+  "Construction-share classification (roadmap 5.2.1)" (around line 3380), and
+  "Line observation" (around line 5729).
+- `docs/adr-002-additional-rust-components.md` (line-callback cost is a
+  Python concern) and `docs/adr-008-rust-pump-observation-channel.md` (the
+  separate, synchronous pump-hook channel; do not conflate it with observe
+  hooks).
 - `docs/documentation-style-guide.md` and `docs/scripting-standards.md`.
-- `.rules/python-00.md`, `.rules/python-typing.md`,
+- `.rules/python-00.md`, `.rules/python-typing.md`, and
   `.rules/python-exception-design-raising-handling-and-logging.md`.
 
-Skills to load: `execplans` (this plan), `python-router` then
-`python-types-and-apis` and `python-testing`, `hypothesis` for the
-differential property, `python-quality-tools` for py-spy work,
-`codegraph-mcp` for caller and impact queries, `en-gb-oxendict` for prose,
-`commit-message` and `pr-creation` for delivery, and `firecrawl-mcp` for any
-external documentation lookup. `rust-router` was consulted and is not needed
-beyond Decision D6.
+Skills to load: `execplans` (this plan); `python-router`, then `python-testing`
+and `hypothesis`; `python-quality-tools` for py-spy work; `codegraph-mcp` for
+caller and impact queries; `en-gb-oxendict` for prose; `commit-message` and
+`pr-creation` for delivery; `firecrawl-mcp` for any external documentation
+lookup. `rust-router` was consulted and is not needed (Decision D6).
 
 ## Conformance basis
 
-Upstream artefacts, at `main` revision `71aaf3eb`:
+Upstream artefacts at `main` revision `71aaf3eb`:
 
-- `docs/roadmap.md` item 5.2.2 (identifier ROAD-5.2.2), with three success
-  clauses: ROAD-5.2.2-S1 "known-sync hooks dispatch without per-line awaitable
-  detection"; ROAD-5.2.2-S2 "async hooks retain identical scheduling
-  behaviour"; ROAD-5.2.2-S3 "a committed profiler artefact shows
+- `docs/roadmap.md` item 5.2.2 (ROAD-5.2.2), with success clauses
+  ROAD-5.2.2-S1 ("known-sync hooks dispatch without per-line awaitable
+  detection"), ROAD-5.2.2-S2 ("async hooks retain identical scheduling
+  behaviour"), and ROAD-5.2.2-S3 ("a committed profiler artefact shows
   `inspect.isawaitable` contributes 0 sampled frames in the per-line hot
-  path". Mechanism clause ROAD-5.2.2-M "classifying each hook as sync or async
-  once at registration".
-- `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5, Table 4 (BASE-T4,
-  "avoid `inspect.isawaitable` for known-sync hooks").
+  path"), and mechanism clause ROAD-5.2.2-M ("by classifying each hook as sync
+  or async once at registration").
+- `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §5, Table 4 (BASE-T4).
 - `docs/cuprum-design.md` §8.1.3 "Async observers" (DES-8.1.3-ASYNC).
-- `docs/users-guide.md` observe-hook contract (UG-OBS-AWAIT, "Awaitable hook
-  results are scheduled…").
-- `docs/adr-002-additional-rust-components.md` (ADR-002: line-callback cost is
-  a Python concern).
+- `docs/users-guide.md` observe-hook contract (UG-OBS-AWAIT).
+- `docs/adr-002-additional-rust-components.md` (ADR-002).
 - No Terms of Reference document exists for this phase.
 
-Trace links:
+Trace links (Option A):
 
 ```plaintext
-BASE-T4 -> ROAD-5.2.2-S1 -> D1/D2 -> EP-M3
-  -> test_observe_hook_dispatch::test_sync_none_results_never_reach_isawaitable
-ROAD-5.2.2-M -> D3/D4 -> EP-M1, EP-M3
-  -> test_callable_kinds::test_classification_table
-  -> test_observe_hook_dispatch::test_hooks_are_classified_once_per_execution
-ROAD-5.2.2-S2 + UG-OBS-AWAIT + DES-8.1.3-ASYNC -> D1/D2 -> EP-M3
-  -> test_observe_hook_dispatch_properties::test_dispatch_matches_reference_oracle
+BASE-T4 -> ROAD-5.2.2-S1 -> D1(A)/D2 -> EP-M2
+  -> test_observe_hook_dispatch::test_none_results_never_reach_isawaitable
+  -> test_observe_hook_dispatch::test_native_coroutines_never_reach_isawaitable
+ROAD-5.2.2-S2 + UG-OBS-AWAIT + DES-8.1.3-ASYNC -> D1(A)/D2/D3/D4 -> EP-M2
+  -> test_observe_hook_dispatch_properties::test_dispatch_matches_specification
+  -> test_observe_hook_dispatch::test_sync_callable_returning_coroutine_is_still_scheduled
   -> tests/features/observe_hook_dispatch.feature
-ROAD-5.2.2-S3 -> EP-M4, EP-M5
+ROAD-5.2.2-S3 -> D7 -> EP-M3, EP-M5
   -> docs/profiling/5-2-2-observe-hook-dispatch/r{1,2,3}-{control,candidate}/frame-census.json
+ROAD-5.2.2-M -> D1 -> deviation (Option A) or EP-M2 Option B deltas
 ```
 
-Deviation recorded for approval: D3 classifies when an execution binds its
-hooks rather than inside `observe()`; see the Decision log.
+Deviation recorded for approval: under Option A, clause ROAD-5.2.2-M is not
+implemented as written; the outcome clauses S1-S3 are. See Decision D1.
 
 ## Verification plan
 
-The change introduces one new invariant (dispatch equivalence), one new
-contract (classification is computed once per execution), and one measurable
-absence (no `isawaitable` frame under the per-line anchor). No lemma requires a
-formal proof; Decision D6 records why.
+Option A introduces one invariant (dispatch equivalence over every result
+shape) and one measurable absence (no `isawaitable` frame under the per-line
+anchor). It introduces no lemma requiring a formal proof (Decision D6).
 
 Axioms relied upon, not verified here:
 
-- A1. CPython evaluates `async def` calls (including bound methods and
-  `functools.partial` wrappers recognized by `inspect.iscoroutinefunction`) to
-  objects of exact type `types.CoroutineType`. Exercised by the
-  classification table on every interpreter in the CI matrix (3.12-3.15).
-- A2. `inspect.iscoroutinefunction` and `inspect.isawaitable` behave as
-  documented in the standard library for each supported interpreter; the
-  probe in `Artefacts and notes` records the observed behaviour.
-- A3. py-spy 0.4.2 in raw mode attributes a sample to every Python frame on
-  the sampled stack, so a function that runs on the per-line path at a
-  measurable rate appears in some sample; the control capture is the
-  empirical check that it does.
+- A1. A call to an `async def` function (including bound methods,
+  `functools.partial` wrappers, `AsyncMock`, and `async def __call__`) returns
+  an object of exact type `types.CoroutineType`, and that type cannot be
+  subclassed. Exercised by V1's classes on every interpreter in the CI matrix
+  (3.12-3.15).
+- A2. `inspect.isawaitable(x)` returns true whenever
+  `type(x) is types.CoroutineType`, and returns false for `None`, on every
+  supported interpreter (its first branch is the coroutine-type test).
+- A3. py-spy 0.4.2 in raw mode attributes each sample to every Python frame
+  on the sampled stack. The control capture is the empirical check.
 - A4. `asyncio.create_task` scheduling order equals call order within one
-  emission (FIFO ready queue).
+  emission.
 
 Obligations:
 
-- V1. Dispatch equivalence.
-  Obligation: for every finite sequence of hooks drawn from the hook-shape
-  classes below and every phase, `_emit_exec_event(_classify_observe_hooks(
-  hooks), event)` is observationally equivalent to the pre-change dispatcher:
-  same hook call order, same returned task list length and task names, same
-  results when the tasks are awaited, same exception type and identity on
-  failure, same scheduled-prefix length in `_ExecEventEmissionError`, and the
-  same sequence of log records (logger, level, message, and `extra` keys).
-  Method: Hypothesis differential (oracle) property test.
-  Rationale: the domain is sequences with ordering-dependent failure; a
-  property over generated sequences covers prefix and interleaving cases that
-  finite tables miss. The oracle is the current dispatcher body copied
-  verbatim into the test support module as `_reference_emit_exec_event`, so
-  the comparison is against real pre-change behaviour rather than a restated
-  specification.
-  Domain: lists of length 0 to 8 drawn from twelve classes: sync returning
+- V1. Dispatch matches its specification.
+  Obligation: for every finite sequence of hooks drawn from the classes below
+  and every phase, `_emit_exec_event(hooks, event)` (a) calls hooks in order up
+  to and including the first raising hook; (b) schedules, in order, exactly
+  those earlier hooks whose result satisfies `inspect.isawaitable` (evaluated
+  by the test on an identical, separately produced result); (c) names each task
+  `cuprum.observe.<phase>`; (d) raises `_ExecEventEmissionError` carrying
+  exactly that scheduled prefix and wrapping the original exception object, or
+  returns the list when nothing raises; and (e) emits the same log records as
+  today, compared on logger name, level, `getMessage()`, `extra` values, and
+  `exc_info` type. Method: Hypothesis property with a specification oracle
+  (Decision D4). Domain: sequences of length 0 to 8 drawn from: sync returning
   `None`; sync returning a non-awaitable non-`None` value; plain function
-  returning a coroutine; lambda returning a coroutine; `functools.wraps`
-  sync wrapper of an `async def`; `async def`; `functools.partial` of an
-  `async def`; bound async method; instance with `async def __call__`;
-  instance with sync `__call__`; honest `markcoroutinefunction`; lying
-  `markcoroutinefunction` returning `None`; lying `markcoroutinefunction`
-  returning a non-awaitable non-`None` value; hook returning an
-  `asyncio.Future`; hook raising `Exception`; hook raising a non-`Exception`
-  `BaseException`; hook raising `CancelledError`. (The list is open to the
-  expert review.) Phases sampled from `plan`, `start`, `stdout`, `exit`.
-  Artefact: `cuprum/unittests/test_observe_hook_dispatch_properties.py` with
-  helpers in `cuprum/unittests/_observe_hook_dispatch_support.py`.
-  Evidence: `uv run pytest
-  cuprum/unittests/test_observe_hook_dispatch_properties.py -v` passes; before
-  EP-M3 the test cannot import `_classify_observe_hooks` and is marked
-  `xfail(strict=True)` for the red stage.
-  Non-vacuity: each class is tagged with `hypothesis.event(...)` and the run
-  is executed with `--hypothesis-show-statistics` once, with the output
-  recorded in `Artefacts and notes`; an `@example` pins one sequence per class
-  and one sequence where a failing hook follows two scheduling hooks. A seeded
-  fault test, `test_oracle_rejects_literal_classification`, runs the same
-  comparison against a deliberately wrong dispatcher that never inspects
-  sync-classified results and must observe a mismatch on the lambda class; a
-  second seeded fault that schedules every non-`None` result of an
-  async-classified hook without detection must be rejected by the
-  lying-marker class that returns a non-awaitable value.
-- V2. Classification table.
-  Obligation: `_is_async_callable` returns true exactly for the detectably
-  asynchronous shapes listed in `Context and orientation`, and the observe
-  classifier maps each hook to the dispatch path D1 prescribes.
-  Method: parameterized pytest (finite partition with named rows).
-  Artefact: `cuprum/unittests/test_callable_kinds.py`.
-  Evidence: passes on every interpreter in the CI matrix.
-  Non-vacuity: rows exist for both outcomes; the sync-wrapper rows assert
-  `False`, recording the known limitation as specification rather than a
-  surprise.
-- V3. Known-sync results never reach awaitable detection (ROAD-5.2.2-S1).
-  Obligation: for hooks classified sync that return `None`, and for `async
-  def` hooks, emitting any number of events performs zero calls to
-  `inspect.isawaitable`.
-  Method: named pytest examples with a counting spy installed by
-  `monkeypatch.setattr(inspect, "isawaitable", spy)`.
-  Artefact: `cuprum/unittests/test_observe_hook_dispatch.py`.
-  Evidence: red before EP-M3 (the spy counts one call per hook per event);
-  green after.
-  Non-vacuity: a companion test asserts the spy *is* called exactly once per
-  event for a lambda returning a coroutine, proving the spy is wired into the
-  real call site.
-- V4. Classification happens once per execution.
-  Obligation: emitting `n` line events through one `_StageObservation`
-  classifies each hook exactly once, independent of `n`.
-  Method: Hypothesis property over `n` in 0 to 200 with a spy on
-  `cuprum._callable_kinds._is_async_callable`.
-  Artefact: `cuprum/unittests/test_observe_hook_dispatch.py`.
-  Non-vacuity: `n = 0` and `n ≥ 1` are both generated (`hypothesis.event`);
-  a seeded fault that classifies inside the loop must fail.
-- V5. End-to-end behaviour through a real subprocess.
-  Obligation: a real command with line callbacks delivers every line to a sync
-  hook, an `async def` hook, and a lambda returning a coroutine, and every
-  scheduled task completes before `run_sync()` returns.
-  Method: pytest-bdd scenarios.
-  Artefact: `tests/features/observe_hook_dispatch.feature`,
-  `tests/behaviour/test_observe_hook_dispatch.py`.
-  Non-vacuity: each scenario asserts an exact count of received line events
-  equal to the number of lines the command prints.
-- V6. Absence in the profile (ROAD-5.2.2-S3).
-  Obligation: under the per-line anchor, `isawaitable` in `inspect.py`
-  receives zero sampled weight in every candidate capture.
-  Method: three matched py-spy control/candidate capture pairs analysed by
-  the frame-census command (EP-M4).
-  Artefact: `docs/profiling/5-2-2-observe-hook-dispatch/`.
-  Evidence: candidate `frame-census.json` reports `target_weight == 0` and the
-  command exits 0; control reports `target_weight > 0` and exits 1.
-  Non-vacuity: anchor weight at least 10,000 in every capture; control target
-  weight non-zero in every pair; `variant.txt` proves which tree each capture
-  imported.
-- V7. Frame-census correctness.
-  Obligation: the census command's anchor and target weights equal a
-  brute-force recount over the parsed stacks.
-  Method: Hypothesis property over generated folded stacks plus named examples
-  for malformed input and the exit-code table.
-  Artefact: `cuprum/unittests/test_hot_path_frame_census.py`.
-  Non-vacuity: generated stacks include, in the same capture, stacks with the
-  target outside the anchor (must not count), inside it (must count), and
-  repeated within one stack (counted once).
+  returning a coroutine; lambda returning a coroutine; `functools.wraps` sync
+  wrapper of an `async def`; `async def`; `functools.partial` of an
+  `async def`; bound async method; instance with `async def __call__`; instance
+  with sync `__call__`; `AsyncMock`; `create_autospec` of an `async def`;
+  `markcoroutinefunction`-marked function returning `None`; hook returning an
+  `asyncio.Future`; hook returning a `@types.coroutine` generator; hook
+  returning an object with `__await__`; hook returning a `Mock` and a
+  `MagicMock`; hook raising `Exception`; hook raising a non-`Exception`
+  `BaseException`; hook raising `CancelledError`; and hook returning an object
+  whose awaitable check raises (pinning C3's unwrapped escape). Phases are
+  sampled from `plan`, `start`, `stdout`, and `exit`. Artefacts:
+  `cuprum/unittests/test_observe_hook_dispatch_properties.py`, with hook
+  factories in `cuprum/unittests/_observe_hook_dispatch_support.py`. Evidence:
+  `uv run pytest cuprum/unittests/test_observe_hook_dispatch_properties.py -v`
+  passes both before and after EP-M2 (it is a preservation property, not a red
+  test), and fails against each seeded fault below. Non-vacuity: every class is
+  tagged with `hypothesis.event(...)`; one run with
+  `--hypothesis-show-statistics` is recorded in `Artefacts and notes` and must
+  show every class; `@example`s pin one sequence per class and one where a
+  raising hook follows two scheduling hooks. Two seeded-fault tests run the
+  property body against deliberately wrong dispatchers and must observe a
+  mismatch: `test_specification_rejects_every_non_none_scheduled` (rejected by
+  the non-awaitable-value class) and
+  `test_specification_rejects_native_coroutines_only` (rejected by the `Future`,
+  `@types.coroutine`, and `__await__` classes). Seeded faults close any
+  coroutine they drop, so no unraisable `RuntimeWarning` leaks into later tests.
+- V2. Known-shape results never reach awaitable detection (ROAD-5.2.2-S1).
+  Obligation: for hooks returning `None` and hooks returning native coroutines,
+  emitting any number of events makes zero calls to `inspect.isawaitable` from
+  `_emit_exec_event`. Method: named pytest examples with a counting spy
+  installed by `monkeypatch.setattr(inspect, "isawaitable", spy)` that counts
+  only calls whose immediate caller's code object is
+  `cuprum._observability._emit_exec_event.__code__`
+  (`sys._getframe(1).f_code`), so asyncio or pytest plugin calls cannot inflate
+  or mask the count. Artefact:
+  `cuprum/unittests/test_observe_hook_dispatch.py`, tests
+  `test_none_results_never_reach_isawaitable` and
+  `test_native_coroutines_never_reach_isawaitable`. Evidence: red before EP-M2
+  under `xfail(strict=True)` (the spy counts one call per hook per event
+  against the existing signature, so the module imports cleanly and the failure
+  is an assertion, not a collection error); green after, with the marker
+  removed. Non-vacuity: `test_awaitable_objects_still_reach_isawaitable`
+  asserts the spy *is* called exactly once per event for a hook returning an
+  `asyncio.Future`, proving the spy sees the real call site.
+- V3. Shapes that classification cannot see are still scheduled (guards R2).
+  Obligation: a plain function, a lambda, and a `functools.wraps` wrapper that
+  return coroutines are scheduled exactly as an `async def` hook is. Method:
+  named pytest example, parameterized over the three shapes, whose docstring
+  states the rule. Artefact:
+  `cuprum/unittests/test_observe_hook_dispatch.py::test_sync_callable_returning_coroutine_is_still_scheduled`.
+  Non-vacuity: asserts the task count, task names, and that each coroutine ran
+  to completion (a side-effect flag), with `gc.collect()` inside
+  `warnings.catch_warnings(record=True)` showing no "never awaited" warning.
+- V4. End-to-end behaviour through a real subprocess.
+  Obligation: a real command with observed line events delivers every line to
+  every supported hook shape, and every scheduled task completes before
+  `run_sync()` returns. Method: pytest-bdd scenario outline (specification
+  below). Artefacts: `tests/features/observe_hook_dispatch.feature` and
+  `tests/behaviour/test_observe_hook_dispatch.py` (collected by the
+  `test_[i-r]*.py` glob in `PYTEST_TARGETS`), reusing
+  `tests/behaviour/_structured_events_support.py`. A new feature is used
+  because extending `structured_events.feature` would push
+  `tests/behaviour/test_structured_events.py` (353 lines) past the cap.
+  Evidence: passes before and after EP-M2; it is a regression guard.
+  Non-vacuity: each example asserts an exact count of received line events
+  equal to the number of lines printed, in print order.
+- V5. Absence in the profile (ROAD-5.2.2-S3).
+  Obligation: under the anchor, the target carries zero inclusive weight in
+  every candidate capture. Method: three matched py-spy control/candidate pairs
+  analysed by the census command. Artefacts:
+  `docs/profiling/5-2-2-observe-hook-dispatch/`. Evidence: each candidate's
+  `frame-census.json` reports `target_weight` 0 and
+  `target_weight_any_location` 0, and the census exits 0; each control reports
+  both weights equal and non-zero (expected in the high hundreds per repeat)
+  and exits 1. Non-vacuity and bound: the floor is derived, not assumed. If the
+  target survived at a fraction f of anchored samples, the chance of observing
+  zero in N samples is (1 − f)^N. Requiring that to be below 10⁻⁶ for f = 0.1%
+  (one hundredth of the control's roughly 9-11% share) gives N ≥ 13,816, so the
+  floor is 14,000. Single-repeat anchors measured 9,142-9,318, so captures run
+  with `--repeat-count 2`. The control's non-zero target, the name-only
+  cross-check, the pinned interpreter, and `variant.txt` guard against a zero
+  produced by matching nothing.
+- V6. Census correctness.
+  Obligation: the census command's anchor, target, and name-only target weights
+  equal a brute-force recount over the parsed stacks. Method: Hypothesis
+  property over generated folded stacks, plus named examples for malformed
+  input and each exit status. Artefact:
+  `cuprum/unittests/test_hot_path_frame_census.py`. Non-vacuity: generated
+  captures include, together, stacks with the target outside the anchor (must
+  not count), inside it (must count), repeated within one stack (counted once),
+  and rendered with a different location (counted only by the name-only weight).
+- V7. Speed is not worse, and the per-event saving is quantified.
+  Obligation: the `cb` scenario's candidate/control wall-time ratio has a 95%
+  interval whose upper bound is at most 1.05, and the in-process microbenchmark
+  shows the per-event saving. Method: ABBA-ordered unprofiled pairs with a
+  discarded warm-up, a paired geometric-mean ratio with a bootstrap interval;
+  and a pytest-benchmark microbenchmark of `_emit_exec_event`. Artefacts:
+  `docs/profiling/5-2-2-observe-hook-dispatch/unprofiled/` and the new
+  `observe-dispatch` group in `benchmarks/test_stream_microbenchmarks.py`.
+  Non-vacuity: the microbenchmark runs both a `None`-returning hook and an
+  `async def` hook; the timing report lists every paired ratio, not only the
+  summary.
 
-Methods deliberately not used: syrupy snapshots (no new output format is
-introduced; the existing `tests/behaviour/__snapshots__/test_structured_events.ambr`
-must stay unchanged, which is itself evidence for C1); CrossHair (the
-classifier is introspection over live callables, which symbolic execution
-does not model usefully); Rust `proptest`, Kani, and Verus (Decision D6).
+Methods deliberately not used: new syrupy snapshots (no output format is
+introduced; `tests/behaviour/__snapshots__/test_structured_events.ambr` must
+stay unchanged, which is itself evidence for C1); CrossHair, Rust `proptest`,
+Kani, and Verus (Decision D6).
+
+### Behavioural specification
+
+`tests/features/observe_hook_dispatch.feature`:
+
+```gherkin
+Feature: Observe hook dispatch
+  Every supported observe-hook shape receives every line event, and every
+  awaitable it returns is awaited before the run returns.
+
+  Scenario Outline: Every hook shape receives every line and settles before the run returns
+    Given a safe command that prints 5 numbered lines to stdout
+    And an observe hook shaped as <shape> that records stdout line events
+    When the command runs synchronously with line events observed
+    Then the hook records exactly 5 stdout line events in print order
+    And no observe-hook task is pending when the run returns
+    And no coroutine-never-awaited warning was emitted
+
+    Examples:
+      | shape                                  |
+      | a synchronous function                 |
+      | an async def function                  |
+      | a lambda returning a coroutine         |
+      | a functools.wraps wrapper of async def |
+      | an instance with async __call__        |
+```
+
+Under Option B, add:
+
+```gherkin
+  Scenario: A hook whose attribute lookup raises still observes every line
+    Given a safe command that prints 5 numbered lines to stdout
+    And a synchronous observe hook whose attribute lookup raises
+    When the command runs synchronously with line events observed
+    Then the hook records exactly 5 stdout line events in print order
+```
 
 ## Plan of work
 
-Stage A (no code): expert review and approval of this plan.
+Stage A (no code): approval of this plan and the Option A or B choice.
 
-Stage B (red): add V2-V5 tests and the V1 property, marked
-`@pytest.mark.xfail(strict=True, reason="5.2.2 classified dispatch not yet
-implemented")` where they depend on the new symbols; run them and record the
-expected failures.
+Stage B (red): add V2 under strict `xfail`, and add V1, V3, and V4, which pass
+on today's dispatcher because they specify preserved behaviour. Record the red
+run.
 
-Stage C (green): implement EP-M1 and EP-M3, remove the markers, then EP-M4.
+Stage C (green): change `_emit_exec_event`, remove the marker, and add the
+census command and the microbenchmark.
 
-Stage D: collect profiles (EP-M5), write the evidence and documentation
-(EP-M6), and run every gate.
+Stage D: collect evidence (EP-M5), write documentation (EP-M6), and run every
+gate.
 
-### Production code shape
+### Production change (Option A)
 
-In `cuprum/_callable_kinds.py` (new, under 40 lines):
-
-```python
-def _is_async_callable(candidate: object) -> bool:
-    """Return whether *candidate* is detectably asynchronous."""
-    if inspect.iscoroutinefunction(candidate):
-        return True
-    return inspect.iscoroutinefunction(type(candidate).__call__)
-```
-
-`cuprum/_idle_heartbeat.py` imports it in place of `_is_async_callback`, which
-is deleted.
-
-In `cuprum/_observability.py`:
-
-```python
-class _ObserveHookSlot(typ.NamedTuple):
-    """One observe hook paired with its once-computed dispatch path."""
-
-    hook: ExecHook
-    is_async: bool
-
-
-def _classify_observe_hooks(
-    hooks: tuple[ExecHook, ...],
-) -> tuple[_ObserveHookSlot, ...]:
-    """Pair each hook with whether it is detectably asynchronous."""
-    return tuple(_ObserveHookSlot(hook, _is_async_callable(hook)) for hook in hooks)
-```
-
-`_emit_exec_event(dispatch: tuple[_ObserveHookSlot, ...], event)` keeps its
-`try`/`except` block unchanged, then:
+In `cuprum/_observability.py`, inside `_emit_exec_event`, replace the single
+line `if inspect.isawaitable(result):` (line 132) with an early skip and a
+two-part test, leaving the scheduling block and its logging untouched:
 
 ```python
         if result is None:
             continue
-        if is_async and type(result) is types.CoroutineType:
-            scheduled.append(_schedule_hook_result(result, event, len(scheduled)))
-        elif inspect.isawaitable(result):
-            scheduled.append(_schedule_hook_result(result, event, len(scheduled)))
+        if type(result) is types.CoroutineType or inspect.isawaitable(result):
+            scheduled.append(
+                asyncio.create_task(
+                    _await_awaitable(result, event.phase),
+                    name=f"cuprum.observe.{event.phase}",
+                )
+            )
+            # observe_hook_task_scheduled record unchanged; count read after
+            # the append exactly as today.
 ```
 
-where `_schedule_hook_result` holds today's `create_task` call and the
-`observe_hook_task_scheduled` record verbatim. The two scheduling branches may
-be merged into one condition if CodeScene prefers; the order of the tests is
-the specification. Note that `result is None` skipping is equivalent to
-today's behaviour because `inspect.isawaitable(None)` is false.
+Add a short comment explaining *why*: `None` is the only result a synchronous
+hook returns and a native coroutine is the only result an `async def` hook
+returns, so the general test runs only for the remaining shapes. `types` is
+already imported. Update the docstring's first paragraph to say which results
+are scheduled. No other production module changes.
 
-In `cuprum/_pipeline_types.py`, `_ExecutionHooks` gains
+### Option B deltas (only if the approver requires clause M literally)
 
-```python
-    observe_dispatch: tuple[_ObserveHookSlot, ...] = dc.field(
-        init=False, repr=False, compare=False
-    )
-
-    def __post_init__(self) -> None:
-        """Classify observe hooks once for this execution."""
-        object.__setattr__(
-            self, "observe_dispatch", _classify_observe_hooks(self.observe_hooks)
-        )
-```
-
-and `_StageObservation._emit_event` passes `self.hooks.observe_dispatch`.
-`report_pipeline_wait` keeps iterating `self.hooks.observe_hooks`. No import
-cycle is introduced: `cuprum/_pipeline_types.py:17` already imports
-`_emit_exec_event` and `_ExecEventEmissionError` from `cuprum._observability`
-at module level, and `_observability` does not import `_pipeline_types`.
+- Classify in `_ExecutionHooks.__post_init__` (`cuprum/_pipeline_types.py`)
+  into a derived `observe_dispatch` field of `(hook, is_async)` pairs, declared
+  with `dc.field(init=False, repr=False, compare=False)` and set with
+  `object.__setattr__`. Use plain tuples rather than a `NamedTuple` (measured
+  faster). The probe confirmed this works on a frozen, slotted dataclass, and
+  that `dc.replace`, `copy`, and `pickle` behave; nothing calls `dc.replace` on
+  `_ExecutionHooks`. Classification runs once per command or pipeline stage.
+- Extract `_is_async_callback` from `cuprum/_idle_heartbeat.py:356` into a
+  new leaf module `cuprum/_callable_kinds.py` as `_is_async_callable`, with its
+  own `__all__`; update
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr` for the new file.
+- The observe classifier catches `Exception` from `_is_async_callable` and
+  falls back to `False`; the shared helper itself keeps raising for the
+  heartbeat validator.
+- `_emit_exec_event` takes `tuple[tuple[ExecHook, bool], ...]`; its loop uses
+  the hint only to try the exact-type test first, and the result-guarded logic
+  above still decides scheduling. Document in code and in §8.1.3 that the hint
+  never decides whether a result is scheduled.
+- Update the direct callers in `test_cqrs_helpers.py` and
+  `test_cqrs_hook_behaviour.py` without growing either file (move the touched
+  tests into a new module if needed).
+- Add a version-aware classification table (`create_autospec` differs on
+  3.12) and a spy on `cuprum._observability._is_async_callable` (the name as
+  looked up) asserting exactly `len(hooks)` calls per stage.
+- Add the raising-proxy behavioural scenario above.
 
 ## Milestones and plateaus
 
-- EP-M1. Shared classifier extracted. `cuprum/_callable_kinds.py` exists,
-  `_idle_heartbeat` uses it, `test_callable_kinds.py` (V2) passes, the wheel
-  manifest snapshot is updated, and every gate passes. Requirements:
-  ROAD-5.2.2-M (partial). Conformance check: no behaviour change; idle
-  heartbeat tests unchanged and green. Recovery: revert the single commit.
-  Remaining: dispatch. Compatibility decision: none (private helper renamed
-  and moved together with its only caller).
-- EP-M2. Red tests. V1, V3, V4, V5, and the observe rows of V2 committed with
-  strict `xfail` markers; `make test` passes because the markers hold.
-  Recovery: revert. Remaining: implementation.
-- EP-M3. Classified dispatch. `_ObserveHookSlot`, `_classify_observe_hooks`,
-  `_schedule_hook_result`, the new `_emit_exec_event` loop, and
-  `_ExecutionHooks.observe_dispatch` land together with the updated direct
-  callers in `test_cqrs_helpers.py` and `test_cqrs_hook_behaviour.py`; markers
-  removed; all gates pass; `cs delta origin/main` reports no new finding.
-  Requirements: ROAD-5.2.2-S1, -S2, -M. Conformance check: C1-C5 hold by V1,
-  V3, V5 and the unchanged snapshot. Recovery: revert the commit; EP-M2's
-  markers return the tree to green. Compatibility decision: none;
-  `_emit_exec_event` is private and every caller is updated in the same
-  commit.
-- EP-M4. Frame census. `benchmarks/summarize_hot_path_frames.py` (command
-  line) and its rules file format, reusing `parse_capture`, `Frame`, and
-  `FramePattern` from `benchmarks/_line_event_profile_model.py`; V7 passes.
-  The command takes `<stacks.folded> --rules <rules.json> --output <out.json>`;
-  rules name `anchor_frames` and `target_frames` as `{function, location}`
-  patterns plus `min_anchor_weight`; output records `total_weight`,
-  `anchor_weight`, `target_weight`, `target_weight_outside_anchor`, and
-  `status`; exit 0 when the target weight is zero and the anchor is
-  sufficient, 1 when the target weight is non-zero, 2 when input is malformed
-  or the anchor is insufficient. Requirements: ROAD-5.2.2-S3 (instrument).
-  Recovery: revert.
-- EP-M5. Profiler evidence. Three control/candidate pairs collected, analysed,
-  and committed; evidence document written. Requirements: ROAD-5.2.2-S3.
-  Conformance check: candidate zero, control non-zero, anchor sufficient,
-  variants proven. Recovery: re-collect (idempotent; captures are overwritten
-  per pair directory).
-- EP-M6. Documentation and roadmap. Users' guide, design document,
-  developers' guide, changelog, contents index, and roadmap updated; roadmap
-  item 5.2.2 ticked with its citation corrected and D3's wording recorded.
-  Recovery: revert.
+- EP-M1. Red tests. V2 committed under
+  `xfail(strict=True, reason="5.2.2 result-guarded dispatch not yet implemented")`;
+  V1, V3, and V4 committed passing. Gates pass. Requirements: ROAD-5.2.2-S1
+  (specified), -S2 (guarded). Recovery: revert. Compatibility decision: none.
+- EP-M2. Result-guarded dispatch. The Option A change lands; V2's marker is
+  removed; all gates pass; `cs delta origin/main` reports nothing new.
+  Requirements: ROAD-5.2.2-S1, -S2. Conformance check: C1-C5 hold by V1-V4 and
+  the unchanged snapshot; no public surface touched. Recovery: revert; EP-M1's
+  marker returns the tree to green. Compatibility decision: none.
+- EP-M3. Census command. `benchmarks/summarize_hot_path_frames.py` with
+  `<stacks.folded> --anchor FUNCTION@LOCATION --target FUNCTION@LOCATION
+  --min-anchor-weight N --output OUT.json`,
+  reusing `parse_capture`, `Frame`, and `FramePattern`. Output fields:
+  `total_weight`, `anchor_weight`, `target_weight`,
+  `target_weight_any_location`, `target_weight_outside_anchor`, `status`. Exit
+  0 when both target weights are zero and the anchor meets the floor; 1 when
+  the target weights agree and are non-zero; 2 for malformed input, an anchor
+  below the floor, or disagreeing target weights. V6 passes. Documented under
+  "Profiling harness overview" in `docs/developers-guide.md`. Requirements:
+  ROAD-5.2.2-S3 (instrument). Recovery: revert.
+- EP-M4. Microbenchmark. An `observe-dispatch` group in
+  `benchmarks/test_stream_microbenchmarks.py` (122 lines today) timing
+  `_emit_exec_event` with one `None`-returning hook and with one `async def`
+  hook. Runs under `make benchmark-micro`. Recovery: revert.
+- EP-M5. Evidence. Three capture pairs, census results, the re-run 5.2.1
+  classifier on every capture, unprofiled ABBA pairs, and microbenchmark output
+  for control and candidate are committed under
+  `docs/profiling/5-2-2-observe-hook-dispatch/` with a README; the evidence
+  document `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` is written.
+  Conformance check: candidate zero, control non-zero and name-only equal,
+  anchors at or above 14,000, variants and interpreter proven. Recovery:
+  re-collect; each pair directory is overwritten.
+- EP-M6. Documentation and roadmap (see `Concrete steps`). Recovery: revert.
 
 ## Concrete steps
 
-Run everything from the worktree root. Use the `tee` logging convention from
-`AGENTS.md`, for example:
+Run everything from the worktree root. Log every gate with `tee`, for example:
 
 ```bash
 make test 2>&1 | tee /tmp/test-cuprum-5-2-2-remove-the-per-hook-inspect-isawaitable-call.out
 ```
 
-Red stage (EP-M2):
+Red stage (EP-M1):
 
 ```bash
 uv run pytest cuprum/unittests/test_observe_hook_dispatch.py \
   cuprum/unittests/test_observe_hook_dispatch_properties.py \
-  cuprum/unittests/test_callable_kinds.py \
   tests/behaviour/test_observe_hook_dispatch.py -v
 ```
 
-Expected: every new test reports `XFAIL` (or, for the BDD scenario that
-already passes on today's dispatcher, `PASSED`, which is correct: V5 is a
-regression guard, not a red test).
+Expected: the two V2 tests report `XFAIL`; every other new test reports
+`PASSED`.
 
-Green stage (EP-M3): rerun the same command; expect `PASSED` throughout and no
-`XPASS(strict)`.
+Green stage (EP-M2): remove the marker and rerun; expect `PASSED` throughout.
 
-Profiling (EP-M5). Prepare a control worktree at the commit before EP-M3 and
-the candidate at EP-M3's head:
+Profiling (EP-M5). Pin one interpreter (CPython 3.14.4, as 5.2.1 used) for
+every run. Create the control worktree at EP-M1's head and use EP-M2's head as
+the candidate:
 
 ```bash
-git worktree add ../cuprum-5-2-2-control <EP-M2 head SHA>
+git worktree add ../cuprum-5-2-2-control <EP-M1 head SHA>
 ```
 
 Build the fixture exactly as 5.2.1 did (see
 `docs/profiling/5-2-1-line-event-emission/README.md`), producing
-`dist/fixtures/seed12345-wrap76.b64`. For each round `r` in 1, 2, 3, alternate
-which variant runs first, and capture from inside the variant's worktree so
+`dist/fixtures/seed12345-wrap76.b64`. For rounds 1 to 3, alternate which
+variant runs first, and capture from inside the variant's worktree so that
 `python -m` imports that tree's `cuprum`:
 
 ```bash
@@ -740,57 +773,102 @@ py-spy record --format raw --rate 100 \
   <python> -m benchmarks.tee_profile_worker \
   --fixture dist/fixtures/seed12345-wrap76.b64 --stages 1 --mode echo \
   --sink-kind devnull --line-callbacks --backend python \
-  --repeat-count 1 --read-size 65536 --output <capture>/worker-result.json
+  --repeat-count 2 --read-size 65536 --output <capture>/worker-result.json
 python -m benchmarks.summarize_hot_path_frames <capture>/stacks.folded \
-  --rules docs/profiling/5-2-2-observe-hook-dispatch/frame-census-rules.json \
-  --output <capture>/frame-census.json
+  --anchor emit_line@cuprum/_line_callbacks.py \
+  --target isawaitable@inspect.py \
+  --min-anchor-weight 14000 --output <capture>/frame-census.json
+python -m benchmarks.summarize_line_event_profile <capture>/stacks.folded \
+  --rules docs/profiling/5-2-1-line-event-emission/classifier-rules.json \
+  --output <capture>/construction-share.json
 ```
 
-Record `py-spy` and census exit codes, the revision, and the variant probe:
+Record in `variant.txt`:
 
 ```bash
-python -c "import cuprum, cuprum._observability as o; print(cuprum.__file__, hasattr(o, '_classify_observe_hooks'))"
+python - <<'EOF' > <capture>/variant.txt
+import pathlib
+import subprocess
+import sys
+
+import cuprum
+
+package = pathlib.Path(cuprum.__file__).parent
+print(sys.version)
+print(package)
+print(subprocess.check_output(["git", "-C", str(package), "rev-parse", "HEAD"], text=True).strip())
+EOF
 ```
 
 A non-zero py-spy exit with `No child process (os error 10)` after `Errors: 0`
-is benign (5.2.1 evidence, around lines 167-172). Then run five unprofiled
-paired rounds of the `cb` scenario (`echo-devnull-cb-s1`) as in 5.2.1 and
-record medians.
+is benign (5.2.1 evidence, around lines 167-172). Then run one discarded
+warm-up per variant and six ABBA-ordered unprofiled pairs of the `cb` scenario
+(`echo-devnull-cb-s1`), compute the paired geometric-mean ratio with a
+10,000-resample bootstrap 95% interval, and run `make benchmark-micro` in both
+trees.
+
+Documentation (EP-M6):
+
+- `docs/users-guide.md`: list the supported hook shapes explicitly ("any
+  callable whose return value is awaitable, including `async def` functions,
+  bound async methods, objects with `async def __call__`, and plain functions
+  or lambdas that return a coroutine"), and add a performance note beside the
+  5.2.1 note (around line 1046) with the measured figures.
+- `docs/cuprum-design.md` §8.1.3: record the result-guarded dispatch, why the
+  decision is made on the result and not on the hook, and the rule that no hook
+  classification may decide whether a result is scheduled.
+- `docs/developers-guide.md`: document the census command under "Profiling
+  harness overview"; replace the forecast at around line 3413 and lines
+  5842-5847 with the measured construction share, and correct the 589-sample
+  figure's meaning (leaf-only).
+- `docs/roadmap.md`: tick 5.2.2; correct the stale `:35` citation; reword the
+  mechanism per Decision D1; replace the forecast at around line 311 with the
+  measurement; add a candidate follow-up for the per-line
+  `observe_hook_task_scheduled` record cost.
+- `docs/contents.md`: index the evidence document and the profile README
+  beside the 5.2.1 entries (around line 105), and update the 5.2.1 entry's
+  forecast wording (around line 110).
+- `benchmarks/_line_event_profile_classifier.py`: refresh the line citations
+  in the comment above `_HOOK_DISPATCH_BOUNDARY` (around line 70) and confirm
+  the boundary still matches `_emit_exec_event` by name and location.
+- `CHANGELOG.md`: add a bullet after the 5.2.1 entry in `### Changed` under
+  `## [0.2.0-beta1]`, linking the evidence and quoting measured figures.
+- Run `make fmt` (it reflows Markdown with `mdtablefix`), then
+  `make markdownlint` and `make nixie`.
 
 ## Validation and acceptance
 
 Acceptance is met when all of the following hold:
 
-- `make check-fmt`, `make typecheck`, `make lint`, `make test`, `make
-  markdownlint`, and `make nixie` pass at the final head.
-- `cuprum/unittests/test_observe_hook_dispatch.py::test_sync_none_results_never_reach_isawaitable`
-  failed before EP-M3 (as a strict `xfail`) and passes after.
-- The V1 differential property passes with every class reported in its
-  statistics, and both seeded-fault tests pass by observing a mismatch.
-- `tests/behaviour/__snapshots__/test_structured_events.ambr` is unchanged
-  (`git diff --exit-code origin/main -- tests/behaviour/__snapshots__/`).
-- Each `docs/profiling/5-2-2-observe-hook-dispatch/r{1,2,3}-candidate/frame-census.json`
-  reports `"target_weight": 0` with census exit 0, and each control reports a
-  non-zero target weight with census exit 1; every anchor weight is at least
-  10,000.
-- No unprofiled scenario's candidate median is more than 5% slower than its
-  control.
+- `make check-fmt`, `make typecheck`, `make lint`, `make test`,
+  `make markdownlint`, and `make nixie` pass at the final head.
+- `test_none_results_never_reach_isawaitable` and
+  `test_native_coroutines_never_reach_isawaitable` were recorded as strict
+  `xfail` before EP-M2 and pass after.
+- The V1 property passes with every class in its recorded statistics, and
+  both seeded-fault tests pass by observing a mismatch.
+- `git diff --exit-code origin/main -- tests/behaviour/__snapshots__/ cuprum/unittests/__snapshots__/`
+  reports no change (Option A).
+- Every candidate census reports both target weights 0 and exits 0; every
+  control census reports equal, non-zero target weights and exits 1; every
+  anchor weight is at least 14,000.
+- The `cb` ratio's 95% interval upper bound is at most 1.05.
 
 Quality criteria: tests and gates above; V1-V7 discharged; no new dependency;
 no change to public API.
 
 ## Idempotence and recovery
 
-Every milestone is one or a few commits that can be reverted independently in
+Every milestone is one or a few commits that can be reverted independently, in
 reverse order. Profiling is re-runnable; each pair directory is overwritten on
 re-collection, and nothing under `dist/` is committed. Remove the control
-worktree with `git worktree remove ../cuprum-5-2-2-control` when EP-M5 is
-complete.
+worktree with `git worktree remove ../cuprum-5-2-2-control` after EP-M5.
 
 ## Artefacts and notes
 
-Classification probe (2026-10-01), abridged; identical results on 3.12.13,
-3.13.13, 3.14.4, and 3.15.0b2:
+Classification probe (2026-10-01), abridged; identical on 3.12.13, 3.13.13,
+3.14.4, and 3.15.0b2 (`iscorofn` is `inspect.iscoroutinefunction(hook)`;
+`heartbeat_rule` adds the `type(hook).__call__` test):
 
 ```plaintext
 async def                              iscorofn=True  heartbeat_rule=True  returns_awaitable=True
@@ -808,31 +886,52 @@ functools.wraps sync wrapper of async  iscorofn=False heartbeat_rule=False retur
 3.14.4:  isawaitable(None) 233.8 ns ; 'is None' 11.0 ns
 ```
 
-Control-capture baseline: in
-`docs/profiling/5-2-1-line-event-emission/r2-candidate/stacks.folded`,
-`isawaitable (inspect.py:…)` leaves under `emit_line` total 589 samples
-(5.2.1 evidence, around line 333).
+Expert design review (2026-10-01), three panels: structure and contracts,
+alternatives and cost, and failure modes and viability. All three independently
+recommended Option A. Their corrections to the first draft are folded into
+`Surprises & discoveries`, the Decision log (D1-D8), V1-V7, and the tolerances.
+The verdict was "proceed with conditions": choose between Options A and B,
+correct the anchor floor, and make the red stage collectable.
 
 ## Interfaces and dependencies
 
-No new dependency. New private symbols, all module-private and unexported:
+No new dependency, and no new or changed production symbol under Option A.
+`_emit_exec_event` keeps its signature:
 
-- `cuprum._callable_kinds._is_async_callable(candidate: object) -> bool`.
-- `cuprum._observability._ObserveHookSlot` (`NamedTuple` of `hook: ExecHook`,
-  `is_async: bool`).
-- `cuprum._observability._classify_observe_hooks(hooks: tuple[ExecHook, ...])
-  -> tuple[_ObserveHookSlot, ...]`.
-- `cuprum._observability._schedule_hook_result(result, event, count) ->
-  asyncio.Task[None]`.
-- `cuprum._observability._emit_exec_event(dispatch: tuple[_ObserveHookSlot,
-  ...], event: ExecEvent) -> list[asyncio.Task[None]]` (signature change from
-  `hooks: tuple[ExecHook, ...]`).
-- `cuprum._pipeline_types._ExecutionHooks.observe_dispatch` (derived,
-  `init=False`).
-- `benchmarks.summarize_hot_path_frames` (command line and `summarize(...)`
-  function).
+```python
+def _emit_exec_event(
+    hooks: tuple[ExecHook, ...],
+    event: ExecEvent,
+) -> list[asyncio.Task[None]]: ...
+```
+
+New non-production artefacts:
+
+- `benchmarks/summarize_hot_path_frames.py`: a command line and a
+  `summarize(capture, *, anchor, target, min_anchor_weight) -> dict[str,
+  object]`
+  function.
+- `cuprum/unittests/test_observe_hook_dispatch.py`,
+  `cuprum/unittests/test_observe_hook_dispatch_properties.py`,
+  `cuprum/unittests/_observe_hook_dispatch_support.py`,
+  `cuprum/unittests/test_hot_path_frame_census.py`,
+  `tests/features/observe_hook_dispatch.feature`, and
+  `tests/behaviour/test_observe_hook_dispatch.py`.
+- `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` and
+  `docs/profiling/5-2-2-observe-hook-dispatch/`.
 
 ## Revision note
 
-2026-10-01: initial draft from reconnaissance and the classification probe;
-awaiting expert review.
+2026-10-01, first draft: classification once per execution as a fast-path
+selector, with a new shared classifier module.
+
+2026-10-01, revision 1 after the expert design review: Option A (a
+result-guarded dispatcher with no classification) is recommended, and
+classification moves to `Option B deltas` for the approver to choose. The
+measurement plan is corrected: a derived anchor floor of 14,000 with
+`--repeat-count 2`, inclusive rather than leaf weights, a name-only
+cross-check, a pinned interpreter, `git rev-parse` variant proof, and a timing
+interval in place of a raw 5% threshold. The off-by-one scheduled-count
+logging, the reachable `isawaitable` exception, the over-cap test files, and
+the red stage's collectability are also addressed. Remaining work is unchanged
+in order but smaller in scope: one production module under Option A.
