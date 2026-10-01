@@ -319,14 +319,28 @@ def test_bind_executable_honours_allow_relative() -> None:
 
 
 def test_bind_executable_does_not_release_an_existing_hold() -> None:
-    """The handle keeps the derived context alive without weakening the scope."""
-    context = CuprumContext(allowlist=frozenset([LS]))
-    handle = bind_executable(ECHO, "/opt/tools/echo")
-    try:
-        assert handle is not None
-        assert context.is_allowed(ECHO) is False
-    finally:
-        handle.detach()
+    """A binding layers onto the live scope instead of replacing it.
+
+    The binding is installed while an allowlist scope is already in effect.
+    If the handle derived its context from the default rather than from the
+    one in force, installing it would drop the surrounding allowlist; the
+    assertion therefore reads ``current_context()`` from inside the scope
+    rather than a local ``CuprumContext``, which a dropped hold could not
+    affect.
+    """
+    with scoped(ScopeConfig(allowlist=frozenset([LS]))):
+        assert current_context().is_allowed(LS) is True
+        with bind_executable(ECHO, "/opt/tools/echo"):
+            live = current_context()
+            assert live.is_allowed(LS) is True, (
+                "the allowlist in force must survive the binding"
+            )
+            assert live.resolve_executable(ECHO, cwd="/srv") == "/opt/tools/echo", (
+                "the binding must be visible alongside the surviving allowlist"
+            )
+        assert current_context().resolve_executable(ECHO, cwd="/srv") is None, (
+            "leaving the block must remove the binding"
+        )
 
 
 def test_registration_is_a_context_manager_returning_a_context_error_base() -> None:

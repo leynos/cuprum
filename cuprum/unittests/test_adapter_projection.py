@@ -328,7 +328,12 @@ class TestAdapterProjection:
             "an execution path must never become a metrics label, got "
             f"{sorted(labels)!r}"
         )
-        assert "resolved_path" not in "".join(labels.values()), (
+        # The key set alone cannot see a path smuggled into an existing
+        # label's value, which is the shape a leak would actually take: the
+        # ``program`` label is a natural host for it. Check the value, not
+        # the field name -- the name never appears in a label by
+        # construction, so asserting on it could not fail.
+        assert not any("/opt/tools/echo" in value for value in labels.values()), (
             f"the bound path must not leak into any label value either, got {labels!r}"
         )
 
