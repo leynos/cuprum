@@ -205,6 +205,18 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-01) The three findings above were committed as `f5310367` and
+  pushed, a fast-forward `36d483da..f5310367`. All six gates were re-run
+  against the frozen revision and passed with the two files byte-identical at
+  the start and the end of the run (`2a60e61b…` and `78b3c7c1…`): check-fmt,
+  markdownlint, nixie, typecheck, and — importantly, because the previous
+  `lint` run had died at its first leaf — a full `lint` in which every leaf
+  reached a verdict, including the `ambrleaks`, `skylos`, `rust-lint` and
+  `github-actions-lint` leaves that had gone unobserved. `make test` reported
+  2632 passed and 70 skipped across the ten Python sessions, 127 of 127 Rust
+  tests, and the doctests complete. The commit moved no content, so only the
+  three working-tree-bound gates were re-run afterwards and passed at the new
+  HEAD.
 - [x] (2026-10-01) The fixture extraction above tripped the docstring gate:
   `make lint` stopped at the `python-lint` leaf with
   `docstring-missing-returns: 'return' is not documented in docstring` against
