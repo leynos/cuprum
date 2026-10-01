@@ -31,10 +31,33 @@ import typing as typ
 
 from cuprum._pipeline_types import _ExecutionInvariantError
 
+# Imported at runtime, not under ``TYPE_CHECKING``: the builders below are
+# annotated with the unions and this module re-exports them, so the names have
+# to resolve for anything that reads these annotations back.
+from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
+
 if typ.TYPE_CHECKING:
-    from cuprum._rusage import _ChildRusageSnapshot
+    from cuprum._rusage import ChildResourceUsage, _ChildRusageSnapshot
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
+
+
+class _RunMeasurementsKwargs(typ.TypedDict):
+    """The keyword arguments :meth:`_RunMeasurements.as_kwargs` returns.
+
+    Declared rather than left as ``dict[str, object]`` so unpacking it into a
+    result constructor keeps each field's type: an opaque value type would
+    make every ``**kwargs`` argument unrepresentable to the type checker, and
+    the measurements would stop being checked against the fields they fill.
+    """
+
+    pid: int
+    started_at: float
+    duration: float
+    max_rss_bytes: int | None
+    user_cpu_seconds: float | None
+    system_cpu_seconds: float | None
+    relay_fallbacks: tuple[RelayFallback, ...]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -43,29 +66,36 @@ class _RunMeasurements:
 
     These are the keyword arguments the result classes accept after their five
     positional ones, so :meth:`as_kwargs` is the whole of what the two
-    constructions share. The rusage snapshot is kept whole rather than
-    flattened here, so the ``None`` propagation for the three resource figures
-    happens in exactly one place.
+    constructions share. The rusage is kept whole rather than flattened here,
+    so the ``None`` propagation for the three resource figures happens in
+    exactly one place.
+
+    ``rusage`` accepts either of the two shapes the measurement seam produces:
+    the pre-spawn snapshot a ``wait4`` bracket takes, or the aggregate
+    :func:`~cuprum._wait4_process.resource_usage_for` falls back to when the
+    direct child cannot be reaped through that interface. Both report the same
+    three figures and both allow a missing ``max_rss_bytes``, so accepting the
+    union here is what lets the caller pass the measurement on rather than
+    convert it.
     """
 
     pid: int
     started_at: float
     duration: float
-    rusage: _ChildRusageSnapshot | None
+    rusage: _ChildRusageSnapshot | ChildResourceUsage | None
     relay_fallbacks: tuple[RelayFallback, ...]
 
-    def as_kwargs(self) -> dict[str, object]:
+    def as_kwargs(self) -> _RunMeasurementsKwargs:
         """Return these measurements as the results' shared keyword arguments."""
+        rusage = self.rusage
         return {
             "pid": self.pid,
             "started_at": self.started_at,
             "duration": self.duration,
-            "max_rss_bytes": None if self.rusage is None else self.rusage.max_rss_bytes,
-            "user_cpu_seconds": (
-                None if self.rusage is None else self.rusage.user_cpu_seconds
-            ),
+            "max_rss_bytes": None if rusage is None else rusage.max_rss_bytes,
+            "user_cpu_seconds": (None if rusage is None else rusage.user_cpu_seconds),
             "system_cpu_seconds": (
-                None if self.rusage is None else self.rusage.system_cpu_seconds
+                None if rusage is None else rusage.system_cpu_seconds
             ),
             "relay_fallbacks": self.relay_fallbacks,
         }
@@ -118,33 +148,8 @@ def _require_text(payload: _StreamPayload | None, stream: str) -> str | None:
     return payload
 
 
-def _narrow_payload(
-    payload: _StreamPayload | None,
-    stream: str,
-    *,
-    capture_bytes: bool,
-) -> bytes | None:
-    """Narrow a captured payload as byte-exact, refusing anything already decoded.
-
-    The narrowing counterpart of :func:`_require_bytes` for callers that hold
-    the mode as a value rather than having committed to a construction already.
-    A pipeline stage reads its mode once and then narrows both of its streams,
-    so without this it would have to either restate the check or spread the
-    result-class choice over two branches.
-
-    Returns
-    -------
-    bytes | None
-        The payload, unchanged.
-    """
-    if not capture_bytes:
-        return typ.cast("bytes | None", payload)
-    return _require_bytes(payload, stream)
-
-
 __all__ = [
     "_RunMeasurements",
-    "_narrow_payload",
     "_require_bytes",
     "_require_text",
 ]

@@ -45,7 +45,8 @@ if typ.TYPE_CHECKING:
         _PipelineObservers,
         _PipelineSpawnResult,
     )
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum._result_types import _AnyCommandResult
+    from cuprum.sh import SafeCmd
 
 
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
@@ -54,7 +55,7 @@ _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 async def _finalize_pipeline_execution(
     parts: tuple[SafeCmd, ...],
     observers: _PipelineObservers,
-    stage_results: list[CommandResult],
+    stage_results: list[_AnyCommandResult],
     sink_bracket: _SinkBracket,
 ) -> None:
     """Run after-hooks before settling stages, then drain observer tasks.
@@ -95,6 +96,17 @@ async def _finalize_pipeline_execution(
         )
         raise
     await _shielded_cleanup(_wait_for_exec_hook_tasks(pending_tasks))
+
+
+def _run_pipeline_after_hooks(
+    parts: tuple[SafeCmd, ...],
+    hooks_by_stage: tuple[_ExecutionHooks, ...],
+    results: list[_AnyCommandResult],
+) -> None:
+    """Run registered after hooks for each pipeline stage."""
+    for cmd, hooks, result in zip(parts, hooks_by_stage, results, strict=True):
+        for hook in hooks.after_hooks:
+            hook(cmd, result)
 
 
 async def _reconcile_pipeline_run_failure(
@@ -195,17 +207,6 @@ async def _finalize_pipeline_stage_result_failure(
             message=_PIPELINE_FINALIZATION_ERROR,
         )
     )
-
-
-def _run_pipeline_after_hooks(
-    parts: tuple[SafeCmd, ...],
-    hooks_by_stage: tuple[_ExecutionHooks, ...],
-    results: list[CommandResult],
-) -> None:
-    """Run registered after hooks for each pipeline stage."""
-    for cmd, hooks, result in zip(parts, hooks_by_stage, results, strict=True):
-        for hook in hooks.after_hooks:
-            hook(cmd, result)
 
 
 __all__ = [

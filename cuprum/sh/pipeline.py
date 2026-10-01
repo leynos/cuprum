@@ -21,7 +21,12 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._bytes_run import _bytes_output, _validate_bytes_output
+from cuprum._bytes_run import (
+    _bytes_output,
+    _require_bytes_pipeline_result,
+    _require_pipeline_result,
+    _validate_bytes_output,
+)
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
 from cuprum._sink_lifecycle import _outcome_for_error
@@ -128,7 +133,7 @@ class Pipeline:
         # every path out of the pipeline, including one the runner itself
         # raises on the way to its first stage.
         try:
-            return await _run_pipeline(self.parts, config)
+            return _require_pipeline_result(await _run_pipeline(self.parts, config))
         except BaseException as run_error:
             config.sink_bracket.close(outcome=_outcome_for_error(run_error))
             raise
@@ -237,7 +242,9 @@ class Pipeline:
         # every path out of the pipeline, including one the runner itself
         # raises on the way to its first stage.
         try:
-            return await _run_pipeline(self.parts, config)
+            return _require_bytes_pipeline_result(
+                await _run_pipeline(self.parts, config)
+            )
         except BaseException as run_error:
             config.sink_bracket.close(outcome=_outcome_for_error(run_error))
             raise

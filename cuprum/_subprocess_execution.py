@@ -24,7 +24,12 @@ from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._result_assembly import _require_bytes, _require_text, _RunMeasurements
+from cuprum._result_assembly import (
+    _require_bytes,
+    _require_text,
+    _RunMeasurements,
+)
+from cuprum._result_types import _AnyCommandResult
 from cuprum._subprocess_context import _cwd_arg, _sh_module
 from cuprum._subprocess_stream_run import (
     # Imported, not merely re-exported: the direct run path below is the caller.
@@ -278,7 +283,7 @@ async def _await_direct_completion(
     )
 
 
-async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
+async def _execute_subprocess(execution: _SubprocessExecution) -> _AnyCommandResult:
     """Execute a subprocess and return the command result."""
     # All three pre-spawn readings are taken here, before the spawn await, so
     # a run's recorded duration includes the time its spawn blocked and the
@@ -335,7 +340,7 @@ def _build_command_result(
     execution: _SubprocessExecution,
     completion: _DirectCompletion,
     measurements: _RunMeasurements,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Assemble the run's result, choosing the class its mode calls for.
 
     This is the only place either result class is constructed, and the only
@@ -349,7 +354,7 @@ def _build_command_result(
 
     Returns
     -------
-    CommandResult
+    CommandResult | BytesCommandResult
         A ``BytesCommandResult`` when the run captured bytes, otherwise the
         ordinary text result.
     """

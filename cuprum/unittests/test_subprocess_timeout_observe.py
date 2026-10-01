@@ -20,6 +20,7 @@ from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
+from cuprum.unittests._stream_drain_support import ConsumerTask
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
     _ExitedProcess,
@@ -188,7 +189,7 @@ def test_capture_eof_grace_expiry_emits_observe_event() -> None:
         await asyncio.Event().wait()
 
     async def expire_immediately(
-        _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        _consumers: tuple[ConsumerTask, ConsumerTask],
     ) -> None:
         """Close the test grace window without elapsed wall-clock time."""
 
@@ -232,7 +233,7 @@ def test_completed_capturing_readers_emit_no_grace_expiry_event() -> None:
     """Readers that reach EOF before the grace closes emit no expiry event."""
 
     async def wait_for_readers(
-        consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        consumers: tuple[ConsumerTask, ConsumerTask],
     ) -> None:
         """Let both readers complete deterministically inside the grace window."""
         await asyncio.gather(*consumers)
@@ -295,7 +296,7 @@ def test_failing_grace_observer_cannot_replace_cancellation() -> None:
         await asyncio.Event().wait()
 
     async def expire_immediately(
-        _consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
+        _consumers: tuple[ConsumerTask, ConsumerTask],
     ) -> None:
         """Close the grace window before the observer requests cancellation."""
 

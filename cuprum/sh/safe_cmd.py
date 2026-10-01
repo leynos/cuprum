@@ -21,7 +21,12 @@ import asyncio
 import collections.abc as cabc
 import dataclasses as dc
 
-from cuprum._bytes_run import _bytes_output, _validate_bytes_output
+from cuprum._bytes_run import (
+    _bytes_output,
+    _require_bytes_command_result,
+    _require_command_result,
+    _validate_bytes_output,
+)
 from cuprum._command_internals import (
     _build_subprocess_execution,
     _ExecutionState,
@@ -133,14 +138,16 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return await _run_prepared_command(
-            self,
-            _ExecutionState(
-                context=ctx,
-                output=out,
-                stdin_data=stdin_data,
-                timeout=effective_timeout,
-            ),
+        return _require_command_result(
+            await _run_prepared_command(
+                self,
+                _ExecutionState(
+                    context=ctx,
+                    output=out,
+                    stdin_data=stdin_data,
+                    timeout=effective_timeout,
+                ),
+            )
         )
 
     async def run_bytes(
@@ -199,15 +206,17 @@ class SafeCmd:
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
-        return await _run_prepared_command(
-            self,
-            _ExecutionState(
-                context=ctx,
-                output=out,
-                stdin_data=stdin_data,
-                timeout=effective_timeout,
-                capture_bytes=True,
-            ),
+        return _require_bytes_command_result(
+            await _run_prepared_command(
+                self,
+                _ExecutionState(
+                    context=ctx,
+                    output=out,
+                    stdin_data=stdin_data,
+                    timeout=effective_timeout,
+                    capture_bytes=True,
+                ),
+            )
         )
 
     def run_bytes_sync(

@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
+from cuprum.unittests._stream_drain_support import CapturedOrNone
 from tests.helpers.parity import (
     PropertyPipelineCase,
     build_property_pipeline_case,
@@ -87,7 +88,7 @@ async def _consume_at_read_size(
     *,
     read_size: int,
     lines: list[str] | None = None,
-) -> str | None:
+) -> CapturedOrNone:
     """Consume payload through a real reader using an injected read size."""
     reader = asyncio.StreamReader()
     reader.feed_data(payload)

@@ -7,6 +7,10 @@ import io
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
+from cuprum.unittests._stream_drain_support import (
+    CapturedOrNone,
+    CapturedPair,
+)
 
 
 class _RecordingReader(asyncio.StreamReader):
@@ -25,7 +29,7 @@ class _RecordingReader(asyncio.StreamReader):
         return await super().read(n)
 
 
-async def _consume_lines(payload: bytes) -> tuple[str | None, list[str]]:
+async def _consume_lines(payload: bytes) -> CapturedPair[list[str]]:
     """Consume *payload* and return its capture and emitted lines."""
     reader = asyncio.StreamReader()
     reader.feed_data(payload)
@@ -60,7 +64,7 @@ def test_crlf_split_at_read_boundary_emits_no_empty_line() -> None:
 def test_consume_stream_forwards_explicit_read_size_to_every_reader_call() -> None:
     """The final stream consumer retains the injected benchmark read size."""
 
-    async def consume() -> tuple[str | None, list[int]]:
+    async def consume() -> CapturedPair[list[int]]:
         """Consume a recording reader with a deliberately non-default size."""
         reader = _RecordingReader(b"firstsecond")
         captured = await _consume_stream(reader, _config(read_size=17))
