@@ -143,6 +143,30 @@ async def _reconcile_pipeline_run_failure(
     )
 
 
+async def _finalize_pipeline_run_failure(
+    config: _PipelineRunConfig,
+    spawn: _PipelineSpawnResult,
+    observers: _PipelineObservers,
+    run_error: BaseException,
+) -> None:
+    """Close the sink, settle spawned stages, and drain after run failure."""
+    outcome = _outcome_for_error(run_error)
+    config.sink_bracket.close(outcome=outcome)
+    await _shielded_cleanup(
+        _reconcile_pipeline_run_failure(
+            spawn,
+            observers.pending_tasks,
+            run_error,
+            lambda: _emit_terminal_events(
+                observers.observations,
+                outcome.outcome,
+                processes=spawn.processes,
+                started_at=spawn.stages.started_at,
+            ),
+        )
+    )
+
+
 async def _finalize_pipeline_timeout(
     config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
@@ -173,6 +197,32 @@ async def _finalize_pipeline_timeout(
     )
 
 
+async def _finalize_pipeline_stage_result_failure(
+    spawn: _PipelineSpawnResult,
+    observers: _PipelineObservers,
+    sink_bracket: _SinkBracket,
+    result_error: BaseException,
+) -> None:
+    """Settle stages and drain hooks after stage-result assembly fails."""
+    outcome = _outcome_for_error(result_error)
+    sink_bracket.close(outcome=outcome)
+    _emit_terminal_events(
+        observers.observations,
+        outcome.outcome,
+        processes=spawn.processes,
+        started_at=spawn.stages.started_at,
+    )
+    # Result assembly runs after process cleanup but before pipeline
+    # finalization, so this layer still owns the observe-hook tasks.
+    await _shielded_cleanup(
+        _drain_tasks_during_cleanup(
+            observers.pending_tasks,
+            result_error,
+            message=_PIPELINE_FINALIZATION_ERROR,
+        )
+    )
+
+
 async def _run_spawned_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
@@ -198,7 +248,6 @@ async def _run_spawned_pipeline(
         The assembled stage results and the index of the first failing stage.
     """
     observations = observers.observations
-    pending_tasks = observers.pending_tasks
     sink_bracket = config.sink_bracket
     try:
         inputs = await _collect_pipeline_inputs(
@@ -215,23 +264,7 @@ async def _run_spawned_pipeline(
         )
         raise
     except BaseException as run_error:
-        outcome = _outcome_for_error(run_error)
-        sink_bracket.close(outcome=outcome)
-        # One shielded unit: shielding the two separately would let a
-        # cancellation landing between them abandon the observe-hook drain.
-        await _shielded_cleanup(
-            _reconcile_pipeline_run_failure(
-                spawn,
-                pending_tasks,
-                run_error,
-                lambda: _emit_terminal_events(
-                    observations,
-                    outcome.outcome,
-                    processes=spawn.processes,
-                    started_at=spawn.stages.started_at,
-                ),
-            )
-        )
+        await _finalize_pipeline_run_failure(config, spawn, observers, run_error)
         raise
     try:
         stage_results = _build_pipeline_stage_results(
@@ -241,24 +274,11 @@ async def _run_spawned_pipeline(
             inputs=inputs,
         )
     except BaseException as result_error:
-        outcome = _outcome_for_error(result_error)
-        sink_bracket.close(outcome=outcome)
-        _emit_terminal_events(
-            observations,
-            outcome.outcome,
-            processes=spawn.processes,
-            started_at=spawn.stages.started_at,
-        )
-        # The stage-result build sits between the spawn and finalization, so
-        # the observe-hook tasks this pipeline owns are nobody else's yet: the
-        # run owes the drain here for the same reason the spawn-failure branch
-        # above does, and for the same reason the close comes first.
-        await _shielded_cleanup(
-            _drain_tasks_during_cleanup(
-                pending_tasks,
-                result_error,
-                message=_PIPELINE_FINALIZATION_ERROR,
-            )
+        await _finalize_pipeline_stage_result_failure(
+            spawn,
+            observers,
+            sink_bracket,
+            result_error,
         )
         raise
     # Finalization owns the close, after the after-hooks have run: a failing

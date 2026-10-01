@@ -188,7 +188,13 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
     """
     events: list[ExecEvent] = []
     _run_until_timeout(0.2, events, InMemoryMetrics())
+    _assert_timeout_exits_cover_started_stages(events)
+    _assert_terminal_outcomes_match_stage_exits(events)
+    _assert_timeout_precedes_each_stage_exit(events)
 
+
+def _assert_timeout_exits_cover_started_stages(events: list[ExecEvent]) -> None:
+    """Assert every spawned stage has one observed terminal exit event."""
     exits = [ev for ev in events if ev.phase == "exit"]
     assert len(exits) == _STAGE_COUNT, (
         f"each of the {_STAGE_COUNT} stages must report a terminal exit event, "
@@ -197,6 +203,11 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
     assert {ev.pid for ev in exits} == {
         ev.pid for ev in events if ev.phase == "start"
     }, "the exit events must cover exactly the stages that started"
+
+
+def _assert_terminal_outcomes_match_stage_exits(events: list[ExecEvent]) -> None:
+    """Assert each settled stage retains its own exit details and timeout."""
+    exits = [event for event in events if event.phase == "exit"]
     settled = [event for event in events if event.phase == "settled"]
     assert len(settled) == _STAGE_COUNT, (
         f"each stage must settle once, got {[(ev.phase, ev.pid) for ev in events]}"
@@ -207,6 +218,9 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
         assert terminal.pid == stage_exit.pid
         assert terminal.exit_code == stage_exit.exit_code
 
+
+def _assert_timeout_precedes_each_stage_exit(events: list[ExecEvent]) -> None:
+    """Assert per-stage timeout events precede their own reaped exit."""
     # Per stage, not globally: `phases.index` reports only the *first*
     # occurrence in the whole stream, so with two stages it would compare one
     # stage's timeout against the other's exit and accept an interleaving in

@@ -81,19 +81,34 @@ def given_terminal_worker_command(tmp_path: Path) -> WorkerCommand:
     )
 
 
+def _cancel_worker_during_terminal_cleanup(
+    state: _TerminalOutcomeState,
+    worker: WorkerCommand,
+    *,
+    repeat_cancellations: int = 0,
+) -> None:
+    """Run the worker cancellation scenario and retain its lifecycle events."""
+    events: list[ExecEvent] = []
+    state["pid"] = _cancel_command_with_grace(
+        worker["command"],
+        worker["pid_file"],
+        options=_CancellationOptions(
+            events=events,
+            repeat_cancellations=repeat_cancellations,
+        ),
+    )
+    state["events"] = events
+
+
 @when("I cancel while terminal cleanup is observed")
 def when_cancel_during_terminal_cleanup(
     terminal_outcome_state: _TerminalOutcomeState,
     terminal_worker_command: WorkerCommand,
 ) -> None:
     """Cancel after start while an async terminal hook holds cleanup open."""
-    events: list[ExecEvent] = []
-    terminal_outcome_state["pid"] = _cancel_command_with_grace(
-        terminal_worker_command["command"],
-        terminal_worker_command["pid_file"],
-        options=_CancellationOptions(events=events),
+    _cancel_worker_during_terminal_cleanup(
+        terminal_outcome_state, terminal_worker_command
     )
-    terminal_outcome_state["events"] = events
 
 
 @when("I cancel repeatedly during terminal cleanup")
@@ -102,13 +117,30 @@ def when_repeat_cancellation_during_terminal_cleanup(
     terminal_worker_command: WorkerCommand,
 ) -> None:
     """Repeat cancellation while terminal-hook cleanup remains pending."""
-    events: list[ExecEvent] = []
-    terminal_outcome_state["pid"] = _cancel_command_with_grace(
-        terminal_worker_command["command"],
-        terminal_worker_command["pid_file"],
-        options=_CancellationOptions(events=events, repeat_cancellations=3),
+    _cancel_worker_during_terminal_cleanup(
+        terminal_outcome_state,
+        terminal_worker_command,
+        repeat_cancellations=3,
     )
-    terminal_outcome_state["events"] = events
+
+
+def _assert_single_terminal_outcome(
+    events: list[ExecEvent],
+    expected_outcome: TerminalOutcome,
+) -> None:
+    """Assert one correlated terminal outcome with no invented process data."""
+    settled = [event for event in events if event.phase == "settled"]
+    plans = [event for event in events if event.phase == "plan"]
+    assert len(settled) == 1, f"Expected one settled event, found {settled!r}"
+    assert len(plans) == 1, f"Expected one plan event, found {plans!r}"
+    assert settled[0].terminal_outcome is expected_outcome, (
+        f"expected {expected_outcome!s} as the terminal category"
+    )
+    assert settled[0].exec_id == plans[0].exec_id, (
+        "settlement must correlate with its plan event"
+    )
+    assert settled[0].pid is None, "a run without a spawned child has no PID"
+    assert settled[0].exit_code is None, "a run without a child has no exit code"
 
 
 @then("exactly one cancelled terminal outcome is observed")
@@ -116,19 +148,10 @@ def then_one_cancelled_terminal_outcome(
     terminal_outcome_state: _TerminalOutcomeState,
 ) -> None:
     """Assert settlement is unique and correlated with the observed run."""
-    events = terminal_outcome_state["events"]
-    settled = [event for event in events if event.phase == "settled"]
-    plans = [event for event in events if event.phase == "plan"]
-    assert len(settled) == 1, f"Expected one settled event, found {settled!r}"
-    assert len(plans) == 1, f"Expected one plan event, found {plans!r}"
-    assert settled[0].terminal_outcome is TerminalOutcome.CANCELLED, (
-        "cancellation must be the reported terminal category"
+    _assert_single_terminal_outcome(
+        terminal_outcome_state["events"],
+        TerminalOutcome.CANCELLED,
     )
-    assert settled[0].exec_id == plans[0].exec_id, (
-        "settlement must correlate with its plan event"
-    )
-    assert settled[0].pid is None, "cancellation must not invent a PID"
-    assert settled[0].exit_code is None, "cancellation must not invent an exit code"
 
 
 @then("the terminal-outcome subprocess stops cleanly")
@@ -171,16 +194,7 @@ def then_spawn_failure_settles(
     terminal_outcome_state: _TerminalOutcomeState,
 ) -> None:
     """Assert failed spawn has one correlated event and no fabricated status."""
-    events = terminal_outcome_state["events"]
-    settled = [event for event in events if event.phase == "settled"]
-    plans = [event for event in events if event.phase == "plan"]
-    assert len(settled) == 1, f"Expected one settled event, found {settled!r}"
-    assert len(plans) == 1, f"Expected one plan event, found {plans!r}"
-    assert settled[0].terminal_outcome is TerminalOutcome.ERROR, (
-        "spawn failure must be reported as an error"
+    _assert_single_terminal_outcome(
+        terminal_outcome_state["events"],
+        TerminalOutcome.ERROR,
     )
-    assert settled[0].exec_id == plans[0].exec_id, (
-        "settlement must correlate with its plan event"
-    )
-    assert settled[0].pid is None, "a failed spawn has no process ID"
-    assert settled[0].exit_code is None, "a failed spawn has no exit code"
