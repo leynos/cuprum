@@ -2101,7 +2101,7 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   | Finding                                      | Verdict                                                                                    |
   | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
   | `:1224` first- and second-person phrasing    | **Still valid** — one residual, newly introduced by the passage recorded immediately above |
-  | `:1518` "recognisable" → "recognizable"      | **Already fixed** — no prose occurrence remains                                            |
+  | `:1518` en-GB-oxendict spelling              | **Already fixed** — no prose occurrence remains                                            |
   | Failed check: private `validate_buffer_size` | **Refuted** — legal, deliberate, and the gap it names is closed in Python                  |
 
   The privacy finding repays a careful reading, because its *observation* is
