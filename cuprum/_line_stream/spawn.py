@@ -27,7 +27,7 @@ from cuprum._subprocess_streams import (
     _spawn_stream_consumers,
     _StreamConsumerSpawnContext,
 )
-from cuprum._subprocess_wait import _RunTaskOwnership
+from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:

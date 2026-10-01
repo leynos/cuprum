@@ -104,6 +104,11 @@ class _ExecutionState:
     output: RunOutputOptions
     stdin_data: bytes | None
     timeout: float | None
+    # Whether the captured streams are reported as bytes rather than decoded
+    # text. Defaulted rather than required because the text-mode entry point
+    # is the one the whole codebase calls; the binary entry points are the
+    # only callers that set it.
+    capture_bytes: bool = False
 
 
 def _prepare_execution_observation(
@@ -178,6 +183,7 @@ def _build_subprocess_execution(
         observation=observation,
         stdin_data=state.stdin_data,
         on_line=state.output.on_line,
+        capture_bytes=state.capture_bytes,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes
         # the spawn is the parent's work, and must not read as the child's
