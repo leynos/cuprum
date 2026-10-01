@@ -18,10 +18,11 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum._result_types import _AnyCommandResult
 from cuprum.sinks import base as sinks
 
 if typ.TYPE_CHECKING:
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum.sh import SafeCmd
 
 _DEFAULT_LABEL_SEPARATOR = ": "
 
@@ -172,8 +173,14 @@ def _close_sink_session(
     session.close(outcome)
 
 
-def _outcome_for_result(result: CommandResult) -> sinks.SessionOutcome:
-    """Map a completed command's result onto the terminal-outcome set."""
+def _outcome_for_result(result: _AnyCommandResult) -> sinks.SessionOutcome:
+    """Map a completed command's result onto the terminal-outcome set.
+
+    Either result class is accepted: both declare ``exit_code``, which is the
+    only field this reads, so the terminal outcome is the same fact whichever
+    mode reported it. A pipeline stage is not one of these — its bracket is the
+    pipeline's, opened around every stage at once.
+    """
     outcome = (
         sinks.TerminalOutcome.EXIT_ZERO
         if result.exit_code == 0

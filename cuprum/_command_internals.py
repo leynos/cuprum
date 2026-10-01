@@ -52,6 +52,7 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._result_types import _AnyCommandResult
 from cuprum._sink_lifecycle import (
     _command_session_start,
     _outcome_for_error,
@@ -211,7 +212,7 @@ async def _execute_with_hooks(
     cmd: SafeCmd,
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Execute *execution*, dispatch after-hooks, and handle cancellation.
 
     Draining the observe-hook tasks during cleanup must not let a failing
@@ -231,9 +232,9 @@ async def _execute_with_hooks(
 
     Returns
     -------
-    CommandResult
+    CommandResult | BytesCommandResult
         The completed command's result, once every after-hook has run and the
-        observe-hook tasks have drained.
+        observe-hook tasks have drained, in whichever mode the run asked for.
     """
     try:
         result = await _execute_subprocess(execution)
@@ -261,7 +262,7 @@ async def _execute_with_hooks(
 async def _run_prepared_command(
     cmd: SafeCmd,
     state: _ExecutionState,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Run one validated command after its public inputs are resolved.
 
     ``SafeCmd.run`` remains the public entry point and keeps its signature; it
@@ -281,8 +282,9 @@ async def _run_prepared_command(
 
     Returns
     -------
-    CommandResult
-        The completed command's result.
+    CommandResult | BytesCommandResult
+        The completed command's result, byte-exact when the run asked for
+        bytes.
     """
     output = state.output
     # The bracket owns the session for the whole run: a plan observer, a

@@ -19,6 +19,10 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _drain, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
+from cuprum.unittests._stream_drain_support import (
+    CapturedOrNone,
+    CapturedPair,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -260,7 +264,7 @@ def test_discarding_a_cancelled_capture_skips_decoding() -> None:
 def test_cancelled_capture_retains_buffered_text() -> None:
     """Cancellation returns buffered capture when cleanup does not discard it."""
 
-    async def run_case() -> str | None:
+    async def run_case() -> CapturedOrNone:
         """Cancel a reader after it buffers text and blocks awaiting EOF."""
         reader = asyncio.StreamReader()
         reader.feed_data(b"partial output")
@@ -275,7 +279,7 @@ def test_cancelled_capture_retains_buffered_text() -> None:
 def test_cancelled_capture_flushes_replacement_echo() -> None:
     """Cancellation flushes an incomplete echoed character before returning it."""
 
-    async def run_case() -> tuple[str | None, str]:
+    async def run_case() -> CapturedPair[str]:
         """Cancel after buffering an incomplete UTF-8 sequence without EOF."""
         reader = asyncio.StreamReader()
         reader.feed_data(b"\xc3")

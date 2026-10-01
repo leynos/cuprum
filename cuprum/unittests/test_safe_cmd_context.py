@@ -14,7 +14,7 @@ import typing as typ
 import pytest
 
 from cuprum import ECHO, ForbiddenProgramError, ScopeConfig, scoped, sh
-from cuprum.sh import ExecutionContext, RunOutputOptions
+from cuprum.sh import BytesCommandResult, ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -136,12 +136,12 @@ def test_run_invokes_after_hooks_in_lifo_order(
     _, execute = execution_strategy
     call_order: list[int] = []
 
-    def outer_hook(cmd: SafeCmd, result: CommandResult) -> None:
+    def outer_hook(cmd: SafeCmd, result: CommandResult | BytesCommandResult) -> None:
         """Record the outer scope's after hook invocation."""
         _, _ = cmd, result
         call_order.append(1)
 
-    def inner_hook(cmd: SafeCmd, result: CommandResult) -> None:
+    def inner_hook(cmd: SafeCmd, result: CommandResult | BytesCommandResult) -> None:
         """Record the inner scope's after hook invocation."""
         _, _ = cmd, result
         call_order.append(2)
@@ -169,13 +169,13 @@ def test_run_passes_command_and_result_to_hooks(
 
     _, execute = execution_strategy
     before_received: list[SafeCmd] = []
-    after_received: list[tuple[SafeCmd, CommandResult]] = []
+    after_received: list[tuple[SafeCmd, CommandResult | BytesCommandResult]] = []
 
     def before_hook(cmd: SafeCmd) -> None:
         """Capture the command passed to the before hook."""
         before_received.append(cmd)
 
-    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+    def after_hook(cmd: SafeCmd, result: CommandResult | BytesCommandResult) -> None:
         """Capture the command and result passed to the after hook."""
         after_received.append((cmd, result))
 
@@ -210,7 +210,7 @@ def test_run_does_not_invoke_after_hooks_on_cancellation(
 
     after_called = False
 
-    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+    def after_hook(cmd: SafeCmd, result: CommandResult | BytesCommandResult) -> None:
         """Record that the after hook was invoked."""
         nonlocal after_called
         _, _ = cmd, result

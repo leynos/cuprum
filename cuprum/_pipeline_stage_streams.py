@@ -24,6 +24,7 @@ from cuprum.echo_events import EchoStream
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -93,16 +94,16 @@ class _StageCaptureRequest:
 def _create_stage_capture_tasks(
     request: _StageCaptureRequest,
 ) -> tuple[
-    asyncio.Task[str | None] | None,
-    asyncio.Task[str | None] | None,
+    _StreamConsumerTask | None,
+    _StreamConsumerTask | None,
     tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
 ]:
     """Create stderr and stdout capture tasks for a pipeline stage."""
     process = request.process
     config = request.config
     observation = request.observation
-    stderr_task: asyncio.Task[str | None] | None = None
-    stdout_task: asyncio.Task[str | None] | None = None
+    stderr_task: _StreamConsumerTask | None = None
+    stdout_task: _StreamConsumerTask | None = None
 
     # Every stage's stderr is observed for lines, so the caller's ``on_line``
     # runs here too; the consumer itself is created whenever the stream is

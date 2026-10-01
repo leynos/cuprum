@@ -29,6 +29,11 @@ if typ.TYPE_CHECKING:
 # untouched in the byte-exact one.
 type _StreamPayload = str | bytes
 type _StreamConsumerTask = asyncio.Task[_StreamPayload | None]
+# One stream's settled payload, in the pair order every waiter uses: stdout
+# first, then stderr. Spelled once because both the line-stream teardown and
+# the stream-run waiter hand back this pair, and a reader should not have to
+# work out from two separate annotations whether the order means anything.
+type _StreamPayloadPair = tuple[_StreamPayload | None, _StreamPayload | None]
 type _EofGraceWaiter = cabc.Callable[
     [tuple[_StreamConsumerTask, _StreamConsumerTask]],
     cabc.Awaitable[object],
@@ -79,4 +84,5 @@ __all__ = [
     "_RunTaskOwnership",
     "_StreamConsumerTask",
     "_StreamPayload",
+    "_StreamPayloadPair",
 ]

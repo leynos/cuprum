@@ -14,6 +14,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.line_queue import _LineStreamRun
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_wait_types import _StreamPayloadPair
 
 __all__ = ["_drain_after_exit"]
 
@@ -22,7 +23,7 @@ async def _drain_after_exit(
     run: _LineStreamRun,
     pid: int | None,
     execution: _SubprocessExecution,
-) -> tuple[str | None, str | None]:
+) -> _StreamPayloadPair:
     """Await the settled consumers and drain them exactly once on failure."""
     # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
     # lives in ``cuprum._line_stream.coordinator`` because a test patches its

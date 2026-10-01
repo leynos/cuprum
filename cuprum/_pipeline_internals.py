@@ -60,6 +60,7 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._result_types import _AnyPipelineResult
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum.context import EnvMode, current_context
 
@@ -161,7 +162,7 @@ async def _run_spawned_pipeline(
     config: _PipelineRunConfig,
     spawn: _PipelineSpawnResult,
     observers: _PipelineObservers,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Drive a spawned pipeline to a result, reconciling whatever ends it.
 
     Split from :func:`_run_pipeline`, which keeps the pre-spawn half. The
@@ -177,8 +178,9 @@ async def _run_spawned_pipeline(
 
     Returns
     -------
-    PipelineResult
-        The assembled stage results and the index of the first failing stage.
+    PipelineResult | BytesPipelineResult
+        The assembled stage results and the index of the first failing stage,
+        byte-exact when the pipeline was asked for bytes.
     """
     observations = observers.observations
     pending_tasks = observers.pending_tasks
@@ -246,7 +248,7 @@ async def _run_spawned_pipeline(
 async def _run_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Execute a pipeline and return a structured result.
 
     A thin wrapper, so that the aggregate idle heartbeat is settled on every
@@ -255,8 +257,9 @@ async def _run_pipeline(
 
     Returns
     -------
-    PipelineResult
-        The assembled stage results and the index of the first failing stage.
+    PipelineResult | BytesPipelineResult
+        The assembled stage results and the index of the first failing stage,
+        byte-exact when the pipeline was asked for bytes.
     """
     try:
         return await _spawn_and_drive_pipeline(parts, config)
@@ -270,7 +273,7 @@ async def _run_pipeline(
 async def _spawn_and_drive_pipeline(
     parts: tuple[SafeCmd, ...],
     config: _PipelineRunConfig,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Spawn every stage, then drive the spawned pipeline to a result."""
     pending_tasks: list[asyncio.Task[None]] = []
     try:

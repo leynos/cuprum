@@ -19,7 +19,8 @@ import typing as typ
 
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
-from cuprum._result_assembly import _narrow_payload, _require_text
+from cuprum._result_assembly import _require_bytes, _require_text
+from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
 from cuprum.events import ResourceUsageMode
 
 # Runtime, not ``TYPE_CHECKING``: the narrowing helpers below use it with
@@ -99,7 +100,7 @@ def _build_pipeline_stage_results(
     processes: list[asyncio.subprocess.Process],
     inputs: _PipelineStageResultInputs,
     capture_bytes: bool = False,
-) -> list[CommandResult]:
+) -> list[_AnyCommandResult]:
     """Emit exit events and assemble a command result per pipeline stage.
 
     The observation a stage already has supplies its command and its index, so
@@ -114,11 +115,11 @@ def _build_pipeline_stage_results(
 
     Returns
     -------
-    list[CommandResult]
+    list[CommandResult | BytesCommandResult]
         One result per stage, in execution order, of whichever class the mode
         selects.
     """
-    stage_results: list[CommandResult] = []
+    stage_results: list[_AnyCommandResult] = []
     for idx, obs in enumerate(observations):
         process = processes[idx]
         ended_at = inputs.wait_result.ended_at[idx]
@@ -181,7 +182,7 @@ def _build_stage_result(
     stderr: _StreamPayload | None,
     *,
     capture_bytes: bool,
-) -> CommandResult:
+) -> _AnyCommandResult:
     """Build one stage's result, in the mode the pipeline was asked for.
 
     The mode is the same for every stage, so the two constructions here are the
@@ -191,7 +192,7 @@ def _build_stage_result(
 
     Returns
     -------
-    CommandResult
+    CommandResult | BytesCommandResult
         A ``BytesCommandResult`` when the pipeline captured bytes, otherwise
         the ordinary text result.
     """
@@ -211,8 +212,8 @@ def _build_stage_result(
     }
     if capture_bytes:
         return sh.BytesCommandResult(
-            stdout=_narrow_payload(stdout, "stdout", capture_bytes=True),
-            stderr=_narrow_payload(stderr, "stderr", capture_bytes=True),
+            stdout=_require_bytes(stdout, "stdout"),
+            stderr=_require_bytes(stderr, "stderr"),
             **measurements,
         )
     return sh.CommandResult(
@@ -222,7 +223,7 @@ def _build_stage_result(
     )
 
 
-def _require_bytes_stage(stage: CommandResult) -> BytesCommandResult:
+def _require_bytes_stage(stage: _AnyCommandResult) -> BytesCommandResult:
     """Narrow a stage result the pipeline's mode says is byte-exact.
 
     The stage builder already chose the class from the same flag, so this is
@@ -246,7 +247,7 @@ def _require_bytes_stage(stage: CommandResult) -> BytesCommandResult:
     return stage
 
 
-def _require_text_stage(stage: CommandResult) -> CommandResult:
+def _require_text_stage(stage: _AnyCommandResult) -> CommandResult:
     """Narrow a stage result the pipeline's mode says is text.
 
     ``BytesCommandResult`` does not subclass ``CommandResult``, so a stage of
@@ -269,11 +270,11 @@ def _require_text_stage(stage: CommandResult) -> CommandResult:
 
 
 def _build_pipeline_result(
-    stage_results: list[CommandResult],
+    stage_results: list[_AnyCommandResult],
     *,
     failure_index: int | None,
     capture_bytes: bool,
-) -> PipelineResult:
+) -> _AnyPipelineResult:
     """Wrap the stage results in the pipeline result their mode calls for.
 
     The stages were already built in the run's mode, so the aggregate has to
@@ -283,7 +284,7 @@ def _build_pipeline_result(
 
     Returns
     -------
-    PipelineResult
+    PipelineResult | BytesPipelineResult
         A ``BytesPipelineResult`` when the pipeline captured bytes, otherwise
         the ordinary text result.
     """

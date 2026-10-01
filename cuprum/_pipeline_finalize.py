@@ -40,7 +40,8 @@ if typ.TYPE_CHECKING:
         _PipelineObservers,
         _PipelineSpawnResult,
     )
-    from cuprum.sh import CommandResult, SafeCmd
+    from cuprum._result_types import _AnyCommandResult
+    from cuprum.sh import SafeCmd
 
 
 _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
@@ -49,7 +50,7 @@ _PIPELINE_FINALIZATION_ERROR = "pipeline finalization failed"
 async def _finalize_pipeline_execution(
     parts: tuple[SafeCmd, ...],
     observers: _PipelineObservers,
-    stage_results: list[CommandResult],
+    stage_results: list[_AnyCommandResult],
     sink_bracket: _SinkBracket,
 ) -> None:
     """Run after hooks, commit the sink outcome, then drain observe tasks.
@@ -87,7 +88,7 @@ async def _finalize_pipeline_execution(
 def _run_pipeline_after_hooks(
     parts: tuple[SafeCmd, ...],
     hooks_by_stage: tuple[_ExecutionHooks, ...],
-    results: list[CommandResult],
+    results: list[_AnyCommandResult],
 ) -> None:
     """Run registered after hooks for each pipeline stage."""
     for cmd, hooks, result in zip(parts, hooks_by_stage, results, strict=True):
