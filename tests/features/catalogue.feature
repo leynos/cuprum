@@ -21,3 +21,14 @@ Feature: Catalogue defaults
     When I build a safe command with "-n" and "hello world"
     Then the safe command argv includes the program name and arguments
     And the safe command exposes project metadata for downstream services
+
+  Scenario: An executable binding names the executable but not the identity
+    When I bind the program "echo" to the executable "/opt/tools/echo"
+    Then the bound executable runs and reports itself
+    And the logical program remains "echo"
+
+  Scenario: An unapproved executable cannot borrow an approved name
+    Given the curated program "echo" is present in the catalogue
+    When I bind the unlisted program "sccache" to the executable "/opt/tools/sccache"
+    Then execution is refused as a forbidden program
+    And the binding's executable was never resolved
