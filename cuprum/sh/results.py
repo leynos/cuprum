@@ -94,12 +94,15 @@ class CommandResult:
     max_rss_bytes: int | None = dc.field(default=None, kw_only=True)
     user_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
     system_cpu_seconds: float | None = dc.field(default=None, kw_only=True)
-    relay_fallbacks: tuple[RelayFallback, ...] = ()
     # ``kw_only`` for the same reason the measurements are: ``relay_fallbacks``
     # holds the seventh positional slot, which main established and
     # ``test_public_api`` pins, so a new field must not take a positional slot
-    # beside it.
+    # beside it. Declared before ``relay_fallbacks`` rather than after it so
+    # that field stays the declaration tail as well as the positional one;
+    # ``test_public_api`` pins both, and a caller reading ``dc.fields()`` sees
+    # the same ordering the generated signature uses.
     resolved_path: str | None = dc.field(default=None, kw_only=True)
+    relay_fallbacks: tuple[RelayFallback, ...] = ()
 
     @property
     def ok(self) -> bool:
