@@ -179,8 +179,42 @@ escalation, not a workaround.
   exit status is the evidence. The working tree was clean at that commit, so
   the log measures exactly what `cfc784db` contains. Every gate this branch can
   run is now green at a recorded revision.
-- [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
-  projection, `CommandResult.resolved_path`.
+- [x] (2026-10-01 21:40Z) EP-M3 complete at `5d1e762f`. Resolution now happens
+  at spawn time. `_StageObservation` gained a `resolved_path` field and an
+  `argv0` property that is the single home of the fallback rule, so both spawn
+  sites read one implementation instead of each rebuilding the argument vector.
+  `ExecEvent` gained `resolved_path` appended after `exec_id`; the shared
+  `_verbatim_fields` list projects it into both adapters, and because
+  `metrics_adapter.py` never calls `_event_common_fields` at all, the field
+  cannot reach a metric label by construction — the plan's highest-severity
+  risk is closed structurally rather than by inspection.
+  `CommandResult.resolved_path` is keyword-only, so no positional slot moved.
+- [x] (2026-10-01 21:40Z) Eleven tests pin the binding join in
+  `cuprum/unittests/test_executable_binding_execution.py`. Both claimed
+  regressions were confirmed to fail them for the intended reason: `argv0`
+  ignoring the binding fails eight of eleven (the decoy's marker, or a
+  missing-file error), and resolving ahead of enforcement fails the refusal
+  test with a resolver call recorded. The suite is arranged so a name-based
+  fallback would *succeed* rather than error — the catalogued program names a
+  real executable decoy — so the approved marker can only come from the binding.
+- [x] (2026-10-01 21:40Z) `make check-fmt lint typecheck` exits 0 at
+  `5d1e762f` (`/tmp/gates-cuprum-issue-440-m3i.out`). The maturin wheel
+  snapshot was re-recorded: `cuprum/_context_policy.py` is a new wheel member,
+  and the recorded payload grew by exactly that one entry (verified by diffing
+  the snapshot's entries against the built wheel's, not by reading the diff
+  output, which truncates).
+- [x] (2026-10-01 22:05Z) `make test` exits 0 at `5d1e762f`
+  (`/tmp/test-cuprum-issue-440-m3.out`), so the whole tree — the new binding
+  execution module included — is green under the full suite, not merely under
+  the focused run. The main Python group reports
+  `2692 passed, 70 skipped in 134.35s` and the log carries no `FAILED` or
+  `ERROR` line anywhere; the Rust `nextest` legs report
+  `127 tests run: 127 passed, 0 skipped` and the Cargo doctest pass its own
+  summary. As with the earlier run, `make test` invokes pytest once per target
+  group and so produces several per-invocation summaries rather than one
+  aggregate count, which is why a single group's figure is quoted rather than a
+  total. The only tracked change at that revision was this document, so the log
+  measures the code at `5d1e762f` exactly.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
   changelog, migration guide, roadmap note.
 - [ ] EP-M5: gates green, push, draft pull request, CodeRabbit review.
@@ -311,6 +345,34 @@ escalation, not a workaround.
   Check the prerequisite chain before writing down what a target did and did
   not cover.
 
+- Observation: the 400-line tolerance was breached by the *comment* explaining
+  a re-export, not by any logic. `_pipeline_internals.py` sat at exactly 400
+  lines before EP-M3, so a three-line `__all__` comment was enough to trip
+  `C0302` at 405, and shortening it only reached 404. Evidence: three
+  successive gate runs, each reporting a smaller overage but still an overage.
+  Impact: the remaining slack has to come from moving code, and the plan's own
+  tolerance ("stop and extract rather than trim") already said so. Trimming
+  prose to fit a size gate degrades the explanation without addressing the
+  cause.
+- Observation: the extracted helper found a better home than the one the plan
+  named. `_resolve_executable_for` was written into `_context_policy.py`, but
+  it is not a policy read — it produces a field of the stage observation. It
+  sits naturally in `_observability.py` alongside `_resolve_env_overlay` and
+  `_base_stage_tags`, which answer the other two observation-input questions.
+  Evidence: `_observability.py` already imported `current_context` and had
+  `SafeCmd` under `TYPE_CHECKING`, so the move needed no new imports and made
+  both call sites shorter. Impact: `_context_policy.py` now holds exactly the
+  two *policy* reads, and its docstring says where the third went and why.
+- Observation: `CommandResult`'s public-API test pins `relay_fallbacks` as the
+  *declaration* tail, not only the positional one. The new keyword-only
+  `resolved_path` passed the positional check but failed
+  `fields[-1] == "relay_fallbacks"`. Evidence:
+  `test_command_result_keeps_relay_fallbacks_as_its_trailing_slot` failed only
+  on its last assertion. Impact: the field is declared *before*
+  `relay_fallbacks`, which satisfies both readings without weakening a test
+  that exists to protect a public contract. A keyword-only field's declaration
+  order still communicates the wire shape to anyone reading `dc.fields()`.
+
 ## Decision log
 
 - Decision: bindings live on `CuprumContext`/`ScopeConfig`, not on
@@ -331,6 +393,22 @@ escalation, not a workaround.
   stay inspectable, and both adapters already carry unbounded fields such as
   `argv`. Metrics labels are explicitly low-cardinality by documented policy.
   Date/Author: 2026-10-01, implementing agent.
+- Decision: `_resolve_executable_for` lives in `cuprum/_observability.py`
+  rather than in `cuprum/_context_policy.py`, and `_context_policy` keeps only
+  the two policy reads. Rationale: the split is by kind, not by caller. The
+  allowlist gate and the hook bundle are decisions the context makes; the
+  executable is an input the observation carries, and its siblings
+  (`_resolve_env_overlay`, `_base_stage_tags`) already live in
+  `_observability`. The move also took `_pipeline_internals.py` back under the
+  400-line cap without a second extraction. Date/Author: 2026-10-01,
+  implementing agent.
+- Decision: `CommandResult.resolved_path` is declared before
+  `relay_fallbacks`, both keyword-only. Rationale: `test_public_api` pins
+  `relay_fallbacks` as the last field of both the positional projection and
+  `dc.fields()`. Declaring the new field ahead of it satisfies both without
+  loosening that test; the alternative — relaxing the declaration-tail
+  assertion — would weaken a contract test to accommodate an implementation
+  detail. Date/Author: 2026-10-01, implementing agent.
 - Decision: the plan is executed without a separate approval round trip.
   Rationale: the task packet that commissioned this plan already directs
   implementation, gates, and review; the ExecPlan is the recorded contract for
