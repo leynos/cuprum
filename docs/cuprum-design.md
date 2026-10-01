@@ -299,11 +299,18 @@ something else".
 
 ##### Resolution and its limits
 
-Validation of an `ExecutablePath` is **advisory**. Construction checks the
-shape of the string (it is non-empty, absolute unless `allow_relative=True`,
-and carries no NUL or `..` segment) and, at most, probes the file with an
-`os.access` call to report an obviously unusable path early. It does not, and
-cannot, guarantee that the file executed later is the file inspected:
+Validation of an `ExecutablePath` is **advisory**. Construction is purely
+syntactic: it checks the shape of the string (it is non-empty, absolute unless
+`allow_relative=True`, and carries no NUL or `..` segment) and consults the
+filesystem not at all, so a path may be validated and bound before the file it
+names exists. The optional filesystem probe is separate and opt-in: callers
+that want an early warning invoke `advisory_path_rejection`, which reports an
+obviously unusable path via an existence check, a regular-file test, and an
+`os.access` execute-bit probe. That probe is itself partial, skipping bare
+names (whose `PATH` resolution Cuprum does not replicate) and the whole check
+on Windows, where the execute bit is not part of a file's identity. Neither
+step, alone or together, guarantees that the file executed later is the file
+inspected:
 
 - the path may be replaced, renamed, or re-pointed by a symlink between the
   check and the `exec`, a time-of-check-to-time-of-use (TOCTOU) window that no

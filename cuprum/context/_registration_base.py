@@ -31,11 +31,11 @@ class _TokenRegistration:
     """Canonical base for ContextVar-backed scope-registration handles.
 
     All scope-registration handles (allowlist extensions, hook
-    registrations, env overlays) derive from this base. Subclasses perform
-    only the context-derivation step in ``__init__`` and hand the derived
-    context to :meth:`_install`; the token capture, idempotent
-    :meth:`detach`, and context-manager protocol live here so the subtle
-    restoration discipline cannot drift between handle types.
+    registrations, env overlays, executable bindings) derive from this base.
+    Subclasses perform only the context-derivation step in ``__init__`` and
+    hand the derived context to :meth:`_install`; the token capture,
+    idempotent :meth:`detach`, and context-manager protocol live here so the
+    subtle restoration discipline cannot drift between handle types.
 
     Token-based Restoration
     -----------------------
