@@ -1781,8 +1781,8 @@ There is no time limit. Tool failures do not justify lowering acceptance.
 
 - [x] (2026-10-01) **`0eb1e666`'s CI failure is the third occurrence of the
   same `coverage`-job timeout, on the commit that fixed the previous failure.**
-  Run `36892038283` reports `completed/failure`, and a grep of every `FAILED`
-  line in its failed-job log finds exactly **one** failing test —
+  **Attempt 1** of run `36892038283` reports `completed/failure`, and a grep of
+  every `FAILED` line in its failed-job log finds exactly **one** failing test —
   `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`,
   `Failed: Timeout (>30.0s) from pytest-timeout`. Test start `16:49:48.532` →
   verdict `16:50:18.660` is **30.13 s**: the bound fired, no assertion failed.
@@ -1817,7 +1817,10 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   What actually differed is the **Cargo registry cache**: restored from
   `cargo-v1-…9b8de305…` in the green run, and
   `Cache not found for input keys: cargo-v1-…64238430…` at `0eb1e666`. The
-  whole job ran cold — 661 s green against 1362 s failing, 2.1×. That is the
+  whole job ran cold — 661 s green against 1362 s failing, 2.1× (both are
+  *step* spans: first step start → last step end; the enclosing *job* spans are
+  669 s and 1372 s, and the ratio is 2.06 and 2.05 respectively, so the
+  conclusion does not depend on which convention is read). That is the
   environmental variance the 9.6 s → 30.1 s spread sits inside, and it is the
   reason this is a rerun rather than a patch. `gh run rerun --failed` was
   dispatched (`attempt=2`), which is the remedy the project's own notes record.
@@ -1832,6 +1835,74 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   artefact of fixing the two documentation gates, not new evidence either way.
   A cancelled attempt is the one outcome that cannot be read as a signal, which
   is why the distinction is recorded rather than the attempt simply dropped.
+
+- [x] (2026-10-01) **The deferred confirmation arrived: run `36897918582` is
+  green, all 17 jobs and all 28 reported checks, and the flake is therefore
+  environmental on the same reasoning rather than on a rerun's luck.** The run
+  is `completed/success` at head `10abccad`, and its coverage job completed
+  `success` in 663 s — within 6 s of the 669 s green control at `97f51d41`, and
+  against the 1372 s the same job took when it timed out. That is the
+  prediction the entry above deferred to, now discharged by the run it named
+  and by no other.
+
+  The PR's check rollup is `28` entries: **24 `SUCCESS`, 4 `SKIPPED`, 0
+  anything else**. The four skips are `automerge`, `extended`,
+  `Kody Code Review` and `Sourcery review` — all repository-configured to skip
+  on this PR, not failures wearing a neutral label. `mergeStateStatus` reads
+  `CLEAN`.
+
+  Derived from that run rather than from the prose above, the coverage job's
+  two spans are **663 s** (job) and **653 s** (step), which is a useful
+  cross-check on the previous entry: it records 661 s / 1362 s, and those are
+  *step* spans, not job spans. Both conventions are legitimate and both
+  reproduce exactly — the step span is first-step-start → last-step-end, the
+  job span is the job's own `started_at` → `completed_at`, an ~8–10 s
+  difference from runner setup and teardown. The entry above now names which
+  convention it used, because the unnamed gap is exactly what reads as drift
+  later; this was checked as a possible defect first, and the arithmetic (2.06
+  and 2.05) shows the conclusion is unaffected either way.
+
+  One claim in that entry **was** stale and is corrected above: it says run
+  `36892038283` "reports `completed/failure`". At run level it now reports
+  `completed/cancelled`, because the run-level rollup reflects the *latest*
+  attempt and attempt 2 was cancelled. The failure is real and intact — it is
+  **attempt 1** that carries `completed/failure`, with the coverage job at
+  `2026-10-01T16:34:58Z` → `16:57:50Z` — so the correction is a scope
+  qualification, not a retraction. The mechanism is worth recording: a
+  `gh run view` of a re-run run answers about the newest attempt, so a bare
+  run-level `conclusion` silently re-scopes as soon as a rerun is dispatched.
+
+  The supersession chain is now pinned to the second rather than inferred,
+  since the earlier entry asserted the causal order: `10abccad` was committed
+  `19:14:01+02:00` (= `17:14:01Z`), run `36897918582` was created `17:14:30Z`,
+  and the superseded attempt's coverage job went `cancelled` at `17:15:26Z`.
+  Commit → new run → cancellation, in that order, 85 s end to end. The
+  cancellation is therefore confirmed as a scheduling artefact of the fix
+  commits, exactly as claimed, and not as a signal about the flake.
+
+  Documentation gates were re-run at the local head `2fe6c2c8` (the
+  execplan-only commit that follows the pushed head) and are green:
+  `make check-fmt` `EXIT=0` including the `mdtablefix` and
+  `ruff format --check` leaves, `make markdownlint` `0 error(s)` across 78
+  files with its `make spelling` leaf passing, and `make nixie` reporting "All
+  diagrams validated successfully!". `2fe6c2c8` touches only this file — 11
+  insertions, 1 file — so the green run at `10abccad` remains the authoritative
+  code-gate evidence for the pushed head, and no code byte differs between
+  them. This paragraph is itself an edit to this file, so those verdicts pin
+  `2fe6c2c8` and not the commit that carries the text being read — the same
+  regress the 2026-09-28 entry above records, and the reason the pushed head's
+  CI run is carried as the independent confirmation rather than this file's own
+  say-so.
+
+  **What remains is not a gate.** It is review `5354955377`
+  (`CHANGES_REQUESTED`, `2026-09-29T15:42:06Z`, assessed against `e7d4fa45`),
+  which holds `reviewDecision` at `CHANGES_REQUESTED` even though
+  `mergeStateStatus` is `CLEAN`. Its sole finding was the `_safe_close`
+  duplication fixed by `b3ae9f20`, and its inline thread is
+  `resolved=true, outdated=true`. Nothing in the tree can clear it — only a
+  fresh CodeRabbit review against a current commit can, because the decision is
+  the bot's to withdraw. That request is enqueued separately rather than
+  claimed here.
 
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
