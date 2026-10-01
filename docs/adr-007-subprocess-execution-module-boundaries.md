@@ -435,3 +435,38 @@ surface are unchanged for importers. `cuprum._line_stream` follows the same
 package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
+
+## Addendum (2026-10-01): byte-exact runs share the execution seams
+
+Byte-exact runs (issue #444) are not a second execution path. `SafeCmd.run_bytes()`
+and `Pipeline.run_bytes()`, with their `run_bytes_sync()` counterparts, reuse the
+existing runners and carry one extra fact — `capture_bytes` — from the resolved
+execution state through the stream configuration to the drains. The reusable parts
+of that refactor live in their own modules:
+
+- `cuprum/_result_assembly.py` — the rules a finished execution applies when
+  reporting its result: `_RunMeasurements`, which carries the measured fields both
+  result classes declare identically, and the `_require_bytes`/`_require_text`
+  narrowing pair that re-establishes each class's declared payload type.
+  Single-command and per-stage pipeline construction both read these rules from
+  here, so a stage and a direct run of the same command differ only in what could
+  actually be measured. `_pipeline_finalize.py` owns the completed-pipeline
+  teardown ordering for the same reason, keeping `_pipeline_internals` on the
+  spawn half of a run.
+- `cuprum/_bytes_run.py` — the decisions the two byte-exact entry points owe
+  regardless of which is called: `_validate_bytes_output` rejects the one
+  combination bytes mode cannot honour (a line observer) before anything is
+  spawned, and the `_require_command_result`/`_require_pipeline_result` helpers
+  re-take the narrower class a text-mode entry point promised.
+- `cuprum/_result_types.py` — the unions the widened internal seam speaks
+  (`_AnyCommandResult`, `_AnyPipelineResult`). It imports nothing from the
+  assembly rules because `cuprum.context` publishes hook signatures that accept
+  either result class, and the assembly rules reach back into `cuprum.context`,
+  so the unions have to be nameable without closing that cycle.
+
+The widening is deliberately confined to the internal seam. Each public boundary
+re-takes the narrower class it promised, and `_require_bytes`/`_require_text` raise
+`_ExecutionInvariantError` on a mode/type contradiction rather than reporting a
+replacement character as the child's output. No existing result class, and no
+`TimeoutExpired`, is subclassed or modified; `BytesCommandResult` and
+`BytesPipelineResult` are separate frozen types.
