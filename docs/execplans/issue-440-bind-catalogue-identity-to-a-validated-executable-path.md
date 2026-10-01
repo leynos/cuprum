@@ -284,8 +284,38 @@ escalation, not a workaround.
         commit because the log was written before the commit it measures. The
         eleven-test entry now precedes the milestone summary it belongs to,
         because its artefact genuinely predates it. See the Surprises entry.
-  - [ ] GitHub Actions green at `896677e3`.
-  - [ ] `coderabbit review --agent` returns no unresolved finding.
+  - [x] (2026-10-01 18:15Z) `coderabbit review --agent` returned five findings
+        against `896677e3`, none of them blocking. All five concern the
+        demonstration surface rather than the mechanism: two asserts that
+        could not fail, an inaccurate sentence in the design guide about when
+        the filesystem is consulted, a base-class docstring that omitted
+        executable bindings, and an unrelated assertion standing in for a
+        hold-preservation check. The transcript is in
+        `/tmp/coderabbit-cd050cee-epm5.out`.
+  - [x] (2026-10-01 18:18Z) All five were actioned; the design-guide pair
+        overlap at the same lines and the second phrasing is discharged by
+        the same rewrite, so the four distinct edits cover five findings. Both
+        rewritten assertions were then checked against a seeded fault, because
+        a replacement assert that still cannot fail would have "fixed" nothing.
+        Leaking the bound path as the *value* of the existing `program` label
+        — the shape a leak would really take, and the shape the original
+        assert was blind to — now fails. Installing the binding over an empty
+        allowlist now fails on the survival assertion rather than passing.
+        Two earlier mutations were discarded as inconclusive: each failed with
+        a `NameError` or `TypeError` raised by the mutation itself, which
+        proves nothing about the assertion.
+  - [x] (2026-10-01 18:32Z) Six gates green on the fix set at `ff58bba2`, the
+        tree frozen across the whole run: `check-fmt`, `typecheck`, `lint`,
+        `test`, `markdownlint`, `nixie`. Every log records the same HEAD at
+        start and end, and all four file digests are byte-identical to their
+        run-start values, so no gate wrote to a tracked file. Test evidence:
+        2700 passed/70 skipped (unit), 127/127 (Rust nextest), plus the
+        behaviour and doctest suites. Landed as `5e2e3dd5` and `903fb33e`,
+        split so the test-strength change and the prose correction stay
+        separately reviewable.
+  - [ ] GitHub Actions green at `903fb33e`.
+  - [ ] `coderabbit review --agent` returns no unresolved finding at
+        `903fb33e`.
 
 ## Surprises & discoveries
 
@@ -513,6 +543,15 @@ escalation, not a workaround.
   recollection produces a figure that is unfalsifiable until someone measures
   the wall clock against it. Note the local zone is CEST (UTC+2), so a
   `--date=format-local` reading is not UTC and must not be written with a `Z`.
+- Observation: the defect recurred once more, on the entries recording this
+  very lesson. Shell command output and gate logs print local time, so those
+  readings were again two hours ahead of the truth when written with a `Z`; the
+  CodeRabbit entry was written as `20:13Z` against an artefact that records
+  `18:15Z`. Knowing the rule was not sufficient — the entries were transcribed
+  from display values rather than converted. The durable fix is to convert at
+  the point of writing, with `TZ=UTC stat -c %y` or
+  `TZ=UTC git log --date=format-local`, and never to copy a displayed time into
+  a `Z` field.
 
 ## Decision log
 
