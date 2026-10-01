@@ -37,7 +37,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
-    from cuprum.context.env_overlay import EnvOverlay
+    from cuprum.context.env_overlay import EnvMode, EnvOverlay
     from cuprum.events import ExecId
     from cuprum.program import Program
 
@@ -99,6 +99,11 @@ class _LineEventEmitter:
         Working directory for the execution, when set.
     env:
         Environment overlay for the execution, when set.
+    env_mode:
+        The effective environment policy for this execution. It is invariant
+        per stage observation like the other fields here, and it is carried on
+        *every* phase rather than only the terminal one, so each line event
+        must report it or the mode would appear to change mid-stream.
     pid:
         Subprocess identifier, ``None`` before spawn.
     stream:
@@ -122,6 +127,7 @@ class _LineEventEmitter:
     argv: tuple[str, ...]
     cwd: Path | None
     env: EnvOverlay | None
+    env_mode: EnvMode | None
     pid: int | None
     stream: LineStreamName
     tags: cabc.Mapping[str, object]
@@ -139,6 +145,7 @@ class _LineEventEmitter:
                 argv=self.argv,
                 cwd=self.cwd,
                 env=self.env,
+                env_mode=self.env_mode,
                 pid=self.pid,
                 timestamp=self.wall_clock(),
                 line=line,
@@ -180,6 +187,7 @@ def _line_event_emitter(
         argv=observation.cmd.argv_with_program,
         cwd=observation.cwd,
         env=observation.env_overlay,
+        env_mode=observation.env_mode,
         pid=context.pid,
         stream=context.stream,
         tags=observation.tags,
