@@ -904,17 +904,35 @@ helper behind `sh.make` builders. It delegates to the same internal coercion
 path as builders, so tests and project-specific wrappers can verify argument
 normalization without catalogue lookup or subprocess execution.
 
-Keep `build_argv` and `sh.make` behaviour aligned:
+The two entry points divide this contract between them:
+
+- `build_argv` stays generic. It serializes every keyword argument it is given
+  and knows nothing about execution.
+- `sh.make` rejects the execution-option names before serializing at all. A
+  keyword naming an `ExecutionContext` field or a `run_sync` parameter raises
+  `TypeError` rather than becoming a child flag, because the caller almost
+  certainly meant the execution setting. Context fields are named through
+  `ExecutionContext`; `run_sync`'s own parameters are named directly.
+  Positional arguments remain the escape hatch for a tool whose own command
+  line genuinely takes such a flag.
+
+The serializer contract itself:
 
 - positional arguments are stringified with `str()` in the order supplied;
-- keyword arguments are serialized after positionals as `--flag=value` entries;
+- keyword arguments accepted by the builder are serialized after positionals
+  as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
 - `None` raises `TypeError` in positional and keyword positions.
 
+The boundary, and why a warning or a per-builder opt-out was rejected instead,
+is recorded in [Cuprum design](cuprum-design.md) §6.2.6.
+
 Property coverage for this contract lives in
-`cuprum/unittests/test_sh_property_based.py`. Update those properties whenever
-argv construction semantics change.
+`cuprum/unittests/test_sh_property_based.py`; the drift guard pinning the
+reserved run-option names to `SafeCmd.run_sync` lives in
+`cuprum/unittests/test_sh.py`. Update those properties whenever argv
+construction semantics change.
 
 ## Program catalogue duplicate diagnostics
 

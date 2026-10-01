@@ -5,6 +5,43 @@ opt-in unless a section says otherwise. Start with the
 [users' guide](users-guide.md) for a complete first command. Every Python
 example here is executed from this document by the behavioural suite.
 
+## Execution options are no longer child flags
+
+Until now every builder keyword became a child `--name=value` argument, so
+`python("-c", script, cwd=repo_dir)` built `--cwd=<path>` rather than changing
+the child's working directory. A subprocess user's first four guesses — `cwd`,
+`env`, `timeout`, and `stdin` — were all accepted and forwarded, and a tool
+that ignores unknown flags ran in the wrong place with no error at all.
+
+The builder now rejects the `ExecutionContext` field names and the `run_sync`
+parameters with a `TypeError` that names the right call.
+
+<!-- tested-example: migration-reserved-execution-options -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="reserved")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+try:
+    python("-c", "print('unused')", cwd="/tmp")
+except TypeError as exc:
+    assert str(exc) == (
+        "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
+    )
+else:
+    raise AssertionError("cwd should not become a child flag")
+```
+
+Move the value to `run_sync`, passing `context=ExecutionContext(cwd=...)`,
+`timeout=...`, or `stdin=...`. A command line that genuinely takes such a flag
+still gets it positionally: `python("--cwd=<dir>")`. The rejection is narrower
+than it sounds — only the exact names are reserved, so `working_dir=...` and
+`stdin_file=...` continue to render as flags. See
+[Build arguments deliberately](users-guide.md#build-arguments-deliberately).
+
 ## Catalogue-backed scoped contexts
 
 When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue

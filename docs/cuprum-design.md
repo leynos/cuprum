@@ -488,6 +488,14 @@ coercion path as `sh.make`, so positional ordering, keyword flag formatting,
 underscore-to-hyphen normalization, and `None` rejection stay in lockstep with
 builders.
 
+`build_argv` stays generic; the *builder* reserves the names that describe how
+a command runs. A keyword naming an `ExecutionContext` field or a `run_sync`
+parameter is rejected with `TypeError` (see
+[Execution options are reserved](#626-execution-options-are-reserved)) rather
+than rendered as a child flag, because the caller almost always meant the
+execution setting and a child that ignores unknown flags would otherwise run
+with the wrong configuration in silence.
+
 #### 6.2.2 Command builders
 
 Command builders centralize and type arguments for a given command. Builders
@@ -748,6 +756,51 @@ Hook call order is deterministic. A reasonable order is:
 - **after:** per‑command → inner context → outer context → global/baseline.
 
 Exact ordering must be documented when implemented.
+
+#### 6.2.6 Execution options are reserved
+
+A builder keyword is rendered as a child argument, so a name that configures
+the *run* rather than the *child* is ambiguous. `cwd`, `env`, `timeout`, and
+`stdin` are the first four a subprocess caller reaches for, and forwarding them
+silently produces the wrong execution: `git("tag", cwd=repo_dir)` runs
+`git tag --cwd=<path>` in the ambient directory. A tool that rejects the
+unknown flag fails loudly, but one that ignores it succeeds in the wrong place.
+
+The builder therefore rejects the union of two name sets before rendering:
+
+- the `ExecutionContext` fields, derived at import time from
+  `dataclasses.fields(ExecutionContext)`, so a new field cannot silently become
+  a child flag;
+- `run_sync`'s keyword-only parameters (`output`, `timeout`, `context`,
+  `stdin`), written by hand and pinned by a drift guard that compares the set
+  with `inspect.signature(SafeCmd.run_sync)`. Every `run` and `lines` parameter
+  is either shared with `run_sync` or one of the context fields, so `run_sync`
+  alone is the authoritative surface to guard.
+
+The `TypeError` names the correct spelling. Context fields are reported as
+`cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync`, and
+`run_sync`'s parameters directly, as
+`timeout is an execution option; pass timeout=... to run_sync`. `timeout`
+appears in both sets and takes the direct form, which matches the parameter the
+caller can pass straight through. The first reserved keyword in insertion order
+is the one reported, so a call mixing several names gets a stable message.
+
+Two properties are preserved deliberately:
+
+- **`build_argv` stays generic.** It is a pure serializer with no knowledge of
+  execution, and its property tests check that it agrees with the builder. The
+  restriction lives in the builder, not the serializer.
+- **Positional rendering is unchanged.** A tool whose command line genuinely
+  takes `--cwd` still receives it as `"--cwd=<dir>"`, which keeps the escape
+  hatch open without an opt-out on `SafeCmdBuilder`. Only the exact reserved
+  names are rejected, so `working_dir` and `stdin_file` keep rendering as
+  `--working-dir=…` and `--stdin-file=…`.
+
+A warning was rejected as too weak: the failure it guards against is silent
+misconfiguration, which a warning in a long continuous integration (CI) log
+does not prevent. A per-builder opt-out was rejected because the positional
+form already covers every tool that needs those flags, and an opt-out would
+reintroduce the ambiguity for any caller that set it out of habit.
 
 ### 6.3 `cuprum.unsafe` – Explicit Escape Hatch
 
