@@ -77,13 +77,13 @@ from cuprum.sh.execution import _EnvMapping as _EnvMapping
 from cuprum.sh.execution import cabc as cabc
 from cuprum.sh.factory import make
 from cuprum.sh.output import IOOptions, RunOutputOptions, StdioTarget
-from cuprum.sh.output import _DeprecatedOutputFlags as _DeprecatedOutputFlags
-from cuprum.sh.output import _resolve_pipeline_output as _resolve_pipeline_output
 from cuprum.sh.output import _validate_convenience_flags as _validate_convenience_flags
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
 from cuprum.sh.pipeline import Pipeline
+from cuprum.sh.pipeline import _DeprecatedOutputFlags as _DeprecatedOutputFlags
+from cuprum.sh.pipeline import _resolve_pipeline_output as _resolve_pipeline_output
 from cuprum.sh.results import CommandResult, PipelineResult
 from cuprum.sh.results import dc as dc
 from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
