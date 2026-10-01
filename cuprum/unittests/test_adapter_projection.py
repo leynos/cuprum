@@ -65,6 +65,62 @@ class TestAdapterProjection:
             "structured logs must not expose personal data"
         )
 
+    def test_the_executed_path_reaches_every_adapter_but_the_labels(
+        self,
+    ) -> None:
+        """The bound path is projected verbatim, spelled, and never a label.
+
+        The sibling property derives its expectation from the same projection
+        function it checks, so it cannot see a field the projection drops.
+        This pins the literal key each surface uses — the names are the wire
+        contract, and none of them follows from the field name — against an
+        event whose ``resolved_path`` is set. The metrics label set is asserted
+        unchanged, which is the property that keeps a per-execution path out of
+        a low-cardinality label.
+        """
+        event = dc.replace(
+            self._representative_event("start"), resolved_path="/opt/tools/echo"
+        )
+
+        extra = _build_extra(event)
+        assert extra["cuprum_resolved_path"] == "/opt/tools/echo", (
+            "the logging adapter must emit the bound path under "
+            f"cuprum_resolved_path, got {sorted(extra)!r}"
+        )
+        attributes = TracingHook._build_attributes(event)
+        assert attributes["cuprum.resolved_path"] == "/opt/tools/echo", (
+            "the tracing adapter must emit the bound path under "
+            f"cuprum.resolved_path, got {sorted(attributes)!r}"
+        )
+        labels = MetricsHook._extract_labels(event)
+        assert set(labels) == {"program", "project"}, (
+            "an execution path must never become a metrics label, got "
+            f"{sorted(labels)!r}"
+        )
+        assert "resolved_path" not in "".join(labels.values()), (
+            f"the bound path must not leak into any label value either, got {labels!r}"
+        )
+
+    def test_the_unbound_case_emits_no_path_key_at_all(self) -> None:
+        """An unbound execution adds no path key to the logging extras.
+
+        The negative control for the test above: if the projection emitted
+        ``cuprum_resolved_path`` unconditionally, an operator filtering on it
+        could not tell a bound run from an unbound one, and every telemetry
+        consumer would have to re-check for ``None``.
+        """
+        event = dc.replace(self._representative_event("start"), resolved_path=None)
+
+        extra = _build_extra(event)
+        assert "cuprum_resolved_path" not in extra, (
+            f"an unbound execution must omit the key entirely, got {sorted(extra)!r}"
+        )
+        attributes = TracingHook._build_attributes(event)
+        assert "cuprum.resolved_path" not in attributes, (
+            "an unbound execution must omit the tracing attribute entirely, got "
+            f"{sorted(attributes)!r}"
+        )
+
     @staticmethod
     def _representative_event(phase: str) -> ExecEvent:
         """Build a deterministic, fully populated event for *phase*."""
@@ -117,6 +173,12 @@ class TestAdapterProjection:
             # known before the child is spawned and describes the whole
             # execution rather than one measurement.
             env_mode=EnvMode.REPLACE,
+            # The executed binary, present on every phase of a bound run for
+            # the same reason as ``env_mode``: resolution happens before the
+            # child is spawned, so the path is known from ``plan`` onwards.
+            # Fixed rather than volatile, so the snapshot pins the exact
+            # spelling each adapter publishes it under.
+            resolved_path="/opt/tools/echo",
         )
 
     @staticmethod
