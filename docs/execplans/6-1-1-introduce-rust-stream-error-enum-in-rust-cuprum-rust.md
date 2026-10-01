@@ -36,11 +36,14 @@ and CI covers it. The PR was then marked ready for review, which un-blocked
 CodeRabbit (it had been reporting `skipped` while the PR was a draft); its one
 finding — deduplicate a local `_safe_close` onto the shared helper — was
 correct and was applied in `b3ae9f20`, disproving in the process a file-count
-premise this plan had asserted without testing. The branch stands at **19**
+premise this plan had asserted without testing. The branch then stood at **19**
 files excluding the lockfile and this plan — one over the tolerance, on a single
 `typos.toml` line `main` already carries, with the merge ref back at eighteen.
-The 2026-10-01 entry below measures all three counts. At `1714ac0d` the required
-`coverage` job failed twice on a test this branch does not touch,
+`e2846439` later adopted `main`'s `typos.local.toml` verbatim, which took the
+branch frame to **20** without moving the merge ref, and the surface is now
+**18 of 18** — exactly at the tolerance rather than over it. The 2026-10-01
+entries below measure every count. At `1714ac0d` the required `coverage` job
+failed twice on a test this branch does not touch,
 `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`.
 The failure is **environmental and measured, not a branch defect**: the
 coverage job is the only lane that runs that test without provisioning
@@ -1977,8 +1980,12 @@ There is no time limit. Tool failures do not justify lowering acceptance.
     source tree.
   - `git diff --stat b3ae9f20 HEAD -- cuprum/unittests/test_rust_streams_roundtrip_property.py`
     is empty, so the file the finding named is untouched.
-  - `git grep -c 'def _safe_close' -- .` reports exactly one definition in the
-    package, `cuprum/unittests/_rust_stream_test_support.py`.
+  - `git grep -c 'def _safe_close' -- 'cuprum/unittests'` reports exactly one
+    definition, `cuprum/unittests/_rust_stream_test_support.py`. The pathspec
+    is not decoration: scoped to the repository root the same command returns
+    two files, because this plan quotes the literal repeatedly whilst
+    discussing the fix. The claim is about the package, so the command must be
+    scoped to the package or it fails to witness what it asserts.
   - `git diff --numstat b3ae9f20 HEAD -- '*.py'` reports `49 0`, so the single
     Python edit since the fix is additive and no reviewed line was removed or
     rewritten.
