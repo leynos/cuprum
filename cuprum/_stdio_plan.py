@@ -261,11 +261,11 @@ def _resolve_stdio_binding(
     ------
     ValueError
         If descriptor redirection is attempted on a platform without POSIX
-        descriptors, as decided by :func:`_ensure_redirection_supported`; or
-        if an ``fd`` target's file object has no descriptor to inherit, in
-        which case the original ``io.UnsupportedOperation`` is chained as
-        ``__cause__``.
-    """
+        descriptors, as decided by :func:`_ensure_redirection_supported`.
+    io.UnsupportedOperation
+        If an ``fd`` target's file object has no descriptor to inherit; the
+        original is chained as ``__cause__``.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the platform check.
     kind = target.kind
     if kind == "pipe":
         return _StdioBinding(stream=stream, is_pipe=True)
@@ -288,15 +288,17 @@ def _resolve_stdio_binding(
     except io.UnsupportedOperation as exc:
         # An in-memory object has no descriptor to hand the child, and its own
         # message is a bare ``fileno`` naming neither the stream nor the fault.
-        # ``UnsupportedOperation`` is already both a ``ValueError`` and an
-        # ``OSError``; re-raising as a ``ValueError`` naming the stream keeps
-        # the caller's own exception reachable as ``__cause__``.
+        # The replacement names both, and is raised as the *same* type it
+        # caught. ``UnsupportedOperation`` subclasses both ``ValueError`` and
+        # ``OSError``, so re-raising as a plain ``ValueError`` would look, from
+        # the message alone, like an improvement while dropping the arm most
+        # callers catch: an object with no descriptor is an I/O fault first.
         msg = (
             f"RunOutputOptions {stream} was given a file object that has no "
             f"descriptor to inherit ({type(borrowed).__name__}); pass an int "
             "descriptor, or open a real file instead of an in-memory object."
         )
-        raise ValueError(msg) from exc
+        raise io.UnsupportedOperation(msg) from exc
     return _StdioBinding(stream=stream, descriptor=descriptor, borrowed=borrowed)
 
 

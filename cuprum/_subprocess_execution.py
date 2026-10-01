@@ -31,10 +31,13 @@ from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._stdio_plan import _NoStdin, _ResolvedStdio
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_spawn import _spawn_subprocess
-from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin import (
+    _cancel_stdin_writer,
+    _settle_stdin_writer,
+    _spawn_stdin_writer,
+)
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 from cuprum._subprocess_streams import (
@@ -66,6 +69,7 @@ if typ.TYPE_CHECKING:
     from cuprum._constants import PipeStream
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._rusage import _ChildRusageSnapshot
+    from cuprum._stdio_plan import _ResolvedStdio
     from cuprum._streams import _RelayDiagnostics
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
@@ -143,14 +147,10 @@ class _SubprocessExecution:
     @property
     def pipes(self) -> frozenset[PipeStream]:
         """The child's streams cuprum holds a parent-side pipe for."""
-        names: set[PipeStream] = set()
-        if self.stdio.stdout.is_pipe:
-            names.add("stdout")
-        if self.stdio.stderr.is_pipe:
-            names.add("stderr")
-        if not isinstance(self.stdio.stdin, _NoStdin):
-            names.add("stdin")
-        return frozenset(names)
+        # Delegated rather than restated: the resolved stdio already answers
+        # this, and a second copy of the rule can only disagree with it. The
+        # bundle's ``stdio`` is the resolved object, so the answer is its own.
+        return self.stdio.pipes
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -233,8 +233,7 @@ async def _run_subprocess_without_streams(
     except BaseException:
         await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
         raise
-    if stdin_task is not None:
-        await stdin_task
+    await _settle_stdin_writer(stdin_task)
     return exit_code, exited_at
 
 

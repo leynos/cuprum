@@ -6544,11 +6544,18 @@ executes:
    `_write_stdin`, which writes the bytes, drains the pipe, and closes it. A
    producer (`StdinStream`) goes to `_write_stdin_stream`, which pulls one
    chunk at a time, writes it, awaits `drain()` before pulling the next, and
-   closes the pipe on every exit path. `OSError` and `RuntimeError` failures
-   are logged to `cuprum.stdin` and emitted as a `stdin_error` trace event so
-   operators can observe early-close scenarios without execution disruption.
-   Successful writes emit a `stdin` event with a byte count. The metrics
-   adapter increments `cuprum_stdin_bytes_total` for successful writes and
+   closes the pipe on every exit path. The payload writer logs an `OSError` or a
+   `RuntimeError` to `cuprum.stdin` and emits a `stdin_error` trace event, and
+   the run continues: a child that closed its stdin early is observed rather
+   than treated as fatal. The producer writer distinguishes an early close from
+   a producer that genuinely failed. An early close — a `BrokenPipeError`, a
+   `ConnectionResetError`, or an `OSError` carrying `EPIPE` — gets the same
+   `cuprum.stdin` log and `stdin_error` emission, and the run proceeds to the
+   child's exit code. Any other producer or encoder failure is raised as the
+   public `StdinSourceError` and ends the run, because a producer that broke is
+   not the same event as a child that stopped reading. Successful writes emit a
+   `stdin` event with a byte count. The metrics adapter increments
+   `cuprum_stdin_bytes_total` for successful writes and
    `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams` in
    `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
