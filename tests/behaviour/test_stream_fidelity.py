@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses as dc
 import random
 import typing as typ
 
@@ -19,12 +20,21 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
     from cuprum.program import Program
-    from cuprum.sh import Pipeline, PipelineResult
+    from cuprum.sh import BytesPipelineResult, Pipeline, PipelineResult
 
 # Fixed seed ensures deterministic output across runs.
 _SEED = 20260101
 _LINES = 512
 _BYTES_PER_LINE = 48  # Results in 64 chars of base64 per line
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _BinaryCase:
+    """A byte-exact pipeline, the payload it relays, and its allowlist."""
+
+    pipeline: Pipeline
+    payload: bytes
+    allowlist: frozenset[Program]
 
 
 def _generate_test_data() -> str:
@@ -123,4 +133,80 @@ def then_output_matches_snapshot(
     assert pipeline_result.ok, "Expected pipeline_result.ok"
     assert pipeline_result.stdout == snapshot, (
         "Expected pipeline_result.stdout == snapshot"
+    )
+
+
+@scenario(
+    "../features/stream_fidelity.feature",
+    "Pipeline preserves bytes that are not valid text",
+)
+def test_pipeline_preserves_binary_data() -> None:
+    """Behavioural coverage for byte-exact fidelity through cat."""
+
+
+@given(
+    "a binary payload no decoder can round-trip",
+    target_fixture="binary_pipeline",
+)
+def given_binary_payload() -> _BinaryCase:
+    """Build a pipeline whose payload survives only if nothing decodes it.
+
+    Every byte value is followed by a lone continuation byte, a byte no UTF-8
+    sequence starts with, and a NUL. A text-mode run of this payload would
+    replace the three invalid bytes, so the capture can only match if the
+    pipeline relayed and captured it without decoding.
+
+    Returns
+    -------
+    _BinaryCase
+        The composed python->cat pipeline, the payload it relays, and the
+        allowlist the scoped run requires.
+    """
+    payload = bytes(range(256)) + b"\xff\x00\xfe\x80"
+    _, python_prog = python_catalogue()
+    cat_prog = cat_program()
+    catalogue = combine_programs_into_catalogue(
+        python_prog,
+        cat_prog,
+        project_name="stream-fidelity-tests",
+        documentation_locations=("docs/users-guide.md#binary-output",),
+    )
+    python_cmd = sh.make(python_prog, catalogue=catalogue)
+    cat_cmd = sh.make(cat_prog, catalogue=catalogue)
+    producer = (
+        f"import sys; sys.stdout.buffer.write({payload!r});sys.stdout.buffer.flush()"
+    )
+    return _BinaryCase(
+        pipeline=python_cmd("-c", producer) | cat_cmd(),
+        payload=payload,
+        allowlist=frozenset([python_prog, cat_prog]),
+    )
+
+
+@when(
+    "I pipe the payload through cat byte-exactly",
+    target_fixture="binary_result",
+)
+def when_pipe_binary_through_cat(binary_pipeline: _BinaryCase) -> BytesPipelineResult:
+    """Execute the pipeline through the byte-exact entry point.
+
+    Returns
+    -------
+    BytesPipelineResult
+        The run's result, whose ``stdout`` must be the payload unchanged.
+    """
+    with scoped(ScopeConfig(allowlist=binary_pipeline.allowlist)):
+        return binary_pipeline.pipeline.run_bytes_sync()
+
+
+@then("the captured bytes are the payload unchanged")
+def then_captured_bytes_match(
+    binary_result: BytesPipelineResult,
+    binary_pipeline: _BinaryCase,
+) -> None:
+    """Assert the relayed capture is the payload, byte for byte."""
+    assert binary_result.ok is True, "every stage should exit cleanly"
+    assert binary_result.stdout == binary_pipeline.payload, (
+        "the relayed capture must be the payload unchanged, got "
+        f"{binary_result.stdout!r}"
     )
