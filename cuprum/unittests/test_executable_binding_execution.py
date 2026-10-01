@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import stat
 import typing as typ
-from pathlib import Path
 
 import pytest
 
@@ -43,8 +42,10 @@ from cuprum.sh import ExecutionContext, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum.events import ExecEvent
-    from cuprum.sh import Pipeline, PipelineResult, SafeCmd
+    from cuprum.sh import CommandResult, Pipeline, PipelineResult, SafeCmd
 
 _APPROVED = "APPROVED"
 _IMPOSTOR = "IMPOSTOR"
@@ -90,7 +91,7 @@ def _catalogue_for(*programs: str) -> tuple[ProgramCatalogue, tuple[Program, ...
     return catalogue, entries
 
 
-def _run_capturing(cmd: SafeCmd, *, cwd: Path | None = None) -> typ.Any:  # noqa: ANN401 - CommandResult is imported only for typing
+def _run_capturing(cmd: SafeCmd, *, cwd: Path | None = None) -> CommandResult:
     """Run one command capturing output, optionally in ``cwd``."""
     return cmd.run_sync(
         output=RunOutputOptions(capture=True, echo=False),
@@ -229,10 +230,13 @@ def test_a_pipeline_resolves_each_stage_independently(tmp_path: Path) -> None:
         "stage-producer",
         "stage-consumer",
     )
-    pipeline = sh.make(producer_prog, catalogue=catalogue)() | sh.make(
-        consumer_prog,
-        catalogue=catalogue,
-    )()
+    pipeline = (
+        sh.make(producer_prog, catalogue=catalogue)()
+        | sh.make(
+            consumer_prog,
+            catalogue=catalogue,
+        )()
+    )
 
     with (
         scoped(ScopeConfig(allowlist=frozenset([producer_prog, consumer_prog]))),
@@ -291,11 +295,17 @@ def test_a_bound_but_unlisted_program_is_refused_without_resolving(
     with (
         scoped(ScopeConfig(allowlist=frozenset([echo_prog]))),
         bind_executable(unlisted, resolver),
+        pytest.raises(ForbiddenProgramError, match=str(LS)),
     ):
-        with pytest.raises(ForbiddenProgramError, match=str(LS)):
-            _run_capturing(sh.make(unlisted, catalogue=catalogue)())
+        _run_capturing(sh.make(unlisted, catalogue=catalogue)())
 
-    assert calls == [], "a resolver must not run for a program the allowlist refuses"
+    # ``len(...) == 0`` rather than a falsy check: the list must be empty
+    # because the resolver never ran, and the message should say how many
+    # times it did run when that assertion fails.
+    assert len(calls) == 0, (
+        f"a resolver must not run for a program the allowlist refuses, ran "
+        f"{len(calls)} times"
+    )
 
 
 def test_the_bound_path_reaches_every_event_of_the_execution(tmp_path: Path) -> None:
