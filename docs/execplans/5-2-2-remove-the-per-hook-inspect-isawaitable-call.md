@@ -196,12 +196,12 @@ workaround.
   `/tmp/probe-classify-cuprum-5-2-2.out`, reproduced in `Artefacts and notes`.
   On all four interpreters, `async def`, `functools.partial` of an `async
   def` or bound async method, a bound async method, and
-  `inspect.markcoroutinefunction` are recognised by
+  `inspect.markcoroutinefunction` are recognized by
   `inspect.iscoroutinefunction`; an instance with `async def __call__` is
-  recognised only by the `type(obj).__call__` rule that
+  recognized only by the `type(obj).__call__` rule that
   `cuprum/_idle_heartbeat.py:_is_async_callback` already applies; a lambda or
   plain function returning a coroutine and a `functools.wraps` sync wrapper of
-  an `async def` are recognised by neither.
+  an `async def` are recognized by neither.
   Impact: classification can only select a fast path; Decision D1.
 - Observation: `inspect.isawaitable(None)` costs roughly 230-480 ns per call
   on these interpreters against roughly 11-14 ns for `result is None`.
@@ -421,10 +421,16 @@ Upstream artefacts, at `main` revision `71aaf3eb`:
 Trace links:
 
 ```plaintext
-BASE-T4 -> ROAD-5.2.2-S1 -> D1/D2 -> EP-M3 -> test_observe_hook_dispatch::test_sync_none_results_never_reach_isawaitable
-ROAD-5.2.2-M -> D3/D4 -> EP-M1, EP-M3 -> test_callable_kinds::test_classification_table, test_observe_hook_dispatch::test_hooks_are_classified_once_per_execution
-ROAD-5.2.2-S2 + UG-OBS-AWAIT + DES-8.1.3-ASYNC -> D1/D2 -> EP-M3 -> test_observe_hook_dispatch_properties::test_dispatch_matches_reference_oracle, tests/features/observe_hook_dispatch.feature
-ROAD-5.2.2-S3 -> EP-M4, EP-M5 -> docs/profiling/5-2-2-observe-hook-dispatch/r{1,2,3}-{control,candidate}/frame-census.json
+BASE-T4 -> ROAD-5.2.2-S1 -> D1/D2 -> EP-M3
+  -> test_observe_hook_dispatch::test_sync_none_results_never_reach_isawaitable
+ROAD-5.2.2-M -> D3/D4 -> EP-M1, EP-M3
+  -> test_callable_kinds::test_classification_table
+  -> test_observe_hook_dispatch::test_hooks_are_classified_once_per_execution
+ROAD-5.2.2-S2 + UG-OBS-AWAIT + DES-8.1.3-ASYNC -> D1/D2 -> EP-M3
+  -> test_observe_hook_dispatch_properties::test_dispatch_matches_reference_oracle
+  -> tests/features/observe_hook_dispatch.feature
+ROAD-5.2.2-S3 -> EP-M4, EP-M5
+  -> docs/profiling/5-2-2-observe-hook-dispatch/r{1,2,3}-{control,candidate}/frame-census.json
 ```
 
 Deviation recorded for approval: D3 classifies when an execution binds its
@@ -440,7 +446,7 @@ formal proof; Decision D6 records why.
 Axioms relied upon, not verified here:
 
 - A1. CPython evaluates `async def` calls (including bound methods and
-  `functools.partial` wrappers recognised by `inspect.iscoroutinefunction`) to
+  `functools.partial` wrappers recognized by `inspect.iscoroutinefunction`) to
   objects of exact type `types.CoroutineType`. Exercised by the
   classification table on every interpreter in the CI matrix (3.12-3.15).
 - A2. `inspect.iscoroutinefunction` and `inspect.isawaitable` behave as
