@@ -250,7 +250,9 @@ class Pipeline:
         Raises
         ------
         ValueError
-            If ``output`` is combined with deprecated flags.
+            If ``output`` is combined with deprecated flags, or if it names a
+            ``stdin``/``stdout``/``stderr`` target, which pipeline stages do
+            not honour.
         PermissionError
             If a pipeline command is not allowed by the active scope.
         TimeoutError
