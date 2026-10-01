@@ -11,6 +11,10 @@ breaks its own: each side defers the import it needs to the point of use.
 
 ``cuprum/sh/__init__.py`` re-exports both classes unchanged, so importers of
 ``cuprum.sh`` see the same objects they always did.
+
+The module also hosts the deprecated flat ``capture``/``echo`` keyword
+resolution, ``_resolve_pipeline_output``, because ``Pipeline.run`` and
+``run_sync`` are its only callers.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -20,6 +24,7 @@ breaks its own: each side defers the import it needs to the point of use.
 import asyncio
 import dataclasses as dc
 import typing as typ
+import warnings
 
 from cuprum._bytes_run import (
     _bytes_output,
@@ -32,14 +37,50 @@ from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.sh.execution import ExecutionContext
-from cuprum.sh.output import (
-    RunOutputOptions,
-    _DeprecatedOutputFlags,
-    _resolve_pipeline_output,
-)
+from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.results import BytesPipelineResult, PipelineResult
 
 __all__ = ["Pipeline"]
+
+
+class _DeprecatedOutputFlags(typ.TypedDict, total=False):
+    """Deprecated flat ``capture``/``echo`` flags for ``Pipeline.run``."""
+
+    capture: bool
+    echo: bool
+
+
+def _resolve_pipeline_output(
+    output: RunOutputOptions | None,
+    flags: _DeprecatedOutputFlags,
+) -> RunOutputOptions:
+    """Resolve pipeline output options, deprecating flat ``capture``/``echo``."""
+    # Callers forward their ``Unpack[_DeprecatedOutputFlags]`` kwargs verbatim,
+    # so the parameter keeps the precise ``TypedDict`` surface. Unknown keys
+    # can still arrive at runtime (a ``TypedDict`` is open), and are rejected
+    # here to preserve the strict keyword surface.
+    unknown = set(flags) - {"capture", "echo"}
+    if unknown:
+        joined = ", ".join(sorted(unknown))
+        msg = f"Pipeline.run/run_sync got unexpected keyword arguments: {joined}"
+        raise TypeError(msg)
+    if not flags:
+        return output or RunOutputOptions()
+    if output is not None:
+        # Reject combining the deprecated flat flags with ``output``: the
+        # caller's intent would otherwise be ambiguous.
+        msg = "Pass either 'output' or the deprecated 'capture'/'echo' flags, not both"
+        raise ValueError(msg)
+    warnings.warn(
+        "Pipeline.run/run_sync 'capture' and 'echo' keyword arguments are "
+        "deprecated; pass output=RunOutputOptions(...) instead",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return RunOutputOptions(
+        capture=flags.get("capture", True),
+        echo=flags.get("echo", False),
+    )
 
 
 @dc.dataclass(frozen=True, slots=True)
