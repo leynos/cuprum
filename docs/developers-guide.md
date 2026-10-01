@@ -4249,6 +4249,13 @@ consume the parsed model directly, while the behavioural tests use both
 fixtures to exercise the gate and its summary against the checked-in
 configuration.
 
+The shared `run_bash` helpers in `tests/helpers/release_workflow.py` and
+`tests/helpers/workflow_steps.py` remove inherited `BASH_ENV` before layering
+an explicit `env` mapping, so a caller-provided `env["BASH_ENV"]` remains
+honoured. Both helpers capture standard output and error as text. The
+regression contract for ambient and explicit values is in
+`tests/test_ci_workflow_step_bash_env.py`.
+
 The support is split by responsibility: `workflow_types.py` defines the narrow
 `TypedDict` shapes; `workflow.py` parses the workflow and provides queries over
 its jobs and steps; `workflow_gate.py` contains the pure path matching and

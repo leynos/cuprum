@@ -34,6 +34,7 @@ from cuprum.unittests._timeout_lane_support import (
     EXPECTED_NEXTEST_MIN_VERSION,
     declared_minimum_nextest_version,
 )
+from cuprum.unittests.test_doctest_warning_contract import DEV_FAST_TOOLCHAIN
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -126,23 +127,33 @@ def _read_workflow_env(root: pth.Path, name: str) -> str:
 
 def _lint_test_job(root: pth.Path) -> Job:
     """Read the lint-test job from the CI workflow."""
+    return _workflow_job(root, "lint-test")
+
+
+def _workflow_job(root: pth.Path, name: str) -> Job:
+    """Read a named job from the CI workflow."""
     workflow = _ci_workflow(root)
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
-    job = jobs.get("lint-test")
-    assert isinstance(job, dict), "ci.yml must declare the lint-test job"
+    job = jobs.get(name)
+    assert isinstance(job, dict), f"ci.yml must declare the {name!r} job"
     return job
 
 
 def _lint_test_step(job: Job, name: str) -> Step:
     """Read a named step from the lint-test job."""
+    return _workflow_job_step(job, name, "lint-test")
+
+
+def _workflow_job_step(job: Job, name: str, job_name: str) -> Step:
+    """Read a named step from a CI workflow job."""
     steps = job.get("steps")
-    assert isinstance(steps, list), "the lint-test job must declare steps"
+    assert isinstance(steps, list), f"the {job_name!r} job must declare steps"
     for step in typ.cast("list[object]", steps):
         if not isinstance(step, dict) or step.get("name") != name:
             continue
         return typ.cast("Step", step)
-    pytest.fail(f"the lint-test job must declare an {name!r} step")
+    pytest.fail(f"the {job_name!r} job must declare an {name!r} step")
 
 
 def _lint_test_step_script(job: Job, name: str) -> str:
@@ -236,6 +247,44 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
                 f"{site} pins {tool} as {value!r}, which is not an exact "
                 "dotted release version"
             )
+
+
+def test_python_ci_installs_the_doctest_toolchain_before_running_tests() -> None:
+    """Keep the doctest's pinned nightly ready before pytest starts its timeout."""
+    root = repo_root()
+    job = _workflow_job(root, "typecheck-test")
+    environment = job.get("env")
+    assert isinstance(environment, dict), "typecheck-test must declare an env block"
+    expected_toolchain = _read_makefile_pin(root, "DEV_FAST_TOOLCHAIN")
+    assert expected_toolchain == DEV_FAST_TOOLCHAIN, (
+        "the doctest warning test must use the Makefile's dev-fast toolchain"
+    )
+    assert environment.get("DEV_FAST_TOOLCHAIN") == expected_toolchain, (
+        "the typecheck-test job must expose the pinned dev-fast toolchain"
+    )
+
+    install = _workflow_job_step(
+        job, "Install dev-fast doctest toolchain", "typecheck-test"
+    )
+    install_condition = typ.cast("dict[str, object]", install).get("if")
+    assert install_condition == "matrix.python-suite && env.LEG_RUNS == 'true'", (
+        "only Python lanes that run pytest should install the doctest toolchain"
+    )
+    install_command = install.get("run")
+    assert install_command == (
+        'rustup toolchain install "$DEV_FAST_TOOLCHAIN" --profile minimal'
+    ), "CI must install the pinned doctest toolchain before pytest"
+
+    steps = job.get("steps")
+    assert isinstance(steps, list), "typecheck-test must declare steps"
+    step_names = [
+        step.get("name")
+        for step in typ.cast("list[object]", steps)
+        if isinstance(step, dict)
+    ]
+    assert step_names.index("Install dev-fast doctest toolchain") < step_names.index(
+        "Run tests"
+    ), "the doctest toolchain must be installed before the Python suite"
 
 
 def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:

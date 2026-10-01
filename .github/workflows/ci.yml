@@ -68,12 +68,10 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     # Compile-bound on two toolchains plus a Windows cross-target check,
     # measured at 198 to 292 s over six runs on four GitHub-hosted vCPU.
-    # Ubicloud vCPU are not GitHub vCPU, so the Ubicloud figure is expected to
-    # be higher and the arm is judged on the third run. The ceiling matches the
-    # interpreter-suite lanes: a regression fails visibly instead of quietly
-    # costing, and `ubicloud-standard-4` needs measured evidence this
-    # repository does not have yet.
-    timeout-minutes: 45
+    # Ubicloud vCPU are not GitHub vCPU, so the cold Whitaker build can take
+    # over 20 minutes; leave room for the remaining Windows checks while
+    # retaining a finite ceiling.
+    timeout-minutes: 60
     env:
       MBAKE_VERSION: '1.4.6'
       MDTABLEFIX_VERSION: '0.6.0'
@@ -425,6 +423,7 @@ jobs:
       # the push writes its compiler family, since the saves need a push.
       LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}
       MDTABLEFIX_VERSION: '0.6.0'
+      DEV_FAST_TOOLCHAIN: 'nightly-2026-08-23'
     strategy:
       fail-fast: false
       matrix:
@@ -593,6 +592,13 @@ jobs:
       - name: Run typechecker
         if: env.LEG_RUNS == 'true'
         run: make typecheck
+
+      # The doctest-warning contract invokes this pinned nightly from inside
+      # pytest. Install it here so a cold rustup download does not consume the
+      # test's 30-second timeout.
+      - name: Install dev-fast doctest toolchain
+        if: matrix.python-suite && env.LEG_RUNS == 'true'
+        run: rustup toolchain install "$DEV_FAST_TOOLCHAIN" --profile minimal
 
       # `make test-python`, not `make test`: the Rust suite runs exactly once
       # per event, inside the coverage job, under instrumentation. This step is
