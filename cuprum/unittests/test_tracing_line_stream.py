@@ -14,7 +14,7 @@ import typing as typ
 
 import pytest
 
-from cuprum.events import new_exec_id
+from cuprum.events import TerminalOutcome, new_exec_id
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
 from cuprum.unittests._adapter_test_support import (
     Traced,
@@ -38,8 +38,16 @@ def _open_span(traced: Traced, exec_id: ExecId) -> None:
 
 
 def _close_span(traced: Traced, exec_id: ExecId) -> None:
-    """Close the execution span so later events find nothing to record onto."""
-    traced.hook(_make_exec_event(phase="exit", overrides=_cat_overrides(exec_id)))
+    """Settle the execution span so later events find nothing to record onto."""
+    traced.hook(
+        _make_exec_event(
+            phase="settled",
+            overrides={
+                **_cat_overrides(exec_id),
+                "terminal_outcome": TerminalOutcome.EXIT_ZERO,
+            },
+        )
+    )
 
 
 def _projected(span: InMemorySpan) -> list[dict[str, object]]:
@@ -176,7 +184,7 @@ def test_event_without_an_open_span_records_nothing(tracing_hook: Traced) -> Non
 
 
 def test_event_after_the_span_closed_records_nothing(tracing_hook: Traced) -> None:
-    """A lifecycle event arriving after ``exit`` is dropped, not appended."""
+    """A lifecycle event arriving after ``settled`` is dropped, not appended."""
     exec_id = new_exec_id()
     _open_span(tracing_hook, exec_id)
     _close_span(tracing_hook, exec_id)
@@ -190,7 +198,7 @@ def test_event_after_the_span_closed_records_nothing(tracing_hook: Traced) -> No
     )
 
     span = tracing_hook.tracer.spans[0]
-    assert span.ended, "the execution span must have been closed by its exit event"
+    assert span.ended, "the execution span must have been closed by settlement"
     assert _projected(span) == [], (
         "no lifecycle event may be recorded after the span closed, got "
         f"{_projected(span)!r}"

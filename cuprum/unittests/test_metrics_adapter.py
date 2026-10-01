@@ -95,7 +95,7 @@ print('err1', file=sys.stderr)""",
         )
 
         durations = metrics.histograms.get("cuprum_duration_seconds", [])
-        assert len(durations) == 1, "exit events should record one duration sample"
+        assert len(durations) == 1, "settled events should record one duration sample"
         assert durations[0] >= 0.0, "duration samples should be non-negative"
 
     @pytest.mark.parametrize(
@@ -424,9 +424,8 @@ class TestResourceMetricSurface:
     def _exit_event(**overrides: object) -> ExecEvent:
         """Build an exit event with the resource fields under test.
 
-        A real terminal event always carries an exit code and an elapsed
-        duration, so the shared factory's unset defaults are filled in here
-        rather than left for each test to restate.
+        The exit event remains the child-resource measurement carrier; outcome
+        and duration metrics are asserted against settled events separately.
 
         Returns
         -------
@@ -454,14 +453,6 @@ class TestResourceMetricSurface:
         )
 
         assert recorder.calls == [
-            (
-                "cuprum_duration_seconds",
-                0.25,
-                {
-                    "program": "cat",
-                    "project": "resource-metrics",
-                },
-            ),
             (
                 "cuprum_resource_usage_measurements_total",
                 1.0,
@@ -500,8 +491,7 @@ class TestResourceMetricSurface:
             ),
         ], (
             "an attributable measurement must emit every resource metric, each "
-            "labelled with the mode, and must not add that mode to the duration "
-            "histogram it shares the event with"
+            "labelled with the mode"
         )
 
     def test_cpu_only_fallback_omits_rss_and_names_its_mode(self) -> None:
@@ -545,14 +535,6 @@ class TestResourceMetricSurface:
 
         assert recorder.calls == [
             (
-                "cuprum_duration_seconds",
-                0.25,
-                {
-                    "program": "cat",
-                    "project": "unknown",
-                },
-            ),
-            (
                 "cuprum_resource_usage_measurements_total",
                 1.0,
                 {
@@ -580,9 +562,9 @@ class TestResourceMetricSurface:
         hook(self._exit_event())
 
         observed = [name for name, _, _ in recorder.calls]
-        assert observed == ["cuprum_duration_seconds"], (
-            "only the duration histogram may be observed for an exit event "
-            f"that recorded no resource mode, got {observed!r}"
+        assert observed == [], (
+            "an exit event without resource measurements contributes no metrics, "
+            f"got {observed!r}"
         )
 
     @pytest.mark.parametrize(

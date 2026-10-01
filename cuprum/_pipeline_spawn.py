@@ -25,9 +25,11 @@ import time
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._pipeline_results import _emit_terminal_events
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_all_shielded
+from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _cwd_arg
 
 if typ.TYPE_CHECKING:
@@ -169,7 +171,7 @@ async def _spawn_pipeline_processes(
     resources = _SpawnedPipelineStages()
     try:
         await _spawn_pipeline_stages(resources, observations, config)
-    except BaseException:
+    except BaseException as spawn_error:
         # Teardown begins here, so the heartbeat stops here: it must not narrate
         # a pipeline that is already being torn down.
         await _stop_idle_monitor(config.idle)
@@ -178,6 +180,12 @@ async def _spawn_pipeline_processes(
             resources.stderr_tasks,
             resources.stdout_task,
             config.ctx.cancel_grace,
+        )
+        _emit_terminal_events(
+            observations,
+            _outcome_for_error(spawn_error).outcome,
+            processes=resources.processes,
+            started_at=resources.started_at,
         )
         raise
 

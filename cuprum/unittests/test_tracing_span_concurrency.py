@@ -1,14 +1,14 @@
 """Concurrency regressions for the ``TracingHook`` span lifecycle.
 
 ``TracingHook`` holds its lifecycle lock only across the active-span map. Each
-active execution has a separate lock around its ``Span`` callbacks, so an exit
-cannot close one span between lookup and ``add_event`` while callbacks for
+active execution has a separate lock around its ``Span`` callbacks, so a
+settled event cannot close one span between lookup and ``add_event`` while
 unrelated executions remain unblocked.
 
 - ``_handle_start`` swaps the mapping under the lock and marks and ends the
   *detached* stale span outside it, so an unrelated execution's whole lifecycle
   still runs.
-- ``_handle_exit`` pops under the lock and ends outside it, so an event that
+- ``_handle_settled`` pops under the lock and ends outside it, so an event that
   loses the race — here a ``pipeline_fail_fast`` arriving once the pop has
   happened — finds no span and is dropped rather than recorded on a span that
   is being closed. Dropping an uncorrelatable event is the hook's documented
@@ -22,7 +22,7 @@ import threading
 import typing as typ
 
 from cuprum.adapters.tracing_adapter import InMemorySpan, TracingHook
-from cuprum.events import new_exec_id
+from cuprum.events import TerminalOutcome, new_exec_id
 from cuprum.unittests._adapter_test_support import (
     Traced,
     _make_exec_event,
@@ -76,7 +76,7 @@ def _fail_fast(hook: TracingHook, exec_id: ExecId) -> None:
 
 
 def _exit(hook: TracingHook, exec_id: ExecId) -> None:
-    """Dispatch a clean ``exit`` for ``exec_id``."""
+    """Dispatch a clean exit and definitive settlement for ``exec_id``."""
     hook(
         _make_exec_event(
             phase="exit",
@@ -85,6 +85,30 @@ def _exit(hook: TracingHook, exec_id: ExecId) -> None:
                 "exec_id": exec_id,
                 "exit_code": 0,
                 "duration_s": 0.1,
+            },
+        )
+    )
+    hook(
+        _make_exec_event(
+            phase="settled",
+            overrides={
+                "pid": _PID,
+                "exec_id": exec_id,
+                "terminal_outcome": TerminalOutcome.EXIT_ZERO,
+            },
+        )
+    )
+
+
+def _settle(hook: TracingHook, exec_id: ExecId) -> None:
+    """Dispatch terminal status for ``exec_id`` without a child-exit event."""
+    hook(
+        _make_exec_event(
+            phase="settled",
+            overrides={
+                "pid": _PID,
+                "exec_id": exec_id,
+                "terminal_outcome": TerminalOutcome.CANCELLED,
             },
         )
     )
@@ -337,9 +361,9 @@ class TestTracingSpanConcurrency:
             "the target fail-fast callback must reach the blocked add_event"
         )
 
-        exit_thread = _spawn(lambda: _exit(hook, failing))
+        settle_thread = _spawn(lambda: _settle(hook, failing))
         assert _wait_for_span_detachment(hook, failing), (
-            "the exit handler must detach the active span"
+            "the settled handler must detach the active span"
         )
 
         unrelated_thread = _spawn(lambda: _fail_fast(hook, unrelated))
@@ -350,13 +374,13 @@ class TestTracingSpanConcurrency:
 
         blocked_event.release.set()
         fail_fast_thread.join(timeout=_TIMEOUT_S)
-        exit_thread.join(timeout=_TIMEOUT_S)
+        settle_thread.join(timeout=_TIMEOUT_S)
         assert not fail_fast_thread.is_alive(), "the fail-fast callback must finish"
-        assert not exit_thread.is_alive(), "the exit must finish after fail-fast"
+        assert not settle_thread.is_alive(), "settlement must finish after fail-fast"
         assert blocked_event.was_open == [True], (
             "the fail-fast callback must complete before its span is ended"
         )
-        assert failing_span.ended is True, "the target exit must end its span"
+        assert failing_span.ended is True, "the target settlement must end its span"
         assert unrelated_span.events[0][0] == "cuprum.pipeline_fail_fast", (
             "the unrelated fail-fast callback must remain independently live"
         )

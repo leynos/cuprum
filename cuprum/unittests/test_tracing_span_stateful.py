@@ -3,11 +3,11 @@
 The deterministic tests in ``test_tracing_span_lifecycle`` pin specific
 recycled-PID orderings. This state machine generalizes their invariant:
 across randomized, interleaved sequences of ``start``/``stdout``/``stderr``/
-``exit`` events for two ``exec_id`` values that deliberately share one PID
-(plus uncorrelated ``exec_id=None`` events), correlation by ``exec_id`` must
-hold. Output only ever lands on its own execution's span, an exit ends and
-removes only its own execution's span, and legacy events create, modify, and
-close nothing.
+``exit`` and ``settled`` events for two ``exec_id`` values that deliberately
+share one PID (plus uncorrelated ``exec_id=None`` events), correlation by
+``exec_id`` must hold. Output only ever lands on its own execution's span,
+settlement ends and removes only its own execution's span, and legacy events
+create, modify, and close nothing.
 
 The machine keeps a small model keyed by ``exec_id`` (the currently-active
 span for each) and cross-checks it against the hook's internal state after
@@ -23,7 +23,7 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
-from cuprum.events import new_exec_id
+from cuprum.events import TerminalOutcome, new_exec_id
 from cuprum.unittests._adapter_test_support import _make_exec_event
 
 if typ.TYPE_CHECKING:
@@ -120,7 +120,7 @@ class TracingSpanMachine(RuleBasedStateMachine):
         exit_code=st.integers(min_value=0, max_value=5),
     )
     def finish(self, name: str, exit_code: int) -> None:
-        """End and remove only the matching execution's span on ``exit``."""
+        """End and remove only the matching execution's span on settlement."""
         exec_id = self._ids[name]
         target = self.active.get(exec_id)
         before_status = self._status_snapshot()
@@ -137,15 +137,29 @@ class TracingSpanMachine(RuleBasedStateMachine):
                 },
             )
         )
+        self.hook(
+            _make_exec_event(
+                phase="settled",
+                overrides={
+                    "pid": _SHARED_PID,
+                    "exec_id": exec_id,
+                    "terminal_outcome": (
+                        TerminalOutcome.EXIT_ZERO
+                        if exit_code == 0
+                        else TerminalOutcome.EXIT_NONZERO
+                    ),
+                },
+            )
+        )
 
         expected_active = dict(before_active)
         if target is not None:
-            assert target.ended is True, "exit must end the matching span"
+            assert target.ended is True, "settled must end the matching span"
             assert target.status_ok is (exit_code == 0), (
-                "exit status must follow the exit code"
+                "terminal status must follow the terminal category"
             )
             assert exec_id not in self.hook._active_spans, (
-                "exit must remove the matching execution's span"
+                "settled must remove the matching execution's span"
             )
             expected_active.pop(exec_id, None)
             del self.active[exec_id]
@@ -153,10 +167,10 @@ class TracingSpanMachine(RuleBasedStateMachine):
             if target is not None and span is target:
                 continue
             assert (span.ended, span.status_ok) == before_status[id(span)], (
-                "exit must not end or change any other span"
+                "settled must not end or change any other span"
             )
         assert self.hook._active_spans == expected_active, (
-            "exit must remove only the matching execution from the active map"
+            "settled must remove only the matching execution from the active map"
         )
 
     @rule(
@@ -200,7 +214,7 @@ class TracingSpanMachine(RuleBasedStateMachine):
             "the active exec_ids must match the model"
         )
         for exec_id, span in self.active.items():
-            assert self.hook._active_spans[exec_id] is span, (
+            assert self.hook._active_spans[exec_id].span is span, (
                 "each active exec_id must map to its own span object"
             )
 

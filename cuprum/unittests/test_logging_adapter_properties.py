@@ -30,7 +30,7 @@ from cuprum.adapters.logging_adapter import (
     _format_message,
     structured_logging_hook,
 )
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.unittests._adapter_test_support import capturing_logger
 
 if typ.TYPE_CHECKING:
@@ -48,6 +48,7 @@ _KNOWN_PHASES = (
     "teardown_error",
     "capture_eof_grace_expired",
     "exit",
+    "settled",
     "pipeline_fail_fast",
 )
 
@@ -116,6 +117,9 @@ def _events(draw: st.DrawFn) -> ExecEvent:
             draw(st.lists(st.tuples(_awkward_text, _tag_values), max_size=3)),
         ),
         byte_count=draw(st.none() | st.integers(min_value=0, max_value=1 << 20)),
+        terminal_outcome=(
+            draw(st.sampled_from(list(TerminalOutcome))) if phase == "settled" else None
+        ),
     )
 
 
@@ -221,6 +225,7 @@ def test_each_phase_logs_at_its_configured_level(
             "stdout": levels.output_level,
             "stderr": levels.output_level,
             "exit": levels.exit_level,
+            "settled": levels.exit_level,
             "pipeline_fail_fast": levels.fail_fast_level,
         }.get(event.phase, logging.DEBUG)
 

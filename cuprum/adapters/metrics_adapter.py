@@ -205,8 +205,11 @@ class MetricsHook:
     The hook emits the following metrics:
 
     - ``cuprum_executions_total``: Counter incremented on each ``start`` event
-    - ``cuprum_failures_total``: Counter incremented on non-zero exit
-    - ``cuprum_duration_seconds``: Histogram of execution durations
+    - ``cuprum_terminal_outcomes_total``: Counter of terminal outcomes, labelled
+      by the bounded ``terminal_outcome`` category
+    - ``cuprum_failures_total``: Counter incremented for every category except
+      ``exit_zero``
+    - ``cuprum_duration_seconds``: Histogram of measured terminal durations
     - ``cuprum_stdout_lines_total``: Counter of stdout lines emitted
     - ``cuprum_stderr_lines_total``: Counter of stderr lines emitted
     - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
@@ -273,12 +276,13 @@ class MetricsHook:
 
         Notes
         -----
-        An ``exit`` event can yield up to six operations, applied as
-        independent collector calls in a fixed order: the failure counter (only
-        for a known non-zero exit code), then the duration observation (only
-        when a duration was measured), then the resource counter, and finally
-        the resource histograms — maximum RSS, user CPU, and system CPU, each
-        only where that figure was measured. There is no atomicity across them,
+        A ``settled`` event can yield three operations, applied as independent
+        collector calls in a fixed order: the category counter, the failure
+        counter (for every category except ``exit_zero``), then the duration
+        observation when measured. An ``exit`` event separately yields the
+        resource counter and resource histograms — maximum RSS, user CPU, and
+        system CPU, each only where that figure was measured. There is no
+        atomicity across them,
         and none is attempted: the collector wraps an arbitrary backend
         (``prometheus_client``, statsd, OpenTelemetry), and this adapter cannot
         make multiple writes to such a backend transactional. Buffering them to
