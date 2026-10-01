@@ -206,6 +206,40 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-09-29) Rebased onto `origin/main` and repaired the one gate the
+  rebase broke. `OLD_BASE` is `991dee64`, proven exclusive two independent ways
+  — it is an ancestor of `origin/main` *and* the direct parent of this branch's
+  first commit `17d30126` — so the replay range is `991dee64..3d6bdc2b` (43
+  commits). The target was `2733ffc6` at the time of the fetch. Three conflicts
+  were resolved by union or compose rather than by choosing a side:
+  `cuprum/unittests/test_public_api.py` (both sides added imports; all five
+  names verified in use), `cuprum/sh/output.py` (both sides added import
+  statements and both were kept), and `cuprum/_line_stream/drain.py`, where
+  main's `_discard_drain` reconciliation and this branch's settled-consumer
+  gather had to be woven into one function because each owns a different
+  failure path. Weave did **not** participate: `git check-attr merge` reported
+  `unspecified` for every path, so Git's own `zdiff3` machinery was used.
+  `rerere` was disabled command-scoped (`-c rerere.enabled=false`) because its
+  cache is shared through the bare repo's common git dir and other sessions'
+  resolutions would otherwise have been applied silently. The skill's
+  three-check semantic audit then ran clean: target-only paths byte-identical,
+  every deletion explained by this branch's own relocations, no new duplicated
+  blocks.
+- [x] (2026-09-29) Module-size repair after the rebase, `6d7a5362`. The rebased
+  tree failed `make lint` with `C0302: Too many lines in module (410/400)` at
+  `cuprum/sh/output.py`, aborting the recipe before eight later leaves ran.
+  Neither side is individually at fault: main's broken-pipe work added the
+  resolve-time validation, and this branch added the `StdioTarget` re-export
+  and the documented `stdin`/`stdout`/`stderr` fields, and the two landed in a
+  file already near the ceiling. Repaired by extraction rather than trimming,
+  so every plus-line this branch contributed survives: `_DeprecatedOutputFlags`
+  and `_resolve_pipeline_output` moved to `cuprum/sh/pipeline.py`, which this
+  branch had just created as that concern's home and which holds their only
+  production caller. `cuprum/sh/output.py` went 410 → 369 lines,
+  `cuprum/sh/pipeline.py` 179 →
+  1. `cuprum.sh` re-exports both names unchanged, so object identity is
+  preserved and `test_pipeline_output_options.py` — which imports them from
+  `cuprum.sh` — needed no edit.
 - [x] (2026-09-27 22:05Z) Re-gate after the round-4 repair. The first attempt
   aborted at `python-lint`: the new regression test's `_collect_stdout_lines`
   helper used `# noqa: ANN401`, which this repository no longer honours
@@ -638,6 +672,28 @@ likelihood, and mitigation.
 
 ## Surprises & discoveries
 
+- Observation: the 400-line module cap can be crossed by a *rebase* with no
+  new code on either side. Evidence: `cuprum/sh/output.py` was 379 lines on the
+  target and under the cap on this branch, but 410 after the replay, because
+  main's broken-pipe work and this branch's stdio fields both landed in the
+  same near-full file. Impact: after a rebase into a repository with a
+  configured module-length ceiling, `make lint`'s `C0302` is a real merge
+  outcome and must be repaired by relocating code to the module that owns the
+  concern, not by trimming the branch's own documented additions.
+- Observation: the rebase boundary had to be proven, not inferred. The
+  merge-base of this branch and `origin/main` was `991dee64`, which is not
+  `origin/main` and could have meant a squash-merged parent needing a restack
+  plan. Evidence: `991dee64` satisfies both halves of the boundary test — it is
+  an ancestor of `origin/main` *and* the direct parent of this branch's first
+  commit `17d30126` — so this is ordinary divergence, and the linear replay
+  range `991dee64..3d6bdc2b` is exactly this branch's own work. Impact:
+  `plan_restack.py` was correctly not needed.
+- Observation: `rerere` is shared across worktrees because the cache lives in
+  the bare repository's *common* git dir, not per-worktree. Evidence: the cache
+  at `<bare>.git/rr-cache` held 804 entries recorded by other sessions'
+  rebases. Impact: replaying a conflict without disabling it can silently apply
+  another session's resolution to this branch; the replay was run with
+  `-c rerere.enabled=false` so each conflict was examined on its own terms.
 - Observation: `subprocess.Popen._get_handles` maps `PIPE` to `os.pipe()`,
   `DEVNULL` to `_get_devnull()`, a raw `int` directly to the child-end
   descriptor, and anything else through `<obj>.fileno()`; `self.stdin`,
@@ -861,6 +917,41 @@ likelihood, and mitigation.
 
 ## Decision log
 
+- Decision: repay the post-rebase module-length overrun by moving
+  `_DeprecatedOutputFlags` and `_resolve_pipeline_output` into
+  `cuprum/sh/pipeline.py`, rather than by compressing the documentation this
+  branch added to `RunOutputOptions`. Rationale: the two candidates differed in
+  kind. The deprecated flat-flag adapter exists solely to serve `Pipeline.run`/
+  `run_sync`, so relocating it colocates a concern with its only caller and
+  costs nothing. The `stdin`/`stdout`/`stderr` field documentation is the
+  feature itself — the whole point of the issue is that a reader must be able
+  to tell a borrowed descriptor from an owned pipe — so trimming it would have
+  repaid a merge debt by degrading the deliverable. Date/Author: 2026-09-29,
+  implementation agent.
+- Decision: keep the `cuprum.sh` re-export of the two moved names rather than
+  repointing every caller at `cuprum.sh.pipeline`, and leave
+  `cuprum.sh.output`'s `__all__` untouched. Rationale: `cuprum.sh` is the
+  documented stable entry point, the re-export preserves object identity for
+  the existing test import, and the names are private, so they were never part
+  of a published surface that a deprecation cycle would need to manage. This is
+  not a compatibility shim: it is the same one-hop re-export the package
+  already performs for every other submodule symbol. Date/Author: 2026-09-29,
+  implementation agent.
+- Decision: resolve `cuprum/_line_stream/drain.py` by weaving both sides into
+  one function instead of picking main's version or this branch's. Rationale:
+  main's `_discard_drain` call and this branch's settled-consumer
+  `asyncio.gather` guard *different* failure paths — the first cleans up the
+  stream consumers when the stdin producer or the gather raises, the second
+  settles the relay diagnostics on the one path that read every consumer to
+  completion. Taking either side alone would silently drop one of those
+  obligations. Date/Author: 2026-09-29, implementation agent.
+- Decision: run the replay with `-c rerere.enabled=false` and Git's own
+  `zdiff3` merge machinery, not the registered Weave driver. Rationale:
+  `git check-attr merge` reported `unspecified` for every path, so Weave was
+  never selected for this repository and bypassing it records a decision that
+  was already the default; disabling the shared `rerere` cache prevented
+  another session's resolutions from being applied unseen. Date/Author:
+  2026-09-29, implementation agent.
 - Decision: fix the ignored-encoding defect by threading a codec value rather
   than by widening `_spawn_stdin_writer` with two more scalar parameters.
   Rationale: the spawn call sites are already at the repository's argument
