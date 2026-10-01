@@ -2193,6 +2193,38 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   future reader can re-run the two commands above to confirm it rather than
   trusting this paragraph.
 
+- [x] (2026-10-01) **Two claims that a check was supposed to support were
+  re-tested, and both checks failed to witness what they asserted.** Found by
+  re-reading the PR description against the tree rather than against the plan
+  that produced it; the plan had inherited the same two defects.
+
+  The first is a scope mismatch. This plan's verification bullet for the queued
+  review body cites `git grep -c 'def _safe_close' -- .` as reporting exactly
+  one definition "in the package". The claim is true — one definition exists
+  under `cuprum/unittests/` — but the command is scoped to the repository root,
+  where the same grep returns **two** files, because this plan itself quotes
+  `def _safe_close` repeatedly whilst discussing the fix. `git grep` searches
+  tracked text, so a document that names a symbol becomes a hit. The command is
+  now scoped to `cuprum/unittests`, and the bullet records why the pathspec is
+  load-bearing: the wide form contradicts a true statement, which is the same
+  failure class as a check that passes vacuously, read from the other side.
+
+  The second is a stale tense. The PR description said the branch and landing
+  counts were "20 paths added by the branch, 18 files at the landing surface …
+  neither count includes `typos.toml`". The landing half is right, but the
+  branch half is false: the branch frame's 20 **does** include both
+  `typos.toml` and `typos.local.toml`, which is why it is 20 rather than 18.
+  The typos files are absent from the *landing* surface, not from both. This is
+  the same conflation the 2026-10-01 count entry above unpicks, surviving one
+  artefact further along. The description now says the branch count includes
+  them and why they nonetheless appear in no landing surface.
+
+  The general rule, which this branch has now needed three times: a number is
+  only as good as the command that produced it, and a command is only as good
+  as its scope. Prefer citing the exact command beside every count, scoped to
+  the frame the claim is about, so the next reader re-derives rather than
+  trusts.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
