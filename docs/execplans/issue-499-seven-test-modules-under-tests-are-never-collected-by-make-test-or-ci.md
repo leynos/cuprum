@@ -305,6 +305,27 @@ contract module under `tests/` and forgets to name it will be told so by
   fingerprint changing during gate 5. Impact: gates 1–4 certify `a4053bd3`; the
   fix landed afterwards and needs its own run. The rule to carry forward is to
   wait for the run's own completion report, not for a marker in one log.
+- [x] (2026-10-01) Rebased the 30 surviving commits onto `origin/main`
+  (`7b86b904`) and resolved the one conflict the rebase raised. Upstream's #559
+  (`3e29ac27`) retired the local CodeScene contract family: it deleted
+  `tests/test_codescene_environment_contract.py`, its
+  `tests/helpers/codescene_environment_rules.py` reader (329 lines), and five
+  sibling CodeScene modules, replacing them with shared CV-005 contracts. The
+  branch's rename of that module therefore became a rename/delete conflict, and
+  the renamed module was dropped: its only dependency was the deleted helper,
+  so it could not run and there was nothing left for it to assert. Six of the
+  seven renames survive upstream intact and replay cleanly. The final
+  `typos.toml` regeneration was dropped by the rebase as already upstream,
+  which is correct — the file is generated from the shared estate dictionary.
+- [x] (2026-10-01) Updated the guard for the new base. The named-modules test
+  went from seven to six, and its docstring now records why the seventh is
+  gone. The population-wide checks then failed on
+  `tests/test_workflow_bash_env_contract.py`, a module upstream added in #466
+  that no selector collects — an independent recurrence of this issue's exact
+  defect, caught by the guard this branch ships. Renamed it to
+  `tests/test_ci_workflow_bash_env_contract.py`, the remedy the guard's own
+  failure message prescribes, which keeps `EXCEPTIONS` empty as designed. All
+  54 guard assertions pass.
 
 ## Surprises & discoveries
 

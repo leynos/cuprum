@@ -200,23 +200,27 @@ def test_a_module_the_selector_drops_is_reported_as_uncovered(
     )
 
 
-def test_the_seven_reported_modules_are_now_collected() -> None:
+def test_the_six_reported_modules_are_now_collected() -> None:
     """Pin the modules issue #499 named, so a regression is reported by name.
 
     The population-wide check above would also catch one of these leaving the
     selector, but only as a line in a list. Naming them keeps the issue's own
-    finding legible in the test that closes it, so a reader can see the seven
+    finding legible in the test that closes it, so a reader can see the six
     without reconstructing the report.
 
     Resolved against `PYTEST_TARGETS` alone rather than through
-    `covered_modules`, which unions in `ACT_SCENARIO_TARGETS`. These seven are
+    `covered_modules`, which unions in `ACT_SCENARIO_TARGETS`. These six are
     the *default suite*, and the scenario selector is the suite they were
     deliberately kept out of: a module moved there would leave `make test`
     while an aggregate check still called it covered. Asking the narrower
     question is what makes this test about the issue it closes.
+
+    Issue #499 reported seven modules. The seventh,
+    `tests/test_codescene_environment_contract.py`, was retired by #559 along
+    with the local CodeScene helpers it read, so its renamed form no longer
+    exists and there is no module left to collect.
     """
     expected = {
-        "tests/test_ci_codescene_environment_contract.py",
         "tests/test_ci_coverage_scratch_discard.py",
         "tests/test_ci_dev_fast_action.py",
         "tests/test_ci_loom_workflow_contract.py",
@@ -227,13 +231,13 @@ def test_the_seven_reported_modules_are_now_collected() -> None:
     selected = {str(path) for path in selected_paths(variable_expansion(SELECTOR))}
     missing = sorted(expected - selected)
     assert not missing, (
-        f"issue #499's seven modules must stay in the suite; these are no "
-        f"longer collected by {SELECTOR}: {missing}"
+        f"issue #499's six surviving modules must stay in the suite; these "
+        f"are no longer collected by {SELECTOR}: {missing}"
     )
 
 
 def test_the_selector_resolves_the_whole_root_module_population() -> None:
-    """Show the selector and the enumeration agree on more than the seven.
+    """Show the selector and the enumeration agree on more than the six.
 
     The population check and the named check can both pass while the resolver
     reads a stub of the selector, so this asserts the two sets meet: every
