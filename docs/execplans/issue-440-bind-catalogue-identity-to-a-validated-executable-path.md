@@ -168,8 +168,16 @@ escalation, not a workaround.
   (`/tmp/make-code-cuprum-issue-440.out`). That target chain includes the Rust
   gates, so `cargo +nightly-2026-05-28 fmt --check`, rustdoc, clippy, whitaker,
   the typos gate, `yamllint`, and `actionlint` all passed as well;
-  `make markdownlint` and `make nixie` passed too. `make test` has not been run
-  at any commit on this branch.
+  `make markdownlint` and `make nixie` passed too.
+- [x] (2026-10-01 18:20Z) `make test` run for the first time on this branch, at
+  `cfc784db`. Exit 0, no `FAILED` or `ERROR` line in the log
+  (`/tmp/test-cuprum-issue-440-bind-catalogue-identity-to-a-validated-executable-path.out`).
+  The Python suite, the Rust `nextest` legs, and the separate Cargo doctest
+  pass all ran. `make test` drives pytest once per target group, so the log
+  holds several per-invocation summaries and no single aggregate count; the
+  exit status is the evidence. The working tree was clean at that commit, so
+  the log measures exactly what `cfc784db` contains. Every gate this branch can
+  run is now green at a recorded revision.
 - [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
   projection, `CommandResult.resolved_path`.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
