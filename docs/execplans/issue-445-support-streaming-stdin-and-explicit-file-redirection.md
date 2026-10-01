@@ -805,6 +805,25 @@ likelihood, and mitigation.
 
 ## Surprises & discoveries
 
+- Observation: an overrun module's *peak* size is not recoverable from the
+  committed history once the same session has committed a further split, so a
+  peak is a working-tree measurement and must be labelled as one. Evidence: the
+  2026-09-27 addendum records `_subprocess_execution.py` crossing the ceiling
+  at 523 lines and `_subprocess_wait.py` at 438. Neither figure exists in any
+  reachable commit: scanning every commit across all refs and reflogs for those
+  two paths returns maxima of 510 and 424, and the branch's own commits top out
+  at 390 and 336. The same addendum also records `origin/main` holding the
+  modules "at 363 and 392", but main holds the first at 372 — it has advanced
+  since. `cuprum/sh/stdio.py` shows the same shape: the third addendum records
+  427, and the branch's committed states are 434 at the pre-split commit and
+  246 after, with no 427 anywhere. Impact: the module-cap crossings are real —
+  `C0302` fired and forced each split — but only the *committed* sizes are
+  citable. Prose that quotes a peak should say which revision it was measured
+  at, and a claim about a module's size on the target branch goes stale as soon
+  as that target advances, which a long-lived branch will outlive. The
+  pull-request description now cites current committed sizes only, and states
+  that the split points are recorded as append-only addenda rather than pinning
+  peak figures that cannot be reproduced.
 - Observation: a lint failure can be invisible on the branch head and real in
   CI, because CI lints the *merge* ref rather than the head. Evidence:
   `lint-test` failed on run 36893348494 for head `e3384618` while `make lint`
