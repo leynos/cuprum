@@ -227,7 +227,7 @@ def test_best_effort_recovers_from_binary_buffer_failures(
         "the binary path must forward the original bytes and stop at the point "
         f"it broke for mode={mode!r}, raw={sink.buffer.raw!r}"
     )
-    assert sink.text_writes == [], "the binary fast path must not fall back to text"
+    assert not sink.text_writes, "the binary fast path must not fall back to text"
 
 
 def test_best_effort_warns_once_with_structured_extras(

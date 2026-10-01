@@ -316,6 +316,7 @@ async def _drain_case(
 def test_echo_guard_stops_after_the_first_write_failure(
     case: tuple[bytes, tuple[bytes, ...], int, _FailingCall],
     caplog: pytest.LogCaptureFixture,
+    *,
     policy: BrokenPipePolicy,
     error: cabc.Callable[[], BaseException],
     category: EchoErrorCategory,
