@@ -4512,7 +4512,9 @@ make lint
    over `$(PYLINT_TARGETS)`: once over `$(PYLINT_STRICT_TARGETS)` and once over
    `$(PYLINT_TEST_TARGETS)`, where only `too-many-lines` is disabled.
 4. The CPython 3.14 `df12-python-lints` pass stored in `$(DF12_PYLINT)`, over
-   the same targets.
+   `$(DF12_PYLINT_TARGETS)` — a narrower set than `$(PYLINT_TARGETS)`. DF12
+   keeps its established package-root discovery, so the non-package test roots
+   named directly for the classic pass are absent from it.
 5. The CPython 3.14 `ambrleaks` scanner over unit, script, and behavioural
    test roots.
 6. `$(SKYLOS)` scanning `$(SKYLOS_PRODUCTION_TARGETS)` for dead code, excluding
@@ -4704,9 +4706,10 @@ Table: Lint-related Makefile variables and their defaults.
 | `PYPY312_SHA256`            | Pinned digest                                                               | SHA-256 the downloaded PyPy archive must match before extraction.                                                           |
 | `PYPY312_PYTHON`            | `$(abspath .pypy/pypy3.12-v8.0.0-linux64/bin/pypy3.12)`                     | Explicit interpreter path handed to `uv tool run` for the classic tier.                                                     |
 | `PYLINT_PYTHON`             | `$(PYPY312_PYTHON)`                                                         | Python interpreter requested by `uv tool run` for the classic Pylint tier.                                                  |
-| `PYLINT_TARGETS`            | Broad roots plus the non-package test directories                           | Directories and files passed to the PyPy-backed Pylint tiers.                                                               |
+| `PYLINT_TARGETS`            | Broad roots plus the non-package test directories                           | Directories and files passed to the classic Pylint pass; `$(DF12_PYLINT_TARGETS)` governs the DF12 pass instead.            |
 | `PYLINT_TEST_TARGETS`       | `cuprum/unittests scripts/tests tests/behaviour tests/features`             | Test roots analysed with only `too-many-lines` disabled.                                                                    |
 | `PYLINT_STRICT_TARGETS`     | `$(PYLINT_TARGETS)` minus `$(PYLINT_TEST_TARGETS)`                          | Targets held to the full classic diagnostic set, including the line cap.                                                    |
+| `DF12_PYLINT_TARGETS`       | `benchmarks conftest.py cuprum scripts tests`                               | Directories and files passed to the DF12 Pylint pass; narrower than `$(PYLINT_TARGETS)`.                                    |
 | `PYLINT_VERSION`            | `4.0.9`                                                                     | Pylint package version supplied to `uv tool run` through `--from`.                                                          |
 | `ASTROID_VERSION`           | `4.0.4`                                                                     | Astroid package version pinned between the classic and DF12 Pylint passes.                                                  |
 | `PYLINT_CACHE`              | `.cache/pylint/pypy312`                                                     | Worktree-local cache for the classic PyPy Pylint pass.                                                                      |
@@ -4729,11 +4732,14 @@ Table: Lint-related Makefile variables and their defaults.
 <!-- markdownlint-enable MD013 -->
 
 Override these variables only for local diagnosis. For example, to lint a
-single module with the configured second tier:
+single module with the classic Pylint pass:
 
 ```bash
 PYLINT_TARGETS=cuprum/sh make lint
 ```
+
+Overriding `PYLINT_TARGETS` does not narrow the DF12 pass, which reads
+`DF12_PYLINT_TARGETS`. Set both to restrict either pass to one module.
 
 Do not change the PyPy, Pylint, or Astroid pins casually. Their runtime
 identities are part of the lint contract, `verify-classic-pylint` and
