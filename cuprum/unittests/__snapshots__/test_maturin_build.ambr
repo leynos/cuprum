@@ -14,6 +14,7 @@
       'cuprum/_command_internals.py',
       'cuprum/_concurrent_config.py',
       'cuprum/_constants.py',
+      'cuprum/_context_policy.py',
       'cuprum/_echo_truncation.py',
       'cuprum/_execution_tracking.py',
       'cuprum/_idle_diagnostic.py',
