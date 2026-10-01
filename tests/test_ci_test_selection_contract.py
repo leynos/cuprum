@@ -37,6 +37,8 @@ developers' guide.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests.helpers.makefile import variable_expansion
@@ -236,6 +238,48 @@ def test_the_six_reported_modules_are_now_collected() -> None:
     )
 
 
+def test_covered_modules_follows_the_selector_it_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show the resolver *tracks* the selector rather than returning the tree.
+
+    The equality check above is necessary but not sufficient on this tree, and
+    the reason is the point of issue #499: the whole population is now
+    collected, so `root_modules()` and `covered_modules()` agree — and a
+    resolver that simply *returned* `root_modules()` would satisfy the equality
+    while reading no Makefile at all. The two answers coincide today, so
+    comparing them cannot separate "reads the selector" from "returns the
+    population".
+
+    This drives them apart. Narrowing the selector to one real module must
+    narrow `covered_modules` to that module: a resolver reading the Makefile
+    follows, while a constant stays at full population and is caught. The
+    module named is real so the narrowed selector cannot fail for being
+    unknown, and the control asserts the narrowed set is genuinely smaller
+    than the full one, so it cannot pass by the patch not taking effect.
+
+    `variable_expansion` is patched at `tests.helpers.suite_selection`, its
+    own module namespace, because that is the name the resolver calls.
+    """
+    module = root_modules()[0]
+    real = variable_expansion
+    full = covered_modules()
+    monkeypatch.setattr(
+        "tests.helpers.suite_selection.variable_expansion",
+        lambda name, **kwargs: (module,) if name == SELECTOR else real(name, **kwargs),
+    )
+    narrowed = covered_modules()
+    assert narrowed == frozenset({module}), (
+        "a resolver reading the selector must follow it; one returning the "
+        f"enumerated population would stay at {len(full)} entries but gave "
+        f"{sorted(narrowed)!r}"
+    )
+    assert len(narrowed) < len(full), (
+        "the control only proves anything if the narrowed selector is genuinely "
+        f"smaller than the full one; got {len(narrowed)} vs {len(full)}"
+    )
+
+
 def test_the_selector_resolves_the_whole_root_module_population() -> None:
     """Show the selector and the enumeration agree on more than the six.
 
@@ -256,6 +300,49 @@ def test_the_selector_resolves_the_whole_root_module_population() -> None:
     assert len(covered) > 1, (
         "a selector that resolves to a single module cannot be reading the "
         f"patterns; got {sorted(covered)}"
+    )
+
+
+def test_covered_modules_equals_the_direct_selector_expansion() -> None:
+    """Pin `covered_modules` to the selectors, not to a plausible constant.
+
+    Every other assertion here asks `covered_modules` a question and checks the
+    answer against `root_modules`, so a resolver that returned *every*
+    enumerated module would satisfy all of them while reading no selector at
+    all: `uncovered()` would be empty by construction and the whole guard would
+    be vacuous. That is not hypothetical — replacing the resolver with
+    `frozenset(root_modules())` leaves the population check and every
+    parametrized case passing.
+
+    So this compares the resolver against the expansion computed here, from the
+    two selectors directly, with neither `root_modules` nor the exception table
+    involved. The two must name the same files. The comparison is what makes
+    `covered_modules` a claim about the Makefile rather than about the tree.
+
+    `test_ci_act_harness_contract.py` pins the *shape* of both selectors — that
+    they stay disjoint, and that the scenario target is not folded into the
+    default suite. This pins that the resolver reads them, which is the half
+    that a constant cannot satisfy.
+    """
+    # Expand both selectors here rather than through `covered_modules`, so a
+    # broken resolver cannot define its own expected answer. The root-level
+    # filter is applied here too, and deliberately: `covered_modules` is
+    # defined as the root-level subset, so comparing against the unfiltered
+    # expansion would fail for the right reason but the wrong test.
+    direct = {
+        str(path)
+        for selector in (SELECTOR, SCENARIO_SELECTOR)
+        for pattern in variable_expansion(selector)
+        for path in selected_paths((pattern,))
+        if path.parent == Path("tests")
+    }
+    resolved = covered_modules()
+    assert resolved == direct, (
+        "covered_modules must be exactly what the two selectors expand to; a "
+        "resolver disagreeing with the Makefile is reading something else — a "
+        f"constant, or one selector rather than both. Only in resolved: "
+        f"{sorted(resolved - direct)}; only in the expansion: "
+        f"{sorted(direct - resolved)}"
     )
 
 

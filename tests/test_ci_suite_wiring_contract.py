@@ -29,7 +29,7 @@ from tests.helpers.ci_leg_gate import flag_holds_on, pull_request_legs
 from tests.helpers.ci_leg_matrix import matrix_legs
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.ci_workflows import steps
-from tests.helpers.makefile import recipe_of
+from tests.helpers.makefile import recipe_of, recipe_tokens
 from tests.helpers.suite_selection import SELECTOR
 from tests.helpers.workflow_shell import script_runs_command
 
@@ -301,12 +301,20 @@ def test_the_suite_target_recipe_consumes_the_selector() -> None:
     The endpoints are read as one table rather than as a probe apiece, so a
     recipe missing two of them reports both, and a reviewer reads the required
     data flow in one place instead of reconstructing it from four assertions.
+
+    The recipe is read as *shell* rather than as text, through
+    `recipe_tokens`. `recipe_of` joins the recipe into one line, so a single
+    `#` anywhere in it comments out every command after that point while the
+    words stay in the string — a substring check would keep passing over a
+    recipe that had been disabled. Tokenizing with comment markers honoured is
+    what makes the assertion about what the shell would run.
     """
     recipe = recipe_of("test-python")
+    tokens = recipe_tokens(recipe)
     absent = [
         f"  {endpoint!r} is missing: {consequence}"
         for endpoint, consequence in _RECIPE_ENDPOINTS
-        if endpoint not in recipe
+        if not any(endpoint in token for token in tokens)
     ]
     assert not absent, (
         "the `test-python` recipe must wire every endpoint of the selection "
@@ -316,6 +324,39 @@ def test_the_suite_target_recipe_consumes_the_selector() -> None:
     assert f"$({SELECTOR})" in iterated, (
         f"the selector must be the list `$(foreach` iterates, not merely a "
         f"variable the recipe mentions. Recipe: {recipe!r}"
+    )
+
+
+def test_a_commented_out_recipe_does_not_satisfy_the_endpoint_check() -> None:
+    """Show the endpoint check reads a live command, not surviving text.
+
+    `recipe_of` joins a target's recipe into a single line, so one ``#``
+    anywhere in it comments out every command after that point while every
+    word stays in the string. A substring check would keep passing over a
+    recipe that the shell would run as nothing — the guard would certify a
+    suite that never executes.
+
+    The fault is seeded on the reader rather than by editing the Makefile:
+    the real recipe with a comment marker placed at its head is exactly the
+    text a disabled recipe would produce, and it keeps the control independent
+    of the estate's own Makefile. The second half asserts the same endpoints
+    *are* found once the marker is removed, so the first half cannot hold for a
+    reader that had simply stopped tokenizing.
+    """
+    recipe = recipe_of("test-python")
+    endpoints = tuple(endpoint for endpoint, _ in _RECIPE_ENDPOINTS)
+    live = recipe_tokens(recipe)
+    assert all(any(endpoint in token for token in live) for endpoint in endpoints), (
+        "the estate recipe must satisfy the check, or this control is not "
+        "measuring the difference under test"
+    )
+    dead = recipe_tokens(f"# {recipe}")
+    surviving = [
+        endpoint for endpoint in endpoints if any(endpoint in token for token in dead)
+    ]
+    assert not surviving, (
+        "a commented-out recipe must contribute no endpoint; the shell would "
+        f"run none of it. Tokens read: {dead!r}, which still name {surviving!r}"
     )
 
 
