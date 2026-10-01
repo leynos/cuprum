@@ -569,6 +569,19 @@ correct in both cases despite the bugs — which is the argument for reading the
 selector structurally and asserting non-vacuity rather than trusting a green
 result.
 
+Post-rebase outcome (2026-10-01). At `d16904f5`, on a base of `7b86b904`:
+`make check-fmt`, `make lint`, `make markdownlint`, `make nixie`,
+`make typecheck`, `make test-python`, and `make test-rust` all exit 0 with the
+tree clean before and after. `make test-python` reports 2537 passed and 70
+skipped; `make test-rust` reports 127 passed and 0 skipped. The guard passes 54
+tests, and both negative controls still reject, on the smaller denominator the
+retired seventh module leaves: renaming one module out of the selector fails
+`4 failed, 50 passed`, and deleting `tests/test_ci_*.py` from `PYTEST_TARGETS`
+fails `50 failed, 4 passed`. Six of issue #499's modules are in the suite by
+name, the seventh is gone upstream, and
+`tests/test_ci_workflow_bash_env_contract.py` — upstream's own uncollected
+module — is collected too.
+
 ## Context and orientation
 
 A novice reading this plan needs three things: where the selector lives, how
