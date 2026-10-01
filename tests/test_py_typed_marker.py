@@ -127,6 +127,7 @@ def _wheel_marker(wheel_path: Path) -> str | None:
         return archive.read(MARKER_PATH).decode("utf-8")
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     """Every wheel carries an empty, complete ``py.typed`` marker.
@@ -151,6 +152,7 @@ def test_wheel_ships_the_pep561_marker(backend: str, tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
     backend: str,
