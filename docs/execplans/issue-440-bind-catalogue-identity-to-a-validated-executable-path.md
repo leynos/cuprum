@@ -160,6 +160,16 @@ escalation, not a workaround.
   live in `cuprum/context/registration.py`, re-exported through
   `cuprum/context/__init__.py`. `resolve_executable` is pinned as independent
   of the allowlist. 96 focused tests pass.
+- [x] (2026-10-01 18:20Z) EP-M2 gate sweep. Five defects sat behind the
+  environmental abort: two spelling errors (`concretised`, `hand-written`), the
+  R9110 executable-overlay delegate, four `ty` diagnostics in the
+  deliberate-wrong-type tests, and a ruff PT012 trip introduced while fixing the
+  `ty` findings. At `0e177d29`, `make check-fmt lint typecheck` exited clean
+  (`/tmp/make-code-cuprum-issue-440.out`). That target chain includes the Rust
+  gates, so `cargo +nightly-2026-05-28 fmt --check`, rustdoc, clippy, whitaker,
+  the typos gate, `yamllint`, and `actionlint` all passed as well;
+  `make markdownlint` and `make nixie` passed too. `make test` has not been run
+  at any commit on this branch.
 - [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
   projection, `CommandResult.resolved_path`.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
@@ -236,6 +246,61 @@ escalation, not a workaround.
   Impact: each milestone that adds a shipped module must re-record
   `cuprum/unittests/__snapshots__/test_maturin_build.ambr` with
   `--snapshot-update` and confirm the diff is exactly the new modules.
+- Observation: the Stop hook's gate environment cannot reach the Lody git
+  remote helper, so every gate recipe that shells out to
+  `uv tool run --from git+https://github.com/...` aborts before it measures
+  anything. Evidence: `~/.claude/settings.json` pins `env.PATH` without the
+  helper directory; the hook runs `subprocess.run` with no `env=`, and several
+  Makefile recipes shadow `PATH` again through `LOCAL_TOOL_ENV`, which defeats
+  any `BASH_ENV`-based prepend. Both `make spelling` and `verify-df12-pylint`
+  failed as `Failed to resolve '--with' requirement / Git operation failed`,
+  which reads like a missing ref rather than a PATH fault. Impact: two gates
+  were reported red for environmental reasons, masking three genuine defects
+  behind them: the spelling errors, the R9110 delegate, and four ty
+  diagnostics. Run the gates with the helper directory prepended until the
+  hook's `env.PATH` is fixed; the failure is not caused by any change on this
+  branch.
+- Observation: the repository's own tests already treat an ambient `BASH_ENV`
+  as a hazard, because a host `BASH_ENV` once prepended a `gh` wrapper and
+  perturbed the shell the helpers spawn. Evidence:
+  `tests/test_ci_workflow_step_bash_env.py` and
+  `tests/helpers/workflow_steps.py` both drop it, and
+  `docs/developers-guide.md` documents the policy. Impact: on this machine the
+  correct remedy is the opposite of the usual one. Dropping `BASH_ENV` is what
+  removes the helper from `PATH` here, so the two rules must be applied
+  together: keep the helper directory on `PATH` explicitly, and only then
+  consider whether `BASH_ENV` also needs clearing.
+- Observation: three linters police the same test idiom and pull in opposite
+  directions. A deliberate wrong-type call cannot carry
+  `# type: ignore[arg-type]`, because `ty` does not honour mypy-style codes;
+  `setattr` avoids ruff B010 only to trip ruff PT012; and assigning to a
+  read-only attribute needs `Any` to pass `ty` at all. Evidence: four `ty`
+  diagnostics, then a ruff B010, then a ruff PT012, each surfacing only after
+  the previous fix. Impact: the working idiom is to cast the receiver or the
+  argument to `typ.Any` *outside* the `pytest.raises` block and keep exactly
+  one simple statement inside it. This is already how
+  `cuprum/unittests/test_executable_context.py` handles the same shape.
+- Observation: `merge_executable_bindings` needed no mode-reconciling wrapper.
+  The sibling `_resolve_env_policy` earns its keep because it must reconcile an
+  `EnvMode`; bindings carry no mode, so a matching wrapper forwards its
+  arguments unchanged and the DF12 plugin rejects it as R9110. Impact: `narrow`
+  calls `merge_executable_bindings` directly, and the asymmetry with the
+  environment policy is recorded at the call site rather than in a wrapper
+  docstring. Justifying the wrapper by adding a second statement
+  (`return merged if merged else None`) would have changed the
+  `{}`-versus-`None` contract to satisfy a linter, and was rejected for that
+  reason.
+- Observation: the Rust gates were reported, and briefly recorded, as
+  outstanding when they had in fact passed. `make check-fmt lint typecheck`
+  builds a prerequisite chain, and `make` aborts at the first failure, so a
+  clean final target proves every gate in that chain ran clean — including
+  `rust-lint`, which is the whole of `cargo +nightly-2026-05-28 fmt --check`,
+  rustdoc, clippy, whitaker, and the typos gate. Evidence: `make -n` shows the
+  chain, and `/tmp/make-code-cuprum-issue-440.out` contains the clippy and
+  whitaker invocations and ends with `All checks passed!` from the last
+  prerequisite. Impact: do not read a gate's coverage from its target name.
+  Check the prerequisite chain before writing down what a target did and did
+  not cover.
 
 ## Decision log
 
