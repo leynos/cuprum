@@ -127,6 +127,71 @@ def test_capture_matches_whole_payload_decode_at_each_read_size(
     )
 
 
+_ALL_BYTE_VALUES = bytes(range(256))
+
+
+@st.composite
+def _byte_exact_case(draw: st.DrawFn) -> tuple[bytes, int]:
+    """Construct a payload spanning the full byte range at a chosen read size.
+
+    Every generated payload carries all 256 byte values, so an invalid UTF-8
+    sequence, a NUL, and a valid multibyte character are present in each one:
+    a decoder that replaces or drops anything cannot pass by luck. The rest of
+    the payload is drawn freely, and the chunking is what a real pipe does to
+    it — a payload is split wherever the reader happens to stop.
+    """
+    read_size = draw(st.sampled_from(_IN_PROCESS_READ_SIZES))
+    extra = draw(st.binary(min_size=0, max_size=256))
+    return _ALL_BYTE_VALUES + extra, read_size
+
+
+async def _consume_bytes_at_read_size(payload: bytes, *, read_size: int) -> bytes | None:
+    """Consume *payload* byte-exactly through a real reader and a real drain."""
+    reader = asyncio.StreamReader()
+    reader.feed_data(payload)
+    reader.feed_eof()
+    config = _StreamConfig(
+        capture_output=True,
+        echo_output=False,
+        sink=io.StringIO(),
+        encoding="utf-8",
+        errors="replace",
+        read_size=read_size,
+        capture_bytes=True,
+    )
+    captured = await _consume_stream(reader, config)
+    assert not isinstance(captured, str), (
+        f"a byte-exact drain must not decode, got {captured!r}"
+    )
+    return captured
+
+
+@settings(max_examples=32, deadline=None, derandomize=True)
+@example(case=(_ALL_BYTE_VALUES, 1))
+@example(case=(_ALL_BYTE_VALUES + b"\xff\x00", 7))
+@given(case=_byte_exact_case())
+def test_byte_exact_capture_round_trips_every_byte_value(
+    case: tuple[bytes, int],
+) -> None:
+    """Property: a byte-exact drain hands back the child's bytes unchanged.
+
+    The read size varies across the examples, so a chunk boundary landing
+    inside a multibyte sequence or between a NUL and the byte after it is
+    exercised rather than assumed away.
+    """
+    payload, read_size = case
+    captured = asyncio.run(_consume_bytes_at_read_size(payload, read_size=read_size))
+
+    assert captured == payload, (
+        "byte-exact capture must round-trip the payload unchanged for "
+        f"read_size={read_size}, payload={payload!r}, captured={captured!r}"
+    )
+    assert len(set(captured or b"")) == 256, (
+        "the generated payload must still carry every byte value after the "
+        f"round trip, got {sorted(set(captured or b''))!r}"
+    )
+
+
 @st.composite
 def _line_boundary_case(draw: st.DrawFn) -> tuple[int, str]:
     """Construct text whose line ending lands beside a read boundary."""
