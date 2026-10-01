@@ -641,7 +641,7 @@ show = "-c", "import os; print(os.getenv('CUPRUM_DEMO'), os.getenv('CUPRUM_KEEP'
 os.environ["CUPRUM_KEEP"] = "kept"
 with env({"CUPRUM_DEMO": "overlaid"}, CUPRUM_DEMO="won"):
     assert python(*show).run_sync().stdout == "won kept\n"
-with env({"CUPRUM_KEEP": UNSET}):
+with env({"CUPRUM_DEMO": UNSET, "CUPRUM_KEEP": UNSET}):
     assert python(*show).run_sync().stdout == "None None\n"
 with env({"CUPRUM_DEMO": "only"}, mode=EnvMode.REPLACE):
     assert python(*show).run_sync().stdout == "only None\n"
