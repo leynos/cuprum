@@ -190,7 +190,7 @@ jobs:
       # same pinned toolchain the pull-request coverage job uses rather than
       # whatever the runner image ships.
       - name: Install Rust toolchain
-        uses: leynos/shared-actions/.github/actions/setup-rust@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/setup-rust@6cec89bac47a21cf756d68d638a9a510998e57f8
         with:
           toolchain: '1.85.0'
           cache-provider: external
