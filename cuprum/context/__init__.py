@@ -45,6 +45,26 @@ construction.
 ...     current_context().env_overlay["MY_VAR"]
 'hello'
 
+Scoped executable bindings (issue #440): ``bind_executable(program,
+path_or_resolver, *, allow_relative=False)`` binds a logical catalogued
+program to the executable it should run inside the scope, and returns an
+:class:`ExecutableBindingRegistration` handle that detaches or acts as a
+context manager. The :class:`CuprumContext` and :class:`ScopeConfig`
+dataclasses each carry an ``executable_bindings`` field coerced to an
+immutable proxy on construction; ``merge_executable_bindings(parent, child)``
+records the effective layer without resolving it. Bindings are a second,
+narrower authority than the allowlist: the allowlist decides which logical
+programs may run at all, and a binding decides only which executable a
+permitted program runs. Resolution therefore happens strictly after allowlist
+enforcement, and ``CuprumContext.resolve_executable`` never consults
+``is_allowed`` or ``check_allowed``.
+
+>>> from cuprum.context import bind_executable, current_context
+>>> from cuprum.catalogue import ECHO
+>>> with bind_executable(ECHO, "/opt/tools/echo"):
+...     current_context().resolve_executable(ECHO, cwd=None)
+'/opt/tools/echo'
+
 """
 
 from cuprum.context._policy import (
@@ -74,10 +94,12 @@ from cuprum.context.env_overlay import (
 from cuprum.context.registration import (
     AllowRegistration,
     EnvRegistration,
+    ExecutableBindingRegistration,
     HookRegistration,
     after,
     allow,
     before,
+    bind_executable,
     env,
     observe,
 )
@@ -93,6 +115,7 @@ __all__ = [
     "CuprumContext",
     "EnvMode",
     "EnvRegistration",
+    "ExecutableBindingRegistration",
     "ForbiddenProgramError",
     "HookRegistration",
     "ScopeConfig",
@@ -100,6 +123,7 @@ __all__ = [
     "after",
     "allow",
     "before",
+    "bind_executable",
     "current_context",
     "env",
     "get_context",

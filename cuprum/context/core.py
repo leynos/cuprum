@@ -15,12 +15,15 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from cuprum.context._executable import _ExecutableBindingPolicy
+from cuprum.context._hooks import _HookPolicy
 from cuprum.context._policy import (
     _is_narrowed_allowlist_restricted,
     _merge_hooks,
     _narrow_allowlist,
     _resolve_env_policy,
     _resolve_narrowed_catalogue,
+    _resolve_executable_overlay,
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
@@ -32,6 +35,10 @@ from cuprum.context._scope import (
     ScopeConfig,
 )
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
+from cuprum.context.executable_overlay import (
+    ExecutableBindingOverlay,
+    _coerce_executable_bindings,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.catalogue import ProgramCatalogue
@@ -42,7 +49,7 @@ _logger = logging.getLogger("cuprum.context")
 
 
 @dc.dataclass(frozen=True, slots=True)
-class CuprumContext:
+class CuprumContext(_HookPolicy, _ExecutableBindingPolicy):
     """Immutable execution context holding allowlist and hooks.
 
     Attributes
@@ -75,6 +82,11 @@ class CuprumContext:
         name a catalogue explicitly. Excluded from equality because it carries
         no permission semantics: two contexts that allow the same programs are
         equivalent for enforcement regardless of which catalogue supplied them.
+    executable_bindings:
+        Optional immutable mapping from a logical program to the executable it
+        should run. When ``None``, every permitted program runs under the name
+        it was catalogued with. A binding supplies the executable for an
+        already-permitted program and never widens the allowlist.
 
     """
 
@@ -87,9 +99,10 @@ class CuprumContext:
     _allowlist_is_restricted: bool = False
     env_mode: EnvMode = EnvMode.OVERLAY
     catalogue: ProgramCatalogue | None = dc.field(default=None, compare=False)
+    executable_bindings: ExecutableBindingOverlay | None = None
 
     def __post_init__(self) -> None:
-        """Validate and coerce timeout after initialization."""
+        """Validate and coerce timeout, overlays, and bindings."""
         validated = _validate_timeout(self.timeout, "CuprumContext")
         # Use object.__setattr__ because the dataclass is frozen
         object.__setattr__(self, "timeout", validated)
@@ -97,6 +110,11 @@ class CuprumContext:
             self,
             "env_overlay",
             _coerce_env_overlay(self.env_overlay),
+        )
+        object.__setattr__(
+            self,
+            "executable_bindings",
+            _coerce_executable_bindings(self.executable_bindings),
         )
 
     def is_allowed(self, program: Program) -> bool:
@@ -202,6 +220,10 @@ class CuprumContext:
             env_overlay=env_overlay,
             env_mode=env_mode,
             catalogue=_resolve_narrowed_catalogue(self.catalogue, config.catalogue),
+            executable_bindings=_resolve_executable_overlay(
+                self.executable_bindings,
+                config.executable_bindings,
+            ),
             _allowlist_is_restricted=is_restricted,
         )
 
@@ -228,99 +250,6 @@ class CuprumContext:
             or bool(self.allowlist)
             or bool(allowlist),
         )
-
-    def with_before_hook(self, hook: BeforeHook) -> CuprumContext:
-        """Return a context with an additional before hook.
-
-        Parameters
-        ----------
-        hook : BeforeHook
-            The before-execution hook to append.
-
-        Returns
-        -------
-        CuprumContext
-            A new context with the before hook appended.
-        """
-        return dc.replace(self, before_hooks=(*self.before_hooks, hook))
-
-    def without_before_hook(self, hook: BeforeHook) -> CuprumContext:
-        """Return a context with the specified before hook removed.
-
-        Parameters
-        ----------
-        hook : BeforeHook
-            The before-execution hook to remove.
-
-        Returns
-        -------
-        CuprumContext
-            A new context without the given before hook.
-        """
-        new_hooks = tuple(h for h in self.before_hooks if h is not hook)
-        return dc.replace(self, before_hooks=new_hooks)
-
-    def with_after_hook(self, hook: AfterHook) -> CuprumContext:
-        """Return a context with an additional after hook (prepended for LIFO).
-
-        Parameters
-        ----------
-        hook : AfterHook
-            The after-execution hook to prepend.
-
-        Returns
-        -------
-        CuprumContext
-            A new context with the after hook prepended.
-        """
-        return dc.replace(self, after_hooks=(hook, *self.after_hooks))
-
-    def without_after_hook(self, hook: AfterHook) -> CuprumContext:
-        """Return a context with the specified after hook removed.
-
-        Parameters
-        ----------
-        hook : AfterHook
-            The after-execution hook to remove.
-
-        Returns
-        -------
-        CuprumContext
-            A new context without the given after hook.
-        """
-        new_hooks = tuple(h for h in self.after_hooks if h is not hook)
-        return dc.replace(self, after_hooks=new_hooks)
-
-    def with_observe_hook(self, hook: ExecHook) -> CuprumContext:
-        """Return a context with an additional observe hook.
-
-        Parameters
-        ----------
-        hook : ExecHook
-            The structured-event observe hook to append.
-
-        Returns
-        -------
-        CuprumContext
-            A new context with the observe hook appended.
-        """
-        return dc.replace(self, observe_hooks=(*self.observe_hooks, hook))
-
-    def without_observe_hook(self, hook: ExecHook) -> CuprumContext:
-        """Return a context with the specified observe hook removed.
-
-        Parameters
-        ----------
-        hook : ExecHook
-            The structured-event observe hook to remove.
-
-        Returns
-        -------
-        CuprumContext
-            A new context without the given observe hook.
-        """
-        new_hooks = tuple(h for h in self.observe_hooks if h is not hook)
-        return dc.replace(self, observe_hooks=new_hooks)
 
     def with_program(self, program: Program) -> CuprumContext:
         """Return a context with the program added to the allowlist.
