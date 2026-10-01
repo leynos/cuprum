@@ -1822,6 +1822,17 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   reason this is a rerun rather than a patch. `gh run rerun --failed` was
   dispatched (`attempt=2`), which is the remedy the project's own notes record.
 
+  **That rerun did not produce a verdict, and no pass may be claimed from it.**
+  It reached `in_progress` with 15 of 16 jobs green and `coverage` still
+  running, then went `completed/cancelled` at `17:16Z` — not because it failed,
+  but because the concurrency group cancels a run once a newer commit arrives
+  on the branch. The commit that superseded it is `10abccad`, whose push
+  created run `36897918582`. So the flake's disposition is unchanged and its
+  *confirmation* is deferred to that run: the cancellation is a scheduling
+  artefact of fixing the two documentation gates, not new evidence either way.
+  A cancelled attempt is the one outcome that cannot be read as a signal, which
+  is why the distinction is recorded rather than the attempt simply dropped.
+
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
