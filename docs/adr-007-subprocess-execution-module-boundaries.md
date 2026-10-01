@@ -654,10 +654,17 @@ splits: `output.py` no longer holds the standard-stream vocabulary, and
 - `cuprum/sh/output.py` — `RunOutputOptions` and `IOOptions`.
 - `cuprum/sh/stdio.py` — `StdioTarget` and the validation policing it.
 - `cuprum/sh/safe_cmd.py` — `SafeCmd` and `SafeCmdBuilder`.
-- `cuprum/sh/pipeline.py` — `Pipeline`, which the package re-exports.
+- `cuprum/sh/pipeline.py` — `Pipeline`, which the package re-exports, plus
+  the deprecated flat `capture`/`echo` adapter `_resolve_pipeline_output` and
+  its `_DeprecatedOutputFlags` payload. Those two moved here from `output.py`
+  when the rebase onto `origin/main` pushed that module back over the ceiling:
+  `Pipeline.run`/`run_sync` are their only callers, so colocating them with the
+  class costs nothing and leaves `output.py`'s documented standard-stream
+  options untouched.
 - `cuprum/sh/factory.py` — the `make()` builder factory.
 
-The public surface is unchanged: `cuprum.sh` still exports `StdioTarget` and
-`Pipeline` under the same names with the same object identity, and the wheel
-snapshot is regenerated for the two new modules. No public API changes, and the
-module-size suppression remains unnecessary.
+The public surface is unchanged: `cuprum.sh` still exports `StdioTarget`,
+`Pipeline`, and (for internal callers) the two relocated helpers under the same
+names with the same object identity, and the wheel snapshot is regenerated for
+the two new modules. No public API changes, and the module-size suppression
+remains unnecessary.
