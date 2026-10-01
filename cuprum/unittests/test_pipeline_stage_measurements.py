@@ -35,7 +35,6 @@ from cuprum._pipeline_types import (
     _StageObservation,
     _StageWaitContext,
 )
-from cuprum.sh import BytesCommandResult, CommandResult
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -43,7 +42,7 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum.events import ExecEvent, ExecHook
-    from cuprum.sh import CommandResult
+    from cuprum.sh import BytesCommandResult, CommandResult
 
 # Injected clocks, one entry per stage of the widest pipeline built here.
 # The wall-clock values are unrelated in magnitude to the monotonic ones, so

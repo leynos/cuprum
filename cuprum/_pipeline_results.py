@@ -20,7 +20,6 @@ import typing as typ
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails, _ExecutionInvariantError
 from cuprum._result_assembly import _require_bytes, _require_text
-from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
 from cuprum.events import ResourceUsageMode
 
 # Runtime, not ``TYPE_CHECKING``: the narrowing helpers below use it with
@@ -33,9 +32,10 @@ if typ.TYPE_CHECKING:
         _PipelineStageResultInputs,
         _StageObservation,
     )
+    from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
     from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
-    from cuprum.sh import CommandResult, PipelineResult, SafeCmd
+    from cuprum.sh import CommandResult, SafeCmd
 
 # Every pipeline stage's terminal event reports this. Both exits below are
 # terminal events that attempted no measurement, and a stage can never attempt

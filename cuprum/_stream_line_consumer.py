@@ -78,6 +78,11 @@ async def _consume_stream_with_lines(
     reaching here has a text config. The drain still reports the widened
     payload its shared signature promises, so the text guarantee is re-taken
     rather than assumed.
+
+    Returns
+    -------
+    str | None
+        The decoded capture, or ``None`` when the run captured nothing.
     """
     if stream is None:
         return "" if consumption.config.capture_output else None

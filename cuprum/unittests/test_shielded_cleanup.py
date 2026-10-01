@@ -26,7 +26,6 @@ import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum.unittests._stream_drain_support import CapturedOrNone, ConsumerTask
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import pending_tasks
 
@@ -34,6 +33,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent
+    from cuprum.unittests._stream_drain_support import CapturedOrNone, ConsumerTask
 
 
 class _CleanupGate:

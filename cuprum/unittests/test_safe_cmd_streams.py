@@ -15,7 +15,6 @@ import pytest
 
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.sh import RunOutputOptions, StdinInput
-from cuprum.unittests._stream_drain_support import ConsumerTask
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
@@ -23,6 +22,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 @pytest.fixture

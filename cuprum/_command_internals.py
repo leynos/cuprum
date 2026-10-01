@@ -52,7 +52,6 @@ from cuprum._pipeline_types import (
     _StageObservation,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._result_types import _AnyCommandResult
 from cuprum._sink_lifecycle import (
     _command_session_start,
     _outcome_for_error,
@@ -67,8 +66,8 @@ from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode, current_context
 
 if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import (
-        CommandResult,
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,

@@ -18,10 +18,10 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
-from cuprum._result_types import _AnyCommandResult
 from cuprum.sinks import base as sinks
 
 if typ.TYPE_CHECKING:
+    from cuprum._result_types import _AnyCommandResult
     from cuprum.sh import SafeCmd
 
 _DEFAULT_LABEL_SEPARATOR = ": "
@@ -180,6 +180,11 @@ def _outcome_for_result(result: _AnyCommandResult) -> sinks.SessionOutcome:
     only field this reads, so the terminal outcome is the same fact whichever
     mode reported it. A pipeline stage is not one of these — its bracket is the
     pipeline's, opened around every stage at once.
+
+    Returns
+    -------
+    sinks.SessionOutcome
+        The terminal outcome, tagged with the run's exit code.
     """
     outcome = (
         sinks.TerminalOutcome.EXIT_ZERO

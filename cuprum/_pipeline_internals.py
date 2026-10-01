@@ -60,7 +60,6 @@ from cuprum._pipeline_types import (
     _StageWaitContext,
 )
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._result_types import _AnyPipelineResult
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum.context import EnvMode, current_context
 
@@ -68,8 +67,9 @@ if typ.TYPE_CHECKING:
     import asyncio
 
     from cuprum._pipeline_config import _PipelineRunConfig
+    from cuprum._result_types import _AnyPipelineResult
     from cuprum.context import CuprumContext
-    from cuprum.sh import PipelineResult, SafeCmd
+    from cuprum.sh import SafeCmd
 
 # Every name the finalization module owns is re-exported here, because this is
 # the module ``cuprum.sh`` and the internal callers already import those helpers

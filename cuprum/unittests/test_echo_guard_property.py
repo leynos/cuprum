@@ -36,13 +36,13 @@ from cuprum.echo_events import (
     EchoStream,
     RelayFallback,
 )
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+    )
 
 # ``derandomize=True`` makes the example count the coverage knob, and each
 # example now draws one of two failing calls, so the budget is doubled to keep
