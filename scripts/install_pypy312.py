@@ -120,6 +120,8 @@ def install(installation: PyPyInstallation) -> None:
     """  # ruff: ignore[docstring-extraneous-exception] - ValueError and OSError propagate from checked_download.
     _require_linux_x86_64()
     installation.root.parent.mkdir(parents=True, exist_ok=True)
+    if installation.root.is_dir() and _is_executable(installation.python):
+        return
     checked_download(installation.url, installation.archive, installation.digest)
     if installation.root.is_dir():
         if not _is_executable(installation.python):
