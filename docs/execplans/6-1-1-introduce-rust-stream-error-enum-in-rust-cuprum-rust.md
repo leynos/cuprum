@@ -2150,6 +2150,42 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   was removed rather than defended. Fixed by `f30c1be4`; the sweeps above are
   the proof that the file is now clean.
 
+- [x] (2026-10-01) **The per-frame file count was re-derived, and the
+  deviation recorded above is no longer live.** `e2846439` changed which frame
+  binds. The `typos.toml` entry states the count per frame as **19** on the
+  branch and **18** at the merge ref, with the branch one over the plan's
+  tolerance. That was accurate at the `91b444de` head it was written for:
+  re-measured there, `git diff --name-only 7f762870 91b444de` lists 21 paths and
+  `git diff --name-only <merge-tree> origin/main` lists 20, so excluding the
+  lockfile and this plan gives exactly 19 and 18. The branch figure then moved
+  on its own. `e2846439` adopted `main`'s `typos.local.toml` verbatim to clear
+  the merge conflict, which added one path to the base frame but none to the
+  landing surface, because that file replays empty against `main` exactly as
+  `typos.toml` does.
+
+  Re-measured at `d3a5b9d9`, the same two commands list **22** and **20**, so
+  the branch frame is **20** and the landing surface is **18**. The landing
+  surface is the frame that decides, since CI builds the merge ref, and it has
+  not moved: both typos files are byte-identical to `main` there —
+  `git diff --quiet origin/main HEAD -- typos.toml typos.local.toml` is clean
+  for each — and neither appears in the surface at all. The count is therefore
+  **18 of 18, exactly at the tolerance rather than one over**, and the
+  nineteenth-file argument has no referent in either frame.
+
+  The `91b444de` entry is left standing rather than rewritten: it keeps the
+  figures true at its own head, and its closing sentence says so. This entry
+  supersedes its conclusion, not its measurements. Verified with
+  `git merge-tree --write-tree HEAD origin/main`, which yields tree `d446a53b`
+  at `d3a5b9d9`; `git diff --name-only d446a53b origin/main` lists the execplan
+  and `rust/Cargo.lock` beside the 18 files.
+
+  Both figures are path counts, so neither decays as this plan grows: the plan
+  contributes one path to each frame whether it is long or short, and the two
+  frames differ by the lockfile and the two now-inert typos files. The count is
+  therefore expected to hold at **20 and 18** for the rest of the branch, and a
+  future reader can re-run the two commands above to confirm it rather than
+  trusting this paragraph.
+
 ## Surprises & discoveries
 
 **Three of the five behavioural scenarios never ran, and the only signal was a
@@ -2461,18 +2497,19 @@ changing anything between the runs that disagreed.
 
 - (2026-09-29) **The `coverage` job's doctest-contract timeout is a `main`
   defect and is deliberately not patched here.** The branch was then at its
-  18-file tolerance (re-measured 2026-10-01 as 19 on the branch and 18 at the
-  merge ref; see Progress) and the failing test is byte-identical to base and
-  outside the change surface, so a fix would (a) exceed the tolerance, (b)
-  enlarge the branch into an unrelated CI concern, and (c) require editing
-  `.github/workflows/ci.yml`, which this branch has deliberately never touched
-  and whose every byte `actionlint` reads is `main`'s. Two fixes are available
-  and both belong to a separate change: provision `nightly-2026-08-23` in the
-  coverage job, or raise this single test's timeout above the global 30 s. The
-  first is better — it removes the download rather than accommodating it —
-  because the same latent cost is paid by any lane that runs the test without
-  the prerequisite action. Recorded in Progress with the measurements, and left
-  for `main`.
+  18-file tolerance (re-measured 2026-10-01 as 20 on the branch and 18 at the
+  merge ref, the frame CI builds, so the surface sits exactly at 18 of 18; see
+  Progress, where the earlier 19 is superseded) and the failing test is
+  byte-identical to base and outside the change surface, so a fix would (a)
+  exceed the tolerance, (b) enlarge the branch into an unrelated CI concern,
+  and (c) require editing `.github/workflows/ci.yml`, which this branch has
+  deliberately never touched and whose every byte `actionlint` reads is
+  `main`'s. Two fixes are available and both belong to a separate change:
+  provision `nightly-2026-08-23` in the coverage job, or raise this single
+  test's timeout above the global 30 s. The first is better — it removes the
+  download rather than accommodating it — because the same latent cost is paid
+  by any lane that runs the test without the prerequisite action. Recorded in
+  Progress with the measurements, and left for `main`.
 
 - (2026-09-26) **The `rstest-bdd` dev-dependency must be locked at
   `textwrap 0.16.2`, not re-resolved freely.** Adding `rstest-bdd` pulls in
