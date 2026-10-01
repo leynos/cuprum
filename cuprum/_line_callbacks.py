@@ -37,6 +37,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum.context.env_overlay import EnvOverlay
     from cuprum.events import ExecId
     from cuprum.program import Program
 
@@ -120,7 +121,7 @@ class _LineEventEmitter:
     program: Program
     argv: tuple[str, ...]
     cwd: Path | None
-    env: cabc.Mapping[str, str] | None
+    env: EnvOverlay | None
     pid: int | None
     stream: LineStreamName
     tags: cabc.Mapping[str, object]
