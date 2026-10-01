@@ -1229,6 +1229,28 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   describe the plan's own bulk are revision-dependent and need re-deriving
   whenever they are quoted.
 
+  **Correction (2026-10-01): "does not move at all" was true at that head and
+  is not a general property, which that sentence should not have claimed.**
+  Re-derived at `3b2f8cd4`: total **355,395**, this plan's share **221,448**,
+  non-plan remainder **133,947**. The remainder moved after all — from 131,010
+  to 133,947, a delta of 2,937 — because `e2846439` added abbreviated-SHA
+  ignore entries to `typos.toml` and `typos.local.toml`, which are non-plan
+  files inside the change surface. The correct statement is narrower than the
+  one above: the remainder is insensitive to *this plan's* growth, which is
+  what the budget argument needs, but it is not insensitive to changes in the
+  other files in the surface. The share of the cap is now **89%**, under the
+  150,000 limit by 16,053, and the plan is **62%** of the total. The conclusion
+  is unchanged — the trimmable text is still the mandated living artefact — and
+  the corrected percentages are what the PR description quotes.
+
+  These three figures are bound to `3b2f8cd4` and are stale the moment they are
+  committed, because this very paragraph enlarges the plan. Only the plan's own
+  share moves; the non-plan remainder is what the budget argument rests on, and
+  it changes only when a non-plan file changes. A re-derivation must therefore
+  be taken at the revision it claims to describe, and must re-run the commands
+  rather than adjust the numbers by the size of the edit — the trap
+  `97f51d41`'s entry above records.
+
   Codex is the mirror case: it did run — *"Code Review ✅ Completed,
   `2026-09-29T15:36:37Z`, `e7d4fa4`"* — and it did signal clean, with the 👍
   its own help text reserves for "all reviews finish with no findings". The
