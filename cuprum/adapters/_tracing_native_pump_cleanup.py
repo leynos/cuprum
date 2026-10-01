@@ -47,9 +47,7 @@ class _NativePumpCleanupTracingMixin:
 
         hook = typ.cast("TracingHook", self)
         with hook._lock:
-            active = hook._span_states.get(event.exec_id)
-            if active is not None:
-                hook._active_spans.move_to_end(event.exec_id)
+            active = hook._active_spans.get(event.exec_id)
         if active is None:
             return
 

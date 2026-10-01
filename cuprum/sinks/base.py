@@ -29,26 +29,9 @@ An adapter is inactive for a run when it returns ``None`` from
 from __future__ import annotations
 
 import dataclasses as dc
-import enum
 import typing as typ
 
-
-class TerminalOutcome(enum.StrEnum):
-    """Why a run finished, as a closed set the adapter can act on.
-
-    Examples
-    --------
-    The member value is the string adapters see::
-
-        assert TerminalOutcome.EXIT_NONZERO == "exit_nonzero"
-
-    """
-
-    EXIT_ZERO = "exit_zero"
-    EXIT_NONZERO = "exit_nonzero"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
-    ERROR = "error"
+from cuprum.events import TerminalOutcome
 
 
 @dc.dataclass(frozen=True, slots=True)

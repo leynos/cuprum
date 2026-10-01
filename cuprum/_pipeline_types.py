@@ -19,6 +19,7 @@ from cuprum.events import (
     ExecEvent,
     ExecPhase,
     ResourceUsageMode,
+    TerminalOutcome,
     TimeoutMode,
     new_exec_id,
 )
@@ -98,7 +99,7 @@ class _EventDetails:
     resource_usage_mode: ResourceUsageMode | None = None
 
 
-@dc.dataclass(frozen=True, slots=True)
+@dc.dataclass(slots=True)
 class _StageObservation:
     """Per-stage state used to emit observe events for a pipeline command."""
 
@@ -121,15 +122,30 @@ class _StageObservation:
     # trusted field rather than a tag because a caller may shadow any tag key,
     # and the point of publishing the mode is that a consumer can rely on it.
     env_mode: EnvMode | None = None
+    _plan_emitted: bool = dc.field(default=False, init=False)
+    _terminal_emitted: bool = dc.field(default=False, init=False)
+    _started_pid: int | None = dc.field(default=None, init=False)
 
     def emit(
         self,
         phase: ExecPhase,
         details: _EventDetails,
+        *,
+        terminal_outcome: TerminalOutcome | None = None,
     ) -> None:
         """Emit an observe event for ``phase`` when observe hooks are set."""
         if not self.hooks.observe_hooks:
             return
+        match phase:
+            case "plan":
+                # Mark before dispatch: if a synchronous observer raises, the
+                # runner still owes a best-effort terminal event for the plan
+                # it began delivering.
+                self._plan_emitted = True
+            case "start":
+                self._started_pid = details.pid
+            case _:
+                pass
         event = ExecEvent(
             phase=phase,
             program=self.cmd.program,
@@ -150,6 +166,7 @@ class _StageObservation:
             timeout_s=details.timeout_s,
             timeout_mode=details.timeout_mode,
             exec_id=self.exec_id,
+            terminal_outcome=terminal_outcome,
             stage_index=details.stage_index,
             stage_count=details.stage_count,
             eof_grace_s=details.eof_grace_s,
@@ -161,6 +178,22 @@ class _StageObservation:
             env_mode=self.env_mode,
         )
         self._emit_event(event)
+
+    @property
+    def started_pid(self) -> int | None:
+        """Child PID announced by this observation, if any."""
+        return self._started_pid
+
+    def emit_terminal(
+        self,
+        outcome: TerminalOutcome,
+        details: _EventDetails,
+    ) -> None:
+        """Emit the first and only definitive outcome for this observation."""
+        if self._terminal_emitted or not self._plan_emitted:
+            return
+        self._terminal_emitted = True
+        self.emit("settled", details, terminal_outcome=outcome)
 
     def emit_fail_fast(self, details: _EventDetails) -> None:
         """Emit the sanitized fail-fast decision event."""

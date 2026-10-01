@@ -31,6 +31,7 @@ type ExecPhase = typ.Literal[
     "stdout",
     "stderr",
     "exit",
+    "settled",
     "stdin",
     "stdin_error",
     "timeout",
@@ -38,6 +39,21 @@ type ExecPhase = typ.Literal[
     "capture_eof_grace_expired",
     "pipeline_fail_fast",
 ]
+
+
+class TerminalOutcome(enum.StrEnum):
+    """Why an observed execution reached its definitive terminal event.
+
+    The values are shared with presentation sinks, so execution telemetry and
+    output adapters classify the same outcome with the same bounded labels.
+    """
+
+    EXIT_ZERO = "exit_zero"
+    EXIT_NONZERO = "exit_nonzero"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    ERROR = "error"
+
 
 # A stable, per-execution correlation token. It is minted once when an
 # execution begins and propagated unchanged through every lifecycle event
@@ -115,6 +131,17 @@ class ExecEvent:
         lifecycle phase. ``pipeline_fail_fast`` reports the pipeline
         coordinator's decision before the failing stage's own ``exit`` event.
 
+        ``settled`` is the single definitive terminal event for every execution
+        that emitted ``plan``. It carries ``terminal_outcome``, an optional
+        ``pid``, and ``exec_id``. ``exit_code`` is a real child status only when
+        one is available; it stays ``None`` for spawn failure and cancellation
+        paths that do not produce a command result. The event never carries an
+        exception payload.
+        Catalogue lookup failures raised as ``UnknownProgramError`` in
+        :mod:`cuprum.catalogue` and allowlist failures from
+        :func:`cuprum.sh._enforce_allowlist` happen before ``exec_id`` is minted
+        and are outside this terminal-event contract.
+
         ``timeout`` marks a run that exceeded its deadline, and is emitted
         before the existing ``exit`` event and the public ``TimeoutExpired``,
         both of which are preserved.
@@ -140,17 +167,20 @@ class ExecEvent:
         Environment overlay provided for this execution, when set. Absent from
         the sanitized ``pipeline_fail_fast`` decision event.
     pid:
-        Process identifier for the running subprocess (populated for every
-        phase except ``plan``, which fires before the subprocess is
-        spawned).
+        Process identifier for the running subprocess, when reported. ``plan``
+        always carries ``None``. A ``settled`` event can also carry ``None``
+        when startup failed before a process existed or cancellation ended the
+        run before a result was available.
     timestamp:
         Wall-clock timestamp (seconds since epoch) when the phase occurred.
     line:
         Output line for ``stdout`` / ``stderr`` phases. Line terminators are
         omitted.
     exit_code:
-        Exit code for the ``exit`` phase, and the failing stage's exit code for
-        the ``pipeline_fail_fast`` phase.
+        Real child exit code for ``exit`` and, when available, ``settled``
+        phases, and the failing stage's exit code for ``pipeline_fail_fast``.
+        It is ``None`` when no child status is available, including spawn
+        failure and cancellation paths that do not produce a command result.
     duration_s:
         Elapsed duration in seconds from ``start`` to subprocess exit (not
         including output drain after process termination). For
@@ -185,6 +215,10 @@ class ExecEvent:
         (``pid``) can be recycled by the operating system across executions.
         ``None`` for legacy or manually constructed events that predate the
         token; such events cannot be safely correlated by consumers.
+    terminal_outcome:
+        Closed category carried by ``settled``: ``exit_zero``,
+        ``exit_nonzero``, ``timeout``, ``cancelled``, or ``error``. It is
+        ``None`` for every other phase and contains no exception details.
     timeout_s:
         For the ``timeout`` phase, the configured wall-clock timeout in seconds
         that was exceeded. ``None`` for other phases.
@@ -253,11 +287,12 @@ class ExecEvent:
         legacy or manually constructed events; the execution paths always
         resolve a mode.
 
-    New optional fields are appended after ``exec_id`` rather than inserted
-    beside the field they relate to. Inserting one ahead of ``exec_id`` would
-    silently rebind a positional argument in existing caller code, handing the
-    correlation token to the new field and leaving ``exec_id=None`` — which
-    consumers such as ``TracingHook`` treat as uncorrelatable and drop.
+    New optional fields are appended to the end of the declaration to preserve
+    existing positional argument slots. In particular, inserting one ahead of
+    ``exec_id`` would silently rebind a positional argument in existing caller
+    code, handing the correlation token to the new field and leaving
+    ``exec_id=None`` — which consumers such as ``TracingHook`` treat as
+    uncorrelatable and drop.
 
     """
 
@@ -291,6 +326,7 @@ class ExecEvent:
     system_cpu_seconds: float | None = None
     resource_usage_mode: ResourceUsageMode | None = None
     env_mode: EnvMode | None = None
+    terminal_outcome: TerminalOutcome | None = None
 
 
 type ExecHook = cabc.Callable[[ExecEvent], cabc.Awaitable[None] | None]
@@ -302,6 +338,7 @@ __all__ = [
     "ExecId",
     "ExecPhase",
     "ResourceUsageMode",
+    "TerminalOutcome",
     "TimeoutMode",
     "new_exec_id",
 ]

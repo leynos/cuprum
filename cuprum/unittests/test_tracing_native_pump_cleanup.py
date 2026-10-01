@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from cuprum.adapters.tracing_adapter import TracingHook
-from cuprum.events import ExecEvent, ExecId, new_exec_id
+from cuprum.events import ExecEvent, ExecId, TerminalOutcome, new_exec_id
 from cuprum.program import Program
 from cuprum.pump_events import PumpEvent
 from cuprum.unittests._adapter_test_support import (
@@ -198,6 +198,15 @@ class TestNativePumpCleanupTracing:
             _make_exec_event(
                 phase="exit",
                 overrides={"exec_id": exec_id, "exit_code": 0},
+            )
+        )
+        hook(
+            _make_exec_event(
+                phase="settled",
+                overrides={
+                    "exec_id": exec_id,
+                    "terminal_outcome": TerminalOutcome.EXIT_ZERO,
+                },
             )
         )
 

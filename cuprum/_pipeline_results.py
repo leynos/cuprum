@@ -1,9 +1,9 @@
 """Per-stage terminal events and result assembly for pipelines.
 
 Split from ``cuprum._pipeline_internals`` so that module stays about *running*
-a pipeline — spawning, waiting, cleanup — while the rules for *reporting* each
-stage live here: the terminal ``exit`` event a stage owes its observers, and
-the ``CommandResult`` assembled alongside it.
+a pipeline — spawning, waiting, cleanup — while the rules for reporting each
+stage live here: the actual child ``exit`` event, definitive ``settled`` event,
+and ``CommandResult`` assembled alongside them.
 
 Both the success path and the timeout path emit that terminal event from this
 module, so a stage never reports a ``timeout`` and then falls silent.
@@ -18,9 +18,13 @@ import typing as typ
 
 from cuprum._pipeline_collect import _sh_module
 from cuprum._pipeline_types import _EventDetails
-from cuprum.events import ResourceUsageMode
+from cuprum._sink_lifecycle import _outcome_for_result
+from cuprum._timeout_reporting import _safe_emit_terminal
+from cuprum.events import ResourceUsageMode, TerminalOutcome
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_types import (
         _PipelineSpawnResult,
         _PipelineStageResultInputs,
@@ -38,6 +42,29 @@ if typ.TYPE_CHECKING:
 _STAGE_RESOURCE_MODE: typ.Final = ResourceUsageMode.UNAVAILABLE
 
 
+def _emit_terminal_events(
+    observations: tuple[_StageObservation, ...],
+    outcome: TerminalOutcome,
+    *,
+    processes: cabc.Sequence[asyncio.subprocess.Process] = (),
+    started_at: cabc.Sequence[float] = (),
+) -> None:
+    """Settle every planned stage with the facts known after cleanup."""
+    ended_at = time.perf_counter()
+    for idx, observation in enumerate(observations):
+        process = processes[idx] if idx < len(processes) else None
+        started = started_at[idx] if idx < len(started_at) else None
+        _safe_emit_terminal(
+            observation,
+            outcome,
+            _EventDetails(
+                pid=None if process is None else process.pid,
+                exit_code=None if process is None else process.returncode,
+                duration_s=(None if started is None else max(0.0, ended_at - started)),
+            ),
+        )
+
+
 def _emit_timeout_exit_events(
     observations: tuple[_StageObservation, ...],
     spawn: _PipelineSpawnResult,
@@ -51,9 +78,9 @@ def _emit_timeout_exit_events(
     ``TimeoutExpired``, so without this a pipeline stage would be the only
     execution that reports a ``timeout`` and then goes quiet.
 
-    That matters beyond symmetry: ``TracingHook`` ends a span only on ``exit``,
-    so a missing terminal event leaves the stage's span open for the lifetime
-    of the tracer.
+    That matters beyond symmetry: ``TracingHook`` keeps a span open through
+    ``exit`` and closes it only on ``settled``, so a missing terminal event
+    leaves the stage's span open for the lifetime of the tracer.
 
     Every stage has been terminated and reaped by this point, so ``returncode``
     is available; ``-1`` stands in for a stage with no recorded code, matching
@@ -112,26 +139,35 @@ def _build_pipeline_stage_results(
                 resource_usage_mode=_STAGE_RESOURCE_MODE,
             ),
         )
-        stage_results.append(
-            sh.CommandResult(
-                program=obs.cmd.program,
-                argv=obs.cmd.argv,
+        stage_result = sh.CommandResult(
+            program=obs.cmd.program,
+            argv=obs.cmd.argv,
+            exit_code=inputs.wait_result.exit_codes[idx],
+            pid=process.pid if process.pid is not None else -1,
+            stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
+            stderr=inputs.stderr_by_stage[idx],
+            started_at=inputs.wait_result.wall_clock_started_at[idx],
+            duration=0.0 if duration_s is None else duration_s,
+            max_rss_bytes=None,
+            user_cpu_seconds=None,
+            system_cpu_seconds=None,
+            relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
+        )
+        outcome = _outcome_for_result(stage_result)
+        obs.emit_terminal(
+            outcome.outcome,
+            _EventDetails(
+                pid=process.pid,
                 exit_code=inputs.wait_result.exit_codes[idx],
-                pid=process.pid if process.pid is not None else -1,
-                stdout=inputs.final_stdout if idx == len(parts) - 1 else None,
-                stderr=inputs.stderr_by_stage[idx],
-                started_at=inputs.wait_result.wall_clock_started_at[idx],
-                duration=0.0 if duration_s is None else duration_s,
-                max_rss_bytes=None,
-                user_cpu_seconds=None,
-                system_cpu_seconds=None,
-                relay_fallbacks=inputs.relay_fallbacks_by_stage[idx],
+                duration_s=duration_s,
             ),
         )
+        stage_results.append(stage_result)
     return stage_results
 
 
 __all__ = [
     "_build_pipeline_stage_results",
+    "_emit_terminal_events",
     "_emit_timeout_exit_events",
 ]

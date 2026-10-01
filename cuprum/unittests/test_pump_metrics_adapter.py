@@ -318,6 +318,7 @@ def test_pump_phases_stay_out_of_the_exec_phase_contract() -> None:
         "stdout",
         "stderr",
         "exit",
+        "settled",
         "stdin",
         "stdin_error",
         "timeout",

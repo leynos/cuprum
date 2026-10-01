@@ -25,7 +25,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_types import _StageObservation
-    from cuprum.events import TimeoutMode
+    from cuprum.events import TerminalOutcome, TimeoutMode
 
 # Timeout diagnostics ride the module-scoped ``cuprum.timeout`` logger,
 # mirroring the ``cuprum.stdin`` convention in ``cuprum._subprocess_stdin``:
@@ -139,6 +139,16 @@ def _safe_emit(
     # CancelledError) so it cannot replace the timeout/cancellation.
     with contextlib.suppress(Exception, asyncio.CancelledError):
         observation.emit(phase, details)
+
+
+def _safe_emit_terminal(
+    observation: _StageObservation,
+    outcome: TerminalOutcome,
+    details: _EventDetails,
+) -> None:
+    """Emit a terminal outcome without displacing the run's primary error."""
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        observation.emit_terminal(outcome, details)
 
 
 def _emit_timeout_event(
@@ -311,4 +321,5 @@ __all__ = [
     "_report_teardown_drain_failure",
     "_report_timeout_expiry",
     "_safe_emit",
+    "_safe_emit_terminal",
 ]

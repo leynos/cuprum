@@ -130,7 +130,6 @@ def test_exec_id_keeps_its_positional_slot() -> None:
         "exec_id must directly follow error_type so existing positional callers "
         f"keep binding it, got {fields}"
     )
-
     exec_id = new_exec_id()
     event = c.ExecEvent(
         "start",  # phase

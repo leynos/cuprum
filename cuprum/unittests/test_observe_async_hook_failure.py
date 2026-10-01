@@ -60,18 +60,18 @@ def _assert_aggregates(
 
 
 def test_async_hook_failure_on_timeout_preserves_timeout_expired() -> None:
-    """A failing async observe task cannot replace ``TimeoutExpired``.
+    """A failing async settled hook cannot replace ``TimeoutExpired``.
 
     ``timeout=0`` takes the deterministic immediate-expiry path, so the run is
-    already unwinding with ``TimeoutExpired`` when the drain reaches the failed
-    hook task. The drain must aggregate the two rather than let the hook's
-    error stand in for the timeout a caller is waiting to catch.
+    already unwinding with ``TimeoutExpired`` when settlement schedules the
+    failing hook task. The drain must aggregate the two rather than let the
+    hook's error stand in for the timeout a caller is waiting to catch.
     """
     cmd, catalogue = _sleep_command()
 
     async def hook(ev: ExecEvent) -> None:
-        """Fail asynchronously once the timeout event has been emitted."""
-        if ev.phase == "timeout":
+        """Fail asynchronously when the definitive timeout is reported."""
+        if ev.phase == "settled":
             await asyncio.sleep(0)
             raise _ObserveTaskError
 
@@ -86,11 +86,11 @@ def test_async_hook_failure_on_timeout_preserves_timeout_expired() -> None:
 
 
 def test_async_hook_failure_on_cancellation_preserves_cancelled_error() -> None:
-    """A failing async observe task cannot replace ``CancelledError``.
+    """A failing async settled hook cannot replace ``CancelledError``.
 
-    The hook fails on the ``start`` event, so its task is already broken when
-    the run is cancelled and cleanup drains it. Cancellation must still reach
-    the caller, aggregated with the hook failure.
+    The hook schedules its failure from the ``settled`` event emitted while
+    cancellation is unwinding. Cancellation must still reach the caller,
+    aggregated with the hook failure.
     """
     cmd, catalogue = _sleep_command()
 
@@ -99,9 +99,10 @@ def test_async_hook_failure_on_cancellation_preserves_cancelled_error() -> None:
         started = asyncio.Event()
 
         async def hook(ev: ExecEvent) -> None:
-            """Signal readiness on start, then fail as a background task."""
+            """Signal readiness on start and fail after terminal settlement."""
             if ev.phase == "start":
                 started.set()
+            elif ev.phase == "settled":
                 await asyncio.sleep(0)
                 raise _ObserveTaskError
 

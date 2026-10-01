@@ -13,13 +13,18 @@ custom iterator on ``break``.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 from cuprum._observability import (
     _drain_tasks_during_cleanup,
     _wait_for_exec_hook_tasks,
 )
+from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._sink_lifecycle import _outcome_for_error, _outcome_for_result
+from cuprum._timeout_reporting import _safe_emit_terminal
+from cuprum.events import TerminalOutcome
 from cuprum.lines import LineEvent
 
 if typ.TYPE_CHECKING:
@@ -32,6 +37,15 @@ if typ.TYPE_CHECKING:
     from cuprum.sh import CommandResult
 
 _LINES_FINALIZATION_ERROR = "line stream finalization failed"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _LineStreamFinalization:
+    """Facts needed to settle a line stream after its coordinator exits."""
+
+    execution: _SubprocessExecution
+    result: CommandResult | None
+    failure: BaseException | None
 
 
 class LineStream:
@@ -127,6 +141,7 @@ async def _iter_line_events(
     )
     coordinator: asyncio.Task[None] | None = None
     failure: BaseException | None = None
+    result: CommandResult | None = None
     # The plan event and the before hooks run inside the try, not ahead of it:
     # both emit, and a synchronous observe hook that raises on either would
     # otherwise strand the async-hook tasks already queued behind it, which only
@@ -146,6 +161,15 @@ async def _iter_line_events(
                 break
         result = await result_future
         _publish_completion(tracking, execution, result)
+        outcome = _outcome_for_result(result)
+        execution.observation.emit_terminal(
+            outcome.outcome,
+            _EventDetails(
+                pid=result.pid,
+                exit_code=result.exit_code,
+                duration_s=result.duration,
+            ),
+        )
         yield result
     except BaseException as error:
         # Broader than ``Exception`` on purpose: the teardown classifies what
@@ -155,7 +179,39 @@ async def _iter_line_events(
         failure = error
         raise
     finally:
-        await _reconcile_line_stream(coordinator, result_future, tracking, failure)
+        await _reconcile_line_stream(
+            coordinator,
+            result_future,
+            tracking,
+            _LineStreamFinalization(execution, result, failure),
+        )
+
+
+def _emit_line_stream_error(
+    execution: _SubprocessExecution,
+    result: CommandResult | None,
+    failure: BaseException | None,
+) -> None:
+    """Settle a line stream after its coordinator has reconciled the child."""
+    if failure is None:
+        return
+    outcome = _outcome_for_error(failure)
+    is_cancelled = outcome.outcome is TerminalOutcome.CANCELLED
+    _safe_emit_terminal(
+        execution.observation,
+        outcome.outcome,
+        _EventDetails(
+            pid=(
+                None
+                if is_cancelled
+                else result.pid
+                if result is not None
+                else execution.observation.started_pid
+            ),
+            exit_code=(None if is_cancelled or result is None else result.exit_code),
+            duration_s=None if result is None else result.duration,
+        ),
+    )
 
 
 async def _drive_line_stream(
@@ -206,7 +262,7 @@ async def _reconcile_line_stream(
     coordinator: asyncio.Task[None] | None,
     result_future: asyncio.Future[CommandResult],
     tracking: _ExecutionTracking,
-    failure: BaseException | None,
+    finalization: _LineStreamFinalization,
 ) -> None:
     """Cancel the coordinator when it is still running, then drain its tasks.
 
@@ -225,9 +281,21 @@ async def _reconcile_line_stream(
         # A published coordinator failure must not skip observe-hook cleanup.
         # Passing it as the active error means a failing hook is grouped with,
         # rather than replaces, the outcome that ended the run.
+        _emit_line_stream_error(
+            finalization.execution,
+            finalization.result,
+            finalization.failure,
+        )
         await _shielded_cleanup(_drain_line_stream_tasks(tracking.pending_tasks, error))
         raise
-    await _shielded_cleanup(_drain_line_stream_tasks(tracking.pending_tasks, failure))
+    _emit_line_stream_error(
+        finalization.execution,
+        finalization.result,
+        finalization.failure,
+    )
+    await _shielded_cleanup(
+        _drain_line_stream_tasks(tracking.pending_tasks, finalization.failure)
+    )
 
 
 async def _next_queue_item(

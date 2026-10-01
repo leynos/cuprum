@@ -83,6 +83,7 @@ class _StructuredLoggingHook:
             "stdout": levels.output_level,
             "stderr": levels.output_level,
             "exit": levels.exit_level,
+            "settled": levels.exit_level,
             "pipeline_fail_fast": levels.fail_fast_level,
         }
 
@@ -139,11 +140,12 @@ def structured_logging_hook(
 
     - ``cuprum_phase``: Event phase (plan, start, stdout, stderr, stdin,
       stdin_error, timeout, teardown_error, capture_eof_grace_expired, exit,
-      pipeline_fail_fast)
+      settled, pipeline_fail_fast)
     - ``cuprum_program``: Program being executed
     - ``cuprum_argv``: Full argument vector
     - ``cuprum_pid``: Process ID (when available)
     - ``cuprum_exit_code``: Exit code (for exit and pipeline_fail_fast events)
+    - ``cuprum_terminal_outcome``: Bounded category on ``settled`` events
     - ``cuprum_duration_s``: Duration in seconds (for exit and
       pipeline_fail_fast events)
     - ``cuprum_stage_index`` / ``cuprum_stage_count``: Position of the failing
@@ -254,18 +256,24 @@ def _format_message(event: ExecEvent) -> str:
     program = event.program
     match event.phase:
         case "plan":
-            return f"cuprum.plan program={program} argv={event.argv!r}"
+            message = f"cuprum.plan program={program} argv={event.argv!r}"
         case "start":
-            return f"cuprum.start program={program} pid={event.pid}"
+            message = f"cuprum.start program={program} pid={event.pid}"
         case "stdout" | "stderr":
             # One rendering for both: they differ only in the phase name.
-            return f"cuprum.{event.phase} pid={event.pid} line={event.line!r}"
+            message = f"cuprum.{event.phase} pid={event.pid} line={event.line!r}"
         case "exit":
-            return _format_exit_message(event)
+            message = _format_exit_message(event)
+        case "settled":
+            message = (
+                f"cuprum.settled program={program} "
+                f"terminal_outcome={event.terminal_outcome}"
+            )
         case "pipeline_fail_fast":
-            return _format_fail_fast_message(event)
+            message = _format_fail_fast_message(event)
         case _:
-            return f"cuprum.{event.phase} program={program}"
+            message = f"cuprum.{event.phase} program={program}"
+    return message
 
 
 class JsonLoggingFormatter(logging.Formatter):
