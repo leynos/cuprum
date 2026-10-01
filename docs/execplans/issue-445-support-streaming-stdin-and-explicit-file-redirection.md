@@ -68,17 +68,16 @@ asyncio.run(main())
 ```
 
 and mean two new things. First, the producer's chunks are pulled one at a time,
-written to the child's stdin, and drained before the next chunk is pulled, so
-the writer cannot outrun the child and the payload is never held whole. That is
-a bound on how far *ahead* the producer is pulled, not on the size of the chunk
-being written: until `drain()` returns, the chunk just pulled and its encoded
-payload are still in memory alongside the transport's write buffer and the OS
-pipe, so peak memory is roughly the largest chunk yielded plus those buffers —
-which is why a caller who cares about it should yield bounded-size chunks.
-Second, the child's stdout is bound to a file cuprum opened for the run and
-closed as soon as the child was spawned — the child keeps the descriptor for
-its lifetime, cuprum keeps ownership of closing it, and the caller never sees a
-leak.
+written to the child's stdin, and drained before the next chunk is pulled. That
+limits how far *ahead* of the child the producer may run; it does not mean the
+child has consumed the previous chunk or that the pipe is empty. Until
+`drain()` returns, the chunk just pulled and its encoded payload are still in
+memory alongside the transport's write buffer and the OS pipe, so the writer
+may retain the largest chunk yielded plus those buffers — which is why a caller
+who cares about it should yield bounded-size chunks. Second, the child's stdout
+is bound to a file cuprum opened for the run and closed as soon as the child
+was spawned — the child keeps the descriptor for its lifetime, cuprum keeps
+ownership of closing it, and the caller never sees a leak.
 
 The existing `stdin=StdinInput(...)` payload API and the inherited-stdin
 default (the current `stdin=None`) behave exactly as they do today; this is an
@@ -206,6 +205,51 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-01) The fixture extraction above tripped the docstring gate:
+  `make lint` stopped at the `python-lint` leaf with
+  `docstring-missing-returns: 'return' is not documented in docstring` against
+  `cuprum/unittests/test_safe_cmd_redirect.py:154`. Ruff's DOC201 exempts
+  one-line docstrings from the signature checks, so an explanatory paragraph is
+  what makes the `Returns` section mandatory, and the fixture explains a real
+  constraint — both hooks are process-wide — so the paragraph stays and the
+  section was added. Worth carrying forward twice over: a helper carrying a
+  paragraph needs a `Returns` section even when the one-line form would not, and
+  `make lint` fails fast, so `docstring-missing-returns` at the first leaf left
+  `ambrleaks`, `skylos`, `rust-lint` and `github-actions-lint` unobserved in
+  that run. A red `lint` therefore says "this leaf failed", not "the others
+  passed".
+- [x] (2026-10-01) Three further review findings from the review CodeRabbit ran
+  on `61de2373`, all three verified against the tree before being actioned. Two
+  are prose corrections in this plan, and both were claims that had overstated
+  what the code does. The first: `SafeCmd.run` is `async def` at
+  `cuprum/sh/safe_cmd.py:141`, and `_resolve_stdin_source` is called from its
+  body (line 196), so a `StdinInput` encoding error surfaces when the coroutine
+  is awaited, not when it is created — the plan said "synchronously from
+  `run()`". The second: the 33-pull measurement is producer lookahead, not 33
+  chunks simultaneously in flight, because `drain()` returns at the transport's
+  low-water mark and the OS pipe holds bytes of its own; that limit was already
+  recorded elsewhere in the plan, so the "cannot outrun the child" and "33
+  chunks were in flight together" phrasings contradicted the plan's own
+  analysis and are corrected to match it. The overstatement turned up at
+  several places, so the sweep was driven by the concepts (`outrun`,
+  `in flight`, `never held whole`) rather than by the reviewed wording; the
+  readers of this plan who already had it right — the *Pull-after-drain*
+  definition, the Outcomes retrospective, the INV-1 limits, and the
+  `Verification plan` discussion of `drain()`'s low-water mark — are cited by
+  name rather than by line number, because line numbers in a living document
+  move under the entries that record them.
+- [x] (2026-10-01) The third finding is the only test change: the failing-run
+  and timeout cases asserted `log.read_text()` and `stat.S_ISREG(...)` as their
+  evidence that cuprum closed the descriptor it opened, and neither can see a
+  leak — a deliberately leaked fd leaves the path readable and still a regular
+  file. The `os.open`/`os.close` tracking that the success case already used is
+  now a `target_descriptor_log` fixture plus a module-level
+  `_assert_no_descriptor_leak` helper, and all three cases assert that at least
+  one descriptor was opened and that `sorted(closed) == sorted(opened)`.
+  Non-vacuity was shown in both directions rather than assumed: the helper
+  fails on `opened=[3], closed=[]` and on a partial `[3, 4]`/`[3]` mismatch
+  while passing the matched cases, and the two assertions it replaced were
+  confirmed to pass with an fd deliberately held open.
 - [x] (2026-10-01) Ninth review finding, actioned after a full re-verification
   of all nine CodeRabbit inline comments rather than only the newest.
   `Pipeline.run_sync` calls `self.run(...)`, which calls
@@ -1545,8 +1589,9 @@ non-zero exit, borrowed descriptors shown to survive the run, a Hypothesis
 property over generated `str`/`bytes` chunk lists with the child hexing its
 stdin, and an INV-1 pull counter that measured 33 pulls of 256 read ahead of
 the child against a cap of 64, with the eager negative control reading all 256.
-That gap is the bound's whole content: 33 chunks were in flight together, which
-is a pipe's worth of data rather than one chunk's.
+That gap is the measured producer lookahead: the producer had yielded 33 chunks
+by the child's first-read marker. It does not show that 33 chunks were
+simultaneously in flight.
 
 Three lessons are worth carrying forward. First, a *cleared* ceiling is not a
 stable state: the module-size plateau was re-crossed three separate times, each
@@ -1596,9 +1641,9 @@ The run path, in order, is:
    resolves `stdin` through `_resolve_stdin_source`, and builds a
    `_ExecutionState`. That resolver is where the two variants part: a
    `StdinInput` payload is encoded to bytes here, so an encoding error surfaces
-   synchronously from `run()`, while a `StdinStream` is passed through unpulled
-   — pulling it is the writer's job, and pulling it here would defeat the
-   bound. The `_ExecutionState.stdin_data` field therefore holds
+   when the `run()` coroutine is awaited, while a `StdinStream` is passed
+   through unpulled — pulling it is the writer's job, and pulling it here would
+   defeat the bound. The `_ExecutionState.stdin_data` field therefore holds
    `bytes | StdinStream | None`, not bytes alone.
 2. `cuprum/_command_internals.py` — `_build_subprocess_execution` turns the
    state into a `_SubprocessExecution`; `_run_prepared_command` opens the sink
@@ -1721,14 +1766,14 @@ and why a passing result cannot be vacuous.
   not on what is retained: `drain()` returns once the transport's write buffer
   falls below its low-water mark, and the OS pipe holds bytes of its own, so
   several chunks are legitimately in flight — the test's cap is deliberately
-  loose for exactly this reason. What is retained is therefore "the largest
-  chunk yielded, plus the transport buffer, plus the pipe", not the pipe alone,
-  and no chunk size is enforced: the type does not police it, so a producer
-  yielding one enormous chunk is not protected from itself. And there is no
-  peak-RSS measurement, on the `wait4` path or anywhere else: retained memory
-  cannot be read off a finished run, so the counter stands in for it. A caller
-  who needs a hard memory guarantee should yield bounded-size chunks, because
-  cuprum offers none smaller than one chunk.
+  loose for exactly this reason. The writer can therefore retain the current
+  chunk and its encoded payload alongside the transport buffer and the OS pipe,
+  not the pipe alone, and no chunk size is enforced: the type does not police
+  it, so a producer yielding one enormous chunk is not protected from itself.
+  And there is no peak-RSS measurement, on the `wait4` path or anywhere else:
+  retained memory cannot be read off a finished run, so the counter stands in
+  for it. A caller who needs a hard memory guarantee should yield bounded-size
+  chunks, because cuprum offers none smaller than one chunk.
 
 - Obligation: `INV-2 — byte-exact delivery`. For a producer yielding a
   generated list of `bytes` and `str` chunks, the child receives exactly the
