@@ -1904,6 +1904,32 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   the bot's to withdraw. That request is enqueued separately rather than
   claimed here.
 
+  **It is enqueued, and the ETA is the thing a reader needs to know.**
+  `comenq put leynos/cuprum 432 …` returned identifier `de71c44b` with an
+  estimated post time of **~23 h 11 m**, because the shared queue is **63**
+  entries deep — not rate-limited, just busy, and the delay is the queue's. So
+  "awaiting review" here means a real, tracked, ~1-day wait, not a request that
+  silently failed. A future reader who finds the `CHANGES_REQUESTED` still
+  standing should read that queue depth before concluding the request was lost.
+
+  The gating record is now closed as far as the repository can close it. What
+  the branch's own artefacts establish, each independently of this file's prose:
+  `mergeStateStatus` is `CLEAN`; `mergeable` is `MERGEABLE`; `main` is **not**
+  branch-protected (`gh api branches/main/protection` returns 404), so
+  `CHANGES_REQUESTED` is a bot-held signal rather than a technical gate; and
+  the review's sole finding is genuinely repaired — `b3ae9f20` deleted the
+  local copy and `test_rust_streams_roundtrip_property.py:27` now imports the
+  shared `_safe_close` from `cuprum.unittests._rust_stream_test_support`, where
+  it is defined at `:29`. The fact that `main` is unprotected is worth stating
+  plainly, because it is the difference between "cannot merge" and "will not
+  merge without an updated review", and only the second is true.
+
+  Two CI runs for `89336b01` are in flight and neither is a verdict yet: run
+  `36901334814` (`CI`, 14 jobs, `in_progress`, 0 failing) and `36901334242`
+  (`Rust boundary verification`, 5 jobs, `queued`, 0 failing). They are named
+  so that a later reader can tell which runs the push created rather than
+  having to reconstruct it, and they are explicitly **not** claimed as passing.
+
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
 
