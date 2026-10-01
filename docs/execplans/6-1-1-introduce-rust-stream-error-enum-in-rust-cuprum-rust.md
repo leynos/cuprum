@@ -1912,15 +1912,18 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   silently failed. A future reader who finds the `CHANGES_REQUESTED` still
   standing should read that queue depth before concluding the request was lost.
 
-  The identifier is `f33ee725` and not the `de71c44b` first enqueued, and the
-  reason is worth keeping: `de71c44b` named head `89336b01` in its body, and a
-  commit landed afterwards, so the queued text would have asked the bot to
-  review a head that was no longer the tip. It was deleted with
-  `comenq del de71c44b` and re-queued against the final head. A queued comment
-  is a *deferred* artefact with a ~1-day lag, which means the ordinary habit of
-  enqueueing and moving on reliably produces a request pinned to a superseded
-  SHA — the fix is to enqueue only once the head is genuinely final, and to put
-  the head in the body so the staleness is visible rather than silent.
+  The identifier is `67f60c91`, the third enqueued, and the two supersessions
+  are the reusable lesson. `de71c44b` named head `89336b01` in its body and was
+  invalidated when a later commit landed; `f33ee725` named `3de1c64b` and was
+  invalidated the same way 20 minutes later. Both were deleted with
+  `comenq del` and re-queued, because a queued comment is a *deferred* artefact
+  with a ~1-day lag, so any head written into its body is ~23 hours stale by
+  the time it posts. The fix is not to chase the head — that is a treadmill,
+  since recording each correction moves the head again — but to write a body
+  that is true at *any* head: `67f60c91` names no SHA, and instead states the
+  invariant that makes any head acceptable, namely that every commit after the
+  fix `b3ae9f20` is execplan-only, so the current head exercises the same code.
+  That claim is checkable and does not decay.
 
   The gating record is now closed as far as the repository can close it. What
   the branch's own artefacts establish, each independently of this file's prose:
