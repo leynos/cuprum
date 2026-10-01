@@ -34,6 +34,19 @@ name and refuses the clauses it still cannot settle. The split is the point —
 `admits` stays a conservative superset over legs, and the event-aware reading
 that the pull-request question actually needs is stated beside it rather than
 weakened into it.
+
+The two readings are also visibly different at the call site, which is the
+point of keeping both rather than one flag on a single function:
+
+>>> admits_event(
+...     "matrix.python-suite", {"python-suite": True}, "pull_request", subject="s"
+... )
+True
+>>> admits_event(
+...     "github.event_name == 'push'", {"python-suite": True}, "pull_request",
+...     subject="s",
+... )
+False
 """
 
 from __future__ import annotations
@@ -282,13 +295,9 @@ def admits_event(
 ) -> bool:
     """Report whether a guard admits a leg *and* runs on the named event.
 
-    :func:`admits` answers with a superset over legs, which is the safe
-    direction for the cache-ownership caller and the wrong one here. A guard
-    such as ``github.event_name == 'push'`` names no matrix key, so `admits`
-    reads it as satisfied and every leg is admitted; a pull-request contract
-    built on that would certify a suite on a lane no pull request schedules.
-    This evaluates the event clauses `admits` leaves unread, and refuses the
-    ones neither can settle, rather than assuming them true.
+    `admits` leaves the event clauses unread, which is the safe direction for
+    the cache-ownership caller and the wrong one for the pull-request question
+    this feeds. See the module docstring for why the two contracts differ.
 
     Parameters
     ----------
@@ -313,35 +322,17 @@ def admits_event(
     ------
     AssertionError
         When a clause is neither a matrix reference, an event-name comparison,
-        nor a status function. The contract this feeds asks which lanes a pull
-        request runs `make test-python` on, and a clause read as satisfied
-        would answer that with a lane that may never run it; the shape is
-        reported instead of guessed at.
+        nor a status function. Whether the step runs is not decidable from the
+        leg, and treating the clause as satisfied would certify a lane that may
+        never run it; the shape is reported instead of guessed at.
 
     Notes
     -----
-    Only the top-level ``&&`` split :func:`clauses` performs is modelled; a
-    guard whose top level is ``||`` reduces to one clause matching no form and
-    is refused rather than read as one of its branches.
-
-    The refusal is the difference from :func:`admits`, so it is deliberately the
-    default: a clause is admitted here by being *recognized*, not by escaping
-    recognition. An ``inputs.`` reference is the shape that makes this matter —
-    empty on a pull-request event, so a guard reading it excludes every lane —
-    and it is refused rather than read as satisfied for the same reason the
-    event clause is evaluated.
-
-    Examples
-    --------
-    >>> admits_event(
-    ...     "matrix.python-suite", {"python-suite": True}, "pull_request", subject="s"
-    ... )
-    True
-    >>> admits_event(
-    ...     "github.event_name == 'push'", {"python-suite": True}, "pull_request",
-    ...     subject="s",
-    ... )
-    False
+    A clause is admitted here by being *recognized*, not by escaping
+    recognition, so an unrecognized shape is refused rather than read as
+    satisfied. Only the top-level ``&&`` split :func:`clauses` performs is
+    modelled; a guard whose top level is ``||`` reduces to one clause matching
+    no form and is refused rather than read as one of its branches.
     """  # ruff: ignore[docstring-extraneous-exception] - the refusal is raised by require()
     for clause in clauses(condition):
         event_match = _EVENT_CLAUSE.match(clause)

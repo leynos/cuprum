@@ -69,6 +69,7 @@ def _runner_returning(stdout: str, returncode: int = 0) -> Runner:
     """Return a fake runner that reports the given output."""
 
     def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Report the canned output, echoing the argv it was handed."""
         return _completed(argv, returncode, stdout)
 
     return run
@@ -78,6 +79,7 @@ def _runner_raising(error: BaseException) -> Runner:
     """Return a fake runner that raises instead of returning."""
 
     def run(_argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        """Raise the supplied error, standing in for a process that cannot start."""
         raise error
 
     return run
@@ -130,6 +132,7 @@ class TestMakeutilProcessBoundary:
         seen: dict[str, object] = {}
 
         def spy(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            """Capture the keywords the reader passes, and report success."""
             seen.update(kwargs)
             return _completed(argv, 0, _GOOD_DOCUMENT)
 
@@ -196,7 +199,11 @@ class TestMakefileNarrowing:
         runner = self._document([
             {"name": "A", "raw_value": "one.py \\\n  two.py", "operator": "="}
         ])
-        assert variable_expansion("A", runner=runner) == ("one.py", "two.py")
+        resolved = variable_expansion("A", runner=runner)
+        assert resolved == ("one.py", "two.py"), (
+            f"a continuation must collapse to one space; got {resolved!r}, whose "
+            "extra token would be a backslash standing in for a path pattern"
+        )
 
 
 class TestDocumentNarrowing:
@@ -205,7 +212,11 @@ class TestDocumentNarrowing:
     def test_a_well_formed_workflow_narrows_to_its_jobs(self) -> None:
         """The success path yields jobs, so the refusals are not blanket."""
         document = parse_document("jobs:\n  build:\n    steps:\n      - run: x\n", "w")
-        assert "build" in typ.cast("dict[str, object]", document["jobs"])
+        jobs = typ.cast("dict[str, object]", document["jobs"])
+        assert "build" in jobs, (
+            f"the job's name must survive narrowing; got {sorted(jobs)!r}, so a "
+            "reader that refused everything would pass every refusal case above"
+        )
 
     def test_a_document_that_is_not_a_mapping_is_refused(self) -> None:
         """A YAML list is not a workflow document."""
@@ -220,7 +231,11 @@ class TestDocumentNarrowing:
     def test_a_job_without_steps_yields_none(self) -> None:
         """A reusable-workflow call legitimately declares no steps."""
         job = typ.cast("Job", {"uses": "owner/repo/.github/workflows/x.yml@main"})
-        assert narrow_steps(job, "w:job") == []
+        steps = narrow_steps(job, "w:job")
+        assert steps == [], (
+            f"a `uses:` job must yield no steps, not be refused; got {steps!r}, "
+            "which would mean the reader cannot tell a call from a malformed job"
+        )
 
     def test_steps_of_the_wrong_shape_are_refused_not_read_as_empty(self) -> None:
         """`steps: {}` is malformed, not empty.

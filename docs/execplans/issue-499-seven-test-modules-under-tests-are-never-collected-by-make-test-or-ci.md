@@ -5,8 +5,10 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IMPLEMENTED; pull request #505 open for review at `3d1408c0`, with the
-post-rebase review findings reconciled
+Status: IMPLEMENTED; pull request #505 open for review, with the post-rebase
+review findings reconciled and the CodeScene Large Method finding cleared. The
+last reviewed revision was `3d1408c0`; work since then is the review-response
+round recorded under `Progress`.
 
 ## Purpose / big picture
 
@@ -424,11 +426,76 @@ contract module under `tests/` and forgets to name it will be told so by
     rather than a local copy, per the export-and-reuse sweep `AGENTS.md`
     requires; it is a leaf (`strict_yaml` only), so no cycle closes. The split
     is behaviour-preserving: the same 86 contract assertions pass unchanged.
-  - *`make markdownlint` / spelling.*
-    `test_the_success_path_finds_this_repositorys_scripts`
-    tripped the en-GB gate on `repositorys`. Renamed to
-    `test_the_success_path_finds_the_estates_scripts`, which is the term the
-    surrounding modules already use.
+  - *`make markdownlint` / spelling.* A new test whose name ended in the
+    possessive of "repository" followed by "s" tripped the en-GB gate, because
+    the possessive construction yields a token the dictionary does not carry
+    (the gate's suggested spelling is the plural, which is not what the name
+    meant). Renamed to `test_the_success_path_finds_the_estates_scripts`,
+    which is the term the surrounding modules already use and which needs no
+    possessive at all.
+- [x] (2026-10-02) Cleared the second run's two failures at `78ee0b44`.
+  - *`make lint` / interrogate.* The gate failed at `interrogate --fail-under
+    100`, reporting `99.9%` against a `100.0%` minimum. Three of the five
+    misses are this branch's: two nested `run` closures and one nested `spy`
+    closure in `tests/test_ci_helper_boundaries.py`, all with `-> None`
+    bodies the gate counts as definitions. Docstrings added. The other two
+    (`_RecordedCompile.__init__` and `_RecordedRun.__init__` in
+    `scripts/tests/`) are on `origin/main` and untouched by this branch —
+    verified with `git ls-tree origin/main` and an empty
+    `git log origin/main..HEAD` for both files.
+    **The lesson is about the gate, not the misses.** Interrogate renders its
+    score to one decimal, so `--fail-under 100` is not a count: `main`'s two
+    misses are 99.9736% and *pass*, while this branch's five are 99.9323% and
+    *fail*. Confirmed by probing the tool with a synthetic 7565/2 tree, which
+    exits 0. The branch was therefore red on a rounding boundary with roughly
+    three misses of headroom, not on a new class of defect — and the failure
+    message names the percentage, never the file, so the offending callables
+    have to be found with `-vv`. Worth knowing before adding undocumented
+    nested helpers to this estate.
+- [x] (2026-10-02) Cleared the CodeScene Large Method finding on
+  `admits_event`, and pinned its counting rule on the way through.
+  - *The finding.* CodeScene reviewed `3d1408c0` and raised Large Method on
+    `tests/helpers/ci_leg_matrix.py::admits_event`, gate **failed**. The unit
+    comment's link (`?line=369`) is an end-of-function anchor, not a warning
+    line, which is misleading but does match the function's last line.
+  - *The counting rule.* CodeScene reports 83 for a 94-line physical span.
+    Probing the actual lines gives it exactly: the span is 94 lines, of which
+    7 are blank and 4 are pure comments, and 94 − 7 − 4 = 83. So the metric is
+    **non-blank, non-comment lines within the function span**, threshold
+    "fires above 70". Worth recording because the number is otherwise
+    unattributable — it matches neither the physical span nor the body after
+    the docstring (24).
+  - *The repair.* Docstring-only, as the follow-up advised: the rationale that
+    duplicated the module docstring was cut, and the two doctest examples
+    moved into the module docstring unchanged. This repository runs no Python
+    module doctests (only Rust rustdoc), so the examples are documentation
+    rather than executed assertions, and CodeScene counts no comment lines.
+    The executable body is byte-identical under `ast.dump(..., n.body[1:])`
+    comparison against the pre-edit revision, which is the check that matters
+    for a claim of behaviour preservation. New count: **63**, clearing the
+    threshold with 7 lines of headroom. A structural split was explicitly not
+    taken: the function is one coherent operation, and extracting a helper to
+    satisfy a *documentation* finding would add indirection to the call graph
+    the follow-up asked to preserve.
+- [x] (2026-10-02) Cleared a DF12 pylint failure that two earlier runs had
+  never reached.
+  - *What happened.* The run before this one aborted at `interrogate`, and the
+    one before that at `ruff`. Because `python-lint` chains its leaves with
+    `&&`, aborting at leaf 2 or 3 leaves every later leaf **unobserved** rather
+    than failing — so DF12 pylint had never actually run on this branch. When
+    it finally did, it reported three real errors:
+    `tests/test_ci_helper_boundaries.py:202,211,226: C9102: Assert statement
+      lacks a failure message`.
+  - *The fix.* All three bare asserts given failure messages that report the
+    actual value, so a failure names what it saw rather than only the
+    comparison that failed. The file's own asserts now carry messages: 7 of 7.
+  - *The lesson.* "Two consecutive gate runs failed" is not the same as "the
+    recipe has two problems". A chained recipe reports the *first* failure in
+    its chain, so the observed-failure count is a lower bound on the real one,
+    and each fix can expose the next leaf for the first time. Before reporting
+    a chained gate as fixed, make sure a run has reached its **end**; otherwise
+    the report should say which leaves were reached and which were never
+    observed.
 
 ## Surprises & discoveries
 
