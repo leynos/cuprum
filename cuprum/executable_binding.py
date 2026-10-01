@@ -61,7 +61,7 @@ type ExecutableResolver = cabc.Callable[[], str]
 """A zero-argument callable producing the executable to run.
 
 Evaluated once per execution, at spawn time. It exists for callers whose
-executable is only knowable late: a virtual environment concretised during the
+executable is only knowable late: a virtual environment concretized during the
 run, a toolchain selected from configuration, or a test double chosen by the
 test's own fixtures. Its result is used verbatim, so a resolver that wants its
 result anchored must return an absolute path itself.

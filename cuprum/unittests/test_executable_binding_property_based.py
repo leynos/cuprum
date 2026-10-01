@@ -4,7 +4,7 @@ The classification and resolution helpers in ``cuprum.executable_binding`` are
 pure total functions over large input domains: any string may be offered as an
 executable path, and any binding may be resolved against any working
 directory. Hypothesis explores those domains far more thoroughly than a
-hand-written table can.
+handwritten table can.
 
 The invariants checked here are:
 
