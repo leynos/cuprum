@@ -263,7 +263,9 @@ def test_nested_catalogue_scope_replaces_and_then_restores() -> None:
     inner_catalogue = ProgramCatalogue.from_programs(LS)
 
     with scoped(catalogue=outer_catalogue):
-        assert current_context().catalogue is outer_catalogue
+        assert current_context().catalogue is outer_catalogue, (
+            "the outer catalogue should be active before the inner scope opens"
+        )
         with scoped(catalogue=inner_catalogue):
             assert current_context().catalogue is inner_catalogue, (
                 "the innermost catalogue scope should replace the outer one"

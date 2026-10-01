@@ -226,10 +226,12 @@ git = sh.make(GIT, catalogue=CATALOGUE)
 grep = sh.make(GREP, catalogue=CATALOGUE)
 ```
 
-Builders created outside a catalogue scope must name their catalogue, as above.
-Inside `with scoped(catalogue=CATALOGUE):` the `catalogue=` argument is
-redundant, because `sh.make()` resolves the innermost scoped catalogue when the
-call does not name one.
+A builder created outside a catalogue scope needs an explicit `catalogue=`
+argument only when the program lives in an application catalogue rather than
+`DEFAULT_CATALOGUE`; `sh.make()` without one falls back to that default. Inside
+`with scoped(catalogue=CATALOGUE):` the argument is redundant, because
+`sh.make()` resolves the innermost scoped catalogue when the call does not name
+one.
 
 The default project name joins the programs' base names with `-`, giving
 `git-grep` here; pass `name=` to supply an explicit project name, and

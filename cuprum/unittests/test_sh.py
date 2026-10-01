@@ -356,7 +356,9 @@ def test_make_uses_the_innermost_scoped_catalogue() -> None:
             inner = sh.make(inner_program)("run")
         after = sh.make(outer_program)("run")
 
-    assert before.project is outer_catalogue.lookup(outer_program).project
+    assert before.project is outer_catalogue.lookup(outer_program).project, (
+        "The outer catalogue should resolve the builder before the inner scope opens"
+    )
     assert inner.project is inner_catalogue.lookup(inner_program).project, (
         "The innermost catalogue should resolve the builder"
     )
