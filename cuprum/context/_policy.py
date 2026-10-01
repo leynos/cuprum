@@ -18,6 +18,10 @@ import math
 import typing as typ
 
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, merge_env_overlays
+from cuprum.context.executable_overlay import (
+    ExecutableBindingOverlay,
+    merge_executable_bindings,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -113,3 +117,30 @@ def _resolve_env_policy(
     if child_mode is EnvMode.REPLACE:
         return merge_env_overlays(None, child_overlay), EnvMode.REPLACE
     return merge_env_overlays(parent_overlay, child_overlay), parent_mode
+
+
+def _resolve_executable_overlay(
+    parent: ExecutableBindingOverlay | None,
+    child: ExecutableBindingOverlay | None,
+) -> ExecutableBindingOverlay | None:
+    """Compose parent and child executable bindings without resolving them.
+
+    Unlike the environment policy there is no mode: a binding is additive
+    policy for an already-permitted program, so narrowing can rebind a
+    program but never remove the allowlist entry that permits it. Keeping the
+    composition in one helper leaves :meth:`CuprumContext.narrow` a single
+    expression per field.
+
+    Parameters
+    ----------
+    parent : ExecutableBindingOverlay | None
+        The bindings in effect before narrowing. ``None`` contributes nothing.
+    child : ExecutableBindingOverlay | None
+        The bindings the narrowed scope supplies. ``None`` contributes nothing.
+
+    Returns
+    -------
+    ExecutableBindingOverlay | None
+        The merged layer, or ``None`` when neither side contributed.
+    """
+    return merge_executable_bindings(parent, child)

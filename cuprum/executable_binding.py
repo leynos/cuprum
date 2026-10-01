@@ -151,13 +151,16 @@ def executable_binding(
 
     Examples
     --------
-    >>> binding = executable_binding(Program("tool"), "/opt/tools/tool")
+    >>> binding = executable_binding("tool", "/opt/tools/tool")
     >>> binding.path
     '/opt/tools/tool'
     >>> binding.is_lazy
     False
     """
-    if callable(path_or_resolver):
+    # Discriminate on the path types rather than on ``callable``: the negative
+    # branch of a callable test leaves the union un-narrowed, and the intended
+    # reading is "a resolver is anything that is not a path".
+    if not isinstance(path_or_resolver, (str, Path)):
         return ExecutableBinding(resolver=path_or_resolver)
     raw_value = coerce_path_string(path_or_resolver)
     rejection = classify_executable_path(raw_value, allow_relative=allow_relative)
@@ -192,7 +195,7 @@ def resolve_binding(binding: ExecutableBinding, *, cwd: str | None) -> str:
     Examples
     --------
     >>> resolve_binding(
-    ...     executable_binding(Program("tool"), "bin/tool", allow_relative=True),
+    ...     executable_binding("tool", "bin/tool", allow_relative=True),
     ...     cwd="/srv/project",
     ... )
     '/srv/project/bin/tool'
