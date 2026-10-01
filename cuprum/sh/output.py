@@ -5,9 +5,9 @@ command or pipeline's stdout and stderr are captured, mirrored, and
 optionally reframed through a presentation sink. The ``cuprum.sh`` package
 re-exports the public names.
 
-The stdio target vocabulary and the validation that polices it live in
-:mod:`cuprum.sh.stdio`; ``StdioTarget`` is re-exported here so
-``cuprum.sh.output`` remains a usable import path for it.
+The stdio target vocabulary lives in :mod:`cuprum.sh.stdio` and the rules
+policing it in :mod:`cuprum.sh.stdio_rules`; ``StdioTarget`` is re-exported
+here so ``cuprum.sh.output`` remains a usable import path for it.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from cuprum.echo_events import BrokenPipePolicy, _parse_broken_pipe_policy
 from cuprum.sh.stdio import (
     StdioTarget as StdioTarget,
 )
-from cuprum.sh.stdio import (
+from cuprum.sh.stdio_rules import (
     _validate_stdio_targets as _validate_stdio_targets,
 )
 
@@ -228,12 +228,15 @@ class RunOutputOptions:
     sink: sinks.OutputSink | None = None
     group: bool = False
     annotate_failure: bool = False
-    # The three standard streams default to ``None``, which resolves to "pipe
-    # when something needs the stream, otherwise inherit". Naming a target
-    # explicitly overrides that choice; see ``StdioTarget``. ``stdin`` accepts
-    # only the two variants that describe the *pipe* itself --- ``pipe()`` and
-    # ``inherit()`` --- because a file or a borrowed descriptor for stdin
-    # belongs in a ``StdinInput``/``StdinStream`` source, not here.
+    # The three standard streams default to ``None``. ``stdin`` then inherits
+    # the parent's stream; ``stdout`` and ``stderr`` resolve to a pipe when
+    # capture, echo, idle reporting, or line observation needs one, and to
+    # ``/dev/null`` when it does not --- never to the parent's own descriptor,
+    # which would echo an unread child into the caller's terminal. Naming a
+    # target explicitly overrides that choice; see ``StdioTarget``. ``stdin``
+    # accepts only the two variants that describe the *pipe* itself ---
+    # ``pipe()`` and ``inherit()`` --- because a file or a borrowed descriptor
+    # for stdin belongs in a ``StdinInput``/``StdinStream`` source, not here.
     stdin: StdioTarget | None = None
     stdout: StdioTarget | None = None
     stderr: StdioTarget | None = None

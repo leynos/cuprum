@@ -47,7 +47,11 @@ import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
-from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
+from cuprum._subprocess_stdin import (
+    _cancel_stdin_writer,
+    _settle_stdin_writer,
+    _spawn_stdin_writer,
+)
 from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -213,8 +217,13 @@ async def _run_subprocess_without_streams(
     except BaseException:
         await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
         raise
-    if stdin_task is not None:
-        await stdin_task
+    # Settled rather than awaited: this path has no shared post-exit deadline
+    # scope over it (that scope belongs to the streamed path), so a producer
+    # parked in ``anext`` would make a bare await outlast the run's own
+    # deadline — the terminator would fire, the child would be killed, and the
+    # caller would go on waiting for the producer. See
+    # :func:`~cuprum._subprocess_stdin._settle_stdin_writer`.
+    await _settle_stdin_writer(stdin_task)
     return exit_code, exited_at
 
 
@@ -233,11 +242,20 @@ async def _await_stdin_writer(tasks: _RunTaskOwnership) -> None:
     boundary is woken only after the writer has finished dying, including the
     close grace it bounds. The shield returns the cancellation at once instead.
     It is a latency improvement and *not* what makes the run terminate: the
-    writer's bounded close does that (ADR 021 records the measurements).
+    writer's own bounded settle does that (ADR 021 records the measurements).
+
+    The shielded await is a *settle* rather than a bare await of the task, and
+    that is what supplies the bound the shield only protects. The writer's
+    ``_close_stdin`` grace bounds a write already in flight, but it is reached
+    only once the producer has finished producing; a producer parked in
+    ``anext`` never gets there, so a bare await would sit on this line with the
+    child already reaped and outlast the run's own deadline. The settle window
+    plus the cancel it falls back to is what makes the wait terminate in that
+    case, and it reclaims the task rather than leaving it parked.
     """
     if tasks.stdin_task is None:
         return
-    await asyncio.shield(tasks.stdin_task)
+    await asyncio.shield(_settle_stdin_writer(tasks.stdin_task))
 
 
 async def _settle_group_and_reconcile_consumers(
