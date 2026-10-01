@@ -27,3 +27,14 @@ Feature: Catalogue defaults
     When I build a safe command for "gh" inside that catalogue scope
     Then the safe command resolves through the scoped catalogue
     And the default catalogue still rejects "gh"
+
+  Scenario: An executable binding names the executable but not the identity
+    When I bind the program "echo" to the executable "/opt/tools/echo"
+    Then the bound executable runs and reports itself
+    And the logical program remains "echo"
+
+  Scenario: An unapproved executable cannot borrow an approved name
+    Given the curated program "echo" is present in the catalogue
+    When I bind the unlisted program "sccache" to the executable "/opt/tools/sccache"
+    Then execution is refused as a forbidden program
+    And the binding's executable was never resolved
