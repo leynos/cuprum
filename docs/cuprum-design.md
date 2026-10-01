@@ -262,6 +262,65 @@ names to settings without mutating the catalogue. Property access is preferred;
 the former `visible_settings()` call remains a compatibility path during the
 next-minor migration and returns the same mapping.
 
+#### 5.1.2 Executable bindings
+
+A `Program` names a *logical* program. It is the catalogue's identity for the
+program, the key policy is written against, and the label telemetry carries —
+but it is also, by default, the string handed to the operating system as
+`argv[0]`. Those two roles coincide for a script that runs whatever `ls` the
+`PATH` resolves, and diverge as soon as a project needs to run a pinned
+absolute path, a virtual-environment executable, or a controlled replacement in
+a test.
+
+`bind_executable(program, path_or_resolver, *, allow_relative=False)` supplies
+the second role without disturbing the first. Inside the scope it opens, the
+logical `program` executes the bound executable; the identity used for
+allowlisting, project metadata, and telemetry stays the logical `Program`. The
+arguments may be a path (validated at construction) or a zero-argument
+resolver, evaluated once per execution at spawn time. Nesting composes: an
+inner binding for a program overrides the outer one for the inner scope alone,
+and bindings for other programs are left intact.
+
+Two authorities stay separate, and the separation is the design's point:
+
+- The **allowlist** decides which logical programs may run at all. A binding
+  never widens it. Binding an unlisted program and running it still raises
+  `ForbiddenProgramError`, and the binding's resolver is never called.
+- A **binding** decides only which executable a *permitted* program runs.
+  Resolution therefore happens strictly after allowlist enforcement, so a
+  refused command never starts a resolver that might have side effects.
+
+Because resolution happens after enforcement and once per execution, the
+resolved string is the same value the child was started with and the value
+published on the lifecycle events. `CommandResult.resolved_path` and
+`ExecEvent.resolved_path` are `None` for an unbound program, which is what lets
+a consumer distinguish "ran under its catalogued name" from "a binding named
+something else".
+
+##### Resolution and its limits
+
+Validation of an `ExecutablePath` is **advisory**. Construction checks the
+shape of the string (it is non-empty, absolute unless `allow_relative=True`,
+and carries no NUL or `..` segment) and, at most, probes the file with an
+`os.access` call to report an obviously unusable path early. It does not, and
+cannot, guarantee that the file executed later is the file inspected:
+
+- the path may be replaced, renamed, or re-pointed by a symlink between the
+  check and the `exec`, a time-of-check-to-time-of-use (TOCTOU) window that no
+  amount of pre-checking closes;
+- the underlying file may be modified in place;
+- the `os.access` result reflects the *effective* user's permissions at the
+  moment it runs, which may differ from the child's if privileges change.
+
+Closing the window properly requires holding a descriptor across the spawn and
+`exec`-ing it directly (`O_PATH` plus `fexecve`), which the current async
+subprocess machinery does not expose. Cuprum therefore documents the boundary
+rather than claiming a guarantee it cannot make: filesystem ownership, write
+permissions on the bound path, and read-only deployment where binaries must not
+change are the **operator's responsibility**. A deployment that must be certain
+which bytes ran should make the bound path unwritable to the executing user and
+mount it read-only, rather than relying on the construction-time check.
+
 ### 5.2 Safe vs Dynamic Commands
 
 Cuprum distinguishes between:

@@ -88,6 +88,29 @@
 
 ### Added
 
+- **Scoped executable bindings:**
+  `bind_executable(program, path_or_resolver, *, allow_relative=False)` binds a
+  catalogued program to the executable it should run inside the enclosing
+  scope, so a pinned absolute path, a virtual-environment interpreter, or a
+  controlled test replacement no longer has to become the program's catalogue
+  identity. The logical `Program` still governs the allowlist, project
+  metadata, and telemetry, while the binding decides only what a *permitted*
+  program executes; resolution therefore happens strictly after allowlist
+  enforcement, and a refused program never calls its resolver. `ExecutablePath`
+  and `ExecutableBinding` are the value types, `resolve_binding` the pure
+  resolution helper, `InvalidExecutableBindingError` the rejection, and
+  `merge_executable_bindings` the overlay-only composition rule.
+  `CuprumContext.resolve_executable()` inspects the effective binding without
+  running anything. `ExecEvent` and `CommandResult` gain `resolved_path`,
+  carrying the executed executable or `None` when nothing was bound; the
+  logging adapter projects it as `cuprum_resolved_path` and the tracing adapter
+  as `cuprum.resolved_path`, and it is deliberately absent from the metrics
+  labels, which stay low-cardinality. Path validation is advisory: construction
+  rejects an empty path, a relative path unless `allow_relative=True`, and NUL
+  or `..` segments, but it cannot close the window between the check and the
+  `exec`, so filesystem ownership, permissions, and read-only deployment remain
+  the operator's responsibility
+  ([#440](https://github.com/leynos/cuprum/issues/440)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state
   ([#434](https://github.com/leynos/cuprum/issues/434)).
