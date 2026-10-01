@@ -65,6 +65,31 @@ except `limit_percent` and `status`. That is the check that the revision moved
 the target rather than the measurement, and it is why both verdicts are kept
 here rather than one overwriting the other.
 
+## The observe-hook dispatch boundary
+
+A rule's caller list names emission sites, but that alone does not exclude
+every constructor reached *through* the emission path. An observe hook runs
+below the dispatcher and therefore below every emission caller, so a hook that
+builds its own dataclass per event would render as a generated `__init__` whose
+nearest matching caller is still `emit_line` -- and it would be counted as
+`ExecEvent` construction. `_crosses_hook_dispatch` in
+`benchmarks/_line_event_profile_classifier.py` rejects such a candidate
+structurally, matching `_emit_event` and `_emit_exec_event` on function *and*
+module location so that a same-named frame elsewhere cannot trip the guard.
+
+The guard changed no committed number, and that was measured rather than
+assumed. Re-running the guarded classifier over all six captures reproduces
+`reclassified-at-30/` byte for byte, and every measurement field is identical
+to the committed per-capture `construction-share.json` -- the only differences
+there are `limit_percent` and its derived `status`, from the approved 28% to
+30% revision. The reason is visible in the captures themselves: no construction
+frame appears below the dispatcher. The benchmark's own hook only increments a
+counter, so every counted frame was already a direct call from an emission
+caller.
+
+The tightest pair is unchanged at r2: candidate 29.9414% against control
+34.2928%, a 0.0586-point margin under the 30% limit.
+
 ## Redaction
 
 Absolute host paths are replaced with `<repo>` and `<capture>` placeholders.

@@ -195,7 +195,7 @@ failure injection at that boundary.
   `env -u BASH_ENV` with `2543 passed, 0 failed` (2530 + 13 = 2543, nothing
   regressed); that is environmental, not branch-attributable. Evidence in the
   2026-09-27 entry below.
-- [~] EP-M1: establish current control and contract characterization.
+- [x] EP-M1: establish current control and contract characterization.
   - [x] V1 red test written and recorded through *both* existing production
     factories; `strict=True` xfail keeps the committed suite green, and a
     `0`-line case carries no marker because it passes either way. The pipeline
@@ -4378,6 +4378,65 @@ separate"* exercises the interleaving it advertises. Recorded the mutation test
 that witnesses it and the residual gap that no assertion yet proves the runs
 overlapped. The section that had deferred this finding is amended in place
 rather than rewritten, so the deferral and its reversal both remain legible.
+
+2026-10-01: Closed the two failed pre-merge checks and the observe-hook
+attribution finding, and the second of those falsified a limitation this plan
+had recorded as permanent. The caller rule *can* be tightened after all, just
+not in the rule file: an observe hook runs below the dispatcher and so below
+every emission caller, which means a hook that builds its own dataclass per
+event renders as a generated `__init__` whose nearest matching caller is still
+an emission caller. `_crosses_hook_dispatch` in
+`benchmarks/_line_event_profile_classifier.py` now rejects any candidate whose
+matching caller reaches it across `_emit_event` or `_emit_exec_event`, matched
+on function *and* module location so a same-named frame in another module
+cannot trip the guard. The boundary lives with the guard rather than in
+`classifier-rules.json` because it is a property of the production dispatch
+call graph, and a rule file that could disagree with it would be a footgun.
+
+The guard changes no committed number, and that was measured rather than
+asserted: re-running the guarded classifier over all six captures reproduces
+`reclassified-at-30/` byte for byte, and every measurement field is identical
+to the committed per-capture report — the only differences there are
+`limit_percent` and its derived `status`, from the approved 28% to 30%
+revision. The reason is visible in the captures: no construction frame appears
+below the dispatcher, because the benchmark's own hook only increments a
+counter. The tightest pair is unchanged at r2, candidate 29.9414% against
+control 34.2928%, a 0.0586-point margin. The evidence is recorded in
+`docs/profiling/5-2-1-line-event-emission/README.md`.
+
+Two corrections to earlier work came out of writing the regression suite, and
+both are worth recording because the first was a false claim this plan had
+already committed to prose. The classifier's boundary comment originally
+asserted that `emit_line` "exists twice in this process", naming
+`cuprum/_stream_line_consumer.py` as the second site. That is wrong: the
+consumer's helper is `_emit_line` with a leading underscore, which py-spy
+renders intact — 561 frames in the captures carry it — and `emit_line` is
+instead defined twice *within* `_line_callbacks.py` (the `:132` method and the
+`:213` closure it composes). The real same-name recurrence is `emit`, defined
+in both `cuprum/_pipeline_types.py` and `cuprum/_line_stream/telemetry.py`. The
+comment and the rules-file `$comment` now say what is true, and the location
+matching is justified as the defence against a same-named frame in another
+module rather than against a collision that does not exist.
+
+The second correction is about test strength. The first version of the location
+test could not fail: it placed the consumer frame *above* the resolving caller,
+where the guard's open-interval scan never looks, so adding `emit_line` to the
+boundary tuple left all 23 tests green. The replacement uses a frame that
+reuses the dispatcher's *name* from another module, which is the only thing the
+`(function, location)` pair actually buys; a name-only boundary now fails the
+suite. Mutation testing pinned the rest: removing the guard fails 10 tests,
+dropping either boundary frame fails 3 each, and removing the new
+`UnicodeDecodeError` arm in `_load_rules_json` fails the decode test with
+exactly the traceback that arm prevents. The over-broad-boundary case is inert
+by construction rather than by luck — a caller can never sit strictly between
+itself and the frame it resolves — which is why the earlier test was vacuous
+and why the new one tests the reachable hazard instead.
+
+Also fixed the first of the two failed pre-merge checks: `_load_rules_json` now
+reads with an explicit `encoding="utf-8"` and wraps `UnicodeDecodeError` — a
+`ValueError`, not an `OSError`, so it needed its own arm — in
+`_ProfileInputError`, keeping the CLI's exit-2 inconclusive contract intact
+instead of escaping as a traceback and exiting 1.
 
 [roadmap]: ../roadmap.md#52-make-per-line-event-emission-cheap-for-line-callback-workloads
 [design-events]: ../cuprum-design.md#813-structured-execution-events-observe-hooks
