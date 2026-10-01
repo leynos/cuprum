@@ -23,6 +23,7 @@ import pytest
 from cuprum import ScopeConfig, scoped, sh
 from cuprum.catalogue import ProgramCatalogue
 from cuprum.context import EnvMode
+from cuprum.events import TerminalOutcome
 from cuprum.program import Program
 from cuprum.sh import ExecutionContext, Pipeline, RunOutputOptions
 from cuprum.unittests._fail_fast_pipeline_support import (
@@ -223,22 +224,16 @@ def test_failing_stage_reports_the_mode_on_the_fail_fast_decision() -> None:
     )
 
 
-def test_a_stage_that_cannot_spawn_reports_no_terminal_event() -> None:
-    """A stage whose spawn fails leaves the run without a terminal event.
+def test_a_stage_that_cannot_spawn_settles_with_error_outcome() -> None:
+    """A spawn failure settles without inventing a process or status.
 
     A replacement policy that omits ``PATH`` leaves a bare program name
     unresolvable, so the stage's spawn raises before its ``start``. The
-    coordinator then tears down and re-raises, and the stage never reports an
-    ``exit``. This runs against a *non-final* stage so the gap is the spawn
-    failure itself rather than the fail-fast teardown, and it asserts the
-    boundary the metrics adapter documents: no ``exit`` for that stage, so no
-    ``cuprum_failures_total`` sample, and the typed ``env_mode`` field on the
-    events that do arrive is the only signal of the policy in force.
-
-    Closing this gap is tracked as issue #441, which asks for exactly one
-    terminal outcome per observed execution — including pipeline partial
-    startup. Until that lands, this pins the current behaviour so a later
-    change to it is a deliberate decision rather than an accident.
+    coordinator then tears down and re-raises. Running this as a non-final stage
+    distinguishes the spawn failure from fail-fast teardown: it must emit one
+    ``settled`` event with the error category, while leaving the PID and child
+    exit status unset. The effective ``env_mode`` remains available on both
+    lifecycle events.
     """
     catalogue, program = python_catalogue()
     python = sh.make(program, catalogue=catalogue)
@@ -265,11 +260,22 @@ def test_a_stage_that_cannot_spawn_reports_no_terminal_event() -> None:
             )
 
     failing_stage = [event for event in events if _stage_of(event) == 1]
-    assert [event.phase for event in failing_stage] == ["plan"], (
-        "the stage that could not spawn must report only its plan, got "
+    assert [event.phase for event in failing_stage] == ["plan", "settled"], (
+        "a spawn-failed stage must settle after its plan, got "
         f"{[event.phase for event in failing_stage]!r}"
     )
-    assert failing_stage[0].env_mode is EnvMode.REPLACE, (
-        "the surviving event must still carry the policy, got "
-        f"{failing_stage[0].env_mode!r}"
+    settled = failing_stage[-1]
+    assert settled.terminal_outcome is TerminalOutcome.ERROR, (
+        f"a spawn failure must settle as an error, got {settled.terminal_outcome!r}"
+    )
+    assert settled.pid is None, (
+        f"a spawn failure must not invent a process, got pid={settled.pid!r}"
+    )
+    assert settled.exit_code is None, (
+        "a spawn failure must not invent a child status, "
+        f"got exit_code={settled.exit_code!r}"
+    )
+    assert all(event.env_mode is EnvMode.REPLACE for event in failing_stage), (
+        "both lifecycle events must retain the policy, got "
+        f"{[event.env_mode for event in failing_stage]!r}"
     )

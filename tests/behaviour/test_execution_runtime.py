@@ -14,6 +14,7 @@ from cuprum.sh import ExecutionContext, RunOutputOptions, StdinInput
 from tests.behaviour._execution_runtime_support import (
     WorkerCommand,
     _cancel_command_with_grace,
+    _CancellationOptions,
     _create_worker_command,
     _wait_for_pid,
 )
@@ -348,7 +349,7 @@ def when_cancel_non_cooperative(
     behaviour_state["pid"] = _cancel_command_with_grace(
         non_cooperative_command["command"],
         non_cooperative_command["pid_file"],
-        cancel_grace=0.1,
+        options=_CancellationOptions(cancel_grace=0.1),
     )
 
 

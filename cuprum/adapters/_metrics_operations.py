@@ -15,6 +15,8 @@ import dataclasses as dc
 import types
 import typing as typ
 
+from cuprum.events import TerminalOutcome
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
@@ -67,6 +69,7 @@ _PHASE_COUNTERS: cabc.Mapping[str, str] = types.MappingProxyType({
     "teardown_error": "cuprum_teardown_errors_total",
     "capture_eof_grace_expired": "cuprum_capture_eof_grace_expired_total",
     "pipeline_fail_fast": "cuprum_pipeline_fail_fast_total",
+    "settled": "cuprum_terminal_outcomes_total",
 })
 
 # The unit-counter phases whose counter describes the execution as a whole and
@@ -145,21 +148,31 @@ def _resource_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     return tuple(operations)
 
 
-def _exit_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
-    """Return the failure, duration, and resource ops for an exit event."""
-    operations: list[_MetricOp] = []
-    # The failure counter carries the mode so that a non-zero exit under a
-    # replacement policy is distinguishable from an ordinary overlay one. A
-    # spawn failure never reaches this reducer at all: a bare program name that
-    # a replacement policy's missing ``PATH`` cannot resolve raises before
-    # ``start``, so no ``exit`` event follows and no failure sample is recorded.
-    if event.exit_code is not None and event.exit_code != 0:
+# Keep the old internal import path for consumers that used this private helper
+# before the metric operations moved into this module.
+_exit_operations = _resource_operations
+
+
+def _settled_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return category, failure, and duration ops for a settled event."""
+    outcome = event.terminal_outcome
+    if outcome is None:
+        return ()
+
+    operations: list[_MetricOp] = [
+        _CounterOp(
+            "cuprum_terminal_outcomes_total",
+            1.0,
+            {"terminal_outcome": str(outcome)},
+        )
+    ]
+    if outcome is not TerminalOutcome.EXIT_ZERO:
         operations.append(
             _CounterOp("cuprum_failures_total", 1.0, _env_mode_label(event))
         )
     if event.duration_s is not None:
         operations.append(_HistogramOp("cuprum_duration_seconds", event.duration_s))
-    return (*operations, *_resource_operations(event))
+    return tuple(operations)
 
 
 def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
@@ -180,7 +193,11 @@ def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
                 return ()
             return (_CounterOp("cuprum_stdin_bytes_total", float(event.byte_count)),)
         case "exit":
-            return _exit_operations(event)
+            # Duration and failure metrics now come from ``settled``. The
+            # existing ``exit`` event remains the resource-measurement carrier.
+            return _resource_operations(event)
+        case "settled":
+            return _settled_operations(event)
         case _ if (counter_name := _PHASE_COUNTERS.get(phase)) is not None:
             # The unit-counter phases stay keyed by `_PHASE_COUNTERS` rather
             # than repeated as a literal alternation, so the metric names have

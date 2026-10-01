@@ -136,6 +136,6 @@ def test_the_existing_lifecycle_events_are_unchanged(
         assert phases[1] == "start", (
             f"stage {stage} must still start before anything else, found {phases!r}"
         )
-        assert phases[-1] == "exit", (
-            f"stage {stage} must still end with exit, found {phases!r}"
+        assert phases[-2:] == ["exit", "settled"], (
+            f"stage {stage} must report exit then settled, found {phases!r}"
         )

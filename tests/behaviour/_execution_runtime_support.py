@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses as dc
 import typing as typ
 
 import pytest
@@ -20,6 +21,7 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum.events import ExecEvent
     from cuprum.sh import SafeCmd
 
 
@@ -36,6 +38,15 @@ class WorkerCommand(typ.TypedDict):
 
     command: SafeCmd
     pid_file: Path
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _CancellationOptions:
+    """Optional controls for cancellation lifecycle scenarios."""
+
+    cancel_grace: float | None = None
+    events: list[ExecEvent] | None = None
+    repeat_cancellations: int = 0
 
 
 __all__ = [
@@ -109,37 +120,66 @@ def _cancel_command_with_grace(
     command: SafeCmd,
     pid_file: Path,
     *,
-    cancel_grace: float | None = None,
+    options: _CancellationOptions | None = None,
 ) -> int:
-    """Run a command, cancel it, and return the recorded child PID."""
+    """Cancel a worker and optionally gate its terminal-hook cleanup."""
+    run_options = options or _CancellationOptions()
 
     async def orchestrate() -> int:
         """Run the command as a task, then cancel it after the PID appears."""
+        terminal_hook_started = asyncio.Event()
+        release_terminal_hook = asyncio.Event()
+
+        async def observe(event: ExecEvent) -> None:
+            """Collect events and optionally hold terminal cleanup open."""
+            if run_options.events is not None:
+                run_options.events.append(event)
+            if event.phase == "settled" and run_options.events is not None:
+                terminal_hook_started.set()
+                await release_terminal_hook.wait()
+
         grace = (
-            cancel_grace
-            if cancel_grace is not None
+            run_options.cancel_grace
+            if run_options.cancel_grace is not None
             else ExecutionContext().cancel_grace
         )
-        task = asyncio.create_task(
-            command.run(
-                output=RunOutputOptions(capture=False),
-                context=ExecutionContext(
-                    env={"CUPRUM_PID_FILE": str(pid_file)},
-                    cancel_grace=grace,
-                ),
-            ),
+        observation_context = (
+            sh.observe(observe)
+            if run_options.events is not None
+            else contextlib.nullcontext()
         )
-        try:
-            pid = await _wait_for_pid(pid_file)
-        except BaseException:
+        task: asyncio.Task[typ.Any] | None = None
+        with observation_context:
+            task = asyncio.create_task(
+                command.run(
+                    output=RunOutputOptions(capture=False),
+                    context=ExecutionContext(
+                        env={"CUPRUM_PID_FILE": str(pid_file)},
+                        cancel_grace=grace,
+                    ),
+                )
+            )
+            try:
+                pid = await _wait_for_pid(pid_file)
+            except BaseException:
+                release_terminal_hook.set()
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                raise
+            await asyncio.sleep(0.1)
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            raise
-        await asyncio.sleep(0.1)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        return pid
+            try:
+                if run_options.events is not None:
+                    await asyncio.wait_for(terminal_hook_started.wait(), timeout=5.0)
+                    for _ in range(run_options.repeat_cancellations):
+                        task.cancel()
+                        await asyncio.sleep(0)
+                    release_terminal_hook.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                release_terminal_hook.set()
+            return pid
 
     return asyncio.run(orchestrate())

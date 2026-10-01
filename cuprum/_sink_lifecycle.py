@@ -18,6 +18,7 @@ import asyncio
 import dataclasses as dc
 import typing as typ
 
+from cuprum.events import TerminalOutcome
 from cuprum.sinks import base as sinks
 
 if typ.TYPE_CHECKING:
@@ -175,9 +176,9 @@ def _close_sink_session(
 def _outcome_for_result(result: CommandResult) -> sinks.SessionOutcome:
     """Map a completed command's result onto the terminal-outcome set."""
     outcome = (
-        sinks.TerminalOutcome.EXIT_ZERO
+        TerminalOutcome.EXIT_ZERO
         if result.exit_code == 0
-        else sinks.TerminalOutcome.EXIT_NONZERO
+        else TerminalOutcome.EXIT_NONZERO
     )
     return sinks.SessionOutcome(outcome=outcome, exit_code=result.exit_code)
 
@@ -199,14 +200,14 @@ def _outcome_for_error(error: BaseException) -> sinks.SessionOutcome:
     match error:
         case TimeoutExpired():
             return sinks.SessionOutcome(
-                outcome=sinks.TerminalOutcome.TIMEOUT,
+                outcome=TerminalOutcome.TIMEOUT,
                 exit_code=None,
                 detail="timeout",
             )
         case asyncio.CancelledError():
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.CANCELLED)
+            return sinks.SessionOutcome(outcome=TerminalOutcome.CANCELLED)
         case _:
-            return sinks.SessionOutcome(outcome=sinks.TerminalOutcome.ERROR)
+            return sinks.SessionOutcome(outcome=TerminalOutcome.ERROR)
 
 
 __all__ = [

@@ -52,7 +52,7 @@ class TestTracingHook:
         return tracer, tracer.spans[0]
 
     def test_creates_span_for_execution(self) -> None:
-        """Hook creates a span from start to exit."""
+        """Hook creates a span from start to settlement."""
         builder, catalogue = _python_builder(project_name="tracing-span")
         cmd = builder("-c", "print('traced')")
 

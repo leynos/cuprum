@@ -8,12 +8,16 @@ import pytest
 
 from cuprum import (
     ECHO,
+    ScopeConfig,
     _pipeline_internals,
+    _pipeline_observation,
     _pipeline_spawn,
     _pipeline_stage_streams,
+    scoped,
     sh,
 )
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
+from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import RunOutputOptions
 
 
@@ -81,12 +85,28 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
+    events: list[ExecEvent] = []
+
+    def observe(event: ExecEvent) -> None:
+        """Collect each stage's lifecycle event."""
+        events.append(event)
+
     async def exercise() -> None:
         """Spawn the pipeline and assert the spawn failure propagates."""
-        with pytest.raises(FileNotFoundError):
-            await _spawn_pipeline_processes((first, second), config)
+        pending_tasks = []
+        observations = _pipeline_internals._build_pipeline_observations(
+            (first, second),
+            config,
+            pending_tasks=pending_tasks,
+        )
+        _pipeline_internals._emit_plan_events_and_run_before_hooks(observations)
+        with pytest.raises(FileNotFoundError, match="missing"):
+            await _spawn_pipeline_processes(
+                (first, second), config, observations=observations
+            )
 
-    asyncio.run(exercise())
+    with scoped(ScopeConfig(allowlist=frozenset([ECHO]))), sh.observe(observe):
+        asyncio.run(exercise())
 
     assert len(spawned) == 1, (
         "only the first stage should have been spawned before the failure"
@@ -96,6 +116,18 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
         "a cooperative stage must not need escalation to kill"
     )
     assert spawned[0].wait_calls >= 1, "the terminated stage must be awaited"
+    planned = [event for event in events if event.phase == "plan"]
+    settled = [event for event in events if event.phase == "settled"]
+    assert len(planned) == len(settled) == 2, (
+        f"partial startup must settle each planned stage once, got "
+        f"{[event.phase for event in events]}"
+    )
+    assert all(event.terminal_outcome is TerminalOutcome.ERROR for event in settled)
+    assert [event.exec_id for event in settled] == [event.exec_id for event in planned]
+    assert settled[0].pid == 12345
+    assert settled[0].exit_code == -15, "the spawned child's status must be retained"
+    assert settled[1].pid is None
+    assert settled[1].exit_code is None, "an unspawned stage has no child status"
 
 
 class _StagePreparationError(RuntimeError):
@@ -238,10 +270,8 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     )
     monkeypatch.setattr(_pipeline_spawn.time, "perf_counter", monotonic_clock)
     # The stage observation builder installs ``time.time`` as each stage's
-    # ``wall_clock`` callable, so the injected wall clock must be patched where
-    # that attribute is read from — not in ``sh``, which no longer imports
-    # ``time`` now that observation construction lives in ``_pipeline_internals``.
-    monkeypatch.setattr(_pipeline_internals.time, "time", wall_clock)
+    # ``wall_clock`` callable, so patch the clock where observation reads it.
+    monkeypatch.setattr(_pipeline_observation.time, "time", wall_clock)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(
         _pipeline_stage_streams,

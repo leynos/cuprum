@@ -1,11 +1,12 @@
-"""What a span carries at each end, and the field sets that decide it.
+"""What exit and ancillary events add to a span, and their field sets.
 
 Split from ``cuprum.adapters.tracing_adapter`` so that module stays about
-*driving* a span — start, evict, close — while the field selections live here.
+*driving* a span — start, observe, and close — while field selections live
+here.
 Two distinct projections attach to one span, and they are easy to confuse:
 
 - :data:`_SPAN_FIELDS`, recorded as span events on ancillary phases, and
-- :func:`write_exit_attributes`, written as span attributes when the span ends.
+- :func:`write_exit_attributes`, written as span attributes on ``exit``.
 
 They differ in both what they carry and when it can be read. The resource
 figures only exist once the child has been reaped, so they cannot be part of the
@@ -34,10 +35,11 @@ _SPAN_FIELDS = (
     "pending_readers",
 )
 
-# Terminal child-resource fields, written as the span ends. The mode is what
-# lets a backend tell an attributable measurement from the CPU-only fallback and
-# from a platform that measures nothing; the figures accompany it only where a
-# source produced them, so a ``None`` is skipped rather than written as null.
+# Terminal child-resource fields, written from the child ``exit`` event. The
+# mode lets a backend tell an attributable measurement from the CPU-only
+# fallback and from a platform that measures nothing; the figures accompany it
+# only where a source produced them, so a ``None`` is skipped rather than
+# written as null.
 _EXIT_RESOURCE_FIELDS = (
     "max_rss_bytes",
     "user_cpu_seconds",
@@ -47,7 +49,7 @@ _EXIT_RESOURCE_FIELDS = (
 
 
 def write_exit_attributes(span: Span, event: ExecEvent) -> None:
-    """Write every terminal attribute onto ``span`` as it ends.
+    """Write actual child-exit attributes while the span remains open.
 
     One rule for all of them: an optional field is written where a value exists
     and skipped where it does not, so an absent figure stays absent rather than
@@ -58,9 +60,9 @@ def write_exit_attributes(span: Span, event: ExecEvent) -> None:
     Parameters
     ----------
     span:
-        The span about to end.
+        The span for this execution.
     event:
-        The terminal ``exit`` event carrying the attributes.
+        The ``exit`` event carrying the child attributes.
     """
     if event.exit_code is not None:
         span.set_attribute("cuprum.exit_code", event.exit_code)

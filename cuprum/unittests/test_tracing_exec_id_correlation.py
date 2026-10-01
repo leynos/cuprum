@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import typing as typ
 
-from cuprum.adapters.tracing_adapter import InMemorySpan
-from cuprum.events import new_exec_id
+from cuprum.adapters.tracing_adapter import InMemorySpan, TracingHook
+from cuprum.events import TerminalOutcome, new_exec_id
 from cuprum.unittests._adapter_test_support import (
     Traced,
     _make_exec_event,
@@ -35,10 +35,26 @@ from cuprum.unittests._adapter_test_support import (
 if typ.TYPE_CHECKING:
     import pytest
 
+    from cuprum.events import ExecId
+
 __all__ = ["tracing_hook"]
 
 # A single recycled PID shared by two distinct executions A and B.
 _SHARED_PID = 1234
+
+
+def _settle(hook: TracingHook, exec_id: ExecId, outcome: TerminalOutcome) -> None:
+    """Dispatch terminal status for the identified execution."""
+    hook(
+        _make_exec_event(
+            phase="settled",
+            overrides={
+                "pid": _SHARED_PID,
+                "exec_id": exec_id,
+                "terminal_outcome": outcome,
+            },
+        )
+    )
 
 
 class TestTracingExecIdCorrelation:
@@ -128,6 +144,7 @@ class TestTracingExecIdCorrelation:
                 },
             )
         )
+        _settle(hook, exec_a, TerminalOutcome.EXIT_NONZERO)
 
         assert span_a.ended is True, "A's delayed exit must close A"
         assert span_a.status_ok is False, "A must close with its own failing status"
@@ -146,6 +163,7 @@ class TestTracingExecIdCorrelation:
                 },
             )
         )
+        _settle(hook, exec_b, TerminalOutcome.EXIT_ZERO)
         assert span_b.ended is True, "B's exit must close B"
         assert span_b.status_ok is True, "B must retain its own clean status"
 
@@ -196,6 +214,7 @@ class TestTracingExecIdCorrelation:
                 },
             )
         )
+        _settle(hook, exec_b, TerminalOutcome.EXIT_ZERO)
 
         assert span_b.events == [("cuprum.stdout", {"line": "hello-from-B"})], (
             "B's output must attach to B's span"
@@ -277,7 +296,8 @@ class TestTracingExecIdCorrelation:
         def recording_end(span: InMemorySpan) -> None:
             """Capture the hook's mapping at the moment the prior span ends."""
             if span is stale:
-                observed["mapping_during_end"] = hook._active_spans.get(exec_id)
+                active = hook._active_spans.get(exec_id)
+                observed["mapping_during_end"] = None if active is None else active.span
                 observed["status_during_end"] = span.status_ok
             real_end(span)
 
@@ -294,7 +314,7 @@ class TestTracingExecIdCorrelation:
             "the prior span must be marked failed before it is ended"
         )
         assert stale.ended is True, "the prior span must be ended"
-        assert hook._active_spans[exec_id] is current, (
+        assert hook._active_spans[exec_id].span is current, (
             "the replacement span must remain installed after the prior span ends"
         )
 

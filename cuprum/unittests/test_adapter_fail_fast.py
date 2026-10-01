@@ -194,7 +194,7 @@ class TestTracingFailFast:
         }, f"the span event must carry the decision's fields, found {attributes!r}"
 
     def test_no_span_is_started_or_ended(self, tracing_hook: Traced) -> None:
-        """The stage's own ``exit`` event still owns the span's lifecycle.
+        """The stage's own ``settled`` event still owns the span lifecycle.
 
         A span of its own would have no duration to report and would need a
         second key to be joined back to the stage; ending the stage's span
@@ -209,7 +209,7 @@ class TestTracingFailFast:
             f"no additional span may be started, found {tracer.spans!r}"
         )
         assert not tracer.spans[0].ended, (
-            "the stage's span must stay open for its own exit event to close"
+            "the stage's span must stay open for its own settled event to close"
         )
 
     def test_an_uncorrelatable_event_is_dropped(self, tracing_hook: Traced) -> None:

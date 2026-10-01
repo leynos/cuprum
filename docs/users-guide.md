@@ -1111,6 +1111,13 @@ hooks receive `ExecEvent` values describing:
 
 - `exit` — subprocess finished (exit code and duration).
 
+- `settled` — the single definitive terminal outcome for every execution
+  whose `plan` event began observation. It carries `terminal_outcome` with one
+  of `exit_zero`, `exit_nonzero`, `timeout`, `cancelled`, or `error`, plus
+  `pid` when available, `exec_id`, and a real `exit_code` only when supplied
+  from an actual child exit. It never carries exception details. Spawn failure
+  and cancellation therefore settle without an invented exit code.
+
 - `stdin` — input supplied through `StdinInput` was written to the child;
   `byte_count` gives its size.
 
@@ -1163,10 +1170,18 @@ the corresponding `cuprum_capture_eof_grace_expired_total` metric uses only the
 `cuprum.capture_eof_grace_expired` event to the matching span. The grace-expiry
 event itself carries no captured stdout or stderr payload.
 
+Catalogue lookup failures (`UnknownProgramError`) and allowlist rejection
+happen before an `exec_id` is minted. They emit neither `plan` nor `settled`
+and are outside the observed-execution contract. A timeout retains its
+`timeout` and `exit` events before `settled`; spawn failure and external
+cancellation can settle without an `exit` event.
+
 These ancillary events preserve the public outcome: `start` and `exit` are
 unchanged, and synchronous hook failures handling `timeout`, `teardown_error`,
 or `capture_eof_grace_expired` are suppressed rather than masking
-`TimeoutExpired` or `CancelledError`.
+`TimeoutExpired` or `CancelledError`. Terminal-hook failures are also
+suppressed while preserving an existing timeout, cancellation, or other run
+error.
 
 Each event carries a stable `exec_id` correlation token: every lifecycle event
 for one execution — a single command, or one stage of a pipeline — shares the
@@ -1266,10 +1281,10 @@ never swallowed. The two hook kinds differ only in when that happens:
   first is raised.
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
-reject unknown values. `pipeline_fail_fast` arrived in 0.2.0, so such a hook
-written earlier raises on it — and so fails the pipeline — until it grows an
-arm for it. A hook that must never influence the run should catch its own
-exceptions.
+reject unknown values. `pipeline_fail_fast` arrived in 0.2.0, and `settled`
+adds another phase, so such a hook written earlier raises on it — and so fails
+the run — until it grows an arm for it. A hook that must never influence the
+run should catch its own exceptions.
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
@@ -1288,8 +1303,11 @@ be implemented with any preferred metrics library.
 The hook collects:
 
 - `cuprum_executions_total`: Counter incremented on each command start
-- `cuprum_failures_total`: Counter incremented on non-zero exit
-- `cuprum_duration_seconds`: Histogram of execution durations
+- `cuprum_terminal_outcomes_total`: Counter labelled by `terminal_outcome`,
+  incremented once for each `settled` event
+- `cuprum_failures_total`: Counter incremented for every terminal category
+  except `exit_zero`
+- `cuprum_duration_seconds`: Histogram of durations carried by `settled`
 - `cuprum_stdout_lines_total`: Counter of stdout lines emitted
 - `cuprum_stderr_lines_total`: Counter of stderr lines emitted
 - `cuprum_stdin_bytes_total`: Counter of successful stdin bytes written
@@ -1368,8 +1386,9 @@ The hook creates spans with these attributes:
 - `cuprum.argv`: Full argument vector
 - `cuprum.pid`: Process ID
 - `cuprum.cwd`: Working directory (when set)
-- `cuprum.exit_code`: Exit code (set on span end)
-- `cuprum.duration_s`: Duration in seconds (set on span end)
+- `cuprum.exit_code`: Actual child exit code, when an `exit` event occurred
+- `cuprum.duration_s`: Duration in seconds, when an `exit` event occurred
+- `cuprum.terminal_outcome`: Bounded terminal category set on `settled`
 - `cuprum.project`: Project name from tags
 - `cuprum.env_mode`: The execution's effective environment policy
   (`inherit`, `overlay`, or `replace`), set on spans for every phase
@@ -1377,7 +1396,7 @@ The hook creates spans with these attributes:
 - `cuprum.pipeline_stages`: Total pipeline stages (when applicable)
 - `cuprum.max_rss_bytes`, `cuprum.user_cpu_seconds`,
   `cuprum.system_cpu_seconds`, `cuprum.resource_usage_mode`: Terminal child
-  resource figures and the mode naming their source, set on span end. The mode
+  resource figures and the mode naming their source, set from `exit`. The mode
   is carried on every terminal `exit` event — `wait4_child`,
   `aggregate_cpu_delta`, or `unavailable` — while the three figures alone are
   absent rather than null when no measurement applies
@@ -1389,9 +1408,9 @@ Output lines (stdout/stderr) are recorded as span events when
 
 The `stdin_error`, `timeout`, `teardown_error`, and `capture_eof_grace_expired`
 phases are recorded as `cuprum.<phase>` events on the execution's open span.
-They leave the span neither ended nor marked; a later `exit` closes it normally.
-`timeout` is always followed by `exit`, while `teardown_error` may be the
-final event.
+They leave the span neither ended nor marked; `settled` closes it and sets its
+status from the terminal category. `timeout` is followed by `exit` and then
+`settled`, while spawn failure and cancellation can settle without `exit`.
 
 Ancillary events carry whichever of the `line`, `operation`, `error_type`,
 `note`, `timeout_s`, `timeout_mode`, `eof_grace_s`, and `pending_readers`
@@ -1417,8 +1436,8 @@ span, carrying `stage_index`, `stage_count`, `exit_code`, and `duration_s`. It
 is `cuprum_exec_id` that joins the record, the event, and that span: the
 decision reuses the failing stage's existing execution token rather than
 minting one of its own, so the teardown appears in the trace of the stage that
-caused it. No separate span is started, and the stage's own `exit` event still
-closes and marks the span.
+caused it. No separate span is started, and each stage's `settled` event closes
+and marks its span.
 
 OpenTelemetry integrations implement the `Tracer` and `Span` protocols.
 

@@ -79,11 +79,11 @@ future JUnit reporter) reuse the same protocol.
 
 ## Decision outcome / proposed direction
 
-Option C. `cuprum.sinks.base` defines the protocol and the closed
-`TerminalOutcome` set (`exit_zero`, `exit_nonzero`, `timeout`, `cancelled`,
-`error`); `cuprum.sinks.github_actions` implements the adapter;
-`RunOutputOptions.sink` carries the opt-in on both `SafeCmd` and `Pipeline`
-entry points.
+Option C. `cuprum.events` defines the closed `TerminalOutcome` set (`exit_zero`,
+`exit_nonzero`, `timeout`, `cancelled`, `error`), and `cuprum.sinks.base`
+aliases that same type for session closure; `cuprum.sinks.github_actions`
+implements the adapter; `RunOutputOptions.sink` carries the opt-in on both
+`SafeCmd` and `Pipeline` entry points.
 
 Framing order per run:
 
@@ -236,6 +236,24 @@ supported configuration rather than a degenerate one — a run summary entry
 without collapsible logs — and the stop-commands lease is suppressed with the
 group, because a lease with no group would silence workflow-command
 interpretation for the rest of the step and display nothing for it.
+
+### Amendment (2026-09-28): definitive execution settlement events
+
+Issue #441 adds `settled` to the closed `ExecPhase` literal. Each execution
+whose `plan` event begins observation receives exactly one `settled` event,
+correlated by the same `exec_id`, for success, non-zero exit, timeout,
+cancellation, or error. It carries one of the shared `TerminalOutcome`
+categories and no exception payload. A real `exit_code` is present only when a
+child actually exited; spawn failure and cancellation do not invent a child
+status. The existing `exit` phase continues to describe an actual child exit,
+including the `exit` event emitted after `timeout`.
+
+Validation is a separate boundary: `UnknownProgramError` from catalogue lookup
+and allowlist rejection happen before `exec_id` is minted, so they emit neither
+`plan` nor `settled`. Adding `settled` is breaking for existing observe hooks
+that reject unknown phases. Built-in adapters handle the category without
+exception details; tracing closes spans on `settled`, and metrics records one
+terminal category for each observed execution.
 
 ### Amendment (2026-09-24): Flag validation and replacement semantics
 

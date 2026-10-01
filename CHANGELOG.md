@@ -375,6 +375,12 @@
   (`python("--cwd=<dir>")`), and names merely resembling the reserved ones —
   `working_dir`, `stdin_file` — keep rendering as flags
   ([#513](https://github.com/leynos/cuprum/issues/513)).
+- **New `ExecPhase` value (breaking for fail-closed hooks):** `settled` closes
+  each observed execution exactly once and carries a bounded `terminal_outcome`
+  (`exit_zero`, `exit_nonzero`, `timeout`, `cancelled`, or `error`), including
+  spawn failures and cancellations. Exhaustive hooks must handle the new phase.
+  Catalogue lookup and allowlist validation happen before observation and are
+  outside this contract ([#441](https://github.com/leynos/cuprum/issues/441)).
 - **`ProgramCatalogue.visible_settings` is now a property:** Prefer
   `catalogue.visible_settings` over the former callable spelling. Existing
   `catalogue.visible_settings()` callers remain supported during the next-minor
