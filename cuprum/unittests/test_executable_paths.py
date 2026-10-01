@@ -13,6 +13,7 @@ because the classifier is what the binding constructor is built from.
 
 from __future__ import annotations
 
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -146,7 +147,9 @@ def test_executable_path_accepts_a_path_object() -> None:
 def test_executable_path_rejects_a_non_path_like_value() -> None:
     """A value that is neither a string nor path-like raises ``TypeError``."""
     with pytest.raises(TypeError, match="ExecutablePath expects str or Path"):
-        executable_path(42)  # type: ignore[arg-type]
+        # Deliberately wrong-typed: the runtime guard is what is under test,
+        # and a checker-visible call would be rejected before it ran.
+        executable_path(typ.cast("typ.Any", 42))
 
 
 def test_coerce_path_string_passes_strings_through_unchanged() -> None:
@@ -162,10 +165,12 @@ def test_coerce_path_string_keeps_a_path_string_form() -> None:
 def test_coerce_path_string_rejects_bytes() -> None:
     """Bytes are rejected rather than silently decoded."""
     with pytest.raises(TypeError, match="ExecutablePath expects str or Path"):
-        coerce_path_string(b"/opt/tools/tool")  # type: ignore[arg-type]
+        # Deliberately wrong-typed; see the note on the sibling test above.
+        coerce_path_string(typ.cast("typ.Any", b"/opt/tools/tool"))
 
 
 def test_coerce_path_string_names_the_offending_type() -> None:
     """The error names the type the caller actually passed."""
     with pytest.raises(TypeError, match="got int"):
-        coerce_path_string(42)  # type: ignore[arg-type]
+        # Deliberately wrong-typed; see the note on the sibling test above.
+        coerce_path_string(typ.cast("typ.Any", 42))
