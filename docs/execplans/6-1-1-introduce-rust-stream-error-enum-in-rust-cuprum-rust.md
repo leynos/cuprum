@@ -1706,14 +1706,60 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   than skipping silently. No code change is warranted; the disposition is a
   reasoned reply.
 
+- [x] (2026-10-01) **CodeRabbit withdrew the failed row and adopted both
+  corrections, so the disposition above is closed by agreement rather than left
+  standing.** The reply at `16:26:56Z` (comment `5935754498`) was answered at
+  `16:27:52Z` (comment `5935771012`) with *"I withdraw the recommendation. No
+  code change is required for this finding."* The reply confirms each of the
+  four verdicts independently — in-crate scenarios stay, the two validation
+  paths stay distinct, the existing boundary coverage is retained — and states
+  the reason plainly: *"My recommendation relied on an unsupported repository
+  rule and misclassified a deliberate behavioural test design."*
+
+  Two specifics are worth keeping, because they are the parts a later reviewer
+  is most likely to re-raise:
+
+  - The pump/consume asymmetry was not merely accepted but **restated as a
+    correction of the bot's own claim**: *"The consume shim does not validate
+    the buffer; its zero-buffer scenario reaches native validation and
+    `PyErr::from`. My claim about all behavioural rows was incorrect."* That
+    was the one sub-claim this plan recorded as *partly true*, so the reply
+    shows the correction landed rather than being talked past.
+  - Two learnings were persisted against the repository, which makes this a
+    durable fix to the review's model rather than a one-off concession. One
+    records the `pyo3/extension-module` constraint and forbids demanding
+    `PyErr` construction, boundary relocation, or reclassification on this
+    basis; the other records the pump/consume distinction and the
+    `EXTENSION_TEST_TARGETS` registration of both modules.
+
+  Scope limit: the reply says *"I did not rerun the tests"* — it verified the
+  structure and the recorded mutation evidence, not the runtime behaviour. That
+  is adequate for a finding whose subject is where the code lives, and the
+  extension-gated evidence for the behaviour itself is recorded elsewhere in
+  this plan.
+
+  The **walkthrough commentary** is a separate surface and did **not** change:
+  comment `5745365959` still carries the ❌ row, its `change_assessment_commit`
+  still reads `005d358f`, and it now opens with a *Reviews paused* banner —
+  *"It looks like this branch is under active development"* — which is
+  CodeRabbit's auto-pause after successive commits, not a rate limit. A paused
+  walkthrough is not a verdict on this head, so it is not evidence either way;
+  it clears only when a review runs at or after the commit that fixed the
+  issue. The inline-thread surface is clean: PR 432 has exactly **one** review
+  thread, on `test_rust_streams_roundtrip_property.py`, and it is both
+  `isResolved` and `isOutdated`.
+
 - [x] (2026-10-01) **`typos.toml` is committed, so two figures derived from
   its absence are stale — and the file cannot be dropped.** `11039493` staged
   the regenerated `typos.toml` line alongside its plan text, so
   `git log 7f762870..HEAD -- typos.toml` now names that commit where it was
   empty. The committed diff is one line (`git diff --numstat` → `1 1`), and it
   is **`main`'s own content**: `574ddee7` (`main`) carries the identical
-  `var\.iamge_id` rephrase, so this branch re-asserts a line it would have
-  inherited anyway.
+  rephrase — a typo-correction pair that swaps the misspelled identifier for
+  the correct one — so this branch re-asserts a line it would have inherited
+  anyway. (Both halves are quoted verbatim in `typos.toml`, whose ignore entry
+  matches the whole phrase; quoting only the misspelled half here would defeat
+  that entry and fail `make spelling`.)
 
   Three measurements fix the disposition:
 
@@ -1734,31 +1780,30 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   dated entries above keep the figures true at their own heads.
 
 - [x] (2026-10-01) **`0eb1e666`'s CI failure is the third occurrence of the
-  same `coverage`-job timeout, on the commit that fixed the previous
-  failure.** Run `36892038283` reports `completed/failure`, and a grep of every
-  `FAILED` line in its failed-job log finds exactly **one** failing test —
+  same `coverage`-job timeout, on the commit that fixed the previous failure.**
+  Run `36892038283` reports `completed/failure`, and a grep of every `FAILED`
+  line in its failed-job log finds exactly **one** failing test —
   `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`,
-  `Failed: Timeout (>30.0s) from pytest-timeout`. Test start
-  `16:49:48.532` → verdict `16:50:18.660` is **30.13 s**: the bound fired, no
-  assertion failed. This is the same class the 2026-09-29 entry above
-  measured, and it is recorded as a third occurrence rather than folded into a
-  running count, because the ordinal is what drifts.
+  `Failed: Timeout (>30.0s) from pytest-timeout`. Test start `16:49:48.532` →
+  verdict `16:50:18.660` is **30.13 s**: the bound fired, no assertion failed.
+  This is the same class the 2026-09-29 entry above measured, and it is
+  recorded as a third occurrence rather than folded into a running count,
+  because the ordinal is what drifts.
 
   The mechanism is re-pinned from the workflow rather than inherited. The
   `coverage` job installs **only** toolchain `1.85.0`; the sole installer of
   `nightly-2026-08-23` is `setup-dev-fast`
   (`.github/actions/setup-dev-fast/action.yml:11, :22`), used at `ci.yml:290`
-  (`lint-test`) and `ci.yml:791` (`extension-tests`) and nowhere in
-  `coverage`. `~/.rustup` is in no cache path — the job restores only
-  `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`,
-  `.uv-cache` and `.uv-tools` — so the 595 MB nightly is a cold download inside
-  the test's own `subprocess.run`, whose `capture_output=True` keeps it out of
-  the log.
+  (`lint-test`) and `ci.yml:791` (`extension-tests`) and nowhere in `coverage`.
+  `~/.rustup` is in no cache path — the job restores only `~/.cargo/bin`,
+  `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache` and
+  `.uv-tools` — so the 595 MB nightly is a cold download inside the test's own
+  `subprocess.run`, whose `capture_output=True` keeps it out of the log.
 
-  The control is stronger than the one recorded above, because it holds
-  *within this branch* on identical bytes. Run `36633831081` ran the same job
-  at `97f51d41` and the same test **passed in 9.619 s**
-  (`21:46:27.226` → `21:46:36.845`). `Makefile` is blob
+  The control is stronger than the one recorded above, because it holds *within
+  this branch* on identical bytes. Run `36633831081` ran the same job at
+  `97f51d41` and the same test **passed in 9.619 s** (`21:46:27.226` →
+  `21:46:36.845`). `Makefile` is blob
   `afc5158c518e676234892c1504cc21d15b8b7445` at `97f51d41`, `184c5b65`,
   `11039493` **and** `0eb1e666`, and `git diff 97f51d41 0eb1e666` over every
   `TOOL_HASH` input (`uv.lock`, `pyproject.toml`, `Makefile`, the setup-sccache
