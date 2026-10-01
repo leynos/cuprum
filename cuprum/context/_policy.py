@@ -18,10 +18,6 @@ import math
 import typing as typ
 
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, merge_env_overlays
-from cuprum.context.executable_overlay import (
-    ExecutableBindingOverlay,
-    merge_executable_bindings,
-)
 
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
@@ -124,28 +120,3 @@ def _resolve_narrowed_catalogue[CatalogueT](
 ) -> CatalogueT | None:
     """Return the catalogue named by a scope, or the inherited one when none."""
     return parent if config is None else config
-def _resolve_executable_overlay(
-    parent: ExecutableBindingOverlay | None,
-    child: ExecutableBindingOverlay | None,
-) -> ExecutableBindingOverlay | None:
-    """Compose parent and child executable bindings without resolving them.
-
-    Unlike the environment policy there is no mode: a binding is additive
-    policy for an already-permitted program, so narrowing can rebind a
-    program but never remove the allowlist entry that permits it. Keeping the
-    composition in one helper leaves :meth:`CuprumContext.narrow` a single
-    expression per field.
-
-    Parameters
-    ----------
-    parent : ExecutableBindingOverlay | None
-        The bindings in effect before narrowing. ``None`` contributes nothing.
-    child : ExecutableBindingOverlay | None
-        The bindings the narrowed scope supplies. ``None`` contributes nothing.
-
-    Returns
-    -------
-    ExecutableBindingOverlay | None
-        The merged layer, or ``None`` when neither side contributed.
-    """
-    return merge_executable_bindings(parent, child)

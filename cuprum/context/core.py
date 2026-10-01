@@ -23,7 +23,6 @@ from cuprum.context._policy import (
     _narrow_allowlist,
     _resolve_env_policy,
     _resolve_narrowed_catalogue,
-    _resolve_executable_overlay,
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
@@ -38,6 +37,7 @@ from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 from cuprum.context.executable_overlay import (
     ExecutableBindingOverlay,
     _coerce_executable_bindings,
+    merge_executable_bindings,
 )
 
 if typ.TYPE_CHECKING:
@@ -220,7 +220,12 @@ class CuprumContext(_HookPolicy, _ExecutableBindingPolicy):
             env_overlay=env_overlay,
             env_mode=env_mode,
             catalogue=_resolve_narrowed_catalogue(self.catalogue, config.catalogue),
-            executable_bindings=_resolve_executable_overlay(
+            # Bindings compose without a mode to reconcile, unlike the
+            # environment policy: a binding is additive policy for an
+            # already-permitted program, so narrowing can rebind one but
+            # never drop the allowlist entry that permits it. An entry the
+            # child omits therefore stays inherited.
+            executable_bindings=merge_executable_bindings(
                 self.executable_bindings,
                 config.executable_bindings,
             ),
