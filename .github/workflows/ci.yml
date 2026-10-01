@@ -292,7 +292,7 @@ jobs:
         uses: ./.github/actions/setup-dev-fast
 
       - name: Install Whitaker
-        uses: leynos/shared-actions/.github/actions/install-whitaker@6dea5677a84fec60ca51b07202570e3af12ffdb4
+        uses: leynos/shared-actions/.github/actions/install-whitaker@013346ccfd37bd1e02eb430525233f1a4cd942b8
 
       - name: Validate Mermaid diagrams
         run: make nixie
