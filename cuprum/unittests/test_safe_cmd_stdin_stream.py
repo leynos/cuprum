@@ -119,7 +119,7 @@ def test_stream_chunks_reach_child_in_order(
     assert result.stdout == "alpha-beta-gamma", (
         "every chunk should reach the child, in the order produced"
     )
-    assert result.stderr == "", "streaming stdin should not emit stderr"
+    assert not result.stderr, "streaming stdin should not emit stderr"
 
 
 def test_stream_bytes_chunks_are_written_verbatim(
