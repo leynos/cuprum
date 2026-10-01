@@ -16,7 +16,6 @@ from hypothesis import strategies as st
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
-from cuprum.unittests._stream_drain_support import CapturedOrNone
 from tests.helpers.parity import (
     PropertyPipelineCase,
     build_property_pipeline_case,
@@ -26,6 +25,7 @@ from tests.helpers.parity import (
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import PipelineResult
+    from cuprum.unittests._stream_drain_support import CapturedOrNone
 
 _GENERAL_MAX_EXAMPLES = 12
 _BOUNDARY_MAX_EXAMPLES = 1
@@ -139,13 +139,22 @@ def _byte_exact_case(draw: st.DrawFn) -> tuple[bytes, int]:
     a decoder that replaces or drops anything cannot pass by luck. The rest of
     the payload is drawn freely, and the chunking is what a real pipe does to
     it — a payload is split wherever the reader happens to stop.
+
+    Returns
+    -------
+    tuple[bytes, int]
+        The generated payload and the read size to consume it at.
     """
     read_size = draw(st.sampled_from(_IN_PROCESS_READ_SIZES))
     extra = draw(st.binary(min_size=0, max_size=256))
     return _ALL_BYTE_VALUES + extra, read_size
 
 
-async def _consume_bytes_at_read_size(payload: bytes, *, read_size: int) -> bytes | None:
+async def _consume_bytes_at_read_size(
+    payload: bytes,
+    *,
+    read_size: int,
+) -> bytes | None:
     """Consume *payload* byte-exactly through a real reader and a real drain."""
     reader = asyncio.StreamReader()
     reader.feed_data(payload)

@@ -39,7 +39,8 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
-from cuprum.unittests._stream_drain_support import ConsumerTask
+
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 async def _never_reaches_eof() -> str | None:
@@ -356,7 +357,7 @@ def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -
 # own bytes rather than a decoded approximation of them.
 
 
-def test_capturing_bytes_drain_reports_empty_bytes_for_a_reader_with_no_capture() -> None:
+def test_capturing_bytes_drain_reports_empty_bytes_without_a_capture() -> None:
     """A byte-exact capturing drain falls back to ``b""``, never ``""``."""
 
     async def run_case() -> None:
@@ -443,7 +444,9 @@ def test_bytes_timeout_keeps_flushed_output_after_the_child_is_ready(
         run_timeout = 1.0
         deadline = asyncio.get_running_loop().time() + run_timeout
         run = asyncio.create_task(
-            command.run_bytes(timeout=run_timeout, output=RunOutputOptions(capture=True)),
+            command.run_bytes(
+                timeout=run_timeout, output=RunOutputOptions(capture=True)
+            ),
         )
 
         await _wait_for_marker(marker, deadline=deadline)

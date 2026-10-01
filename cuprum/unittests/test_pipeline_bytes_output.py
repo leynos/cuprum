@@ -109,9 +109,9 @@ def test_pipeline_run_bytes_captures_each_stage_stderr_as_bytes() -> None:
         f"a quiet stage's captured stderr is empty bytes, got "
         f"{result.stages[1].stderr!r}"
     )
-    assert all(
-        isinstance(stage, BytesCommandResult) for stage in result.stages
-    ), f"every stage must be a BytesCommandResult, got {result.stages!r}"
+    assert all(isinstance(stage, BytesCommandResult) for stage in result.stages), (
+        f"every stage must be a BytesCommandResult, got {result.stages!r}"
+    )
 
 
 def test_pipeline_run_bytes_matches_the_async_entry_point() -> None:
@@ -151,8 +151,9 @@ def test_pipeline_run_bytes_rejects_line_observation_before_spawning() -> None:
     pipeline, allowlist = _relay_pipeline()
     observed: list[typ.Any] = []
 
-    with scoped(ScopeConfig(allowlist=allowlist)), pytest.raises(
-        ValueError, match="on_line"
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        pytest.raises(ValueError, match="on_line"),
     ):
         pipeline.run_bytes_sync(output=RunOutputOptions(on_line=observed.append))
 
