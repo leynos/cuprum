@@ -36,10 +36,11 @@ and CI covers it. The PR was then marked ready for review, which un-blocked
 CodeRabbit (it had been reporting `skipped` while the PR was a draft); its one
 finding — deduplicate a local `_safe_close` onto the shared helper — was
 correct and was applied in `b3ae9f20`, disproving in the process a file-count
-premise this plan had asserted without testing. The branch stands at **18 of
-18** files excluding the lockfile and this plan — at the tolerance, not over
-it. At `1714ac0d` the required `coverage` job failed twice on a test this
-branch does not touch,
+premise this plan had asserted without testing. The branch stands at **19**
+files excluding the lockfile and this plan — one over the tolerance, on a single
+`typos.toml` line `main` already carries, with the merge ref back at eighteen.
+The 2026-10-01 entry below measures all three counts. At `1714ac0d` the required
+`coverage` job failed twice on a test this branch does not touch,
 `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`.
 The failure is **environmental and measured, not a branch defect**: the
 coverage job is the only lane that runs that test without provisioning
@@ -48,8 +49,8 @@ test's own `subprocess.run`, under the global 30 s `pytest-timeout`. Reproduced
 locally by pointing `RUSTUP_HOME` at an empty directory: **11.5–12.7 s cold
 versus 0.49 s warm**, a 23–26× differential, on a 6-core idle host — the same
 download on a loaded 2-vCPU runner exceeds the bound. The test file is
-byte-identical to base `7f762870` (`b8f96ae4`), is outside the branch's 18-file
-set, and the job passed at `b7d1b109` (`36356062517`) with the same bytes.
+byte-identical to base `7f762870` (`b8f96ae4`), is outside the branch's change
+surface, and the job passed at `b7d1b109` (`36356062517`) with the same bytes.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -816,10 +817,12 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   The change lands the PR at **18 of 18** files excluding the lockfile and this
   plan, exactly at the tolerance rather than over it. `make lint` regenerated
   `typos.toml` from the live shared estate dictionary (one entry reworded,
-  unrelated to this branch); it was reverted, because the branch has
-  deliberately never carried that generated file in any of its commits —
-  `git log 7f762870..HEAD -- typos.toml` is empty — and committing it would
-  both exceed the tolerance and put unrelated churn in the diff.
+  unrelated to this branch); it was reverted here, on the reading that the
+  branch had carried no generated file in any of its commits —
+  `git log 7f762870..HEAD -- typos.toml` was empty at this head. **That reading
+  did not survive the branch.** `11039493` later committed the line, so the
+  command is no longer empty and the count is **19**. The 2026-10-01 entry
+  below measures both frames and dispositions the file.
 
   The record above first read "that budget is why the fix is a split and two
   comment corrections rather than a wider deduplication: touching a shared
@@ -890,8 +893,10 @@ There is no time limit. Tool failures do not justify lowering acceptance.
       `typos.toml` regeneration "across its seven commits" — a count that was 22
       when written and 24 by the time it was read, so it had never been right in
       any revision. The last of these is now stated as the fact it was standing
-      in for: `git log 7f762870..HEAD -- typos.toml` is empty, so this branch has
-      never carried the estate churn in a commit. Each correction is its own
+      in for: at this head `git log 7f762870..HEAD -- typos.toml` was empty, so
+      the branch had carried no estate churn in a commit. (`11039493` later
+      committed one line of it; the 2026-10-01 entry below measures that.) Each
+      correction is its own
       commit (`59f326ad`, `999880dd`, `9096c804`) so the history shows what was
       believed and when.
 
@@ -1143,9 +1148,10 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   the gates) were carried out. The file-count half of the reply is *also*
   correct and no longer live: it said "the PR currently changes 17 files … so
   one new file remains within the plan's 18-file tolerance", and the surface
-  now stands at exactly **18 of 18**. Two of the reply's three forward-looking
-  numbers therefore describe the pre-split tree; the third, the destination,
-  was reached exactly.
+  then stood at exactly **18 of 18** (19 on the branch and 18 at the merge ref
+  once `11039493` committed `typos.toml`; see 2026-10-01). Two of the reply's
+  three forward-looking numbers therefore describe the pre-split tree; the
+  third, the destination, was reached exactly.
 
   **CodeRabbit has since re-confirmed the inline half of that reporting and
   withdrawn the other half's warrant.** Reply `4136525485` (`17:42:16Z`, posted
@@ -1448,6 +1454,15 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   plan's size does drift, but a re-derivation must be taken at the same
   revision as the claim, not across an uncommitted working tree.
 
+  **Correction (2026-10-01): this entry's own commit falsified its
+  "uncommitted" framing.** `11039493` staged the regenerated `typos.toml` line
+  in the same commit that carries this text, so the file is committed from that
+  point onward; `git diff --numstat 7f762870 HEAD -- typos.toml` is `1 1`. The
+  `531` and `131,541` readings above were taken on the working tree as this
+  entry was drafted and are left as that measurement. The count at the current
+  head is re-measured in the 2026-10-01 entry below; the Sourcery figures are
+  left as this entry's own reading.
+
   This entry was first drafted while the Lody GitHub credential broker was down
   session-wide
   (`Cannot verify GitHub identity preferences with Lody… no GitHub
@@ -1690,6 +1705,77 @@ There is no time limit. Tool failures do not justify lowering acceptance.
   (`Makefile:180`), so it runs under `CUPRUM_REQUIRE_RUST_EXTENSION=1` rather
   than skipping silently. No code change is warranted; the disposition is a
   reasoned reply.
+
+- [x] (2026-10-01) **`typos.toml` is committed, so two figures derived from
+  its absence are stale — and the file cannot be dropped.** `11039493` staged
+  the regenerated `typos.toml` line alongside its plan text, so
+  `git log 7f762870..HEAD -- typos.toml` now names that commit where it was
+  empty. The committed diff is one line (`git diff --numstat` → `1 1`), and it
+  is **`main`'s own content**: `574ddee7` (`main`) carries the identical
+  `var\.iamge_id` rephrase, so this branch re-asserts a line it would have
+  inherited anyway.
+
+  Three measurements fix the disposition:
+
+  - Excluding the lockfile and this plan, `git diff --name-only 7f762870 HEAD`
+    lists **19** files, not 18.
+  - `git merge-tree --write-tree origin/main HEAD` shows `typos.toml` clean
+    against `main` — the branch's copy replays empty — so the landing surface
+    is **18**. CI builds the merge ref.
+  - Reverting is not stable: checked out to its `7f762870` content and re-run,
+    `make spelling` writes the rephrase back (the pinned `v0.1.2` builder
+    regenerates it from the live shared dictionary), leaving a dirty tree the
+    Stop hook blocks on.
+
+  The line therefore stays, and the count is stated per frame: **19** on the
+  branch, **18** at the merge ref. In the branch frame that is one over the
+  plan's tolerance; in substance it is 18 changes, because the nineteenth is a
+  byte `main` owns. Recorded as a deviation rather than absorbed silently. The
+  dated entries above keep the figures true at their own heads.
+
+- [x] (2026-10-01) **`0eb1e666`'s CI failure is the third occurrence of the
+  same `coverage`-job timeout, on the commit that fixed the previous
+  failure.** Run `36892038283` reports `completed/failure`, and a grep of every
+  `FAILED` line in its failed-job log finds exactly **one** failing test —
+  `test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning`,
+  `Failed: Timeout (>30.0s) from pytest-timeout`. Test start
+  `16:49:48.532` → verdict `16:50:18.660` is **30.13 s**: the bound fired, no
+  assertion failed. This is the same class the 2026-09-29 entry above
+  measured, and it is recorded as a third occurrence rather than folded into a
+  running count, because the ordinal is what drifts.
+
+  The mechanism is re-pinned from the workflow rather than inherited. The
+  `coverage` job installs **only** toolchain `1.85.0`; the sole installer of
+  `nightly-2026-08-23` is `setup-dev-fast`
+  (`.github/actions/setup-dev-fast/action.yml:11, :22`), used at `ci.yml:290`
+  (`lint-test`) and `ci.yml:791` (`extension-tests`) and nowhere in
+  `coverage`. `~/.rustup` is in no cache path — the job restores only
+  `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`,
+  `.uv-cache` and `.uv-tools` — so the 595 MB nightly is a cold download inside
+  the test's own `subprocess.run`, whose `capture_output=True` keeps it out of
+  the log.
+
+  The control is stronger than the one recorded above, because it holds
+  *within this branch* on identical bytes. Run `36633831081` ran the same job
+  at `97f51d41` and the same test **passed in 9.619 s**
+  (`21:46:27.226` → `21:46:36.845`). `Makefile` is blob
+  `afc5158c518e676234892c1504cc21d15b8b7445` at `97f51d41`, `184c5b65`,
+  `11039493` **and** `0eb1e666`, and `git diff 97f51d41 0eb1e666` over every
+  `TOOL_HASH` input (`uv.lock`, `pyproject.toml`, `Makefile`, the setup-sccache
+  and install-makeutil actions) is **empty** — so the tool cache key's apparent
+  difference between the runs is not a branch effect, and both runs restored
+  from a prefix key rather than the computed one. The branch also touches
+  neither the test file nor `pyproject.toml`. The `Makefile` diff on the branch
+  is three `EXTENSION_TEST_TARGETS` additions and does not touch the doctest
+  recipe.
+
+  What actually differed is the **Cargo registry cache**: restored from
+  `cargo-v1-…9b8de305…` in the green run, and
+  `Cache not found for input keys: cargo-v1-…64238430…` at `0eb1e666`. The
+  whole job ran cold — 661 s green against 1362 s failing, 2.1×. That is the
+  environmental variance the 9.6 s → 30.1 s spread sits inside, and it is the
+  reason this is a rerun rather than a patch. `gh run rerun --failed` was
+  dispatched (`attempt=2`), which is the remedy the project's own notes record.
 
 - [x] M2: documentation reconciled, platform evidence complete, 6.1.1 marked
       done.
@@ -2004,10 +2090,11 @@ changing anything between the runs that disagreed.
 ## Decision log
 
 - (2026-09-29) **The `coverage` job's doctest-contract timeout is a `main`
-  defect and is deliberately not patched here.** The branch is at its 18-file
-  tolerance and the failing test is byte-identical to base and outside the
-  change surface, so a fix would (a) exceed the tolerance, (b) enlarge the
-  branch into an unrelated CI concern, and (c) require editing
+  defect and is deliberately not patched here.** The branch was then at its
+  18-file tolerance (re-measured 2026-10-01 as 19 on the branch and 18 at the
+  merge ref; see Progress) and the failing test is byte-identical to base and
+  outside the change surface, so a fix would (a) exceed the tolerance, (b)
+  enlarge the branch into an unrelated CI concern, and (c) require editing
   `.github/workflows/ci.yml`, which this branch has deliberately never touched
   and whose every byte `actionlint` reads is `main`'s. Two fixes are available
   and both belong to a separate change: provision `nightly-2026-08-23` in the
