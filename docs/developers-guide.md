@@ -1145,6 +1145,16 @@ The serializer contract itself:
 The boundary, and why a warning or a per-builder opt-out was rejected instead,
 is recorded in [Cuprum design](cuprum-design.md) §6.2.6.
 
+`sh.make` resolves its catalogue before building the argv path, through
+`_resolve_catalogue` in `cuprum/sh/factory.py`: an explicit `catalogue`
+argument, then `current_context().catalogue`, then `DEFAULT_CATALOGUE`. The
+context field is set by `scoped(catalogue=...)` and inherited by any derived
+context through `dc.replace`; a `ScopeConfig` without a catalogue leaves the
+inherited one in place. Resolution happens once, at construction, and the
+catalogue is closed over by the returned builder. Changing the resolution order
+means changing `_resolve_catalogue`, not the coercion path; keep the lookup out
+of `build_argv`, which performs no catalogue work.
+
 Property coverage for this contract lives in
 `cuprum/unittests/test_sh_property_based.py`; the drift guard pinning the
 reserved run-option names to `SafeCmd.run_sync` lives in
