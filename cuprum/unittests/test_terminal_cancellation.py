@@ -9,7 +9,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _pipeline_internals, scoped, sh
+from cuprum import ScopeConfig, _pipeline_finalize, scoped, sh
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
@@ -17,7 +17,10 @@ from tests.helpers.catalogue import python_catalogue
 if typ.TYPE_CHECKING:
     from cuprum.program import Program
 
-_REAL_CANCEL_STREAM_TASKS = _pipeline_internals._cancel_stream_tasks
+# The pipeline's cleanup reads this name from the finalization module, which is
+# where the run-failure reconciliation moved when it was split out of
+# ``_pipeline_internals``; patching the old home would leave the real one in use.
+_REAL_CANCEL_STREAM_TASKS = _pipeline_finalize._cancel_stream_tasks
 
 
 class _CommandCleanupGate:
@@ -72,7 +75,7 @@ def cancellation_scenario(
     )
     scenario = _PipelineCancellationScenario(pipeline, python_program)
     monkeypatch.setattr(
-        _pipeline_internals, "_cancel_stream_tasks", scenario.cancel_stream_tasks
+        _pipeline_finalize, "_cancel_stream_tasks", scenario.cancel_stream_tasks
     )
     return scenario
 

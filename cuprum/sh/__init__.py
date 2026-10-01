@@ -9,9 +9,11 @@ The implementation is split across submodules by responsibility:
 - ``argv`` builds argument vectors and publishes ``ArgValue``.
 - ``builder`` holds the ``SafeCmdBuilder`` callable contract.
 - ``execution`` holds the execution context, stdin, and timeout types.
-- ``results`` holds ``CommandResult`` and ``PipelineResult``.
+- ``results`` holds ``CommandResult``, ``PipelineResult``, and their byte-exact
+  counterparts ``BytesCommandResult`` and ``BytesPipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
-- ``safe_cmd`` holds the ``SafeCmd`` and ``Pipeline`` execution primitives.
+- ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
+- ``pipeline`` holds the ``Pipeline`` execution primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``
@@ -76,7 +78,12 @@ from cuprum.sh.output import _validate_convenience_flags as _validate_convenienc
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
-from cuprum.sh.results import CommandResult, PipelineResult
+from cuprum.sh.results import (
+    BytesCommandResult,
+    BytesPipelineResult,
+    CommandResult,
+    PipelineResult,
+)
 from cuprum.sh.results import dc as dc
 from cuprum.sh.safe_cmd import Pipeline, SafeCmd
 from cuprum.sh.safe_cmd import asyncio as asyncio
@@ -84,6 +91,8 @@ from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
     "ArgValue",
+    "BytesCommandResult",
+    "BytesPipelineResult",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",

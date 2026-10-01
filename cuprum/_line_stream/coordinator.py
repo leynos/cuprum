@@ -43,6 +43,7 @@ from cuprum._line_stream.telemetry import (
 )
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._stream_drain import _drain_stream_consumers
 from cuprum._subprocess_execution import (
     _relay_fallbacks_for_result,
     _spawn_subprocess,
@@ -57,11 +58,10 @@ from cuprum._subprocess_timeout import (
     _SubprocessTimeoutError,
 )
 from cuprum._subprocess_wait import (
-    _drain_stream_consumers,
-    _DrainContext,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
+from cuprum._subprocess_wait_types import _DrainContext
 from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:

@@ -59,6 +59,11 @@ class _PipelineRunConfig:
     # a closed reader. Defaulted for the callers that build this config
     # directly; the production path always resolves it from the options.
     broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
+    # Whether the pipeline's captured streams are reported as bytes rather
+    # than decoded text. Like the broken-pipe policy, one value governs the
+    # whole pipeline: the caller asked for it once, and the internal stage
+    # boundaries are not the place to decide per stream.
+    capture_bytes: bool = False
 
     idle: _IdleMonitor | None = None
 
@@ -129,6 +134,7 @@ class _PipelineRunConfig:
             sink=framed,
             encoding=self.ctx.encoding,
             errors=self.ctx.errors,
+            capture_bytes=self.capture_bytes,
             read_size=_current_read_size(),
             activity=self.idle.note_activity if self.idle is not None else None,
             mirror=self._echo_mirror(framed),
@@ -185,6 +191,7 @@ def _prepare_pipeline_config(
     output: RunOutputOptions,
     timeout: float | None,
     context: ExecutionContext | None,
+    capture_bytes: bool = False,
 ) -> _PipelineRunConfig:
     """Normalize runtime options for pipeline execution from one options object."""
     # Deferred, unlike the module-scope import in ``_pipeline_results``: this
@@ -217,6 +224,7 @@ def _prepare_pipeline_config(
         stdout_sink=stdout_sink,
         stderr_sink=stderr_sink,
         sink_bracket=sink_bracket,
+        capture_bytes=capture_bytes,
         on_line=output.on_line,
         # One aggregate heartbeat for the whole pipeline, labelled for what it
         # actually observes: the parent-facing output, not the health of every

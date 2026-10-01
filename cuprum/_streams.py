@@ -26,11 +26,12 @@ from cuprum._echo_truncation import (
     _EchoLineLimiter,
     _validate_bounded_echo_encoding,
 )
+from cuprum._pipeline_types import _ExecutionInvariantError
+from cuprum._stream_drain_finish import _finish_drain
 from cuprum._stream_drain_state import _EchoGuard, _MirrorCursor, _RelayDiagnostics
 from cuprum._stream_echo import (
     _echo_chunk,
     _echo_decoder,
-    _flush_echo_decoder,
     _write_chunk,
 )
 from cuprum._stream_line_boundaries import _split_complete_lines, _strip_line_ending
@@ -71,6 +72,18 @@ type _LineSink = cabc.Callable[[str], cabc.Awaitable[None] | None]
 type _ChunkSink = cabc.Callable[[bytes], cabc.Awaitable[None] | None]
 
 
+class _DrainInvariantError(_ExecutionInvariantError):
+    """Raised when a drain is asked for a combination it cannot honour.
+
+    Subclasses the shared package-level invariant error, which itself derives
+    from :class:`RuntimeError`, while retaining a distinct type for stream
+    drains. Mirrors
+    :class:`cuprum._subprocess_timeout._SubprocessInvariantError` for the
+    single-command path and
+    :class:`cuprum._pipeline_collect._PipelineInvariantError` for pipelines.
+    """
+
+
 @dc.dataclass(frozen=True, slots=True)
 class _StreamConfig:
     """Configuration for decoding and echoing a subprocess stream."""
@@ -96,6 +109,13 @@ class _StreamConfig:
     # Defaults to stdout because every production call site names the stderr
     # config explicitly when it replaces the stdout one.
     stream: EchoStream = EchoStream.STDOUT
+    # Whether the captured payload is reported as the child's own bytes rather
+    # than decoded text. Off by default, so every config built before byte-exact
+    # capture existed keeps decoding exactly as it did. When on, the drain still
+    # echoes through the ordinary renderer — a sink that accepts bytes gets
+    # them, a text sink decodes for display only — but the value handed back is
+    # never decoded, so arbitrary binary survives the round trip.
+    capture_bytes: bool = False
     # Run-owned observers, both optional and both unable to change what is
     # captured: ``activity`` reports that a non-empty chunk arrived, before any
     # decoding, truncation, or line callback could drop it, and ``mirror``
@@ -137,7 +157,7 @@ async def _consume_stream(
     *,
     on_line: _LineSink | None = None,
     relay_diagnostics: _RelayDiagnostics | None = None,
-) -> str | None:
+) -> str | bytes | None:
     """Read from a subprocess stream, teeing to sink when requested.
 
     ``relay_diagnostics`` defaults to a fresh collector, so a caller that does
@@ -145,8 +165,16 @@ async def _consume_stream(
 
     Returns
     -------
-    str | None
-        The captured text, or ``None`` when capture is disabled.
+    str | bytes | None
+        The captured payload — bytes when the config asks for byte-exact
+        capture, decoded text otherwise — or ``None`` when capture is
+        disabled.
+
+    Raises
+    ------
+    _DrainInvariantError
+        If a byte-exact config is asked to observe decoded lines, which cannot
+        be honoured: the line consumer decodes each chunk to find boundaries.
     """
     if on_line is None:
         return await _consume_stream_without_lines(
@@ -154,6 +182,16 @@ async def _consume_stream(
             config,
             relay_diagnostics=relay_diagnostics,
         )
+    # Line observation and byte-exact capture are mutually exclusive, and the
+    # public entry points refuse the combination before anything spawns. This
+    # guard is the second line of defence, at the only seam where the choice is
+    # still visible: the line consumer decodes each chunk to find boundaries,
+    # so routing a byte-exact config into it would hand back decoded text from
+    # a run the caller asked to be byte-exact. Refusing beats returning the
+    # wrong type silently.
+    if config.capture_bytes:
+        msg = "byte-exact capture cannot observe decoded lines"
+        raise _DrainInvariantError(msg)
     return await _consume_stream_with_lines(
         stream,
         _LineConsumption(
@@ -171,7 +209,7 @@ async def _drain(
     *,
     on_chunk: _ChunkSink | None = None,
     relay_diagnostics: _RelayDiagnostics | None = None,
-) -> str | None:
+) -> str | bytes | None:
     """Run the canonical read/echo/buffer loop over *stream*."""
     # This is the single source of truth for the consume mechanics shared by
     # :func:`_consume_stream_without_lines` and
@@ -241,35 +279,6 @@ def _build_drain_state(
     )
 
 
-def _finish_drain(
-    state: _DrainState,
-    measurement: _StreamOperationMeasurement | None,
-    *,
-    reached_eof: bool,
-) -> str | None:
-    """Complete one drain and return any captured text."""
-    if not reached_eof:
-        _complete_stream_operation(measurement, StreamOperationOutcome.CANCELLED)
-        if state.buffer is None or _discard_on_cancel(state.config):
-            raise asyncio.CancelledError
-        _flush_echo_decoder(state)
-        return state.buffer.decode(state.config.encoding, errors=state.config.errors)
-    _flush_echo_decoder(state)
-    captured = None
-    if state.buffer is not None:
-        captured = state.buffer.decode(
-            state.config.encoding,
-            errors=state.config.errors,
-        )
-    _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
-    return captured
-
-
-def _discard_on_cancel(config: _StreamConfig) -> bool:
-    """Whether cancellation must discard buffered bytes without decoding them."""
-    return config.discard_on_cancel is not None and config.discard_on_cancel.is_set()
-
-
 async def _drain_chunks(
     stream: asyncio.StreamReader,
     state: _DrainState,
@@ -316,10 +325,23 @@ async def _consume_stream_without_lines(
     config: _StreamConfig,
     *,
     relay_diagnostics: _RelayDiagnostics | None = None,
-) -> str | None:
-    """Read from a subprocess stream without emitting line callbacks."""
+) -> str | bytes | None:
+    """Read from a subprocess stream without emitting line callbacks.
+
+    A stream that was never attached is reported as an empty capture rather
+    than as absent output — the run did capture, and the child simply had no
+    such pipe — so the empty value has to match the mode: ``b""`` for a
+    byte-exact run, ``""`` for a text one.
+
+    Returns
+    -------
+    str | bytes | None
+        The captured payload, or ``None`` when this config is not capturing.
+    """
     if stream is None:
-        return "" if config.capture_output else None
+        if not config.capture_output:
+            return None
+        return b"" if config.capture_bytes else ""
     return await _drain(
         stream,
         config,
