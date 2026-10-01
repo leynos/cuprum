@@ -256,13 +256,12 @@ class TestObserveHookBoundary:
         ],
     )
     @pytest.mark.parametrize(
-        ("dispatcher", "hook_owned"),
+        "dispatcher",
         [
-            (EMIT_EVENT, True),
-            (EMIT_EXEC_EVENT, True),
-            ("", False),
+            pytest.param(EMIT_EVENT, id="via-emit_event"),
+            pytest.param(EMIT_EXEC_EVENT, id="via-emit_exec_event"),
+            pytest.param("", id="direct"),
         ],
-        ids=["via-emit_event", "via-emit_exec_event", "direct"],
     )
     def test_construction_is_counted_only_when_it_precedes_the_dispatcher(
         self,
@@ -270,7 +269,6 @@ class TestObserveHookBoundary:
         label: str,
         emission: str,
         dispatcher: str,
-        hook_owned: bool,
     ) -> None:
         """Every emission entry point is guarded, and every one still counts.
 
@@ -278,6 +276,11 @@ class TestObserveHookBoundary:
         below a dispatcher frame, so the guard has to resolve one and reject
         the other. A guard that simply refused every frame would pass the
         rejection rows and fail the direct ones.
+
+        Whether the path crosses a dispatcher is read from ``dispatcher``
+        rather than restated as a case parameter: the empty placeholder *is*
+        the direct row, so a separate flag would be a second copy of that
+        fact that could disagree with the path actually built below.
 
         The rules are written here rather than taken from the shared fixture
         because that fixture keys on ``emit`` and ``emit_line`` alone, and
@@ -311,7 +314,7 @@ class TestObserveHookBoundary:
         capture = _line(f"a;{path};{GENERATED_INIT}", 30)
         _, result = _run(tmp_path, capture, rules_path=rules)
 
-        expected = {} if hook_owned else {"emission": 30}
+        expected = {"emission": 30} if not dispatcher else {}
         assert result["matched_frames"] == expected, (
             f"{label} construction above the dispatcher must count; below it must not"
         )

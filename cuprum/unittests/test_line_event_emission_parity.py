@@ -209,7 +209,7 @@ class TestLineEventPayloadParity:
         )
         assert callback is not None
 
-        assert captured == [], "preparation must not emit an event"
+        assert not captured, "preparation must not emit an event"
 
     def test_echo_stream_values_match_the_phase_literals(self) -> None:
         """The echo-stream members and the phase literals agree by value."""
