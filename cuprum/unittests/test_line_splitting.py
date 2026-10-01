@@ -545,7 +545,7 @@ def test_split_complete_lines_remainder_has_no_line_ending(text: str) -> None:
         "_split_complete_lines remainder must not end with a recognized line ending"
     )
     if text.endswith(_LINE_ENDINGS):
-        assert remainder == "", (
+        assert not remainder, (
             "_split_complete_lines remainder must be empty when input ends with a "
             "recognized line ending"
         )

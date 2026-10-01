@@ -66,7 +66,7 @@ class TestStreamParity:
         pipeline, allowlist = _build_pipeline("pass")
         result = run_parity_pipeline(pipeline, allowlist)
 
-        assert result.stdout == "", "expected empty stdout"
+        assert not result.stdout, "expected empty stdout"
         assert result.ok is True, "pipeline should succeed"
         assert len(result.stages) == 2, "pipeline should have exactly two stages"
         assert all(s.exit_code == 0 for s in result.stages), (

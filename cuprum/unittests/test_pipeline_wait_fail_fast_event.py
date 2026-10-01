@@ -251,7 +251,7 @@ class TestFailFastEventEmission:
             completions=case.completions,
         )
 
-        assert driven.events == (), f"{case.reason}, found {driven.events!r}"
+        assert not driven.events, f"{case.reason}, found {driven.events!r}"
 
     def test_a_later_failure_does_not_publish_a_second_event(
         self,
@@ -389,6 +389,6 @@ class TestFailFastHookFailure:
         with pytest.raises(_HookFailureError):
             apply_completions(state, [(0, 4)])
 
-        assert terminations == [], (
+        assert not terminations, (
             f"termination must not have been requested, found {terminations!r}"
         )

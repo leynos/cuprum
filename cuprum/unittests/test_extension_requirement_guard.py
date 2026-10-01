@@ -104,7 +104,7 @@ def fixture_root_conftest(pytestconfig: pytest.Config) -> ModuleType:
         module_file = getattr(plugin, "__file__", None)
         if module_file and pathlib.Path(module_file) == root:
             return typ.cast("ModuleType", plugin)
-    pytest.fail(f"the root conftest at {root} is not a registered plugin")
+    return pytest.fail(f"the root conftest at {root} is not a registered plugin")
 
 
 @pytest.fixture(name="declare_extension")

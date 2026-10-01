@@ -161,9 +161,9 @@ class TestSimultaneousCompletions:
             "a fully settled batch must record the latch but no teardown, "
             f"found {actions!r}"
         )
-        assert run.terminations == (), (
+        assert not run.terminations, (
             f"no termination may be requested, found {run.terminations!r}"
         )
-        assert run.events == (), (
+        assert not run.events, (
             f"no fail-fast event may be published, found {run.events!r}"
         )

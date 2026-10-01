@@ -189,24 +189,26 @@ def test_whitelist_lock_preserves_concurrent_documented_entries(tmp_path: Path) 
     writer.chmod(0o755)
     cli = str(writer)
 
-    first = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
-        _whitelist_command(tmp_path, cli=cli),
-        cwd=tmp_path,
-        env={**os.environ, "SYMBOL": "first", "REASON": "first reason"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    second = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
-        _whitelist_command(tmp_path, cli=cli),
-        cwd=tmp_path,
-        env={**os.environ, "SYMBOL": "second", "REASON": "second reason"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    first_stdout, first_stderr = first.communicate()
-    second_stdout, second_stderr = second.communicate()
+    with (
+        subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
+            _whitelist_command(tmp_path, cli=cli),
+            cwd=tmp_path,
+            env={**os.environ, "SYMBOL": "first", "REASON": "first reason"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as first,
+        subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Makefile and test arguments.
+            _whitelist_command(tmp_path, cli=cli),
+            cwd=tmp_path,
+            env={**os.environ, "SYMBOL": "second", "REASON": "second reason"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as second,
+    ):
+        first_stdout, first_stderr = first.communicate()
+        second_stdout, second_stderr = second.communicate()
 
     assert first.returncode == 0, (
         f"first Skylos whitelist update must succeed: {first_stdout}{first_stderr}"
