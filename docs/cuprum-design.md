@@ -797,10 +797,10 @@ Two properties are preserved deliberately:
   `--working-dir=…` and `--stdin-file=…`.
 
 A warning was rejected as too weak: the failure it guards against is silent
-misconfiguration, which a warning in a long CI log does not prevent. A
-per-builder opt-out was rejected because the positional form already covers
-every tool that needs those flags, and an opt-out would reintroduce the
-ambiguity for any caller that set it out of habit.
+misconfiguration, which a warning in a long continuous integration (CI) log
+does not prevent. A per-builder opt-out was rejected because the positional
+form already covers every tool that needs those flags, and an opt-out would
+reintroduce the ambiguity for any caller that set it out of habit.
 
 ### 6.3 `cuprum.unsafe` – Explicit Escape Hatch
 
