@@ -1,3 +1,4 @@
+---
 name: Set up sccache
 description: >-
   Install the pinned Linux sccache binary and point it at exactly one store.
@@ -110,7 +111,9 @@ runs:
           staging="${RUNNER_TEMP}/sccache-staging"
           rm -rf "${staging}"
           mkdir -p "${staging}"
-          url="https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          url="https://github.com/mozilla/sccache/releases/download"
+          url+="/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}"
+          url+="-x86_64-unknown-linux-musl.tar.gz"
           curl --fail --location --proto '=https' --tlsv1.2 "${url}" -o "${archive}"
           echo "${SCCACHE_SHA256}  ${archive}" | sha256sum --check --status
           tar --extract --gzip --file "${archive}" --strip-components=1 \
@@ -139,7 +142,9 @@ runs:
           # to a directory that dies with the runner.
           if [ -z "${ACTIONS_CACHE_URL:-}" ] || \
              [ -z "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
-            echo "::error title=setup-sccache::backend 'gha' needs ACTIONS_CACHE_URL and ACTIONS_RUNTIME_TOKEN; run export-ubicloud-cache-credentials before this step" >&2
+            echo "::error title=setup-sccache::backend 'gha' needs" \
+              "ACTIONS_CACHE_URL and ACTIONS_RUNTIME_TOKEN; run" \
+              "export-ubicloud-cache-credentials before this step" >&2
             exit 1
           fi
           echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
@@ -151,4 +156,3 @@ runs:
           } >> "${GITHUB_ENV}"
           echo "sccache will use ${HOME}/.cache/sccache capped at ${SCCACHE_LOCAL_CACHE_SIZE}."
         fi
-
