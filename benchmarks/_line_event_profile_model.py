@@ -324,11 +324,15 @@ def _load_rules_json(rules_path: pth.Path) -> object:
 
     The encoding is pinned rather than inherited from the locale, so a rules
     file cannot decode one way here and another way in Continuous Integration.
-    Reading is strict on purpose: a mangled rule silently matching fewer frames
-    would understate the share. ``UnicodeDecodeError`` descends from
-    ``ValueError`` rather than ``OSError``, so it needs its own arm below --
-    without one it escapes as a traceback and exits 1, the status this gate
-    reserves for "share above the limit", instead of the documented 2.
+    Strict reading is deliberate: a mangled rule that silently matched fewer
+    frames would understate the share.
+
+    ``UnicodeDecodeError`` descends from ``ValueError``, not ``OSError``, so it
+    needs catching here: as a traceback it would exit 1, the status this gate
+    reserves for "share above the limit", rather than the documented 2. It
+    shares the unreadable-file arm because both mean the rules never loaded,
+    and CodeScene reads a third handler as pushing this function's cyclomatic
+    complexity past its threshold.
 
     Returns
     -------
@@ -342,11 +346,8 @@ def _load_rules_json(rules_path: pth.Path) -> object:
     """
     try:
         return json.loads(rules_path.read_text(encoding="utf-8"))
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         msg = f"cannot read rules at {rules_path}: {exc}"
-        raise _ProfileInputError(msg) from exc
-    except UnicodeDecodeError as exc:
-        msg = f"rules at {rules_path} are not valid UTF-8: {exc}"
         raise _ProfileInputError(msg) from exc
     except json.JSONDecodeError as exc:
         msg = f"rules at {rules_path} are not valid JSON: {exc}"

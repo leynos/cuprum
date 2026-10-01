@@ -103,10 +103,10 @@ class TestRulesDecoding:
         """A non-UTF-8 rules file exits 2 rather than escaping as a traceback.
 
         ``UnicodeDecodeError`` descends from ``ValueError``, not ``OSError``,
-        so it needs its own arm in ``_load_rules_json``. Without one the
-        exception escapes the CLI boundary and the command exits 1 -- which
-        this gate reserves for "share exceeds the limit", the opposite
-        meaning. A mangled rules file must read as unmeasurable.
+        so ``_load_rules_json`` must catch it. Left to escape the CLI boundary
+        it would exit 1 -- which this gate reserves for "share exceeds the
+        limit", the opposite meaning. A mangled rules file must read as
+        unmeasurable.
         """
         capture = _write(tmp_path, "stacks.folded", "a;_consume_x 5\n")
         rules = tmp_path / "rules.json"
