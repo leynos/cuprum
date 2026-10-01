@@ -157,7 +157,7 @@ def test_pipeline_run_bytes_rejects_line_observation_before_spawning() -> None:
     ):
         pipeline.run_bytes_sync(output=RunOutputOptions(on_line=observed.append))
 
-    assert observed == [], "the rejection must happen before any line is observed"
+    assert not observed, "the rejection must happen before any line is observed"
 
 
 def test_pipeline_run_bytes_reports_timeout_stderr_in_stage_order() -> None:
