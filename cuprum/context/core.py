@@ -20,6 +20,7 @@ from cuprum.context._policy import (
     _merge_hooks,
     _narrow_allowlist,
     _resolve_env_policy,
+    _resolve_narrowed_catalogue,
     _resolve_narrowed_timeout,
     _validate_timeout,
 )
@@ -33,6 +34,7 @@ from cuprum.context._scope import (
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, _coerce_env_overlay
 
 if typ.TYPE_CHECKING:
+    from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecHook
     from cuprum.program import Program
 
@@ -65,6 +67,12 @@ class CuprumContext:
         from an empty allowlist produced by narrowing a restricted scope.
     env_mode:
         Policy used to render the composed environment for child processes.
+    catalogue:
+        Catalogue the innermost active scope activated, or ``None`` outside any
+        catalogue scope. ``sh.make`` consults it to resolve builders that do not
+        name a catalogue explicitly. Excluded from equality because it carries
+        no permission semantics: two contexts that allow the same programs are
+        equivalent for enforcement regardless of which catalogue supplied them.
 
     """
 
@@ -76,6 +84,7 @@ class CuprumContext:
     env_overlay: EnvOverlay | None = None
     _allowlist_is_restricted: bool = False
     env_mode: EnvMode = EnvMode.OVERLAY
+    catalogue: ProgramCatalogue | None = dc.field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         """Validate and coerce timeout after initialization."""
@@ -190,6 +199,7 @@ class CuprumContext:
             timeout=_resolve_narrowed_timeout(self.timeout, config.timeout),
             env_overlay=env_overlay,
             env_mode=env_mode,
+            catalogue=_resolve_narrowed_catalogue(self.catalogue, config.catalogue),
             _allowlist_is_restricted=is_restricted,
         )
 

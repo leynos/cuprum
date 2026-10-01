@@ -21,3 +21,9 @@ Feature: Catalogue defaults
     When I build a safe command with "-n" and "hello world"
     Then the safe command argv includes the program name and arguments
     And the safe command exposes project metadata for downstream services
+
+  Scenario: A catalogue scope selects the builder catalogue
+    Given a catalogue owning the program "gh"
+    When I build a safe command for "gh" inside that catalogue scope
+    Then the safe command resolves through the scoped catalogue
+    And the default catalogue still rejects "gh"
