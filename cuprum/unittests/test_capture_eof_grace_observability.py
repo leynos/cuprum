@@ -16,7 +16,6 @@ from cuprum import Program, TimeoutExpired, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.context import ScopeConfig, scoped
 from cuprum.sh import RunOutputOptions
-from cuprum.unittests._stream_drain_support import ConsumerTask
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.timeouts import child_argv, python_interpreter
 
@@ -26,6 +25,7 @@ if typ.TYPE_CHECKING:
 
     from cuprum._streams import _StreamConfig
     from cuprum.events import ExecEvent
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 @pytest.fixture

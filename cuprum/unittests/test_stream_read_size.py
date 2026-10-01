@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import typing as typ
 
 from cuprum._streams import _consume_stream, _StreamConfig
 from cuprum._streams_pump import _READ_SIZE
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-)
+
+if typ.TYPE_CHECKING:
+    from cuprum.unittests._stream_drain_support import CapturedPair
 
 
 class _RecordingReader(asyncio.StreamReader):

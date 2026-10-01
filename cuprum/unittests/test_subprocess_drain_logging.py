@@ -21,7 +21,8 @@ from cuprum._subprocess_wait import (
 
 if typ.TYPE_CHECKING:
     import pytest
-from cuprum.unittests._stream_drain_support import ConsumerTask
+
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 _DRAIN_LOGGER = "cuprum._subprocess_wait"
 

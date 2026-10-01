@@ -31,11 +31,6 @@ import typing as typ
 
 from cuprum._pipeline_types import _ExecutionInvariantError
 
-# Imported at runtime, not under ``TYPE_CHECKING``: the builders below are
-# annotated with the unions and this module re-exports them, so the names have
-# to resolve for anything that reads these annotations back.
-from cuprum._result_types import _AnyCommandResult, _AnyPipelineResult
-
 if typ.TYPE_CHECKING:
     from cuprum._rusage import ChildResourceUsage, _ChildRusageSnapshot
     from cuprum._subprocess_wait_types import _StreamPayload

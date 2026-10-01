@@ -20,7 +20,6 @@ from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext
-from cuprum.unittests._stream_drain_support import ConsumerTask
 from cuprum.unittests._timeout_test_helpers import (
     _DeadlineExecution,
     _ExitedProcess,
@@ -32,6 +31,7 @@ from cuprum.unittests._timeout_test_helpers import (
 if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _EventDetails, _StageObservation
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum.unittests._stream_drain_support import ConsumerTask
 
 
 def _assert_timeout_event_fields(

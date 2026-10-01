@@ -338,6 +338,11 @@ async def _run_to_command_result(
     reaching here has a text config. The drain still reports the widened
     payload its shared signature promises, so the text guarantee is re-taken
     rather than assumed.
+
+    Returns
+    -------
+    CommandResult
+        The completed run's exit code, captured text, and relay diagnostics.
     """
     started_at = run.started_at
     stdout_text: _StreamPayload | None = None

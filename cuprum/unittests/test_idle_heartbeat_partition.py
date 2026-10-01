@@ -24,13 +24,13 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _split_complete_lines, _StreamConfig
-from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
-    CapturedPair,
-)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.unittests._stream_drain_support import (
+        CapturedOrNone,
+    )
 
 _PROPERTY_MAX_EXAMPLES = 24
 _CHUNKS = st.lists(st.binary(min_size=1, max_size=6), min_size=1, max_size=6)
