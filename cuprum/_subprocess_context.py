@@ -21,19 +21,26 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum.context import CuprumContext
-    from cuprum.sh import CommandResult, ExecutionContext, TimeoutExpired
+    from cuprum.sh import (
+        BytesCommandResult,
+        CommandResult,
+        ExecutionContext,
+        TimeoutExpired,
+    )
 
 
 class _ShModule(typ.Protocol):
     """Structural view of the ``cuprum.sh`` members reached lazily.
 
-    Only the two constructors below are accessed through :func:`_sh_module`
-    (``CommandResult`` in ``cuprum._subprocess_execution`` and
-    ``TimeoutExpired`` in ``cuprum._subprocess_timeout``), so naming them
-    keeps the lazy-import shim typed without reintroducing the import cycle.
+    Only the constructors below are accessed through :func:`_sh_module`:
+    ``CommandResult`` and ``BytesCommandResult`` in
+    ``cuprum._subprocess_execution``, where the run's mode picks between them,
+    and ``TimeoutExpired`` in ``cuprum._subprocess_timeout``. Naming them keeps
+    the lazy-import shim typed without reintroducing the import cycle.
     """
 
     CommandResult: type[CommandResult]
+    BytesCommandResult: type[BytesCommandResult]
     TimeoutExpired: type[TimeoutExpired]
 
 

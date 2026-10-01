@@ -74,13 +74,20 @@ from cuprum.sh.output import _validate_convenience_flags as _validate_convenienc
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
-from cuprum.sh.results import CommandResult, PipelineResult
+from cuprum.sh.results import (
+    BytesCommandResult,
+    BytesPipelineResult,
+    CommandResult,
+    PipelineResult,
+)
 from cuprum.sh.results import dc as dc
 from cuprum.sh.safe_cmd import Pipeline, SafeCmd, SafeCmdBuilder
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
 __all__ = [
+    "BytesCommandResult",
+    "BytesPipelineResult",
     "CommandResult",
     "ExecutionContext",
     "IOOptions",

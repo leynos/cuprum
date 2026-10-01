@@ -24,9 +24,13 @@ from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
+from cuprum._result_assembly import _require_bytes, _require_text, _RunMeasurements
 from cuprum._subprocess_context import _cwd_arg, _sh_module
-from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
-from cuprum._subprocess_stream_run import _run_subprocess_with_streams
+from cuprum._subprocess_stream_run import (
+    # Imported, not merely re-exported: the direct run path below is the caller.
+    _run_subprocess_with_streams,
+    _run_subprocess_without_streams,
+)
 from cuprum._subprocess_streams import (
     _build_stream_config,
     _create_stream_callback,
@@ -51,6 +55,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._rusage import _ChildRusageSnapshot
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamPayload
     from cuprum.echo_events import RelayFallback
     from cuprum.lines import _LineHookFn
     from cuprum.sh import CommandResult, ExecutionContext, SafeCmd
@@ -81,6 +86,10 @@ class _SubprocessExecution:
 
     stdin_data: bytes | None
     on_line: _LineHookFn | None = None
+    # Whether this run's captured streams are reported as bytes rather than
+    # decoded text. Defaulted for the tests that build this bundle directly and
+    # for every text-mode caller; only the binary entry points set it.
+    capture_bytes: bool = False
     # Defaulted for the tests that build this bundle directly, and resolved by
     # ``RunOutputOptions.__post_init__`` on the production path, so the value
     # reaching the stream config is always a member, never a raw spelling.
@@ -153,12 +162,17 @@ class _DirectCompletion:
     three. Returning them as one record keeps the waiting and the result
     assembly in separate helpers, so neither accumulates enough locals to trip
     the repository's ``too-many-locals`` ceiling.
+
+    The two payload fields are typed ``str | bytes`` because the drain reports
+    whichever the run's mode asked for. Nothing here inspects the type: the
+    mode is read once, at the seam that chooses which result class to build,
+    so the payload reaches its field unexamined.
     """
 
     exit_code: int
     exited_at: float
-    stdout_text: str | None
-    stderr_text: str | None
+    stdout_text: _StreamPayload | None
+    stderr_text: _StreamPayload | None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None
 
 
@@ -186,43 +200,6 @@ async def _spawn_subprocess(
             cwd=_cwd_arg(execution.ctx.cwd),
         )
     )
-
-
-async def _run_subprocess_without_streams(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> tuple[int, float]:
-    """Run a subprocess directly, without stdout/stderr capture or echo.
-
-    The direct path spawns no stream consumers, so the only task to reconcile is
-    the stdin writer. Whatever escapes the wait — a timeout, a cancellation, or
-    an unexpected failure — it is cancelled and drained through
-    :func:`_cancel_stdin_writer` *before* the exception propagates, so a stdin
-    drain blocked on an unread pipe cannot delay timeout translation or
-    cancellation, and no writer is left running behind a failure. That cleanup
-    is shielded, so a cancellation arriving while it runs cannot abandon it. An
-    unexpected stdin-writer failure after the process exits normally propagates
-    unchanged.
-
-    Returns
-    -------
-    tuple[int, float]
-        The process exit code and the ``perf_counter`` timestamp of exit.
-    """
-    stdin_task = _spawn_stdin_writer(
-        process, execution.stdin_data, execution.observation
-    )
-    try:
-        exit_code, exited_at = await _wait_for_exit_code_within_timeout(
-            process,
-            execution,
-        )
-    except BaseException:
-        await _shielded_cleanup(_cancel_stdin_writer(stdin_task))
-        raise
-    if stdin_task is not None:
-        await stdin_task
-    return exit_code, exited_at
 
 
 def _relay_fallbacks_for_result(
@@ -254,8 +231,8 @@ async def _await_direct_completion(
 ) -> _DirectCompletion:
     """Wait for the child to settle and report how it ended as one record."""
     # The direct path captures nothing; the stream path overwrites these values.
-    stdout_text: str | None = None
-    stderr_text: str | None = None
+    stdout_text: _StreamPayload | None = None
+    stderr_text: _StreamPayload | None = None
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics] | None = None
     try:
         if execution.consumes_stdout or execution.consumes_stderr:
@@ -341,19 +318,58 @@ async def _execute_subprocess(execution: _SubprocessExecution) -> CommandResult:
             resource_usage=rusage,
         ),
     )
-    return _sh_module().CommandResult(
+    return _build_command_result(
+        execution,
+        completion,
+        _RunMeasurements(
+            pid=pid if pid is not None else -1,
+            started_at=run_start.wall_clock_started_at,
+            duration=max(0.0, completion.exited_at - started_at),
+            rusage=rusage,
+            relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
+        ),
+    )
+
+
+def _build_command_result(
+    execution: _SubprocessExecution,
+    completion: _DirectCompletion,
+    measurements: _RunMeasurements,
+) -> CommandResult:
+    """Assemble the run's result, choosing the class its mode calls for.
+
+    This is the only place either result class is constructed, and the only
+    place the run's mode is read on the way out. One builder rather than two
+    keeps every measurement — duration, rusage, the relay diagnostics — from
+    being computed twice under two names, which is how a binary run would come
+    to report figures that a text run of the same command did not. The two
+    constructions differ only in the class and in the narrowing of the captured
+    payloads, and both narrowing rules are read from
+    :mod:`cuprum._result_assembly` rather than restated here.
+
+    Returns
+    -------
+    CommandResult
+        A ``BytesCommandResult`` when the run captured bytes, otherwise the
+        ordinary text result.
+    """
+    sh = _sh_module()
+    if execution.capture_bytes:
+        return sh.BytesCommandResult(
+            program=execution.cmd.program,
+            argv=execution.cmd.argv,
+            exit_code=completion.exit_code,
+            stdout=_require_bytes(completion.stdout_text, "stdout"),
+            stderr=_require_bytes(completion.stderr_text, "stderr"),
+            **measurements.as_kwargs(),
+        )
+    return sh.CommandResult(
         program=execution.cmd.program,
         argv=execution.cmd.argv,
         exit_code=completion.exit_code,
-        pid=process.pid if process.pid is not None else -1,
-        stdout=completion.stdout_text,
-        stderr=completion.stderr_text,
-        started_at=run_start.wall_clock_started_at,
-        duration=max(0.0, completion.exited_at - started_at),
-        max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
-        user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
-        system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
-        relay_fallbacks=_relay_fallbacks_for_result(completion.relay_diagnostics),
+        stdout=_require_text(completion.stdout_text, "stdout"),
+        stderr=_require_text(completion.stderr_text, "stderr"),
+        **measurements.as_kwargs(),
     )
 
 
@@ -366,7 +382,13 @@ __all__ = [
     "_create_stream_callback",
     "_execute_subprocess",
     "_run_subprocess_with_streams",
+    # Re-exported so the tests that neutralize the direct path can keep
+    # patching it where they always have.
     "_run_subprocess_without_streams",
     "_spawn_stream_consumers",
     "_spawn_subprocess",
+    # Re-exported for the same reason: the deadline wait moved to
+    # ``cuprum._subprocess_wait``, but tests still import and patch it by this
+    # path.
+    "_wait_for_exit_code_within_timeout",
 ]

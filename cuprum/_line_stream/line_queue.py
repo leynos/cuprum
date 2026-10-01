@@ -17,7 +17,7 @@ from cuprum.line_stream_events import LineStreamPhase
 
 if typ.TYPE_CHECKING:
     from cuprum._line_stream.telemetry import _LineStreamTelemetry
-    from cuprum._subprocess_wait import _RunTaskOwnership
+    from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.line_stream_events import LineStreamSink
     from cuprum.lines import LineEvent, _LineHookFn
     from cuprum.sh import CommandResult

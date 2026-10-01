@@ -361,8 +361,12 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
     [
         ("SafeCmd.run", "CommandResult"),
         ("SafeCmd.run_sync", "CommandResult"),
+        ("SafeCmd.run_bytes", "BytesCommandResult"),
+        ("SafeCmd.run_bytes_sync", "BytesCommandResult"),
         ("Pipeline.run", "PipelineResult"),
         ("Pipeline.run_sync", "PipelineResult"),
+        ("Pipeline.run_bytes", "BytesPipelineResult"),
+        ("Pipeline.run_bytes_sync", "BytesPipelineResult"),
     ],
 )
 def test_execution_method_type_hints_resolve_at_runtime(

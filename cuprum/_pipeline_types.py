@@ -40,6 +40,7 @@ if typ.TYPE_CHECKING:
     # imports this module, so taking the record back from it would close a
     # cycle. The other direction is the reason the record lives here.
     from cuprum._streams import _RelayDiagnostics
+    from cuprum._subprocess_wait_types import _StreamConsumerTask, _StreamPayload
     from cuprum.context import AfterHook, BeforeHook
 
     # Annotation-only, as in ``cuprum.events``: ``env_mode`` is read as a value
@@ -282,8 +283,8 @@ class _PipelineStageResultInputs:
     """
 
     wait_result: _PipelineWaitResult
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
+    stderr_by_stage: tuple[_StreamPayload | None, ...]
+    final_stdout: _StreamPayload | None
     relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...]
 
 
@@ -327,8 +328,8 @@ class _PipelineSpawnResult:
     """Processes and output tasks produced when spawning a pipeline."""
 
     processes: list[asyncio.subprocess.Process]
-    stderr_tasks: list[asyncio.Task[str | None] | None]
-    stdout_task: asyncio.Task[str | None] | None
+    stderr_tasks: list[_StreamConsumerTask | None]
+    stdout_task: _StreamConsumerTask | None
     relay_diagnostics_by_stage: tuple[
         tuple[_RelayDiagnostics | None, _RelayDiagnostics | None],
         ...,
@@ -346,7 +347,12 @@ class _PipelineOutputs:
     whatever was already recorded before the wait failed.
     """
 
-    stderr_by_stage: tuple[str | None, ...]
-    final_stdout: str | None
+    stderr_by_stage: tuple[_StreamPayload | None, ...]
+    final_stdout: _StreamPayload | None
     capture: bool
+    # Whether the captured payloads are bytes rather than decoded text. Read
+    # only where the ``TimeoutExpired`` is built, because that is the one
+    # payload this path has to *combine* rather than pass through: joining
+    # stage stderr needs the empty value of the mode it is joining in.
+    capture_bytes: bool = False
     relay_fallbacks_by_stage: tuple[tuple[RelayFallback, ...], ...] = ()
