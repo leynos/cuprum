@@ -64,7 +64,9 @@ class CuprumContext:
         no overlay is active on this context.
     _allowlist_is_restricted:
         Internal marker distinguishing the permissive empty default allowlist
-        from an empty allowlist produced by narrowing a restricted scope.
+        from an empty allowlist produced by narrowing a restricted scope. It
+        keeps its position ahead of ``catalogue`` so the positional argument
+        order that predates the catalogue field is unchanged.
     env_mode:
         Policy used to render the composed environment for child processes.
     catalogue:
