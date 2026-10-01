@@ -206,6 +206,46 @@ likelihood, and mitigation.
 
 ## Progress
 
+- [x] (2026-10-01) Third rebase onto `origin/main`, taken for a reason the
+  first two did not have: a CI failure that was *not reproducible on the branch
+  head at all*. `lint-test` failed on the merge ref for `e3384618`, and
+  reproducing it required rebuilding that merge ref locally. `origin/main` had
+  advanced `104c680c` → `7b86b904` with two commits, one of them `e8910a7a`, a
+  Pylint migration. That migration is the whole story: it split
+  `PYLINT_TARGETS` into `PYLINT_STRICT_TARGETS` and a new
+  `PYLINT_TEST_TARGETS ?= cuprum/unittests scripts/tests tests/behaviour
+  tests/features`,
+  on the reasoning its own comment states — *"Pylint's recursive walk only
+  descends from a package directory, so the broad roots alone skip them."*
+  `cuprum/unittests` has no `__init__.py`, so every one of its ~340 modules
+  entered the lint scope for the first time, and two branch- added assertions
+  tripped `C1804 use-implicit-booleaness-not-comparison-to-string`. This is the
+  clearest instance yet of PR CI building the merge ref: both gates were green
+  on the branch and red on the merge, and no amount of re-running the branch
+  would have shown it. `OLD_BASE` is `104c680c`, the previous rebase's target,
+  so no squash analysis was needed. The replay was 49 commits and
+  **conflict-free**, which is why no `range-diff` entry is content-different
+  here. Weave was bypassed again (`-c core.attributesFile=/dev/null`), as was
+  `rerere`. Verified afterwards: the two `C1804` sites become `assert not …`,
+  and the tree diffs clean against both the old head and the new target for
+  those files.
+- [x] (2026-10-01) Third gate run, on the rebased head `9b7e4d20`. All six
+  targets pass, and gate 5 — the one CI failed — reaches every leaf for the
+  first time since the Pylint migration: `verify-classic-pylint`,
+  `verify-df12-pylint`, `pylint-integration` (`7 passed`), both
+  `pylint-classic` passes, `ruff`, `interrogate` (100.0%), `df12-pylint`,
+  `ambrleaks`, `skylos --gate`, the Rust half (`cargo doc` + clippy, whitaker,
+  spelling) and the Actions half (yamllint, actionlint). Both pylint passes
+  print `rated at 10.00/10` with **no** diagnostic lines and no
+  `make: *** [... Error` footer, which is the distinction that matters: this
+  repository's own Pylint config warns that a 10.00/10 can mean no module was
+  analysed at all, so the rating string is not accepted as evidence on its own
+  — the message-format grep and the exit status are. `make test` reaches the
+  genuine end of `test-rust`: 127 nextest tests passed, and the doctest recipe
+  ran to its closing line rather than aborting earlier. `typos.toml` stayed
+  byte-identical through the spelling stages, so there is no regenerated
+  artefact to commit. Pushed as a forced update `e3384618` → `9b7e4d20`, leased
+  to the recorded remote head.
 - [x] (2026-09-29) Rebased onto `origin/main` and repaired the one gate the
   rebase broke. `OLD_BASE` is `991dee64`, proven exclusive two independent ways
   — it is an ancestor of `origin/main` *and* the direct parent of this branch's
@@ -282,7 +322,7 @@ likelihood, and mitigation.
   (`_validate_stdio_targets` and the `_reject_*` helpers) moved to a new
   `cuprum/sh/stdio_rules.py`, leaving `stdio.py` with the vocabulary and the
   per-variant payload rules. `stdio.py` went 427 → 246 lines, `stdio_rules.py`
-  is 214. `cuprum.sh.output` re-exports `_validate_stdio_targets` under its old
+  is 213. `cuprum.sh.output` re-exports `_validate_stdio_targets` under its old
   name, so its `__post_init__` call site is unchanged, and
   `_command_internals.py` now imports `_reject_contested_stdin` from the new
   module. The split also drifted the maturin wheel-manifest snapshot, which was
@@ -765,6 +805,20 @@ likelihood, and mitigation.
 
 ## Surprises & discoveries
 
+- Observation: a lint failure can be invisible on the branch head and real in
+  CI, because CI lints the *merge* ref rather than the head. Evidence:
+  `lint-test` failed on run 36893348494 for head `e3384618` while `make lint`
+  was green on that same commit locally. The difference was one file —
+  `Makefile` — where main's `e8910a7a` had split `PYLINT_TARGETS` and added
+  `cuprum/unittests` to the lint scope. `cuprum/unittests` has no `__init__.py`
+  and Pylint's recursive walk only descends from a package directory, so the
+  pre-merge config never reached it; the new `PYLINT_TEST_TARGETS` pass made
+  ~340 test modules lintable for the first time, and two branch-added `x == ""`
+  assertions were already in that set. Impact: a green branch-head gate is not
+  evidence about a pull request. When CI fails and the head is green, the merge
+  ref must be rebuilt locally (`git merge origin/main`, then re-run the gate)
+  before concluding anything — and the failure should be chased to the target
+  commit that created it, which here named the mechanism exactly.
 - Observation: the 400-line module cap can be crossed by a *rebase* with no
   new code on either side. Evidence: `cuprum/sh/output.py` was 379 lines on the
   target and under the cap on this branch, but 410 after the replay, because
