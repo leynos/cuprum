@@ -458,7 +458,7 @@ def test_path_target_closed_after_a_timeout(
         )
 
     # The window that proves the close: the file must be reopenable and empty.
-    assert log.read_text(encoding="utf-8") == "", (
+    assert not log.read_text(encoding="utf-8"), (
         "a timed-out child wrote nothing, and the file must still be closed"
     )
 
