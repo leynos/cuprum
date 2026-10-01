@@ -1069,8 +1069,7 @@ jobs:
         # where there is no proxy and the action fails closed, so the step
         # runs on the owned arm only.
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: "leynos/shared-actions/.github/actions/\
-          export-ubicloud-cache-credentials@dbe2e22ceaf498d85512679ccded38be9dbe7777"
+        uses: "leynos/shared-actions/.github/actions/export-ubicloud-cache-credentials@c4ed5ffaf0640b1907d5359a87fd1677034eec27"
 
       - name: Set up sccache
         uses: ./.github/actions/setup-sccache
