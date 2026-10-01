@@ -1140,7 +1140,7 @@ jobs:
       # treats changes within one percentage point as measurement noise.
       #
       - name: Generate coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@a5765019912a8ab6882b12db049c7cde635f3a85
+        uses: leynos/shared-actions/.github/actions/generate-coverage@c4ed5ffaf0640b1907d5359a87fd1677034eec27
         env:
           # The same warnings posture and the same core budget the
           # uninstrumented run used.
