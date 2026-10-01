@@ -152,8 +152,14 @@ escalation, not a workaround.
   `cuprum/executable_paths.py` (path vocabulary) and
   `cuprum/executable_binding.py` (binding + resolution) after the single module
   reached 426 lines. 99 tests pass.
-- [ ] EP-M2: `cuprum/context/executable_overlay.py`, `CuprumContext` and
-  `ScopeConfig` fields, `resolve_executable`, `bind_executable`, exports.
+- [x] (2026-10-01 17:52Z) EP-M2 complete.
+  `cuprum/context/executable_overlay.py` (95 lines) carries
+  `merge_executable_bindings`; `cuprum/context/_executable.py` (148 lines)
+  carries the bindings field, coercion, `with_executable_binding`, and
+  `resolve_executable`; `ExecutableBindingRegistration` and `bind_executable`
+  live in `cuprum/context/registration.py`, re-exported through
+  `cuprum/context/__init__.py`. `resolve_executable` is pinned as independent
+  of the allowlist. 96 focused tests pass.
 - [ ] EP-M3: spawn-time resolution, `ExecEvent.resolved_path`, adapter
   projection, `CommandResult.resolved_path`.
 - [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
@@ -214,6 +220,22 @@ escalation, not a workaround.
   `SafeCmd`, `sh.make`, and `Pipeline.concat`. Impact: `ExecutableBinding`'s
   annotations must remain resolvable, which the two-module split preserves
   because nothing in a TYPE_CHECKING block is referenced at runtime.
+- Observation: no gate executes Python doctests. The wheel gate runs Cargo
+  doctests and CI has a `doctests` input, but nothing runs
+  `pytest --doctest-modules` or equivalent over `cuprum/`. Evidence:
+  `grep -rn "doctest" Makefile` matches only the Rust rustdoc flags, and a
+  repository-wide search for `doctest.testmod`/`--doctest-modules` finds
+  nothing. Impact: the documented examples shipped in EP-M1 were never
+  executed, and two of them were broken — `executable_binding` and
+  `resolve_binding` both called `Program("tool")`, which is not callable at
+  runtime, so every example in those docstrings raised `NameError`. Repaired by
+  hand and verified with `uv run python -m doctest`; future examples must be
+  checked the same way, because no gate will catch them.
+- Observation: adding files under `cuprum/` breaks
+  `test_maturin_wheel_build_snapshot`, which pins the built wheel's file list.
+  Impact: each milestone that adds a shipped module must re-record
+  `cuprum/unittests/__snapshots__/test_maturin_build.ambr` with
+  `--snapshot-update` and confirm the diff is exactly the new modules.
 
 ## Decision log
 
@@ -260,6 +282,31 @@ escalation, not a workaround.
   binding construction. `executable_path` remains a subtype of `ValueError`, so
   callers written against the sibling `safe_path` contract keep working.
   Date/Author: 2026-10-01, implementing agent.
+- Decision: extract `_registration_base.py` and `_env_registration.py` in
+  addition to the planned `_executable.py` and `_hooks.py`. Rationale: the
+  planned extractions alone brought `cuprum/context/core.py` from 409 to 314
+  lines but left `cuprum/context/registration.py` at 469, over pylint's
+  400-line ceiling. Extracting the `env` handle alone produced a cycle, because
+  `_env_registration` needed `_TokenRegistration` from the module that imports
+  it; moving the base out as well breaks the cycle by giving both modules a
+  leaf dependency. `registration` re-exports `EnvRegistration`, `env`, and
+  `_TokenRegistration`, so every existing import path resolves to the same
+  object. Date/Author: 2026-10-01, implementing agent.
+- Decision: `executable_binding` discriminates on
+  `isinstance(value, (str, Path))` rather than `callable(value)`. Rationale:
+  the negative branch of `callable` leaves the argument union un-narrowed, so
+  `ty` rejected the resolver assignment outright. Branching on the path types
+  narrows cleanly and states the intended contract — a resolver is anything
+  that is not a path — without a cast or a `TypeIs` guard, which the 3.12 floor
+  rules out anyway. Date/Author: 2026-10-01, implementing agent.
+- Decision: repair two pre-existing interrogate misses in
+  `scripts/tests/test_boundary_*.py`, which are byte-identical to
+  `origin/main`. Rationale: `make lint` failed at 99.9% against a 100.0% floor.
+  Fixing only the three misses this branch introduced lands at 99.9865%, which
+  rounds to 100.0% and passes — but that leaves the gate depending on
+  interrogate's one-decimal rounding of main's existing debt rather than on the
+  tree being covered. Fixing all five removes that dependency. Date/Author:
+  2026-10-01, implementing agent.
 
 ## Outcomes & retrospective
 
