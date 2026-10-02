@@ -1221,6 +1221,26 @@ than discovering the gap months later.
     is not a licence to hand-wrap the next paragraph to 80 columns; the width
     that matters is `mdtablefix`'s, and only `make fmt` proves it.
 
+- [ ] (2026-10-03) The queued CodeRabbit request for #505 has not run, and none
+  of the work above changes that.
+  - *The queue request is still pending, not expired.* `d8860275` had been
+    pending 24 h 22 m at the latest read. An earlier note here said it had
+    vanished from the queue; that was a **misread of a truncated list** — the
+    pending list is 87 rows and the first ten do not reach it. It is still
+    there and still un-run. Nothing in this record should be read as claiming
+    otherwise.
+  - *Why it matters.* `reviewDecision` is `CHANGES_REQUESTED`, anchored at
+    `92f17d25` (2026-10-02T10:38:44Z). That decision is the only thing keeping
+    `mergeStateStatus` at `BLOCKED`; every thread is already resolved (8 of 8,
+    0 unresolved) and no CodeRabbit comment is newer than 14:32:16Z. A
+    submission is the only mechanism that can move it, and only the queued
+    request can produce one.
+  - *State at `ba06a730`.* `headRefOid` matches, `isDraft` false,
+    `reviewDecision` `CHANGES_REQUESTED`, `mergeStateStatus` `BLOCKED`. Note
+    that `review_decision` is not a REST field: reading it from
+    `/pulls/505` returns `null` and looks like "no decision", which is wrong.
+    It has to come from `gh pr view --json reviewDecision` or GraphQL.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
