@@ -7,8 +7,9 @@ renderer those two call into lives in ``cuprum._stream_echo``, and the
 line-boundary emitter that publishes decoded lines lives in
 ``cuprum._stream_line_consumer``. Capture and line emission are independent
 channels: the drain's buffer keeps the child's own bytes, and only the line
-feeder decodes, so one drain serves both modes. The writer side that pumps one pipeline
-stage's stdout into the next stage's stdin lives in ``cuprum._streams_pump``
+feeder decodes, so one drain serves both modes. The writer side that pumps one
+pipeline stage's stdout into the next stage's stdin lives in
+``cuprum._streams_pump``
 and is re-exported here (``_pump_stream``, ``_close_stream_writer``,
 ``_write_to_stream_writer``, ``_WriteOutcome``,
 ``_drain_stream_reader_bounded``) so importers of this module keep working
