@@ -1737,11 +1737,11 @@ siblings — moved to `tests/test_ci_selection_guard_controls.py` when the pair
 crossed the 400-line cap, and
 `test_ci_invokes_the_target_that_consumes_the_selector` and
 `test_the_suite_target_recipe_consumes_the_selector` were always the wiring
-family's: the first is in `tests/test_ci_suite_wiring_contract.py:49`, the
-second in `tests/test_ci_recipe_flow_contract.py:94` (which the wiring contract
-calls into), and both ask the companion question the contract module's
-docstring names. The list is kept as written because it records what the plan
-expected, and the corrections are made here rather than by rewriting the record.
+family's: the first is in `tests/test_ci_suite_wiring_contract.py`, the second
+in `tests/test_ci_recipe_flow_contract.py` (which the wiring contract calls
+into), and both ask the companion question the contract module's docstring
+names. The list is kept as written because it records what the plan expected,
+and the corrections are made here rather than by rewriting the record.
 
 The two guard readings of a step guard both live in `ci_leg_matrix.py` as
 built, because the second is the first plus one more resolved value rather than
@@ -1769,8 +1769,12 @@ only caller of `admits_event`.
 
 Two tests beyond the plan's sketch are worth naming.
 `test_the_exception_mechanism_reports_an_uncovered_module` is the seeded-fault
-control: it drives `remedy` with a module that cannot exist so the empty
-exception table is exercised rather than assumed.
+control for the *report*: it drives `remedy` — a pure formatter that reads no
+`EXCEPTIONS` — with a module that cannot exist, and requires the message to
+name that module and both fixes. The empty table's own machinery is driven by
+`tests/test_ci_exemption_contract.py` instead, whose
+`test_a_valid_exemption_is_honoured` reaches the qualifying branch a
+refusal-only control never can.
 `test_the_suite_target_recipe_consumes_the_selector` closes the gap between the
 Makefile and the workflow from the other side: a target named `test-python`
 that ran a bare directory would satisfy the workflow check while collecting the
