@@ -795,6 +795,43 @@ than discovering the gap months later.
     readily as for the other two. Both messages now name the toolbox the tests
     need rather than a command the action runs. Four sites, not two; the
     earlier entry undercounted.
+- [x] (2026-10-02) Corrected `recipe_of`'s docstring, which contradicted the
+  helper below it about what `make` does with a continued recipe entry.
+  - *The contradiction was in the same module.* `recipe_of` said its collapse
+    of a continued recipe entry matches "what `make` does before invoking the
+    shell"; `_join_continuations`, twenty lines up, says the opposite and gives
+    the reason. `make -n` settles it: a recipe entry continued with a trailing
+    backslash still prints its backslash-newline for the shell to join, while
+    the same continuation in an assignment expands to one space, so the
+    collapse is this reader's own for a recipe and `make`'s own for an
+    assignment. That is precisely why one helper serves both callers, and the
+    guide carried the same wrong sentence beside it.
+  - *This was the plan's fifth point, and the plan's own entry had it right.*
+    The requirement to correct recipe-line descriptions in
+    `docs/developers-guide.md`, `makefile.py::recipe_tokens` and
+    `tests/test_ci_suite_wiring_contract.py` resolved to the `recipe_of`
+    docstring and one guide paragraph; `makefile.py::recipe_tokens` is a
+    one-line delegate with nothing to correct, and the wiring contract's
+    command matching goes through the tokenizing `script_runs_command` rather
+    than a raw-text search, so neither site carried a wrong description.
+- [x] (2026-10-02) Re-ran the five gates at `2b008c89`, the head carrying both
+  corrections, and recorded the result.
+  - *All five green, tree frozen.* `check-fmt` exit 0, `typecheck` exit 0,
+    `lint` exit 0 in 151s, `markdownlint` exit 0 in 24s, `test` exit 0 in 242s.
+    `HEAD_BEFORE` and `HEAD_AFTER` are `2b008c89` for every gate and the tree
+    was empty before and after each, so the run speaks for the commit it names.
+    Logs: `/tmp/<gate>-issue499-2b008c89.out` with matching `.meta`.
+  - *Every leaf was reached, which an exit status alone would not show.* All
+    thirteen `make lint` leaves ran; `github-actions-lint` completed both its
+    `yamllint` and `actionlint` steps, so the host's historic deadlock did not
+    reproduce. `make test` ran eleven pytest sessions (3676 passed, 86
+    skipped), the nextest leaf (127/127) and the doctest leaf (0 failed, 3
+    ignored); `cargo-nextest not found` is absent.
+  - *No warning anywhere.* The only "warn" matches in the lint log are inside
+    echoed command lines (`-D warnings`), and the test log's matches are test
+    node names; there is no `warnings summary`, no `=== FAILURES ===` and no
+    `=== ERRORS ===` block in any log. `typos.toml` re-hashed to the same blob
+    `9024e10f` before and after all five gates, so no gate dirtied the tree.
 
 ## Surprises & discoveries
 
