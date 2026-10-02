@@ -8,8 +8,8 @@ The invariants checked here are:
 
 - ``build_argv``: positional arguments are stringified in order and
   precede keyword flags; keyword flags preserve insertion order and
-  normalize underscores in keys to hyphens; ``None`` is rejected with
-  ``TypeError`` in both positional and keyword positions.
+  normalize underscores in keys to hyphens; ``None`` and ``bytes`` are
+  rejected with ``TypeError`` in both positional and keyword positions.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
   entry; unknown programs are rejected with ``UnknownProgramError``;
@@ -21,6 +21,7 @@ The invariants checked here are:
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 from pathlib import Path
 
@@ -48,6 +49,25 @@ _ARG_VALUES = st.one_of(
 _KWARG_KEYS = st.text(alphabet="abcd_", min_size=1, max_size=8)
 _ARGS = st.lists(_ARG_VALUES, max_size=6)
 _KWARGS = st.dictionaries(_KWARG_KEYS, _ARG_VALUES, max_size=4)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RejectedValue:
+    """An argv value the builder must reject, with the message it reports."""
+
+    value: object
+    pattern: str
+
+
+# Bytes are rejected outright, so the property ranges over arbitrary
+# payloads -- including non-UTF-8 -- rather than over curated examples.
+_INVALID_ARG = st.one_of(
+    st.just(_RejectedValue(None, "None is not a valid argv element")),
+    st.builds(
+        lambda payload: _RejectedValue(payload, "bytes is not a valid argv element"),
+        st.binary(max_size=8),
+    ),
+)
 
 _TEST_PROJECT = ProjectSettings(
     name="property-tests",
@@ -83,26 +103,27 @@ def test_build_argv_orders_and_normalizes(
     )
 
 
-@settings(max_examples=100)
-@given(args=_ARGS, kwargs=_KWARGS, data=st.data())
-def test_build_argv_rejects_none_anywhere(
+@settings(max_examples=200)
+@given(args=_ARGS, kwargs=_KWARGS, specimen=_INVALID_ARG, data=st.data())
+def test_build_argv_rejects_invalid_values_everywhere(
     args: list[str | int | bool | Path],
     kwargs: dict[str, str | int | bool | Path],
+    specimen: _RejectedValue,
     data: st.DataObject,
 ) -> None:
-    """``None`` raises TypeError in any positional or keyword position."""
+    """Invalid argv values raise TypeError in any position or keyword slot."""
     # Deliberately defeat static typing: the property under test is the
-    # runtime rejection of None, which the annotations forbid.
-    poisoned = typ.cast("str", None)
+    # runtime rejection that the annotations forbid.
+    poisoned = typ.cast("str", specimen.value)
     position = data.draw(
         st.integers(min_value=0, max_value=len(args)),
         label="insertion position",
     )
     positional = [*args[:position], poisoned, *args[position:]]
-    with pytest.raises(TypeError, match="None is not a valid argv element"):
+    with pytest.raises(TypeError, match=specimen.pattern):
         build_argv(*positional, **kwargs)
     key = data.draw(_KWARG_KEYS, label="poisoned key")
-    with pytest.raises(TypeError, match="None is not a valid argv element"):
+    with pytest.raises(TypeError, match=specimen.pattern):
         build_argv(*args, **{**kwargs, key: poisoned})
 
 
@@ -132,13 +153,16 @@ def test_make_builder_agrees_with_build_argv(
 
 # Drawn from a literal specimen rather than from the production set: a reserved
 # set that lost a name must fail the assertion below, not make the strategy
-# unsamplable. The specimens cover both message forms plus the names the
-# builder most often sees.
+# unsamplable. The specimens cover the names the builder most often sees.
 _SPECIMEN_RESERVED = ("cwd", "env", "stdin", "timeout")
 
 # Insertion order decides which reserved name the builder reports, so anything
-# drawn before the injected key (including safe keywords) must not shadow it.
+# drawn before the injected key (including safe keywords) must not shadow it:
+# the table covers a keyword in key order and a poison inserted after it.
 _RESERVED_KEYS = st.sampled_from(_SPECIMEN_RESERVED)
+# The bare run_sync parameter names are reserved without an ExecutionContext
+# field, so they cover the second rejection form.
+_RESERVED_SPECIMENS = st.one_of(_RESERVED_KEYS, st.sampled_from(("context", "output")))
 
 
 @settings(max_examples=200)
@@ -146,7 +170,7 @@ _RESERVED_KEYS = st.sampled_from(_SPECIMEN_RESERVED)
     program=st.sampled_from(sorted(DEFAULT_CATALOGUE.allowlist)),
     args=_ARGS,
     kwargs=_KWARGS.filter(lambda mapping: not mapping.keys() & _RESERVED_OPTIONS),
-    reserved=_RESERVED_KEYS,
+    reserved=_RESERVED_SPECIMENS,
 )
 def test_make_rejects_reserved_execution_option_keywords(
     program: Program,

@@ -105,6 +105,33 @@ def test_make_rejects_none_argument(
     assert "None" in str(excinfo.value), "None should be explicitly rejected"
 
 
+@pytest.mark.parametrize(
+    ("invoke", "offending_value"),
+    [
+        pytest.param(lambda builder: builder(b"release"), b"release", id="release"),
+        pytest.param(lambda builder: builder(b"v\xff"), b"v\xff", id="non-utf8"),
+        pytest.param(
+            lambda builder: builder(tag=b"release"),
+            b"release",
+            id="keyword-value",
+        ),
+    ],
+)
+def test_make_rejects_bytes_argument(
+    invoke: cabc.Callable[[SafeCmdBuilder], object],
+    offending_value: bytes,
+) -> None:
+    """Bytes values in positional and keyword arguments raise TypeError."""
+    builder = sh.make(ECHO)
+
+    with pytest.raises(TypeError, match="bytes is not a valid argv element") as excinfo:
+        invoke(builder)
+
+    assert repr(offending_value) in str(excinfo.value), (
+        "The error should identify the offending bytes value"
+    )
+
+
 def test_make_supports_custom_catalogue() -> None:
     """Injected catalogues drive metadata visible to downstream services."""
     program = Program("tool")

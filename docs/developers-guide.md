@@ -923,7 +923,11 @@ The serializer contract itself:
   as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- `None` raises `TypeError` in positional and keyword positions.
+- accepted values are `str`, `int`, `float`, `bool`, and `Path`;
+- `None` raises `TypeError` in positional and keyword positions;
+- `bytes` raises `TypeError` in positional and keyword positions, with the
+  offending value in the message, because `str()` would otherwise pass the
+  value's Python `repr` to the child process.
 
 The boundary, and why a warning or a per-builder opt-out was rejected instead,
 is recorded in [Cuprum design](cuprum-design.md) §6.2.6.

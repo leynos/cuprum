@@ -42,6 +42,36 @@ than it sounds — only the exact names are reserved, so `working_dir=...` and
 `stdin_file=...` continue to render as flags. See
 [Build arguments deliberately](users-guide.md#build-arguments-deliberately).
 
+## Bytes arguments are rejected
+
+`sh.make()` builders and the `build_argv` helper no longer accept `bytes`
+values. Cuprum previously stringified them with `str()`, so `b"release"` was
+passed to the child as the literal text `b'release'` — Python's `repr`, not the
+intended text. A `bytes` value in any positional or keyword position now raises
+`TypeError` naming the offending value, matching the existing rejection of
+`None`.
+
+Decode caller-held filesystem bytes before building the command:
+
+<!-- tested-example: migration-bytes-arguments -->
+
+```python
+import os
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="bytes-arguments")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+argument = os.fsdecode(b"v\xc3\xbf")
+command = python("-c", "print('two words')", argument)
+assert command.argv == ("-c", "print('two words')", argument)
+```
+
+`os.fsdecode()` uses the configured filesystem encoding and error handler; see
+[build arguments deliberately](users-guide.md#build-arguments-deliberately) in
+the users' guide for the platform differences.
+
 ## Catalogue-backed scoped contexts
 
 When a scope allowlist should match a `ProgramCatalogue`, pass the catalogue

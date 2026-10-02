@@ -485,8 +485,8 @@ expected to wrap `sh.make` with **builders** (see below).
 pure helper for tests and wrapper code that need to inspect normalization
 without performing a catalogue lookup. It intentionally shares the same
 coercion path as `sh.make`, so positional ordering, keyword flag formatting,
-underscore-to-hyphen normalization, and `None` rejection stay in lockstep with
-builders.
+underscore-to-hyphen normalization, and rejection of `None` and `bytes` stay in
+lockstep with builders.
 
 `build_argv` stays generic; the *builder* reserves the names that describe how
 a command runs. A keyword naming an `ExecutionContext` field or a `run_sync`
@@ -563,8 +563,10 @@ assert text is not None
 - Positional arguments are stringified with `str()`. Keyword arguments are
   serialized as `--flag=value`, replacing underscores with hyphens in flag
   names to align with common CLI conventions.
-- `None` is rejected as an argument value to catch accidental omissions early;
-  builders should decide whether to omit the flag or substitute a value.
+- `None` and `bytes` are rejected as argument values; `None` catches accidental
+  omissions early, and `bytes` would otherwise reach the child as its Python
+  `repr`. Builders should decide whether to omit the flag or substitute a
+  value, and decode filesystem bytes before passing them.
 - `SafeCmd` instances carry the owning `ProjectSettings`, making catalogue
   noise rules and documentation links visible to downstream hooks without an
   extra lookup.
