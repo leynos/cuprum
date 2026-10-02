@@ -586,26 +586,36 @@ exclude = ["unittests/**"]
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/context/registration.py",
     "cuprum/_line_iteration.py",
     "cuprum/_pipeline_native_pump_types.py",
     "cuprum/_line_stream/telemetry.py",
     "cuprum/_pipeline_results.py",
+    "cuprum/_command_internals.py",
     "cuprum/_line_stream/line_queue.py",
     "cuprum/_pipeline_config.py",
     "cuprum/_stream_line_consumer.py",
     "cuprum/adapters/pump_metrics.py",
+    "cuprum/events.py",
 ]
-reason = "Nine modules whose `if TYPE_CHECKING:` guard opens the same way. The bodies name different types and the guard is the only shared part; import declarations cannot be factored into a shared helper."
+reason = "Ten modules whose `if typ.TYPE_CHECKING:` block repeats. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper."
 
 [[tool.duplication_gate.allow]]
 members = [
+    "cuprum/context/registration.py",
+    "cuprum/_line_callbacks.py",
     "cuprum/_line_stream/spawn.py",
     "cuprum/_pipeline_collect.py",
     "cuprum/_subprocess_streams.py",
     "cuprum/_subprocess_wait.py",
 ]
-reason = "The same four-module TYPE_CHECKING header. Each module imports its own collaborators; only the `import types`/`import collections.abc as cabc` prologue repeats."
+reason = "Six more modules whose `if typ.TYPE_CHECKING:` block repeats for the same reason: one guard keyword and one convention, followed by each module's own distinct type-only imports. Widened after `main` moved `cuprum/context/registration.py` into this family and added `cuprum/_line_callbacks.py` to it."
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_internals.py",
+    "cuprum/_command_internals.py",
+]
+reason = "Two modules importing overlapping names from `cuprum._observability`: `cuprum/_pipeline_internals.py` takes six, `cuprum/_command_internals.py` five of the same, and the window covers that statement plus the next import's opening line. Their remaining imports diverge immediately, and import declarations cannot be factored into a shared helper. Reported after `main` widened both blocks with the environment-policy names."
 
 [[tool.duplication_gate.allow]]
 members = [

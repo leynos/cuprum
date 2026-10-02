@@ -118,6 +118,12 @@ repository rather than re-derived here.
       [ADR-018: Typed environment policies](../../docs/adr-018-typed-environment-policies.md),
       so this branch's record was renumbered to ADR-019 across
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
+- [x] (2026-10-02) Widened two allow entries and added a third after the
+      replay surfaced three unsuppressed families. `main`'s env-policy and
+      line-event work had reshaped three `if typ.TYPE_CHECKING:` import blocks
+      the branch had adjudicated with exact member lists; the gate was green at
+      the pre-rebase head `eeae8e70`, so this is rebase-induced, not a
+      regression in the branch. `check` reports 27 allowed, no stale entries.
 - [ ] Re-run the commit gates against the rebased head and update the draft
       pull request. The `ccccaa85` evidence above describes the pre-rebase
       series and does not carry over to the rewritten commits.
@@ -431,8 +437,43 @@ three-line preamble from `_lookup_active_span` and left a two-line None guard
 byte-identical to an unrelated guard in a module the branch never touched, so
 the gate reported a new family against this branch's own tip. That is the
 detector working as designed — it matches token windows, not intentions — and
-the exception records the comparison rather than hiding it. The final state is
-26 families covered by 24 reasoned entries, with `top = 30` still not binding.
+the exception records the comparison rather than hiding it.
+
+The 2026-10-02 rebase made the detector state its own point once more, and this
+time the trigger was `main` rather than the branch. The gate was green at the
+pre-rebase head `eeae8e70` (26 families, 24 entries, exit 0, measured in a
+scratch checkout of that revision); after replaying onto `b6bb9a99` it failed
+with three unsuppressed families and one stale entry. Two of `main`'s merged
+changes were responsible, and neither duplicated anything:
+
+- `104c680c` (environment replacement policies) added `_without_env_mode_tag`
+  to the `cuprum._observability` import block in both `_command_internals.py`
+  and `_pipeline_internals.py`, and added `EnvMode` to `_command_internals`'
+  `cuprum.context` import. That widened two blocks the branch had adjudicated
+  with exact member lists, so entry 1 (nine modules) no longer covered the
+  ten-location family (`_command_internals.py` and `events.py` were new), and a
+  new two-location family pairing the two `_observability` blocks appeared.
+- `71aaf3eb` (hoisting invariant `ExecEvent` fields) reshaped
+  `cuprum/_line_callbacks.py` into the same type-only guard family, and the
+  same commit's env-policy import moved `cuprum/context/registration.py` from
+  the guard-prologue family into it, so entry 2 (four modules) no longer
+  covered the six-location family.
+
+All three families are `if typ.TYPE_CHECKING:` import windows, which the entry
+preamble and ADR-019 already establish as the one category that cannot be
+factored into a shared helper: re-importing from a common module would not
+remove the per-module binding, and a wildcard re-export would trade a
+reviewable import list for an invisible one. The two entries were therefore
+widened to the full membership the gate reported and a new entry recorded for
+the `_observability` pair, each with a reason naming the trigger. No import was
+added, removed, or reordered to make the gate pass, and neither the surface nor
+the token floor moved. The final state is 27 families covered by 25 reasoned
+entries, with `top = 30` still not binding. The measured movement is: findings
+26 → 27 (the one new `_observability` pairing), entries 24 → 25, and the two
+existing families 9 → 10 and 4 → 6 locations. In the first family
+`cuprum/context/registration.py` moved out to the second and
+`cuprum/_command_internals.py` and `cuprum/events.py` moved in; in the second,
+`cuprum/context/registration.py` and `cuprum/_line_callbacks.py` joined.
 
 The §9 demonstration was re-run at the delivered head after `nose_detector.py`
 changed, so its evidence describes the shipped code: all four legs pass with
