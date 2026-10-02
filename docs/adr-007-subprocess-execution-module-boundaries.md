@@ -457,11 +457,11 @@ separate modules:
 - `cuprum/_bytes_run.py` — the decisions the two byte-exact entry points owe
   regardless of which is called: `_validate_bytes_output` rejects the one
   combination bytes mode does not offer (a caller-supplied line observer)
-  before anything is spawned, and the
-  `_require_command_result`/`_require_pipeline_result` helpers re-take the
-  narrower class a text-mode entry point promised. The refusal is policy, not
-  capability: the drain serves byte-exact capture and decoded-line observation
-  at once, so a registered `sh.observe()` hook stays supported.
+  before anything is spawned, and the `_require_command_result`/
+  `_require_pipeline_result` helpers re-take the narrower class a text-mode
+  entry point promised. The refusal is policy, not capability: the drain serves
+  byte-exact capture and decoded-line observation at once, so a registered
+  `sh.observe()` hook stays supported.
 - `cuprum/_result_types.py` — the unions the widened internal seam speaks
   (`_AnyCommandResult`, `_AnyPipelineResult`). It imports nothing from the
   assembly rules because `cuprum.context` publishes hook signatures that accept
