@@ -25,6 +25,9 @@ from cuprum.sh import (
 )
 from tests.helpers.catalogue import python_catalogue
 
+if typ.TYPE_CHECKING:
+    from cuprum.events import ExecEvent
+
 # Every byte value, then a lone continuation byte, a byte no UTF-8 sequence
 # starts with, and a NUL. A pipeline that decoded anywhere along the way —
 # relaying, capturing, or fanning out to a sink — would replace the invalid
@@ -215,17 +218,15 @@ def test_pipeline_run_bytes_survives_an_observe_hook() -> None:
     pipeline, allowlist = _relay_pipeline()
     observed: list[str] = []
 
-    def hook(event: object) -> None:
+    def hook(event: ExecEvent) -> None:
         """Record the decoded line the run publishes."""
-        line = getattr(event, "line", None)
-        if line is not None:
-            observed.append(line)
+        if event.line is not None:
+            observed.append(event.line)
 
     with scoped(ScopeConfig(allowlist=allowlist)), sh.observe(hook):
         result = pipeline.run_bytes_sync()
 
     assert result.stdout == _PRODUCER_STDOUT, (
-        "an observe hook must not decode the relayed payload, got "
-        f"{result.stdout!r}"
+        f"an observe hook must not decode the relayed payload, got {result.stdout!r}"
     )
     assert observed, "the observe hook must still receive decoded lines"
