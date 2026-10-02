@@ -636,6 +636,38 @@ than discovering the gap months later.
     `head_before` and `head_after`, and both are `726282f3` for all five — the
     tree did not move under the run and stayed clean, so the run speaks for the
     commit it names.
+- [x] (2026-10-02) Verified the review round's five inline findings against the
+  tree at `8257139c`, then ran the five gates at the head this entry belongs to.
+  - *Three findings were already remedied, one is stale, one needed code.*
+    The `PYTEST_TARGETS` excerpt and its ten-entry count are correct at this
+    head (`d6a59e1c`). The `_VARIABLE_NAME` refusal the `makefile.py` finding
+    asked for is implemented and driven by
+    `tests/test_ci_makefile_boundaries.py`. The two token-source findings —
+    the exemption recipe in `suite_selection.py` and the `$(foreach` window in
+    the suite-wiring contract — were valid against the reviewed revision
+    `92f17d25`, where both really did search raw recipe text, and are remedied
+    by `a36dd556`, which moved both checks onto `recipe_tokens` in
+    `tests/helpers/recipe_flow.py`. The sampler docstring finding is stale: the
+    docstring described the same condition the gate rejects as of `a36dd556`.
+  - *The one real defect was one nobody had reported.* `run_scripts` promised a
+    named diagnostic for a malformed workflow document, and a job written as a
+    scalar broke the promise: `document_jobs` vets the *jobs* mapping, not each
+    value inside it, so `narrow_steps` saw a `str` and raised
+    `AttributeError: 'str' object has no attribute 'get'` — naming neither the
+    workflow nor the job. Both `ci_documents.py` and `ci_run_scripts.py` are
+    new on this branch, so the defect is this PR's own. The payload is now
+    narrowed in `_job_run_scripts`, where the job's name is still in hand, and
+    the failure reads `scalar.yml:build must be a mapping`. The witness
+    reproduces the opaque `AttributeError` when the guard is removed.
+  - *Two prose errors from the same refactor are corrected with it.* The
+    developers' guide still called the Makefile reader "split in two" after
+    `recipe_read.py` took ownership of recipe text, and credited "the shared
+    helper" with a continuation rule that two readers apply. The sampler
+    module claimed the action shells out to `du`; it invokes `free` and `df`
+    only, and `du` is checked for the toolbox the module asserts. The skip
+    behaviour is unchanged, as the review asked.
+  - *The gate run is recorded separately below.* Its counts belong to the head
+    it names, not to this summary.
 
 ## Surprises & discoveries
 
