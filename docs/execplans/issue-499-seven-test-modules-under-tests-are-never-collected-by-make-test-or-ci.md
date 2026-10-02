@@ -907,7 +907,10 @@ than discovering the gap months later.
     and every other job did too — the four `Typecheck and test` legs,
     `lint-test`, both `Extension-gated tests` jobs, all five `build-wheels`
     fan-outs, `verify-wheel-install`, `benchmark-ratchet`, `changes`, and the
-    native-contract, `verus`, and `extended` checks. CodeScene reads `success`
+    three native-contract jobs and `verus`. Nothing failed: the remaining
+    checks read `skipped` — five of them (`automerge`, `extended`,
+    `Kody Code Review`, `Loom model smoke test`, `Sourcery review`) — which is
+    this repository's normal path for them on a PR. CodeScene reads `success`
     again (`id 110959988378`), so the refactor still holds at this head. The
     earlier `coverage` failure is therefore confirmed environmental: the same
     test passed unchanged once the cold toolchain install did not race the 30 s
