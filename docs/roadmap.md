@@ -967,4 +967,96 @@ questions" and §"Recommendation".
   - Success: the users' guide and the changelog state the settled behaviour
     with its rationale, or the question is closed as a documented non-goal.
 
+## 12. Opt-in process-group ownership (issue `#438`)
+
+Idea: a run that terminates its direct child can leave the child's descendants
+holding inherited pipes open, so a timed-out capture waits out its grace window
+on a producer that is still running. Today Cuprum terminates only the process
+it spawned. If a caller could opt into owning a child's process group, then
+teardown could signal every member of that group, the inherited pipes would
+reach end-of-file, and the guarantee could be stated precisely: the group the
+run created is terminated, descendants that leave it are not, and no caller
+who does not opt in is affected. See
+[ADR-019](adr-019-process-group-ownership.md).
+
+### 12.1. Make group ownership a policy on the execution context
+
+This step answers whether the spawn argument can be carried by the existing
+per-call `ExecutionContext` without changing anything a caller does not ask
+for. Its outcome is the vocabulary every later task in this phase depends on:
+a policy with an unchanged default and one opt-in member.
+
+- [ ] 12.1.1. Add the `ProcessGroupPolicy` enum with `INHERIT` and
+  `OWN_GROUP`, and add `process_group: ProcessGroupPolicy =
+  ProcessGroupPolicy.INHERIT` to `ExecutionContext`.
+  - Success: the enum is exported from `cuprum` and `cuprum.sh`, the default
+    builds the same spawn arguments as before, and existing contexts,
+    pipelines, and `ExecutionContext` equality are unaffected by the new
+    field.
+- [ ] 12.1.2. Carry the policy from the context onto the per-spawn argument
+  bundle used by single commands.
+  - Requires 12.1.1.
+  - Success: a `SafeCmd` run and a `SafeCmd.lines()` run built with
+    `OWN_GROUP` both reach the spawn with the policy, and neither reads the
+    process-global environment or the concurrent-run configuration for it.
+
+### 12.2. Spawn owned groups and signal them on teardown
+
+This step answers whether the existing teardown lifecycle can deliver the
+group signal without losing any of its cancellation guarantees. Its outcome is
+the behaviour the phase's acceptance criteria measure.
+
+- [ ] 12.2.1. Derive the spawn keyword from the policy in one shared helper:
+  no keyword for `INHERIT`, `start_new_session=True` for `OWN_GROUP` on POSIX,
+  and a `ValueError` naming the option and the platform for `OWN_GROUP` on
+  Windows.
+  - Requires 12.1.2.
+  - Success: the helper is the only place either spawn site decides the
+    keyword, a Windows `OWN_GROUP` run fails before any child is created, and
+    `INHERIT` on every platform is byte-identical to the current spawn.
+- [ ] 12.2.2. Apply the derived keyword at the direct-command spawn and at
+  every pipeline stage spawn, and record the ownership each spawn produced
+  alongside the process it belongs to.
+  - Requires 12.2.1.
+  - Success: a pipeline's stages are each their own group leader, a partial
+    spawn failure tears down exactly the groups it started, and teardown reads
+    the recorded ownership rather than re-deriving it.
+- [ ] 12.2.3. Signal the owned group with `os.killpg` in the existing
+  two-phase teardown, keeping the `is_done()` short-circuit, the grace period,
+  the `SIGKILL` escalation, and the shielded cleanup unchanged.
+  - Requires 12.2.2.
+  - Success: timeout, cancellation, fail-fast, and partial-spawn teardown all
+    terminate an owned group; a repeated cancellation during the grace window
+    still ends in the escalation; and an already-exited child produces no
+    error on either policy.
+
+### 12.3. Prove the guarantee and its limits
+
+This step answers whether the phase's promise survives contact with a real
+grandchild, and whether the documentation states the limits as precisely as
+the implementation enforces them.
+
+- [ ] 12.3.1. Cover a child that spawns a grandchild which ignores `SIGTERM`
+  and retains an inherited pipe, asserting the group is terminated, the pipe
+  is released, and an unrelated process is untouched.
+  - Requires 12.2.3.
+  - Success: the test observes process liveness by targeted identifier rather
+    than by group, never signals a group the test process belongs to, and
+    fails without the opt-in.
+- [ ] 12.3.2. Cover the pipeline paths — a stage whose descendant holds a pipe,
+  a partial startup failure, and an already-exited stage — and repeat
+  cancellation during the grace window.
+  - Requires 12.2.3.
+  - Success: each path terminates the groups it started and leaves no task or
+    descriptor behind, and the already-exited case is a no-op.
+- [ ] 12.3.3. Document the policy in the migration guide, the changelog, and
+  the users' guide, stating the POSIX semantics (the child leads a new session
+  and process group, `PGID == PID`), the Windows refusal and its reason, and
+  the limitation that a descendant which calls `setsid()` escapes the group.
+  - Requires 12.3.1.
+  - Success: every documented example is executable, the migration guide
+    states that the feature is opt-in with an unchanged default, and the
+    escape-the-group limitation is stated as a limitation rather than a
+    caveat.
+
 [issue-379]: https://github.com/leynos/cuprum/issues/379
