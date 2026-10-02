@@ -894,7 +894,7 @@ escalation, not a workaround.
   `git merge-tree --write-tree --messages HEAD origin/main` returned rc=1 with
   exactly one conflicted path, `docs/roadmap.md`. The branch was rebased onto
   `a592b50c` as `86449239`, 45 commits, no merge commits.
-- [x] (2026-10-02 20:45Z) **The conflict was two insertions at one anchor, and
+- [x] (2026-10-02 20:42Z) **The conflict was two insertions at one anchor, and
   the resolution keeps both.** Both sides insert after roadmap item 10.4.3, at
   the blank line before the file's single link-reference block: this branch
   adds one line (`[#440]:`), main adds a 181-line section
@@ -941,6 +941,19 @@ escalation, not a workaround.
   link-reference definition nested in a list item indented 2 spaces has a
   content indent of 2, so the next line indented 2 spaces would be parsed as a
   continuation of the *definition* rather than as a new roadmap item.
+- [x] (2026-10-02 20:51Z) **Pushed, mid-sweep, and CI now builds exactly the
+  certified head.** `--force-with-lease` bound to the then-current remote head
+  `068cc43a` succeeded as `+ 068cc43a...86449239 (forced update)`; the
+  displaced head remains recoverable at
+  `refs/recovery/issue-440/r2-20261002T204153Z-old-head`. Because the branch is
+  now a fast-forward of `origin/main`, `git merge-tree HEAD origin/main`
+  returns rc=0 and its result tree `0c93b1c7` equals `HEAD^{tree}`, so the
+  merge ref CI builds is the head that was gated — the `CONFLICTING` mergeable
+  state is resolved. **This push preceded the end of the sweep**, which is why
+  the timestamp is `20:51Z` and not later: GitHub created run `37063193930` at
+  `20:51:00Z`, while `make test` was still running (`20:47:43Z`–`20:51:38Z`).
+  The ordering is recorded rather than smoothed over; see the audit entry
+  below, which found and corrected two stamps this entry had wrong.
 - [x] (2026-10-02 20:54Z) **Six gates at `86449239`, all exit 0, tree clean.**
   `check-fmt` 0s, `test` 235s, `typecheck` 1s, `lint` 165s, `markdownlint` 19s,
   `nixie` 0s; every log records `head_before=head_after=86449239`. Two positive
@@ -970,15 +983,29 @@ escalation, not a workaround.
   `[[md046-checkbox-item-indent-6-renders-as-code]]`: a bare `--diff`-style
   file-count check can be vacuous, but the reliable test is the
   `Linting: N files` line against the tracked count, plus a positive control.
-- [x] (2026-10-02 20:57Z) **Pushed and CI now builds exactly the certified
-  head.** `--force-with-lease` bound to the then-current remote head `068cc43a`
-  succeeded as `+ 068cc43a...86449239 (forced update)`; the displaced head
-  remains recoverable at
-  `refs/recovery/issue-440/r2-20261002T204153Z-old-head`. Because the branch is
-  now a fast-forward of `origin/main`, `git merge-tree HEAD origin/main`
-  returns rc=0 and its result tree `0c93b1c7` equals `HEAD^{tree}`, so the
-  merge ref CI builds is the head that was gated — the `CONFLICTING` mergeable
-  state is resolved.
+- [x] (2026-10-02 21:17Z) **CI certified all twelve required contexts at
+  `ecebfe7c`, and an audit of these eight stamps found two of them wrong.** Run
+  `37064253018` — created `21:01:07Z` at head `ecebfe7c`, the commit that
+  carries this entry — returned `completed/success`, and every one of the
+  twelve contexts read from ruleset `18427980` is `success` with none absent:
+  `lint-test`, `Typecheck and test (Python 3.12)` and `(Python 3.14)`,
+  `coverage`, `benchmark-ratchet`, the five `build-native-wheels` legs,
+  `verify-wheel-install`, and `Extension-gated tests (Python/Rust boundary)`
+  (12 success, 0 not-green, 0 absent). The prior run `37063193930` at
+  `86449239` was **cancelled** by this push at `21:01:51Z` with one job
+  unfinished (`coverage`); its other fifteen jobs had passed, but a cancelled
+  run cannot be cited as green, which is why the certification rests on the new
+  run. The two heads differ by exactly the 93-line plan addition and nothing
+  else, so the code under test is identical. Separately, a timestamp audit
+  against hard evidence — reflog epochs, gate-log footers, file mtimes, and
+  GitHub's own `createdAt` — found two of the eight stamps wrong: the push
+  stamp read `20:57Z` when CI proves the push was `20:51:00Z` (a 6-minute late
+  error that silently reordered it *after* the "six gates green" entry, hiding
+  that the push preceded full validation), and the conflict-resolution stamp
+  read `20:45Z` against a `20:42Z` rebase finish (2.9 minutes late). Both are
+  corrected here. This is the same fault the retrospective below records,
+  recurring in the very entries that report it, and re-derived from the
+  introducing commits rather than from labels.
 
 ## Surprises & discoveries
 
