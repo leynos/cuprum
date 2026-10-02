@@ -228,6 +228,21 @@ def _expected_catalogue(steps: cabc.Sequence[_Step]) -> ProgramCatalogue | None:
     return active
 
 
+def _name(catalogue: ProgramCatalogue | None) -> str:
+    """Name ``catalogue`` by its program, without raising on an unknown one."""
+    if catalogue is None:
+        return "None"
+    unknown = "<a catalogue outside _CATALOGUES>"
+    return next(
+        (
+            program
+            for program, candidate in _CATALOGUES.items()
+            if candidate is catalogue
+        ),
+        unknown,
+    )
+
+
 def _open(step: _Step) -> contextlib.AbstractContextManager[object]:
     """Return the context manager that opens one generated scope step."""
     if step.kind == "catalogue":
@@ -237,10 +252,23 @@ def _open(step: _Step) -> contextlib.AbstractContextManager[object]:
     return allow(step.program)
 
 
-def _assert_selection(open_steps: cabc.Sequence[_Step], phase: str) -> None:
-    """Assert the active catalogue matches the innermost named open scope."""
-    assert current_context().catalogue is _expected_catalogue(open_steps), (
-        f"the active catalogue should be the innermost catalogue scope ({phase})"
+def _assert_selection(
+    open_steps: cabc.Sequence[_Step],
+    phase: str,
+    kind: typ.Literal["selection", "restoration"],
+) -> None:
+    """Assert the active catalogue matches the innermost named open scope.
+
+    ``kind`` names which half of the invariant this boundary witnesses, so a
+    failure says whether the wrong catalogue was *selected* for the open
+    scopes or the enclosing one was not *restored* on unwind.
+    """
+    expected = _expected_catalogue(open_steps)
+    actual = current_context().catalogue
+    assert actual is expected, (
+        f"{kind} failure {phase}: the active catalogue should be the"
+        f" innermost catalogue scope, expected {_name(expected)}"
+        f" but the active catalogue was {_name(actual)}"
     )
 
 
@@ -249,19 +277,19 @@ def _replay(
     remaining: cabc.Sequence[_Step] = (),
 ) -> None:
     """Recursively replay ``steps``, asserting the invariant at each boundary."""
-    _assert_selection(remaining, "on entry")
+    _assert_selection(remaining, "on entry", "selection")
     if not steps:
         return
     step, rest = steps[0], steps[1:]
     opened = [*remaining, step]
     with _open(step):
-        _assert_selection(opened, "after opening the scope")
+        _assert_selection(opened, "after opening the scope", "selection")
         _replay(rest, opened)
         # The inner scopes have unwound but this one is still open, so the
         # selection must not have been left behind by the recursion.
-        _assert_selection(opened, "after the inner scopes unwound")
+        _assert_selection(opened, "after the inner scopes unwound", "restoration")
     # The scope has closed: the enclosing selection is active again.
-    _assert_selection(remaining, "after the scope closed")
+    _assert_selection(remaining, "after the scope closed", "restoration")
 
 
 @_PROPERTY_SETTINGS
@@ -279,6 +307,17 @@ def test_catalogue_scope_nesting_resolves_to_the_innermost_named_catalogue(
 
 def test_scope_operations_after_a_catalogue_keep_it_selected() -> None:
     """A catalogue survives plain and allow operations opened beneath it."""
+    # The replay drives the same four boundary assertions the property uses,
+    # so this fixed sequence pins them deterministically rather than relying
+    # on Hypothesis to generate this shape.
+    _replay([
+        _Step("catalogue", ECHO),
+        _Step("plain", ECHO),
+        _Step("allow", LS),
+    ])
+
+    # The same sequence again with explicit assertions, which additionally
+    # check the intermediate and final states a reader cares about.
     catalogue = _CATALOGUES[ECHO]
 
     with scoped(catalogue=catalogue):
@@ -306,6 +345,18 @@ def test_scope_operations_after_a_catalogue_keep_it_selected() -> None:
 
 def test_nested_catalogues_restore_the_outer_selection_on_unwind() -> None:
     """Each unwinding step restores the selection of the scope still open."""
+    # Two distinct catalogues separated by a plain scope, then a third that
+    # shadows the middle one: the replay asserts the boundary invariant at
+    # every level of this exact nesting.
+    _replay([
+        _Step("catalogue", ECHO),
+        _Step("catalogue", LS),
+        _Step("plain", LS),
+        _Step("catalogue", ECHO),
+    ])
+
+    # The same shape spelled out, so the intermediate restorations are
+    # asserted by value and not only by the generic boundary invariant.
     outer = _CATALOGUES[ECHO]
     middle = _CATALOGUES[LS]
     inner = _CATALOGUES[ECHO]
