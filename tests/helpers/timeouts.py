@@ -91,6 +91,84 @@ def python_interpreter() -> str:
     return str(sys.executable)
 
 
+# The grandchild inherits its parent's stdout and stderr, so it holds the write
+# ends of the run's pipes. It ignores SIGTERM, so only a SIGKILL — to it, or to
+# a process group containing it — can end it. It records its own pid and then a
+# readiness marker, both after installing its handler, so a caller that waits on
+# the marker knows the grandchild is genuinely immune rather than mid-start-up.
+_GRANDCHILD_SOURCE = "; ".join((
+    "import os, pathlib, signal, sys, time",
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))",
+    "pathlib.Path(sys.argv[2]).write_text('ready')",
+    f"time.sleep({_BLOCK_SECONDS})",
+))
+
+# The parent spawns the grandchild and then blocks. It passes its own stdout
+# and stderr straight through, which is what leaves the grandchild holding the
+# pipe after the parent is gone.
+_PARENT_SOURCE = "; ".join((
+    "import subprocess, sys, time",
+    "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]])",
+    f"time.sleep({_BLOCK_SECONDS})",
+))
+
+
+def pipe_holding_child_argv(
+    pid_file: Path,
+    marker: Path,
+) -> tuple[str, ...]:
+    """Return ``-c`` argv for a child that holds a pipe through a grandchild.
+
+    The child spawns a grandchild that inherits the run's stdout and stderr and
+    ignores ``SIGTERM``, so the grandchild owns the write ends of those pipes
+    and no signal aimed at the direct child can dislodge it.
+
+    Parameters
+    ----------
+    pid_file:
+        Path the grandchild writes its own pid to, after installing its
+        handler. Its arrival therefore doubles as the readiness signal.
+    marker:
+        Path the grandchild writes once its handler is installed.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``-c`` argv, ready to spread into a spawn call.
+    """
+    return (
+        "-c",
+        _PARENT_SOURCE,
+        _GRANDCHILD_SOURCE,
+        str(pid_file),
+        str(marker),
+    )
+
+
+def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int:
+    """Return the pid recorded in ``path``, waiting until the file appears.
+
+    Returns
+    -------
+    int
+        The pid the process recorded.
+
+    Raises
+    ------
+    pytest.fail
+        If the file does not appear within ``seconds``.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            text = path.read_text().strip()
+            if text:
+                return int(text)
+        time.sleep(0.05)
+    pytest.fail(f"Process did not record its pid for {context}")
+
+
 def process_is_running(pid: int) -> bool:
     """Return whether ``pid`` still exists.
 

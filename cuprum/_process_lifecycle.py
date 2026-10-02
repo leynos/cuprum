@@ -31,6 +31,7 @@ import typing as typ
 
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_exit import _await_process_exit
+from cuprum._process_group import _await_group_teardown
 from cuprum.context import current_context
 from cuprum.context._policy import _resolve_env_policy
 from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
@@ -87,6 +88,31 @@ async def _terminate_process(
     )
 
 
+def _settlement(
+    process: asyncio.subprocess.Process,
+    wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
+    *,
+    owns_group: bool,
+) -> cabc.Awaitable[object]:
+    """Wait for the run's teardown target to settle.
+
+    An inherited-group run targets the direct child alone, exactly as before.
+    An owning run targets the child's whole group, so the direct child exiting
+    is not settlement: the group is only settled once it holds no signalable
+    member left. Anchoring the grace period on that — rather than on the child
+    — is what lets the escalation reach a descendant the direct child left
+    behind. A leader that exits promptly on ``SIGTERM`` would otherwise end the
+    grace period before the group was ever compelled, and a descendant immune
+    to ``SIGTERM`` would outlive the run that spawned it.
+
+    Both waits are composed rather than replaced so the direct child's exit is
+    still awaited, and therefore reaped, on every route.
+    """
+    if not owns_group or process.pid is None:
+        return wait_for_exit()
+    return _await_group_teardown(wait_for_exit(), process.pid)
+
+
 async def _terminate_process_with_wait(
     process: asyncio.subprocess.Process,
     *,
@@ -100,8 +126,16 @@ async def _terminate_process_with_wait(
     The two-phase grace is unchanged whether the run owns the child's group or
     not: the first phase asks every member of the target to exit, the second
     compels whichever of them outlived the grace period. Only the target of
-    those signals differs, and :func:`_signal_child` is the one place that
-    decides it.
+    those signals, and of the settlement they wait on, differs, and
+    :func:`_signal_child` and :func:`_settlement` are the two places that
+    decide it.
+
+    *is_done* still short-circuits on the direct child, which is deliberate.
+    While that child is un-reaped its identifier is unambiguously this run's,
+    so the group name ``pid == pgid`` is too. Once the child has been reaped
+    that name may already have been recycled, so signalling it could reach a
+    group this run never created; an owned teardown therefore stops there
+    rather than trading a leaked descendant for signalling a stranger.
     """
     grace_period = max(0.0, grace_period)
     if is_done():
@@ -116,7 +150,10 @@ async def _terminate_process_with_wait(
     except (ProcessLookupError, OSError):
         return False
     try:
-        await asyncio.wait_for(wait_for_exit(), grace_period)
+        await asyncio.wait_for(
+            _settlement(process, wait_for_exit, owns_group=owns_group),
+            grace_period,
+        )
     except asyncio.TimeoutError:  # ruff: ignore[timeout-error-alias] - explicit asyncio timeout needed
         try:
             _signal_child(
@@ -127,7 +164,7 @@ async def _terminate_process_with_wait(
             )
         except (ProcessLookupError, OSError):
             return False
-        await wait_for_exit()
+        await _settlement(process, wait_for_exit, owns_group=owns_group)
     return True
 
 
