@@ -6,14 +6,17 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: IMPLEMENTED; pull request #505 open for review, with the post-rebase
-review findings reconciled and the CodeScene Large Method finding cleared. The
-last reviewed revision was `3d1408c0`; work since then is the review-response
-round recorded under `Progress`.
+review findings reconciled and the review-response round applied. The guard's
+self-inclusion gap is closed by the `test-selection` bootstrap, and
+`uv run pytest tests/test_ci_test_selection_contract.py` reports 61 passed on
+the current branch head. Dated counts for earlier revisions are in `Progress`;
+each is anchored to the revision it was measured on rather than carried
+forward.
 
 ## Purpose / big picture
 
-Seven test modules under `tests/` never run in the default suite.
-`PYTEST_TARGETS` in the repository `Makefile` collects only
+Issue #499 filed seven test modules under `tests/` that never run in the
+default suite. `PYTEST_TARGETS` in the repository `Makefile` collects only
 `tests/test_ci_*.py` from that directory — plus the explicitly named
 `tests/test_native_sdist.py` — and the seven modules in question match neither.
 `CI`'s `typecheck-test` job runs `make test-python`, which reads the same
@@ -21,11 +24,13 @@ variable, so these contract suites can regress without anything noticing. (The
 `coverage` job's bare rootdir `pytest` does collect them, so they are not
 unexecuted everywhere; the loss is the fast local loop.)
 
-After this change, running `make test-python` executes all seven modules, and a
-new guard test fails the suite whenever a root-level `tests/test_*.py` module
-has no route into a suite that CI actually runs. A contributor who adds a
-contract module under `tests/` and forgets to name it will be told so by
-`make test-python` rather than discovering the gap months later.
+After this change, six of the seven are in scope and all six run under
+`make test-python`; upstream retired the seventh before the rebase, so no path
+for it survives and there is nothing left to collect. A new guard test fails
+the suite whenever a root-level `tests/test_*.py` module has no route into a
+suite that CI actually runs. A contributor who adds a contract module under
+`tests/` and forgets to name it will be told so by `make test-python` rather
+than discovering the gap months later.
 
 ## Constraints
 
@@ -53,8 +58,9 @@ contract module under `tests/` and forgets to name it will be told so by
 ## Tolerances (exception triggers)
 
 - Scope: stop and escalate if a module in `tests/` other than the seven named
-  in this plan must be renamed, moved, or otherwise modified. Seven renames
-  plus one new guard module and one new helper is the expected shape.
+  in this plan must be renamed, moved, or otherwise modified. Six renames plus
+  one new guard module and one new helper was the shape that shipped; the
+  seventh module was retired upstream instead of renamed.
 - Interface: stop and escalate if `PYTEST_TARGETS`, `ACT_SCENARIO_TARGETS`,
   `ACT_PARSER_TARGETS`, or `EXTENSION_TEST_TARGETS` must change their contents.
   The rename route exists precisely so they need not.
@@ -79,11 +85,11 @@ contract module under `tests/` and forgets to name it will be told so by
 - Risk: a renamed module resolves a path relative to its own file, so moving it
   changes what it reads. Severity: high Likelihood: low Mitigation: triage each
   module by running it *after* the rename as well as before, not only before.
-  The seven modules read through `tests.helpers` accessors that resolve from
+  The modules read through `tests.helpers` accessors that resolve from
   `__file__` in the helper, and the helper's depth is unchanged by renaming a
   file inside the same directory, but this is asserted rather than assumed —
-  `make test-python` collecting and passing all seven is the acceptance
-  evidence.
+  `make test-python` collecting and passing every surviving module is the
+  acceptance evidence.
 
 - Risk: the syrupy snapshot for `tests/test_dev_fast_action.py` is keyed by
   module name. Renaming the module orphans the snapshot, which then fails as a
@@ -99,8 +105,8 @@ contract module under `tests/` and forgets to name it will be told so by
   by an empty set and proves nothing. Severity: high Likelihood: medium
   Mitigation: the guard requires both the enumerated set and the covered set to
   be non-empty, and asserts specific known members — `tests/test_ci_*.py` must
-  contain the seven renamed modules. Non-vacuity is discharged explicitly in the
-  `Verification plan` below, including a negative control that must fail.
+  contain the renamed modules that survive. Non-vacuity is discharged explicitly
+  in the `Verification plan` below, including a negative control that must fail.
 
 - Risk: reading the Makefile with the wrong mechanism produces a false clean
   result. A regex that misses an assignment, or one that reads a comment,
@@ -834,15 +840,19 @@ contract module under `tests/` and forgets to name it will be told so by
 
 `EP-M1` through `EP-M3` are complete; the gates and the pull request remain.
 
-What was achieved. All seven modules issue #499 named now run under
-`make test-python`: `env -u BASH_ENV make test-python` passes with the
-`tests/test_ci_*.py` pattern collecting 750 tests, and each of the seven
-appears in the collected set by name. `make test-dev-fast-contract` collects
-the renamed dev-fast module and its two snapshots. The guard,
-`tests/test_ci_test_selection_contract.py`, passes 58 tests and rejects both
-negative controls: renaming one module back out of the selector fails four of
-its tests naming that module, and deleting `tests/test_ci_*.py` from
-`PYTEST_TARGETS` fails 54. The rule is documented under "Test selection" in the
+What was achieved. Every module issue #499 named that still exists now runs
+under `make test-python`: `env -u BASH_ENV make test-python` passes with the
+`tests/test_ci_*.py` pattern collecting 750 tests, and each renamed module
+appears in the collected set by name. Six of the seven survive; upstream
+retired the seventh, so there is nothing left to collect for it.
+`make test-dev-fast-contract` collects the renamed dev-fast module and its two
+snapshots. The guard,
+`tests/test_ci_test_selection_contract.py`, passes 58 tests at `df3c59ad` and
+rejects both negative controls: renaming one module back out of the selector
+fails four of its tests naming that module, and deleting `tests/test_ci_*.py`
+from `PYTEST_TARGETS` fails 54. The `test-selection` bootstrap added during
+review runs the guard by name, so neither control can silence the module that
+reports the fault. The rule is documented under "Test selection" in the
 developers' guide.
 
 These counts are as measured at revision `df3c59ad`. The guard's own size grows
@@ -888,7 +898,9 @@ module — is collected too.
 ## Context and orientation
 
 A novice reading this plan needs three things: where the selector lives, how
-the suites are split, and what the seven modules are.
+the suites are split, and which modules the issue named. The module names below
+are the ones filed in `#499`; the rename that shipped is described after the
+table.
 
 The selector is `PYTEST_TARGETS` in the repository `Makefile`, defined around
 line 154 as a `?=` assignment containing ten whitespace-separated shell glob
@@ -908,9 +920,9 @@ Three sibling variables matter and must not change:
 - `EXTENSION_TEST_TARGETS` is outside it too, because the extension must be
   built first. `make test-extension` runs them.
 
-The seven modules, all directly under `tests/`:
+The seven modules `#499` listed, all directly under `tests/`:
 
-| Module today                                   | Contract                                                  |
+| Module as filed in `#499`                       | Contract                                                  |
 | ---------------------------------------------- | --------------------------------------------------------- |
 | `tests/test_codescene_environment_contract.py` | the `codescene` environment sits on the uploading job     |
 | `tests/test_coverage_scratch_discard.py`       | the coverage discard step reclaims instrumented trees     |
@@ -920,23 +932,39 @@ The seven modules, all directly under `tests/`:
 | `tests/test_workflow_contract.py`              | the mutation-mutmut caller's pinned shape                 |
 | `tests/test_dev_fast_action.py`                | the dev-fast composite action's install step              |
 
-All seven rename by prefacing `ci_`:
-`tests/test_ci_codescene_environment_contract.py` and so on, with
-`tests/test_workflow_contract.py` becoming
-`tests/test_ci_mutation_workflow_contract.py` because its subject is the
+Six of the seven rename by prefacing `ci_`;
+`tests/test_workflow_contract.py` becomes
+`tests/test_ci_mutation_workflow_contract.py`, because its subject is the
 mutation-mutmut workflow caller and the shorter name would read as if it owned
-every workflow contract.
+every workflow contract. `tests/test_codescene_environment_contract.py` is the
+seventh: upstream deleted it, so no renamed module carries that contract and
+neither the old nor the new path exists in the tree. That deletion is what
+leaves six modules in scope rather than seven; see the `Post-rebase outcome`
+note under `Outcomes & retrospective`.
 
-`test_dev_fast_action.ambr` is the one syrupy snapshot file affected; it lives
-at `tests/__snapshots__/test_dev_fast_action.ambr` and is keyed by module name.
+Independently of those renames, upstream added
+`tests/test_workflow_bash_env_contract.py` in #466 with no selector route into
+the default suite. The guard caught it on the rebased base, and the branch
+renamed it to `tests/test_ci_workflow_bash_env_contract.py` — the remedy the
+guard's failure message prescribes — so it is collected too and the exception
+table stays empty.
+
+`test_dev_fast_action.ambr` is the one syrupy snapshot file the rename moved;
+it now lives at `tests/__snapshots__/test_ci_dev_fast_action.ambr`, keyed by
+module name as before.
 
 The guard test belongs in the `test_ci_` family because it is itself a CI
-contract. It will be named `tests/test_ci_test_selection_contract.py`, which
-lets the guard police its own inclusion: if someone removes the
-`tests/test_ci_*.py` pattern, the guard is no longer collected, and the module
-that would have complained is gone. That is acceptable and is noted as a
-residual gap — the alternative, a guard outside the selector, is not collected
-either.
+contract. It is named `tests/test_ci_test_selection_contract.py`, which lets
+the guard police its own inclusion: if someone removes the `tests/test_ci_*.py`
+pattern, the guard is no longer collected, and the module that would have
+complained is gone. The plan first recorded that as an acceptable residual gap
+on the grounds that a guard outside the selector is not collected either. The
+review round rejected that reasoning and closed it: the `test-selection`
+bootstrap target names the guard module directly, and both `make test` and
+`make test-python` depend on it, so the guard has a route the selector cannot
+silence. `tests/test_ci_exemption_contract.py` pins that route, including a
+fault control that drops the contract glob and proves the bootstrap still
+fails.
 
 ## Conformance basis
 
@@ -958,11 +986,16 @@ upstream artefacts are:
 Trace links:
 
 ```plaintext
-ISSUE-499/module-list      -> EP-M1 -> make test-python collects all seven
-ISSUE-499/rename-route     -> EP-M2 -> tests/test_ci_*.py expands to the seven
+ISSUE-499/module-list      -> EP-M1 -> make test-python collects the surviving six
+ISSUE-499/rename-route     -> EP-M2 -> tests/test_ci_*.py expands to the six
 ISSUE-499/guard-test       -> EP-M3 -> tests/test_ci_test_selection_contract.py
+ISSUE-499/guard-route      -> EP-M3 -> make test-selection names the guard directly
 AGENTS/400-line-limit      -> EP-M3 -> tests/helpers/makefile.py line count
 ```
+
+The first two links read "seven" until the rebase; the tracked issue keeps its
+original title, and the seventh module was retired upstream rather than
+collected.
 
 ## Verification plan
 
@@ -985,16 +1018,17 @@ in a documented exception table.
   documented exceptions (initially none).
 - Artefact: `tests/test_ci_test_selection_contract.py`.
 - Evidence: `uv run pytest tests/test_ci_test_selection_contract.py -v` passes
-  with the seven modules renamed, and fails with a message naming each
+  with the six surviving modules renamed, and fails with a message naming each
   uncovered module when one is renamed back out of the selector.
 - Non-vacuity: the guard asserts both the enumerated set and the covered set are
-  non-empty and asserts the seven renamed modules are in the expansion. The
-  negative control is the red stage of Red-Green-Refactor: the guard is written
-  and run *before* the rename is applied, so it must fail listing all seven
-  modules. That failure is the proof the guard detects exactly the defect
-  reported in `#499`. A second control — temporarily removing
-  `tests/test_ci_*.py` from the selector — must also be rejected, proving the
-  covered set is not accidentally satisfied by another pattern.
+  non-empty and asserts the six renamed modules are in the expansion. The
+  negative controls are the two seeded-fault cases re-applied to the finished
+  tree: renaming one module back out of the selector must fail naming that
+  module, and temporarily removing `tests/test_ci_*.py` from the selector must
+  also be rejected, proving the covered set is not accidentally satisfied by
+  another pattern. The planned pre-rename Red run was not available — the
+  rename landed before the helper was finished — so these controls are the
+  reproducible substitute.
 
 Obligation `RESOLVE-1`: the helper's pattern resolution agrees with the shell's
 own glob expansion, and its variable expansion agrees with `make`'s.
@@ -1033,19 +1067,24 @@ finite file list, and the bound is the whole domain rather than a sample of it.
 
 ## Plan of work
 
-Stage A — triage (complete). Run each of the seven modules individually and
-record the counts.
+Stage A — triage (complete). Run each of the seven filed modules individually
+and record the counts.
 
-Stage B — red guard. Write `tests/helpers/makefile.py` and
-`tests/test_ci_test_selection_contract.py` *before* the rename, run the guard,
-and observe it fail listing all seven modules. Commit the failing test as the
-Red stage, because the failure is the evidence the guard works.
+Stage B — rename. Rename the seven modules with `git mv`, rename the snapshot,
+update the `Makefile`'s `test-dev-fast-contract` recipe, the one in-module
+reference in `tests/test_loom_workflow_contract.py`, the two references in
+`docs/developers-guide.md`, and the one in `tests/helpers/ci_runners.py`. Six of
+those renames survive the later rebase; upstream's #559 retired
+`tests/test_codescene_environment_contract.py` in the interval, so that one
+rename is dropped rather than carried.
 
-Stage C — rename (Green). Rename the seven modules with `git mv`, rename the
-snapshot, update the `Makefile`'s `test-dev-fast-contract` recipe, the one
-in-module reference in `tests/test_loom_workflow_contract.py`, the two
-references in `docs/developers-guide.md`, and the one in
-`tests/helpers/ci_runners.py`. Re-run the guard: it must now pass.
+Stage C — the guard (Green). Write `tests/helpers/makefile.py` and
+`tests/test_ci_test_selection_contract.py`, and run the guard against the
+renamed tree: it must pass. The rename had already landed by the time the helper
+was finished, so instead of a pre-rename Red run the guard carries two
+seeded-fault negative controls that can be re-applied to the final tree: one
+renames a module back out of the selector, and one deletes the
+`tests/test_ci_*.py` pattern. Both must be rejected.
 
 Stage D — resolve the sampler timing defect, update documentation
 (`docs/developers-guide.md`), commit, and run the full gates.
@@ -1056,34 +1095,41 @@ current stage's validation fails.
 ## Milestones and plateaus
 
 `EP-M1 — triage recorded`. Requirements and gaps: `ISSUE-499/module-list`
-advanced. End state: seven modules confirmed passing, with counts recorded.
+advanced. End state: seven modules confirmed passing, with counts recorded; the
+seventh was retired upstream after triage, leaving six in scope.
 Acceptance evidence: the per-module counts in `Artefacts and notes`.
 Conformance check: no source file was modified by triage. Recovery: nothing to
 revert; triage is read-only. Remaining gaps: nothing is yet collected by the
 suite. Compatibility decision: none required; this is a test-only surface.
 
-`EP-M2 — the seven modules enter the selector`. Requirements and gaps:
+`EP-M2 — the six surviving modules enter the selector`. Requirements and gaps:
 `ISSUE-499/rename-route` discharged. End state: `tests/test_ci_*.py` expands to
-the seven renamed modules plus the existing ones; `PYTEST_TARGETS` is
-byte-identical to its previous value; all seven pass under `make test-python`.
-Acceptance evidence: `make test-python` collects and passes the seven; the
+the six renamed modules plus the existing ones; `PYTEST_TARGETS` is
+byte-identical to its previous value; all six pass under `make test-python`.
+Acceptance evidence: `make test-python` collects and passes the six; the
 `test-dev-fast-contract` target still collects its module. Conformance check:
 the three sibling variables are unchanged; no `skipif` was added to weaken an
 assertion; the snapshot rename is in the same commit as the module rename.
 Recovery: `git revert` the rename commit; the modules return to their
-uncollected state and no other behaviour changes. Remaining gaps: the guard
-test does not yet exist, so the next uncollected module still goes unnoticed.
-Compatibility decision: none required.
+uncollected state and no other behaviour changes. Remaining gaps at this
+milestone: the guard test did not yet exist, so the next uncollected module
+would have gone unnoticed; `EP-M3` closes that gap, which is why this milestone
+is not on its own a sufficient end state. Compatibility decision: none
+required.
 
 `EP-M3 — the guard prevents recurrence`. Requirements and gaps:
 `ISSUE-499/guard-test` discharged. End state:
 `tests/test_ci_test_selection_contract.py` passes, and fails when any
-root-level module leaves the selector. Acceptance evidence: the guard's Red run
-listing seven modules, and its Green run after the rename. Conformance check:
-the exception table is empty and documented as such; the helper fails on an
+root-level module leaves the selector. Acceptance evidence: the two
+seeded-fault negative controls, applied to the finished tree — renaming a
+module out of the selector and deleting the `tests/test_ci_*.py` pattern — each
+rejected; and the guard's Green run after the rename. Conformance check: the
+exception table is empty and documented as such; the helper fails on an
 undefined variable; the guard asserts non-emptiness of both sets. Recovery:
-revert the guard commit; the suite returns to `EP-M2`. Remaining gaps: the
-guard is itself inside the selector it polices, noted above.
+revert the guard commit; the suite returns to `EP-M2`. Remaining gaps: none —
+the guard's placement inside its own selector was closed by the `test-selection`
+bootstrap, which is a prerequisite of both `make test` and `make test-python`
+and names the guard module directly.
 
 ## Concrete steps
 
@@ -1102,7 +1148,10 @@ uv run pytest tests/test_workflow_contract.py -v
 uv run pytest tests/test_dev_fast_action.py -v
 ```
 
-Renames:
+Renames, as first applied on the pre-rebase tree. The first line is the rename
+that the rebase dropped: upstream's #559 retired
+`tests/test_codescene_environment_contract.py`, so neither that path nor a
+renamed successor exists in the current tree.
 
 ```bash
 git mv tests/test_codescene_environment_contract.py tests/test_ci_codescene_environment_contract.py
@@ -1176,9 +1225,10 @@ tree is the stronger artefact, because a reader can re-run them.
 - Red, control B: delete the `tests/test_ci_*.py` pattern from
   `PYTEST_TARGETS` and run the same command. It fails 54 of the 58 collected
   cases. This is the control that proves the covered set is not satisfied by
-  some other pattern, and it also demonstrates the residual gap recorded above:
-  the guard lives inside the selector it polices, so removing the pattern
-  removes it too.
+  some other pattern. That measurement predates the `test-selection` bootstrap;
+  the bootstrap now names the guard directly, so deleting the pattern no longer
+  silences it in the default suite, and the fault control in
+  `tests/test_ci_exemption_contract.py` pins that route.
 
   The four survivors are three of the five controls that need no selector —
   `test_the_exception_mechanism_reports_an_uncovered_module`,
@@ -1193,7 +1243,7 @@ tree is the stronger artefact, because a reader can re-run them.
   per root-level `tests/test_*.py` module) and 7 fixed, five of which are
   selector-independent.
 
-- Green: on the final tree,
+- Green: on the tree at `df3c59ad`, before the rebase,
 
   ```bash
   uv run pytest tests/test_ci_test_selection_contract.py -q
@@ -1220,8 +1270,11 @@ tree is the stronger artefact, because a reader can re-run them.
 
 Quality criteria:
 
-- Tests: `make test-python` passes, collecting the seven renamed modules. The
-  guard passes. `make test-dev-fast-contract` passes and collects
+- Tests: `make test-python` passes, collecting the renamed modules — the six
+  that survive the rebase, since the seventh was retired upstream. The guard
+  passes, and is collected both through the selector and through the
+  `test-selection` bootstrap that names it directly.
+  `make test-dev-fast-contract` passes and collects
   `tests/test_ci_dev_fast_action.py`. `make markdownlint` passes after the
   developers'-guide edits.
 - Verification: `SELECT-1` and `RESOLVE-1` discharged with the non-vacuity
