@@ -268,13 +268,28 @@ likelihood, and mitigation.
   two misses are main's `scripts/tests/test_boundary_contract.py` and
   `test_boundary_faults.py`, unchanged and byte-identical to the target.
 
-  The repaired tree was then re-gated: `check-fmt` reported
+  The repaired tree was then re-gated. The two review-repair gates were re-run
+  first, while the repairs were still uncommitted: `check-fmt` reported
   `83 files left unchanged`, and `lint` reached all fourteen leaves with no
   `make: ***` line anywhere, including the `verify-df12-pylint` target that had
   killed the earlier run and the rust-lint and github-actions-lint subtrees
   that fail-fast had hidden. This was the second time the df12 git fetch
   succeeded under the clean environment, confirming the earlier failure was the
   ambient `GIT_CONFIG_*` rewrite and not the code.
+
+  That left the evidence split across two revisions — `test` and `typecheck` on
+  the pristine head, the two repairs on the working tree — so the repairs were
+  committed as `329d0b13` and all four gates were re-run on that one frozen
+  revision. Each log's first line records the SHA it tested. All four passed:
+  `check-fmt` `83 files left unchanged`; `test`
+  `2764 passed, 70 skipped in 139.34s` with nextest `127 passed` and clean
+  doctests; `typecheck` `All checks passed!`; `lint` all fourteen leaves with
+  zero `make: ***` lines. The tree was clean before, between, and after every
+  gate, and the test figures are identical to the pre-repair run, which is the
+  expected result for two docstrings and a reflow. Any later commit invalidates
+  this evidence, so a further change requires a fresh run rather than citation
+  of this one.
+
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
   tree rather than against the codex summary. Two were real defects in the
