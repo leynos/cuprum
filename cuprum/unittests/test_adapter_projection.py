@@ -183,7 +183,14 @@ class TestAdapterProjection:
             # child is spawned, so the path is known from ``plan`` onwards.
             # Fixed rather than volatile, so the snapshot pins the exact
             # spelling each adapter publishes it under.
-            resolved_path="/opt/tools/echo",
+            #
+            # Fail-fast is the exception, and the one phase where a fixture
+            # that populated every field would misrepresent production: this
+            # decision event describes no stage's execution, so it stays unset
+            # and the failing stage reports its own path on the ``exit`` event
+            # that follows. A snapshot recorded with a path here would pin a
+            # wire shape Cuprum never emits.
+            resolved_path=None if is_fail_fast else "/opt/tools/echo",
         )
 
     @staticmethod
