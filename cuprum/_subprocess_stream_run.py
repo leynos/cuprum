@@ -161,6 +161,49 @@ async def _await_stdin_writer_and_reconcile_consumers(
         raise
 
 
+async def _await_consumers_and_settle(
+    tasks: _RunTaskOwnership,
+    execution: _SubprocessExecution,
+    pid: int | None,
+) -> tuple[_StreamPayload | None, _StreamPayload | None]:
+    """Await a run's stream consumers and settle their relay diagnostics.
+
+    The consumers are gathered as a unit so the diagnostics are settled only
+    once every reader has finished — a collector read while its stream is
+    still draining would report a partial relay.
+
+    A failure here is re-raised, but not before the survivor is reconciled:
+    ``gather`` re-raises the first failure and leaves its sibling running, so
+    a reader wedged on a pipe would otherwise outlive the run it belonged to.
+    The drain absorbs what it finds, which is right while another error is
+    propagating — and here the consumer failure *is* that error.
+
+    Returns
+    -------
+    tuple[_StreamPayload | None, _StreamPayload | None]
+        The stdout and stderr payloads, as ``str`` or ``bytes`` according to
+        the run's mode, read unchanged off the consumers.
+    """
+    try:
+        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
+        for diagnostics in tasks.relay_diagnostics:
+            diagnostics.settle()
+    except BaseException:
+        await _shielded_cleanup(
+            _drain_stream_consumers(
+                tasks.consumers,
+                _DrainContext(
+                    capture=False,
+                    pid=pid,
+                    observation=execution.observation,
+                    discard_on_cancel=tasks.discard_on_cancel,
+                ),
+            )
+        )
+        raise
+    return stdout_text, stderr_text
+
+
 async def _run_subprocess_with_streams(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -231,28 +274,7 @@ async def _run_subprocess_with_streams(
     # long after its parent is gone.
     await _stop_idle_monitor(execution.idle)
     await _await_stdin_writer_and_reconcile_consumers(tasks, execution, pid)
-    try:
-        stdout_text, stderr_text = await asyncio.gather(*tasks.consumers)
-        for diagnostics in tasks.relay_diagnostics:
-            diagnostics.settle()
-    except BaseException:
-        # `gather` re-raises the first failure and leaves its sibling running,
-        # so a reader wedged on a pipe would outlive the run it belonged to.
-        # Reconcile it the way every other exit path does, then re-raise: the
-        # drain absorbs what it finds, which is right while another error is
-        # propagating — and here the consumer failure *is* that error.
-        await _shielded_cleanup(
-            _drain_stream_consumers(
-                tasks.consumers,
-                _DrainContext(
-                    capture=False,
-                    pid=pid,
-                    observation=execution.observation,
-                    discard_on_cancel=tasks.discard_on_cancel,
-                ),
-            )
-        )
-        raise
+    stdout_text, stderr_text = await _await_consumers_and_settle(tasks, execution, pid)
     return exit_code, exited_at, stdout_text, stderr_text, relay_diagnostics
 
 

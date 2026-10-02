@@ -130,18 +130,9 @@ async def _run_spawned_pipeline(
     observations = observers.observations
     sink_bracket = config.sink_bracket
     try:
-        inputs = await _collect_pipeline_inputs(
-            parts,
-            spawn,
-            config,
-        )
+        inputs = await _collect_pipeline_inputs(parts, spawn, config)
     except _sh_module().TimeoutExpired as timeout_error:
-        await _finalize_pipeline_timeout(
-            config,
-            spawn,
-            observers,
-            timeout_error,
-        )
+        await _finalize_pipeline_timeout(config, spawn, observers, timeout_error)
         raise
     except BaseException as run_error:
         await _finalize_pipeline_run_failure(config, spawn, observers, run_error)
@@ -165,12 +156,8 @@ async def _run_spawned_pipeline(
     # after-hook is a terminal run error, so the outcome cannot be committed
     # before the hooks have had their say.
     await _finalize_pipeline_execution(
-        parts,
-        observers,
-        stage_results,
-        sink_bracket,
+        parts, observers, stage_results, config.sink_bracket
     )
-
     return _build_pipeline_result(
         stage_results,
         failure_index=inputs.wait_result.failure_index,
