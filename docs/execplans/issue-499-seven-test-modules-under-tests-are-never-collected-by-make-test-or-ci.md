@@ -597,6 +597,38 @@ contract module under `tests/` and forgets to name it will be told so by
     that never ran is larger this time, and reporting "lint failed" without
     saying which leaves were reached would understate how much of the gate is
     still unknown. Re-run to completion before treating it as cleared.
+- [x] (2026-10-02) Re-ran the five gates at `726282f3`.
+  - *The two blockers are cleared.* `make check-fmt` exits 0 (695 files
+    already formatted; `mdtablefix --check` leaves 80 files unchanged).
+    `make typecheck` exits 0 (`ty 0.0.74`; "All checks passed!").
+    `make markdownlint` exits 0, its `spelling` prerequisite included — the
+    rewrite of the spelling-traps note above removed the last two violations.
+    `make test` exits 0: `make test-selection` first at `59 passed`, then the
+    selector-driven runs, `2537 passed, 70 skipped`, nextest at `127 tests run:
+    127 passed, 0 skipped`, and 3 ignored doctests, with no emitted warnings.
+  - *The R9108 fix held.* `pylint-classic` rates the tree at `10.00/10` and the
+    DF12 leaf prints no `R9108`. The snapshot fixture is supplied by syrupy's
+    plugin (listed in the `make test` plugin banner as `syrupy-6.1.1`) and the
+    recorded snapshot matches on a plain run, so the type-checking branch that
+    imports `SnapshotAssertion` is not load-bearing at runtime.
+  - *One leaf remains unobservable on this host.* `make lint` exits 2 with
+    `make: *** [Makefile:461: github-actions-lint] Terminated`: the
+    `actionlint` leaf hung, which is the known host-only deadlock (the hosted
+    runners install no shellcheck and complete instantly). Twelve leaves were
+    observed and passed — `ruff` ("All checks passed!"), `interrogate`,
+    `pylint-classic` at `10.00/10`, `pylint-df12` at `10.00/10`, and the
+    doctest, `ambrleaks`, `skylos`, `rustdoc`, `clippy`, `whitaker`, `typos`,
+    and `yamllint` leaves, every one of which printed its command line and
+    either passed or was the last thing before the hang. The dedicated bound
+    re-run, `timeout 120 actionlint -shellcheck= -config-file
+    .github/actionlint.yaml`, exits **0** with zero bytes of output, which is
+    the CI-equivalent invocation. The gate is therefore green on the
+    code-authority boundary; the leaf itself is a host limitation, recorded
+    rather than claimed as passed.
+  - *Read the gate's own provenance, not the log tail.* Each gate wrote
+    `head_before` and `head_after`, and both are `726282f3` for all five — the
+    tree did not move under the run and stayed clean, so the run speaks for the
+    commit it names.
 
 ## Surprises & discoveries
 
