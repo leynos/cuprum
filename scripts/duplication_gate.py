@@ -130,21 +130,14 @@ def _stale_line(entry: AllowEntry, findings: cabc.Sequence[Finding]) -> str:
         The report line for *entry*.
     """
     joined = " ~ ".join(entry.keys)
-    coincidental: Finding | None = None
-    for finding in findings:
-        matched = [
-            key
-            for key in entry.keys
-            if any(key_matches(key, location) for location in finding.locations)
-        ]
-        if len(matched) == len(entry.keys) and len(entry.keys) > 1:
-            return (
-                f"stale allow entry ({joined}): the family it covered has grown "
-                f"to {len(finding.locations)} locations, so the entry no longer "
-                f"covers all of them; widen it to match {finding.label}"
-            )
-        if matched:
-            coincidental = coincidental or finding
+    grown = _superseding_family(entry, findings)
+    if grown is not None:
+        return (
+            f"stale allow entry ({joined}): the family it covered has grown "
+            f"to {len(grown.locations)} locations, so the entry no longer "
+            f"covers all of them; widen it to match {grown.label}"
+        )
+    coincidental = _coincidental_family(entry, findings)
     if coincidental is not None:
         return (
             f"stale allow entry ({joined}): remove it; no family in this scan "
@@ -154,6 +147,53 @@ def _stale_line(entry: AllowEntry, findings: cabc.Sequence[Finding]) -> str:
     return (
         f"stale allow entry ({joined}): remove it; no family in this scan "
         f"reports any of its locations"
+    )
+
+
+def _matched_keys(entry: AllowEntry, finding: Finding) -> list[str]:
+    """Return the entry keys that any location in *finding* matches."""
+    return [
+        key
+        for key in entry.keys
+        if any(key_matches(key, location) for location in finding.locations)
+    ]
+
+
+def _superseding_family(
+    entry: AllowEntry,
+    findings: cabc.Sequence[Finding],
+) -> Finding | None:
+    """Return the family that outgrew *entry*, when one is readable.
+
+    Only a multi-key entry can show this: it named several locations, so a
+    family matching *every* one of them is the family the entry covered, now
+    carrying a member the entry does not name. A single-key entry has no such
+    evidence, because its key is a glob rather than a list.
+
+    Returns
+    -------
+    Finding | None
+        The outgrown family, or ``None`` when growth is not readable.
+    """
+    if len(entry.keys) > 1:
+        return next(
+            (
+                finding
+                for finding in findings
+                if len(_matched_keys(entry, finding)) == len(entry.keys)
+            ),
+            None,
+        )
+    return None
+
+
+def _coincidental_family(
+    entry: AllowEntry,
+    findings: cabc.Sequence[Finding],
+) -> Finding | None:
+    """Return the first family *entry* merely overlaps, if any."""
+    return next(
+        (finding for finding in findings if _matched_keys(entry, finding)), None
     )
 
 

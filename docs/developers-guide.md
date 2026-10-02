@@ -2010,20 +2010,24 @@ every registration handle in the package shares — the context registrations
 here, the logging hook registrations, and the observation registrations. That
 module also owns `_without_identity`, the identity-match, end-first scan used
 by handles that remove their own entry from a hook tuple rather than restoring
-a token, and `_TokenTupleRegistration`/`_IdentityTupleRegistration`, the two
-shapes those channels share. A handle that detaches out of order must use the
-identity form: token restoration would resurrect a hook someone already
+a token, and `_TupleRegistration`, the base that appends a hook to a
+`ContextVar`-backed tuple on behalf of both
+`_TokenTupleRegistration`/`_IdentityTupleRegistration`. The two subclasses
+differ only in how the tuple is put back — the former resets a captured token,
+the latter removes its own entry — so the append lives once in the base and
+each subclass implements `_release()`. A handle that detaches out of order must
+use the identity form: token restoration would resurrect a hook someone already
 removed. Detach runs exactly once per handle, and a `_release` that raises
 leaves the handle retryable rather than marking it detached.
 
 Re-use policy: any new scope-registration handle must derive from
-`_ScopeRegistration` (directly or through one of the two tuple bases) and
-confine itself to deriving the new context or naming its hook variable; the
-restoration protocol is subtle (`ContextVar` token discipline), so a divergent
-copy is a latent correctness hazard. Note that `LoggingHookRegistration`
-(`cuprum/logging_hooks.py`) is a *pair* handle: it composes two
-`HookRegistration` instances and detaches them in reverse order; it
-deliberately carries no token of its own.
+`_ScopeRegistration` (directly or through `_TupleRegistration` and one of its
+two subclasses) and confine itself to deriving the new context or naming its
+hook variable; the restoration protocol is subtle (`ContextVar` token
+discipline), so a divergent copy is a latent correctness hazard. Note that
+`LoggingHookRegistration` (`cuprum/logging_hooks.py`) is a *pair* handle: it
+composes two `HookRegistration` instances and detaches them in reverse order;
+it deliberately carries no token of its own.
 
 `cuprum/unittests/test_token_registration_stateful.py` verifies the token
 discipline with a Hypothesis `RuleBasedStateMachine` driving randomized

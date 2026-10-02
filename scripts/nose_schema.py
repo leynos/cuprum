@@ -110,29 +110,13 @@ def require_table(value: object, *, context: str) -> cabc.Mapping[str, object]:
 
 
 def require_string(value: object, *, context: str) -> str:
-    """Validate one required non-empty configuration string.
-
-    Parameters
-    ----------
-    value : object
-        Candidate configuration value.
-    context : str
-        Configuration path used in an invalid-value diagnostic.
-
-    Returns
-    -------
-    str
-        The validated string.
-
-    Raises
-    ------
-    GateConfigError
-        If ``value`` is not a non-empty string.
-    """
-    if not _is_non_empty_string(value):
-        msg = f"{context} must be a non-empty string"
-        raise GateConfigError(msg)
-    return value
+    """Validate one required non-empty configuration string."""
+    return _require(
+        value,
+        predicate=_is_non_empty_string,
+        requirement="a non-empty string",
+        context=context,
+    )
 
 
 def require_string_tuple(value: object, *, context: str) -> tuple[str, ...]:
@@ -171,30 +155,64 @@ def _is_integer(value: object) -> typ.TypeIs[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def require_positive_int(value: object, *, context: str) -> int:
-    """Validate one required positive configuration integer.
+def _require[T](
+    value: object,
+    *,
+    predicate: cabc.Callable[[object], typ.TypeIs[T]],
+    requirement: str,
+    context: str,
+) -> T:
+    """Return *value* as *T*, or refuse it with the unmet *requirement*.
+
+    Both :func:`require_string` and :func:`require_positive_int` are this
+    shape: test one typed predicate and, when it holds, hand the caller back
+    the same object with the predicate's type. Only the predicate, the
+    requirement named in the diagnostic, and the calling validator's own
+    context differ, so the guard lives here once rather than being retyped per
+    validator. The ``TypeIs`` predicate is what makes the narrowed return sound
+    to a type checker; a plain ``bool`` predicate would leave *value* as
+    ``object``.
 
     Parameters
     ----------
     value : object
         Candidate configuration value.
+    predicate : collections.abc.Callable[[object], typing.TypeIs[T]]
+        Typed test the value must satisfy.
+    requirement : str
+        Requirement phrase completing the ``must be ...`` diagnostic.
     context : str
         Configuration path used in an invalid-value diagnostic.
 
     Returns
     -------
-    int
-        The validated positive integer.
+    T
+        *value*, narrowed to the predicate's type.
 
     Raises
     ------
     GateConfigError
-        If ``value`` is not a positive integer.
+        If *value* does not satisfy *predicate*.
     """
-    if not _is_integer(value) or value < 1:
-        msg = f"{context} must be a positive integer"
+    if not predicate(value):
+        msg = f"{context} must be {requirement}"
         raise GateConfigError(msg)
     return value
+
+
+def _is_positive_integer(value: object) -> typ.TypeIs[int]:
+    """Report whether ``value`` is an integer of at least one."""
+    return _is_integer(value) and value >= 1
+
+
+def require_positive_int(value: object, *, context: str) -> int:
+    """Validate one required positive configuration integer."""
+    return _require(
+        value,
+        predicate=_is_positive_integer,
+        requirement="a positive integer",
+        context=context,
+    )
 
 
 def normalize_findings(report: object) -> list[Finding]:

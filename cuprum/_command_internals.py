@@ -80,6 +80,7 @@ if typ.TYPE_CHECKING:
 __all__ = [
     "_ExecutionState",
     "_ExecutionTracking",
+    "_RunInputs",
     "_build_subprocess_execution",
     "_execute_with_hooks",
     "_prepare_execution_observation",
@@ -90,6 +91,28 @@ __all__ = [
 # Names the aggregate raised when draining observe-hook tasks fails while a
 # single-command execution is already unwinding.
 _COMMAND_FINALIZATION_ERROR = "command finalization failed"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _RunInputs:
+    """One public run's inputs, before any of them are resolved.
+
+    ``SafeCmd.run``, ``SafeCmd.lines``, and ``SafeCmd.run_sync`` accept the
+    same four keyword arguments, and a caller supplies them together or not at
+    all, so they travel as one value rather than as four names every
+    intermediate has to restate. This is the request;
+    :class:`_ExecutionState` is that same request resolved, and
+    :func:`_resolve_execution_state` is the step between them.
+
+    Fields stay optional because "not supplied" is exactly what each one
+    carries into resolution: an omitted *output* or *context* selects a
+    default, and an omitted *timeout* defers to the active context.
+    """
+
+    output: RunOutputOptions | None = None
+    timeout: float | None = None
+    context: ExecutionContext | None = None
+    stdin: StdinInput | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -110,53 +133,41 @@ class _ExecutionState:
     timeout: float | None
 
 
-def _resolve_execution_state(  # ruff: ignore[too-many-arguments] - only ``cmd`` is positional; the four public inputs are keyword-only, so there is no positional order to confuse
+def _resolve_execution_state(
     cmd: SafeCmd,
-    *,
-    output: RunOutputOptions | None,
-    timeout: float | None,
-    context: ExecutionContext | None,
-    stdin: StdinInput | None,
+    inputs: _RunInputs,
 ) -> _ExecutionState:
     """Resolve one public call's inputs into an :class:`_ExecutionState`.
 
-    ``SafeCmd.run`` and ``SafeCmd.lines`` accept the same public inputs, and
-    both must resolve them the same way: the allowlist is enforced, the default
-    output options and execution context are supplied, stdin is encoded against
-    the effective context, and the timeout precedence between the explicit
-    argument and *context* is settled. Only the dispatch that follows — running
-    the command to completion versus streaming its lines — differs between the
-    two, so the resolution lives here and each caller keeps its own tail.
-
-    The parameter list mirrors the public pair it serves, so it is their
-    argument count, not this helper's own complexity, that sets it.
+    ``SafeCmd.run``, ``SafeCmd.lines``, and ``SafeCmd.run_sync`` accept the
+    same public inputs, and all must resolve them the same way: the allowlist
+    is enforced, the default output options and execution context are supplied,
+    stdin is encoded against the effective context, and the timeout precedence
+    between the explicit argument and *inputs.context* is settled. Only the
+    dispatch that follows — running the command to completion versus streaming
+    its lines — differs between them, so the resolution lives here and each
+    caller keeps its own tail.
 
     Parameters
     ----------
     cmd : SafeCmd
         The command to resolve inputs for and to check against the allowlist.
-    output : RunOutputOptions | None
-        Capture and echo settings; the default options are used when omitted.
-    timeout : float | None
-        Explicit wall-clock timeout, overriding any timeout in *context*.
-    context : ExecutionContext | None
-        Execution settings; a default context is used when omitted.
-    stdin : StdinInput | None
-        Optional stdin payload, resolved against the effective context.
+    inputs : _RunInputs
+        The public call's arguments, as the caller supplied them.
 
     Returns
     -------
     _ExecutionState
         The run's resolved inputs, ready for either dispatch.
     """
-    out = output or RunOutputOptions()
-    ctx = context or ExecutionContext()
+    out = inputs.output or RunOutputOptions()
+    ctx = inputs.context or ExecutionContext()
     _enforce_allowlist(cmd)
     return _ExecutionState(
         context=ctx,
         output=out,
-        stdin_data=stdin.resolve(ctx) if stdin is not None else None,
-        timeout=_resolve_timeout(timeout=timeout, context=context),
+        stdin_data=inputs.stdin.resolve(ctx) if inputs.stdin is not None else None,
+        timeout=_resolve_timeout(timeout=inputs.timeout, context=inputs.context),
     )
 
 

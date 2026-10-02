@@ -252,6 +252,52 @@ changes: the surface is 26 families covered by 24 reasoned entries, up from the
 23 entries / 25 families recorded at adjudication time. `top = 30` remains
 non-binding.
 
+### Code-health remediation (2026-10-02)
+
+With the rebase settled, `/codescene-cli` was run over the branch's own files.
+Code Duplication was reported on five of them, and two public validators also
+carried DOC501 for a docstring that never said what they raise.
+
+The rule keys on shared docstring boilerplate, not only on shared code. The
+schema module measures 9.38 with both validators carrying full NumPy sections
+and 10.0 once those collapse to one-liners; swapping their bodies between a
+shared `_require` and raise-local copies moves neither figure. That matches the
+convention `pyproject.toml` already records — NumPy sections are for public
+APIs, private helpers take concise one-line docstrings — so the contract is
+documented once in the private `_require` both validators call and each public
+validator keeps a one-line summary. This cleared the duplication finding *and*
+both DOC501s with no suppression.
+
+Four more files were refactored to the same end. `_stale_line` grew a `Returns`
+section and delegates its two evidence reads to `_matched_keys`; `_run_command`
+delegates its two refusals to `_reject_failed_run` and `_reject_vacuous_scope`;
+`_resolve_execution_state` takes a public call's four optional arguments as one
+`_RunInputs` value instead of four names every caller restates, which is also
+what retires the `too-many-arguments` suppression its old signature carried;
+and the four hook registrations that append to a `ContextVar`-backed tuple
+share a `_TupleRegistration` base, each undo discipline overriding only the
+part it owns.
+
+Behaviour is unchanged across all of them, established by running the pre- and
+post-revision implementations side by side: 15 schema diagnostics, 9 stale-line
+scenarios, and 30 registration observables, zero differences.
+
+Skylos cannot follow `self.` dispatch through the new intermediate base, so it
+reported three overrides as unused. The `AGENTS.md` remedy order applies —
+model the implicit caller as a typed entry-point rule before reaching for a
+whitelist — so `[tool.skylos.dead_code]` gains one `type = "method"` rule
+naming the four methods reached that way, and the contract test is extended to
+match. Narrowness was checked with a control class outside the base, which is
+still reported.
+
+One self-inflicted regression is worth recording. Rewriting
+`_superseding_family` around the extracted `_matched_keys` helper inverted the
+original `len(...) > 1` guard into `< 2`, which the behaviour probes did not
+catch — the guard only selects between two explanatory readings of a stale
+entry, and both readings were exercised under the old polarity.
+`magic-value-comparison` caught it. When extracting a helper from a predicate,
+the polarity of the remaining condition is part of the extraction.
+
 ## Surprises & Discoveries
 
 - **`--exclude` globs are matched relative to each configured root, not to the

@@ -22,6 +22,7 @@ from cuprum._command_internals import (
     _prepare_execution_observation,
     _resolve_execution_state,
     _run_prepared_command,
+    _RunInputs,
 )
 from cuprum._execution_tracking import _ExecutionTracking
 from cuprum._line_iteration import LineStream, _iter_line_events
@@ -128,10 +129,12 @@ class SafeCmd:
             self,
             _resolve_execution_state(
                 self,
-                output=output,
-                timeout=timeout,
-                context=context,
-                stdin=stdin,
+                _RunInputs(
+                    output=output,
+                    timeout=timeout,
+                    context=context,
+                    stdin=stdin,
+                ),
             ),
         )
 
@@ -179,10 +182,12 @@ class SafeCmd:
         """  # ruff: ignore[docstring-extraneous-exception] - all propagate from allowlist, timeout, and stdin encode
         state = _resolve_execution_state(
             self,
-            output=output,
-            timeout=timeout,
-            context=context,
-            stdin=stdin,
+            _RunInputs(
+                output=output,
+                timeout=timeout,
+                context=context,
+                stdin=stdin,
+            ),
         )
         tracking = _ExecutionTracking(
             execution_hooks=_collect_hooks(current_context()),

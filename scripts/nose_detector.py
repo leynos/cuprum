@@ -267,7 +267,24 @@ def run_detector(
 
 
 def _run_command(command: cabc.Sequence[str]) -> str:
-    """Run one detector command from the repository root and return stdout."""
+    """Run one detector command from the repository root and return stdout.
+
+    A zero exit is not enough to trust the report: nose also exits zero when a
+    configured root contains no supported source file, emitting only a stderr
+    warning, so that case is refused explicitly by
+    :func:`_reject_vacuous_scope` rather than read as a clean scan.
+
+    Returns
+    -------
+    str
+        The detector's stdout, once the run is known to be non-vacuous.
+
+    Raises
+    ------
+    GateExecutionError
+        If the command cannot be started, times out, exits non-zero, or
+        succeeds without scanning any supported source file.
+    """
     try:
         result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed, repository-owned binary.
             list(command),
@@ -283,15 +300,39 @@ def _run_command(command: cabc.Sequence[str]) -> str:
     except OSError as error:
         msg = f"cannot run {command[0]}: {error}: {INSTALL_HINT}"
         raise GateExecutionError(msg) from error
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        msg = f"{command[0]} exited with status {result.returncode}: {detail}"
-        raise GateExecutionError(msg)
-    if _EMPTY_SCOPE_MARKER in result.stderr:
-        msg = (
-            f"{command[0]} found no supported source files under every "
-            f"configured root, so this scan proves nothing about the tree: "
-            f"{result.stderr.strip()}"
-        )
-        raise GateExecutionError(msg)
+    _reject_failed_run(command, result)
+    _reject_vacuous_scope(command, result)
     return result.stdout
+
+
+def _reject_failed_run(
+    command: cabc.Sequence[str],
+    result: subprocess.CompletedProcess[str],
+) -> None:
+    """Refuse a detector run that exited non-zero, quoting its own complaint."""
+    if result.returncode == 0:
+        return
+    detail = result.stderr.strip() or result.stdout.strip()
+    msg = f"{command[0]} exited with status {result.returncode}: {detail}"
+    raise GateExecutionError(msg)
+
+
+def _reject_vacuous_scope(
+    command: cabc.Sequence[str],
+    result: subprocess.CompletedProcess[str],
+) -> None:
+    """Refuse a successful run that scanned no supported source file.
+
+    Raises
+    ------
+    GateExecutionError
+        If nose reported that a root held no supported source file.
+    """
+    if _EMPTY_SCOPE_MARKER not in result.stderr:
+        return
+    msg = (
+        f"{command[0]} found no supported source files under every "
+        f"configured root, so this scan proves nothing about the tree: "
+        f"{result.stderr.strip()}"
+    )
+    raise GateExecutionError(msg)

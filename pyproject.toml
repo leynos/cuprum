@@ -528,6 +528,16 @@ full_name = [
 ]
 reason = "Called by TracingHook.record_line_stream_event, which callers register through observe_line_stream."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
+full_name = [
+    "cuprum._scope_registration._TupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._append",
+    "cuprum._scope_registration._TokenTupleRegistration._release",
+    "cuprum._scope_registration._IdentityTupleRegistration._release",
+]
+reason = "Reached by self-dispatch from _TupleRegistration.__init__ and the inherited detach() protocol; each is overridden in a subclass on the same hook-tuple path, so Skylos cannot follow the MRO. Traced executing via PumpHookRegistration, EchoHookRegistration, StreamOperationHookRegistration, and LineStreamHookRegistration."
+
 # The code-duplication gate. `make duplication` and `make lint` run the pinned
 # `nose` binary through `scripts/duplication_gate.py` with these settings.
 #

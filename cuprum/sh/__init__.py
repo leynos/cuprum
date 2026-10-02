@@ -28,6 +28,7 @@ from cuprum._command_internals import (
     _prepare_execution_observation as _prepare_execution_observation,
 )
 from cuprum._command_internals import _run_prepared_command as _run_prepared_command
+from cuprum._command_internals import _RunInputs as _RunInputs
 from cuprum._constants import DEFAULT_ECHO_MAX_LINE_BYTES as DEFAULT_ECHO_MAX_LINE_BYTES
 from cuprum._execution_tracking import _ExecutionTracking as _ExecutionTracking
 from cuprum._idle_heartbeat import _validate_idle_options as _validate_idle_options
