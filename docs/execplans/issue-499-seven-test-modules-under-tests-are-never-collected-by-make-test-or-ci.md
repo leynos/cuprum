@@ -968,6 +968,86 @@ than discovering the gap months later.
     `/tmp/lint-issue-499-seven-test-modules-under-tests-are-never-collected-by-make-test-or-ci-2.out`
     (failed) and `…-retry.out` (passed).
 
+- [x] (2026-10-02) Closed the validation at the pushed head `249d94f8`, which
+  is the previously gated `8e1e3b8d` plus this record. The delta is one file —
+  this plan, +52 lines — so the five named gates were re-run rather than the
+  docs-only subset, because the change surface against `origin/main` also
+  carries the Makefile and helper commits beneath it.
+  - *Local gates, all five green, from the scrutineer.* `HEAD_BEFORE ==
+    HEAD_AFTER == 249d94f8f81f3d134019103bf06e3ce4e9bca6ca` and
+    `git status --porcelain` was empty at both ends. `check-fmt` exit 0 (1.2 s:
+    697 files already formatted, cargo fmt clean, mdtablefix 80 unchanged);
+    `typecheck` exit 0 (`ty 0.0.74`, "All checks passed!"); `lint` exit 0
+    (2 min 34 s: both pylint passes 10.00/10, ruff, interrogate 100%, Whitaker,
+    typos, yamllint, actionlint); `markdownlint` exit 0 (19 s, "0 issues in 0
+    files", spelling clean); `test` exit 0 (4 min 04 s).
+  - *The `test` totals, from the one log.* pytest 3688 passed / 86 skipped / 0
+    failed; nextest 127 passed / 0 skipped / 0 failed; doctests 0 passed, 3
+    ignored. No `warnings summary` block appears anywhere in the log, and no
+    `FAILED` or `ERROR` line. The 86 skips are the suites' own platform and
+    optional-dependency guards, not silent passes.
+  - *The SKYLOS risk did not materialize.* A documentation-only delta can trip
+    the docs-credit rule, which is why the re-gate was worth running rather than
+    assuming. The SKYLOS leaf reported no findings, and the
+    `df12-python-lints` fetch — the transient that failed the earlier `lint`
+    attempt — succeeded on the first attempt this time
+    (`Updated … 4cf41736cce2f7ba2778882a5c629c044568a0e5`), so no retry log
+    exists.
+  - *The bootstrap evidence the stale table asked for, observed running.* The
+    `make test` log opens with `test-selection` running before the selector
+    loop: `tests/test_ci_test_selection_contract.py`, 62 items collected by
+    name, `62 passed`. That is the third-party-independent collection the
+    three collection rows requested, seen executing rather than read.
+  - *Hosted CI at the same head, fully settled.* 27 check runs: 22 `success`,
+    5 `skipped` (`Kody Code Review`, `Loom model smoke test`, `Sourcery
+    review`, `automerge`, `extended` — this repository's normal path for them on
+    a PR), 0 failures, 0 pending. The four `Typecheck and test` legs, both
+    `Extension-gated tests` jobs, all five `build-native-wheels` fan-outs plus
+    `verify-wheel-install`, the three `Native contracts` jobs, `lint-test`,
+    `coverage`, `benchmark-ratchet`, `changes`, `verus`, and `CodeScene Code
+    Health Review (main)` all read `success`.
+  - *CodeScene at this head, quoted.* The check-run reads `status: completed`,
+    `conclusion: success`, title `CodeScene PR Check`, body `**Quality Gate
+    Passed**` / `6 Quality Gates Passed`, details
+    `https://codescene.io/projects/74471/delta/results/7792667`. Separately it
+    submitted `APPROVED` on PR #505 at `249d94f8` (review `5396650338`), which
+    is a review object, not an inline comment. That distinction matters here:
+    the three findings at `6a676b90` lived in the *body* of review `5396267582`,
+    so they carry no thread to reply to and no thread to resolve — the
+    approving review at the fixed head is the whole remedy, and the
+    `codescene-access[bot]` inline-comment population is zero.
+  - *The pre-merge table, reconciled against the tree.* All five rows of the
+    CodeRabbit failed-checks table were written against a head where they were
+    accurate; each row's requested remedy now exists, so the table is stale
+    rather than the code. Recorded here because the reconciliation is part of
+    the PR's closing evidence: `Testing (Overall)`, `Testing (Unit And
+    Behavioural)`, and `Linked Issues check` all ask for a
+    `PYTEST_TARGETS`-independent bootstrap of the guard, which is
+    `Makefile:509`'s `test-selection` recipe — `@$(PYTEST)
+    tests/test_ci_test_selection_contract.py` — wired as a prerequisite of
+    `test-python` (`:497`) and `test` (`:495`) and reached in CI by
+    `ci.yml:617`'s `make test-python`. The regression it asks for is
+    `test_dropping_the_contract_glob_makes_the_bootstrap_fail`
+    (`tests/test_ci_test_selection_contract.py:314`); the valid-exemption and
+    missing-runner cases are `tests/test_ci_exemption_contract.py:70` and
+    `:222`. `Testing (Property / Proof)` asks for a Hypothesis property
+    comparing `admits_event()` to an independent evaluator, which is
+    `test_admits_event_agrees_with_an_independent_evaluation`
+    (`tests/test_ci_workflow_reader_properties.py:173`), one of four `@given`
+    properties in that module. `Developer Documentation` asks that this plan
+    name the six surviving modules,
+    `tests/test_ci_workflow_bash_env_contract.py`, and upstream `#559` as the
+    retirer — recorded at lines 28, 63, 323-324, 1179, 1226, and 1428. The
+    follow-up comment seeking re-inspection was posted as issue comment
+    `5961224792`.
+  - *The decision still outstanding.* `reviewDecision` remains
+    `CHANGES_REQUESTED`, anchored at `92f17d25` — a head three commits behind
+    this one. The five findings that decision cited are each answered in-thread
+    with `@coderabbitai` and were acknowledged by the bot, and a fresh review
+    is queued as `d8860275` (ETA ~27 h at the time of writing). No local gate,
+    approval, or inspection displaces that queue entry, and none of this is a
+    claim that it has run.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
