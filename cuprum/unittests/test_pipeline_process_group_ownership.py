@@ -261,3 +261,57 @@ def test_a_partial_spawn_leaves_no_owned_group_running(
         "a partial spawn must tear down the owned group it already created, "
         "grandchild included"
     )
+
+
+def test_an_exited_owned_stage_is_not_signalled_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stage recorded as owning a group whose leader has exited is a no-op.
+
+    ``_cleanup_spawned_processes`` runs on the partial-spawn path, where a
+    stage that has already exited is an ordinary outcome rather than a
+    failure. Teardown must absorb it as quietly as it absorbs a signal to a
+    reaped direct child.
+
+    "Quietly" here means *no signal at all*, group signals included, and this
+    test exists because the obvious alternative looks equally reasonable. The
+    group name an owned stage is signalled by is its leader's pid, and that
+    stage has been reaped: the kernel is free to have recycled the number, so
+    probing or signalling the group could reach a group this run never created.
+    The reaped child is what makes the name unsafe, so the short-circuit on a
+    completed child is what keeps the group signal honest.
+    """
+    doubles = [_RecordingProcess(7005)]
+    doubles[0].returncode = 0
+    group_signals: list[tuple[int, int]] = []
+
+    def forbidden_killpg(pgid: int, sig: int) -> None:
+        """Record rather than signal a group whose name may be recycled."""
+        group_signals.append((pgid, sig))
+
+    monkeypatch.setattr(os, "killpg", forbidden_killpg)
+
+    async def run_case() -> None:
+        """Tear down a partial spawn whose one stage has already exited."""
+        await _pipeline_spawn._cleanup_spawned_processes(
+            _as_processes(doubles),
+            [],
+            None,
+            _TeardownPolicy(0.1, owns_group=[True]),
+        )
+
+    asyncio.run(run_case())
+
+    assert not group_signals, (
+        "an exited owned stage's group name may have been recycled, so it must "
+        f"not be signalled or probed; found {group_signals!r}"
+    )
+    assert not doubles[0].terminated, (
+        "an exited stage must not be signalled directly either"
+    )
+    assert not doubles[0].killed, (
+        "an exited owned group must never be escalated to SIGKILL"
+    )
+    assert doubles[0].returncode == 0, (
+        "the stage's recorded exit code must survive teardown unchanged"
+    )
