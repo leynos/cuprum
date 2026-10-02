@@ -169,6 +169,12 @@ def structured_logging_hook(
 
 def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
     """Build bounded, trusted fields for a capture EOF-grace expiry."""
+    # ``env_mode`` earns its place on the same test this whitelist applies to
+    # every other field: it is a closed set of three values resolved by
+    # production code, so it carries no caller data, and it is rendered rather
+    # than passed through so the record holds the plain string operators key
+    # on rather than the member's ``repr``.
+    mode = None if event.env_mode is None else str(event.env_mode)
     optional_fields = (
         ("cuprum_pid", event.pid),
         ("cuprum_project", event.project),
@@ -176,6 +182,7 @@ def _capture_eof_grace_extra(event: ExecEvent) -> dict[str, object]:
         ("cuprum_operation", event.operation),
         ("cuprum_eof_grace_s", event.eof_grace_s),
         ("cuprum_pending_readers", event.pending_readers),
+        ("cuprum_env_mode", mode),
     )
     return {
         "cuprum_phase": event.phase,

@@ -11,7 +11,7 @@ import tomllib
 from tests.helpers.docs import repo_root
 from tests.helpers.workflow import Workflow, step_named, steps
 
-_SHARED_ACTION_REVISION = "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+_SHARED_ACTION_REVISION = "6cec89bac47a21cf756d68d638a9a510998e57f8"
 _SETUP_RUST = (
     f"leynos/shared-actions/.github/actions/setup-rust@{_SHARED_ACTION_REVISION}"
 )

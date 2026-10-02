@@ -120,7 +120,7 @@ GHA_BACKEND_JOBS: typ.Final = (
 )
 SETUP_RUST = (
     "leynos/shared-actions/.github/actions/setup-rust@"
-    "c5a54701c8603a0fa756a6b34c49bc2af75a6c11"
+    "6cec89bac47a21cf756d68d638a9a510998e57f8"
 )
 #: The pinned shared coverage action. It drops `target` from its own cache, so
 #: the no-target-archive rule holds even if a caller ever switches back to
@@ -142,7 +142,7 @@ SETUP_RUST = (
 #: request from publishing.
 GENERATE_COVERAGE = (
     "leynos/shared-actions/.github/actions/generate-coverage@"
-    "77ea10341249024e22ec5d9069e3caa7596e0d4f"
+    "a5765019912a8ab6882b12db049c7cde635f3a85"
 )
 OBSERVATION_STEP = "Record cache observations"
 

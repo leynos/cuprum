@@ -1,0 +1,19 @@
+{
+  "backend": "python",
+  "captured_output_length": 0,
+  "exit_code": 0,
+  "fixture_manifest_hash": "51394f18e57972a681a2eb97c7c477d02d1d15b175247f518a60c331319774cc",
+  "fixture_path": "<repo>/dist/fixtures/seed12345-wrap76.b64",
+  "lock_wait_seconds": 4.293397068977356e-07,
+  "mode": "echo",
+  "read_size": 65536,
+  "reentrant_rejection_count": 0,
+  "repeat_count": 1,
+  "scenario": "echo-devnull-cb-s1-python",
+  "sink_kind": "devnull",
+  "stages": 1,
+  "status": "ok",
+  "stdout_line_count": 28256364,
+  "wall_time_seconds": 210.94323723111302,
+  "with_line_callbacks": true
+}

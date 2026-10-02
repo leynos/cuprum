@@ -50,7 +50,7 @@ jobs:
       # `0.2.0-beta1` and any other spelling fails.
       - name: Check the Cargo manifest version against the tag
         id: cargo-version
-        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@c5a54701c8603a0fa756a6b34c49bc2af75a6c11
+        uses: leynos/shared-actions/.github/actions/ensure-cargo-version@2f58fab140cc8dfe69756aaa6a3bbb987c426023
         with:
           manifests: rust/cuprum-rust/Cargo.toml
       # The shared validator for pyproject.toml exists only inside

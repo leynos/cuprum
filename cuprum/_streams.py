@@ -48,7 +48,7 @@ from cuprum._streams_pump import (
     _write_to_stream_writer,
     _WriteOutcome,
 )
-from cuprum.echo_events import EchoStream
+from cuprum.echo_events import BrokenPipePolicy, EchoStream
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
     _complete_stream_operation,
@@ -88,6 +88,10 @@ class _StreamConfig:
     # 64 KiB line) while capture stays byte-for-byte complete.
     echo_max_line_bytes: int | None = None
     discard_on_cancel: asyncio.Event | None = None
+    # How a broken pipe on this stream's sink is handled. Defaults to strict
+    # propagation, so a config built without naming a policy keeps the
+    # behaviour every caller had before the policy existed.
+    broken_pipe_policy: BrokenPipePolicy = BrokenPipePolicy.STRICT
     # Which output stream this config drains, for bounded echo observability.
     # Defaults to stdout because every production call site names the stderr
     # config explicitly when it replaces the stdout one.

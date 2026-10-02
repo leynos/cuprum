@@ -488,6 +488,14 @@ coercion path as `sh.make`, so positional ordering, keyword flag formatting,
 underscore-to-hyphen normalization, and rejection of `None` and `bytes` stay in
 lockstep with builders.
 
+`build_argv` stays generic; the *builder* reserves the names that describe how
+a command runs. A keyword naming an `ExecutionContext` field or a `run_sync`
+parameter is rejected with `TypeError` (see
+[Execution options are reserved](#626-execution-options-are-reserved)) rather
+than rendered as a child flag, because the caller almost always meant the
+execution setting and a child that ignores unknown flags would otherwise run
+with the wrong configuration in silence.
+
 #### 6.2.2 Command builders
 
 Command builders centralize and type arguments for a given command. Builders
@@ -751,6 +759,51 @@ Hook call order is deterministic. A reasonable order is:
 
 Exact ordering must be documented when implemented.
 
+#### 6.2.6 Execution options are reserved
+
+A builder keyword is rendered as a child argument, so a name that configures
+the *run* rather than the *child* is ambiguous. `cwd`, `env`, `timeout`, and
+`stdin` are the first four a subprocess caller reaches for, and forwarding them
+silently produces the wrong execution: `git("tag", cwd=repo_dir)` runs
+`git tag --cwd=<path>` in the ambient directory. A tool that rejects the
+unknown flag fails loudly, but one that ignores it succeeds in the wrong place.
+
+The builder therefore rejects the union of two name sets before rendering:
+
+- the `ExecutionContext` fields, derived at import time from
+  `dataclasses.fields(ExecutionContext)`, so a new field cannot silently become
+  a child flag;
+- `run_sync`'s keyword-only parameters (`output`, `timeout`, `context`,
+  `stdin`), written by hand and pinned by a drift guard that compares the set
+  with `inspect.signature(SafeCmd.run_sync)`. Every `run` and `lines` parameter
+  is either shared with `run_sync` or one of the context fields, so `run_sync`
+  alone is the authoritative surface to guard.
+
+The `TypeError` names the correct spelling. Context fields are reported as
+`cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync`, and
+`run_sync`'s parameters directly, as
+`timeout is an execution option; pass timeout=... to run_sync`. `timeout`
+appears in both sets and takes the direct form, which matches the parameter the
+caller can pass straight through. The first reserved keyword in insertion order
+is the one reported, so a call mixing several names gets a stable message.
+
+Two properties are preserved deliberately:
+
+- **`build_argv` stays generic.** It is a pure serializer with no knowledge of
+  execution, and its property tests check that it agrees with the builder. The
+  restriction lives in the builder, not the serializer.
+- **Positional rendering is unchanged.** A tool whose command line genuinely
+  takes `--cwd` still receives it as `"--cwd=<dir>"`, which keeps the escape
+  hatch open without an opt-out on `SafeCmdBuilder`. Only the exact reserved
+  names are rejected, so `working_dir` and `stdin_file` keep rendering as
+  `--working-dir=…` and `--stdin-file=…`.
+
+A warning was rejected as too weak: the failure it guards against is silent
+misconfiguration, which a warning in a long continuous integration (CI) log
+does not prevent. A per-builder opt-out was rejected because the positional
+form already covers every tool that needs those flags, and an opt-out would
+reintroduce the ambiguity for any caller that set it out of habit.
+
 ### 6.3 `cuprum.unsafe` – Explicit Escape Hatch
 
 The `cuprum.unsafe` namespace houses constructors and helpers that bypass some
@@ -832,7 +885,7 @@ class ExecEvent:
     program: Program | None
     argv: tuple[str, ...]
     cwd: Path | None
-    env: Mapping[str, str] | None
+    env: EnvOverlay | None
     pid: int | None
     timestamp: float
     line: str | None
@@ -849,6 +902,7 @@ class ExecEvent:
     user_cpu_seconds: float | None  # exit: child user CPU seconds
     system_cpu_seconds: float | None  # exit: child system CPU seconds
     resource_usage_mode: ResourceUsageMode | None  # exit: source of figures
+    env_mode: EnvMode | None  # effective policy; on every phase
 
 
 ExecHook = Callable[[ExecEvent], None | Awaitable[None]]
@@ -893,6 +947,89 @@ no result-level fallback tuple. Their collectors are reconciled as part of
 teardown, while any `EchoEvent` emitted synchronously before the transition is
 still available through `observe_echo`. Observer failures remain isolated from
 capture and fallback collection.
+
+For screen readers: The following flowchart shows how one drain handles a
+broken-pipe echo failure. An echo is issued as a write or a flush; when that
+call does not raise `BrokenPipeError`, the drain simply continues. When it
+does, the configured `BrokenPipePolicy` decides. Under the default
+`BrokenPipePolicy.STRICT` the error propagates to the caller unchanged and no
+echo is disabled, so the caller gets no result. Under
+`BrokenPipePolicy.BEST_EFFORT`, `_disable_echo` runs: it stops echoing for the
+affected drain only, leaving the other stream's drain untouched, and emits the
+same three bounded projections as the unencodable-payload recovery — a
+`RelayFallback` appended to the drain's diagnostics, an `EchoEvent` on the
+`observe_echo` channel, and a structured warning on the `cuprum.stream` logger.
+Capture, line observation, and child reaping continue, and the run still
+returns a `CommandResult` carrying the recorded fallback. The clause matches
+`BrokenPipeError` by name rather than the wider `OSError`, so no other I/O
+failure is affected by this policy, and the unencodable-payload recovery above
+keeps its own unconditional handling.
+
+Figure 3: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
+the failing write or flush to the disabled drain and its bounded projections
+
+```mermaid
+flowchart TD
+    A[Echo write or flush] --> B{BrokenPipeError?}
+    B -->|No| C[Continue draining]
+    B -->|Yes| D{Policy is BEST_EFFORT?}
+    D -->|No| E[Propagate error]
+    D -->|Yes| F[_disable_echo]
+    F --> G[Disable affected drain echo]
+    F --> H[Append RelayFallback]
+    F --> I[Emit EchoEvent]
+    F --> J[Emit structured WARNING]
+    G --> K[Continue capture, line observation, and child reaping]
+    H --> L[Return CommandResult]
+    I --> L
+    J --> L
+    K --> L
+```
+
+For screen readers: The following sequence diagram retells the same broken-pipe
+recovery as a message exchange between the caller, `run_sync`, one stream's
+echo drain, the echo sink, and the returned `CommandResult`. The caller invokes
+`run_sync` with `RunOutputOptions`; the run starts a drain for the stream, and
+the drain writes or flushes to the echo sink. When the sink answers with
+`BrokenPipeError`, the configured `BrokenPipePolicy` selects one of two
+alternatives. Under `BrokenPipePolicy.BEST_EFFORT`, the drain calls
+`_disable_echo` with `EchoErrorCategory.BROKEN_PIPE`, which stops echoing for
+that stream, appends a `RelayFallback` to the caller-owned result diagnostics,
+and emits the `EchoEvent` and `cuprum.stream` warning; capture and line
+observation continue, the drain then completes normally, and `run_sync` returns
+a `CommandResult` carrying the recorded fallback. Under the default
+`BrokenPipePolicy.STRICT`, the drain instead propagates `BrokenPipeError` back
+through the run, so no result is produced and the caller receives the error.
+The two arms therefore differ in outcome rather than in detection: best-effort
+yields a result with a recorded fallback, strict yields an exception.
+
+Figure 4: Broken-pipe echo recovery as a message sequence, from the `run_sync`
+call through the drain and sink to the returned `CommandResult` or the
+propagated error
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Run as run_sync
+    participant Drain as Echo drain
+    participant Sink as Echo sink
+    participant Result as CommandResult
+
+    Caller->>Run: run_sync(output=RunOutputOptions(...))
+    Run->>Drain: drain stream
+    Drain->>Sink: write / flush
+    Sink-->>Drain: BrokenPipeError
+    alt broken_pipe_policy is BEST_EFFORT
+        Drain->>Drain: _disable_echo(error_category=BROKEN_PIPE)
+        Drain->>Drain: capture bytes and observe lines
+        Drain->>Result: append RelayFallback
+        Drain-->>Run: complete drain
+        Run-->>Caller: CommandResult
+    else broken_pipe_policy is STRICT
+        Drain-->>Run: propagate BrokenPipeError
+        Run-->>Caller: error
+    end
+```
 
 #### Aggregate Python stream-operation observation
 
@@ -1055,7 +1192,7 @@ stderr sink, resolved at emission time, so it never enters capture, echo, line
 observers, or the activity tracker. An `on_idle` callback is synchronous and
 replaces the built-in renderer rather than joining it.
 
-Figure 3: Per-stream echo resolution and fd gating, from RunOutputOptions to
+Figure 5: Per-stream echo resolution and fd gating, from RunOutputOptions to
 stream consumers
 
 For screen readers: The following flowchart shows how per-stream echo
@@ -1165,8 +1302,11 @@ Implementation notes (current state):
   reaping cannot be attributed to individual stages.
 - Output streams are decoded as UTF-8 with replacement for undecodable bytes to
   avoid runtime errors while keeping observability.
-- Environment overrides are supplied via an `ExecutionContext` and merged on top
-  of `os.environ` without mutating global state.
+- Environment overrides are supplied via an `ExecutionContext` and composed
+  without mutating global state. The base they compose over depends on the
+  active `EnvMode`: `INHERIT` and `OVERLAY` merge the overrides on top of
+  `os.environ`, while `REPLACE` starts from an empty environment and keeps only
+  what the overlays supply.
 - Cancellation sends `terminate`, waits 0.5s, and escalates to `kill` to ensure
   child processes are not left running.
 
@@ -1232,6 +1372,32 @@ The following design decisions were made during implementation:
 
 ### 8.1.3 Structured execution events (observe hooks)
 
+Implemented as `_LineEventEmitter`, a frozen slotted private dataclass in
+`cuprum/_line_callbacks.py`, built once per observed stream, after spawn, when
+the pid is known. It binds the invariant half of a line event — program, argv
+with the program name first, cwd, env, pid, stream, tags, project, and exec_id
+— together with the observation's own `_emit_event` dispatcher. The factory
+returns `None` when no observe hook is installed, so a stream nobody emits
+events for prepares nothing. Every line then needs only itself: `emit_line`
+passes a fresh frozen `ExecEvent`, one fresh clock read, and the line to that
+unchanged dispatcher. The per-line `_EventDetails` construction and the per-line
+`argv_with_program` walk are gone.
+
+**The construction share is measured, not projected.** Pre-hoist the median was
+34.2928%; post-hoist it is 29.9087%, over three matched capture pairs with a
+candidate spread of 0.0423 points, against a limit of 30.0 that was revised
+from 10% to 28% and then to 30%, both on 2026-09-27 with user approval, the
+second revision on the measurement rather than a further projection. 100% of
+the residual numerator now sits inside the generated `ExecEvent.__init__`, whose
+`frozen=True` guard makes 27 `object.__setattr__` calls per construction; two
+faster constructions were measured and declined as public-API or correctness
+trades. The evidence is in
+[`tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md),
+with raw captures under
+[`profiling/5-2-1-line-event-emission/`](profiling/5-2-1-line-event-emission/README.md)
+and the plan in
+[the 5.2.1 plan](execplans/5-2-1-hoist-the-invariant-exec-event-and-event-details.md).
+
 The structured event stream (`ExecEvent`) is exposed via `sh.observe()` and
 implemented with the following decisions:
 
@@ -1267,12 +1433,36 @@ implemented with the following decisions:
 - **Line emission:** `stdout`/`stderr` phases are emitted per decoded line. Line
   terminators are removed, and the final partial line (when output does not end
   with a newline) is still emitted.
+- **Environment mode:** every event carries `ExecEvent.env_mode`, the effective
+  environment policy for the execution once the active context and any per-call
+  policy have been composed. It is one of `EnvMode.INHERIT`, `EnvMode.OVERLAY`,
+  or `EnvMode.REPLACE`, and it is present on every phase — including `plan`,
+  `pipeline_fail_fast`, and the ancillary diagnostics — because it is known
+  before the child is spawned and describes the whole execution rather than one
+  measurement. It is `None` only on legacy or manually constructed events. A
+  `REPLACE` policy discards the live parent environment, so a child that omits
+  `PATH` can fail to resolve a bare program name before it ever starts; without
+  the field a consumer sees an ordinary spawn failure and cannot tell it apart
+  from an overlay run. The mode is a trusted value projected by Cuprum, never
+  read from a caller tag: it is carried on the typed event, and `env_mode` is
+  additionally a reserved observation-tag key — stripped from caller-supplied
+  tags when the tags are built, with the REPLACE tag grafted only by production
+  code. The logging adapter emits it as the `cuprum_env_mode` extra, the
+  tracing adapter as the `cuprum.env_mode` span attribute, and the metrics
+  adapter as the `env_mode` label on `cuprum_executions_total` (on the `start`
+  phase) and `cuprum_failures_total`. A spawn failure produces no `exit` event,
+  so it records no failure sample at all; the typed field is the only signal
+  available for it. The typed policy and its composition rules are specified in
+  [ADR-018](adr-018-typed-environment-policies.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
 - **Tags:** Cuprum attaches a default `project` tag and runtime tags such as
   `capture`/`echo`. Callers can attach additional tags via
-  `ExecutionContext.tags`; caller tags take precedence when keys overlap.
+  `ExecutionContext.tags`; caller tags take precedence when keys overlap, with
+  one exception: `env_mode` is a reserved key, so a caller-supplied value is
+  stripped rather than honoured, and the effective policy is grafted by
+  production code alone.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
   returning results, so `run_sync()` does not leak pending tasks.
@@ -1354,7 +1544,7 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 3: Sequence of start/exit logging hook execution
+Figure 6: Sequence of start/exit logging hook execution
 
 ```mermaid
 sequenceDiagram
@@ -1409,7 +1599,7 @@ stderr, and the exit time. It then reads the process exit code through
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
 
-Figure 4: Subprocess timeout handling, from payload resolution to
+Figure 7: Subprocess timeout handling, from payload resolution to
 `TimeoutExpired`
 
 ```mermaid
@@ -1520,7 +1710,7 @@ grace, captured text is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 5: Capturing drain EOF-grace sequence
+Figure 8: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -1666,7 +1856,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 6: Fail-fast termination selection via the `_stages_to_terminate` reducer
+Figure 9: Fail-fast termination selection via the `_stages_to_terminate` reducer
 
 ```mermaid
 sequenceDiagram
@@ -1853,7 +2043,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 7: Concurrent execution flow with allowlist validation and semaphore
+Figure 10: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -1899,7 +2089,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 8: Fail-fast mode cancellation behaviour
+Figure 11: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -2068,7 +2258,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 9: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 12: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -2550,7 +2740,7 @@ the caller is cancelled — by tearing the child process down through the
 existing SIGTERM, grace-wait, and SIGKILL path before the consumers drain and
 the stream closes. A bare `async for` break does not close the custom iterator.
 
-Figure 10: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 13: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -2574,7 +2764,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 11: Line observation fan-out from decoded output to lifecycle events,
+Figure 14: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -2599,7 +2789,7 @@ values are enqueued and yielded as they arrive, and after the process exits the
 consumers are drained, the `CommandResult` is published, and iteration ends with
 `StopAsyncIteration` before the caller reads the `result` attribute.
 
-Figure 12: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 15: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid

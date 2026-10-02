@@ -146,8 +146,8 @@ def test_out_of_order_detach_removes_each_registered_hook() -> None:
             _drain_config(),
         )
     )
-    assert seen_a == [], "operations after both detaches must not invoke hook A"
-    assert seen_b == [], "operations after both detaches must not invoke hook B"
+    assert not seen_a, "operations after both detaches must not invoke hook A"
+    assert not seen_b, "operations after both detaches must not invoke hook B"
 
 
 def test_measurement_uses_its_injected_monotonic_clock() -> None:

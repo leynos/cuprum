@@ -5,6 +5,43 @@ opt-in unless a section says otherwise. Start with the
 [users' guide](users-guide.md) for a complete first command. Every Python
 example here is executed from this document by the behavioural suite.
 
+## Execution options are no longer child flags
+
+Until now every builder keyword became a child `--name=value` argument, so
+`python("-c", script, cwd=repo_dir)` built `--cwd=<path>` rather than changing
+the child's working directory. A subprocess user's first four guesses — `cwd`,
+`env`, `timeout`, and `stdin` — were all accepted and forwarded, and a tool
+that ignores unknown flags ran in the wrong place with no error at all.
+
+The builder now rejects the `ExecutionContext` field names and the `run_sync`
+parameters with a `TypeError` that names the right call.
+
+<!-- tested-example: migration-reserved-execution-options -->
+
+```python
+import sys
+
+from cuprum import Program, ProgramCatalogue, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="reserved")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+try:
+    python("-c", "print('unused')", cwd="/tmp")
+except TypeError as exc:
+    assert str(exc) == (
+        "cwd is an execution option; pass ExecutionContext(cwd=...) to run_sync"
+    )
+else:
+    raise AssertionError("cwd should not become a child flag")
+```
+
+Move the value to `run_sync`, passing `context=ExecutionContext(cwd=...)`,
+`timeout=...`, or `stdin=...`. A command line that genuinely takes such a flag
+still gets it positionally: `python("--cwd=<dir>")`. The rejection is narrower
+than it sounds — only the exact names are reserved, so `working_dir=...` and
+`stdin_file=...` continue to render as flags. See
+[Build arguments deliberately](users-guide.md#build-arguments-deliberately).
+
 ## Bytes arguments are rejected
 
 `sh.make()` builders and the `build_argv` helper no longer accept `bytes`
@@ -42,6 +79,14 @@ directly to `scoped(catalogue=catalogue)`; `scoped` derives the allowlist from
 its programs. Keep using `scoped(ScopeConfig(...))` when the scope also needs
 hook or policy configuration. For examples and nesting behaviour, see the
 [policy section](users-guide.md#apply-a-policy) in the users' guide.
+
+## Environment policies
+
+`EnvMode`, `UNSET`, and the `env_mode` fields on `ScopeConfig`,
+`CuprumContext`, and `ExecutionContext` are opt-in. Existing callers retain the
+live environment-overlay behaviour and require no changes. Use
+`EnvMode.REPLACE` only where a child must receive an explicitly supplied
+environment, and use `UNSET` to remove an inherited variable from an overlay.
 
 ## Line-level output observation
 
@@ -156,10 +201,10 @@ context manager or calling `detach()` on the returned handle. The existing
 
 `CommandResult` now exposes handled text-sink echo failures through its
 `relay_fallbacks` tuple. Each `RelayFallback` contains the affected stream and
-the closed `unicode_encode` error category, so consumers can count or report
-per-command fallbacks without parsing log messages. Pipeline stage results
-expose the records owned by that stage, with stdout records before stderr
-records.
+the closed error category, `unicode_encode` or `broken_pipe`, so consumers can
+count or report per-command fallbacks without parsing log messages. Pipeline
+stage results expose the records owned by that stage, with stdout records
+before stderr records.
 
 The field is trailing and defaults to `()`, so existing six-argument positional
 construction and existing keyword construction remain compatible. Commands that
@@ -167,6 +212,50 @@ time out or are cancelled do not produce a result-level diagnostics tuple;
 their already-emitted echo events remain available through `observe_echo`. The
 warning, echo event, and result record carry only bounded categorical values
 and never include output, sink details, exception objects, or command arguments.
+
+## Opt-in broken-pipe policy for echoed output
+
+A presentation sink whose destination closes under the run raises
+`BrokenPipeError` from the echo drain. Cuprum 0.2.0 adds an opt-in policy for
+that failure: `RunOutputOptions.broken_pipe_policy` defaults to
+`BrokenPipePolicy.STRICT`, which propagates the error and aborts the run, so
+existing applications need no change and a run with no opt-in behaves as before.
+
+To adopt the policy, name it on the run's output options:
+
+<!-- tested-example: migration-broken-pipe -->
+
+```python
+import sys
+
+from cuprum import (
+    BrokenPipePolicy,
+    Program,
+    ProgramCatalogue,
+    RunOutputOptions,
+    sh,
+)
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="broken-pipe")
+command = sh.make(Program(sys.executable), catalogue=catalogue)("-c", "print('hello')")
+options = RunOutputOptions(broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT)
+assert options.broken_pipe_policy is BrokenPipePolicy.BEST_EFFORT
+result = command.run_sync(output=options)
+assert result.ok and result.stdout == "hello\n"
+```
+
+Under best-effort, a `BrokenPipeError` from a presentation sink disables echo
+for the affected stream only, while capture, line observation, child reaping,
+and result diagnostics continue: the command still returns a result, and that
+result's `relay_fallbacks` names the `broken_pipe` category.
+
+Only `BrokenPipeError` is affected; any other sink `OSError` still propagates
+under both policies.
+
+`BrokenPipePolicy` is exported from the package root next to
+`RunOutputOptions`, so an existing import line such as
+`from cuprum import Program, ProgramCatalogue, RunOutputOptions, sh` only needs
+`BrokenPipePolicy` added to it.
 
 ## Idle heartbeat for quiet children
 

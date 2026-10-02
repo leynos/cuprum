@@ -49,6 +49,12 @@ def _event_common_fields(
         # extras, the span attributes, and the metric label — must carry the
         # plain string operators key on, not the member's ``repr``.
         yield name("resource_usage_mode"), str(event.resource_usage_mode)
+    if event.env_mode is not None:
+        # Also a ``StrEnum``, and rendered for the same reason. The mode names
+        # the policy, never the environment: a replacement run whose child
+        # failed to resolve a bare program name is indistinguishable from an
+        # overlay one without it, and its values are a fixed set of three.
+        yield name("env_mode"), str(event.env_mode)
     for field, value in _verbatim_fields(event):
         if value is not None:
             yield name(field), value

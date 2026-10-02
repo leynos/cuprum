@@ -20,6 +20,11 @@ import pytest
 import yaml
 
 from tests.helpers.ci_workflows import ROOT
+from tests.helpers.dependabot_directories import (
+    COMPOSITE_ACTIONS,
+    composite_action_directories,
+    directory_glob_matches,
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -58,6 +63,10 @@ class ExpectedStanza:
     manifest: str
     #: The channel labels the stanza adds on top of the baseline label.
     channel_labels: tuple[str, ...]
+    #: Directory globs the stanza lists beside ``directory``. Dependabot does
+    #: not descend from ``/`` into ``.github/actions``, so the GitHub Actions
+    #: stanza names the composite actions explicitly.
+    extra_directories: tuple[str, ...] = ()
 
 
 #: One stanza per package ecosystem the repository uses. Listing them here
@@ -69,6 +78,7 @@ EXPECTED_STANZAS = (
         directory="/",
         manifest=".github/workflows",
         channel_labels=("github-actions",),
+        extra_directories=(COMPOSITE_ACTIONS,),
     ),
     ExpectedStanza(
         ecosystem="uv",
@@ -201,19 +211,33 @@ def test_each_stanza_watches_a_directory_holding_its_manifest(
     stanza: ExpectedStanza,
 ) -> None:
     """Point each stanza where its manifest really is."""
-    declared = dependabot_stanzas()[stanza.ecosystem]
-    directory = _text(
-        declared.get("directory"),
-        f"the {stanza.ecosystem} stanza must declare a `directory`",
-    )
-    assert directory == stanza.directory, (
-        f"the {stanza.ecosystem} stanza must target {stanza.directory!r}; "
-        f"got {directory!r}"
+    directories = _declared_directories(stanza.ecosystem)
+    expected = (stanza.directory, *stanza.extra_directories)
+    assert sorted(directories) == sorted(expected), (
+        f"the {stanza.ecosystem} stanza must target {list(expected)}; "
+        f"got {list(directories)}"
     )
     watched = _watched_path(stanza)
     assert watched.exists(), (
-        f"the {stanza.ecosystem} stanza watches {directory!r}, which holds no "
-        f"{stanza.manifest!r}; Dependabot would find nothing and report nothing"
+        f"the {stanza.ecosystem} stanza watches {stanza.directory!r}, which "
+        f"holds no {stanza.manifest!r}; Dependabot would find nothing and "
+        "report nothing"
+    )
+
+
+def test_github_actions_stanza_covers_every_composite_action() -> None:
+    """Reach every composite action, however deeply it is nested."""
+    directories = _declared_directories("github-actions")
+    actions = composite_action_directories()
+    assert actions, "expected at least one composite action under .github/actions"
+    uncovered = [
+        action
+        for action in actions
+        if not any(directory_glob_matches(glob, action) for glob in directories)
+    ]
+    assert not uncovered, (
+        f"the github-actions stanza lists {list(directories)}, which does not "
+        f"reach the composite actions {uncovered}; their pins would drift"
     )
 
 
@@ -317,6 +341,31 @@ def test_each_stanza_bounds_its_pull_request_count(stanza: ExpectedStanza) -> No
             f"`open-pull-requests-limit`; got {limit!r}"
         ),
     )
+
+
+def _declared_directories(ecosystem: str) -> tuple[str, ...]:
+    """Return the directories a stanza lists, from either key.
+
+    Returns
+    -------
+    tuple[str, ...]
+        ``directories`` when the stanza uses it, otherwise ``(directory,)``.
+    """
+    declared = dependabot_stanzas()[ecosystem]
+    if "directories" in declared:
+        raw = _sequence(
+            declared["directories"],
+            f"the {ecosystem} stanza must declare `directories` as a list",
+        )
+        return tuple(
+            _text(entry, f"the {ecosystem} stanza has a non-string directory")
+            for entry in raw
+        )
+    directory = _text(
+        declared.get("directory"),
+        f"the {ecosystem} stanza must declare `directory` or `directories`",
+    )
+    return (directory,)
 
 
 def _watched_path(stanza: ExpectedStanza) -> Path:

@@ -55,11 +55,11 @@ placement and cache ownership contract when the workflow changes.
 The tool family's key hashes the actions that pin what it installs, so a job
 may treat an exact hit as proof that a pinned executable is already present.
 `makeutil` is the one that relies on it: `.github/actions/install-makeutil`
-holds its revision and toolchain, and `typecheck-test`, `coverage` and
+holds its release version and digest, and `typecheck-test`, `coverage` and
 `coverage-upload` run that action only when the tool cache missed. A pin that
-lived anywhere the key does not hash would let a hit skip the rebuild and run a
-stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a second
-copy.
+lived anywhere the key does not hash would let a hit skip the download and run
+a stale binary, which is why `tests/test_ci_makeutil_install.py` refuses a
+second copy.
 
 ## Why the lane is in every key
 

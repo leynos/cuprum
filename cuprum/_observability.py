@@ -15,7 +15,9 @@ import logging
 import types
 import typing as typ
 
-from cuprum.context import current_context, merge_env_overlays
+from cuprum.context import current_context
+from cuprum.context._policy import _resolve_env_policy
+from cuprum.context.env_overlay import EnvMode, EnvOverlay
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -37,11 +39,33 @@ def _merge_tags(*tags: cabc.Mapping[str, object] | None) -> cabc.Mapping[str, ob
     return types.MappingProxyType(merged)
 
 
+def _without_env_mode_tag(
+    tags: cabc.Mapping[str, object] | None,
+) -> cabc.Mapping[str, object] | None:
+    """Return caller tags without the reserved environment-mode key."""
+    if tags is None or "env_mode" not in tags:
+        return tags
+    return {key: value for key, value in tags.items() if key != "env_mode"}
+
+
 def _resolve_env_overlay(
-    extra: cabc.Mapping[str, str] | None,
-) -> cabc.Mapping[str, str] | None:
-    """Resolve the frozen observation env overlay for the active context."""
-    return merge_env_overlays(current_context().env_overlay, extra)
+    extra: EnvOverlay | None,
+    env_mode: EnvMode = EnvMode.OVERLAY,
+) -> tuple[EnvOverlay | None, EnvMode]:
+    """Resolve the frozen observation environment policy for the active context.
+
+    Returns
+    -------
+    tuple[EnvOverlay | None, EnvMode]
+        The composed overlay and mode, without reading ``os.environ``.
+    """
+    context = current_context()
+    return _resolve_env_policy(
+        context.env_overlay,
+        context.env_mode,
+        extra,
+        env_mode,
+    )
 
 
 def _base_stage_tags(

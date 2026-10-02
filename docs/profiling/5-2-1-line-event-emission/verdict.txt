@@ -1,0 +1,29 @@
+HISTORICAL: collected against the 28% limit, before its revision to 30%.
+The FAIL lines below are the collection-time verdict and are NOT the standing
+one. The same six captures re-judged at 30% are in reclassified-at-30/summary.txt,
+where all three candidates pass; every construction_share_percent is identical
+between the two, only limit_percent and status differ. Kept unaltered so both
+verdicts remain legible as history: the revision moved the target, not the
+measurement. See ./README.md for the directory layout.
+
+PROFILED: 6 capture(s)
+label            variant      share %        D status                      lines   wall s rev      
+r1-candidate     candidate    29.8991    17539 fail_above_limit         28256364    180.2 f4d1010aa
+r1-control       control      35.3533    25726 fail_above_limit         28256364    261.0 01ec41bd5
+r2-candidate     candidate    29.9414    17758 fail_above_limit         28256364    181.2 f4d1010aa
+r2-control       control      34.2928    25743 fail_above_limit         28256364    259.2 01ec41bd5
+r3-candidate     candidate    29.9087    17413 fail_above_limit         28256364    175.4 f4d1010aa
+r3-control       control      34.0388    29722 fail_above_limit         28256364    306.4 01ec41bd5
+control shares: [35.3533, 34.2928, 34.0388] median 34.2928
+candidate shares: [29.8991, 29.9414, 29.9087] median 29.9087 range 0.0423
+
+PROFILED FAIL: r1-candidate: candidate share 29.8991 > 28.0
+PROFILED FAIL: r2-candidate: candidate share 29.9414 > 28.0
+PROFILED FAIL: r3-candidate: candidate share 29.9087 > 28.0
+
+UNPROFILED (per scenario, never pooled)
+cb           control median  242.534s candidate median  178.789s delta  -26.28% (n=5/5)
+echo-nocb    control median    2.156s candidate median    2.140s delta   -0.70% (n=5/5)
+tee-nocb     control median    4.688s candidate median    3.306s delta  -29.49% (n=5/5)
+
+UNPROFILED: ALL TOLERANCES MET

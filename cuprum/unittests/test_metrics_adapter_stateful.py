@@ -10,6 +10,7 @@ so counters and observations are created exactly when intended, and only then.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import types
 import typing as typ
 
@@ -27,7 +28,7 @@ from cuprum.adapters.metrics_adapter import (
     _metric_operations,
     _UnhandledMetricsPhaseError,
 )
-from cuprum.context import ScopeConfig, scoped
+from cuprum.context import EnvMode, ScopeConfig, scoped
 from cuprum.events import ExecEvent
 from cuprum.unittests._adapter_test_support import _python_builder
 
@@ -96,11 +97,64 @@ def _event(
     )
 
 
+def _with_mode(event: ExecEvent, mode: EnvMode) -> ExecEvent:
+    """Return ``event`` carrying ``mode`` as its effective policy."""
+    # Set by replacement rather than as a fifth parameter on ``_event``, which
+    # CodeScene's advisory limit holds at four arguments. Replacement also
+    # states what these tests vary: the policy label, with the event held fixed.
+    return dc.replace(event, env_mode=mode)
+
+
 @pytest.mark.parametrize(("phase", "counter"), _UNIT_COUNTER_PHASES)
 def test_unit_counter_phases_yield_one_increment(phase: str, counter: str) -> None:
     """Each simple phase yields exactly one unit increment of its counter."""
     assert _metric_operations(_event(phase)) == (_CounterOp(counter, 1.0),), (
         f"phase {phase!r} must yield exactly one unit increment of {counter!r}"
+    )
+
+
+def test_start_counter_carries_the_environment_mode() -> None:
+    """The execution counter is labelled with the effective environment policy.
+
+    ``start`` is the one counter every observed execution produces, so it is
+    where an operator reads the mix of policies a program runs under. The label
+    is the composed mode, which is what the child actually spawned with rather
+    than what any single scope asked for.
+    """
+    rollup = _metric_operations(_with_mode(_event("start"), EnvMode.REPLACE))
+
+    assert rollup == (
+        _CounterOp("cuprum_executions_total", 1.0, {"env_mode": "replace"}),
+    ), "the execution counter must label the policy the child spawned under"
+
+
+def test_failure_counter_carries_the_environment_mode() -> None:
+    """A failure is attributable to its policy, not just to the program.
+
+    This is the case the label exists for: a replacement policy that omits
+    ``PATH`` fails at spawn, and without the label that failure lands in the
+    same series as an ordinary overlay one.
+    """
+    operations = _metric_operations(
+        _with_mode(_event("exit", exit_code=1), EnvMode.REPLACE)
+    )
+
+    assert _CounterOp("cuprum_failures_total", 1.0, {"env_mode": "replace"}) in (
+        operations
+    ), "a replacement-mode failure must be distinguishable from an overlay one"
+
+
+def test_stream_counters_omit_the_environment_mode() -> None:
+    """Per-line counters stay unlabelled by the per-execution policy.
+
+    Their volume is per-line, so repeating a per-execution constant across
+    every one of those series would multiply the metric for nothing: an
+    operator reads the policy off ``cuprum_executions_total``.
+    """
+    operations = _metric_operations(_with_mode(_event("stdout"), EnvMode.REPLACE))
+
+    assert operations == (_CounterOp("cuprum_stdout_lines_total", 1.0),), (
+        "a per-line counter must not carry the per-execution environment mode"
     )
 
 
@@ -312,7 +366,7 @@ def test_a_failing_second_operation_leaves_the_first_applied() -> None:
         "the counter applied before the failure must remain recorded, found "
         f"{collector.counters!r}"
     )
-    assert collector.histograms == {}, (
+    assert not collector.histograms, (
         "the observation that raised must not be recorded, found "
         f"{collector.histograms!r}"
     )

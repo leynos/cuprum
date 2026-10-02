@@ -12,7 +12,9 @@ The invariants checked here are:
   rejected with ``TypeError`` in both positional and keyword positions.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
-  entry; unknown programs are rejected with ``UnknownProgramError``.
+  entry; unknown programs are rejected with ``UnknownProgramError``;
+  a keyword naming an execution option (an ``ExecutionContext`` field
+  or a ``run_sync`` parameter) is rejected with ``TypeError`` instead.
 - ``Pipeline.concat``: composition is associative, loses no stages,
   preserves left-to-right order, and agrees with the ``|`` operator.
 """
@@ -29,6 +31,7 @@ from hypothesis import strategies as st
 from cuprum.catalogue import DEFAULT_CATALOGUE, ProjectSettings, UnknownProgramError
 from cuprum.program import Program
 from cuprum.sh import Pipeline, SafeCmd, build_argv, make
+from cuprum.sh.factory import _RESERVED_OPTIONS
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -151,6 +154,47 @@ def test_make_builder_agrees_with_build_argv(
     )
     assert cmd.argv_with_program == (str(program), *cmd.argv), (
         "argv_with_program must prefix the program name"
+    )
+
+
+# Drawn from a literal specimen rather than from the production set: a reserved
+# set that lost a name must fail the assertion below, not make the strategy
+# unsamplable. The specimens cover both message forms plus the names the
+# builder most often sees.
+_SPECIMEN_RESERVED = ("cwd", "env", "stdin", "timeout")
+
+# Insertion order decides which reserved name the builder reports, so anything
+# drawn before the injected key (including safe keywords) must not shadow it.
+_RESERVED_KEYS = st.sampled_from(_SPECIMEN_RESERVED)
+
+
+@settings(max_examples=200)
+@given(
+    program=st.sampled_from(sorted(DEFAULT_CATALOGUE.allowlist)),
+    args=_ARGS,
+    kwargs=_KWARGS.filter(lambda mapping: not mapping.keys() & _RESERVED_OPTIONS),
+    reserved=_RESERVED_KEYS,
+)
+def test_make_rejects_reserved_execution_option_keywords(
+    program: Program,
+    args: list[str | int | bool | Path],
+    kwargs: dict[str, str | int | bool | Path],
+    reserved: str,
+) -> None:
+    """No arrangement of arguments lets an execution option reach the child."""
+    assert set(_SPECIMEN_RESERVED) <= _RESERVED_OPTIONS, (
+        "the reserved set must still cover every specimen name"
+    )
+    poisoned = {**kwargs, reserved: "value"}
+
+    with pytest.raises(TypeError) as excinfo:
+        make(program)(*args, **poisoned)
+
+    assert str(excinfo.value).startswith(f"{reserved} is an execution option;"), (
+        "the reported keyword must be the reserved name the caller supplied"
+    )
+    assert "run_sync" in str(excinfo.value), (
+        "the error must point at the run_sync spelling"
     )
 
 

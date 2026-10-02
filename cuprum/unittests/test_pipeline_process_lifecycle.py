@@ -98,6 +98,104 @@ def test_spawn_pipeline_processes_terminates_started_stages_on_failure(
     assert spawned[0].wait_calls >= 1, "the terminated stage must be awaited"
 
 
+class _StagePreparationError(RuntimeError):
+    """A failure raised while preparing a stage's line callbacks."""
+
+
+def test_stage_preparation_failure_reaps_every_spawned_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure after a stage has spawned must not orphan that stage.
+
+    ``_create_stage_capture_tasks`` is the factory the line-event hoist
+    changes, and it runs *after* its stage's process exists, so a failure there
+    leaves a live child unless the owner reclaims it. Two stages spawn and the
+    second stage's factory raises, which exercises both halves of the cleanup:
+    the earlier stage's capture task is cancelled, and every spawned process —
+    the failing stage's included — is terminated and awaited.
+
+    This pins the pipeline path only. The two command paths leak the child on
+    the same injection; that gap is recorded as contradicted in the plan and
+    deliberately has no test here.
+    """
+    echo = sh.make(ECHO)
+    stages = (echo("-n", "first"), echo("-n", "second"))
+    config = _prepare_pipeline_config(
+        output=RunOutputOptions(capture=True, echo=False),
+        timeout=None,
+        context=None,
+    )
+
+    spawned: list[_StubSpawnProcess] = []
+    prepared: list[asyncio.Task[str | None]] = []
+    factory_calls = 0
+
+    async def never_completes() -> str | None:
+        """Suspend until the cleanup cancels this capture task."""
+        await asyncio.sleep(3600)
+        return None
+
+    async def fake_create_subprocess_exec(
+        *_: object,
+        **__: object,
+    ) -> _StubSpawnProcess:
+        """Spawn every stage, recording each one with its own PID."""
+        await asyncio.sleep(0)
+        proc = _StubSpawnProcess(pid=12345 + len(spawned))
+        spawned.append(proc)
+        return proc
+
+    def fake_create_stage_capture_tasks(
+        *_: object,
+        **__: object,
+    ) -> tuple[
+        asyncio.Task[str | None] | None,
+        asyncio.Task[str | None] | None,
+        tuple[None, None],
+    ]:
+        """Hand the first stage a live capture task; fail the second stage."""
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls > 1:
+            raise _StagePreparationError
+        task = asyncio.create_task(never_completes())
+        prepared.append(task)
+        return task, None, (None, None)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(
+        _pipeline_stage_streams,
+        "_create_stage_capture_tasks",
+        fake_create_stage_capture_tasks,
+    )
+
+    async def exercise() -> None:
+        """Spawn the pipeline and assert the preparation failure propagates."""
+        with pytest.raises(_StagePreparationError):
+            await _spawn_pipeline_processes(stages, config)
+
+    asyncio.run(exercise())
+
+    # Anti-vacuity: a test that never reached the second stage could assert
+    # the same things about one process and read as a pass.
+    assert len(spawned) == len(stages), (
+        "both stages must spawn before the second stage's factory fails"
+    )
+    assert [proc.terminate_calls for proc in spawned] == [1, 1], (
+        "every spawned stage must be terminated, the failing stage included"
+    )
+    assert [proc.kill_calls for proc in spawned] == [0, 0], (
+        "a cooperative stage must not need escalation to kill"
+    )
+    assert all(proc.wait_calls >= 1 for proc in spawned), (
+        "every terminated stage must be awaited"
+    )
+    assert len(prepared) == 1, "the first stage must have produced a capture task"
+    assert prepared[0].cancelled(), (
+        "the earlier stage's capture task must be cancelled by the cleanup"
+    )
+
+
 def test_spawn_pipeline_processes_records_times_before_stage_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

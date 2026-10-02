@@ -1,0 +1,18 @@
+Re-classification of the committed folded captures at the revised 30% limit.
+Inputs and rule file: unchanged from the collection (see ../classifier-rules.json).
+Command, per capture:
+  python -m benchmarks.summarize_line_event_profile <capture>/stacks.folded \
+    --rules docs/profiling/5-2-1-line-event-emission/classifier-rules.json \
+    --output <out>.json
+
+label          share      limit  status
+r1-control     35.3533    30.0   fail_above_limit
+r1-candidate   29.8991    30.0   pass
+r2-control     34.2928    30.0   fail_above_limit
+r2-candidate   29.9414    30.0   pass
+r3-control     34.0388    30.0   fail_above_limit
+r3-candidate   29.9087    30.0   pass
+
+Every construction_share_percent is byte-identical to the collection-time
+construction-share.json in each capture directory; only limit_percent and
+status differ. The revision moved the target, not the measurement.

@@ -99,7 +99,7 @@ async def _spawn_pipeline_stages(
             stdin=stream_fds.stdin,
             stdout=stream_fds.stdout,
             stderr=stream_fds.stderr,
-            env=_merge_env(config.ctx.env),
+            env=_merge_env(config.ctx.env, config.ctx.env_mode),
             cwd=_cwd_arg(config.ctx.cwd),
         )
         resources.processes.append(process)
