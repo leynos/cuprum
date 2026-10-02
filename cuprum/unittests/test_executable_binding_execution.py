@@ -198,6 +198,7 @@ def test_a_resolver_runs_once_per_execution_not_once_per_event(
     calls: list[int] = []
 
     def resolver() -> str:
+        """Record each evaluation, so a per-event call becomes visible."""
         calls.append(len(calls))
         return str(approved)
 
@@ -289,6 +290,7 @@ def test_a_bound_but_unlisted_program_is_refused_without_resolving(
     calls: list[int] = []
 
     def resolver() -> str:
+        """Record evaluation, so an unpermitted run would leave a trace."""
         calls.append(len(calls))
         return str(approved)
 

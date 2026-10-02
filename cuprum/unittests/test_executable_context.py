@@ -146,6 +146,7 @@ def test_resolve_executable_evaluates_a_resolver() -> None:
     calls: list[int] = []
 
     def resolver() -> str:
+        """Record how often resolution runs, and return a lazy path."""
         calls.append(len(calls) + 1)
         return "/opt/tools/late"
 
