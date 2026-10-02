@@ -886,6 +886,99 @@ escalation, not a workaround.
   omission from the requested four is exactly how a CI-blocking Markdown defect
   escapes a "fully gated" claim; a documentation edit that never runs it has
   not been gated, whatever the other four report.
+- [x] (2026-10-02 20:42Z) **Second rebase round: the target moved again and
+  produced a real conflict.** After the push of `068cc43a`, `origin/main`
+  advanced from `c65d843c` to `a592b50c` ("RFC 0001: Execution interception for
+  test doubles and passthrough (#517)", one commit, touching `docs/contents.md`,
+  `docs/rfcs/0001-execution-interception.md`, and `docs/roadmap.md`).
+  `git merge-tree --write-tree --messages HEAD origin/main` returned rc=1 with
+  exactly one conflicted path, `docs/roadmap.md`. The branch was rebased onto
+  `a592b50c` as `86449239`, 45 commits, no merge commits.
+- [x] (2026-10-02 20:45Z) **The conflict was two insertions at one anchor, and
+  the resolution keeps both.** Both sides insert after roadmap item 10.4.3, at
+  the blank line before the file's single link-reference block: this branch
+  adds one line (`[#440]:`), main adds a 181-line section
+  (`## 11. Test doubles without a process (RFC 0001)`, with subsections
+  11.1–11.5). Git sees one insertion point and two different insertions, so the
+  base section of the `zdiff3` hunk is empty. The two insertions are only
+  coincidentally adjacent: a link-reference definition is addressable and works
+  anywhere in the file, so its position carries no meaning, whereas section 11
+  is content whose position is fixed. The resolution therefore takes main's
+  section 11 verbatim and keeps the `[#440]:` definition above the shared
+  `[issue-379]:` line — the ordering the branch already had at `068cc43a`.
+  Nothing is dropped from either side.
+- [x] (2026-10-02 20:46Z) **The rebase was verified against the true three-way
+  merge, not merely observed to apply.**
+  `git merge-tree --write-tree --messages 068cc43a origin/main` produced tree
+  `53a97c95`, in which `docs/roadmap.md` was the only marker-bearing path;
+  substituting the resolved blob into that tree yields `0c93b1c7`, which is
+  exactly `86449239^{tree}`. Two independent corroborations:
+  `git diff --stat 068cc43a HEAD` lists *only* main's three files, so no branch
+  content moved; and the resolved file is identical to the `068cc43a` version
+  as a **multiset of lines**, differing solely in the position of the one
+  `[#440]:` line, with zero lines lost. Against `origin/main` the net change to
+  `docs/roadmap.md` remains `+6 −1`, exactly the patch of `aab210be`.
+- [x] (2026-10-02 20:47Z) **Two of this round's own verification checks were
+  defective and were caught rather than trusted.** (1) The first attempt to
+  rebuild the merge tree used `git ls-tree` without `-r`, which lists `docs/`
+  as a subtree rather than `docs/roadmap.md` as a path, so the substitution
+  matched nothing and the comparison silently compared the tree to itself — it
+  had no assertion to catch this, and the retry added one. The defect surfaced
+  only because a later, explicit `mktree` attempt failed loudly
+  (`fatal: path .codescene/code-health-rules.json contains slash`), which is
+  what led to inspecting the first attempt. (2) An earlier "rebase in progress:
+  absent" probe was vacuous: in a worktree `.git` is a *file*, so
+  `[ -e "$R/.git/rebase-merge" ]` can never be true. The correct form is
+  `git rev-parse --git-path rebase-merge`, which confirmed the dry run had in
+  fact stopped at step 33 of 44.
+- [x] (2026-10-02 20:47Z) **The dry run also disproved an assumption carried
+  into this round.** This branch touches `docs/roadmap.md` in two commits,
+  `aab210be` (references `[#440]`) and `ed0e12b0` (relocates its definition to
+  the tail), so the plan expected the conflict to arise at step 21 and to recur
+  at step 33. In fact `aab210be` applied cleanly — its insertion is at line
+  ~136, far from main's tail — and the only conflict was at step 33. The
+  relocation in `ed0e12b0` is load-bearing and could not simply be dropped: a
+  link-reference definition nested in a list item indented 2 spaces has a
+  content indent of 2, so the next line indented 2 spaces would be parsed as a
+  continuation of the *definition* rather than as a new roadmap item.
+- [x] (2026-10-02 20:54Z) **Six gates at `86449239`, all exit 0, tree clean.**
+  `check-fmt` 0s, `test` 235s, `typecheck` 1s, `lint` 165s, `markdownlint` 19s,
+  `nixie` 0s; every log records `head_before=head_after=86449239`. Two positive
+  findings worth keeping: `lint` reached **actionlint**, its final sub-target,
+  so unlike a chained abort nothing was left *unobserved*; and clippy ran
+  `--all-targets --all-features -- -D warnings`. Test denominators, each quoted
+  from one command's own summary: nextest 127 tests run / 127 passed / 0
+  skipped; the largest pytest run 2832 passed, 70 skipped; cargo doctests via
+  `test result: ok` lines. Zero `FAILED`/`ERROR` lines in the pytest output.
+- [x] (2026-10-02 20:55Z) **`markdownlint`'s `Summary: 0 issues in 0 files`
+  was resolved rather than hand-waved, and the earlier reading of it is now
+  corrected.** The line reads as a vacuous 0-files pass, but the authoritative
+  scope number is `Linting: 84 files`, and the repository has exactly 84 tracked
+  `.md` files, so the scope was complete. The summary's second number counts
+  only files carrying issues — the `Summary:` line is not a pass/fail signal at
+  all. Positive controls settle it: a `*` bullet (MD004 is configured as
+  `style: dash`) yields `Summary: 1 issue in 1 file` and exit 1, and an
+  over-length prose line yields `Summary: 2 issues in 1 file` and exit 1. A
+  probe file containing *only* an indented block after a blank line is clean
+  because MD046's default style is `consistent`, which requires only that a
+  document not mix fenced and indented styles — it does not forbid indented
+  blocks in isolation. The earlier entry's phrasing ("0 issues across 83
+  files", "reports `0 issues in 0 files` for an empty or unmatched scope, a
+  vacuous pass") conflated these two numbers and should be read with this
+  correction; the fix it describes remains correct and is confirmed here. Note
+  this also refines the `0 files` warning in
+  `[[md046-checkbox-item-indent-6-renders-as-code]]`: a bare `--diff`-style
+  file-count check can be vacuous, but the reliable test is the
+  `Linting: N files` line against the tracked count, plus a positive control.
+- [x] (2026-10-02 20:57Z) **Pushed and CI now builds exactly the certified
+  head.** `--force-with-lease` bound to the then-current remote head `068cc43a`
+  succeeded as `+ 068cc43a...86449239 (forced update)`; the displaced head
+  remains recoverable at
+  `refs/recovery/issue-440/r2-20261002T204153Z-old-head`. Because the branch is
+  now a fast-forward of `origin/main`, `git merge-tree HEAD origin/main`
+  returns rc=0 and its result tree `0c93b1c7` equals `HEAD^{tree}`, so the
+  merge ref CI builds is the head that was gated — the `CONFLICTING` mergeable
+  state is resolved.
 
 ## Surprises & discoveries
 
