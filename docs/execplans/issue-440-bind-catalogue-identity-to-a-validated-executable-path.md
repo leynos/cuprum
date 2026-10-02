@@ -774,8 +774,74 @@ escalation, not a workaround.
 
       Recovery refs are preserved under `refs/recovery/issue-440/` for the old
       head, old base, and target.
-      Gate evidence for `74b9f004` and earlier is **stale for this candidate**;
-      the four repository gates are re-run against `babb08a4` below.
+      **Every SHA cited in entries written before this one now names a
+      pre-rebase commit that the rewrite replaced.** Those objects still exist
+      under the recovery refs, so `git show <old-sha>` still works and a
+      citation is not a lost commit; what changes is that the SHA no longer
+      appears on the branch. To map any old SHA to its replayed equivalent,
+      run:
+
+      ```bash
+      git range-diff \
+        refs/recovery/issue-440/old-base-b6bb9a99..refs/recovery/issue-440/old-head-74b9f004 \
+        refs/recovery/issue-440/target-c65d843c..HEAD
+      ```
+
+      The left column is the pre-rebase series and the right column is the
+      current one, so an entry citing `91c96d51` is found on the left and read
+      across. Because it is anchored on the immutable recovery refs rather than
+      on `74b9f004`, this command keeps working as later commits are added.
+      Gate evidence for `74b9f004` and earlier is **stale for this
+      candidate**, and the four repository gates
+      (`check-fmt`, `test`, `typecheck`, `lint`) are re-run against the head
+      that carries this entry, with each gate's log recording the head it ran
+      at.
+- [x] (2026-10-02 19:55Z) A process error is recorded here because it changes
+      which evidence is admissible. The gate sweep was launched against the
+      frozen head `a6d1e414`, and while it ran this entry set was edited into
+      the plan — a tracked file. The sweep reports `head_before == head_after`
+      for every gate, but that check compares commit SHAs and **cannot see a
+      dirty working tree**, so it cannot certify that a gate read the committed
+      tree. The consequence is scoped rather than total: `check-fmt` (via
+      `mdtablefix --check`) and `lint` (via the `spelling` sub-gate) read
+      Markdown and are therefore invalidated by the edit, whereas `test` and
+      `typecheck` were verified not to read this file at all — no test in the
+      repository references the issue-440 plan path — so their results stand
+      for any tree differing from `a6d1e414` only in this document. The
+      corrective action is to re-run the Markdown-reading gates at the head
+      that carries the edit and to prove by an empty non-Markdown diff that the
+      `test`/`typecheck` evidence still applies. The lesson for the next
+      operator is to treat "freeze the tree" as binding on the working tree and
+      not merely on the branch pointer: commit every documentation edit
+      **before** launching the sweep, or the sweep's own head assertions will
+      imply a rigour it does not have.
+- [x] (2026-10-02 20:02Z) The `a6d1e414` sweep: `check-fmt`, `test`, and
+      `typecheck` passed; `lint` **failed**, and the failure is environmental
+      rather than a defect in the branch. Everything lint ran up to that point
+      passed — `ruff check`, both pylint passes at `10.00/10`, `interrogate`
+      at `100.0%`, the `df12-python-lints` plugin pass, `ambrleaks`, `skylos`,
+      rustdoc under `-D warnings`, Clippy with `--all-targets --all-features`,
+      and Whitaker — and the run then died in the `spelling` sub-gate with:
+
+      ```plaintext
+      Updating https://github.com/leynos/typos-config-builder.git (v0.1.3)
+        × Failed to resolve `--with` requirement
+        ╰─▶ Git operation failed
+      ```
+
+      That is a `uv` fetch of the pinned config builder failing inside the
+      gate's own environment, not a spelling finding. The same fetch,
+      re-attempted immediately afterwards, succeeds and prints `0.1.3`, so the
+      cause is transient network or credential-helper flakiness on this host
+      and not the pinned revision. **Two consequences are recorded rather than
+      glossed.** First, the failure is *not* evidence about the Markdown, which
+      is fortunate because the tree was also dirty (previous entry) and the
+      spelling gate reads prose. Second, `make lint`'s sub-targets run in
+      sequence, so the failure aborted the remaining ones: `github-actions-lint`
+      **never ran** — `yamllint` and `actionlint` appear zero times in the log —
+      even though the change touches no workflow file. An aborted gate thus
+      leaves later checks unobserved, and this run cannot be cited as evidence
+      for them. The corrective action is a fresh `lint` on a frozen tree.
 
 ## Surprises & discoveries
 
