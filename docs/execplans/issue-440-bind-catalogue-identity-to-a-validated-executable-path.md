@@ -1006,6 +1006,24 @@ escalation, not a workaround.
   corrected here. This is the same fault the retrospective below records,
   recurring in the very entries that report it, and re-derived from the
   introducing commits rather than from labels.
+- [x] (2026-10-02 21:40Z) **CI is green at `963e06bf`, and this is the last
+  fact this document can record about itself.** Run `37066696955` (created
+  `21:24:59Z`) returned `completed/success` at `21:40:46Z`, with the companion
+  `Rust boundary verification` run `37066696666` also `success`, and all twelve
+  required contexts green with none absent — the same twelve listed in the
+  entry above, re-read at this head. The rebase itself is now fully verified on
+  three independent axes: no commit was lost (all 44 pre-rebase subjects are
+  present in the rebased range, with only these two plan commits added, 44 →
+  46); every source, test, and build path is byte-identical to the pre-rebase
+  head (`git diff 068cc43a 963e06bf -- . ':(exclude)docs'` is empty), so only
+  documentation moved; and the merge ref equals `HEAD^{tree}` (`8f7b1493`,
+  `merge-tree` rc=0), so CI builds exactly the gated head. **The limit worth
+  recording:** a commit cannot carry the certification of its own head, because
+  pushing the entry that would contain it creates a new head to certify. Every
+  Progress entry here therefore certifies the head *before* the commit that
+  carries it, and this one is no exception. The terminal evidence for the final
+  head lives in GitHub's run list, not in this file, and the workflow ends by
+  reading it there rather than by adding another entry.
 
 ## Surprises & discoveries
 
