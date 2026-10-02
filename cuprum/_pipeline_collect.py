@@ -99,6 +99,7 @@ async def _await_pipeline_wait_result(
         pipe_tasks=pipe_tasks,
         cancel_grace=config.ctx.cancel_grace,
         stages=spawn.stages,
+        owns_group=spawn.owns_group,
     )
     try:
         if wait_timeout is None:
@@ -191,7 +192,11 @@ async def _collect_pipeline_inputs(
             pipe_tasks=pipe_tasks,
         )
     except TimeoutError as exc:
-        await _terminate_timed_out_stages(spawn.processes, config.ctx.cancel_grace)
+        await _terminate_timed_out_stages(
+            spawn.processes,
+            config.ctx.cancel_grace,
+            owns_group=spawn.owns_group,
+        )
         await _reconcile_pipe_tasks(pipe_tasks)
         stderr_by_stage, final_stdout = await _gather_pipeline_outputs(spawn)
         relay_fallbacks_by_stage = _stage_relay_fallbacks(spawn)

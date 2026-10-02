@@ -152,8 +152,10 @@ async def _run_late_settled_termination(
         failure_index: int,
         *,
         cancel_grace: float,
+        owns_group: object = False,
     ) -> tuple[bool, ...]:
         """Run the real teardown and retain each selected target outcome."""
+        del owns_group
         result = await terminate_stages(
             processes,
             wait_tasks,

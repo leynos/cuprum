@@ -103,6 +103,8 @@ def _cancel_pending_consumers(
 async def _wait_for_exit_code(
     process: asyncio.subprocess.Process,
     ctx: ExecutionContext,
+    *,
+    owns_group: bool = False,
 ) -> tuple[int, float]:
     """Wait for a subprocess exit code, terminating it on expiry or cancel.
 
@@ -142,7 +144,14 @@ async def _wait_for_exit_code(
         # expiry has already consumed one cancellation, so the caller's next
         # ``cancel()`` lands on the grace-period wait here and would skip the
         # ``SIGKILL`` escalation, leaving a ``SIGTERM``-immune child running.
-        await _terminate_all_shielded((process,), ctx.cancel_grace)
+        # ``_Wait4Process`` holds its pipes even once it exits, so the group
+        # teardown is what lets a descendant release the drain this wait is
+        # unwinding from.
+        await _terminate_all_shielded(
+            (process,),
+            ctx.cancel_grace,
+            owns_group=owns_group,
+        )
         raise
     exited_at = time.perf_counter()
     return exit_code, exited_at
@@ -313,7 +322,11 @@ async def _wait_for_exit_code_within_timeout(
     if timeout is not None and timeout <= 0:
         # Shielded for the same reason as the cancellation branch above: a
         # caller cancelling here would otherwise skip the reap.
-        await _terminate_all_shielded((process,), execution.ctx.cancel_grace)
+        await _terminate_all_shielded(
+            (process,),
+            execution.ctx.cancel_grace,
+            owns_group=execution.owns_process_group,
+        )
         _report_timeout_expiry(
             execution.observation,
             pid=process.pid,
@@ -323,7 +336,11 @@ async def _wait_for_exit_code_within_timeout(
         raise TimeoutError
     try:
         async with asyncio.timeout(timeout):
-            return await _wait_for_exit_code(process, execution.ctx)
+            return await _wait_for_exit_code(
+                process,
+                execution.ctx,
+                owns_group=execution.owns_process_group,
+            )
     except TimeoutError as exc:
         # Reached only on asyncio.timeout expiry (a positive deadline elapsed);
         # _wait_for_exit_code has already terminated the process, and the caller

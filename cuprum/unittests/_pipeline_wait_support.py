@@ -169,9 +169,10 @@ def record_terminations(
         failure_index: int,
         *,
         cancel_grace: float,
+        owns_group: object = False,
     ) -> tuple[bool, ...]:
         """Record the termination request instead of signalling processes."""
-        del processes, wait_tasks
+        del processes, wait_tasks, owns_group
         await asyncio.sleep(0)
         terminations.append((failure_index, cancel_grace))
         return (True,) * terminated_count

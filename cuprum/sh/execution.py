@@ -1,9 +1,9 @@
 """Execution context, timeout, and stdin types for ``cuprum.sh``.
 
 These types describe how a command or pipeline stage is run rather than what
-it does: the environment overlay, working directory, cancellation grace
-periods, echo sinks, and encoding used to run it, alongside the timeout
-exception and stdin payload types that accompany execution. The
+it does: the environment overlay, working directory, process-group ownership,
+cancellation grace periods, echo sinks, and encoding used to run it, alongside
+the timeout exception and stdin payload types that accompany execution. The
 ``cuprum.sh`` package re-exports them.
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import enum
 import typing as typ
 from pathlib import Path
 
@@ -28,9 +29,41 @@ _DEFAULT_ERROR_HANDLING = "replace"
 
 __all__ = [
     "ExecutionContext",
+    "ProcessGroupPolicy",
     "StdinInput",
     "TimeoutExpired",
 ]
+
+
+class ProcessGroupPolicy(enum.StrEnum):
+    """Choose whether a run owns the process group its child starts.
+
+    ``INHERIT`` is the default. The child joins the parent's process group and
+    session, and teardown signals the direct child alone, so a run terminates
+    exactly the process it spawned.
+
+    ``OWN_GROUP`` gives the run ownership of a process group of its own. On
+    POSIX the child is spawned with ``start_new_session=True``, which makes it
+    the leader of a new session and a new process group, so the group is
+    addressed by the child's own process identifier. Teardown then signals
+    every member of that group, which lets a child's descendants reach
+    end-of-file on inherited pipes instead of holding a timed-out run's drain
+    open.
+
+    Ownership is bounded. A descendant that leaves the group deliberately —
+    with ``setsid()`` or ``setpgid()`` — is outside it and outside the
+    guarantee, as are the run's ancestors, its siblings, and any process that
+    predates the spawn. Callers needing containment for a descendant that
+    detaches its own session require a supervisor, a control group, or a
+    container.
+
+    ``OWN_GROUP`` is rejected with a :class:`ValueError` at spawn on Windows,
+    which has no POSIX process group and no way to assign a Job Object
+    atomically with process creation.
+    """
+
+    INHERIT = "inherit"
+    OWN_GROUP = "own_group"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -71,6 +104,12 @@ class ExecutionContext:
         Optional metadata attached to structured execution events.
     env_mode:
         Environment policy applied when rendering ``env`` for the subprocess.
+    process_group:
+        Whether the run owns the child's process group. ``INHERIT`` keeps the
+        child in the parent's group and signals only the direct child on
+        teardown; ``OWN_GROUP`` spawns the child as the leader of its own
+        session and process group on POSIX and terminates that whole group.
+        See :class:`ProcessGroupPolicy`.
 
     """
 
@@ -85,6 +124,7 @@ class ExecutionContext:
     errors: str = _DEFAULT_ERROR_HANDLING
     tags: cabc.Mapping[str, object] | None = None
     env_mode: EnvMode = EnvMode.OVERLAY
+    process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT
 
     def __post_init__(self) -> None:
         """Validate the native-pump cleanup grace after initialization."""

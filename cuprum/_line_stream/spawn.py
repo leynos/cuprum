@@ -63,7 +63,11 @@ async def _abandon_unstarted_run(
 
     await _stop_idle_monitor(execution.idle)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    await _terminate_all_shielded((run.process,), execution.ctx.cancel_grace)
+    await _terminate_all_shielded(
+        (run.process,),
+        execution.ctx.cancel_grace,
+        owns_group=execution.owns_process_group,
+    )
     await _discard_drain(run, run.process.pid, execution)
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
 

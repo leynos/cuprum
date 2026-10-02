@@ -249,9 +249,10 @@ def test_spawn_pipeline_processes_records_times_before_stage_spawn(
         fake_create_stage_capture_tasks,
     )
 
-    # The trailing relay-diagnostics list is unused here, but names the last
-    # element so the two clock lists keep binding to their own fields.
-    *_, started_at, wall_clock_started_at, _relay_diagnostics = asyncio.run(
+    # The trailing relay-diagnostics and ownership lists are unused here, but
+    # name the last two elements so the two clock lists keep binding to their
+    # own fields rather than sliding forward as the tuple grows.
+    *_, started_at, wall_clock_started_at, _relay_diagnostics, _owns_group = asyncio.run(
         _spawn_pipeline_processes((sh.make(ECHO)("quiet"),), config),
     )
 

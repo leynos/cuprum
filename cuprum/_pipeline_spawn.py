@@ -28,9 +28,15 @@ from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_stage_streams import _get_stage_stream_fds
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _terminate_all_shielded
-from cuprum._subprocess_context import _cwd_arg
+from cuprum._subprocess_context import (
+    _cwd_arg,
+    _ownership_spawn_kwargs,
+    _owns_process_group,
+)
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_config import _PipelineRunConfig
     from cuprum._streams import _RelayDiagnostics
     from cuprum.sh import SafeCmd
@@ -67,6 +73,10 @@ class _SpawnedPipelineStages:
     relay_diagnostics_by_stage: list[
         tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]
     ] = dc.field(default_factory=list)
+    # One flag per spawned stage, appended in lockstep with ``processes`` so a
+    # teardown can signal each stage the way it was spawned. A partial spawn
+    # gets a short list, matching the few processes actually recorded.
+    owns_group: list[bool] = dc.field(default_factory=list)
 
 
 async def _spawn_pipeline_stages(
@@ -80,6 +90,8 @@ async def _spawn_pipeline_stages(
         _StageCaptureRequest,
     )
 
+    owns_group = _owns_process_group(config.ctx.process_group)
+    ownership_kwargs = _ownership_spawn_kwargs(config.ctx.process_group)
     last_idx = len(observations) - 1
     for idx, observation in enumerate(observations):
         # Both clocks are sampled before the spawn await, so a stage's
@@ -101,8 +113,13 @@ async def _spawn_pipeline_stages(
             stderr=stream_fds.stderr,
             env=_merge_env(config.ctx.env, config.ctx.env_mode),
             cwd=_cwd_arg(config.ctx.cwd),
+            # Raises here, at the first stage, when the platform cannot honour
+            # the policy; no stage is ever spawned with an ownership claim the
+            # teardown could not act on.
+            **ownership_kwargs,
         )
         resources.processes.append(process)
+        resources.owns_group.append(owns_group)
         observation.emit("start", _EventDetails(pid=process.pid))
         if idx == 0 and config.idle is not None:
             # The aggregate clock starts with the first stage actually
@@ -130,13 +147,21 @@ async def _cleanup_spawned_processes(
     stderr_tasks: list[asyncio.Task[str | None] | None],
     stdout_task: asyncio.Task[str | None] | None,
     cancel_grace: float,
+    *,
+    owns_group: cabc.Sequence[bool] | bool = False,
 ) -> None:
     """Terminate processes and cancel tasks after a spawn failure.
 
     Terminates all started processes and cancels any capture tasks to prevent
     resource leaks when a pipeline stage fails to spawn.
+
+    *owns_group* reaches the already-started stages with the ownership they
+    were spawned under. A stage that came up owning its group therefore has
+    that group signalled even though the failure happened in a later stage:
+    the partial spawn is exactly when a descendant left holding an inherited
+    pipe would otherwise survive its parent's teardown.
     """
-    await _terminate_all_shielded(processes, cancel_grace)
+    await _terminate_all_shielded(processes, cancel_grace, owns_group=owns_group)
 
     tasks: list[asyncio.Task[str | None]] = [
         task for task in stderr_tasks if task is not None
@@ -161,6 +186,7 @@ async def _spawn_pipeline_processes(
     list[float],
     list[float],
     list[tuple[_RelayDiagnostics | None, _RelayDiagnostics | None]],
+    list[bool],
 ]:
     """Start subprocesses and wire up their capture tasks."""
     if observations is None:
@@ -178,6 +204,7 @@ async def _spawn_pipeline_processes(
             resources.stderr_tasks,
             resources.stdout_task,
             config.ctx.cancel_grace,
+            owns_group=resources.owns_group,
         )
         raise
 
@@ -188,4 +215,5 @@ async def _spawn_pipeline_processes(
         resources.started_at,
         resources.wall_clock_started_at,
         resources.relay_diagnostics_by_stage,
+        resources.owns_group,
     )
