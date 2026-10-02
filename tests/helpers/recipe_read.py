@@ -18,7 +18,7 @@ import re
 import shlex
 import typing as typ
 
-from tests.helpers.ci_documents import require
+from tests.helpers.ci_documents import mapping, require
 from tests.helpers.makeutil import (
     DEFAULT_RUNNER,
     MAKEFILE,
@@ -114,8 +114,10 @@ def recipe_of(
     Raises
     ------
     AssertionError
-        If the Makefile declares no rule for ``name``, or if the parse itself
-        fails, as :func:`makeutil_document` reports.
+        If the Makefile declares no rule for ``name``; if the parse itself
+        fails, as :func:`makeutil_document` reports; or if the document is
+        shaped differently than `makeutil` documents are, naming the field that
+        is wrong rather than failing on it.
     """
     document = makeutil_document(makefile=makefile, root=root, runner=runner)
     declared = document.get("rules")
@@ -124,19 +126,45 @@ def recipe_of(
         message="the makeutil document must carry a `rules` list",
     )
     for rule in typ.cast("list[object]", declared):
-        entry = typ.cast("dict[str, object]", rule)
-        targets = typ.cast("list[object]", entry.get("targets") or [])
+        entry = mapping(rule, message=f"every rule must be a mapping; got {rule!r}")
+        targets = _entries(entry, "targets", name)
         if name not in targets:
             continue
-        recipes = typ.cast("list[object]", entry.get("recipes") or [])
-        return "\n".join(
-            _join_continuations(
-                typ.cast("str", typ.cast("dict[str, object]", step).get("text", ""))
-            ).removeprefix("@")
-            for step in recipes
-        )
+        # A substring test on the target list would accept a rule declaring
+        # `test-python-extra`, so membership is checked as an element.
+        if not all(isinstance(target, str) for target in targets):
+            require(
+                condition=False,
+                message=f"the {name} target's rule must name its targets as strings",
+            )
+        recipes = _entries(entry, "recipes", name)
+        return "\n".join(_recipe_text(step, name) for step in recipes)
     require(condition=False, message=f"the Makefile must declare a {name} target")
     raise AssertionError
+
+
+def _entries(entry: dict[str, object], key: str, name: str) -> list[object]:
+    """Return one `makeutil` rule field as a list, refusing a malformed one."""
+    found = entry.get(key) or []
+    require(
+        condition=isinstance(found, list),
+        message=(
+            f"the Makefile's {name} target rule must carry its {key} as a list; "
+            f"got {type(found).__name__}"
+        ),
+    )
+    return typ.cast("list[object]", found)
+
+
+def _recipe_text(step: object, name: str) -> str:
+    """Return one recipe entry's text, refusing a malformed entry."""
+    message = f"each of the {name} target's recipe entries must carry its text"
+    carried = mapping(step, message=message).get("text", "")
+    require(
+        condition=isinstance(carried, str),
+        message=f"{message} as a string; got {type(carried).__name__}",
+    )
+    return _join_continuations(typ.cast("str", carried)).removeprefix("@")
 
 
 def recipe_tokens(recipe: str) -> tuple[str, ...]:

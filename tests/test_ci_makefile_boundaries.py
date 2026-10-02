@@ -333,3 +333,56 @@ class TestRecipeReading:
         assert tokens == ("echo", "# not a comment"), (
             f"a quoted hash is an argument, not a comment opener; got {tokens!r}"
         )
+
+    @pytest.mark.parametrize(
+        ("rules", "expected"),
+        [
+            ([{"targets": "t", "recipes": []}], r"targets as a list"),
+            ([{"targets": 3, "recipes": []}], r"targets as a list"),
+            ([{"targets": ["t"], "recipes": "echo one"}], r"recipes as a list"),
+            ([{"targets": ["t"], "recipes": ["echo one"]}], r"recipe entries"),
+            ([{"targets": ["t"], "recipes": [{"text": 7}]}], r"as a string"),
+            (["not-a-mapping"], r"rule must be a mapping"),
+        ],
+        ids=(
+            "targets-as-string",
+            "targets-as-int",
+            "recipes-as-string",
+            "entry-as-scalar",
+            "text-as-int",
+            "rule-as-scalar",
+        ),
+    )
+    def test_a_malformed_document_is_refused_by_field(
+        self,
+        rules: list[object],
+        expected: str,
+    ) -> None:
+        """Each malformed field is refused by name, not by its Python type.
+
+        The reader narrows the `makeutil` document field by field, and each
+        refusal has to say which field is wrong. Without the narrowing a
+        wrong-typed `targets` is silently *iterated* — `"t"` is a list of one
+        character that contains no target — so the reader would report the
+        target missing while the document declared it, and everything above
+        this reader would be reasoning about a file that is not there.
+        """
+        runner = _runner_returning(json.dumps({"variables": [], "rules": rules}))
+        with pytest.raises(AssertionError, match=expected):
+            recipe_of("t", runner=runner)
+
+    def test_a_target_declared_by_another_rule_is_not_matched(self) -> None:
+        """Membership, not substring: `t-extra` must not satisfy a `t` lookup.
+
+        A narrower rule declaring `t-extra` sits before the `t` rule, so a
+        reader testing the target list for a substring would return the wrong
+        recipe — a mistake that reads as a passing contract everywhere above.
+        """
+        rules = [
+            {"targets": ["t-extra"], "recipes": [{"text": "echo wrong"}]},
+            {"targets": ["t"], "recipes": [{"text": "echo right"}]},
+        ]
+        runner = _runner_returning(json.dumps({"variables": [], "rules": rules}))
+        assert recipe_of("t", runner=runner) == "echo right", (
+            "a rule declaring `t-extra` must not answer a lookup for `t`"
+        )
