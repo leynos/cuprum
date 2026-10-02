@@ -32,12 +32,15 @@ from cuprum.context import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.sh import CommandResult, SafeCmd
+
 
 class _HookRegistrationCase(typ.NamedTuple):
     """Typed variant of one before/after registration contract."""
 
     register: cabc.Callable[[BeforeHook | AfterHook], HookRegistration]
     hooks_attr: typ.Literal["before_hooks", "after_hooks"]
+    expected_order: tuple[int, ...]
 
 
 def _register_before(hook: BeforeHook | AfterHook) -> HookRegistration:
@@ -51,10 +54,51 @@ def _register_after(hook: BeforeHook | AfterHook) -> HookRegistration:
 
 
 #: Typed before/after variants for structurally identical registration tests.
+#: The expected run order is the contract each factory exists to provide:
+#: before hooks append (FIFO), after hooks prepend (LIFO).
 _HOOK_REGISTRATIONS = (
-    pytest.param(_HookRegistrationCase(_register_before, "before_hooks"), id="before"),
-    pytest.param(_HookRegistrationCase(_register_after, "after_hooks"), id="after"),
+    pytest.param(
+        _HookRegistrationCase(_register_before, "before_hooks", (1, 2, 3)),
+        id="before",
+    ),
+    pytest.param(
+        _HookRegistrationCase(_register_after, "after_hooks", (3, 2, 1)),
+        id="after",
+    ),
 )
+
+
+def _recorder(
+    case: _HookRegistrationCase,
+    call_order: list[int],
+    ordinal: int,
+) -> BeforeHook | AfterHook:
+    """Return a hook that records ``ordinal``, shaped for ``case``."""
+    if case.hooks_attr == "before_hooks":
+
+        def before_hook(cmd: SafeCmd) -> None:
+            """Record this before hook's registration ordinal."""
+            _ = cmd  # Unused: only the ordinal matters here.
+            call_order.append(ordinal)
+
+        return before_hook
+
+    def after_hook(cmd: SafeCmd, result: CommandResult) -> None:
+        """Record this after hook's registration ordinal."""
+        _, _ = cmd, result  # Unused: only the ordinal matters here.
+        call_order.append(ordinal)
+
+    return after_hook
+
+
+def _invoke(case: _HookRegistrationCase, hook: BeforeHook | AfterHook) -> None:
+    """Invoke ``hook`` with the arguments its shape requires."""
+    if case.hooks_attr == "before_hooks":
+        typ.cast("BeforeHook", hook)(typ.cast("typ.Any", None))
+    else:
+        typ.cast("AfterHook", hook)(
+            typ.cast("typ.Any", None), typ.cast("typ.Any", None)
+        )
 
 
 # =============================================================================
@@ -116,69 +160,24 @@ def test_hook_as_context_manager(
 # =============================================================================
 
 
-def test_before_hooks_execute_in_registration_order() -> None:
-    """Before hooks execute in registration order (FIFO)."""
+@pytest.mark.parametrize("case", _HOOK_REGISTRATIONS)
+def test_hooks_run_in_the_order_their_factory_guarantees(
+    case: _HookRegistrationCase,
+) -> None:
+    """Registration order follows the factory: before appends, after prepends."""
     call_order: list[int] = []
 
-    def hook1(cmd: object) -> None:
-        """Record this before hook as the first to run."""
-        _ = cmd  # Unused
-        call_order.append(1)
+    with scoped(ScopeConfig()):
+        # Register through the public factories, so the ordering under test
+        # is the one production code decides in with_before_hook /
+        # with_after_hook rather than one this test built by hand.
+        for ordinal in (1, 2, 3):
+            case.register(_recorder(case, call_order, ordinal))
 
-    def hook2(cmd: object) -> None:
-        """Record this before hook as the second to run."""
-        _ = cmd  # Unused
-        call_order.append(2)
+        registered = getattr(current_context(), case.hooks_attr)
+        for hook in registered:
+            _invoke(case, hook)
 
-    def hook3(cmd: object) -> None:
-        """Record this before hook as the third to run."""
-        _ = cmd  # Unused
-        call_order.append(3)
-
-    ctx = CuprumContext(
-        before_hooks=(
-            typ.cast("BeforeHook", hook1),
-            typ.cast("BeforeHook", hook2),
-            typ.cast("BeforeHook", hook3),
-        ),
+    assert tuple(call_order) == case.expected_order, (
+        f"{case.hooks_attr} should run in {case.expected_order}"
     )
-
-    # Execute hooks manually to verify order
-    for hook in ctx.before_hooks:
-        hook(typ.cast("typ.Any", None))
-
-    assert call_order == [1, 2, 3]
-
-
-def test_after_hooks_execute_in_reverse_registration_order() -> None:
-    """After hooks execute inner-to-outer (LIFO within a level)."""
-    call_order: list[int] = []
-
-    def hook1(cmd: object, result: object) -> None:
-        """Record this after hook as the first registered."""
-        _, _ = cmd, result  # Unused
-        call_order.append(1)
-
-    def hook2(cmd: object, result: object) -> None:
-        """Record this after hook as the second registered."""
-        _, _ = cmd, result  # Unused
-        call_order.append(2)
-
-    def hook3(cmd: object, result: object) -> None:
-        """Record this after hook as the third registered."""
-        _, _ = cmd, result  # Unused
-        call_order.append(3)
-
-    # In after_hooks, prepended hooks run first
-    ctx = CuprumContext(
-        after_hooks=(
-            typ.cast("AfterHook", hook3),
-            typ.cast("AfterHook", hook2),
-            typ.cast("AfterHook", hook1),
-        ),
-    )
-
-    for hook in ctx.after_hooks:
-        hook(typ.cast("typ.Any", None), typ.cast("typ.Any", None))
-
-    assert call_order == [3, 2, 1]
