@@ -734,6 +734,48 @@ escalation, not a workaround.
       checks rather than from this entry, and should treat the introducing
       commit — not the stamp beside it — as the authority for when each entry
       was written.
+- [x] (2026-10-02 19:47Z) **Rebased onto a moved target.** `origin/main`
+      advanced from `b6bb9a99` to `c65d843c` ("Reject bytes in sh.make
+      arguments (#512)") after the no-op check recorded in `2f89a370`, so the
+      ancestry test that then held no longer did. Rebased the 41 non-merge
+      commits in `b6bb9a99..74b9f004` onto `c65d843c` with the linear
+      procedure; **zero conflicts**. Every audit the rebase procedure requires
+      passed:
+
+      - **Oracle tree.** `git merge-tree --write-tree --messages` of
+        `74b9f004` into `c65d843c` exits 0 and yields tree `a55aa3b7`; the
+        rebased head `babb08a4` has tree `a55aa3b7` — **identical**. This is
+        the check that matters here, because the replay range contained a
+        merge commit (`82acb1ae`) and the known failure mode for that shape is
+        a clean, non-conflicting replay that silently drops content.
+      - **The merge was safe to linearize.** `git merge-tree` of `82acb1ae`'s
+        own parents reproduces its tree `18e7dd1c` exactly, so that merge was
+        purely mechanical and hand-resolved nothing; its second parent
+        `b6bb9a99` is an ancestor of `c65d843c`. It therefore carried no
+        content of its own for a linear replay to lose, and the oracle proof
+        above is not weakened by flattening it.
+      - **`range-diff`.** `b6bb9a99..74b9f004` against `c65d843c..babb08a4`
+        reports `=` on all 41 commits, so each replayed commit is
+        patch-identical to its original.
+      - **Semantic audit.** Of the target's 7 changed files, 4 are target-only
+        and every one is byte-identical at the new head; the 3 the branch also
+        touches (`docs/cuprum-design.md`, `docs/users-guide.md`,
+        `docs/v0-2-0-migration-guide.md`) show **pure insertions** against the
+        target (`88/0`, `56/0`, `58/0`), so no deletion is unexplained.
+        `git diff --check` is clean.
+      - **Driver.** Weave is not selected for any path in this repository: the
+        global attributes file is empty at 0 bytes, there is no tracked
+        `.gitattributes`, and `git check-attr merge` reports `unspecified` for
+        the conflicted-candidate files. The driver could not participate, so
+        the Weave semantic audit is not applicable here rather than skipped.
+      - **Lock files.** Neither the target commit nor the branch range touches
+        `uv.lock` or `rust/Cargo.lock`, and both are identical to the target's;
+        the lock-file policy has nothing to act on.
+
+      Recovery refs are preserved under `refs/recovery/issue-440/` for the old
+      head, old base, and target.
+      Gate evidence for `74b9f004` and earlier is **stale for this candidate**;
+      the four repository gates are re-run against `babb08a4` below.
 
 ## Surprises & discoveries
 
