@@ -802,3 +802,43 @@ accurate against this branch's head, and its implementer may proceed as
 written. The only thing worth carrying forward is the resolution above — "the
 wait" is `_await_direct_completion()`, not the child's exit wait it dispatches
 to, and lifting it brings the stdin-writer arbitration along.
+
+## Addendum (2026-10-02): split the chunk write out of `_subprocess_stdin_stream`
+
+The 2026-09-27 addendum above records streaming stdin splitting out of
+`_subprocess_stdin`. The module that split produced has since split once more,
+and the second split was not recorded here when it landed — this addendum
+closes that gap rather than leaving it to be rediscovered from the imports.
+
+The seam is the one the code already drew. `cuprum/_subprocess_stdin_write.py`
+owns _how_ a chunk reaches the pipe: the `_StreamSink`, the per-chunk write,
+the incremental encoder and its flush, and the predicate that decides whether a
+pipe error came from the child closing its end — none of which needs to know
+about producers or about error types. `cuprum/_subprocess_stdin_stream.py`
+keeps the pull loop and the failure handling that turns those events into the
+public `StdinSourceError`. The two halves had already separated when the
+source-failure fix landed: once a producer's own `OSError` had to be told apart
+from the pipe's, the write side and the pull side stopped sharing state.
+
+The precedent the 2026-09-27 addenda set is that each of these splits is
+recorded with an overrun figure. None of the ordinary ones is available here.
+Across every commit that holds `cuprum/_subprocess_stdin_stream.py` its peak is
+353 lines, and the two modules stand at 347 and 156 now; neither was near the
+ceiling once the split landed. The overrun itself was a working-tree
+measurement, and the working tree it was taken in is not recoverable from any
+commit — the same limitation the execution plan records for peak figures
+generally.
+
+What _is_ recoverable is a bound that decides the question the overrun figure
+would have answered. Replaying the split commit's own diff shows that 79 of the
+156 lines in the new module are lines that same commit deleted from the stream
+module, so the code would have grown the stream module by at least those 79
+lines had it stayed: 327 + 79 = 406, already past the 400-line ceiling before
+counting any of the 26 lines the commit did not relocate. That is a
+demonstration from the commit rather than a working-tree figure, and it holds
+however the peak is read.
+
+The split changed no public surface. `cuprum/_subprocess_stdin_stream.py`
+reaches the write side as `_write`, and the maturin wheel snapshot gained
+exactly one line for the new module, which is the same one-line-per-module
+shape every other split here records.
