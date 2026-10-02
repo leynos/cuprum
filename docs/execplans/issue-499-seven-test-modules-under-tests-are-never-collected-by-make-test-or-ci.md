@@ -1098,6 +1098,69 @@ than discovering the gap months later.
     check is the `--format json` probe counting that `reason`, not an argument
     about scope.
 
+- [x] (2026-10-02) Gated, pushed, and observed the shipping head `3e6c9ff4`,
+  the commit that carries the entry above.
+  - *The gate run, and the two ways it was delayed.* All five gates passed at
+    `3e6c9ff4` with `head_before == head_after` and `git status --porcelain`
+    empty at every gate: `check-fmt` exit 0 (1 s), `typecheck` exit 0 (1 s),
+    `lint` exit 0 (97 s), `markdownlint` exit 0 (11 s), `test` exit 0 (348 s).
+    Neither delay was a code defect. The first `lint` attempt stopped at
+    `verify-df12-pylint` with "Failed to resolve `--with` requirement / Git
+    operation failed" — the Lody-injected `GIT_CONFIG_*` rewrite intercepting
+    `uv`'s fetch of the public `df12-python-lints` repo. Unsetting those
+    variables for the invocation fixed it; verified first that
+    `git ls-remote https://github.com/leynos/df12-python-lints.git v0.3.0`
+    resolves the tag anonymously (`4cf41736`) with no credentials. The second
+    attempt wedged inside `actionlint` — measured on the live process: 37
+    threads, state `S`, no children, and **CPU ticks frozen at 13 across a
+    60-second sample**. That is the known host-only actionlint deadlock, which
+    reproduces on `origin/main` and cannot self-resolve; the bounded re-run
+    completed in 97 s. Logs: the canonical runs are the `/tmp/<gate>-issue499-
+    3e6c9ff4.out` files, with the two superseded `lint` attempts preserved
+    alongside as `-attempt1.out` and `-attempt2-interrupted.out`.
+  - *What the gate run proves about skylos.* `make lint` reached the skylos
+    stage (the echoed recipe appears in the log) and, because make aborts on a
+    failing prerequisite — demonstrated by attempt 1 stopping at
+    `verify-df12-pylint` — the later Rust and spelling stages prove skylos
+    exited 0. This is evidence the stage *ran*, not evidence of what it found:
+    a clean `--format concise` run prints nothing. The `--format json` probe
+    above is the separate evidence for the finding.
+  - *The bootstrap observed running, not inferred.* `make test`'s
+    `test-selection` prerequisite collected
+    `tests/test_ci_test_selection_contract.py` **by name** — `collected 62
+    items`, then `62 passed in 0.22s`. That is the third-party-independent
+    collection the three failed rows originally requested. Totals at this
+    head: pytest 3774 collected = 3688 passed + 86 skipped, 0 failed; nextest
+    127/127; doctests 3 ignored.
+  - *Hosted CI at `3e6c9ff4`, fully settled.* 27 check runs: 22 `success`, the
+    same 5 `skipped` (`Kody Code Review`, `Loom model smoke test`, `Sourcery
+    review`, `automerge`, `extended`), 0 failures, 0 pending. `coverage` — the
+    slowest job and the one CodeRabbit had seen still in progress — reads
+    `success`. Its run took ~12 min, in line with its `e66db481` and
+    `249d94f8` durations (12 m 53 s and 11 m 14 s), so the wait was normal
+    rather than a stall.
+  - *CodeScene at this head, quoted rather than inferred.* Its check run
+    reports `status: completed`, `conclusion: success`, title `CodeScene PR
+    Check`, and the body `**Quality Gate Passed**` / `6 Quality Gates Passed`
+    with details `https://codescene.io/projects/74471/delta/results/7793357`.
+    Beyond the check run, `codescene-access[bot]` submitted a review
+    `APPROVED` whose `commit_id` is `3e6c9ff4` itself, so the approval covers
+    the pushed head rather than an earlier one.
+  - *Warning scan.* Every line matching `warning`/`error`/`failed` across the
+    five logs was inspected individually. In `lint` there are three, and all
+    three are recipe echoes containing the literal flag `-D warnings`; in
+    `test` the matches are pytest IDs of the form
+    `…::test_it_logs_at_warning_with_the_decision PASSED`. No gate emitted a
+    diagnostic under those names.
+  - *Where this leaves the PR.* `headRefOid` is `3e6c9ff4`,
+    `mergeStateStatus` `CLEAN`. `reviewDecision` still reads
+    `CHANGES_REQUESTED`, anchored at `92f17d25` — CodeRabbit's review from
+    10:38Z, predating its own 20:48Z message marking all five rows "Resolved
+    in source". No CodeRabbit inline comment is newer than 14:32:16Z, and all
+    8 threads are resolved, so nothing new is outstanding; the decision simply
+    has not been re-submitted, which is what queued request `d8860275` remains
+    for.
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
