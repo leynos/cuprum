@@ -19,6 +19,19 @@ guard decides whether the step admits it. That last part is
 `ci_leg_matrix.admits_event` rather than `ci_leg_matrix.admits`, because the
 question names an event and a guard may be gated on one; see that function for
 why the permissive reading is unsafe in this direction.
+
+The flag is read rather than re-derived, so the three answers a caller may get
+are worth stating: the leg is enabled, the leg is switched off, or the leg is
+enabled although the event the predicate names is not the one asked about.
+This repository runs no Python module doctests, so these are documentation
+rather than executed assertions:
+
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": False}, "pull_request")
+True
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "pull_request")
+False
+>>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "push")
+True
 """
 
 from __future__ import annotations
@@ -105,35 +118,39 @@ def flag_holds_on(
         predicate's terms. The contract this feeds asks *which* legs a pull
         request runs, and a leg record built from an unread flag would name a
         leg the flag might have switched off; the failure is reported rather
-        than guessed at.
-
-    Notes
-    -----
-    Only the leg field and the event name are read. A flag whose predicate
-    compares the event name against a literal other than the one asked about
-    is reported false, because the predicate then does not hold for this event
-    at all — the leg runs.
-
-    Examples
-    --------
-    >>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": False}, "pull_request")
-    True
-    >>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "pull_request")
-    False
-    >>> flag_holds_on("ci.yml", "typecheck-test", {"experimental": True}, "push")
-    True
-    """  # ruff: ignore[line-too-long] - the doctest lines are quoted invocations
+        than guessed at. The refusal lives in :func:`_flag_terms`, which
+        raises it.
+    """  # ruff: ignore[docstring-extraneous-exception] - _flag_terms raises it
     declared = job_env(workflow_name, job_name).get("LEG_RUNS")
     if not isinstance(declared, str):
-        if (workflow_name, job_name) != GATED_LEG_JOB:
-            return True
-        message = (
-            f"{workflow_name}:{job_name} must declare a string LEG_RUNS, got "
-            f"{declared!r}; the contract this feeds names the legs a pull "
-            "request runs, and without the flag it cannot tell a leg that runs "
-            "from one the flag switches off"
-        )
-        raise AssertionError(message)
+        return _absent_flag_holds(workflow_name, job_name, declared)
+    holds = True
+    for term in _flag_terms(workflow_name, job_name, declared):
+        key = term.group("key")
+        if key is not None:
+            holds = holds and bool(leg.get(key, False))
+            continue
+        holds = holds and term.group("event") == event
+    return not holds
+
+
+def _absent_flag_holds(workflow_name: str, job_name: str, declared: object) -> bool:
+    """Report whether a job that declares no flag runs its legs."""
+    if (workflow_name, job_name) != GATED_LEG_JOB:
+        return True
+    message = (
+        f"{workflow_name}:{job_name} must declare a string LEG_RUNS, got "
+        f"{declared!r}; the contract this feeds names the legs a pull request "
+        "runs, and without the flag it cannot tell a leg that runs from one "
+        "the flag switches off"
+    )
+    raise AssertionError(message)
+
+
+def _flag_terms(
+    workflow_name: str, job_name: str, declared: str
+) -> list[re.Match[str]]:
+    """Decompose the declared flag into its terms, refusing unreadable text."""
     match = _FLAG_PREDICATE.match(declared.strip())
     if match is None:
         message = (
@@ -151,14 +168,7 @@ def flag_holds_on(
             "as 'the flag holds' would report every leg as switched off"
         )
         raise AssertionError(message)
-    holds = True
-    for term in terms:
-        key = term.group("key")
-        if key is not None:
-            holds = holds and bool(leg.get(key, False))
-            continue
-        holds = holds and term.group("event") == event
-    return not holds
+    return terms
 
 
 def normalized(condition: object) -> str:

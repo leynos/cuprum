@@ -748,6 +748,53 @@ than discovering the gap months later.
     `92f17d25^`, `92f17d25`, `8257139c`, and this head once the docstring is
     excluded from the AST — so the fix really was documentation-only, and the
     Large Method finding is cleared on evidence rather than assertion.
+- [x] (2026-10-02) Cleared a second CodeScene finding the previous rounds had
+  not seen, and corrected two residual over-claims in the sampler module.
+  - *CodeScene failed the pushed head, on a function the branch never touched.*
+    The hosted check run `110924463862` at `26af701b` concludes `failure` with
+    three biomarkers on `tests/helpers/ci_leg_gate.py::flag_holds_on` — Bumpy
+    Road Ahead (critical), Complex Method and Large Method (advisory), impact
+    10.00 → 9.41, analysis `results/7789468`. The function's own bytes did not
+    change: the file blob is identical between `92f17d25` and `26af701b`, and
+    the function's full-source hash is identical at `3d1408c0`, `f6dbccf0`,
+    `92f17d25` and `26af701b`. CodeScene's own gate set moved between analyses
+    (at `3d1408c0` it named a different file and a different rule set), so the
+    verdict changed while the code did not. **CodeScene is not a required
+    check** — ruleset `main-required-checks` (18427980) lists `lint-test`, the
+    two `Typecheck and test` legs, `coverage`, `benchmark-ratchet`, the
+    `build-wheels` jobs and the extension-gated job, and not this. It is
+    corrected on its merits anyway, because the three markers are real.
+  - *The metric was reproduced before it was trusted, and the remedy is a real
+    extraction.* A counting script reproducing CodeScene's Large Method figure
+    as non-blank, non-comment lines inside the span returns exactly the two
+    values the earlier round recorded for `admits_event` — 83 before and 63
+    after its fix — so the same script's reading of `flag_holds_on` (79) is
+    calibrated rather than assumed. A docstring trim alone could not have
+    cleared this one: Bumpy Road Ahead and Complex Method are control-flow
+    findings, and the function carried four refusal branches beside its loop.
+    `_absent_flag_holds` and `_flag_terms` now carry the two refusal stages,
+    and the docstring keeps only what the signature cannot say. The reading is
+    41 against a threshold of about 70; `flag_holds_on`'s own body is five
+    statements.
+  - *Behaviour was preserved, and that is measured rather than asserted.*
+    The extraction changes the executable body, so the `ast.dump` equality
+    argument the earlier round could make does not apply here. An 18-case
+    differential harness ran the old and new implementations against the same
+    stubbed `job_env` — the three refusal spellings, an absent flag on and off
+    the gated job, `None` and non-string flags, key-only and event-only
+    predicates, absent legs, and multi-term conjunctions — and the returned
+    value *or raised message* matched in every case, 0 differences. The three
+    refusal messages are unchanged, and no test asserts their text, so the
+    extraction is the only thing that moved.
+  - *Two over-claims the previous round's fix missed.* `87d2b934` corrected the
+    sampler's module docstring and `REQUIRED_TOOLS` comment to say `du` is
+    checked "not because the action calls it", but two f-strings still said the
+    sampler "shells out to" every tool in that tuple. `du` appears nowhere in
+    `.github/actions/resource-sampler/action.yml` — the action invokes `free -m`
+    and `df -m .` only — and the parameterized assertion fires for `du` as
+    readily as for the other two. Both messages now name the toolbox the tests
+    need rather than a command the action runs. Four sites, not two; the
+    earlier entry undercounted.
 
 ## Surprises & discoveries
 

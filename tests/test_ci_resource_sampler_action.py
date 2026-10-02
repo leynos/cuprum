@@ -78,8 +78,8 @@ def _shell_skip_reason() -> str:
     missing = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
     if missing:
         return (
-            f"the sampler shells out to {', '.join(missing)}, which this host "
-            "does not provide"
+            f"these tests need {', '.join(missing)} on PATH to measure the "
+            "sampler, and this host does not provide them"
         )
     return ""
 
@@ -171,7 +171,7 @@ def test_the_sampling_tools_exist(tool: str) -> None:
             check=False,
         ).returncode
         == 0
-    ), f"the sampler shells out to {tool!r}"
+    ), f"the sampler's toolbox must carry {tool!r} on a Linux runner"
 
 
 @requires_the_sampler_toolbox
