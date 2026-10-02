@@ -1935,7 +1935,8 @@ than asserting a payload's type away with a cast, and any new consume variant
 must keep the buffer raw so byte mode stays available to it. The `on_line`
 rejection is policy, not capability — the drain itself honours the
 combination; see
-[ADR-007](adr-007-bytes-result-mode.md) and the
+[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
+boundaries it belongs to, and the
 [binary output section](users-guide.md#binary-output) of the users' guide.
 
 A stream that was never attached is the one payload the drain does not render:
