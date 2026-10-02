@@ -453,6 +453,21 @@ likelihood, and mitigation.
   fixing sites and the test names so the reason each finding is closed is
   checkable without re-deriving it.
 
+- [x] (2026-10-02) The hosted CodeScene check run was re-evaluated against the
+  new head and **passed**: `Quality Gate Passed`, six gates passed, with
+  `_subprocess_stream_run.py` reported as improved from 9.59 to 10.00 for
+  `Large Method`. That is the second of the two findings this entry opened, and
+  the first — Complex Method on `_write_stdin_stream` — no longer appears in
+  the report at all.
+
+  Two things are worth separating here. The *finding* is cleared, which the
+  report says directly. The *thread* on the pull request is a different matter:
+  CodeScene answers on its own comment threads only by re-evaluating the head,
+  so the thread bodies still read as failures until the next review pass
+  retires them. A green check run and a stale thread comment are not a
+  contradiction; the check run is the measurement, and the thread is a record
+  of what the previous revision measured.
+
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
   tree rather than against the codex summary. Two were real defects in the
