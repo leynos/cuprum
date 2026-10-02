@@ -721,3 +721,84 @@ introduced between `stdio`, `stdio_rules`, and `output`. The wheel-manifest
 snapshot is regenerated for the new module, and `cuprum.sh`'s exports are
 unchanged. No public API changes, and the module-size suppression still remains
 unnecessary.
+
+## Addendum (2026-10-02): RFC 0001's seam, reviewed against the rendezvous
+
+`origin/main` advanced by one commit, `a592b50c`, while this branch was open:
+RFC 0001 proposes an execution-interception backend that would lift the spawn
+and "the wait that follows it" out of `_execute_subprocess()` and into a
+`_DirectBackend.execute()`. The RFC is `Proposed`, no task depends on it, and
+this branch ships no part of it. It is reviewed here because this branch
+changed what the wait _does_, and the review's result is that the RFC needs no
+amendment — recorded so the next implementer does not have to reach that
+conclusion independently.
+
+Three statements in the RFC remain accurate at this branch's head, and they are
+checked rather than assumed. The entry point is unchanged:
+`_execute_subprocess()` in `cuprum/_subprocess_execution.py` still takes the
+pre-spawn readings and calls `_spawn_subprocess()`. The ordering the RFC
+depends on is intact: `_spawn_subprocess()` returns the process, and the caller
+then emits `start` with the real `pid`, waits, emits `exit`, and assembles the
+`CommandResult`. The isolation claim holds too — the moved code _is_ already
+behind `_spawn_subprocess()`.
+
+What the RFC's step 1 would lift is "the spawn, the wait that follows it, and
+the two reads of the live process": `start` with the real `pid`, and the rusage
+measurement off the process object. It does not name the wait, but the phrase
+resolves against the code without ambiguity — the wait `_execute_subprocess()`
+awaits after the spawn is `_await_direct_completion()`, and the RFC's own
+sentence that "the wait is what drives the streams, the timeout and the idle
+monitor" describes exactly the dispatch, timeout translation and idle-monitor
+settle that function owns.
+
+Underneath it, this branch put a _caller_ around the child's exit wait, in
+`cuprum/_subprocess_rendezvous.py`, which races that wait against the stdin
+writer's task. Two of the three call sites sit below the function the RFC would
+lift: `_await_direct_completion()` dispatches to
+`_run_subprocess_without_streams()` for a direct run and to
+`_run_subprocess_with_streams()` for one that consumes stdout or stderr. The
+streaming branch reaches the race one level further down, through
+`_wait_for_streamed_process_exit()` in `cuprum/_subprocess_stream_run.py`, and
+both leaves construct the exit wait and hand it to the race. A backend that
+lifts `_await_direct_completion()` therefore lifts the race for both.
+
+The third call site does not sit below it, and that is worth naming rather than
+eliding. Line iteration is a parallel entry point, not a branch of the direct
+one: `cuprum/_line_iteration.py` calls `_start_line_stream_run()` and
+`_coordinate_line_stream()`, and `cuprum/_line_stream/coordinator.py` calls
+`_spawn_subprocess()` itself. Neither `_execute_subprocess()` nor
+`_await_direct_completion()` is on that path, and the race is reached from
+`_wait_for_line_stream_exit()` inside the coordinator. So the RFC's "one branch
+in `_execute_subprocess()`" covers every run that goes through
+`_execute_subprocess()` — direct and streamed, which is the case it argues for
+— but line iteration is outside its reach entirely.
+
+That is not a defect, because the RFC is explicit about its iteration boundary
+and answers for it with an error rather than silence: "The first iteration
+covers direct commands only; a pipeline whose scope has a substitute backend
+raises `NotImplementedError`". The RFC does not name line iteration in that
+non-goal, so the honest reading is that a `lines()` run is a path the proposal
+leaves unaddressed rather than one it resolves. The resolution above should
+therefore not be read as "one seam covers every run".
+
+The writer is the part the RFC does not mention, and it does not need to.
+`cuprum/_subprocess_stdin.py` is byte-identical at this branch's exclusive
+boundary `c65d843c` and at `a592b50c`, and main's
+`_run_subprocess_without_streams()` already spawned a writer through
+`_spawn_stdin_writer()` and already reconciled it after the exit. So the RFC
+could leave the writer unmentioned and still be right, because at main the
+writer was already inside the thing it calls "the wait that follows" the spawn.
+
+What this branch added to the writer's _lifecycle_ is a bounded settle,
+`_settle_stdin_writer()`, so that a producer parked in `anext` cannot outlast
+the run's own deadline. That too sits below the wait and follows it, so it is
+lifted by the same move. Nothing here constrains the RFC's passthrough case,
+which it lists as a first-class goal: a `_DirectBackend.execute()` that owns
+the spawn and the wait owns the race and the settle by construction.
+
+This addendum therefore records a _review_, not a design change, and it
+resolves rather than defers: RFC 0001's "Where it is called" section is
+accurate against this branch's head, and its implementer may proceed as
+written. The only thing worth carrying forward is the resolution above — "the
+wait" is `_await_direct_completion()`, not the child's exit wait it dispatches
+to, and lifting it brings the stdin-writer arbitration along.
