@@ -332,9 +332,9 @@ that want an early warning invoke `advisory_path_rejection`, which reports an
 obviously unusable path via an existence check, a regular-file test, and an
 `os.access` execute-bit probe. That probe is itself partial, skipping bare
 names (whose `PATH` resolution Cuprum does not replicate) and the whole check
-on Windows, where the execute bit is not part of a file's identity. Neither
-step, alone or together, guarantees that the file executed later is the file
-inspected:
+on Windows, where the execute bit is not part of a file's identity. No step,
+alone or combined with the other, guarantees that the file executed later is
+the file inspected:
 
 - the path may be replaced, renamed, or re-pointed by a symlink between the
   check and the `exec`, a time-of-check-to-time-of-use (TOCTOU) window that no

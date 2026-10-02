@@ -174,7 +174,8 @@ def when_bind_unlisted_program(
             # failure next to its cause: the run itself.
             pytest.fail(
                 "the allowlist must refuse an unlisted program, but the run "
-                f"succeeded instead of raising {c.ForbiddenProgramError.__name__}"
+                f"succeeded instead of raising {c.ForbiddenProgramError.__name__}; "
+                f"the resolver ran {len(calls)} times"
             )
     outcome["calls"] = len(calls)
     return outcome
