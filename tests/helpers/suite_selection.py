@@ -27,6 +27,7 @@ from tests.helpers.ci_documents import require
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
 from tests.helpers.makefile import recipe_of, variable_expansion
+from tests.helpers.recipe_flow import require_selector_is_consumed
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
@@ -265,16 +266,21 @@ def exceptions_verified() -> frozenset[str]:
                 "collect the module is not an exemption, it is a gap."
             ),
         )
-        require(
-            condition=f"$({entry.selector})" in recipe_of(entry.target),
-            message=(
-                f"{__name__}.EXCEPTIONS exempts {module} as collected by "
-                f"`make {entry.target}` through {entry.selector}, but that "
-                f"target's recipe does not expand {entry.selector}, so the "
-                f"selector names nothing the target runs. Recorded reason: "
-                f"{entry.reason!r}."
-            ),
-        )
+        try:
+            require_selector_is_consumed(
+                recipe_of(entry.target),
+                selector=entry.selector,
+            )
+        except AssertionError as error:
+            require(
+                condition=False,
+                message=(
+                    f"{__name__}.EXCEPTIONS exempts {module} as collected by "
+                    f"`make {entry.target}` through {entry.selector}, but that "
+                    f"target does not consume the selector: {error}. Recorded "
+                    f"reason: {entry.reason!r}."
+                ),
+            )
         runners = [
             f"{workflow_name}:{job_name}"
             for workflow_name, job_name, _index, script in run_scripts()

@@ -10,8 +10,15 @@ The sampler is a Linux measurement. It reads `free -m` and `df -m .` by column
 position, and these tests run its shell under `/bin/bash`. Where those
 assumptions do not hold the shell tests skip with the reason, so a contributor
 on another platform is told why the question does not apply instead of seeing
-the action reported as broken. On Linux nothing skips: a missing tool is the
-defect this module exists to catch, and a skip there would hide it.
+the action reported as broken. A missing tool skips those same tests for the
+same reason: they measure what the action does, and no host without `free`,
+`df`, or `du` can be measured at all.
+
+That skip is deliberately narrower than the module's claim about runners. The
+toolbox assertion, `test_the_sampling_tools_exist`, carries `on_linux` rather
+than the skip marker, so on a Linux runner with a missing tool it *fails*: the
+departure is the defect the module exists to catch, and a skip there would
+convert a broken runner into a silent pass.
 """
 
 from __future__ import annotations

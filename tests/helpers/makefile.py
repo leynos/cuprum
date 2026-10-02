@@ -31,9 +31,9 @@ the selection policy.
 from __future__ import annotations
 
 import re
-import shlex
 import typing as typ
 
+from tests.helpers import recipe_read
 from tests.helpers.ci_documents import require
 from tests.helpers.makeutil import (
     DEFAULT_RUNNER,
@@ -190,6 +190,12 @@ def _join_continuations(value: str) -> str:
     return re.sub(r"\\\n[ \t]*", " ", value)
 
 
+#: What a variable name may contain. A reference whose name falls outside this
+#: — whitespace, a comma, or a nested ``$(`` — is a `make` *function* call that
+#: this reader does not implement, not an assignment nobody wrote.
+_VARIABLE_NAME = re.compile(r"[A-Za-z0-9_.\-/]+")
+
+
 def _expand(
     value: str,
     records: cabc.Mapping[str, str],
@@ -216,9 +222,11 @@ def _expand(
     Raises
     ------
     AssertionError
-        If a reference names a variable the Makefile does not assign, or if a
-        reference cycle is found. Neither is recoverable: substituting an
-        empty string would shrink the selector and turn the guard vacuous.
+        If a reference is unbalanced, names a `make` function rather than a
+        variable, names a variable the Makefile does not assign, or is part of
+        a reference cycle. None is recoverable: substituting an empty string
+        would shrink the selector and turn the guard vacuous, and reporting a
+        function call as an unassigned variable names a variable nobody wrote.
     """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
     value = _join_continuations(value)
     resolved: list[str] = []
@@ -229,12 +237,17 @@ def _expand(
             resolved.append(value[index:])
             break
         closer = value.find(")", opener)
-        require(
-            condition=closer != -1,
-            message=f"unbalanced `$(` in {value!r}",
-        )
+        require(condition=closer != -1, message=f"unbalanced `$(` in {value!r}")
         resolved.append(value[index:opener])
         name = value[opener + 2 : closer]
+        require(
+            condition=bool(_VARIABLE_NAME.fullmatch(name)),
+            message=(
+                f"the Makefile expands `$({name})`, whose name is not a "
+                "variable; that is a `make` function call or a nested "
+                "reference, which this reader does not implement"
+            ),
+        )
         require(
             condition=name in records,
             message=(
@@ -308,88 +321,23 @@ def recipe_of(
     root: pth.Path | None = None,
     runner: Runner = DEFAULT_RUNNER,
 ) -> str:
-    """Return one target's recipe text.
+    """Return one target's recipe text, as :func:`recipe_read.recipe_of` does.
 
-    Parameters
-    ----------
-    name : str
-        Target name, as written before the colon.
-    makefile : str
-        Path to the Makefile, relative to the working directory.
-    root : pathlib.Path, optional
-        The directory to parse in, as :func:`makeutil_document` takes it.
-    runner : Runner, optional
-        The process boundary, as :func:`makeutil_document` takes it, so a test
-        can drive this question without installing `makeutil`.
+    Defined in `tests/helpers/recipe_read.py` beside `recipe_tokens`, which
+    reads the same text back as shell words. The two share the continuation
+    rule, so they live together rather than one here and one there; this name
+    is re-exported because a caller reading a variable and a caller reading a
+    recipe name one module.
 
     Returns
     -------
     str
-        The target's recipe lines joined with newlines, with `make`'s leading
-        `@` silencing marker removed and backslash continuations collapsed.
-        Line structure is otherwise preserved, so a caller can still tell one
-        command from the next.
-
-    Raises
-    ------
-    AssertionError
-        If the Makefile declares no rule for ``name``, or if the parse itself
-        fails, as :func:`makeutil_document` reports.
+        The target's recipe entries joined with newlines, with `make`'s leading
+        `@` removed and backslash continuations collapsed.
     """
-    document = makeutil_document(makefile=makefile, root=root, runner=runner)
-    declared = document.get("rules")
-    require(
-        condition=isinstance(declared, list),
-        message="the makeutil document must carry a `rules` list",
-    )
-    for rule in typ.cast("list[object]", declared):
-        entry = typ.cast("dict[str, object]", rule)
-        targets = typ.cast("list[object]", entry.get("targets") or [])
-        if name not in targets:
-            continue
-        recipes = typ.cast("list[object]", entry.get("recipes") or [])
-        return "\n".join(
-            _join_continuations(
-                typ.cast("str", typ.cast("dict[str, object]", step).get("text", ""))
-            ).removeprefix("@")
-            for step in recipes
-        )
-    require(condition=False, message=f"the Makefile must declare a {name} target")
-    raise AssertionError
+    return recipe_read.recipe_of(name, makefile=makefile, root=root, runner=runner)
 
 
 def recipe_tokens(recipe: str) -> tuple[str, ...]:
-    """Tokenize a recipe into the shell words `make` would hand the shell.
-
-    A caller asking whether a recipe *uses* a construct has to read it as a
-    shell rather than as text. A substring test cannot tell a live command from
-    the same words commented out, and this repository's recipes are joined by
-    `recipe_of` into one long line, so a single stray ``#`` would silently
-    disable everything after it while every token check kept passing.
-
-    Comment markers are honoured, which is the whole point: ``# ...``
-    contributes no tokens, so dead text cannot satisfy a caller. Quoting is
-    honoured too, so a literal inside a quoted argument counts as a word rather
-    than as a comment opening.
-
-    Parameters
-    ----------
-    recipe : str
-        Recipe text, as :func:`recipe_of` returns it.
-
-    Returns
-    -------
-    tuple of str
-        The shell words, in order, with comments dropped.
-
-    Examples
-    --------
-    >>> recipe_tokens("echo hi # $(PYTEST)")
-    ('echo', 'hi')
-    >>> recipe_tokens("echo '# $(PYTEST)'")
-    ('echo', '# $(PYTEST)')
-    """
-    lexer = shlex.shlex(recipe, posix=True)
-    lexer.whitespace_split = True
-    lexer.commenters = "#"
-    return tuple(lexer)
+    """Tokenize a recipe, as :func:`recipe_read.recipe_tokens` does."""
+    return recipe_read.recipe_tokens(recipe)
