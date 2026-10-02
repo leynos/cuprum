@@ -520,7 +520,22 @@ escalation, not a workaround.
         work rather than merely return zero: the same invocation against a
         probe repository whose workflow puts `run` and `uses` in one step
         exits 1 with `unexpected key "run" for step to execute action`.
-  - [ ] `coderabbit review --agent` returns no unresolved finding at head.
+  - [x] (2026-10-02 18:40Z) `coderabbit review --agent` at `c738c78a` reports
+        `"status":"review_completed"` with **zero findings** across the 51
+        files it reviewed, exit 0. The eleven findings raised against
+        `6efb42b9` are therefore all discharged and nothing new was raised
+        against the fixes. Evidence: the review's own final line, logged at
+        `/tmp/coderabbit-cd050cee-head-c738c78a.out`.
+  - [x] (2026-10-02 19:05Z) CI at `c738c78a` is green: run `37026701030`
+        concludes `success` with every job successful except the Loom smoke
+        test, which is skipped as designed. The suite-coverage claim is again
+        established at step granularity rather than from job conclusions: the
+        Python 3.12 leg (job `110903235097`) and the 3.14 leg (job
+        `110903234681`) both report `success` for `Run typechecker` **and**
+        `Run tests` as executed steps, while the 3.15a leg
+        (`110903234656`) reports `skipped` for checkout, typechecker, and tests
+        alike. The trap this plan records has therefore recurred unchanged at a
+        second head, and the two legs with genuine coverage are the ones cited.
 
 ## Surprises & discoveries
 
