@@ -5,11 +5,16 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE — every gate passes, all eleven findings from the CodeRabbit
-review of `6efb42b9` are applied, the closing review at `c738c78a` returned
-zero findings, and CI is green at `72f0e660` with the suite-coverage legs
-confirmed at step granularity. The work is pushed and draft pull request #571
-is open.
+Status: COMPLETE — every gate passes at the pushed head, and all twelve
+required CI contexts from the `main-required-checks` ruleset are green there
+with the suite-coverage legs confirmed at step granularity. All eleven findings
+from the CodeRabbit review of `6efb42b9` are applied and the closing review at
+`c738c78a` returned zero findings. A further `coderabbit review --agent` pass,
+run through the CLI because the draft pull request makes the CodeRabbit app
+check skip itself, returned two advisory findings; both are applied. The
+specific head is recorded in `Progress` rather than here, since naming it in
+this line has gone stale every time a commit follows. The work is pushed and
+draft pull request #571 is open.
 
 ## Purpose / big picture
 
@@ -652,6 +657,26 @@ escalation, not a workaround.
       `refs/heads/main` (`b6bb9a99`) and the branch tip (`2f89a370`) match the
       local refs, so the earlier no-op finding rests on the live remote rather
       than on a possibly stale tracking ref.
+- [x] (2026-10-02 21:58Z) A `coderabbit review --agent` pass through the CLI
+      returned two advisory findings, both applied. The CLI route is what makes
+      this review possible at all: the CodeRabbit *app* check skips a draft pull
+      request, so the app's green status is not evidence of a review, and this
+      branch has been a draft throughout. The pass reviewed 51 files and
+      returned `{"type":"complete","status":"review_completed"}` with no
+      high- or medium-severity concern. The findings were
+      `tests/behaviour/_catalogue_binding_support.py:175`, where the
+      `pytest.fail` message omitted the resolver's call count that the
+      neighbouring assertion already computes, and `docs/cuprum-design.md:333`,
+      where "Neither step, alone or together" negates awkwardly. Both were
+      read against the tree before being accepted rather than taken on trust,
+      and both sites matched the report exactly. A prior head's evidence also
+      needed correcting here: an earlier handwritten note claimed the amended
+      commit left the tree identical to `2f89a370`, which is wrong — `2f89a370`
+      is tree `177294966f` and the newer commit adds this file, `+27/-0`. The
+      amend was message-only relative to its own pre-amend commit `0197d45c`,
+      which is a different claim. The consequence is that the Markdown-reading
+      gates are *not* inherited from the `2f89a370` run and were re-run, while
+      the Python and Rust gate inputs remain byte-identical.
 
 ## Surprises & discoveries
 
