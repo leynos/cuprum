@@ -11,11 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
-import subprocess
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
 import sys
-import time
-import typing as typ
 
 import pytest
 
@@ -65,9 +62,7 @@ def test_a_group_whose_members_have_gone_has_none() -> None:
     leader = _spawn_blocking_session_leader()
     leader.kill()
     leader.wait()
-    assert not _group_has_members(leader.pid), (
-        "a reaped group must report no members"
-    )
+    assert not _group_has_members(leader.pid), "a reaped group must report no members"
 
 
 def test_members_this_process_may_not_signal_are_not_awaited(
@@ -152,6 +147,10 @@ def test_a_failing_child_wait_leaves_no_group_poller_behind() -> None:
 
             async def failing_exit() -> int:
                 """Fail while the group is still open."""
+                # Yield first so the failure arrives the way a real waiter's
+                # would: after the group poller is already running, not before
+                # ``gather`` has scheduled it.
+                await asyncio.sleep(0)
                 msg = "pooled exit failed"
                 raise RuntimeError(msg)
 

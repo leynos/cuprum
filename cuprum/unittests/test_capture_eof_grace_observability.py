@@ -54,7 +54,7 @@ def readers_that_expire_grace_immediately(
         "cuprum._subprocess_streams._consume_stream",
         consume_forever,
     )
-    monkeypatch.setattr("cuprum._subprocess_wait._await_eof_grace", expire_immediately)
+    monkeypatch.setattr("cuprum._subprocess_drain._await_eof_grace", expire_immediately)
 
 
 def _capture_timeout_command(tmp_path: Path) -> tuple[sh.SafeCmd, ScopeConfig]:
@@ -139,7 +139,7 @@ def test_readers_reaching_eof_emit_no_grace_event_or_metric(
         """Wait for the closed process pipes to deliver EOF to both readers."""
         await asyncio.gather(*consumers)
 
-    monkeypatch.setattr("cuprum._subprocess_wait._await_eof_grace", wait_for_readers)
+    monkeypatch.setattr("cuprum._subprocess_drain._await_eof_grace", wait_for_readers)
     command, scope_config = _capture_timeout_command(tmp_path)
     metrics = InMemoryMetrics()
     events: list[ExecEvent] = []

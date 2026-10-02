@@ -22,7 +22,10 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum._streams import _drain, _StreamConfig
-from cuprum._subprocess_wait import _drain_stream_consumers, _DrainContext
+from cuprum._subprocess_drain import (
+    _drain_stream_consumers,
+    _DrainContext,
+)
 
 _EXAMPLES = 25
 

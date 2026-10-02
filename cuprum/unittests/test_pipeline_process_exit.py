@@ -21,6 +21,7 @@ from cuprum._process_exit import (
     _PROCESS_EXIT_INITIAL_POLL_INTERVAL,
     _PROCESS_EXIT_MAX_POLL_INTERVAL,
 )
+from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
     import pytest
@@ -113,7 +114,7 @@ def test_wait_for_pipeline_recovers_lost_wakeup_before_fail_fast_cleanup(
             _wait_for_pipeline(
                 typ.cast("list[asyncio.subprocess.Process]", processes),
                 pipe_tasks=[],
-                cancel_grace=1.0,
+                policy=_TeardownPolicy(1.0),
                 stages=_StageWaitContext(started_at=(0.0, 0.0, 0.0)),
             ),
             timeout=10,

@@ -175,21 +175,21 @@ class TestSingleCommandRun:
         at a known point — after reconciliation has begun — rather than at whatever
         moment a sleep happened to pick.
         """
-        from cuprum import _subprocess_wait
+        from cuprum import _subprocess_drain
 
         catalogue, python_program = python_catalogue()
         python = sh.make(python_program, catalogue=catalogue)
         cmd = python("-c", "import time; time.sleep(30)")
 
         gate = _CleanupGate()
-        real_drain = _subprocess_wait._drain_stream_consumers
+        real_drain = _subprocess_drain._drain_stream_consumers
         observed: dict[str, tuple[asyncio.Task[str | None], ...]] = {}
 
         # Keep the test double at the drain boundary, including its context
         # object, so it observes the run's actual cleanup call shape.
         async def gated_drain(
             consumers: tuple[asyncio.Task[str | None], asyncio.Task[str | None]],
-            context: _subprocess_wait._DrainContext,
+            context: _subprocess_drain._DrainContext,
         ) -> tuple[str | None, str | None]:
             """Announce that the drain started, wait to be released, then drain."""
             observed["consumers"] = consumers
@@ -197,7 +197,7 @@ class TestSingleCommandRun:
             await gate.release.wait()
             return await real_drain(consumers, context)
 
-        monkeypatch.setattr(_subprocess_wait, "_drain_stream_consumers", gated_drain)
+        monkeypatch.setattr(_subprocess_drain, "_drain_stream_consumers", gated_drain)
 
         async def run_case() -> None:
             """Cancel the run once its drain is under way, then release it."""

@@ -20,6 +20,11 @@ if typ.TYPE_CHECKING:
 # probe, long enough that a group outliving the grace period is noticed
 # without spinning.
 _PROBE_INTERVAL = 0.01
+# Back off towards this interval so a group that takes seconds to die is not
+# re-probed hundreds of times. The cap stays well under the default grace
+# period, so the grace window is still sampled several times over rather than
+# being overshot by a single slow poll.
+_MAX_PROBE_INTERVAL = 0.1
 
 
 def _group_has_members(pgid: int) -> bool:
@@ -31,6 +36,11 @@ def _group_has_members(pgid: int) -> bool:
     signal: neither the grace period nor the ``SIGKILL`` escalation could reach
     them, so waiting longer cannot settle the group and it is reported as
     having no reachable members.
+
+    Returns
+    -------
+    bool
+        Whether the group still holds a member this process could signal.
     """
     try:
         os.killpg(pgid, 0)
@@ -40,9 +50,19 @@ def _group_has_members(pgid: int) -> bool:
 
 
 async def _await_group_exit(pgid: int) -> None:
-    """Wait until group *pgid* has no signalable members left."""
+    """Wait until group *pgid* has no signalable members left.
+
+    The interval backs off as the wait continues: a group that dies promptly is
+    noticed within one short probe, while one that survives several rounds is
+    not re-probed at full frequency for as long as it takes. A process group
+    has no completion event to await — nothing signals the kernel to wake us
+    when the last member is reaped — so polling is the only way to observe it,
+    which is why this sleeps in a loop at all.
+    """
+    interval = _PROBE_INTERVAL
     while _group_has_members(pgid):
-        await asyncio.sleep(_PROBE_INTERVAL)
+        await asyncio.sleep(interval)
+        interval = min(interval * 2, _MAX_PROBE_INTERVAL)
 
 
 async def _await_group_teardown(

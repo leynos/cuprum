@@ -16,8 +16,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._line_stream import _LineStreamRun
+    from cuprum._subprocess_drain import _DrainContext
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_wait import _DrainContext
 
 
 class _TimeoutHandledError(Exception):

@@ -158,7 +158,7 @@ def wait_for_pid_file(path: Path, *, seconds: float = 10.0, context: str) -> int
     ------
     pytest.fail
         If the file does not appear within ``seconds``.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - pytest.fail raises its own outcome rather than an exception callers catch
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if path.exists():

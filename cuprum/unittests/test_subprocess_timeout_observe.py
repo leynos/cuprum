@@ -13,10 +13,12 @@ import typing as typ
 
 import pytest
 
-from cuprum._subprocess_wait import (
+from cuprum._subprocess_drain import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
     _DrainContext,
+)
+from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext

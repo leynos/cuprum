@@ -15,9 +15,11 @@ import typing as typ
 import pytest
 
 from cuprum import _timeout_reporting
-from cuprum._subprocess_wait import (
+from cuprum._subprocess_drain import (
     _drain_stream_consumers,
     _DrainContext,
+)
+from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 from cuprum.sh import ExecutionContext

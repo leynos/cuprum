@@ -39,6 +39,8 @@ from cuprum.context.env_overlay import EnvMode, EnvOverlay, render_env
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._teardown_policy import _TeardownPolicy
+
 
 def _signal_child(
     process: asyncio.subprocess.Process,
@@ -74,17 +76,14 @@ def _signal_child(
 
 async def _terminate_process(
     process: asyncio.subprocess.Process,
-    grace_period: float,
-    *,
-    owns_group: bool = False,
+    policy: _TeardownPolicy,
 ) -> None:
     """Terminate a running process, escalating to kill after the grace period."""
     await _terminate_process_with_wait(
         process,
-        grace_period=grace_period,
+        policy=policy,
         is_done=lambda: process.returncode is not None,
         wait_for_exit=lambda: _await_process_exit(process),
-        owns_group=owns_group,
     )
 
 
@@ -107,6 +106,12 @@ def _settlement(
 
     Both waits are composed rather than replaced so the direct child's exit is
     still awaited, and therefore reaped, on every route.
+
+    Returns
+    -------
+    collections.abc.Awaitable[object]
+        An awaitable that settles once the target has, whether that is the
+        direct child alone or the whole group it leads.
     """
     if not owns_group or process.pid is None:
         return wait_for_exit()
@@ -116,10 +121,9 @@ def _settlement(
 async def _terminate_process_with_wait(
     process: asyncio.subprocess.Process,
     *,
-    grace_period: float,
+    policy: _TeardownPolicy,
     is_done: cabc.Callable[[], bool],
     wait_for_exit: cabc.Callable[[], cabc.Awaitable[int]],
-    owns_group: bool = False,
 ) -> bool:
     """Terminate a process and report whether its waiter completed.
 
@@ -136,8 +140,16 @@ async def _terminate_process_with_wait(
     that name may already have been recycled, so signalling it could reach a
     group this run never created; an owned teardown therefore stops there
     rather than trading a leaked descendant for signalling a stranger.
+
+    Returns
+    -------
+    bool
+        Whether the target was signalled and its waiter ran to completion.
+        ``False`` means it had already settled, or had gone before it could be
+        signalled.
     """
-    grace_period = max(0.0, grace_period)
+    grace_period = max(0.0, policy.grace_period)
+    owns_group = policy.owns_group_for(0)
     if is_done():
         return False
     try:
@@ -197,49 +209,31 @@ async def _await_teardown_shielded(
 
 async def _terminate_all_shielded(
     processes: cabc.Iterable[asyncio.subprocess.Process],
-    cancel_grace: float,
-    *,
-    owns_group: cabc.Sequence[bool] | bool = False,
+    policy: _TeardownPolicy,
 ) -> None:
     """Terminate every process before re-raising caller cancellation.
 
-    *owns_group* accepts either one flag for every process, the single-command
-    case, or one flag per process in ``processes`` order, the pipeline case
-    where stages may have been spawned under different policies. A short or
-    absent sequence leaves the remaining processes on the direct-child route
-    rather than guessing, so an ownership bookkeeping slip degrades to the
-    previous behaviour instead of signalling a group this run does not own.
+    *policy* carries the per-process ownership flags, so each process is
+    signalled the way it was spawned. A policy whose sequence is shorter than
+    ``processes`` leaves the rest on the direct-child route.
     """
     await _await_teardown_shielded(
-        _terminate_process(
-            process,
-            cancel_grace,
-            owns_group=_owns_group_at(owns_group, index),
-        )
+        _terminate_process(process, policy.for_index(index))
         for index, process in enumerate(processes)
     )
-
-
-def _owns_group_at(owns_group: cabc.Sequence[bool] | bool, index: int) -> bool:
-    """Return the ownership flag for the process at *index*."""
-    if isinstance(owns_group, bool):
-        return owns_group
-    return index < len(owns_group) and owns_group[index]
 
 
 async def _cleanup_pipeline_on_error(
     processes: list[asyncio.subprocess.Process],
     pipe_tasks: list[asyncio.Task[None]],
-    cancel_grace: float,
-    *,
-    owns_group: cabc.Sequence[bool] | bool = False,
+    policy: _TeardownPolicy,
 ) -> list[object]:
     """Clean up pipeline resources after an error or cancellation."""
     # Terminate every process, then cancel and collect the pipe tasks owned by
     # the caller. This delivers cancellation to a native pump before waiting
     # for it to return descriptor ownership. Stream consumer tasks remain
     # owned by the caller (``_run_pipeline``), not by this helper.
-    await _terminate_all_shielded(processes, cancel_grace, owns_group=owns_group)
+    await _terminate_all_shielded(processes, policy)
     return await _reconcile_pipe_tasks(pipe_tasks)
 
 
@@ -265,17 +259,14 @@ def _merge_env(
 async def _terminate_process_via_wait_task(
     process: asyncio.subprocess.Process,
     wait_task: asyncio.Task[int],
-    grace_period: float,
-    *,
-    owns_group: bool = False,
+    policy: _TeardownPolicy,
 ) -> bool:
     """Terminate a process and report whether its provided waiter completed."""
     return await _terminate_process_with_wait(
         process,
-        grace_period=grace_period,
+        policy=policy,
         is_done=wait_task.done,
         wait_for_exit=lambda: asyncio.shield(wait_task),
-        owns_group=owns_group,
     )
 
 
@@ -297,9 +288,7 @@ def _stages_to_terminate(
 
 async def _terminate_timed_out_stages(
     processes: cabc.Sequence[asyncio.subprocess.Process],
-    cancel_grace: float,
-    *,
-    owns_group: cabc.Sequence[bool] | bool = False,
+    policy: _TeardownPolicy,
 ) -> None:
     """Terminate every still-running stage after a pipeline deadline expires.
 
@@ -317,7 +306,7 @@ async def _terminate_timed_out_stages(
     Failures are absorbed — this runs while a timeout is already propagating,
     and must not replace the ``TimeoutExpired`` the caller awaits.
     """
-    await _terminate_all_shielded(processes, cancel_grace, owns_group=owns_group)
+    await _terminate_all_shielded(processes, policy)
 
 
 def _has_stages_to_terminate(
@@ -347,9 +336,7 @@ async def _terminate_pipeline_remaining_stages(
     processes: list[asyncio.subprocess.Process],
     wait_tasks: list[asyncio.Task[int]],
     failure_index: int,
-    *,
-    cancel_grace: float,
-    owns_group: cabc.Sequence[bool] | bool = False,
+    policy: _TeardownPolicy,
 ) -> tuple[bool, ...]:
     """Terminate all still-running stages after a stage fails.
 
@@ -376,8 +363,7 @@ async def _terminate_pipeline_remaining_stages(
             _terminate_process_via_wait_task(
                 process,
                 wait_task,
-                cancel_grace,
-                owns_group=_owns_group_at(owns_group, idx),
+                policy.for_index(idx),
             ),
         )
         for idx, (process, wait_task) in enumerate(

@@ -15,13 +15,15 @@ import typing as typ
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._streams import _RelayDiagnostics
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_timeout import _handle_stream_timeout
-from cuprum._subprocess_wait import (
+from cuprum._subprocess_drain import (
     _drain_stream_consumers,
     _DrainContext,
     _reconcile_run_tasks,
     _RunTaskOwnership,
+)
+from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_timeout import _handle_stream_timeout
+from cuprum._subprocess_wait import (
     _wait_for_exit_code_within_timeout,
 )
 

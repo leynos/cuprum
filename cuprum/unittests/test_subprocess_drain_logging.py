@@ -13,7 +13,7 @@ import asyncio
 import logging
 import typing as typ
 
-from cuprum._subprocess_wait import (
+from cuprum._subprocess_drain import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
     _DrainContext,
@@ -22,7 +22,7 @@ from cuprum._subprocess_wait import (
 if typ.TYPE_CHECKING:
     import pytest
 
-_DRAIN_LOGGER = "cuprum._subprocess_wait"
+_DRAIN_LOGGER = "cuprum._subprocess_drain"
 
 
 def _field(record: logging.LogRecord, name: str) -> object:
