@@ -453,20 +453,25 @@ likelihood, and mitigation.
   fixing sites and the test names so the reason each finding is closed is
   checkable without re-deriving it.
 
-- [x] (2026-10-02) The hosted CodeScene check run was re-evaluated against the
-  new head and **passed**: `Quality Gate Passed`, six gates passed, with
-  `_subprocess_stream_run.py` reported as improved from 9.59 to 10.00 for
-  `Large Method`. That is the second of the two findings this entry opened, and
-  the first — Complex Method on `_write_stdin_stream` — no longer appears in
-  the report at all.
+- [x] (2026-10-02) CodeScene's two findings were opened and closed by *different
+  revisions*, and the plan should name which. The failure is on `c064a1f2`, the
+  pre-fix tree: `Quality Gate Failed`,
+  `1 new file with code health below 10.00` and
+  `2 files with Complex Method, Large Method`, naming `_write_stdin_stream` at
+  9.69 and `_run_subprocess_with_streams` at 9.59 → 9.57. The fix commit
+  `70b0af88` already passes, and its check-run summary — read directly through
+  `gh api /repos/leynos/cuprum/commits/<sha>/check-runs` — reads
+  `Quality Gate Passed`, six gates, with `_subprocess_stream_run.py` at 9.59 →
+  10.00 for `Large Method`. `10ef0f22` carries a byte-identical summary. So the
+  passage was measured at the fix, not at the later bookkeeping commit, and
+  this entry previously credited the wrong revision for it. The correction
+  matters because the two commits are not interchangeable: if the fix had *not*
+  landed, `70b0af88` would have been the failing comparison, not a passing one.
 
-  Two things are worth separating here. The *finding* is cleared, which the
-  report says directly. The *thread* on the pull request is a different matter:
-  CodeScene answers on its own comment threads only by re-evaluating the head,
-  so the thread bodies still read as failures until the next review pass
-  retires them. A green check run and a stale thread comment are not a
-  contradiction; the check run is the measurement, and the thread is a record
-  of what the previous revision measured.
+  The *thread* on the pull request is a separate record from the check run, and
+  it is the check run that is the measurement. CodeScene answers on its own
+  threads only by re-evaluating a head, so a thread body can still read as a
+  failure after the finding behind it is gone.
 
 - [x] (2026-10-02) Two commits have landed since the gated revision `70b0af88`:
   `10ef0f22` and `3fd2a41c`, both record-keeping in this document. That
