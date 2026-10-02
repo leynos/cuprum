@@ -3519,32 +3519,18 @@ here rather than a stringly-typed `io::Error::other(...)`.
 
 ### Preserving the operating-system error code
 
-The `Io` variant needs care, because PyO3's own `From<io::Error> for PyErr`
-loses the number. It selects the exception *type* from `io::ErrorKind` and then
-constructs it with a single argument, the error's `Display` string — and Python
-populates `OSError.errno` and `OSError.strerror` only when it receives **two or
-more** arguments. The number therefore survived in the message text and nowhere
-a caller could branch on, forcing callers to parse English to tell `EBADF` from
-`EPIPE`. This was issue `#265`; `io_error_to_py_err` now handles it.
+The tested POSIX `Io` path needs care, because PyO3's own
+`From<io::Error> for PyErr` loses the number. It selects the exception *type*
+from `io::ErrorKind` and then constructs it with a single argument, the error's
+`Display` string — and Python populates `OSError.errno` and `OSError.strerror`
+only when it receives **two or more** arguments. The number therefore survived
+in the message text and nowhere a caller could branch on, forcing callers to
+parse English to tell `EBADF` from `EPIPE`. This was issue `#265`;
+`io_error_to_py_err` now handles it.
 
-The construction is platform-specific, so it sits behind a `cfg`-selected
-`os_error_to_py_err`:
-
-- **Unix** — `raw_os_error` *is* an `errno`, so the two-argument form
-  `OSError(code, strerror)` is exactly right. It also fixes the exception type
-  for free: CPython maps the errno to the matching subclass itself, so
-  `OSError(32, ...)` *is* a `BrokenPipeError` and reading a directory raises
-  `IsADirectoryError`. That is the same subclass selection PyO3 reached for
-  through `ErrorKind`, taken from the authoritative source instead of a
-  parallel table.
-- **Windows** — `raw_os_error` carries a `GetLastError` code, not an `errno`.
-  Passing it as an `errno` would assign an unrelated number
-  (`ERROR_INVALID_HANDLE` is 6, which as an `errno` is `ENXIO`) and pick the
-  subclass from it. The five-argument form
-  `OSError(errno, strerror, filename, winerror, filename2)` is the one that
-  carries a native code: given a `winerror`, CPython ignores the `errno`
-  argument, derives `errno` from the Win32 code, and selects the subclass from
-  the derived value, so all three agree.
+On POSIX, `raw_os_error` is an `errno`, and the two-argument form
+`OSError(code, strerror)` exposes that code to Python. The platform-specific
+construction is selected by `os_error_to_py_err`.
 
 Two details are worth knowing before changing this code. First, `io::Error`
 renders a raw OS error as `"{strerror} (os error {code})"`, so the suffix is
@@ -3556,17 +3542,14 @@ with no `raw_os_error` — one synthesized in Rust rather than returned by a
 syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
 best available and is used unchanged.
 
-`cuprum/unittests/test_rust_errno.py` covers the POSIX arm and
-`cuprum/unittests/test_rust_errno_windows.py` the Windows one, with each set of
-assertions scoped to the platform whose taxonomy it names — the POSIX cases
-name an `errno` and the subclass CPython derives from it, the Windows case
-names a `winerror` and the `errno` CPython derives from *that*. The Windows
-case does not hard-code either expectation: it reads them back from an
-`OSError` it builds from the observed `winerror`, so it pins the derivation
-without depending on which Win32 code the failure happens to raise.
+`cuprum/unittests/test_rust_errno.py` covers the POSIX error conversion. The
+Windows module named `test_rust_errno_windows.py` currently covers raw-handle
+rejection at the PyO3 stream boundary; it does not assert Windows error-code
+conversion.
 
-What actually executes is narrower than what is written, so do not read a green
-run as coverage of both arms:
+The POSIX conversion is tested natively; the Windows integration test exercises
+a different boundary, so a green run does not establish conversion coverage on
+both platforms:
 
 - **POSIX** — the cases run natively on Linux whenever the extension is built,
   so a local `make develop` followed by `make test-extension` executes them.
@@ -3578,9 +3561,9 @@ run as coverage of both arms:
 - **Windows** — the `CI` workflow's `extension-tests-windows` job builds the
   extension and runs the extension-gated modules on `windows-2022`. This is
   deliberately not the full suite because of the `#124` interpreter-abort
-  constraint; it does execute `test_rust_errno_windows.py`, including the
-  `winerror`, derived `errno`, exception-subclass, and message-formatting
-  assertions. Reproduce the native check from a Windows checkout with:
+  constraint; it executes `test_rust_errno_windows.py`, which checks raw-handle
+  rejection at the PyO3 stream boundary. Reproduce the native check from a
+  Windows checkout with:
 
   ```bash
   make develop
@@ -3616,15 +3599,18 @@ runs it on every pull request, which is where it has to hold.
 This is the only check in the repository that reads the `#[cfg(windows)]`
 branches with warnings denied. A trybuild case cannot substitute for it:
 trybuild compiles its fixtures for the host target, so on a Linux runner it
-sees the `#[cfg(unix)]` arm and never the Windows one.
+selects the Unix stream module and does not compile the Windows module. The
+Windows exports are in `stream_pyfunctions_windows.rs`, selected by
+`#[cfg(windows)]` at `rust/cuprum-rust/src/lib.rs:52-62`, so Linux coverage
+excludes those lines.
 
 ## Rust FD-borrow ownership contract
 
-The PyO3 pump and consume entry points in
-`rust/cuprum-rust/src/stream_pyfunctions.rs:42,80` sort every descriptor they
-touch into a *borrowed* or a *consumed* role. `pump_stream` borrows its reader
-and consumes its writer; `consume_stream` borrows its reader and takes no
-writer at all. The unsafe raw-reader constructor
+On Unix, the PyO3 pump and consume paths
+(`rust/cuprum-rust/src/stream_pyfunctions.rs:50-69,88-101`) sort each
+descriptor they touch into a *borrowed* or a *consumed* role. `pump_stream`
+borrows its reader and consumes its writer; `consume_stream` borrows its reader
+and takes no writer at all. On Unix, the unsafe raw-reader constructor
 `cuprum_native_io::borrow_reader` is called only at this PyO3 integration
 boundary. The safe `cuprum_native_io::borrow` API returns a lifetime-bound OS
 borrow; `cuprum-streams` receives typed `AsStream` values and cannot
@@ -3633,13 +3619,28 @@ reconstruct a resource from an integer. The native crate's
 to keep a temporary reconstructed owner from closing a caller-owned handle
 across normal return, error, or real unwind.
 
-The private `stream_pyfunctions::run_stream_operation` helper is limited to the
-two PyO3 stream exports. It owns their shared buffer validation, reader
-descriptor preparation, GIL release, and `PumpError` conversion; the pump
-export alone prepares its ownership-consuming writer and both exports supply
-their stream operation. Do not reuse it outside this FFI adapter boundary or
-move writer ownership into the helper, because that would blur the distinct
-borrow-versus-consume contract.
+Windows synchronous I/O has an additional requirement: the handle must support
+blocking `ReadFile` and `WriteFile` semantics and must not have been opened with
+`FILE_FLAG_OVERLAPPED`. `SynchronousBorrowedStream` represents that
+capability, while `SynchronousOwnedStream` can lend it safely; the native
+adapter accepts the borrowed capability rather than a generic handle. Win32
+documents no way to query this mode from a bare handle, so
+`SynchronousBorrowedStream::new_unchecked` is the audited unsafe construction
+path and its caller must establish the mode at creation, duplication, or
+handoff. `synchronous_pipe` is the safe construction path for Cuprum-created
+anonymous pipes, whose `CreatePipe` endpoints have synchronous semantics. These
+APIs and the adapter are in
+`rust/cuprum-native-io/src/windows.rs:16-59,91-105,141-165`; the foreign-handle
+obligations are recorded by `borrow_reader` and `adopt_writer` in
+`rust/cuprum-native-io/src/lib.rs:76-129`.
+
+On Unix, the private `stream_pyfunctions::run_stream_operation` helper is
+limited to the two PyO3 stream exports. It owns their shared buffer validation,
+reader descriptor preparation, GIL release, and `PumpError` conversion; the
+pump export alone prepares its ownership-consuming writer and both exports
+supply their stream operation. Do not reuse it outside this FFI adapter
+boundary or move writer ownership into the helper, because that would blur the
+distinct borrow-versus-consume contract.
 
 This supersedes an earlier pattern that reconstructed the handle and called
 `std::mem::forget` after the inner operation returned. Because a panic unwinds
@@ -3650,33 +3651,37 @@ reader path now constructs a lifetime-bound `BorrowedStream` directly. The
 Windows adapter uses `ManuallyDrop` through `with_retained_owner`; the real
 `catch_unwind` tests cover that retention path.
 
-There is deliberately no borrowed *writer* variant. The writer FD handed to
-`pump_stream` is consumed: it must close on drop — including during unwinding —
-so downstream readers observe EOF. The PyO3 boundary calls the unsafe
-`cuprum_native_io::adopt_writer` only after Python has transferred a unique
-resource. `cuprum_native_io::with_owned_writer` then owns the drop scope and
-gives its callback only an immutable reference to the writer. This prevents
+On Unix, there is deliberately no borrowed *writer* variant. The writer FD
+handed to `pump_stream` is consumed: it must close on drop — including during
+unwinding — so downstream readers observe EOF. The Unix PyO3 boundary calls the
+unsafe `cuprum_native_io::adopt_writer` only after Python has transferred a
+unique resource. `cuprum_native_io::with_owned_writer` then owns the drop scope
+and gives its callback only an immutable reference to the writer. This prevents
 callback code from replacing or moving the actual owned resource out of the
 scope. The normal path explicitly drops the writer after the callback; unwind
 relies on automatic RAII. Reserve `cuprum_native_io::borrow` for resources
-whose ownership stays with the caller. Python callers must therefore fully
+whose ownership stays with the caller. Unix Python callers must therefore fully
 relinquish the writer descriptor supplied to `pump_stream`/`rust_pump_stream`.
-The pipeline caller passes worker-owned duplicates of both asyncio transport
-descriptors: asyncio keeps and closes the originals, Rust borrows the reader
-duplicate without closing it, and Rust closes the received writer duplicate on
-drop to signal EOF. The Python hand-off owner closes the reader duplicate after
-the worker settles. The two descriptor numbers in each pair must never be
-shared between those owners. The helper's safety contract obliges the caller to
-guarantee each `fd` is a valid open descriptor (or Windows handle) for the
-duration of the call and that ownership remains with the caller; in return the
-helper guarantees it never closes the borrowed reader `fd`.
+The Unix pipeline caller passes worker-owned duplicates of both asyncio
+transport descriptors: asyncio keeps and closes the originals, Rust borrows the
+reader duplicate without closing it, and Rust closes the received writer
+duplicate on drop to signal EOF. The Python hand-off owner closes the reader
+duplicate after the worker settles. The two descriptor numbers in each pair
+must never be shared between those owners. For this Unix hand-off, the helper's
+safety contract obliges the caller to guarantee each descriptor is valid and
+open for the duration of the call and that ownership remains with the caller;
+in return the helper guarantees it never closes the borrowed reader descriptor.
 
-The Windows-handle wording above describes direct Rust extension calls. The
-pipeline dispatcher declines Windows asyncio subprocess-pipe handles with
-`platform_unsupported`, because ProactorEventLoop's overlapped handles cannot
-be used safely by the pump's synchronous Rust I/O. Native Windows wheels and
-the direct extension API remain supported independently of this pipeline
-restriction.
+The exported Windows PyO3 stream functions reject raw handles because those
+integers do not establish the synchronous-I/O capability. The pump still
+consumes and closes its transferred writer when rejecting the call;
+`rust/cuprum-rust/src/stream_pyfunctions_windows.rs:10-19,36-52,66-76`
+implements that boundary, and `cuprum/unittests/test_rust_errno_windows.py`
+checks rejection and writer closure. The Python pipeline dispatcher also
+declines Windows asyncio subprocess-pipe handles with `platform_unsupported`:
+`ProactorEventLoop` uses overlapped handles, which do not satisfy the
+synchronous adapter's precondition. That fallback remains the policy until an
+overlapped-I/O implementation is designed.
 
 The contract is checked at two levels, which are deliberately not
 interchangeable. `rust/cuprum-native-io/src/ownership_tests.rs` holds the
@@ -4247,6 +4252,15 @@ snapshots and properties cover the `consume_stream_files` read-and-decode loop,
 while `TestRustConsumeStream` covers the exported surface a caller actually
 touches. Keep both when changing either.
 
+Both platform entry points named `consume_stream_files` delegate to one private
+loop, `consume_with_reader`. Each entry point passes a read closure over its
+own capability-typed `read_stream`, plus its platform label for the
+length-overflow event. The loop therefore never receives a handle, and Windows
+still requires a `SynchronousBorrowedStream`. `consume_tests.rs` drives that
+loop through a scripted read closure. It pins split sequences, EOF, and
+read-error propagation on every platform, including Windows, where the
+pipe-backed snapshots do not run.
+
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
 which keeps the expected text beside the case that produces it and leaves no
@@ -4419,7 +4433,7 @@ Table 1: modules gated on the compiled extension
 | `test_rust_extension.py`                           | extension availability and module surface                                                                                                                            |
 | `test_rust_splice.py`                              | the Linux `splice` fast path                                                                                                                                         |
 | `test_rust_errno.py`                               | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
-| `test_rust_errno_windows.py`                       | Windows `winerror` conversion and the `errno` and subclass values CPython derives from it                                                                            |
+| `test_rust_errno_windows.py`                       | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                             |
 | `test_backend.py`                                  | the extension-dependent backend-selection cases                                                                                                                      |
 | `test_loom_model_conformance.py`                   | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
 | `test_extension_requirement_guard.py`              | the fail-loud guard itself                                                                                                                                           |

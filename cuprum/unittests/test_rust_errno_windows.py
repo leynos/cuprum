@@ -1,20 +1,10 @@
-"""The Windows arm of the `errno` contract at the PyO3 boundary.
+"""Windows raw-handle rejection at the PyO3 stream boundary.
 
-On Windows the extension's `io::Error` carries a `GetLastError` code rather
-than a POSIX `errno`, so the conversion has a second arm: it hands the native
-number over as `winerror` and lets CPython derive `errno` and the exception
-subclass from that. `test_rust_errno.py` holds the POSIX arm and the shared
-rationale for why the conversion is pinned at all.
-
-Every expectation comes from outside the exception under test. The same failing
-`ReadFile` is issued first through `ctypes`, and the code it reports is what the
-extension is held to; deriving the expectation from the raised exception would
-let a hard-coded or simply wrong native code satisfy the assertion.
-
-CI's `extension-tests-windows` job executes this arm on `windows-2022` after
-building the extension through `make develop`; it then runs the shared
-`make test-extension` target, which keeps the platform-specific contract in
-the same module list as the Linux boundary coverage.
+The synchronous native adapter accepts only capabilities whose non-overlapped
+mode was established at creation or in an audited Rust hand-off. A bare Python
+integer cannot establish that property, so the exported PyO3 helpers reject
+raw Windows handles before they construct the capability. The native-I/O crate
+tests the accepted ``synchronous_pipe`` path directly.
 
 Example
 -------
@@ -26,200 +16,144 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import os
-import re
 import sys
 import typing as typ
 
 import pytest
 
+from cuprum import _streams_rs
+
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    import pathlib
     from types import ModuleType
+
 
 _windows_only = pytest.mark.skipif(
     sys.platform != "win32",
-    reason="asserts Win32 winerror values and the errno derived from them",
+    reason="asserts the Windows-only raw-handle rejection boundary",
 )
+_RAW_HANDLE_MESSAGE = "do not accept raw Windows handles"
+_ERROR_INVALID_HANDLE = 6
 
 
-def _winerror_of(exc: OSError) -> int | None:
-    """Read the Win32 code CPython attaches to a Windows ``OSError``.
+def _assert_invalid_windows_handle(raw_handle: int) -> None:
+    """Check closure without ownership or blocking.
 
-    ``OSError.winerror`` exists only on Windows, so a type check run on any
-    other platform does not know the attribute. The suppression is confined to
-    this one accessor rather than repeated at each use.
-
-    Returns
-    -------
-    int | None
-        The Win32 error code, when CPython attaches one to the exception.
+    Concurrent reuse of the same process-local handle value can race this probe.
     """
-    return exc.winerror  # ty: ignore[unresolved-attribute]
-
-
-def _win32_readfile_error(fd: int) -> int:
-    """Return the Win32 code a direct ``ReadFile`` on ``fd`` reports.
-
-    This is the oracle the boundary is measured against. It issues the same
-    system call the extension does — a Windows stream handle is a
-    ``std::fs::File``, whose ``read`` is ``ReadFile`` — but through ``ctypes``,
-    so nothing it returns passes through the code under test. A hard-coded or
-    mistaken native code on the Rust side therefore fails the comparison.
-
-    ``use_last_error`` makes ``ctypes`` stash ``GetLastError`` immediately on
-    return, before the interpreter can make a call of its own and overwrite it.
-
-    Parameters
-    ----------
-    fd : int
-        A C runtime descriptor that cannot be read.
-
-    Returns
-    -------
-    int
-        The ``GetLastError`` code the failed read reported.
-
-    Examples
-    --------
-    >>> _win32_readfile_error(write_only_handle)  # doctest: +SKIP
-    5
-    """
-    msvcrt = pytest.importorskip("msvcrt", reason="Windows-only handle conversion")
-    handle = msvcrt.get_osfhandle(fd)
-    kernel32 = ctypes.WinDLL(  # ty: ignore[unresolved-attribute]
-        "kernel32",
-        use_last_error=True,
+    kernel32 = ctypes.WinDLL(  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
+        "kernel32", use_last_error=True
     )
-    read_file = kernel32.ReadFile
-    # A HANDLE is pointer-sized; without argtypes ctypes would pass it as a C
-    # int and truncate it on 64-bit Windows.
-    read_file.argtypes = (
+    get_handle_information = kernel32.GetHandleInformation
+    get_handle_information.argtypes = (
         ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.POINTER(ctypes.c_uint32),
-        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_ulong),
     )
-    read_file.restype = ctypes.c_int
-    taken = ctypes.c_uint32(0)
-    succeeded = read_file(
-        ctypes.c_void_p(handle),
-        ctypes.create_string_buffer(1),
-        1,
-        ctypes.byref(taken),
-        None,
+    get_handle_information.restype = ctypes.c_int
+    flags = ctypes.c_ulong()
+    ctypes.set_last_error(0)  # ty: ignore[unresolved-attribute]  # Windows API.
+    handle_is_open = get_handle_information(
+        ctypes.c_void_p(raw_handle), ctypes.byref(flags)
     )
-    assert not succeeded, (
-        "the probe read must fail, or it cannot say which code the extension "
-        "should have reported"
+    assert not handle_is_open, "rejected pump must close the transferred writer"
+    get_last_error = ctypes.get_last_error  # ty: ignore[unresolved-attribute]  # Windows API.
+    assert get_last_error() == _ERROR_INVALID_HANDLE, (
+        "closed writer must report ERROR_INVALID_HANDLE"
     )
-    return ctypes.get_last_error()  # ty: ignore[unresolved-attribute]
-
-
-def _win32_oracle(code: int) -> OSError:
-    """Build the ``OSError`` CPython itself produces for a Win32 ``code``.
-
-    ``ctypes.WinError`` looks the message up with ``FormatMessage`` and hands
-    the code to ``OSError`` as ``winerror``, so CPython derives ``errno`` and
-    selects the subclass. That makes it the authoritative statement of what the
-    extension's exception should look like, built from the independently
-    obtained code rather than from the exception itself.
-
-    Parameters
-    ----------
-    code : int
-        A Win32 error code.
-
-    Returns
-    -------
-    OSError
-        The exception CPython derives from ``code``.
-
-    Examples
-    --------
-    >>> _win32_oracle(5).errno  # doctest: +SKIP
-    13
-    """
-    return ctypes.WinError(code)  # ty: ignore[unresolved-attribute]
-
-
-@pytest.fixture(name="write_only_handle")
-def fixture_write_only_handle(tmp_path: pathlib.Path) -> cabc.Iterator[int]:
-    """Yield a Windows CRT descriptor open for writing, which cannot be read.
-
-    The extension owns the conversion to a native ``HANDLE``. ``ReadFile`` on
-    the resulting handle fails because it was opened ``GENERIC_WRITE``, which
-    is what puts a Win32 code on the ``io::Error`` the conversion must retain.
-
-    Yields
-    ------
-    int
-        The C runtime descriptor for the write-only file.
-    """
-    fd = os.open(tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT)
-    try:
-        yield fd
-    finally:
-        with contextlib.suppress(OSError):
-            os.close(fd)
 
 
 @_windows_only
-def test_windows_failures_carry_the_native_code_as_winerror(
+def test_consume_rejects_raw_windows_handle(rust_streams: ModuleType) -> None:
+    """The safe Python entry point cannot assert synchronous I/O from an int."""
+    read_fd, write_fd = os.pipe()
+    try:
+        with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
+            rust_streams.rust_consume_stream(read_fd)
+    finally:
+        for fd in (read_fd, write_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@_windows_only
+def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
+    """The raw writer transfer is consumed while the unsupported call fails."""
+    reader_fd: int | None = None
+    reader_writer_fd: int | None = None
+    writer_reader_fd: int | None = None
+    writer_fd: int | None = None
+    writer_handle: int | None = None
+    writer_transferred = False
+    try:
+        native = rust_streams._load_native()
+        reader_fd, reader_writer_fd = os.pipe()
+        writer_reader_fd, writer_fd = os.pipe()
+        reader_handle = _streams_rs._convert_fd_for_platform(reader_fd)
+        writer_handle = _streams_rs._duplicate_windows_handle(
+            _streams_rs._convert_fd_for_platform(writer_fd)
+        )
+
+        # PyO3 converts both handles to i64 before Rust can adopt the writer.
+        i64_max = (1 << 63) - 1
+        if not (0 <= reader_handle <= i64_max and 0 <= writer_handle <= i64_max):
+            pytest.skip("Windows handle is outside the native PyO3 i64 range")
+
+        # Rust then adopts and closes the transferred writer before rejecting
+        # this raw-handle call.
+        writer_transferred = True
+        with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
+            native.rust_pump_stream(reader_handle, writer_handle)
+
+        _assert_invalid_windows_handle(writer_handle)
+    finally:
+        for fd in (reader_fd, reader_writer_fd, writer_reader_fd, writer_fd):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        if writer_handle is not None and not writer_transferred:
+            with contextlib.suppress(OSError):
+                _streams_rs._close_windows_handle(writer_handle)
+
+
+@pytest.mark.parametrize(
+    ("reader_fd", "buffer_size", "error_message"),
+    [
+        (0, 0, "buffer_size must be greater than zero"),
+        (-1, 65536, "file handle must be non-negative"),
+    ],
+    ids=("buffer-size", "reader-handle"),
+)
+@_windows_only
+def test_pump_closes_writer_after_early_validation_failure(
     rust_streams: ModuleType,
-    write_only_handle: int,
+    reader_fd: int,
+    buffer_size: int,
+    error_message: str,
 ) -> None:
-    """A Win32 failure arrives as `winerror`, with the rest derived from it.
+    """Later buffer or reader validation failures close the adopted writer."""
+    writer_reader_fd: int | None = None
+    writer_fd: int | None = None
+    writer_handle: int | None = None
+    writer_transferred = False
+    try:
+        native = rust_streams._load_native()
+        writer_reader_fd, writer_fd = os.pipe()
+        writer_handle = _streams_rs._duplicate_windows_handle(
+            _streams_rs._convert_fd_for_platform(writer_fd)
+        )
 
-    Parameters
-    ----------
-    rust_streams : ModuleType
-        The compiled Rust streams extension module.
-    write_only_handle : int
-        A C runtime file descriptor returned by ``os.open``, opened for
-        writing and unable to be read.
+        if not 0 <= writer_handle <= (1 << 63) - 1:
+            pytest.skip("Windows handle is outside the native PyO3 i64 range")
 
-    Notes
-    -----
-    On Windows `raw_os_error` is a `GetLastError` code, not an `errno`. Handing
-    it over where Python expects an `errno` would assign an unrelated number,
-    leave `winerror` unset, and pick the subclass from the wrong value. The
-    five-argument form passes the native code as `winerror`; CPython then
-    derives `errno` from it and selects the subclass from the derived value.
+        writer_transferred = True
+        with pytest.raises(ValueError, match=error_message):
+            native.rust_pump_stream(reader_fd, writer_handle, buffer_size)
 
-    None of the expectations come from the exception. The same read is issued
-    first through `ctypes`, and the code it reports is what the extension is
-    held to; `errno`, `strerror` and the subclass then come from the `OSError`
-    CPython derives from that code. An extension that reported a constant, or
-    the wrong code, or a code it never obtained from the failure, fails here —
-    which is exactly what deriving the expectations from the raised `winerror`
-    could not detect.
-    """
-    expected = _win32_readfile_error(write_only_handle)
-    oracle = _win32_oracle(expected)
-
-    with pytest.raises(OSError, match=re.escape(f"[WinError {expected}]")) as excinfo:
-        rust_streams.rust_consume_stream(write_only_handle)
-
-    raised = excinfo.value
-    assert _winerror_of(raised) == expected, (
-        f"ReadFile reported {expected}, so winerror must carry that code; "
-        f"found {_winerror_of(raised)!r}"
-    )
-    assert type(raised) is type(oracle), (
-        f"winerror {expected} implies {type(oracle).__name__}, "
-        f"found {type(raised).__name__}"
-    )
-    assert raised.errno == oracle.errno, (
-        f"errno must be the one CPython derives from winerror {expected}: "
-        f"expected {oracle.errno!r}, found {raised.errno!r}"
-    )
-    assert raised.strerror == oracle.strerror, (
-        f"strerror must be the system's description of winerror {expected}: "
-        f"expected {oracle.strerror!r}, found {raised.strerror!r}"
-    )
-    assert "os error" not in str(raised), (
-        "the Rust-side suffix must be stripped, leaving Python's own "
-        f"[WinError N] prefix as the only mention; found {str(raised)!r}"
-    )
+        _assert_invalid_windows_handle(writer_handle)
+    finally:
+        for fd in (writer_reader_fd, writer_fd):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+        if writer_handle is not None and not writer_transferred:
+            with contextlib.suppress(OSError):
+                _streams_rs._close_windows_handle(writer_handle)
