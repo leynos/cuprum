@@ -832,6 +832,75 @@ than discovering the gap months later.
     node names; there is no `warnings summary`, no `=== FAILURES ===` and no
     `=== ERRORS ===` block in any log. `typos.toml` re-hashed to the same blob
     `9024e10f` before and after all five gates, so no gate dirtied the tree.
+- [x] (2026-10-02) Pushed `200d2238`, `2b008c89`, and `4422afb6`, then read the
+  hosted verdicts at the pushed head rather than inferring them from source.
+  - *CodeScene passed, and the output says so.* The check run on `4422afb6`
+    (`id 110942702268`) reads `conclusion: success` with the summary **"Quality
+    Gate Passed — 6 Quality Gates Passed"**. At `26af701b` the same check was
+    `failure` with two gates failed — "Enforce critical code health rules (1
+    file with Bumpy Road Ahead)" and "Enforce advisory code health rules (1 file
+    with Complex Method, Large Method)" — and the score read 10.00 → 9.41. The
+    three `codescene-access` review threads it opened (`PRRT_kwDOQgt8686oaJbu`,
+    `PRRT_kwDOQgt8686oaJcU`, `PRRT_kwDOQgt8686oaJc2`) are no longer in the
+    unresolved set; the service resolved them itself, which is the only
+    mechanism those threads have — they take no reply.
+  - *The local `cs` CLI could not have predicted this, which is why its clean
+    verdict is not cited.* `cs` 1.0.33 reports **10.00 / "No issues found!"**
+    for `tests/helpers/ci_leg_gate.py` at `26af701b` — the exact revision the
+    hosted service flagged with all three biomarkers — and reports the same for
+    the fixed head, so it cannot distinguish them. Liveness controls rule out a
+    broken invocation: a synthetic 363-line function scores 1.73 (Bumpy Road,
+    Complex Method cc=361, Large Method, Excess Arguments) and a 79-line probe
+    scores 7.98 with "Complex Method (cc = 80)". The tool is sensitive in
+    general and blind to this file in particular. Both `cs review <rev>:<path>`
+    and `cs delta <fresh-sha>` were tried; neither reproduces the hosted
+    finding.
+  - *The figures quoted to the threads come from a counter calibrated to match
+    CodeScene exactly, not from the CLI.* Four data points reproduce the
+    published numbers with no residual: `flag_holds_on` at `26af701b` reads
+    LoC 79 / cc 12 / bumps 2 against the thread's 79 / 12 / 2 blocks;
+    `admits_event` reads 83 at `92f17d25^` and 63 at `92f17d25` against the
+    earlier finding's 83 and 63. The counting rule that makes them agree is
+    that the docstring's closing line counts toward LoC even when it carries a
+    trailing `# ruff: ignore[...]`, and that **`raise` statements count toward
+    cyclomatic complexity** — the three refusals inline were what made 12
+    rather than 9. Post-fix `flag_holds_on` reads 41 lines, cc 6, one shallow
+    guard and no block nested two deep, on both measures below threshold.
+- [x] (2026-10-02) Ran the five gates a third time at the pushed head
+  `4422afb6` and read the hosted CI alongside them.
+  - *All five green, tree frozen.* `check-fmt` exit 0 in 1s, `typecheck` exit 0
+    in 1s, `lint` exit 0 in 164s with all 13 leaves reached, `markdownlint`
+    exit 0 in 10s, `test` exit 0 in 248s. `HEAD_BEFORE`/`HEAD_AFTER` are
+    `4422afb6` for every gate, the tree was empty before and after each, and
+    `typos.toml` re-hashed to `9024e10ff50ab457d248489c288444dafdb7ed5d` — equal
+    to `git rev-parse HEAD:typos.toml` — so no gate dirtied the tree. Logs:
+    `/tmp/<gate>-issue499-4422afb6.out`. Test totals recomputed by script over
+    the log: 11 pytest sessions, 3676 passed, 86 skipped, 0 failed, 0 errors,
+    with collected = 3762 = 3676 + 86; nextest 127/127 with no
+    `cargo-nextest not found`; doctests 0 failed, 3 ignored.
+  - *Hosted CI: every job green except `coverage`, which hit a documented
+    flake.* All four `Typecheck and test` legs, `lint-test`, both
+    `Extension-gated tests` jobs, both `build-wheels` fan-outs,
+    `verify-wheel-install`, `benchmark-ratchet`, and `changes` succeeded. The
+    `coverage` job's `Generate coverage` step failed with
+    `cuprum/unittests/test_doctest_warning_contract.py::test_pinned_doctest_route_rejects_a_warning
+    - Failed: Timeout (>30.0s) from pytest-timeout`; the traceback ends inside
+    `subprocess.run` → `selectors.py` `poll()`, i.e. Cargo was still running
+    when the suite-wide 30 s ceiling fired. It is not an assertion failure.
+  - *Why that is environmental rather than this branch's.* The test
+    cold-installs `nightly-2026-08-23` inside the timed subprocess — a cold
+    `rustup toolchain install … --profile minimal` measures ~25.4 s here, 85%
+    of the budget before the crate compiles — and no CI step pre-installs it
+    for the Python-test jobs. Attribution checks: the three commits touch
+    no `Makefile`, `.github/` path, or that test file (the five paths they do
+    touch are two docs, `tests/helpers/ci_leg_gate.py`,
+    `tests/helpers/recipe_read.py`, and
+    `tests/test_ci_resource_sampler_action.py`), and all five `TOOL_CACHE_KEY`
+    inputs — `uv.lock`, `pyproject.toml`, `Makefile`, and the two action
+    files — are byte-identical between `26af701b`, whose run was fully green,
+    and `4422afb6`. The failed job was re-run with `gh run rerun --failed`.
+    The re-run's result is recorded separately once read; it is not claimed
+    here.
 
 ## Surprises & discoveries
 
