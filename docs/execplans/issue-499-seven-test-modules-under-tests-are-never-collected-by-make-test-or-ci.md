@@ -668,6 +668,34 @@ than discovering the gap months later.
     behaviour is unchanged, as the review asked.
   - *The gate run is recorded separately below.* Its counts belong to the head
     it names, not to this summary.
+- [x] (2026-10-02) Diagnosed the two `make test` failures the first five-gate
+  run reported, and confirmed they were a host fault rather than a branch
+  defect.
+  - *The failure was a transient `sccache` outage, replayed from cache.* Both
+    failures raised `tests.helpers.maturin.MaturinBuildError`, whose stderr
+    ended in `sccache: error: failed to execute compile` / `Failed to read
+    response header` / `failed to fill whole buffer` — the compiler wrapper's
+    server had died mid-request under host load and auto-restarted afterwards.
+  - *A cached failure made it look reproducible.* `cargo` persists the `rustc
+    -vV` probe in `rust/target/.rustc_info.json`; the entry written during the
+    outage recorded `success: false, code: 2` with the outage's stderr text.
+    Every later `cargo metadata` replayed that entry verbatim — which is why
+    the "reproduction" kept printing heartbeat timestamps from the original
+    failure window two hours after the fact. Bypassing the wrapper and using a
+    fresh `SCCACHE_DIR` each re-ran the probe successfully and superseded the
+    entry, after which the plain command passed with no output on stderr.
+  - *The two failing nodes pass at this head.* Re-running the two modules
+    directly reports 7 passed, exit 0
+    (`/tmp/test-focused-issue499-2d335973.out`).
+  - *The abort also hid most of the suite, which is the count that matters.*
+    `test-python` loops over `PYTEST_TARGETS` and stops at the first non-zero
+    pattern, so the failed `cuprum/unittests` pattern prevented every later
+    selection — the other `tests/test_ci_*.py` modules, `scripts/tests/*`,
+    `tests/behaviour/*`, `tests/integration/test_act_stream_parsing.py` — from
+    being invoked at all, and `make test` never reached `test-rust` or the Rust
+    doctests. The first run therefore says nothing about those selections, and
+    its 2535 passed covers `cuprum/unittests` alone. A full re-run is what
+    supplies the missing evidence; no defect is implied by the gap.
 
 ## Surprises & discoveries
 
