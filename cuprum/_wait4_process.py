@@ -19,6 +19,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - this isolated 
 import typing as typ
 from asyncio.streams import FlowControlMixin
 
+from cuprum._constants import STDERR_STREAM, STDIN_STREAM, STDOUT_STREAM, PipeStream
 from cuprum._pipeline_types import _ExecutionInvariantError
 from cuprum._rusage import (
     ChildResourceUsage,
@@ -52,7 +53,24 @@ class _Wait4InvariantError(_ExecutionInvariantError):
 
 @dc.dataclass(frozen=True, slots=True)
 class DirectProcessConfig:
-    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths."""
+    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths.
+
+    *pipes* names the streams cuprum holds a parent-side pipe for, and it is
+    carried separately from the three stdio values because that value cannot
+    express it: by the time it reaches the spawn layer a non-consuming pipe has
+    been folded down to ``DEVNULL``, and ``Popen`` leaves ``stdout`` and
+    ``stderr`` as ``None`` for ``DEVNULL`` just as it does for a borrowed
+    descriptor, so neither the child object nor the value distinguishes the two.
+    Funding the ``wait4`` path from this set is what keeps it from attaching a
+    reader to a stream cuprum does not own. The default covers every stream,
+    which is what a caller who omits the field and passes real ``PIPE``
+    sentinels means.
+
+    The fallback backend does not consult *pipes*: ``create_subprocess_exec``
+    attaches a reader only to the ``PIPE`` sentinel, and a raw descriptor
+    reaches the child with ``Process.stdout`` left ``None``, so the computed
+    stdio values already say everything it needs.
+    """
 
     argv: tuple[str, ...]
     stdin: int | None
@@ -60,6 +78,11 @@ class DirectProcessConfig:
     stderr: int | None
     env: cabc.Mapping[str, str] | None
     cwd: str | None
+    pipes: frozenset[PipeStream] = frozenset({
+        STDIN_STREAM,
+        STDOUT_STREAM,
+        STDERR_STREAM,
+    })
 
 
 def _close_waiter(
@@ -98,13 +121,22 @@ class _Wait4Process(asyncio.subprocess.Process):
         self,
         popen: subprocess.Popen[bytes],
         loop: asyncio.AbstractEventLoop,
+        pipes: frozenset[PipeStream],
     ) -> None:
-        """Wrap a spawned child before attaching its pipes to ``loop``."""
+        """Wrap a spawned child before attaching its pipes to ``loop``.
+
+        ``pipes`` is the set the spawn config named, and it is recorded rather
+        than re-derived: ``Popen`` sets ``stdout``/``stderr`` only for the
+        ``PIPE`` sentinel, leaving them ``None`` for ``DEVNULL`` and for a
+        borrowed descriptor alike, so the child object alone cannot say whether
+        cuprum holds a reader to attach.
+        """
         self._popen = popen
         # The inherited signal methods delegate to this transport. Popen offers
         # the same signalling interface, while this class keeps reaping local.
         self._transport = popen
         self._loop = loop
+        self._pipes = pipes
         self._returncode: int | None = None
         self._reap_task: asyncio.Task[int] | None = None
         self._resource_usage: ChildResourceUsage | None = None
@@ -126,12 +158,21 @@ class _Wait4Process(asyncio.subprocess.Process):
         return self._resource_usage
 
     async def connect_pipes(self) -> None:
-        """Attach the Popen pipes to asyncio readers and writers."""
-        if self._popen.stdout is not None:
+        """Attach the pipes cuprum owns to asyncio readers and writers.
+
+        Both conditions are required, though only the ``Popen`` one can be the
+        deciding factor here. A stream named in ``pipes`` but absent from the
+        ``Popen`` is the case the guard exists for: nothing was handed over to
+        connect. The converse — a child-side stream the resolution did not name
+        as a pipe — cannot arise, because ``Popen`` sets ``stdout``/``stderr``
+        only for the ``PIPE`` sentinel, and ``DEVNULL`` and a borrowed
+        descriptor leave them ``None``.
+        """
+        if STDOUT_STREAM in self._pipes and self._popen.stdout is not None:
             self.stdout = await self._connect_reader(self._popen.stdout)
-        if self._popen.stderr is not None:
+        if STDERR_STREAM in self._pipes and self._popen.stderr is not None:
             self.stderr = await self._connect_reader(self._popen.stderr)
-        if self._popen.stdin is not None:
+        if STDIN_STREAM in self._pipes and self._popen.stdin is not None:
             self.stdin = await self._connect_writer(self._popen.stdin)
 
     async def _connect_reader(self, pipe: typ.IO[bytes]) -> asyncio.StreamReader:
@@ -228,7 +269,7 @@ async def spawn_wait4_process(
 ) -> asyncio.subprocess.Process:
     """Spawn a direct POSIX child that owns its ``wait4`` resource usage."""
     loop = asyncio.get_running_loop()
-    process = _Wait4Process(_spawn_popen(config), loop)
+    process = _Wait4Process(_spawn_popen(config), loop, config.pipes)
     try:
         await process.connect_pipes()
     except BaseException:
@@ -241,7 +282,24 @@ async def spawn_wait4_process(
 async def spawn_direct_process(
     config: DirectProcessConfig,
 ) -> asyncio.subprocess.Process:
-    """Spawn a direct process using ``wait4`` where it can own the reap."""
+    """Spawn a direct process using ``wait4`` where it can own the reap.
+
+    The three stdio values reach the fallback exactly as the spawn layer
+    computed them. They must not be rewritten here: ``DEVNULL`` is what an
+    unread pipe target resolves to, and promoting it back to ``PIPE`` — because
+    the stream appears in *pipes* — would leave the parent holding a pipe
+    nobody reads, so a child writing past the buffer would hang in ``write``
+    instead of discarding its output. ``create_subprocess_exec`` attaches a
+    reader only to the ``PIPE`` sentinel itself; a raw descriptor passes
+    through to the child and leaves ``Process.stdout`` ``None``, exactly as
+    ``Popen`` does, so no value here needs translating for either backend.
+
+    Returns
+    -------
+    asyncio.subprocess.Process
+        The spawned child, wrapped by :class:`_Wait4Process` when ``wait4``
+        can own its reap and by asyncio's own transport otherwise.
+    """
     if wait4_resource_measurement_available():
         return await spawn_wait4_process(config)
     return await asyncio.create_subprocess_exec(

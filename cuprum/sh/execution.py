@@ -29,6 +29,9 @@ _DEFAULT_ERROR_HANDLING = "replace"
 __all__ = [
     "ExecutionContext",
     "StdinInput",
+    "StdinSource",
+    "StdinSourceError",
+    "StdinStream",
     "TimeoutExpired",
 ]
 
@@ -169,3 +172,95 @@ class StdinInput:
         if self.text is not None:
             return self.text.encode(ctx.encoding, ctx.errors)
         return self.data
+
+
+class StdinSourceError(Exception):
+    """Raised when a streaming stdin producer or its encoder fails.
+
+    A caller who supplies a :class:`StdinStream` sees failures from three
+    sources wrapped in this type: the producer raising while being pulled, the
+    producer yielding a value that is neither ``str`` nor ``bytes``, and the
+    incremental encoder rejecting a ``str`` chunk. The original exception is
+    chained as ``__cause__``, so the caller can still inspect it.
+
+    The child is terminated before this is raised, and the run's stdin
+    writer and pipe are finalized, so catching this type is enough to know
+    that no writer outlives the run. Cancellation is *not* wrapped: an
+    ``asyncio.CancelledError`` propagates unchanged, because it is a
+    control-flow signal rather than a source failure.
+    """
+
+
+type StdinSource = StdinInput | StdinStream
+"""Either a complete payload or a streaming producer."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class StdinStream:
+    """A library-owned, pull-after-drain producer for stdin.
+
+    Cuprum pulls one chunk from *chunks*, writes it to the child's stdin pipe,
+    and waits for that write to drain before pulling the next. That is what
+    lets a caller feed a child more data than they would ever hold in one
+    buffer: the payload is never materialized whole. What it bounds is how far
+    *ahead* the producer runs, not the size of a single chunk. While
+    ``drain()`` waits, the chunk just pulled and its encoded payload are still
+    in memory alongside the transport's write buffer and the OS pipe, so
+    retained memory is roughly the largest chunk the producer yields plus those
+    buffers. A caller who cares about peak memory should yield bounded-size
+    chunks.
+
+    The producer is advanced with ``aiter()``, so *chunks* may be any async
+    iterable. ``str`` chunks are encoded with the run's
+    :attr:`ExecutionContext.encoding` and :attr:`ExecutionContext.errors`,
+    incrementally, so a multi-byte character split across two chunks is
+    still encoded correctly. ``bytes`` chunks are written verbatim.
+
+    Cuprum owns the producer for the duration of the run. On every exit path
+    -- normal completion, producer failure, exceeding the timeout, and
+    cancellation -- it calls the iterator's ``aclose()`` when the producer
+    provides one, closes the pipe, and awaits ``wait_closed()``. A caller
+    therefore does not need to finalize their own generator; a caller must
+    not yield from a generator that something else is concurrently driving.
+
+    A child that closes its stdin early (``head`` is the canonical example)
+    is normal rather than an error: the resulting ``BrokenPipeError`` is
+    recorded as a ``stdin_error`` observation and the run continues to its
+    exit code. Only producer and encoder failures raise
+    :class:`StdinSourceError`.
+    """
+
+    chunks: cabc.AsyncIterable[str | bytes] | cabc.AsyncIterator[str | bytes]
+    """The async iterable or iterator whose chunks become the child's stdin."""
+
+
+def _resolve_stdin_source(
+    stdin: StdinSource | None,
+    ctx: ExecutionContext,
+) -> bytes | StdinStream | None:
+    """Resolve a caller's ``stdin=`` argument into what the spawn path needs.
+
+    A payload resolves here, exactly as it always has, so the encoding error
+    surfaces synchronously from ``run()`` rather than from inside the writer
+    task. A stream stays unresolved: pulling it is the writer's job, and
+    pulling it earlier would defeat the bound.
+
+    Parameters
+    ----------
+    stdin : StdinSource | None
+        The caller's argument, or ``None`` to inherit the parent's stdin.
+    ctx : ExecutionContext
+        The context whose encoding and error handling resolve a ``text``
+        payload.
+
+    Returns
+    -------
+    bytes | StdinStream | None
+        The encoded payload, the stream to pull, or ``None`` for inherited
+        stdin.
+    """
+    if stdin is None:
+        return None
+    if isinstance(stdin, StdinStream):
+        return stdin
+    return stdin.resolve(ctx)

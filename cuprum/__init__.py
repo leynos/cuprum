@@ -100,6 +100,10 @@ from cuprum.sh import (
     SafeCmd,
     SafeCmdBuilder,
     StdinInput,
+    StdinSource,
+    StdinSourceError,
+    StdinStream,
+    StdioTarget,
     TimeoutExpired,
 )
 
@@ -166,6 +170,10 @@ __all__ = [
     "SafeCmdBuilder",
     "ScopeConfig",
     "StdinInput",
+    "StdinSource",
+    "StdinSourceError",
+    "StdinStream",
+    "StdioTarget",
     "TimeoutExpired",
     "UnknownProgramError",
     "after",

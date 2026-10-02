@@ -496,6 +496,15 @@ full_name = [
 ]
 reason = "Called by TracingHook.record_line_stream_event, which callers register through observe_line_stream."
 
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
+    "cuprum.sh.stdio._reject_unknown_kind",
+    "cuprum.sh.stdio._reject_unexpected_payload",
+    "cuprum.sh.stdio._normalize_payload",
+]
+reason = "Called only from StdioTarget.__post_init__, which the dataclass machinery invokes after __init__ and no source line names; StdioTarget is constructed directly (and by RunOutputOptions) rather than through a factory Skylos can follow."
+
 [build-system]
 requires = ["uv_build>=0.9.18,<0.13.0"]
 build-backend = "uv_build"

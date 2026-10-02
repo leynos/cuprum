@@ -435,3 +435,410 @@ surface are unchanged for importers. `cuprum._line_stream` follows the same
 package layout. Its `coordinator` submodule holds the run, teardown, and
 coordination steps, so tests that replace one of their collaborators patch
 `cuprum._line_stream.coordinator`.
+
+## Addendum (2026-09-27): split streaming stdin out of `_subprocess_stdin`
+
+The #445 work made the stdin pipe handle a second kind of source: an async
+producer (`StdinStream`) pulled one chunk at a time, as distinct from the
+complete payload (`StdinInput`) the module already wrote in one go. The
+encoder, the per-chunk helpers, and the source-error construction that came
+with it pushed `cuprum/_subprocess_stdin.py` to 451 lines, back over the
+400-line module ceiling the 2026-09-14 addendum had cleared.
+
+The seam is the one the module's own docstring already drew.
+`cuprum/_subprocess_stdin.py` keeps what the decision outcome above assigns it —
+`_emit_stdin_error`, `_write_stdin`, `_close_stdin`, `_cancel_stdin_writer`,
+the `cuprum.stdin` logger, and `_spawn_stdin_writer`, which stays the single
+entry point both kinds of source are started from.
+`cuprum/_subprocess_stdin_stream.py` now owns the producer path:
+`_write_stdin_stream`, `_StdinCodec` and `_stdin_codec`, the `_StreamSink`
+bundle, `_write_chunk`, `_flush_encoder`, `_finalize_stdin_source`, and the
+`_stdin_source_error` / `_source_error` pair that builds the public
+`StdinSourceError`.
+
+The dependency runs one way. The streaming module imports the pipe primitives
+(`_close_stdin`, `_emit_stdin_error`) from `_subprocess_stdin` at module scope;
+the dispatcher in `_subprocess_stdin` imports `_write_stdin_stream` inside the
+function body. A module-scope import in both directions would close a cycle at
+load time, when neither module is complete, so the deferred import is
+deliberate rather than incidental.
+
+Ownership of the public surface is unchanged: `cuprum.sh` still exports
+`StdinStream` and `StdinSourceError`, and the type a producer failure raises is
+still resolved through `_subprocess_context._sh_module()`. The three spawn call
+sites that pass an `ExecutionContext` to `_stdin_codec` —
+`cuprum/_subprocess_execution.py`, `cuprum/_subprocess_stream_run.py`, and
+`cuprum/_line_stream/spawn.py` — now import it from the new module. No public
+API changes, and the module-size suppression remains unnecessary.
+
+## Addendum (2026-09-27): split the spawn binding and the child-exit wait
+
+The same #445 work carried two more branch-introduced overruns. Resolving stdio
+and opening the caller's target files grew `cuprum/_subprocess_execution.py` to
+523 lines, and the streaming-source and early-close work grew
+`cuprum/_subprocess_wait.py` to 438; against `origin/main` the two modules sit
+at 363 and 392. Both crossed the repository's 400-line `max-module-lines`
+ceiling, whose suppression Option B removed, so two further extractions at
+cycle-safe seams brought them to 367 and 327.
+
+`cuprum/_subprocess_spawn.py` now owns everything the parent does around a
+spawn without consuming a stream: the mapping of a resolved stdio onto the
+value the spawn layer receives (`_output_stdio`, `_stdin_stdio`), the opening
+of each cuprum-owned target file immediately before the fork and the closing of
+cuprum's copy immediately after (`_open_owned_stdio`, `_close_owned_stdio`),
+and the spawn call itself (`_spawn_subprocess`). Its ownership rule is narrow
+on purpose: only library-owned resources are closed. A path target opens the
+file, hands the descriptor to the child, and closes cuprum's copy in a
+`finally` immediately after the spawn returns, whereas a borrowed descriptor or
+file object is never closed — the caller's own later use of it is the only
+witness that the rule held, since no exit code can distinguish a close cuprum
+owed from one it did not. A borrowed file object is still flushed before the
+spawn, by `_subprocess_spawn._flush_borrowed_stdio`, so buffered caller-side
+bytes reach the child. That flush sits beside the fork rather than in the
+resolver because resolution and the fork coincide only on the `run()` path:
+`lines()` resolves its bindings when it is called and forks at first iteration,
+so a resolver-side flush would drop anything the caller wrote in between. The
+mapping is where the two kinds are told apart, and that is why pipe-ness
+travels as an explicit `pipes` frozenset. `Popen` treats `PIPE`, `DEVNULL`, a
+raw `int`, and a file object differently, but it exposes a parent-side stream
+object only for `PIPE`: the other three all leave `Popen.stdin`,
+`Popen.stdout`, and `Popen.stderr` as `None`, so the `wait4` path cannot
+recover pipe-ness from the child object it holds. The computed value cannot
+supply the answer either, because a pipe nothing consumes has already been
+folded down to `DEVNULL` and is indistinguishable there from a borrowed
+descriptor the caller owns. Pipe-ness is therefore the one piece of the
+resolution the value cannot express for itself.
+
+`cuprum/_subprocess_deadline.py` now owns the child-exit half of ending a run:
+`_wait_for_exit_code`, which awaits the process and terminates it on
+cancellation without a timeout of its own, and
+`_wait_for_exit_code_within_timeout`, which applies the deadline and translates
+expiry into the public timeout surface. The other half — cancelling the stdin
+writer and draining the stream consumers exactly once — deliberately stayed in
+`cuprum/_subprocess_wait.py`. Nothing in the new module touches the parent's
+stream tasks, which is what keeps a reader wedged on a pipe from delaying the
+termination that lets it reach EOF. The split is also where the earlier
+addenda's division of labour is preserved unchanged: both helpers terminate the
+child but never drain, so the caller's single drain through
+`_drain_stream_consumers` still reaches EOF, and a non-positive deadline still
+expires immediately rather than racing `asyncio.timeout`.
+
+The seam was drawn on the drain's other side for a test-visible reason.
+`cuprum/unittests/test_subprocess_drain_logging.py` pins
+`_DRAIN_LOGGER = "cuprum._subprocess_wait"`, and `logging.getLogger(__name__)`
+resolves to the module that _defines_ the helper, so moving the drain's debug
+calls would have broken that interface even though the behaviour would have
+been identical. The child-exit half is logger-name-neutral by construction:
+`_report_timeout_expiry`, which the deadline module calls for both expiry
+routes, takes the `_StageObservation` rather than a logger, so the timeout
+records it emits are attributed to the observation the caller supplied and not
+to the defining module.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: both moved names are re-exported from their original modules, so
+`_subprocess_execution` still resolves `_spawn_subprocess` and
+`_subprocess_wait` still resolves `_wait_for_exit_code` and
+`_wait_for_exit_code_within_timeout`. Direct private imports and monkeypatch
+targets therefore resolve the same names as before, and the single-command run,
+the line-stream coordinator, and the timeout test modules each keep one import
+path. The design and developer guides' §8.1.5 rosters now name both modules,
+correcting the earlier statements that placed the wait with the drain and the
+spawn with the orchestration module; the 2026-09-27 stdin addendum above named
+neither. No public API changes, and the module-size suppression remains
+unnecessary.
+
+## Addendum (2026-09-27): the stdin-writer rendezvous
+
+The same #445 work found a third ending, and it belonged to neither module the
+previous addendum had just separated. A producer that failed while the child
+was still running was reported as a slow child: the writer ran alongside the
+exit wait, but nothing raced them, so a producer that died at once was noticed
+only when the child's own deadline expired and the caller received
+`TimeoutExpired` about a failure already known. Awaiting the child first is
+correct as long as a failed producer also stops the child, and it does not —
+the writer's teardown closes the pipe, so a child that reads to EOF and then
+works, or one that never reads at all, keeps running. That is what a
+`head`-like child ignoring its input produces, not a hypothetical shape.
+
+`cuprum/_subprocess_rendezvous.py` now owns that decision.
+`_await_exit_or_writer_failure` waits on the exit wait and the stdin writer
+together and returns the exit only once it is the sole survivor, so a writer
+failure ends the run immediately. The resolution is deliberately narrow: only a
+writer that _failed_ is an outcome, and one that merely _finished_ first is the
+ordinary way a stream ends — a producer exhausted, the pipe closed, the child
+still draining — so the run continues to the child's exit as before. No
+termination policy is restated. The exit wait is cancelled, and
+`_wait_for_exit_code`'s own cancellation handler already escalates through
+`_terminate_all_shielded`.
+
+The module exists because ending a run divides in three. The child's deadline is
+`_subprocess_deadline`'s and the parent's task reconciliation is
+`_subprocess_wait`'s, but "end because the input source died" is neither the
+child's fault nor the parent task set's, so neither is the right place to
+notice it. The ceiling made the same demand from the other side: adding the
+race to `cuprum/_subprocess_wait.py` took it to 449 lines against the
+repository's 400-line `max-module-lines`, whose suppression Option B removed.
+Unlike the two overruns recorded above, this one was never committed — the
+extraction was made in the same working session that introduced the race — so
+the module reads 328 before and 336 after on the branch, re-exporting the moved
+name. This was the third pass at the same ceiling in one milestone, and it
+confirms the lesson the earlier addendum drew: a milestone adding _any_
+behaviour to a module already near the line must budget for the extraction, not
+just for the behaviour.
+
+The private import compatibility rule from the 2026-09-16 addendum applies
+unchanged: `_subprocess_wait` re-exports `_await_exit_or_writer_failure` from
+the new module, and all three call sites — `_subprocess_execution`, the
+line-stream coordinator, and `_subprocess_stream_run` — import it from there as
+before. The helper takes its exit wait already constructed rather than
+resolving it by name, which is what keeps the existing monkeypatch seams
+working: `test_line_stream_exit.py` patches
+`_wait_for_exit_code_within_timeout` on the coordinator, and
+`test_safe_cmd_timeout.py` patches it with process doubles, so each caller must
+still resolve that name from its own module namespace for the patch to land.
+
+The design guide's §8.1.5 roster now names the new module, and this addendum is
+the statement its `_subprocess_wait.py` entry points at for the race. No public
+API changes, and the module-size suppression remains unnecessary.
+
+## Addendum (2026-09-27): two more `cuprum.sh` submodules
+
+The 2026-09-25 addendum's roster above is now incomplete, and one of its
+entries is wrong. The same #445 work that split the private subprocess modules
+also crossed the ceiling in two public-facing ones, and the splits are
+unavoidable rather than discretionary because `max-module-lines` is an enabled
+rule rather than a suppressible one.
+
+`cuprum/sh/output.py` reached 584 lines against the 400-line ceiling. The
+overrun was branch-introduced: against `origin/main` the module sits at 332
+lines and holds no stdio vocabulary at all, because `StdioTarget` is new in
+this work. `cuprum/sh/stdio.py` now owns that vocabulary — `StdioTarget`, its
+four-variant kind, and the validation policing it (`_validate_stdio_targets`,
+the `_reject_*` helpers, and `_share_one_owned_path`). `output.py` keeps
+`RunOutputOptions` and `IOOptions` and stands at 363 lines. It re-exports
+`StdioTarget` and `_validate_stdio_targets`, so `cuprum.sh.output` remains a
+usable import path for both.
+
+`cuprum/sh/safe_cmd.py` is the other overrun, and its shape differs. Against
+`origin/main` it sits at 398 lines — two short of the ceiling with no
+suppression — so the #445 work crossed the cap by adding 52 lines to a module
+already at the line. The extraction took `Pipeline`, which at 138 lines was the
+largest cohesive seam available rather than the thing that had grown; the same
+class was 138 lines on `origin/main`. `cuprum/sh/pipeline.py` now owns it,
+leaving `SafeCmd` and `SafeCmdBuilder` behind, and the two modules reference
+each other. That reciprocal reference is why `Pipeline` is bound by a
+module-level import at the _bottom_ of `safe_cmd.py` rather than at the top or
+inside `__or__`: `SafeCmd.__or__` is annotated `-> "Pipeline"`, and the public
+signatures are introspected with `typing.get_type_hints`, which evaluates a
+quoted annotation against the defining module's namespace alone. A
+function-local import would leave that annotation unresolvable from the first
+composition onwards, and a top-of-file import would ask `pipeline` to import a
+`SafeCmd` that did not exist yet, closing the cycle at load time.
+
+So the roster above reads correctly except in two places. It omits
+`cuprum/sh/stdio.py` and `cuprum/sh/pipeline.py`, and its `cuprum/sh/output.py`
+and `cuprum/sh/safe_cmd.py` entries describe the code as it stood before these
+splits: `output.py` no longer holds the standard-stream vocabulary, and
+`safe_cmd.py` no longer holds `Pipeline`. The corrected roster is:
+
+- `cuprum/sh/argv.py` — argv construction (`build_argv`, `_ArgValue`,
+  `_stringify_arg`, `_serialize_kwargs`).
+- `cuprum/sh/execution.py` — `ExecutionContext`, `TimeoutExpired`,
+  `StdinInput`, and the streaming-stdin types this work added: `StdinStream`
+  (the producer), `StdinSource` (the `StdinInput | StdinStream` union callers
+  pass), and `StdinSourceError` (what a producer or encoder failure raises).
+  All three joined the module's `__all__` and the `cuprum.sh` re-export list
+  alongside `StdinInput`, which is why this roster entry — not just the
+  addendum prose — had to grow.
+- `cuprum/sh/results.py` — `CommandResult` and `PipelineResult`.
+- `cuprum/sh/output.py` — `RunOutputOptions` and `IOOptions`.
+- `cuprum/sh/stdio.py` — `StdioTarget` and the validation policing it.
+- `cuprum/sh/safe_cmd.py` — `SafeCmd` and `SafeCmdBuilder`.
+- `cuprum/sh/pipeline.py` — `Pipeline`, which the package re-exports, plus
+  the deprecated flat `capture`/`echo` adapter `_resolve_pipeline_output` and
+  its `_DeprecatedOutputFlags` payload. Those two moved here from `output.py`
+  when the rebase onto `origin/main` pushed that module back over the ceiling:
+  `Pipeline.run`/`run_sync` are their only callers, so colocating them with the
+  class costs nothing and leaves `output.py`'s documented standard-stream
+  options untouched.
+- `cuprum/sh/factory.py` — the `make()` builder factory.
+
+The public surface is unchanged: `cuprum.sh` still exports `StdioTarget`,
+`Pipeline`, and (for internal callers) the two relocated helpers under the same
+names with the same object identity, and the wheel snapshot is regenerated for
+the two new modules. No public API changes, and the module-size suppression
+remains unnecessary.
+
+## Addendum (2026-10-01): a third `cuprum.sh` split, for the same ceiling
+
+The 2026-09-27 addendum records `cuprum/sh/stdio.py` taking `StdioTarget` and
+"the validation policing it" when `output.py` crossed the ceiling. That
+description was accurate when written, and is now out of date for the same
+reason as its predecessors: this round's review fixes pushed `stdio.py` itself
+to 427 lines, against the same unsuppressible `max-module-lines` rule.
+
+The overrun is branch-introduced. Against `origin/main` the module does not
+exist at all — it is new in this work — so nothing here is a pre-existing
+violation being inherited; it is the same class of growth the two prior addenda
+record, one module further along.
+
+The split follows the seam the 2026-09-27 addendum did not have to name,
+because at that point the two responsibilities were still in one file. A
+`StdioTarget` _is_ a statement about one target: which of the four variants it
+is, which payload that variant may carry, and how a `path` payload is
+normalized. Policing a _combination_ of targets is a statement about a whole
+run: two answers to where stdin comes from, one stream told to be both captured
+and redirected, one file named for both streams. The first is per-variant and
+answerable from a single target; the second needs the assembled
+`RunOutputOptions` and cannot be answered from any one target at all.
+
+`cuprum/sh/stdio_rules.py` now owns the second. It holds
+`_validate_stdio_targets`, the four `_reject_*` helpers,
+`_share_one_owned_path`, and the `_STDIN_KINDS` set those rules consult.
+`cuprum/sh/stdio.py` keeps the vocabulary and the per-variant rules and falls
+from 427 to 246 lines; `stdio_rules.py` is 213. The corrected roster entries
+are:
+
+- `cuprum/sh/stdio.py` — `StdioTarget` and the per-variant rules: which payload
+  each kind carries, and the normalization a `path` payload undergoes.
+- `cuprum/sh/stdio_rules.py` — the rules policing _combinations_ of targets
+  (`_validate_stdio_targets` and the `_reject_*` helpers, including the
+  contested-stdin guard), which read a whole `RunOutputOptions`. Split out of
+  `stdio.py` when the #445 review fixes pushed that module to 427 lines against
+  the 400-line ceiling; `output.py` re-exports `_validate_stdio_targets`, so
+  `__post_init__` still calls it by its old name.
+
+The public surface is unchanged, and so is the call graph. `output.py` imports
+`_validate_stdio_targets` from the new module and re-exports it under the same
+name, so `RunOutputOptions.__post_init__` — which names that helper directly —
+is untouched and the rules still fire at construction rather than at spawn.
+`_command_internals.py` now imports `_reject_contested_stdin` from
+`stdio_rules.py` instead of `stdio.py`; it is the one rule in the module that
+cannot run at construction and is therefore called from the run's preparation.
+The new module imports `StdioTarget`, `PipeStream`, and `RunOutputOptions` only
+under `typing.TYPE_CHECKING`, so it adds no runtime import edge: no cycle is
+introduced between `stdio`, `stdio_rules`, and `output`. The wheel-manifest
+snapshot is regenerated for the new module, and `cuprum.sh`'s exports are
+unchanged. No public API changes, and the module-size suppression still remains
+unnecessary.
+
+## Addendum (2026-10-02): RFC 0001's seam, reviewed against the rendezvous
+
+`origin/main` advanced by one commit, `a592b50c`, while this branch was open:
+RFC 0001 proposes an execution-interception backend that would lift the spawn
+and "the wait that follows it" out of `_execute_subprocess()` and into a
+`_DirectBackend.execute()`. The RFC is `Proposed`, no task depends on it, and
+this branch ships no part of it. It is reviewed here because this branch
+changed what the wait _does_, and the review's result is that the RFC needs no
+amendment — recorded so the next implementer does not have to reach that
+conclusion independently.
+
+Three statements in the RFC remain accurate at this branch's head, and they are
+checked rather than assumed. The entry point is unchanged:
+`_execute_subprocess()` in `cuprum/_subprocess_execution.py` still takes the
+pre-spawn readings and calls `_spawn_subprocess()`. The ordering the RFC
+depends on is intact: `_spawn_subprocess()` returns the process, and the caller
+then emits `start` with the real `pid`, waits, emits `exit`, and assembles the
+`CommandResult`. The isolation claim holds too — the moved code _is_ already
+behind `_spawn_subprocess()`.
+
+What the RFC's step 1 would lift is "the spawn, the wait that follows it, and
+the two reads of the live process": `start` with the real `pid`, and the rusage
+measurement off the process object. It does not name the wait, but the phrase
+resolves against the code without ambiguity — the wait `_execute_subprocess()`
+awaits after the spawn is `_await_direct_completion()`, and the RFC's own
+sentence that "the wait is what drives the streams, the timeout and the idle
+monitor" describes exactly the dispatch, timeout translation and idle-monitor
+settle that function owns.
+
+Underneath it, this branch put a _caller_ around the child's exit wait, in
+`cuprum/_subprocess_rendezvous.py`, which races that wait against the stdin
+writer's task. Two of the three call sites sit below the function the RFC would
+lift: `_await_direct_completion()` dispatches to
+`_run_subprocess_without_streams()` for a direct run and to
+`_run_subprocess_with_streams()` for one that consumes stdout or stderr. The
+streaming branch reaches the race one level further down, through
+`_wait_for_streamed_process_exit()` in `cuprum/_subprocess_stream_run.py`, and
+both leaves construct the exit wait and hand it to the race. A backend that
+lifts `_await_direct_completion()` therefore lifts the race for both.
+
+The third call site does not sit below it, and that is worth naming rather than
+eliding. Line iteration is a parallel entry point, not a branch of the direct
+one: `cuprum/_line_iteration.py` calls `_start_line_stream_run()` and
+`_coordinate_line_stream()`, and `cuprum/_line_stream/coordinator.py` calls
+`_spawn_subprocess()` itself. Neither `_execute_subprocess()` nor
+`_await_direct_completion()` is on that path, and the race is reached from
+`_wait_for_line_stream_exit()` inside the coordinator. So the RFC's "one branch
+in `_execute_subprocess()`" covers every run that goes through
+`_execute_subprocess()` — direct and streamed, which is the case it argues for
+— but line iteration is outside its reach entirely.
+
+That is not a defect, because the RFC is explicit about its iteration boundary
+and answers for it with an error rather than silence: "The first iteration
+covers direct commands only; a pipeline whose scope has a substitute backend
+raises `NotImplementedError`". The RFC does not name line iteration in that
+non-goal, so the honest reading is that a `lines()` run is a path the proposal
+leaves unaddressed rather than one it resolves. The resolution above should
+therefore not be read as "one seam covers every run".
+
+The writer is the part the RFC does not mention, and it does not need to.
+`cuprum/_subprocess_stdin.py` is byte-identical at this branch's exclusive
+boundary `c65d843c` and at `a592b50c`, and main's
+`_run_subprocess_without_streams()` already spawned a writer through
+`_spawn_stdin_writer()` and already reconciled it after the exit. So the RFC
+could leave the writer unmentioned and still be right, because at main the
+writer was already inside the thing it calls "the wait that follows" the spawn.
+
+What this branch added to the writer's _lifecycle_ is a bounded settle,
+`_settle_stdin_writer()`, so that a producer parked in `anext` cannot outlast
+the run's own deadline. That too sits below the wait and follows it, so it is
+lifted by the same move. Nothing here constrains the RFC's passthrough case,
+which it lists as a first-class goal: a `_DirectBackend.execute()` that owns
+the spawn and the wait owns the race and the settle by construction.
+
+This addendum therefore records a _review_, not a design change, and it
+resolves rather than defers: RFC 0001's "Where it is called" section is
+accurate against this branch's head, and its implementer may proceed as
+written. The only thing worth carrying forward is the resolution above — "the
+wait" is `_await_direct_completion()`, not the child's exit wait it dispatches
+to, and lifting it brings the stdin-writer arbitration along.
+
+## Addendum (2026-10-02): split the chunk write out of `_subprocess_stdin_stream`
+
+The 2026-09-27 addendum above records streaming stdin splitting out of
+`_subprocess_stdin`. The module that split produced has since split once more,
+and the second split was not recorded here when it landed — this addendum
+closes that gap rather than leaving it to be rediscovered from the imports.
+
+The seam is the one the code already drew. `cuprum/_subprocess_stdin_write.py`
+owns _how_ a chunk reaches the pipe: the `_StreamSink`, the per-chunk write,
+the incremental encoder and its flush, and the predicate that decides whether a
+pipe error came from the child closing its end — none of which needs to know
+about producers or about error types. `cuprum/_subprocess_stdin_stream.py`
+keeps the pull loop and the failure handling that turns those events into the
+public `StdinSourceError`. The two halves had already separated when the
+source-failure fix landed: once a producer's own `OSError` had to be told apart
+from the pipe's, the write side and the pull side stopped sharing state.
+
+The precedent the 2026-09-27 addenda set is that each of these splits is
+recorded with an overrun figure. None of the ordinary ones is available here.
+Across every commit that holds `cuprum/_subprocess_stdin_stream.py` its peak is
+353 lines, and the two modules stand at 347 and 156 now; neither was near the
+ceiling once the split landed. The overrun itself was a working-tree
+measurement, and the working tree it was taken in is not recoverable from any
+commit — the same limitation the execution plan records for peak figures
+generally.
+
+What _is_ recoverable is a bound that decides the question the overrun figure
+would have answered. Replaying the split commit's own diff shows that 79 of the
+156 lines in the new module are lines that same commit deleted from the stream
+module, so the code would have grown the stream module by at least those 79
+lines had it stayed: 327 + 79 = 406, already past the 400-line ceiling before
+counting any of the 26 lines the commit did not relocate. That is a
+demonstration from the commit rather than a working-tree figure, and it holds
+however the peak is read.
+
+The split changed no public surface. `cuprum/_subprocess_stdin_stream.py`
+reaches the write side as `_write`, and the maturin wheel snapshot gained
+exactly one line for the new module, which is the same one-line-per-module
+shape every other split here records.

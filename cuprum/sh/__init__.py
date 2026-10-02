@@ -10,7 +10,9 @@ The implementation is split across submodules by responsibility:
 - ``execution`` holds the execution context, stdin, and timeout types.
 - ``results`` holds ``CommandResult`` and ``PipelineResult``.
 - ``output`` holds ``RunOutputOptions`` and ``IOOptions``.
-- ``safe_cmd`` holds the ``SafeCmd`` and ``Pipeline`` execution primitives.
+- ``stdio`` holds the ``StdioTarget`` standard-stream binding vocabulary.
+- ``safe_cmd`` holds the ``SafeCmd`` execution primitive.
+- ``pipeline`` holds the ``Pipeline`` composition primitive.
 - ``factory`` holds the ``make`` builder factory.
 
 Every name previously defined or imported by the former ``cuprum/sh.py``
@@ -62,21 +64,29 @@ from cuprum.sh.execution import _DEFAULT_ERROR_HANDLING as _DEFAULT_ERROR_HANDLI
 from cuprum.sh.execution import (
     _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE as _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
 )
-from cuprum.sh.execution import ExecutionContext, StdinInput, TimeoutExpired
+from cuprum.sh.execution import (
+    ExecutionContext,
+    StdinInput,
+    StdinSource,
+    StdinSourceError,
+    StdinStream,
+    TimeoutExpired,
+)
 from cuprum.sh.execution import _CwdType as _CwdType
 from cuprum.sh.execution import _EnvMapping as _EnvMapping
 from cuprum.sh.execution import cabc as cabc
 from cuprum.sh.factory import make
-from cuprum.sh.output import IOOptions, RunOutputOptions
-from cuprum.sh.output import _DeprecatedOutputFlags as _DeprecatedOutputFlags
-from cuprum.sh.output import _resolve_pipeline_output as _resolve_pipeline_output
+from cuprum.sh.output import IOOptions, RunOutputOptions, StdioTarget
 from cuprum.sh.output import _validate_convenience_flags as _validate_convenience_flags
 from cuprum.sh.output import sinks as sinks
 from cuprum.sh.output import typ as typ
 from cuprum.sh.output import warnings as warnings
+from cuprum.sh.pipeline import Pipeline
+from cuprum.sh.pipeline import _DeprecatedOutputFlags as _DeprecatedOutputFlags
+from cuprum.sh.pipeline import _resolve_pipeline_output as _resolve_pipeline_output
 from cuprum.sh.results import CommandResult, PipelineResult
 from cuprum.sh.results import dc as dc
-from cuprum.sh.safe_cmd import Pipeline, SafeCmd, SafeCmdBuilder
+from cuprum.sh.safe_cmd import SafeCmd, SafeCmdBuilder
 from cuprum.sh.safe_cmd import asyncio as asyncio
 from cuprum.sinks import GitHubActionsSink as GitHubActionsSink
 
@@ -91,6 +101,10 @@ __all__ = [
     "SafeCmd",
     "SafeCmdBuilder",
     "StdinInput",
+    "StdinSource",
+    "StdinSourceError",
+    "StdinStream",
+    "StdioTarget",
     "TimeoutExpired",
     "UnknownProgramError",
     "build_argv",

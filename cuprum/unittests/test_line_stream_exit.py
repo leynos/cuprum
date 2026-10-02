@@ -174,10 +174,22 @@ class _FailedExitTestDouble:
 
 
 def _failed_run(double: _FailedExitTestDouble) -> _LineStreamRun:
-    """Build the smallest run shape the failed-exit cleanup needs."""
+    """Build the smallest run shape the failed-exit cleanup needs.
+
+    ``stdin_task`` is ``None`` so the exit race takes its no-writer branch and
+    drives the patched wait directly: this module's cases are about what a
+    *failed exit wait* does, not about the race, which
+    ``test_safe_cmd_stdin_stream.py`` covers against a real child.
+
+    Returns
+    -------
+    _LineStreamRun
+        The minimal run, cast from a namespace to the shape the noexcept
+        cleanup path reads.
+    """
     run = types.SimpleNamespace(
         process=types.SimpleNamespace(pid=123),
-        tasks=types.SimpleNamespace(discard_on_cancel=asyncio.Event()),
+        tasks=types.SimpleNamespace(discard_on_cancel=asyncio.Event(), stdin_task=None),
         telemetry=types.SimpleNamespace(emit=double.emit),
     )
     return typ.cast("_LineStreamRun", run)

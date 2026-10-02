@@ -58,12 +58,14 @@ from cuprum._sink_lifecycle import (
     _outcome_for_result,
     _SinkBracket,
 )
+from cuprum._stdio_plan import _resolve_stdio
 from cuprum._subprocess_execution import (
     _execute_subprocess,
     _SubprocessExecution,
 )
 from cuprum._subprocess_streams import _resolve_stream_sink
 from cuprum.context import EnvMode, current_context
+from cuprum.sh.stdio_rules import _reject_contested_stdin
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import (
@@ -71,6 +73,7 @@ if typ.TYPE_CHECKING:
         ExecutionContext,
         RunOutputOptions,
         SafeCmd,
+        StdinStream,
     )
     from cuprum.sinks import base as sinks
 
@@ -102,7 +105,13 @@ class _ExecutionState:
 
     context: ExecutionContext
     output: RunOutputOptions
-    stdin_data: bytes | None
+    # A payload already resolved against the context's encoding, a producer the
+    # writer pulls during the run, or ``None`` for the parent's own stdin.
+    # ``SafeCmd.run``/``lines`` resolve the payload half before constructing
+    # this bundle, so nothing downstream re-encodes a ``StdinInput``; the stdio
+    # plan and the stream bindings are resolved from it, together with
+    # ``output``'s targets, in ``_build_subprocess_execution``.
+    stdin_data: bytes | StdinStream | None
     timeout: float | None
 
 
@@ -160,11 +169,34 @@ def _build_subprocess_execution(
     session's log, so it has to be part of the bundle before the consumers
     are built.
 
+    Stdio is resolved here rather than in the state, because this is the first
+    point at which the run's *output options* and its *stdin source* are both
+    in hand: ``_ExecutionState`` carries the source and the options but was
+    built by ``SafeCmd.run`` before the idle monitor and the sink session
+    existed, and a redirected stream has to be resolved against whether
+    anything still needs to read it.
+
+    Being the first point where both are in hand is also what makes this the
+    place to check that they agree. ``RunOutputOptions`` validates its own
+    targets when it is constructed, but whether the run *also* carries a stdin
+    source is not known there — the source arrives on the run call, which is
+    what built the state. Establishing that the two answer the same question
+    once is cheap; discovering it from a caller who watched their explicit
+    ``inherit()`` lose to a payload is not.
+
     Returns
     -------
     _SubprocessExecution
         The resolved execution bundle, ready for ``_execute_with_hooks``.
-    """
+
+    Raises
+    ------
+    ValueError
+        If the run's output options name an inherited stdin while its
+        ``stdin=`` argument supplies a source, so the two disagree about where
+        the child's input comes from.
+    """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from the stdio checker.
+    _reject_contested_stdin(state.output.stdin, has_source=state.stdin_data is not None)
     return _SubprocessExecution(
         cmd=cmd,
         ctx=state.context,
@@ -176,7 +208,7 @@ def _build_subprocess_execution(
         sink_session=sink_session,
         timeout=state.timeout,
         observation=observation,
-        stdin_data=state.stdin_data,
+        stdio=_resolve_stdio(state.stdin_data, state.output),
         on_line=state.output.on_line,
         # Built here, during the parent's own preparation, but armed by the run
         # itself, once the child is actually running: everything that precedes
