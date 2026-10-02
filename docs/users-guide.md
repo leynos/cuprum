@@ -255,13 +255,19 @@ off.
 
 Capture and echo read from a parent-side pipe, so they cannot be combined with
 a redirected stream; `RunOutputOptions` rejects the combination at construction
-rather than silently choosing one. `stdin` is the exception in the other
-direction: it accepts only `pipe()` and `inherit()`, because the input itself
-arrives on `SafeCmd.run`'s `stdin=` argument, which is where the encoding is
-applied and a producer is pulled. `SafeCmd.lines()` requires stdout to be a
-pipe for the same reason — there is no parent-side stream to iterate when
-stdout goes to a file — and rejects a redirected stdout; use `SafeCmd.run` for
-that case.
+rather than silently choosing one. `on_line` and idle observation are not
+rejected that way, because a pipe is not what they require: neither is an error
+when the stream is redirected, but neither sees anything either. `on_line`
+simply receives no lines from a redirected stream, and idle reporting has no
+data to report from it — only piped streams are observed. Request a redirect
+when the child's output should land somewhere other than the parent, and line
+observation when it should be inspected in the parent; the two are alternatives.
+`stdin` is the exception in the other direction: it accepts only `pipe()` and
+`inherit()`, because the input itself arrives on `SafeCmd.run`'s `stdin=`
+argument, which is where the encoding is applied and a producer is pulled.
+`SafeCmd.lines()` requires stdout to be a pipe for the same reason — there is
+no parent-side stream to iterate when stdout goes to a file — and rejects a
+redirected stdout; use `SafeCmd.run` for that case.
 
 <!-- tested-example: redirect-stdout-to-a-file -->
 
