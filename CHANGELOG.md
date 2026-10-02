@@ -358,22 +358,22 @@
   ([#375](https://github.com/leynos/cuprum/issues/375)).
 - **Byte-exact result mode:** `SafeCmd.run_bytes()` / `run_bytes_sync()` and
   `Pipeline.run_bytes()` / `run_bytes_sync()` return a subprocess's output as
-  the child's own bytes, through `BytesCommandResult` and `BytesPipelineResult`.
-  The new classes declare the same fields as `CommandResult` and
-  `PipelineResult` — measurements included — except that `stdout` and `stderr`
-  are `bytes | None`, so a binary payload survives the round trip instead of
-  being decoded with a lossy error handler. Capture is the only thing the mode
-  changes: text stays the default, `run()` never returns bytes and
-  `run_bytes()` never returns text, echo sinks and idle heartbeats behave as
-  they do in text mode, and a timeout still carries partial output in the same
-  field. A caller-supplied `RunOutputOptions.on_line` is refused with
-  `ValueError` before the child spawns, because a decoded-text callback beside
-  a byte-exact capture would be a second, contradictory contract for one
-  stream; structured observation registered with `sh.observe()` is unaffected
-  and still receives decoded lines, since capture and line emission travel on
-  separate channels. An external cancellation re-raises
-  `asyncio.CancelledError` rather than being reported as a timeout
-  ([#444](https://github.com/leynos/cuprum/issues/444)).
+  the child's own bytes, through `BytesCommandResult` and
+  `BytesPipelineResult`. The new classes declare the same fields as
+  `CommandResult` and `PipelineResult` — measurements included — except that
+  `stdout` and `stderr` are `bytes | None`, so a binary payload survives the
+  round trip instead of being decoded with a lossy error handler. Capture is
+  the only thing the mode changes: text stays the default, `run()` never
+  returns bytes and `run_bytes()` never returns text, echo sinks and idle
+  heartbeats behave as they do in text mode, and a timeout still carries
+  partial output in the same field. A caller-supplied
+  `RunOutputOptions.on_line` is refused with `ValueError` before the child
+  spawns, because a decoded-text callback beside a byte-exact capture would be
+  a second, contradictory contract for one stream; structured observation
+  registered with `sh.observe()` is unaffected and still receives decoded
+  lines, since capture and line emission travel on separate channels. An
+  external cancellation re-raises `asyncio.CancelledError` rather than being
+  reported as a timeout ([#444](https://github.com/leynos/cuprum/issues/444)).
 
 ### Breaking changes
 
