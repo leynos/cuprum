@@ -720,6 +720,20 @@ escalation, not a workaround.
       line that reads like a pass while meaning no data was retrieved. It
       was discarded, and the re-poll asserted a non-empty response and the
       presence of all twelve contexts before concluding anything.
+- [x] (2026-10-02 19:40Z) `e12fefd3` is the last head whose CI is certified
+      here, and this is deliberately the final entry: **it is recorded by the
+      commit that follows it**, so whatever commit carries this sentence is one
+      ahead of the head it certifies. The lag is inherent rather than an
+      oversight — no commit can assert that its own CI passed — and without a
+      stopping rule each record-and-commit cycle would demand another round.
+      At `e12fefd3` all twelve required contexts are `success`
+      (`required=12 missing=0 notgreen=0`, `coverage` included); its diff from
+      the fully-gated `901794f0` is Markdown only; and its three
+      Markdown-reading gates were re-run green before the push. A reader who
+      needs the CI status of the current tip should read it from the tip's own
+      checks rather than from this entry, and should treat the introducing
+      commit — not the stamp beside it — as the authority for when each entry
+      was written.
 
 ## Surprises & discoveries
 
