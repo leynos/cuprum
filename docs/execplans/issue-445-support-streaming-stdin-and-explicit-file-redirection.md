@@ -224,10 +224,10 @@ likelihood, and mitigation.
   before and after; the `range-diff` marks 52 of 55 commits identical, and the
   three that differ are all explained. Two (the module-size split and the
   module-roster commit) differ only in the context line above their
-  `docs/developers-guide.md` hunks — main inserted text earlier in that file, so
-  the hunk anchor moved while every added line stayed byte-identical. The third
-  is the `CHANGELOG.md` resolution above. All 123 paths that main changed and
-  this branch did not are byte-identical to `c65d843c`; there are no file
+  `docs/developers-guide.md` hunks — main inserted text earlier in that file,
+  so the hunk anchor moved while every added line stayed byte-identical. The
+  third is the `CHANGELOG.md` resolution above. All 123 paths that main changed
+  and this branch did not are byte-identical to `c65d843c`; there are no file
   deletions against the target; and the four newly repeated multi-line blocks
   the scan flagged are all benign sibling shapes (`consumes_stdout` /
   `consumes_stderr` twin properties, the paired `run` / `run_sync` signatures,
@@ -235,10 +235,46 @@ likelihood, and mitigation.
 
   Weave was not selected for this operation. Its driver is registered globally,
   but `git check-attr merge` reports `unspecified` for every path with and
-  without the attributes override, and the repository tracks no `.gitattributes`
-  — so the ambient global registration could not have selected it. The replay
-  therefore used Git's own text merge under `zdiff3`.
+  without the attributes override, and the repository tracks no
+  `.gitattributes` — so the ambient global registration could not have selected
+  it. The replay therefore used Git's own text merge under `zdiff3`.
 
+- [x] (2026-10-02) Fourth-rebase gate run, on the rebased head `283ce61a`. All
+  four gates the task named end in PASS, but not all on one revision, and the
+  gap is recorded rather than smoothed over. `test` passed on the pristine head:
+  `2764 passed, 70 skipped in 225.12s`, nextest `127 passed`, doctests clean,
+  and the six `test_maturin_build` cases passing with the wheel snapshot
+  byte-identical. `typecheck` passed with `All checks passed!`. Two gates
+  failed first and both were real:
+
+  `check-fmt` failed on this file (`+7 -7`): two paragraphs of the entry above
+  were hand-wrapped to 80 columns, and `mdtablefix --wrap` breaks narrower than
+  that, so the file failed the very thing it was written to record. This is the
+  same trap recorded in the earlier gate-repair entry, relearned on new prose.
+  Fixed by applying mdtablefix's own requested reflow rather than hand-editing
+  again; the word sequence is unchanged, which proves the edit is inert.
+
+  `lint` failed on `interrogate --fail-under 100` at `99.9%`, and this one is
+  worth understanding because the first reading of it was wrong. The target tree
+  `c65d843c` has two undocumented definitions out of 7585 — a 99.974% ratio
+  that *rounds up* to a reported 100.0% and passes. This branch adds 178
+  definitions, two of which lacked docstrings, taking the ratio to 99.949%,
+  which rounds *down* to 99.9% and fails. So main is green only by rounding,
+  and the same two inherited misses are harmless there; the branch tipped the
+  ratio and made the defect its own. The two were
+  `_ProducerFailureError.__init__` and a `producer()` closure in the new test
+  module. One-line docstrings each, matching the repository's own `__init__`
+  convention, returned the gate to `PASSED ... actual: 100.0%`. The remaining
+  two misses are main's `scripts/tests/test_boundary_contract.py` and
+  `test_boundary_faults.py`, unchanged and byte-identical to the target.
+
+  The repaired tree was then re-gated: `check-fmt` reported
+  `83 files left unchanged`, and `lint` reached all fourteen leaves with no
+  `make: ***` line anywhere, including the `verify-df12-pylint` target that had
+  killed the earlier run and the rust-lint and github-actions-lint subtrees
+  that fail-fast had hidden. This was the second time the df12 git fetch
+  succeeded under the clean environment, confirming the earlier failure was the
+  ambient `GIT_CONFIG_*` rewrite and not the code.
 - [x] (2026-10-01) The `chatgpt-codex-connector` review of `a3083984` left four
   findings, and a functional probe adjudicated all four against the current
   tree rather than against the codex summary. Two were real defects in the
@@ -961,6 +997,26 @@ likelihood, and mitigation.
       instrument is the stem-based one.
 
 ## Surprises & discoveries
+
+- Observation: a percentage-threshold gate can be green on the target and red
+  on the branch while the branch changes *nothing* about the defect, purely
+  because the branch enlarges the denominator. Evidence: the target `c65d843c`
+  carries two undocumented definitions out of 7585. `interrogate` computes 7583
+  / 7585 = 99.9736%, which rounds to 100.0% and passes. This branch adds 178
+  definitions (its own new modules and tests) and, having two of them
+  undocumented, computes 7781 / 7783 = 99.9743% — a *better* ratio, and one
+  that rounds to 99.9% and fails. The two figures are 0.0007 points apart; the
+  reported verdict differs because 99.9743% and 99.9736% fall on opposite sides
+  of the one-decimal rounding boundary. Impact: adding two docstrings to the
+  branch's own new code is what actually fixed it, but the instructive part is
+  that the target's pass was never a statement about the target's code quality.
+  A branch cannot infer from "main is green" that it inherits no gate debt,
+  because these gates measure ratios, not absolutes, and a growing branch moves
+  the ratio independently of whether it adds defects. The corollary for review:
+  when a ratio gate fails after a rebase, compare *counts* against the target
+  before believing the branch introduced anything; here the branch's own two
+  were real, but the two inherited ones were not, and the failure text named
+  all four without distinguishing them.
 
 - Observation: an overrun module's *peak* size is not recoverable from the
   committed history once the same session has committed a further split, so a
