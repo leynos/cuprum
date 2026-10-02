@@ -5,16 +5,18 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE — every gate passes at the pushed head, and all twelve
-required CI contexts from the `main-required-checks` ruleset are green there
-with the suite-coverage legs confirmed at step granularity. All eleven findings
-from the CodeRabbit review of `6efb42b9` are applied and the closing review at
-`c738c78a` returned zero findings. A further `coderabbit review --agent` pass,
-run through the CLI because the draft pull request makes the CodeRabbit app
-check skip itself, returned two advisory findings; both are applied. The
-specific head is recorded in `Progress` rather than here, since naming it in
-this line has gone stale every time a commit follows. The work is pushed and
-draft pull request #571 is open.
+Status: COMPLETE — the feature is finished and every local gate passes. All
+twelve required CI contexts from the `main-required-checks` ruleset have been
+verified green at each head reached so far, at the time each was the pushed
+head; whether they are green at the *current* head is a live question with a
+fresh answer, and is recorded in `Progress` rather than asserted here. All
+eleven findings from the CodeRabbit review of `6efb42b9` are applied and the
+closing review at `c738c78a` returned zero findings. A further
+`coderabbit review --agent` pass, run through the CLI because the draft pull
+request makes the CodeRabbit app check skip itself, returned two advisory
+findings; both are applied. The specific head is likewise recorded in
+`Progress` rather than here, since naming it in this line has gone stale every
+time a commit follows. The work is pushed and draft pull request #571 is open.
 
 ## Purpose / big picture
 
@@ -699,6 +701,25 @@ escalation, not a workaround.
       time already has a stronger source than any label — the commit that
       introduced the entry. This is the hand-summed-total failure seen from the
       other side: not a figure no command emits, but a figure no clock emitted.
+- [x] (2026-10-02 19:13Z) The status correction above was committed as
+      `91c96d51` and pushed, and CI completed green on it: **all twelve**
+      required contexts from `main-required-checks` are `success`
+      (`required=12 missing=0 notgreen=0`, `coverage` included), with run
+      `37050567552` reporting `completed/success`. Only the three
+      Markdown-reading gates ran before the push — `make check-fmt`,
+      `make markdownlint`, `make nixie`, each exit 0 at a frozen `91c96d51`
+      with `head_before == head_after` — because the change is one Markdown
+      file, `+32/-2`, and a diff of that range excluding Markdown is
+      **empty**, so no Python, Rust, YAML or Mermaid input differs from the
+      fully-gated `901794f0`. A sweep at the settle point confirms it: one
+      tracked file differs from that head and it is this plan, `+44/-12`
+      cumulative, so the combined six-gate run at `901794f0` remains the
+      operative evidence for everything non-Markdown. One methodological
+      error is worth recording: the first poller treated an empty `gh`
+      response as `pending=0` and announced `SETTLED` with `missing=12` — a
+      line that reads like a pass while meaning no data was retrieved. It
+      was discarded, and the re-poll asserted a non-empty response and the
+      presence of all twelve contexts before concluding anything.
 
 ## Surprises & discoveries
 
