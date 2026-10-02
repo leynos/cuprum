@@ -391,3 +391,75 @@ def test_each_root_module_matches_a_selector_pattern(
         condition=module in covered or module in exceptions_verified(),
         message=remedy((module,)),
     )
+
+
+def test_the_selector_collects_the_modules_that_make_this_claim() -> None:
+    """Keep the guard itself inside what the guard describes.
+
+    Every assertion in this module is about what `PYTEST_TARGETS` collects, and
+    the module is collected by that same selector — so a selector edit that
+    dropped `tests/test_ci_*.py` would silence these assertions rather than fail
+    them. Makefile target `test-selection` runs this module by name for exactly
+    that reason, and this is the check that names collide: the bootstrap route
+    must not be the only thing that runs it.
+    """
+    selector = SELECTOR
+    names = variable_expansion(selector)
+    assert "tests/test_ci_*.py" in names, (
+        f"{selector} must keep the glob that collects the CI contract modules; "
+        f"without it these assertions run only through `make test-selection`, "
+        f"and a selector that lost the whole family would go unreported. "
+        f"Resolved patterns: {names!r}"
+    )
+
+
+def test_dropping_the_contract_glob_makes_the_bootstrap_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Show the bootstrap fails in the state it exists to catch.
+
+    Makefile target `test-selection` runs this module by name so the guard
+    cannot be silenced by the selector it polices. That is only worth anything
+    if the guard actually *fails* in that state, so the selector is rewritten
+    here as it would be if someone deleted its `tests/test_ci_*.py` pattern.
+    Every contract module of this family then falls outside the selector, and
+    the guard has to report exactly those.
+
+    The rewrite strips the pattern from the selector's *real* expansion rather
+    than from a copy of the Makefile, so the control is about deleting one
+    pattern from this repository's selector and not about a fictional one. It
+    is injected into the reader rather than written to disk, so this
+    repository's Makefile is untouched.
+    """
+    glob = "tests/test_ci_*.py"
+    real = variable_expansion(SELECTOR)
+    assert glob in real, (
+        f"{SELECTOR} must carry {glob} for this control to remove anything; "
+        f"it resolves to {real!r}"
+    )
+    # Patch the reader in the namespace that consumes it. `suite_selection`
+    # binds `variable_expansion` by value at import, so patching the module it
+    # was defined in would leave the name it actually calls untouched — and the
+    # control would then pass over an unmodified selector, proving nothing.
+    monkeypatch.setattr(
+        "tests.helpers.suite_selection.variable_expansion",
+        lambda name, **_kwargs: (
+            tuple(pattern for pattern in real if pattern != glob)
+            if name == SELECTOR
+            else variable_expansion(name)
+        ),
+    )
+    dropped = tuple(
+        module for module in root_modules() if module.startswith("tests/test_ci_")
+    )
+    assert dropped, (
+        "the control needs the glob to be collecting something; with no "
+        "tests/test_ci_*.py module on disk it proves nothing"
+    )
+    reported = uncovered()
+    missing = [module for module in dropped if module not in reported]
+    assert not missing, (
+        f"the bootstrap must report every module the dropped glob stopped "
+        f"collecting; unreported: {missing!r}. This is the failure that keeps "
+        "`make test-selection` from being a no-op"
+    )

@@ -31,22 +31,38 @@ if typ.TYPE_CHECKING:
 
 
 def _join_continuations(value: str) -> str:
-    r"""Collapse ``\\``-newline continuations the way `make` does.
+    r"""Collapse ``\\``-newline continuations into the words they stand for.
+
+    Two callers share this, and they are governed by different rules.
+
+    For an *assignment* value it is what `make` itself does: `make` replaces the
+    backslash-newline and the whitespace after it with one space, so
+    ``V = one \\`` / ``  two`` expands to ``one two``. Resolving it later, at
+    expansion time, would make each backslash a word of its own — and a
+    backslash is not a `.py` path, so the selector would look right while the
+    tuple carried junk.
+
+    For a *recipe entry* `make` does not collapse anything: it hands the
+    backslash-newline to the shell, and the shell does the collapsing. Doing it
+    here as well is a deliberate normalisation, and it is load-bearing rather
+    than cosmetic — `shlex` implements no line continuation, so a raw ``\``
+    newline arrives as a word containing the newline itself. The shell would
+    never see such a word, so a token check reading the uncollapsed text would
+    be reasoning about words that do not exist.
 
     Parameters
     ----------
     value : str
-        An assignment's raw text, possibly spanning several source lines.
+        An assignment's or a recipe entry's raw text, possibly spanning several
+        source lines.
 
     Returns
     -------
     str
-        The logical single line: `make` replaces each backslash-newline and
-        the whitespace after it with one space, so a two-line list falls apart
-        into the same words a one-line list does. Leaving them in place would
-        make each backslash a word in its own right, and it is not a `.py`
-        path — the pattern beside it would still resolve, so the selector would
-        look right while the tuple carried junk.
+        The logical single line. The replacement is one space, so a
+        space-before-backslash survives beside it and a continued entry can
+        read back with two spaces; that is invisible to the tokenizer, which is
+        the only thing above this that reads the result.
     """
     return re.sub(r"\\\n[ \t]*", " ", value)
 

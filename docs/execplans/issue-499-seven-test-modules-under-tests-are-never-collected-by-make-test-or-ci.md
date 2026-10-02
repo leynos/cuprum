@@ -220,7 +220,7 @@ contract module under `tests/` and forgets to name it will be told so by
       recipe assertions as "structural rather than byte-exact, so reordering
       prerequisites or adding a flag does not fail the test", `AGENTS.md` warns
       against blob comparisons that legitimate formatting turns brittle, and
-      `recipe_of` returns one joined line whose layout `make fmt` can reflow.
+      `recipe_of` returns a line-per-entry layout that `make fmt` can reflow.
       The rewrite is strictly stronger than the probes it replaces: a recipe
       missing two endpoints now reports both rather than failing on the first
       and hiding the second. Verified non-vacuous by mutating each endpoint in
@@ -386,13 +386,16 @@ contract module under `tests/` and forgets to name it will be told so by
     selector's expansion coincide, so an equality check cannot separate
     "reads the selector" from "returns the tree"; the discriminating control
     narrows the selector and requires the resolver to follow it. And
-    `recipe_of` joins the recipe onto one line, so a `#` disables it while the
-    words survive a substring check. `recipe_tokens` now tokenizes with comment
-    markers honoured, and
+    `recipe_of` preserves each recipe entry on its own line, so a `#` disables
+    only its own entry while the words survive a substring check.
+    `recipe_tokens` now tokenizes with comment markers honoured, and
     `test_a_commented_out_recipe_does_not_satisfy_the_endpoint_check` seeds
     that fault on the reader. Focused parsing-boundary tests for
-    `makefile.py`, `ci_documents.py`, and `ci_run_scripts.py` live in
-    `tests/test_ci_helper_boundaries.py`.
+    `makefile.py` and `recipe_read.py` live in
+    `tests/test_ci_makefile_boundaries.py`; those for `ci_documents.py` and
+    `ci_run_scripts.py` live in `tests/test_ci_helper_boundaries.py`. The two
+    were one module until it crossed the 400-line limit; the split follows the
+    boundary the helpers themselves are split along.
   - *Developer Documentation — partly stale, remainder repaired.* The
     `selected_paths` misattribution had already been corrected by the previous
     entry, so that half needed no work. Still live: `ci_documents` and
@@ -437,7 +440,10 @@ contract module under `tests/` and forgets to name it will be told so by
   - *`make lint` / interrogate.* The gate failed at `interrogate --fail-under
     100`, reporting `99.9%` against a `100.0%` minimum. Three of the five
     misses are this branch's: two nested `run` closures and one nested `spy`
-    closure in `tests/test_ci_helper_boundaries.py`, all with `-> None`
+    closure in `tests/test_ci_helper_boundaries.py` at the revision measured,
+    all three now in `tests/test_ci_makefile_boundaries.py` (the family was
+    split later the same day, and the split follows the helper seam rather
+    than the assert seam — see the split entry below), all with `-> None`
     bodies the gate counts as definitions. Docstrings added. The other two
     (`_RecordedCompile.__init__` and `_RecordedRun.__init__` in
     `scripts/tests/`) are on `origin/main` and untouched by this branch —
@@ -485,10 +491,16 @@ contract module under `tests/` and forgets to name it will be told so by
     than failing — so DF12 pylint had never actually run on this branch. When
     it finally did, it reported three real errors:
     `tests/test_ci_helper_boundaries.py:202,211,226: C9102: Assert statement
-      lacks a failure message`.
+      lacks a failure message`. Those line numbers were always three `assert`
+    statements belonging to the Makefile readers, which the module's own
+    line 202 class (`TestDocumentNarrowing`) begins *after*; each is now in
+    `tests/test_ci_makefile_boundaries.py` — `variable_expansion`'s
+    continuation case, and the two workflow-narrowing success paths, all
+    fixed where they stood.
   - *The fix.* All three bare asserts given failure messages that report the
     actual value, so a failure names what it saw rather than only the
-    comparison that failed. The file's own asserts now carry messages: 7 of 7.
+    comparison that failed. The family's asserts now carry messages
+    throughout, in both modules.
   - *The lesson.* "Two consecutive gate runs failed" is not the same as "the
     recipe has two problems". A chained recipe reports the *first* failure in
     its chain, so the observed-failure count is a lower bound on the real one,
@@ -496,6 +508,50 @@ contract module under `tests/` and forgets to name it will be told so by
     a chained gate as fixed, make sure a run has reached its **end**; otherwise
     the report should say which leaves were reached and which were never
     observed.
+- [x] (2026-10-02) Split the reader-boundary family at the helper seam, and
+  gave the selection guard a route the selector cannot silence.
+  - *Why the split.* The session's boundary cases took the reader-boundary
+    module past the `max-module-lines = 400` cap (`pyproject.toml:234`), which
+    applies to `tests/` modules because `tests` is in `PYLINT_STRICT_TARGETS`
+    rather than in `PYLINT_TEST_TARGETS` (`Makefile:243-244`), so unlike
+    `tests/behaviour` it does not receive `--disable=too-many-lines`. The
+    split follows the boundary the helpers themselves are already split along:
+    the Makefile readers (`makeutil.py`, `makefile.py`, `recipe_read.py`) are
+    driven by `tests/test_ci_makefile_boundaries.py`, and the workflow readers
+    (`ci_documents.py`, `ci_run_scripts.py`) by
+    `tests/test_ci_helper_boundaries.py` — 300 and 233 lines respectively.
+  - *What the split is not.* It is not a split by assertion kind. Three of the
+    five C9102 sites fixed above belong to the *Makefile* readers, and they
+    now sit in the new module while two workflow-narrowing sites stay in the
+    old one — so the seam is the helpers' own, and a reader looking for a
+    given boundary test should follow the helper it drives, not the reader it
+    resembles.
+  - *Why the guard needed its own route.* Every assertion that
+    `PYTEST_TARGETS` collects the modules it should lives in a module
+    `PYTEST_TARGETS` itself collects, so an edit dropping
+    `tests/test_ci_*.py` from the selector would **silence** the guard rather
+    than fail it — the suite would simply stop running the file that objects.
+    This is the same failure shape the plan already records as found once, in
+    a different place.
+  - *The bootstrap.* A `test-selection` target names the guard module
+    literally and is a prerequisite of both `test-python` and `test`, ordered
+    before the selector-driven loop. Proven end to end, not by inspection:
+    with the `tests/test_ci_*.py` selector entry deleted the bootstrap fails
+    (`57 failed, 5 passed`, `make: *** [Makefile:509: test-selection] Error 1`,
+    exit 2 — four of the failures are the guard's own self-collection control
+    firing), and passes again once the entry is restored from a byte-exact
+    backup (`62 passed`, exit 0, `sha256sum -c` confirmed the restore).
+  - *The docstring correction.* `_join_continuations` claimed its recipe-entry
+    collapse was "the way `make` does" it. It is not, and the difference is
+    load-bearing. Probed both: `make` hands a continued recipe entry to the
+    shell **verbatim** and lets the shell collapse it, while `shlex` in posix
+    mode implements **no** line continuation at all, so an uncollapsed
+    backslash-newline arrives as a word containing the newline. The collapse
+    is therefore a deliberate normalisation — and the same one `make` does
+    apply to a *variable* value, which is why one helper reads the same way
+    for both callers. `docs/developers-guide.md` now states this, and
+    `recipe_of`'s entry-newline preservation (which is what keeps a `#`
+    comment scoped to its own entry) alongside it.
 
 ## Surprises & discoveries
 
@@ -557,11 +613,11 @@ contract module under `tests/` and forgets to name it will be told so by
   not end in `.py`, so the stray backslashes were discarded and the resolved
   file set looked correct. The helper now collapses continuations the way
   `make` does before splitting. Evidence: the first smoke test printed
-  `PYTEST_TARGETS` as nine alternating path/`\` tokens; the resolved set was
-  nonetheless 344 files and included all seven. Impact: only the returned tuple
-  was wrong, but any future caller comparing words would have been misled. This
-  is why `variable_expansion` joins continuations rather than splitting the raw
-  text.
+  `PYTEST_TARGETS` as nine alternating path/`\` tokens (ten entries now); the
+  resolved set was nonetheless 344 files and included all seven. Impact: only
+  the returned tuple was wrong, but any future caller comparing words would
+  have been misled. This is why `variable_expansion` joins continuations rather
+  than splitting the raw text.
 
 - Observation: `Path("tests") == "tests"` is `False`. The guard's first version
   filtered selector results with `path.parent == "tests"`, which excluded every
@@ -758,7 +814,7 @@ A novice reading this plan needs three things: where the selector lives, how
 the suites are split, and what the seven modules are.
 
 The selector is `PYTEST_TARGETS` in the repository `Makefile`, defined around
-line 154 as a `?=` assignment containing nine whitespace-separated shell glob
+line 154 as a `?=` assignment containing ten whitespace-separated shell glob
 patterns. The `test-python` target around line 420 iterates over those patterns
 and runs `pytest` once per pattern, skipping any pattern whose first expanded
 word does not exist on disk. `make test` runs `test-python` and `test-rust`
@@ -872,7 +928,7 @@ own glob expansion, and its variable expansion agrees with `make`'s.
   can be confidently wrong. Comparing against `make -n test-python`'s printed
   patterns and against `bash`-style globbing of the same patterns grounds the
   helper in an executable oracle rather than in a restatement of its own logic.
-- Domain: the nine patterns in `PYTEST_TARGETS`, the three in
+- Domain: the ten patterns in `PYTEST_TARGETS`, the three in
   `ACT_SCENARIO_TARGETS`, and a synthetic undefined variable.
 - Artefact: `tests/helpers/makefile.py` and its use in the guard test.
 - Evidence: the guard passes; a pattern with no matches contributes nothing and
@@ -1138,12 +1194,19 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_native_sdist.py \
   scripts/tests/test_boundary_*.py \
+  scripts/tests/test_install_pypy312.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py \
   $(ACT_PARSER_TARGETS)
 ```
+
+The excerpt above was reconciled against the `Makefile` on 2026-10-02, because
+the upstream selector gained `scripts/tests/test_install_pypy312.py` and with
+it a tenth pattern. Counts stated elsewhere in this plan have been brought up
+to date to match; figures measured at earlier revisions remain as measured
+there.
 
 ## Interfaces and dependencies
 
@@ -1215,11 +1278,12 @@ read API may leak; `variable_expansion` and `recipe_of` propagate the same
 failure through the `root` and `runner` they accept.
 
 `recipe_tokens` exists for the recipe contract in
-`tests/test_ci_suite_wiring_contract.py`. `recipe_of` joins a target's recipe
-onto one line, so a single `#` comments out every command after it while the
-words stay in the string; tokenizing with `shlex` and comment markers honoured
-is what makes the endpoint assertion a claim about what the shell would run
-rather than about text that happens to survive.
+`tests/test_ci_suite_wiring_contract.py`. `recipe_of` preserves each recipe
+entry on its own line, so a `#` comments out the remainder of its own entry
+rather than every command after it, while the words stay in the string;
+tokenizing with `shlex` and comment markers honoured is what makes the endpoint
+assertion a claim about what the shell would run rather than about text that
+happens to survive.
 
 `selected_paths` lives in `tests/helpers/suite_selection.py`, not in the
 Makefile reader, because resolving patterns needs the root-module enumeration's

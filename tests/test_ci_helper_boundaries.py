@@ -1,17 +1,15 @@
-"""Exercise the parsing boundaries the CI contracts are built on.
+"""Exercise the workflow readers the CI contracts are built on.
 
-The contracts in `tests/test_ci_suite_wiring_contract.py` and
-`tests/test_ci_test_selection_contract.py` read real artefacts — this
-repository's Makefile and its workflows — and that is the right way to assert
-what the repository does. It is the wrong way to test the *readers*: every case
-they can express is a case the estate already satisfies, so a reader's
+`tests/test_ci_workflow_contract.py` and the other workflow contracts ask
+questions of this repository's real workflows, and that is the right way to ask
+what the repository *does*. It is the wrong way to test the *readers*: every
+case they can express is a case the estate already satisfies, so a reader's
 malformed-input handling, its refusals, and its empty-input behaviour are never
-driven at all. A reader could stop refusing anything and every contract above
-it would keep passing on a healthy tree.
+driven at all. A reader could stop refusing anything and every contract above it
+would keep passing on a healthy tree.
 
-So this module drives the three parsing boundaries with synthetic input:
+So the workflow readers are driven here with synthetic input:
 
-* `tests/helpers/makefile.py` — the Makefile read, and its process boundary;
 * `tests/helpers/ci_documents.py` — the parse-and-narrow layer;
 * `tests/helpers/ci_run_scripts.py` — the workflow sweep.
 
@@ -20,12 +18,16 @@ cannot tell a reader that refuses malformed input from one that refuses
 everything. The estate-wide contracts remain the authority on what this
 repository declares; these cases are the authority on what the readers do when
 what they read is wrong.
+
+The Makefile readers are the sibling module
+`tests/test_ci_makefile_boundaries.py`. They were split apart when this family
+crossed the 400-line limit `AGENTS.md` sets and the lint gate enforces; the
+boundary between the two is the one the helpers are already split along, so each
+module drives the readers answering one kind of question.
 """
 
 from __future__ import annotations
 
-import json
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - test doubles for a fixed argv.
 import typing as typ
 
 import pytest
@@ -36,11 +38,6 @@ from tests.helpers.ci_documents import (
 )
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.ci_workflows import workflow_sources
-from tests.helpers.makefile import (
-    Runner,
-    makeutil_document,
-    variable_expansion,
-)
 
 if typ.TYPE_CHECKING:
     # `Path` appears only in the `tmp_path` parameters below; those annotations
@@ -48,162 +45,6 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from tests.helpers.workflow_types import Job
-
-
-def _completed(
-    argv: list[str], returncode: int, stdout: str, stderr: str = ""
-) -> subprocess.CompletedProcess[str]:
-    """Build the completed process a fake runner returns."""
-    return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
-
-
-#: A minimal document carrying one assignment and one rule, so the success path
-#: has something to read rather than merely something to not-refuse.
-_GOOD_DOCUMENT = json.dumps({
-    "variables": [{"name": "X", "raw_value": "a b", "operator": "?="}],
-    "rules": [{"targets": ["t"], "recipes": [{"text": "echo hi"}]}],
-})
-
-
-def _runner_returning(stdout: str, returncode: int = 0) -> Runner:
-    """Return a fake runner that reports the given output."""
-
-    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        """Report the canned output, echoing the argv it was handed."""
-        return _completed(argv, returncode, stdout)
-
-    return run
-
-
-def _runner_raising(error: BaseException) -> Runner:
-    """Return a fake runner that raises instead of returning."""
-
-    def run(_argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        """Raise the supplied error, standing in for a process that cannot start."""
-        raise error
-
-    return run
-
-
-class TestMakeutilProcessBoundary:
-    """The Makefile read must report every failure as its documented error."""
-
-    def test_the_success_path_reads_the_document(self) -> None:
-        """A well-formed document is returned, so the refusals are not blanket."""
-        document = makeutil_document(runner=_runner_returning(_GOOD_DOCUMENT))
-        assert document["variables"], "the parsed document must carry variables"
-
-    def test_a_missing_binary_is_reported_as_a_contract_error(self) -> None:
-        """`makeutil` absent from PATH is the documented `AssertionError`.
-
-        `subprocess.run` raises `FileNotFoundError` for a binary it cannot
-        start, which is not the error this read API documents — so a caller
-        catching the documented type would miss the one failure that says the
-        toolchain is broken rather than the Makefile.
-        """
-        runner = _runner_raising(FileNotFoundError(2, "No such file", "makeutil"))
-        with pytest.raises(AssertionError, match=r"not on PATH"):
-            makeutil_document(runner=runner)
-
-    def test_a_timeout_is_reported_as_a_contract_error(self) -> None:
-        """A wedged parser fails by name rather than escaping as a traceback."""
-        runner = _runner_raising(subprocess.TimeoutExpired("makeutil", 60))
-        with pytest.raises(AssertionError, match=r"did not parse"):
-            makeutil_document(runner=runner)
-
-    def test_a_non_zero_exit_carries_the_parsers_diagnostic(self) -> None:
-        """The parser's own stderr reaches the message; exit status is not enough."""
-        runner = _runner_returning("", returncode=2)
-        with pytest.raises(AssertionError, match=r"exit 2"):
-            makeutil_document(runner=runner)
-
-    def test_output_that_is_not_json_is_refused(self) -> None:
-        """Non-JSON output cannot be read as a document."""
-        with pytest.raises(AssertionError, match=r"did not emit JSON"):
-            makeutil_document(runner=_runner_returning("not a document"))
-
-    def test_json_that_is_not_an_object_is_refused(self) -> None:
-        """A JSON list is valid JSON and still not a Makefile document."""
-        with pytest.raises(AssertionError, match=r"must emit a JSON object"):
-            makeutil_document(runner=_runner_returning("[]"))
-
-    def test_the_working_directory_is_the_one_supplied(self, tmp_path: Path) -> None:
-        """`root` reaches the parser, rather than being silently re-derived."""
-        seen: dict[str, object] = {}
-
-        def spy(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-            """Capture the keywords the reader passes, and report success."""
-            seen.update(kwargs)
-            return _completed(argv, 0, _GOOD_DOCUMENT)
-
-        makeutil_document(root=tmp_path, runner=spy)
-        assert seen["cwd"] == tmp_path, (
-            f"the parse must run in the directory it was given; got {seen['cwd']!r}"
-        )
-
-
-class TestMakefileNarrowing:
-    """The variable reader must refuse what it cannot resolve honestly."""
-
-    def _document(self, variables: list[dict[str, str]]) -> Runner:
-        """Return a runner serving a document with the given assignments."""
-        return _runner_returning(json.dumps({"variables": variables, "rules": []}))
-
-    def test_an_unassigned_variable_is_refused(self) -> None:
-        """Asking for a name the Makefile never assigns fails by name."""
-        runner = self._document([{"name": "A", "raw_value": "1", "operator": "="}])
-        with pytest.raises(AssertionError, match=r"must assign B"):
-            variable_expansion("B", runner=runner)
-
-    def test_a_reference_to_an_undefined_variable_is_refused(self) -> None:
-        """A `$(MISSING)` reference cannot resolve to an empty string.
-
-        Substituting nothing would shrink the selector, and a selector that is
-        too small makes every coverage assertion pass for the wrong reason.
-        """
-        runner = self._document([
-            {"name": "A", "raw_value": "$(MISSING)", "operator": "="}
-        ])
-        with pytest.raises(AssertionError, match=r"never assigns it"):
-            variable_expansion("A", runner=runner)
-
-    def test_a_reference_cycle_is_refused_rather_than_recursed(self) -> None:
-        """A self-referential assignment is reported, not looped on."""
-        runner = self._document([{"name": "A", "raw_value": "$(A)", "operator": "="}])
-        with pytest.raises(AssertionError, match=r"expands itself"):
-            variable_expansion("A", runner=runner)
-
-    def test_a_missing_variables_list_is_refused(self) -> None:
-        """A document with no `variables` fails rather than reading nothing."""
-        with pytest.raises(AssertionError, match=r"must carry a `variables` list"):
-            variable_expansion("A", runner=_runner_returning("{}"))
-
-    def test_an_empty_assignment_table_is_refused(self) -> None:
-        """No assignments at all is a parser change, not a Makefile with none."""
-        runner = _runner_returning(json.dumps({"variables": [], "rules": []}))
-        with pytest.raises(AssertionError, match=r"at least one assignment"):
-            variable_expansion("A", runner=runner)
-
-    def test_an_unimplemented_operator_is_refused(self) -> None:
-        """An operator this reader does not model is reported, not read as `=`."""
-        runner = self._document([{"name": "A", "raw_value": "1", "operator": "+="}])
-        with pytest.raises(AssertionError, match=r"does not implement"):
-            variable_expansion("A", runner=runner)
-
-    def test_continuations_are_collapsed_before_splitting(self) -> None:
-        """A continued list yields its words, not a stray backslash.
-
-        The continuation backslash is not a `.py` path, so leaving it in place
-        would put junk in the selector beside the patterns that do resolve.
-        """
-        runner = self._document([
-            {"name": "A", "raw_value": "one.py \\\n  two.py", "operator": "="}
-        ])
-        resolved = variable_expansion("A", runner=runner)
-        assert resolved == ("one.py", "two.py"), (
-            f"a continuation must collapse to one space; got {resolved!r}, whose "
-            "extra token would be a backslash standing in for a path pattern"
-        )
 
 
 class TestDocumentNarrowing:
@@ -268,3 +109,125 @@ class TestWorkflowSweep:
         assert len(workflow_sources()) > 1, (
             "the sweep is only meaningful over more than one workflow"
         )
+
+
+class TestWorkflowSweepNarrowing:
+    """The sweep must carry each script's location, and refuse the rest.
+
+    `run_scripts` is what the exemption guard asks "does any CI step run this
+    target" through, so a sweep that silently dropped a job, mis-numbered a
+    step, or read a reusable-workflow call as an empty job would change which
+    exemptions are honoured. On the estate's own tree there is exactly one
+    answer, and it is a satisfiable one, so none of those questions is settled
+    by the sweep of this repository.
+    """
+
+    @staticmethod
+    def _workflow(tmp_path: Path, name: str, body: str) -> Path:
+        """Write one workflow into the sweep directory and return the directory."""
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_each_script_keeps_its_own_location(self, tmp_path: Path) -> None:
+        """Every tuple names the workflow, job, and step the script came from.
+
+        The step index counts *all* steps rather than only the `run:` ones, so
+        the location matches the YAML a reader would open. Pairing a script with
+        the wrong index would point a failure at an innocent step.
+        """
+        directory = self._workflow(
+            tmp_path,
+            "ci.yml",
+            "jobs:\n"
+            "  first:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - run: make test\n"
+            "      - name: named\n"
+            "        run: make lint\n"
+            "  second:\n"
+            "    steps:\n"
+            "      - run: make markdownlint\n",
+        )
+        assert run_scripts(directory) == [
+            ("ci.yml", "first", "1", "make test"),
+            ("ci.yml", "first", "2", "make lint"),
+            ("ci.yml", "second", "0", "make markdownlint"),
+        ], (
+            "each script must carry the location it was declared at; a "
+            "different pairing reports failures against the wrong step, and a "
+            "missing tuple reports a contract as vacuously satisfied"
+        )
+
+    def test_a_reusable_workflow_call_contributes_no_script(
+        self, tmp_path: Path
+    ) -> None:
+        """A `uses:` job declares no steps, and that is not a malformed job.
+
+        The two must stay distinguishable: a call genuinely has no script to
+        contribute, while a job whose `steps:` is the wrong shape has to be
+        reported. Reading the call as malformed would refuse a valid workflow.
+        """
+        directory = self._workflow(
+            tmp_path,
+            "reusable.yml",
+            "jobs:\n"
+            "  call:\n"
+            "    uses: owner/repo/.github/workflows/other.yml@main\n"
+            "  local:\n"
+            "    steps:\n"
+            "      - run: make test\n",
+        )
+        found = run_scripts(directory)
+        expected = [("reusable.yml", "local", "0", "make test")]
+        assert found == expected, (
+            "a reusable-workflow call has no `run:` script and a job beside it "
+            "still does; a sweep that refused the call would report a valid "
+            "workflow as malformed"
+        )
+
+    def test_a_step_without_a_run_key_contributes_nothing(self, tmp_path: Path) -> None:
+        """A `uses:` step inside a job is skipped, not read as an empty script.
+
+        An empty script would match a substring search for almost any command,
+        so a step that runs nothing must contribute no tuple at all.
+        """
+        directory = self._workflow(
+            tmp_path,
+            "mixed.yml",
+            "jobs:\n"
+            "  build:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@v4\n"
+            "      - run: make test\n",
+        )
+        found = run_scripts(directory)
+        assert [script for *_rest, script in found] == ["make test"], (
+            f"only the `run:` step may contribute a script; got {found!r}, "
+            "whose empty word would satisfy a substring search for anything"
+        )
+
+    def test_a_job_with_malformed_steps_is_refused(self, tmp_path: Path) -> None:
+        """`steps:` of the wrong shape is reported, not swept as empty.
+
+        Reporting it as empty is the silent vacuous pass: every "no step does
+        X" contract over the job would pass having read nothing at all.
+        """
+        directory = self._workflow(
+            tmp_path, "bad.yml", "jobs:\n  build:\n    steps: {}\n"
+        )
+        with pytest.raises(AssertionError, match=r"bad\.yml:build must declare steps"):
+            run_scripts(directory)
+
+    def test_a_workflow_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
+        """A YAML list is refused by file name rather than swept as empty."""
+        directory = self._workflow(tmp_path, "list.yml", "- one\n- two\n")
+        with pytest.raises(AssertionError, match=r"list\.yml must parse to a mapping"):
+            run_scripts(directory)
+
+    def test_a_workflow_declaring_no_jobs_is_refused(self, tmp_path: Path) -> None:
+        """No `jobs:` key is a fault, not a workflow with nothing to run."""
+        directory = self._workflow(tmp_path, "empty.yml", "name: nothing\n")
+        with pytest.raises(AssertionError, match=r"empty\.yml must declare jobs"):
+            run_scripts(directory)

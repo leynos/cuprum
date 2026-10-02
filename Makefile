@@ -300,7 +300,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         rust-lint lint-clippy lint-whitaker \
         github-actions-lint \
         lint-windows fmt check-fmt \
-        markdownlint spelling nixie test test-python test-rust loom test-act typecheck \
+        markdownlint spelling nixie test test-selection test-python test-rust loom test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         benchmark-micro benchmark-e2e \
@@ -493,13 +493,22 @@ makeutil: ## Verify the Makefile parser used by contract tests
 # coverage job is the only place the Rust suite runs, under instrumentation, so
 # the interpreter matrix calls `test-python` alone. See "One execution per
 # suite" in docs/developers-guide.md.
-test: makeutil test-python test-rust ## Run the Python and Rust suites
+test: makeutil test-selection test-python test-rust ## Run the Python and Rust suites
 
-test-python: build uv $(VENV_TOOLS) makeutil ## Run the Python suite
+test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  CARGO_BUILD_JOBS="$(PYTEST_CARGO_BUILD_JOBS)" RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
 	done
+
+# `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
+# every assertion about it lives in a module *that selector collects* — and a
+# selector that stopped collecting `tests/test_ci_*.py` would therefore silence
+# the guard rather than fail it. This target is named directly, and is a
+# prerequisite of both routes, so the selector's agreement with the module
+# population is settled before the loop that depends on it.
+test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against the module population
+	@$(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
 
 # The scenario half of the harness: it runs the real `changes` job under `act`
 # against a throwaway repository, one scenario at a time. It is opt-in because

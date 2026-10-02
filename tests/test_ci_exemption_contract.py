@@ -22,15 +22,22 @@ because the name was fabricated.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 
-from tests.helpers.makefile import variable_expansion
+from tests.helpers.makefile import (
+    makeutil_document,
+    recipe_of,
+    variable_expansion,
+)
 from tests.helpers.suite_selection import (
     EXCEPTIONS,
     SCENARIO_SELECTOR,
     Exemption,
     covered_modules,
     exceptions_verified,
+    require,
     root_modules,
     selected_paths,
     uncovered,
@@ -242,3 +249,63 @@ def test_an_exemption_no_workflow_runs_is_refused(
     )
     with pytest.raises(AssertionError, match=r"no workflow step runs"):
         exceptions_verified()
+
+
+#: The Makefile target that runs the selection guard by name, and the target
+#: whose prerequisites must therefore include it.
+_BOOTSTRAP_TARGET = "test-selection"
+_BOOTSTRAP_MODULE = "tests/test_ci_test_selection_contract.py"
+
+
+def _prerequisites(target: str) -> tuple[str, ...]:
+    """Return one target's declared prerequisites, in order."""
+    document = makeutil_document()
+    rules = typ.cast("list[dict[str, typ.Any]]", document["rules"])
+    for rule in rules:
+        if target in typ.cast("list[str]", rule.get("targets") or []):
+            return tuple(typ.cast("list[str]", rule.get("prerequisites") or []))
+    require(
+        condition=False,
+        message=f"the Makefile must declare a {target} target",
+    )
+    raise AssertionError
+
+
+def test_the_bootstrap_runs_the_guard_by_name() -> None:
+    """Require the route that the selector cannot silence to name the module.
+
+    `_BOOTSTRAP_TARGET` exists because every assertion about the selector lives
+    in a module the selector collects. If the bootstrap ran a *glob* or a
+    directory instead of the module, a selector edit would silence it exactly
+    as it silences the suite, and the bootstrap would be a no-op claiming to be
+    a guard. The path is asserted literally for that reason.
+    """
+    recipe = recipe_of(_BOOTSTRAP_TARGET)
+    assert _BOOTSTRAP_MODULE in recipe, (
+        f"`make {_BOOTSTRAP_TARGET}` must name {_BOOTSTRAP_MODULE} directly, or "
+        "the route that is supposed to survive a selector edit depends on the "
+        f"selector too. Recipe: {recipe!r}"
+    )
+
+
+def test_the_python_routes_depend_on_the_bootstrap() -> None:
+    """Require the suite routes to run the bootstrap rather than duplicate it.
+
+    A target that nothing depends on is a target nobody runs. Both the local
+    aggregate and the one CI invokes must list it as a prerequisite, so the
+    guard is settled *before* the loop that depends on it — an ordering a
+    sibling prerequisite would not give.
+    """
+    python = _prerequisites("test-python")
+    aggregate = _prerequisites("test")
+    assert _BOOTSTRAP_TARGET in python, (
+        f"`make test-python` must depend on {_BOOTSTRAP_TARGET} so CI's suite "
+        f"route cannot run the selector-driven loop without settling the "
+        f"selector first; prerequisites: {python!r}"
+    )
+    assert _BOOTSTRAP_TARGET in aggregate, (
+        f"`make test` must depend on {_BOOTSTRAP_TARGET} directly, not only "
+        f"through `test-python`: `make test-python` overrides the selector it "
+        f"reads, and the local aggregate is where a developer meets it. "
+        f"Prerequisites: {aggregate!r}"
+    )
