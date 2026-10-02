@@ -13,6 +13,7 @@ cleared wrapper.
 from __future__ import annotations
 
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -23,9 +24,6 @@ from tests.helpers.composite_actions import (
     step_script,
 )
 
-if typ.TYPE_CHECKING:
-    from pathlib import Path
-
 ACTION = ".github/actions/setup-sccache"
 START_STEP = "Start the sccache server"
 #: The four signals of a fallback. The title and the summary line are what
@@ -35,11 +33,16 @@ FALLBACK_TITLE = "::warning title=sccache-fallback::"
 FALLBACK_SUMMARY = "sccache: FALLBACK (cache disabled for this job)"
 
 
-def _run_start(tmp_path: Path, *, starts: bool) -> tuple[StepResult, Path, Path]:
+def _run_start(
+    tmp_path: Path, *, starts: bool, zeroes: bool = True
+) -> tuple[StepResult, Path, Path]:
     """Run the start step against a fake binary that does or does not start.
 
     The fake records each argument it receives, one per line, so a test can
-    tell whether the step zeroed counters or touched statistics.
+    tell whether the step zeroed counters, and the ``SCCACHE_CONF`` it saw when
+    asked to start a server, so a test can tell whether the timeout reached the
+    process that needed it and not merely ``GITHUB_ENV``. ``zeroes=False``
+    makes ``--zero-stats`` fail, as it can when the server died after starting.
 
     Returns
     -------
@@ -51,10 +54,16 @@ def _run_start(tmp_path: Path, *, starts: bool) -> tuple[StepResult, Path, Path]
     binary.parent.mkdir(parents=True)
     calls = tmp_path / "sccache-calls"
     start_status = 0 if starts else 1
+    zero_status = 0 if zeroes else 1
+    seen_conf = tmp_path / "sccache-start-conf"
     binary.write_text(
         "#!/usr/bin/env bash\n"
         f'echo "$1" >> "{calls}"\n'
-        f'[ "$1" = "--start-server" ] && exit {start_status}\n'
+        'if [ "$1" = "--start-server" ]; then\n'
+        f'  echo "${{SCCACHE_CONF-unset}}" > "{seen_conf}"\n'
+        f"  exit {start_status}\n"
+        "fi\n"
+        f'[ "$1" = "--zero-stats" ] && exit {zero_status}\n'
         "exit 0\n",
         encoding="utf-8",
     )
@@ -89,22 +98,46 @@ def test_the_action_publishes_the_start_status_as_an_output() -> None:
     )
 
 
+def _conf_seen_by_the_server(tmp_path: Path) -> str:
+    """Return the ``SCCACHE_CONF`` the fake saw when asked to start a server."""
+    return (tmp_path / "sccache-start-conf").read_text(encoding="utf-8").strip()
+
+
+def _assert_timeout_reached_the_server(tmp_path: Path, result: StepResult) -> None:
+    """Assert the server process sees the timeout, not only ``GITHUB_ENV``.
+
+    A step that wrote the file and the ``GITHUB_ENV`` line but dropped
+    ``export SCCACHE_CONF`` would pass every assertion on the exported
+    variables while the server started with sccache's own 10 s timeout.
+    """
+    seen = _conf_seen_by_the_server(tmp_path)
+    assert seen == result.exported.get("SCCACHE_CONF"), (
+        f"the server must start with SCCACHE_CONF set to the exported path, "
+        f"saw {seen!r}, exported {result.exported.get('SCCACHE_CONF')!r}"
+    )
+    assert "server_startup_timeout_ms = 60000" in Path(seen).read_text(
+        encoding="utf-8"
+    ), "the config the server reads must set a 60 s startup timeout"
+
+
 def test_a_server_that_starts_gets_a_sixty_second_timeout_and_zero_counters(
     tmp_path: Path,
 ) -> None:
-    """The success path writes the config, exports it and keeps the wrapper."""
+    """The success path configures the start, zeroes and keeps the wrapper."""
     result, outputs, calls = _run_start(tmp_path, starts=True)
 
     assert result.returncode == 0, result.stderr
-    conf = result.exported.get("SCCACHE_CONF")
-    assert conf is not None, f"the step must export SCCACHE_CONF, got {result.exported}"
-    assert "server_startup_timeout_ms = 60000" in (
-        tmp_path / conf.removeprefix(str(tmp_path) + "/")
-    ).read_text(encoding="utf-8"), "the config must set a 60 s startup timeout"
+    assert "SCCACHE_CONF" in result.exported, (
+        f"the step must export SCCACHE_CONF, got {result.exported}"
+    )
+    _assert_timeout_reached_the_server(tmp_path, result)
     assert "status=started" in outputs.read_text(encoding="utf-8"), (
         "a started server must publish status=started"
     )
     assert "--zero-stats" in _calls(calls), "a started server must be zeroed"
+    assert "metric setup-sccache.server=started" in result.stdout, (
+        f"a started server must log its bounded metric, got {result.stdout!r}"
+    )
     assert "RUSTC_WRAPPER" not in result.exported, (
         "a started server must leave the wrapper in place"
     )
@@ -114,23 +147,41 @@ def test_a_server_that_starts_gets_a_sixty_second_timeout_and_zero_counters(
     )
 
 
-def test_a_server_that_will_not_start_falls_back_without_failing(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("starts", "zeroes", "touches_server_again"),
+    [(False, True, False), (True, False, True)],
+    ids=["start-fails", "zero-stats-fails-after-start"],
+)
+def test_a_server_that_cannot_be_used_falls_back_without_failing(
+    tmp_path: Path, *, starts: bool, zeroes: bool, touches_server_again: bool
 ) -> None:
-    """Every signal of a fallback is present and the step still succeeds."""
-    result, outputs, calls = _run_start(tmp_path, starts=False)
+    """Every signal of a fallback is present and the step still succeeds.
+
+    ``--zero-stats`` starts a server when none is running, so one that died
+    after ``--start-server`` makes it try again and can fail. Under ``set -e``
+    that would fail the job, which is the same loss as a start that never
+    worked and must be absorbed the same way.
+    """
+    result, outputs, calls = _run_start(tmp_path, starts=starts, zeroes=zeroes)
 
     assert result.returncode == 0, (
         f"a cache is an optimization; the step must not fail the job: {result.stderr}"
     )
+    _assert_timeout_reached_the_server(tmp_path, result)
     assert FALLBACK_TITLE in result.stdout, (
         f"the annotation title must be sccache-fallback, got {result.stdout!r}"
     )
     assert FALLBACK_SUMMARY in result.summary, (
         f"the run page must carry the fallback line, got {result.summary!r}"
     )
+    assert "metric setup-sccache.server=start-failed" in result.stdout, (
+        f"a fallback must log its bounded metric, got {result.stdout!r}"
+    )
     assert "status=fallback" in outputs.read_text(encoding="utf-8"), (
         "a fallback must publish status=fallback"
+    )
+    assert "status=started" not in outputs.read_text(encoding="utf-8"), (
+        "a fallback must not also publish status=started"
     )
     assert "RUSTC_WRAPPER" in result.exported, (
         f"the step must export RUSTC_WRAPPER, got {result.exported}"
@@ -139,8 +190,9 @@ def test_a_server_that_will_not_start_falls_back_without_failing(
         "the wrapper must be cleared so Cargo compiles with plain rustc, got "
         f"{result.exported}"
     )
-    assert "--zero-stats" not in _calls(calls), (
-        "a fallback must not touch the server again; --zero-stats would restart it"
+    assert ("--zero-stats" in _calls(calls)) is touches_server_again, (
+        "a start that failed must not be followed by --zero-stats, which would "
+        f"start another server; calls were {_calls(calls)}"
     )
 
 
