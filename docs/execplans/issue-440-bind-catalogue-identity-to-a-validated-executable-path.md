@@ -625,6 +625,33 @@ escalation, not a workaround.
       finding — the 479 findings outside this branch are untouched in `main` —
       so nothing here is repaired, and the audit is recorded as corroborating
       evidence with a known false-positive rate rather than as a defect list.
+- [x] (2026-10-02 21:07Z) The head moved after the "final head" claim above:
+      recording the rebase investigation required a commit, so the pushed head
+      is now `2f89a370` and the `72f0e660` row is superseded rather than
+      wrong. The delta is one tracked Markdown file,
+      `docs/execplans/issue-440-bind-catalogue-identity-to-a-validated-executable-path.md`,
+      **+119/-0**, so every Python and Rust gate input is byte-identical to
+      `0ee8ba47` and only the Markdown-reading gates could differ. All six were
+      therefore re-run against `2f89a370` and captured with a per-gate
+      `head_before`/`head_after`, both equal to `2f89a370` with the tree clean
+      before and after: `make check-fmt`, `make typecheck`, `make lint`,
+      `make test`, `make markdownlint`, and `make nixie` each exit `0`. Lint
+      again reached every one of its twelve sub-checks, `yamllint` and
+      `actionlint` included, so none was skipped. `make test` ran its eleven
+      `PYTEST_TARGETS` patterns as eleven separate pytest invocations — which
+      is the figure re-derived from the `Makefile`, not a remembered one — and
+      no summary line reports a failure; nextest reports
+      `127 tests run: 127 passed, 0 skipped` and cargo's doctest pass reports
+      `0 passed; 0 failed; 3 ignored`. CI was then re-checked at the new head
+      and **all twelve** required contexts from the `main-required-checks`
+      ruleset are `success` (`missing=0 notgreen=0`), so the earlier
+      "final head" claim now holds at `2f89a370`. CodeScene is the only
+      non-green check and is not among the twelve. The force-push obligation
+      was discharged without a push: `git push --force-with-lease --dry-run`
+      reports `Everything up-to-date`, and `git ls-remote origin` confirms both
+      `refs/heads/main` (`b6bb9a99`) and the branch tip (`2f89a370`) match the
+      local refs, so the earlier no-op finding rests on the live remote rather
+      than on a possibly stale tracking ref.
 
 ## Surprises & discoveries
 
