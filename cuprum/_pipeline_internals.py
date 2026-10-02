@@ -20,6 +20,7 @@ result mapping), ``cuprum._pipeline_streams``, ``cuprum._pipeline_types``,
 
 from __future__ import annotations
 
+import dataclasses as dc
 import time
 import typing as typ
 from pathlib import Path
@@ -349,30 +350,18 @@ async def _spawn_and_drive_pipeline(
             pending_tasks=pending_tasks,
         )
         _emit_plan_events_and_run_before_hooks(observations)
-        (
-            processes,
-            stderr_tasks,
-            stdout_task,
-            started_at,
-            wall_clock_started_at,
-            relay_diagnostics_by_stage,
-            owns_group,
-        ) = await _spawn_pipeline_processes(
+        spawned = await _spawn_pipeline_processes(
             parts,
             config,
             observations=observations,
         )
-        spawn = _PipelineSpawnResult(
-            processes=processes,
-            stderr_tasks=stderr_tasks,
-            stdout_task=stdout_task,
-            relay_diagnostics_by_stage=tuple(relay_diagnostics_by_stage),
+        spawn = dc.replace(
+            spawned,
             stages=_StageWaitContext(
-                started_at=tuple(started_at),
-                wall_clock_started_at=tuple(wall_clock_started_at),
+                started_at=spawned.stages.started_at,
+                wall_clock_started_at=spawned.stages.wall_clock_started_at,
                 observations=observations,
             ),
-            owns_group=tuple(owns_group),
             idle=config.idle,
         )
     except BaseException as spawn_error:

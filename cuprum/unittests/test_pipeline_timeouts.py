@@ -25,6 +25,7 @@ from cuprum import ScopeConfig, TimeoutExpired, _pipeline_collect, scoped, sh
 from cuprum._backend import get_stream_backend
 from cuprum._pipeline_stream_results import _reconcile_pipe_tasks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.sh import Pipeline, RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 from tests.helpers.execution import _RunKwargs
@@ -181,7 +182,7 @@ async def _assert_immediate_timeout_reconciles_pumps(
                 "nothing reconciled the pumps the caller owns"
             )
     finally:
-        await _terminate_all_shielded(timed_out_processes, cancel_grace=0)
+        await _terminate_all_shielded(timed_out_processes, _TeardownPolicy(0.0))
 
 
 def test_zero_timeout_reconciles_pipe_tasks(

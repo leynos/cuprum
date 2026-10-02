@@ -28,8 +28,9 @@ import typing as typ
 
 import pytest
 
-from cuprum import _subprocess_context, _wait4_process, ECHO, sh
+from cuprum import ECHO, _subprocess_context, _wait4_process, sh
 from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.sh import ExecutionContext, ProcessGroupPolicy, RunOutputOptions
 from tests.helpers.timeouts import (
     pipe_holding_child_argv,
@@ -68,6 +69,12 @@ async def _spawn_owned_run(tmp_path: Path) -> _OwnedRun:
     The child is spawned as its own session leader, exactly as ``OWN_GROUP``
     spawns it in production, so the group the tests tear down is the group the
     run created rather than one the test runner belongs to.
+
+    Returns
+    -------
+    _OwnedRun
+        The running child, its grandchild's pid, and the pid of an unrelated
+        process started alongside it.
     """
     pid_file = tmp_path / "grandchild.pid"
     marker = tmp_path / "grandchild.ready"
@@ -95,7 +102,7 @@ async def _spawn_owned_run(tmp_path: Path) -> _OwnedRun:
 
 async def _terminate_owned_run(run: _OwnedRun) -> None:
     """Tear the run down through the ordinary teardown entry."""
-    await _terminate_all_shielded((run.process,), 0.5, owns_group=True)
+    await _terminate_all_shielded((run.process,), _TeardownPolicy(0.5, owns_group=True))
     await asyncio.to_thread(
         wait_for_process_death,
         run.grandchild_pid,
@@ -189,7 +196,10 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
     async def run_case() -> None:
         run = await _spawn_owned_run(tmp_path)
         try:
-            await _terminate_all_shielded((run.process,), 0.5, owns_group=False)
+            await _terminate_all_shielded(
+                (run.process,),
+                _TeardownPolicy(0.5, owns_group=False),
+            )
             await run.process.wait()
             assert process_is_running(run.grandchild_pid), (
                 "an unowned teardown must not reach the grandchild"
@@ -231,7 +241,7 @@ def test_owned_group_teardown_of_an_exited_child_is_not_an_error(
         )
         await process.wait()
         # The leader is reaped; the call must still return quietly.
-        await _terminate_all_shielded((process,), 0.5, owns_group=True)
+        await _terminate_all_shielded((process,), _TeardownPolicy(0.5, owns_group=True))
         assert process.returncode is not None, (
             "the exited child must keep its recorded exit code"
         )
@@ -309,8 +319,7 @@ def test_inherited_policy_spawns_no_new_session() -> None:
     existing caller.
     """
     assert (
-        _subprocess_context._ownership_spawn_kwargs(ProcessGroupPolicy.INHERIT)
-        == {}
+        _subprocess_context._ownership_spawn_kwargs(ProcessGroupPolicy.INHERIT) == {}
     ), "INHERIT must not alter how a child is spawned"
 
 

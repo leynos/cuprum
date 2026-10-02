@@ -22,7 +22,7 @@ import pytest
 
 from cuprum import Program, TimeoutExpired, sh
 from cuprum._streams import _drain, _StreamConfig
-from cuprum._subprocess_wait import (
+from cuprum._subprocess_drain import (
     _CAPTURE_EOF_GRACE_S,
     _drain_stream_consumers,
     _DrainContext,
