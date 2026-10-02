@@ -124,6 +124,40 @@ repository rather than re-derived here.
       the branch had adjudicated with exact member lists; the gate was green at
       the pre-rebase head `eeae8e70`, so this is rebase-induced, not a
       regression in the branch. `check` reports 27 allowed, no stale entries.
+- [x] (2026-10-02) Resolved `pylint-classic`'s `C0302` by extracting the
+      observation builders into `cuprum/_pipeline_observations.py`. `main`
+      landed `cuprum/_pipeline_internals.py` at exactly 400 lines
+      (`b6bb9a99`), so the branch's gate-mandated
+      `_close_sink_and_drain_after_failure` extraction had zero headroom for
+      its net +2. `_enforce_allowlist`, `_collect_hooks`,
+      `_build_pipeline_observations`, `_emit_plan_events_and_run_before_hooks`
+      and the import surface they needed moved out; the internals module fell
+      from 402 to 351 lines and re-exports the moved names, following the
+      precedent `cuprum/_pipeline_types.py` and `cuprum/_pipeline_collect.py`
+      already set. The split also dissolved the `cuprum._observability` import
+      window that entry covered, so that allow entry was removed; the gate now
+      reports 26 allowed over 24 entries with no stale entries.
+- [x] (2026-10-02) Repaired the semantic audit of the replay, which found one
+      lost change. `main` had rewritten this branch's `python-lint` line in the
+      same region the branch rewrites it to add `install-nose`, and the
+      resolution kept `main`'s prerequisite list but dropped the
+      `$(AMBRLEAKS) cuprum/unittests scripts/tests tests` recipe line. The line
+      is present in the pre-rebase base, the pre-rebase branch head, and
+      `main`, and no commit removed it deliberately — the branch's own diff had
+      it as unchanged context. `AMBRLEAKS` stayed defined and unreferenced, so
+      `make lint` would have stopped scanning snapshots for secrets with no
+      visible symptom. Restored in its documented fifth position, between the
+      DF12 Pylint pass and Skylos. The same audit confirmed the ADR renumber
+      `018` to `019` and its cross-references, the `_resolve_execution_state`
+      collapse in `cuprum/sh/safe_cmd.py`, and the shape of every other
+      replayed commit; a mirror test over the 58 branch-owned files found no
+      other line present in both the pre-rebase head and `main` that the
+      resolution had dropped.
+- [x] (2026-10-02) Admitted `cuprum/_pipeline_observations.py` to the native
+      wheel manifest snapshot. The extraction added a shipped module, and
+      `test_maturin_wheel_build_snapshot` pins the wheel's file list, so the
+      snapshot needed the new entry — the same drift the `_scope_registration`
+      extraction caused earlier on this branch.
 - [ ] Re-run the commit gates against the rebased head and update the draft
       pull request. The `ccccaa85` evidence above describes the pre-rebase
       series and does not carry over to the rewritten commits.

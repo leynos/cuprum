@@ -187,6 +187,26 @@ families rather than every reported one.
   application floor stays at 3.12, and `make typecheck` therefore re-checks the
   tooling modules in a second pass at their real floor rather than weakening
   them or misdeclaring Cuprum's support.
+- An extraction can dissolve a reported family without dissolving the overlap
+  that produced it, because the window that matched was anchored to one
+  module's statement ordering. Extracting the observation builders out of
+  `cuprum/_pipeline_internals.py` into `cuprum/_pipeline_observations.py`
+  removed the `cuprum._observability` import window the module had shared with
+  `cuprum/_command_internals.py`, and the gate reported that entry stale. The
+  overlap itself persists at its new address: the new module imports four names
+  from `cuprum._observability`, and its first three are the same names in the
+  same order as the command module's, so the two blocks share a four-line
+  identical run and diverge only where the command module binds
+  `_wait_for_exec_hook_tasks` in its sorted position. No allow entry names that
+  pair at this revision. The entry was removed anyway — the window it named
+  really had dissolved, and keeping it would have left a key matching families
+  the entry never described — but the two facts are recorded together so a
+  later maintainer does not read the removal as proof that the shared import
+  surface went away. Should the gate report the pair, the response is a new
+  reasoned entry or an argument that four import lines justify extraction;
+  restoring the removed entry is not one, because one of the two locations it
+  named no longer holds the window. A stale report is a prompt to check which
+  of the two happened; it is not itself the verdict.
 - The scan covers production Python only. `tests/`, `benchmarks/`, and
   `scripts/` are maintained but not shipped, and are outside this first gate;
   the scope follows Cuprum's existing production-Python idiom

@@ -16,9 +16,11 @@ from cuprum._backend import _check_rust_available, set_rust_availability_for_tes
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
+    _run_pipeline,
+)
+from cuprum._pipeline_observations import (
     _collect_hooks,
     _enforce_allowlist,
-    _run_pipeline,
 )
 from cuprum._pipeline_spawn import _spawn_pipeline_processes
 from cuprum._pipeline_streams import (

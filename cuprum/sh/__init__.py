@@ -35,9 +35,9 @@ from cuprum._line_iteration import LineStream
 from cuprum._line_iteration import _iter_line_events as _iter_line_events
 from cuprum._pipeline_config import _prepare_pipeline_config as _prepare_pipeline_config
 from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES as _MIN_PIPELINE_STAGES
-from cuprum._pipeline_internals import _collect_hooks as _collect_hooks
-from cuprum._pipeline_internals import _enforce_allowlist as _enforce_allowlist
 from cuprum._pipeline_internals import _run_pipeline as _run_pipeline
+from cuprum._pipeline_observations import _collect_hooks as _collect_hooks
+from cuprum._pipeline_observations import _enforce_allowlist as _enforce_allowlist
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout

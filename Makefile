@@ -509,6 +509,7 @@ pylint-classic: verify-classic-pylint ## Run the baseline Pylint pass under PyPy
 python-lint: ruff uv install-nose pylint-integration pylint-classic verify-df12-pylint ## Run Ruff, interrogate, pylint, df12-python-lints, ambrleaks, and the duplication gate
 	$(RUFF) check && $(INTERROGATE)
 	$(DF12_PYLINT) $(DF12_PYLINT_TARGETS)
+	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
 	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
 	$(DUPLICATION_GATE) check
 

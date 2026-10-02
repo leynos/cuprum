@@ -2050,7 +2050,7 @@ and pipeline paths live in exactly one place, `cuprum/_observability.py`:
 
 Re-use policy: the three call sites — `_prepare_execution_observation`
 (`cuprum/_command_internals.py`), `_build_pipeline_observations`
-(`cuprum/_pipeline_internals.py`), and `_build_spawn_observations`
+(`cuprum/_pipeline_observations.py`), and `_build_spawn_observations`
 (`cuprum/_pipeline_spawn.py`, which now delegates to the pipeline builder and
 adds only its no-observe-hooks assertion) — must route through these helpers. A
 new shared tag is added once, in `_base_stage_tags`, or it will silently
@@ -4983,14 +4983,15 @@ Because `interrogate` requires a docstring on every documentable node,
 documenting a large module can take it over the project's 400-line ceiling
 enforced by Pylint's `too-many-lines`. Split the module by feature rather than
 suppressing the limit; this is why the pipeline dataclasses live in
-`cuprum/_pipeline_types.py` (re-exported from `cuprum/_pipeline_internals.py`)
-rather than inline. The coverage gate applies to tests, benchmarks, and scripts
-as well as the production package. Most gaps there are nested helpers whose
-docstring would merely restate the enclosing fixture; when that happens, give
-the helper a name and a one-line docstring that states its intent, and keep
-single-line docstrings on scenario dataclasses and adapters. Do not exclude a
-scope or a name pattern from the gate; an exclusion only hides the next
-undocumented helper.
+`cuprum/_pipeline_types.py` and the observation builders in
+`cuprum/_pipeline_observations.py`, both re-exported from
+`cuprum/_pipeline_internals.py` rather than declared inline. The coverage gate
+applies to tests, benchmarks, and scripts as well as the production package.
+Most gaps there are nested helpers whose docstring would merely restate the
+enclosing fixture; when that happens, give the helper a name and a one-line
+docstring that states its intent, and keep single-line docstrings on scenario
+dataclasses and adapters. Do not exclude a scope or a name pattern from the
+gate; an exclusion only hides the next undocumented helper.
 
 ### Lint Makefile variables
 
@@ -6182,6 +6183,18 @@ per-stage *reporting*: the terminal `exit` event a stage owes its observers
 pipeline — spawning, waiting, and cleanup. `_pipeline_internals` calls into
 `_pipeline_results` to emit each stage's `exit` event and assemble its result,
 on both the success and the timeout paths.
+
+`cuprum/_pipeline_observations.py` owns the state a run is observed *through*:
+`_build_pipeline_observations` assembles one `_StageObservation` per command —
+enforcing the allowlist, collecting the context's hooks, resolving the working
+directory and environment overlay, and grafting the pipeline's stage index and
+stage count onto the base tags — and `_emit_plan_events_and_run_before_hooks`
+fires each stage's `plan` event and before hooks before any process is spawned.
+It was split out of `cuprum/_pipeline_internals.py`, which re-exports its names
+alongside the `cuprum/_pipeline_types.py` dataclasses. `_enforce_allowlist` and
+`_collect_hooks` are pure queries with no emission or mutation, which is what
+lets `cuprum._command_internals` reuse both on the single-command path without
+inheriting the pipeline's event traffic.
 
 `cuprum/_sink_lifecycle.py` holds the presentation-sink session lifecycle the
 two runners share: the `_SinkBracket` that is the take-once owner of one run's

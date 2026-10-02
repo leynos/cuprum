@@ -28,9 +28,9 @@ from cuprum._line_iteration import LineStream, _iter_line_events
 from cuprum._pipeline_config import _prepare_pipeline_config
 from cuprum._pipeline_internals import (
     _MIN_PIPELINE_STAGES,
-    _collect_hooks,
     _run_pipeline,
 )
+from cuprum._pipeline_observations import _collect_hooks
 from cuprum._sink_lifecycle import _outcome_for_error, _SinkBracket
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.catalogue import ProjectSettings

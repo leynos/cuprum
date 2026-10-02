@@ -26,7 +26,7 @@ tasks the drain exists to reconcile.
 It collaborates with :mod:`cuprum._sink_lifecycle` (the session bracket it
 owns), :mod:`cuprum._subprocess_execution`, :mod:`cuprum._subprocess_context`,
 :mod:`cuprum._observability`, :mod:`cuprum._idle_heartbeat`,
-:mod:`cuprum._pipeline_types`, :mod:`cuprum._pipeline_internals` (hook
+:mod:`cuprum._pipeline_types`, :mod:`cuprum._pipeline_observations` (hook
 collection), and :mod:`cuprum.context`, and is invoked by :mod:`cuprum.sh`.
 """
 
@@ -48,7 +48,7 @@ from cuprum._observability import (
     _wait_for_exec_hook_tasks,
     _without_env_mode_tag,
 )
-from cuprum._pipeline_internals import _collect_hooks, _enforce_allowlist
+from cuprum._pipeline_observations import _collect_hooks, _enforce_allowlist
 from cuprum._pipeline_types import (
     _EventDetails,
     _StageObservation,

@@ -33,6 +33,7 @@
       'cuprum/_pipeline_internals.py',
       'cuprum/_pipeline_native_pump_runtime.py',
       'cuprum/_pipeline_native_pump_types.py',
+      'cuprum/_pipeline_observations.py',
       'cuprum/_pipeline_pipe_tasks.py',
       'cuprum/_pipeline_results.py',
       'cuprum/_pipeline_rust_pump_completion.py',

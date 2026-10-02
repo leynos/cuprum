@@ -5,7 +5,8 @@ captured results threaded through pipeline coordination. They live apart from
 ``cuprum._pipeline_internals`` so the coordination logic stays within the
 project file-size ceiling and so spawn-side modules can import them at the
 top level without import cycles; ``cuprum._pipeline_internals`` re-exports
-them for backwards compatibility.
+them for backwards compatibility, as it also does for the observation
+builders in ``cuprum._pipeline_observations``.
 """
 
 from __future__ import annotations

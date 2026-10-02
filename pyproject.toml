@@ -612,13 +612,6 @@ reason = "Six more modules whose `if typ.TYPE_CHECKING:` block repeats for the s
 
 [[tool.duplication_gate.allow]]
 members = [
-    "cuprum/_pipeline_internals.py",
-    "cuprum/_command_internals.py",
-]
-reason = "Two modules importing overlapping names from `cuprum._observability`: `cuprum/_pipeline_internals.py` takes six, `cuprum/_command_internals.py` five of the same, and the window covers that statement plus the next import's opening line. Their remaining imports diverge immediately, and import declarations cannot be factored into a shared helper. Reported after `main` widened both blocks with the environment-policy names."
-
-[[tool.duplication_gate.allow]]
-members = [
     "cuprum/stream_observation.py",
     "cuprum/adapters/stream_metrics.py",
 ]
