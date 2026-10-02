@@ -8,8 +8,8 @@ The invariants checked here are:
 
 - ``build_argv``: positional arguments are stringified in order and
   precede keyword flags; keyword flags preserve insertion order and
-  normalize underscores in keys to hyphens; ``None`` is rejected with
-  ``TypeError`` in both positional and keyword positions.
+  normalize underscores in keys to hyphens; ``None`` and ``bytes`` are
+  rejected with ``TypeError`` in both positional and keyword positions.
 - ``make``: builders produce ``SafeCmd`` instances whose argv agrees
   with ``build_argv`` and whose program/project come from the catalogue
   entry; unknown programs are rejected with ``UnknownProgramError``.
@@ -45,6 +45,9 @@ _ARG_VALUES = st.one_of(
 _KWARG_KEYS = st.text(alphabet="abcd_", min_size=1, max_size=8)
 _ARGS = st.lists(_ARG_VALUES, max_size=6)
 _KWARGS = st.dictionaries(_KWARG_KEYS, _ARG_VALUES, max_size=4)
+# Bytes are rejected outright, so the property ranges over arbitrary
+# payloads -- including non-UTF-8 -- rather than over curated examples.
+_BYTE_VALUES = st.binary(max_size=8)
 
 _TEST_PROJECT = ProjectSettings(
     name="property-tests",
@@ -100,6 +103,30 @@ def test_build_argv_rejects_none_anywhere(
         build_argv(*positional, **kwargs)
     key = data.draw(_KWARG_KEYS, label="poisoned key")
     with pytest.raises(TypeError, match="None is not a valid argv element"):
+        build_argv(*args, **{**kwargs, key: poisoned})
+
+
+@settings(max_examples=100)
+@given(args=_ARGS, kwargs=_KWARGS, payload=_BYTE_VALUES, data=st.data())
+def test_build_argv_rejects_bytes_anywhere(
+    args: list[str | int | bool | Path],
+    kwargs: dict[str, str | int | bool | Path],
+    payload: bytes,
+    data: st.DataObject,
+) -> None:
+    """``bytes`` raises TypeError in any positional or keyword position."""
+    # Deliberately defeat static typing: the property under test is the
+    # runtime rejection of bytes, which the annotations forbid.
+    poisoned = typ.cast("str", payload)
+    position = data.draw(
+        st.integers(min_value=0, max_value=len(args)),
+        label="insertion position",
+    )
+    positional = [*args[:position], poisoned, *args[position:]]
+    with pytest.raises(TypeError, match="bytes is not a valid argv element"):
+        build_argv(*positional, **kwargs)
+    key = data.draw(_KWARG_KEYS, label="poisoned key")
+    with pytest.raises(TypeError, match="bytes is not a valid argv element"):
         build_argv(*args, **{**kwargs, key: poisoned})
 
 

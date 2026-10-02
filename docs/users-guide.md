@@ -131,10 +131,13 @@ positional argument: `check=True` would produce `--check=True`. `bytes` values
 raise `TypeError`, as `None` does, so decode bytes before passing them to the
 builder. An argument containing spaces remains one argument.
 
-Use `os.fsdecode()` when you need to pass caller-held filesystem bytes. It uses
-the filesystem encoding with the `surrogateescape` error handler. On POSIX,
-undecodable bytes become surrogate code points and round-trip unchanged when
-Python encodes the argument for the child process.
+`os.fsdecode()` converts caller-held filesystem bytes to text using the
+configured filesystem encoding and error handler. On POSIX, the default
+`surrogateescape` handler maps undecodable bytes to surrogate code points,
+which round-trip unchanged when Python encodes the argument for the child
+process. On Windows, the default `surrogatepass` handler rejects undecodable
+bytes such as `b"v\xff"` with `UnicodeDecodeError`, so only byte sequences the
+filesystem encoding accepts can pass through.
 
 <!-- tested-example: arguments -->
 
@@ -146,7 +149,7 @@ from cuprum import Program, ProgramCatalogue, sh
 
 catalogue = ProgramCatalogue.from_programs(sys.executable, name="arguments")
 python = sh.make(Program(sys.executable), catalogue=catalogue)
-filesystem_argument = os.fsdecode(b"v\xff")
+filesystem_argument = os.fsdecode(b"v\xc3\xbf")
 command = python("-c", "print('two words')", filesystem_argument)
 assert command.argv == ("-c", "print('two words')", filesystem_argument)
 assert command.argv_with_program == (sys.executable, *command.argv)

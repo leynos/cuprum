@@ -905,7 +905,11 @@ Keep `build_argv` and `sh.make` behaviour aligned:
 - keyword arguments are serialized after positionals as `--flag=value` entries;
 - underscores in keyword names are normalized to hyphens;
 - insertion order for keyword flags is preserved;
-- `None` raises `TypeError` in positional and keyword positions.
+- accepted values are `str`, `int`, `float`, `bool`, and `Path`;
+- `None` raises `TypeError` in positional and keyword positions;
+- `bytes` raises `TypeError` in positional and keyword positions, with the
+  offending value in the message, because `str()` would otherwise pass the
+  value's Python `repr` to the child process.
 
 Property coverage for this contract lives in
 `cuprum/unittests/test_sh_property_based.py`. Update those properties whenever
