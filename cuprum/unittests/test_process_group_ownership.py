@@ -373,3 +373,47 @@ def test_owned_policy_spawns_the_child_as_a_session_leader(
     assert recorded[0].start_new_session, (
         "OWN_GROUP must spawn the child as its own session leader"
     )
+
+
+def test_the_lines_path_spawns_its_child_as_a_session_leader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``SafeCmd.lines()`` carries the policy too, not only ``run()``.
+
+    The two paths reach the spawn through different code — one builds a
+    subprocess execution, the other builds a line-stream run — so a policy
+    wired into only one of them would leave the other inheriting silently.
+    Iterating a line stream is exactly the case ownership matters for, because
+    a line consumer is what outlives a descendant that holds the pipe.
+
+    The child is one that ends immediately: the assertion is about the spawn
+    arguments, so the run only has to reach the spawn and finish.
+    """
+    recorded: list[_SpawnedArgv] = []
+    real_spawn = _wait4_process.spawn_direct_process
+
+    async def recording_spawn(
+        config: _wait4_process.DirectProcessConfig,
+    ) -> asyncio.subprocess.Process:
+        """Record the spawn inputs, then spawn for real."""
+        recorded.append(_SpawnedArgv(config.argv, config.start_new_session))
+        return await real_spawn(config)
+
+    monkeypatch.setattr(_wait4_process, "spawn_direct_process", recording_spawn)
+
+    async def run_case() -> None:
+        """Iterate one command's lines under the owning policy."""
+        cmd = sh.make(ECHO)("-n", "owned")
+        stream = cmd.lines(
+            output=RunOutputOptions(capture=True, echo=False),
+            context=ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP),
+        )
+        async for _event in stream:
+            pass
+
+    asyncio.run(run_case())
+
+    assert recorded, "the run must have spawned through the recorded call"
+    assert recorded[0].start_new_session, (
+        "OWN_GROUP must spawn a line stream's child as its own session leader"
+    )
