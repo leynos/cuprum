@@ -88,6 +88,23 @@
 
 ### Added
 
+- **Opt-in process-group ownership:** `ExecutionContext(process_group=…)`
+  accepts a `ProcessGroupPolicy`. `INHERIT` remains the default and tears down
+  only the direct child, exactly as before. `OWN_GROUP` spawns the child as its
+  own session and process-group leader on POSIX (`PGID == PID`) and tears the
+  whole group down through `os.killpg`, so a descendant the direct child left
+  behind — including one that ignores `SIGTERM` and keeps an inherited pipe
+  open — is reclaimed and the run settles within the documented bounds instead
+  of waiting out the drain's grace window. Only the group the spawn created is
+  signalled, so unrelated processes and the caller's own group are untouched.
+  The guarantee is bounded and stated as such: a descendant that leaves the
+  group with `setsid()` or `setpgid()` is out of reach, as are ancestors and
+  siblings. `OWN_GROUP` raises `ValueError` on Windows, which has no POSIX
+  process groups and would need a Job Object whose assignment cannot be made
+  atomic with process creation, so containment could begin only after a child
+  might already have spawned a descendant. See
+  [ADR-019](docs/adr-019-process-group-ownership.md)
+  ([#438](https://github.com/leynos/cuprum/issues/438)).
 - **`EnvMode`:** Select inherited, additive-overlay, or replacement child
   environments without mutating process-global state
   ([#434](https://github.com/leynos/cuprum/issues/434)).
