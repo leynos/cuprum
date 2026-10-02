@@ -414,12 +414,23 @@ so renaming either is a contract change.
 Workflows therefore carry no separate step that starts or zeroes the server.
 Every call gives the setup step `id: sccache`, and every
 `Record compiler-cache effectiveness` step is guarded on
-`steps.sccache.outputs.status != 'fallback'`, because `sccache --show-stats`
-starts a server when none is running, which would repeat the failure the
-fallback just absorbed. `tests/test_setup_sccache_server_start.py` runs the
-start step against a fake binary and asserts each signal;
-`tests/test_ci_compiler_cache.py` asserts the id, the guard and the absence of
-a workflow-level start or zeroing step.
+`steps.sccache.outputs.status != 'fallback'`. With no server,
+`sccache --show-stats` prints empty default statistics instead of starting one,
+so the guard keeps the report from describing a job that never used the cache.
+The command that does start a server when none is running is
+`sccache --zero-stats`, so the start step treats a failing `--zero-stats` as
+the same loss and falls back rather than failing the job.
+`tests/test_setup_sccache_server_start.py` runs the start step against a fake
+binary and asserts each signal, and that the server process itself sees the 60 s
+`SCCACHE_CONF` rather than only `GITHUB_ENV`.
+`tests/test_ci_compiler_cache.py` asserts the id, the absence of a
+workflow-level start or zeroing step, and, by scanning every workflow for the
+`--show-stats` command rather than a step name, that no report runs unguarded.
+
+Each start also logs one bounded line, `metric setup-sccache.server=started` or
+`metric setup-sccache.server=start-failed`, so a count can be taken from the
+logs with the same estate convention as `setup-rust`'s
+`metric setup-rust.sccache.server=` line.
 
 The `sccache-` key names the run rather than the content it holds. A compiler
 cache depends on the source that was compiled, which no lockfile hash captures,

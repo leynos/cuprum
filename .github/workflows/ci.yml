@@ -1526,7 +1526,7 @@ jobs:
           fi
 
       - name: Report compiler-cache effectiveness
-        if: always()
+        if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
         run: |
           set -euo pipefail

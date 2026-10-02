@@ -265,6 +265,7 @@ SCCACHE_JOBS: typ.Final = (
     ("ci.yml", "lint-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "coverage"),
+    ("ci.yml", "loom-smoke"),
     ("ci.yml", "benchmark-ratchet"),
     ("coverage-main.yml", "coverage-upload"),
     ("loom.yml", "loom"),

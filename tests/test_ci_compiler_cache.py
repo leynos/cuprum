@@ -17,7 +17,8 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.ci_leg_gate import ungated
+from tests.helpers import strict_yaml
+from tests.helpers.ci_leg_gate import normalized, ungated
 from tests.helpers.ci_runners import (
     CACHE_ACTION_PIN,
     CACHE_KEYS_ACTION_FILE,
@@ -96,7 +97,7 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
     stats_index = next(
         index
         for index, step in enumerate(job_steps)
-        if step.get("name") == "Record compiler-cache effectiveness"
+        if "--show-stats" in str(step.get("run", ""))
     )
     measured = [
         index
@@ -114,7 +115,9 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
     stats = job_steps[stats_index]
     # Whole-guard comparison. `always()` keeps the report after a failed
     # build; the second conjunct stops it reading statistics from a server the
-    # composite could not start, which `--show-stats` would restart.
+    # composite could not start: with no server `--show-stats` prints empty
+    # default statistics, so the report would describe a job that never used
+    # the cache.
     guard = ungated(workflow_name, job_name, stats.get("if"))
     expected = f"always() && {NOT_FALLEN_BACK}"
     if workflow_name == "rust-boundaries.yml" and job_name == "native":
@@ -133,6 +136,31 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
     )
     assert "--stats-format json" in script, (
         f"{workflow_name}:{job_name} must record machine-readable stats"
+    )
+
+
+def test_no_workflow_step_reads_statistics_without_the_fallback_guard() -> None:
+    """Find every statistics step by what it runs, not by what it is called.
+
+    The guard was first applied by step name, which missed a differently named
+    report in `loom-smoke`. Scanning for the command itself leaves no step to
+    hide behind a name.
+    """
+    unguarded = []
+    found = 0
+    for workflow_name, source in workflow_sources():
+        document = strict_yaml.load(source, workflow_name)
+        for job_name, job in document.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                if "--show-stats" not in str(step.get("run", "")):
+                    continue
+                found += 1
+                if NOT_FALLEN_BACK not in normalized(step.get("if")):
+                    unguarded.append(f"{workflow_name}:{job_name}:{step.get('name')}")
+    assert found, "no workflow step reads sccache statistics; the scan is empty"
+    assert not unguarded, (
+        f"these steps read sccache statistics without {NOT_FALLEN_BACK!r}, so "
+        f"they would publish empty statistics for an uncached job: {unguarded}"
     )
 
 
