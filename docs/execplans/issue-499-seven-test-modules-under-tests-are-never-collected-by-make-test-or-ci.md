@@ -696,6 +696,58 @@ than discovering the gap months later.
     doctests. The first run therefore says nothing about those selections, and
     its 2535 passed covers `cuprum/unittests` alone. A full re-run is what
     supplies the missing evidence; no defect is implied by the gap.
+- [x] (2026-10-02) Re-ran `make test` at the same head and observed every
+  selection the abort had hidden.
+  - *The gate is green.* `env -u BASH_ENV make test` exits **0** at
+    `2d335973` in 276 s, recording that head as both `HEAD_BEFORE` and
+    `HEAD_AFTER`. The branch had an earlier green `make test` at `726282f3`
+    (`rc=0`, 11 sessions, 329 s); the run below is the first green one at this
+    later head, the aborted run being its only predecessor there. Log:
+    `/tmp/test-rerun-issue499-2d335973.out`.
+  - *Every selection ran this time.* Eleven pytest invocations ran instead of
+    two, plus the Rust and doctest leaves: `test-selection` 62 passed;
+    `cuprum/unittests` 2537 passed, 70 skipped (two more passes than the
+    aborted run, which is exactly the two nodes that had failed); then 764, 2,
+    116, 5, 4, 131, 12 (3 skipped), 21 (13 skipped), and 22 passed across the
+    remaining selections. The Rust leaf reports `127 tests run: 127 passed, 0
+    skipped`, and the doctest leaf passes with three ignored. A scrutineer
+    re-derived the totals from the log independently: 3762 collected, 3676
+    passed, 86 skipped, and 3762 = 3676 + 86 exactly. All eleven sessions
+    carry a `collected N items` line, so no selection is inferred from a
+    summary alone, and `cargo-nextest not found` appears zero times, so the
+    nextest route ran rather than the `cargo test` fallback.
+  - *The restored selections are the ones the abort hid.* The
+    `tests/test_ci_*.py` corpus, `scripts/tests/*`, `tests/behaviour/*`,
+    `tests/test_native_sdist.py`, and
+    `tests/integration/test_act_stream_parsing.py` all appear in the log's
+    node IDs, and the run reached `test-rust` — the `cd rust && … cargo test
+    --workspace --doc` invocation is present where the aborted log has none.
+  - *Two selections that look short are not gaps.* The
+    `tests/behaviour/test_[a-h]*.py` glob expands to 18 files but only 17 emit
+    nodes, because
+    `test_benchmark_gate_summary_support.py` is a support module with no
+    `test_` functions. `scripts/tests/` holds 12 files of which four sit
+    outside `PYTEST_TARGETS`; two of those are genuine test modules
+    (`test_markdown_format_makefile.py` and `test_run_loom.py`). That is the
+    selector's declared boundary, not a regression: this guard polices
+    root-level `tests/test_*.py` only (`tests/helpers/suite_selection.py`), and
+    the coverage job still collects `scripts/tests/`. The repository configures
+    no `testpaths`, and the pinned `generate-coverage` action
+    (`ci.yml:1160`, `a5765019`) builds `PYTEST_ARGS` as `-m pytest -v` with no
+    path arguments, so that job runs a bare root `pytest`; a local bare root
+    `pytest --collect-only` resolves 151 `scripts/tests/` node IDs.
+  - *The doctest leaf is green but vacuous.* Aggregated over the three
+    workspace crates it reports `0 passed; 0 failed; 3 ignored`: two crates run
+    `0 tests`, and `cuprum_streams` runs three that are all ignored. A green
+    doctest leaf is therefore not evidence that any doctest assertion runs.
+    Pre-existing and untouched by this branch, but recorded here so the green
+    is not over-read.
+  - *The CodeScene item is verified first-hand, not taken on report.*
+    `cs delta origin/main` at this head prints "No issues found!" (exit 0), and
+    the executable body of `admits_event` hashes identically across
+    `92f17d25^`, `92f17d25`, `8257139c`, and this head once the docstring is
+    excluded from the AST — so the fix really was documentation-only, and the
+    Large Method finding is cleared on evidence rather than assertion.
 
 ## Surprises & discoveries
 
