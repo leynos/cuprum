@@ -2,32 +2,21 @@
 
 `test_ci_suite_wiring_contract.py` asks whether anything *runs* the selector and
 `tests/helpers/suite_selection.py` asks whether every module is *covered* by it.
-Both answers are only as good as the recipe in between. A `test-python` target
+Both answers are only as good as the recipe in between: a `test-python` target
 that mentions `$(PYTEST_TARGETS)` inside an `echo`, or that iterates one
-variable and then hands a different one to pytest, satisfies every
+variable and hands a different one to pytest, satisfies every
 mentions-the-name check while collecting something else, or nothing at all.
-
 Reading the recipe as text cannot tell those apart, so the claim is checked as a
-**bounded** structural walk over the recipe's shell tokens — not a shell
-interpreter. It recognizes one shape, the shape this repository's suite target
-is written in, and refuses the rest:
+**bounded** structural walk over the recipe's shell tokens, never a shell
+interpreter. It recognizes the shape this repository's suite target is written
+in — a `for` loop over the selector, whose body binds each value with `set --`
+and hands it to the configured pytest command — and refuses everything else by
+name, which is what makes the `echo`-only, wrong-list, discarded-argument, and
+commented-out recipes fail here instead of passing on their words.
 
-* a `for <name> in $(foreach <ignored>,<list>,<body>)` whose *list* argument is
-  the selector, so the loop is driven by the selector rather than by a variable
-  mentioned nearby;
-* a `set -- <name>` that is itself a command of that loop's body, so each
-  iterated value becomes the positional parameters rather than being printed;
-* a command of the same body whose program is the configured pytest invocation
-  and whose arguments include the positional expansion, so those values reach
-  pytest.
-
-The body is bounded by the loop's own `done`, so a `set --` an `echo` merely
-prints, or a pytest run after the loop has finished, is not counted. Anything
-else is refused by name, which is what makes the `echo`-only, wrong-list,
-discarded-argument, and commented-out recipes fail here instead of passing on
-their words. Refusing is the safe direction for a contract: a recipe in a
-different but equally valid shape is reported for a human to read rather than
-silently certified.
+Refusing is the safe direction for a contract: a recipe in a different but
+equally valid shape is reported for a human to read rather than silently
+certified.
 """
 
 from __future__ import annotations
@@ -48,8 +37,8 @@ __all__ = (
 )
 
 #: Commands whose whole purpose is to print their arguments. A selector named
-#: only among them is reported to a reader, not handed to the suite, so it does
-#: not count as consumed: the recipe describes the selection rather than runs it.
+#: only among them describes the selection rather than running it, so it is not
+#: counted as consumed.
 _PRINTERS = frozenset({"echo", "printf"})
 
 #: A plain shell variable name, all `for` may bind here: a name that is itself a
@@ -62,16 +51,16 @@ _VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _COMMAND_SEPARATORS = frozenset({";", "&&", "||", "|", "do", "done", "then", "fi"})
 
 #: A leading `NAME=value` word: an environment assignment prefixed to a command.
-#: Stripped before reading the command's program, so a recipe that sets
-#: `RUSTFLAGS` before invoking pytest is read as invoking pytest.
+#: Stripped before reading the program, so `RUSTFLAGS=… $(PYTEST)` reads as a
+#: pytest invocation.
 _ENVIRONMENT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 #: How many `$(foreach` arguments to expect before treating the call as
 #: unreadable. Three is the arity `make` defines.
 _FOREACH_ARITY = 3
 
-#: Tokens a loop header occupies before its `$(foreach` list: `for`, the
-#: loop variable, `in`, and the call itself.
+#: Tokens a loop header occupies before its `$(foreach` list: `for`, the loop
+#: variable, `in`, and the call itself.
 _LOOP_HEADER_WIDTH = 4
 
 #: The word at which `set -- <value>` carries the value it binds: `set`, the
@@ -117,6 +106,53 @@ def _program(words: cabc.Sequence[str]) -> str:
     return words[index] if index < len(words) else ""
 
 
+def _loop_shape(tokens: cabc.Sequence[str], index: int) -> tuple[str, str, int] | None:
+    """Return a `for` header's variable, list, and `done`, else `None`.
+
+    `None` is how a caller tells the loop from a command that merely carries
+    its words: an `echo for p in $(foreach …` has every token the loop does
+    while the shell runs `echo`. The `done` is sought in the token stream,
+    because `_segments` consumes it as the separator it is, so it is never a
+    command's program. A nested loop would end the body early; this suite
+    target has none, and generalizing would buy a shell interpreter.
+    """  # ruff: ignore[docstring-missing-returns] - the summary names the return
+    window = tokens[index : index + _LOOP_HEADER_WIDTH]
+    # A short window yields a short slice, which is not the pair sought — so
+    # the length check is the comparison rather than a clause beside it.
+    if tuple(window[2:4]) != ("in", "$(foreach"):
+        return None
+    variable = window[1]
+    if not _VARIABLE_NAME.fullmatch(variable):
+        return None
+    head = " ".join(tokens[index + 3 :]).split(";", 1)[0]
+    pieces = head.split(",", _FOREACH_ARITY - 1)
+    require(
+        condition=len(pieces) >= _FOREACH_ARITY,
+        message=(
+            f"the `test-python` recipe's `$(foreach` call does not carry "
+            f"the three arguments `make` defines, so the list it iterates "
+            f"cannot be read. Read: {head!r}"
+        ),
+    )
+    body_end = next(
+        (
+            position
+            for position, token in enumerate(tokens)
+            if position > index and token.rstrip(";") == "done"
+        ),
+        -1,
+    )
+    require(
+        condition=body_end >= 0,
+        message=(
+            "the `test-python` recipe's `for` loop is not closed by a "
+            "`done`, so the loop body has no end and the recipe cannot run "
+            "as written"
+        ),
+    )
+    return variable, pieces[1].strip(), body_end
+
+
 def _loop_header(
     tokens: cabc.Sequence[str],
     *,
@@ -128,30 +164,13 @@ def _loop_header(
     closest one iterates another variable — reported by naming the list read.
     """  # ruff: ignore[docstring-missing-returns, docstring-missing-exception] - the summary names the return and the refusal
     reference = f"$({selector})"
-    # `for` must be the command's *program*, not a word inside one: an
-    # `echo for p in $(foreach …` carries every token the loop does while the
-    # shell runs `echo`, so reading segments keeps an argument from being
-    # mistaken for the loop itself.
     for index, words in _segments(tokens):
         if _program(words) != "for":
             continue
-        window = tokens[index : index + _LOOP_HEADER_WIDTH]
-        if len(window) < _LOOP_HEADER_WIDTH or window[2:4] != ("in", "$(foreach"):
+        shape = _loop_shape(tokens, index)
+        if shape is None:
             continue
-        variable = window[1]
-        if not _VARIABLE_NAME.fullmatch(variable):
-            continue
-        head = " ".join(tokens[index + 3 :]).split(";", 1)[0]
-        pieces = head.split(",", _FOREACH_ARITY - 1)
-        require(
-            condition=len(pieces) >= _FOREACH_ARITY,
-            message=(
-                f"the `test-python` recipe's `$(foreach` call does not carry "
-                f"the three arguments `make` defines, so the list it iterates "
-                f"cannot be read. Read: {head!r}"
-            ),
-        )
-        iterated = pieces[1].strip()
+        variable, iterated, body_end = shape
         require(
             condition=reference in iterated,
             message=(
@@ -160,23 +179,7 @@ def _loop_header(
                 "driven by; it is merely a variable the recipe mentions"
             ),
         )
-        # The body runs from the header to its matching `done`, sought in the
-        # token stream because `_segments` consumes it as the separator it is,
-        # so it is never a command's program. A nested loop would end the body
-        # early; this repository's suite target has none, and generalizing
-        # would buy a shell interpreter.
-        for position in range(index + 1, len(tokens)):
-            if tokens[position].rstrip(";") == "done":
-                return index, variable, position
-        require(
-            condition=False,
-            message=(
-                "the `test-python` recipe's `for` loop is not closed by a "
-                "`done`, so the loop body has no end and the recipe cannot run "
-                "as written"
-            ),
-        )
-        raise AssertionError
+        return index, variable, body_end
     require(
         condition=False,
         message=(
