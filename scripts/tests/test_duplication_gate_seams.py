@@ -91,18 +91,16 @@ class TestCheckInputSeams:
         )
 
     @pytest.mark.parametrize(
-        ("error", "expected_type", "expected_message"),
+        ("error", "expected_type"),
         [
             pytest.param(
                 OSError("unreadable configuration"),
                 gate.GateExecutionError,
-                "cannot load duplication allowlist: unreadable configuration",
                 id="os-error",
             ),
             pytest.param(
                 tomllib.TOMLDecodeError("bad table", "", 0),
                 gate.GateExecutionError,
-                "cannot load duplication allowlist: bad table (at end of document)",
                 id="toml-error",
             ),
         ],
@@ -111,7 +109,6 @@ class TestCheckInputSeams:
         self,
         error: Exception,
         expected_type: type[Exception],
-        expected_message: str,
     ) -> None:
         """Unreadable configuration becomes an explicit execution error."""
 
@@ -122,6 +119,15 @@ class TestCheckInputSeams:
         with pytest.raises(expected_type) as raised:
             gate._read_allowlist(reader)
 
+        # The gate owns the fixed prefix and the decision to render the caught
+        # error; CPython owns how that error renders itself. Pinning the whole
+        # string would pin the interpreter instead: 3.14 gave TOMLDecodeError
+        # `.msg`/`.lineno`/`.colno` and changed `str()` from the constructor
+        # arguments to `bad table (at end of document)`, while 3.12 and 3.13
+        # still render `('bad table', '', 0)`. Spell the contract the gate
+        # implements, so the module also holds under the 3.13 interpreter the
+        # coverage job collects it with.
+        expected_message = f"cannot load duplication allowlist: {error}"
         assert str(raised.value) == expected_message, "Diagnostic must name the cause."
         assert raised.value.__cause__ is error, "The original error must be the cause."
 
