@@ -21,6 +21,7 @@ import pytest
 from cuprum import Program, ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
+from cuprum.events import TerminalOutcome
 from cuprum.sh import RunOutputOptions
 from tests.helpers.catalogue import python_catalogue
 
@@ -178,16 +179,22 @@ def test_pipeline_timeout_expired_still_reaches_the_caller() -> None:
 
 
 def test_pipeline_timeout_emits_terminal_exit_events() -> None:
-    """Every reaped stage still reports a terminal ``exit`` event.
+    """Every reaped stage reports ``exit`` then one ``settled`` outcome.
 
     The success path emits these while assembling stage results, which a
     timeout never reaches. Without an explicit emission the stage would report
-    a ``timeout`` and then go silent — and, because ``TracingHook`` ends a span
-    only on ``exit``, its span would stay open for the tracer's lifetime.
+    a ``timeout`` and then go silent; ``settled`` follows each preserved ``exit``
+    and closes the matching tracing span.
     """
     events: list[ExecEvent] = []
     _run_until_timeout(0.2, events, InMemoryMetrics())
+    _assert_timeout_exits_cover_started_stages(events)
+    _assert_terminal_outcomes_match_stage_exits(events)
+    _assert_timeout_precedes_each_stage_exit(events)
 
+
+def _assert_timeout_exits_cover_started_stages(events: list[ExecEvent]) -> None:
+    """Assert every spawned stage has one observed terminal exit event."""
     exits = [ev for ev in events if ev.phase == "exit"]
     assert len(exits) == _STAGE_COUNT, (
         f"each of the {_STAGE_COUNT} stages must report a terminal exit event, "
@@ -197,6 +204,23 @@ def test_pipeline_timeout_emits_terminal_exit_events() -> None:
         ev.pid for ev in events if ev.phase == "start"
     }, "the exit events must cover exactly the stages that started"
 
+
+def _assert_terminal_outcomes_match_stage_exits(events: list[ExecEvent]) -> None:
+    """Assert each settled stage retains its own exit details and timeout."""
+    exits = [event for event in events if event.phase == "exit"]
+    settled = [event for event in events if event.phase == "settled"]
+    assert len(settled) == _STAGE_COUNT, (
+        f"each stage must settle once, got {[(ev.phase, ev.pid) for ev in events]}"
+    )
+    for terminal in settled:
+        stage_exit = next(event for event in exits if event.exec_id == terminal.exec_id)
+        assert terminal.terminal_outcome is TerminalOutcome.TIMEOUT
+        assert terminal.pid == stage_exit.pid
+        assert terminal.exit_code == stage_exit.exit_code
+
+
+def _assert_timeout_precedes_each_stage_exit(events: list[ExecEvent]) -> None:
+    """Assert per-stage timeout events precede their own reaped exit."""
     # Per stage, not globally: `phases.index` reports only the *first*
     # occurrence in the whole stream, so with two stages it would compare one
     # stage's timeout against the other's exit and accept an interleaving in
@@ -298,11 +322,10 @@ def test_exit_hook_failure_cannot_mask_the_timeout() -> None:
 
 
 def test_pipeline_timeout_closes_tracing_spans() -> None:
-    """A timed-out pipeline leaves no span open in the tracer.
+    """A timed-out pipeline settles and closes every span in the tracer.
 
-    This is what the terminal ``exit`` event buys: ancillary phases record a
-    span event and deliberately leave the span open, so only ``exit`` can end
-    it. A pipeline that timed out previously stranded one span per stage.
+    Ancillary phases record span events and leave spans open; the definitive
+    ``settled`` event sets their status and closes them.
     """
     tracer = InMemoryTracer()
     pipeline, allowlist = _sleeping_pipeline()
@@ -321,4 +344,9 @@ def test_pipeline_timeout_closes_tracing_spans() -> None:
     assert not unfinished, (
         f"a timed-out pipeline must end every span it opened, {len(unfinished)} "
         "were left open"
+    )
+    assert all(
+        span.attributes["cuprum.terminal_outcome"] == "timeout"
+        and span.status_ok is False
+        for span in tracer.spans
     )

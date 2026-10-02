@@ -148,6 +148,39 @@
     'tracing_span_event': None,
   })
 # ---
+# name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[settled]
+  dict({
+    'logging_extra': dict({
+      'cuprum_argv': tuple(
+        'echo',
+        'hello',
+      ),
+      'cuprum_cwd': '<cwd>',
+      'cuprum_env_mode': 'replace',
+      'cuprum_phase': 'settled',
+      'cuprum_pid': '<pid>',
+      'cuprum_program': 'echo',
+    }),
+    'metrics_labels': dict({
+      'program': 'echo',
+      'project': 'proj',
+    }),
+    'tracing_attributes': dict({
+      'cuprum.argv': list([
+        'echo',
+        'hello',
+      ]),
+      'cuprum.cwd': '<cwd>',
+      'cuprum.env_mode': 'replace',
+      'cuprum.pid': '<pid>',
+      'cuprum.pipeline_stage_index': 0,
+      'cuprum.pipeline_stages': 2,
+      'cuprum.program': 'echo',
+      'cuprum.project': 'proj',
+    }),
+    'tracing_span_event': None,
+  })
+# ---
 # name: TestAdapterProjection.test_projection_snapshots_lock_the_wire_contract[start]
   dict({
     'logging_extra': dict({

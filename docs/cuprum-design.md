@@ -1791,21 +1791,22 @@ registered hooks without performing authorization, dispatching hooks, or
 mutating the context. Pipeline execution preserves this ordering for every
 stage before emitting its `plan` event and dispatching before-hooks.
 
-`cuprum._pipeline_internals` owns pipeline orchestration: it enforces the
-allowlist, collects hooks, builds stage observations, coordinates process
-execution and completion, and assembles stage results. `cuprum._pipeline_types`
-contains the passive shared dataclasses and types used by that coordination
-layer; it does not perform execution logic. `_pipeline_internals` re-exports
-selected `_pipeline_collect` helpers for backwards compatibility, not those
-types. Do not reintroduce the combined `_run_before_hooks` responsibility in
+`cuprum._pipeline_observation` owns pipeline preflight and event setup: it
+enforces the allowlist, collects hooks, builds stage observations, then emits
+each plan before dispatching its before-hooks. `cuprum._pipeline_internals`
+coordinates process execution and completion, finalizes the run, and assembles
+stage results. It re-exports the observation helpers for existing internal
+importers. `cuprum._pipeline_types` contains the passive shared dataclasses and
+types used by those modules; it does not perform execution logic. Do not
+reintroduce the combined `_run_before_hooks` responsibility in
 `_pipeline_types`.
 
 `cuprum._pipeline_results` owns per-stage *reporting*, split out of
 `_pipeline_internals` so that module stays about *running* a pipeline: the
-terminal `exit` event a stage owes its observers (`_emit_timeout_exit_events`)
-and the `CommandResult` assembly alongside it (`_build_pipeline_stage_results`).
-`_pipeline_internals` calls into `_pipeline_results` on both the success and
-the timeout paths, so a stage never reports a `timeout` and then falls silent.
+actual child `exit` event, the definitive `settled` outcome, and the
+`CommandResult` assembly alongside them. `_pipeline_internals` calls into
+`_pipeline_results` on both the success and timeout paths, so a stage never
+reports a `timeout` and then falls silent.
 
 `cuprum._sink_lifecycle` owns the presentation-sink session lifecycle the two
 runners share: the `_SinkBracket`, the take-once owner of one run's session,

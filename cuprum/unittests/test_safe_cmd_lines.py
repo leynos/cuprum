@@ -279,10 +279,10 @@ def test_lines_started_stream_emits_lifecycle_and_output_events(
     assert [event.phase for event in observed[:2]] == ["plan", "start"], (
         f"iteration must plan and start before output, got {observed!r}"
     )
-    assert observed[-1].phase == "exit", (
+    assert [event.phase for event in observed[-2:]] == ["exit", "settled"], (
         f"completion must follow all output, got {observed!r}"
     )
-    assert observed.index(observed[-1]) > max(
+    assert observed.index(observed[-2]) > max(
         index
         for index, event in enumerate(observed)
         if event.phase in {"stdout", "stderr"}

@@ -24,12 +24,11 @@ from cuprum.adapters.metrics_adapter import (
     InMemoryMetrics,
     MetricsHook,
     _CounterOp,
-    _HistogramOp,
     _metric_operations,
     _UnhandledMetricsPhaseError,
 )
 from cuprum.context import EnvMode, ScopeConfig, scoped
-from cuprum.events import ExecEvent
+from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.unittests._adapter_test_support import _python_builder
 
 if typ.TYPE_CHECKING:
@@ -49,6 +48,7 @@ _KNOWN_PHASES: list[str] = [
     "teardown_error",
     "capture_eof_grace_expired",
     "exit",
+    "settled",
     "pipeline_fail_fast",
 ]
 
@@ -97,11 +97,17 @@ def _event(
     )
 
 
+def _with_terminal_outcome(
+    event: ExecEvent,
+    outcome: TerminalOutcome | None,
+) -> ExecEvent:
+    """Return ``event`` with its terminal category set for reducer tests."""
+    return dc.replace(event, terminal_outcome=outcome)
+
+
 def _with_mode(event: ExecEvent, mode: EnvMode) -> ExecEvent:
     """Return ``event`` carrying ``mode`` as its effective policy."""
-    # Set by replacement rather than as a fifth parameter on ``_event``, which
-    # CodeScene's advisory limit holds at four arguments. Replacement also
-    # states what these tests vary: the policy label, with the event held fixed.
+    # Replacement varies only the policy label, with the event held fixed.
     return dc.replace(event, env_mode=mode)
 
 
@@ -129,14 +135,15 @@ def test_start_counter_carries_the_environment_mode() -> None:
 
 
 def test_failure_counter_carries_the_environment_mode() -> None:
-    """A failure is attributable to its policy, not just to the program.
-
-    This is the case the label exists for: a replacement policy that omits
-    ``PATH`` fails at spawn, and without the label that failure lands in the
-    same series as an ordinary overlay one.
-    """
+    """A settled non-zero exit attributes its failure to the effective policy."""
     operations = _metric_operations(
-        _with_mode(_event("exit", exit_code=1), EnvMode.REPLACE)
+        _with_mode(
+            _with_terminal_outcome(
+                _event("settled"),
+                TerminalOutcome.EXIT_NONZERO,
+            ),
+            EnvMode.REPLACE,
+        )
     )
 
     assert _CounterOp("cuprum_failures_total", 1.0, {"env_mode": "replace"}) in (
@@ -185,31 +192,6 @@ def test_stdin_yields_bytes_counter_only_when_counted(
         )
 
 
-@given(
-    exit_code=st.none() | st.integers(min_value=-3, max_value=3),
-    duration_s=st.none()
-    | st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
-)
-def test_exit_yields_failure_and_duration_only_when_present(
-    *,
-    exit_code: int | None,
-    duration_s: float | None,
-) -> None:
-    """An exit event counts a failure iff non-zero, and a duration iff measured."""
-    operations = _metric_operations(
-        _event("exit", exit_code=exit_code, duration_s=duration_s),
-    )
-    expected: list[_CounterOp | _HistogramOp] = []
-    if exit_code is not None and exit_code != 0:
-        expected.append(_CounterOp("cuprum_failures_total", 1.0))
-    if duration_s is not None:
-        expected.append(_HistogramOp("cuprum_duration_seconds", duration_s))
-    assert list(operations) == expected, (
-        f"exit(exit_code={exit_code!r}, duration_s={duration_s!r}) must yield "
-        f"{expected!r}, found {list(operations)!r}"
-    )
-
-
 def test_unknown_phase_raises_structured_error() -> None:
     """An out-of-contract phase raises the structured metrics error."""
     with pytest.raises(_UnhandledMetricsPhaseError):
@@ -240,14 +222,17 @@ def _events(draw: st.DrawFn) -> ExecEvent:
                 allow_infinity=False,
             ),
         )
-        if phase == "exit"
+        if phase == "settled"
         else None
     )
-    return _event(
-        phase,
-        byte_count=byte_count,
-        exit_code=exit_code,
-        duration_s=duration_s,
+    terminal_outcome = (
+        draw(st.sampled_from(list(TerminalOutcome))) if phase == "settled" else None
+    )
+    return _with_terminal_outcome(
+        _event(
+            phase, byte_count=byte_count, exit_code=exit_code, duration_s=duration_s
+        ),
+        terminal_outcome,
     )
 
 
@@ -285,7 +270,10 @@ class _MetricsAccumulationMachine(RuleBasedStateMachine):
                     float(event.byte_count),
                 )
             case "exit":
-                if event.exit_code is not None and event.exit_code != 0:
+                pass
+            case "settled" if event.terminal_outcome is not None:
+                self._expect_counter("cuprum_terminal_outcomes_total", 1.0)
+                if event.terminal_outcome is not TerminalOutcome.EXIT_ZERO:
                     self._expect_counter("cuprum_failures_total", 1.0)
                 if event.duration_s is not None:
                     self.expected_durations.append(event.duration_s)
@@ -342,27 +330,33 @@ class _FailingHistogramCollector(InMemoryMetrics):
         labels: cabc.Mapping[str, str],
     ) -> None:
         """Fail as a backend rejecting the observation would."""
-        msg = f"metrics backend rejected {name}"
-        raise _MetricsBackendError(msg)
+        if name == "cuprum_duration_seconds":
+            msg = f"metrics backend rejected {name}"
+            raise _MetricsBackendError(msg)
+        super().observe_histogram(name, value, labels)
 
 
 def test_a_failing_second_operation_leaves_the_first_applied() -> None:
-    """A partly-applied exit event keeps what already landed, and reports.
+    """A partly-applied settled event keeps what already landed, and reports.
 
-    An exit event yields a failure counter then a duration observation, as two
-    independent collector calls. There is no atomicity across them and none is
-    attempted, so this pins what a caller actually observes rather than leaving
-    it to chance: the counter stays, the histogram is absent, and the backend's
-    own exception leaves the hook unwrapped rather than being absorbed.
+    A settled event yields its category and failure counters before the duration
+    observation, as independent collector calls. There is no atomicity across
+    them, so both counters stay while the failing histogram is absent.
     """
     collector = _FailingHistogramCollector()
     hook = MetricsHook(collector)
-    event = _event("exit", exit_code=3, duration_s=1.5)
+    event = _with_terminal_outcome(
+        _event("settled", duration_s=1.5),
+        TerminalOutcome.ERROR,
+    )
 
     with pytest.raises(_MetricsBackendError, match="rejected cuprum_duration_seconds"):
         hook(event)
 
-    assert collector.counters == {"cuprum_failures_total": 1.0}, (
+    assert collector.counters == {
+        "cuprum_terminal_outcomes_total": 1.0,
+        "cuprum_failures_total": 1.0,
+    }, (
         "the counter applied before the failure must remain recorded, found "
         f"{collector.counters!r}"
     )

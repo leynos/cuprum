@@ -14,6 +14,7 @@ import typing as typ
 import pytest
 from pytest_bdd import parsers, scenario, then
 
+from cuprum.events import TerminalOutcome
 from tests.behaviour._structured_events_support import (
     LIFECYCLE_PHASES,
     LINE_PHASES,
@@ -127,12 +128,25 @@ def then_observe_sees_timing_and_tags(behaviour_state: dict[str, object]) -> Non
     events = retained_events(behaviour_state)
     start = next(ev for ev in events if ev.phase == "start")
     exit_ = next(ev for ev in events if ev.phase == "exit")
+    plans = [event for event in events if event.phase == "plan"]
+    settled = [event for event in events if event.phase == "settled"]
 
     assert start.pid is not None, "Expected start.pid is not None"
     assert start.pid > 0, "Expected start.pid > 0"
     assert exit_.exit_code == 0, "Expected exit_.exit_code == 0"
     assert exit_.duration_s is not None, "Expected exit_.duration_s is not None"
     assert exit_.duration_s >= 0.0, "Expected exit_.duration_s >= 0.0"
+    assert len(plans) == len(settled) == 1, (
+        "one observed run must produce one plan and one settlement"
+    )
+    assert settled[0].terminal_outcome is TerminalOutcome.EXIT_ZERO, (
+        "successful execution must be reported as exit_zero"
+    )
+    assert settled[0].exec_id == plans[0].exec_id, (
+        "settlement must correlate with its plan event"
+    )
+    assert settled[0].pid is not None, "successful execution must retain its PID"
+    assert settled[0].exit_code == 0, "successful execution must retain its status"
 
     for ev in (start, exit_):
         assert ev.tags["run_id"] == RUN_TAG, f"Expected {RUN_TAG!r} run tag"
