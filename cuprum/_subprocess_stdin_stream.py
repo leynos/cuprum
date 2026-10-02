@@ -23,6 +23,13 @@ from ``cuprum._subprocess_stdin``, and the dispatcher in that module imports
 this one's ``_write_stdin_stream`` lazily inside the function body. The
 dependency therefore only ever runs in one direction once both modules are
 loaded.
+
+The per-chunk write machinery — the sink, the encoder, and the question of
+whether a pipe error came from the child — lives in
+``cuprum._subprocess_stdin_write``, which this module pulls in as ``_write``.
+That split keeps each module inside the 400-line ceiling and draws the same
+line the code does: this module owns *which* failures are the producer's, and
+``_subprocess_stdin_write`` owns *how* a chunk reaches the pipe.
 """
 
 from __future__ import annotations
@@ -31,16 +38,16 @@ import asyncio
 import codecs
 import contextlib
 import dataclasses as dc
-import errno
 import logging
 import typing as typ
 
-from cuprum._pipeline_internals import _EventDetails, _StageObservation
+from cuprum import _subprocess_stdin_write as _write
 from cuprum._subprocess_stdin import _close_stdin, _emit_stdin_error
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._pipeline_internals import _StageObservation
     from cuprum.sh.execution import ExecutionContext, StdinStream
 
 _LOGGER = logging.getLogger("cuprum.stdin")
@@ -113,107 +120,6 @@ async def _finalize_stdin_source(
         await aclose()
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _StreamSink:
-    """Everything one streaming write needs beyond the chunk itself.
-
-    These four values are bound once per run and never vary between chunks, so
-    they travel as one object rather than as four positional arguments. That
-    keeps the per-chunk helpers to a single changing parameter, which is what
-    makes their signatures readable at the call site.
-    """
-
-    process: asyncio.subprocess.Process
-    stdin: asyncio.StreamWriter
-    encoder: codecs.IncrementalEncoder
-    observation: _StageObservation
-
-
-async def _write_chunk(
-    sink: _StreamSink,
-    chunk: str | bytes,
-) -> None:
-    """Encode one chunk, write it, and drain before returning.
-
-    Draining before returning is the backpressure: the caller's next pull
-    happens only after ``drain()`` has returned, and because that return comes
-    at the transport's low-water mark rather than on an empty buffer, the
-    writer may pull ahead of the child's reads. The bound is on how far ahead
-    it runs, not on whether the child has taken these bytes off the pipe.
-
-    An empty encoded payload writes nothing and emits nothing: a ``str`` chunk
-    that the incremental encoder is still holding entirely (a lone leading
-    surrogate, say) produces no bytes, and reporting a zero-byte write would
-    be noise.
-
-    Raises
-    ------
-    TypeError
-        If the producer yields anything other than ``str`` or ``bytes``. A
-        chunk of the wrong type is a caller error, not a pipe condition, so
-        it is raised here for the streaming writer to wrap.
-    """
-    match chunk:
-        case str():
-            payload = sink.encoder.encode(chunk, final=False)
-        case bytes():
-            payload = chunk
-        case _:
-            msg = (
-                f"stdin producer yielded {type(chunk).__name__}; "
-                f"chunks must be str or bytes"
-            )
-            raise TypeError(msg)
-    if not payload:
-        return
-    sink.stdin.write(payload)
-    await sink.stdin.drain()
-    sink.observation.emit(
-        "stdin",
-        _EventDetails(pid=sink.process.pid, byte_count=len(payload)),
-    )
-
-
-async def _flush_encoder(sink: _StreamSink) -> None:
-    """Write whatever the incremental encoder is still holding.
-
-    A trailing partial sequence only becomes visible to the child here, so this
-    runs after the producer is exhausted and before the pipe is closed.
-    """
-    tail = sink.encoder.encode("", final=True)
-    if not tail:
-        return
-    sink.stdin.write(tail)
-    await sink.stdin.drain()
-    sink.observation.emit(
-        "stdin",
-        _EventDetails(pid=sink.process.pid, byte_count=len(tail)),
-    )
-
-
-def _is_early_close(exc: BaseException) -> bool:
-    """Whether *exc* is the child closing its end of the input pipe.
-
-    ``BrokenPipeError`` is how CPython spells a pipe write, but the
-    subclassing happens at construction only: an ``OSError`` whose errno is
-    assigned afterwards stays plain. Both are the same pipe condition, so both
-    belong on the early-close path.
-
-    Parameters
-    ----------
-    exc : BaseException
-        The failure raised while writing to the child's stdin.
-
-    Returns
-    -------
-    bool
-        ``True`` when the child closed the pipe rather than cuprum failing.
-    """
-    if isinstance(exc, BrokenPipeError | ConnectionResetError):
-        return True
-    return isinstance(exc, OSError) and exc.errno == errno.EPIPE
-
-
 async def _write_stdin_stream(
     process: asyncio.subprocess.Process,
     stream: StdinStream,
@@ -258,30 +164,98 @@ async def _write_stdin_stream(
         _LOGGER.debug("stdin_writer_skipped pid=%s reason=no_pipe", process.pid)
         return
     source: cabc.AsyncIterator[str | bytes] | None = None
-    encoder = codec.encoder()
-    sink = _StreamSink(
+    sink = _write._StreamSink(
         process=process,
         stdin=stdin,
-        encoder=encoder,
+        codec=codec,
         observation=observation,
     )
     try:
         source = aiter(stream.chunks)
-        async for chunk in source:
-            await _write_chunk(sink, chunk)
-        await _flush_encoder(sink)
+        await _pump_chunks(source, sink)
+        await _write._flush_encoder(sink)
     except asyncio.CancelledError:
         # Cancellation is control flow, not a source failure: the run is being
         # torn down and the caller must see the cancellation, not an error.
         raise
+    except _ProducerFailureError as exc:
+        # The producer failed, so there is no child-side close to weigh: the
+        # marker is the only reason this is distinguishable once the exception
+        # has left _pump_chunks.
+        raise _stdin_source_error(exc.cause) from exc.cause
     except Exception as exc:
-        if not _is_early_close(exc):
+        if not _write._is_early_close(exc):
             raise _stdin_source_error(exc) from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
     finally:
         await _finalize_stdin_source(source)
         await _close_stdin(process, stdin, observation)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
+
+
+class _ProducerFailureError(Exception):
+    """Marks a failure that came from advancing the producer.
+
+    It carries no behaviour, only provenance. Advancing the producer and
+    writing to the child both raise ``OSError`` in the pipe family, so once
+    control reaches the shared handler the exception type alone cannot say
+    which side failed; the marker is what preserves that. The original
+    exception travels as :attr:`cause` so the handler can chain it to the
+    public error it builds.
+    """
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+async def _pump_chunks(
+    source: cabc.AsyncIterator[str | bytes],
+    sink: _write._StreamSink,
+) -> None:
+    """Pull each chunk and write it, keeping the two failure sources apart.
+
+    Advancing the producer and writing to the child both raise ``OSError`` in
+    the pipe family when the pipe breaks, but only the write means the child
+    closed its end. A producer whose own machinery raises ``BrokenPipeError``
+    — reading a socket it owns, say — is the producer failing, and the
+    documented contract is that a producer failure becomes a
+    ``StdinSourceError`` rather than being read as the child finishing early.
+
+    Wrapping only the producer's ``__anext__`` is what separates them: a pipe
+    error raised there can only have come from the producer, so it is marked
+    as a producer failure, while the same error from ``_write_chunk``
+    propagates unchanged to the early-close handler.
+
+    Parameters
+    ----------
+    source : collections.abc.AsyncIterator[str | bytes]
+        The producer's iterator, advanced one chunk at a time.
+    sink : cuprum._subprocess_stdin_write._StreamSink
+        The writer, encoder, and observation this run writes through.
+
+    Raises
+    ------
+    _ProducerFailureError
+        If advancing the producer fails for any reason other than the producer
+        ending cleanly. The original exception is carried as ``cause``.
+    asyncio.CancelledError
+        If the producer or the run is cancelled. Cancellation is control flow
+        rather than a producer failure, so it propagates unchanged instead of
+        being marked.
+    """
+    while True:
+        try:
+            chunk = await anext(source)
+        except StopAsyncIteration:
+            return
+        except asyncio.CancelledError:
+            # Cancellation is control flow, not a producer failure, so it is
+            # never marked here; the caller re-raises it untouched.
+            raise
+        except Exception as exc:
+            raise _ProducerFailureError(exc) from exc
+        await _write._write_chunk(sink, chunk)
 
 
 def _stdin_source_error(exc: BaseException) -> Exception:
