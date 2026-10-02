@@ -53,17 +53,17 @@ async def _never_reaches_eof_bytes() -> bytes | None:
     await asyncio.Event().wait()
 
 
-# An interpreter start-up plus a module import, with room to spare. This seeds
-# only the *marker* deadline; the run deadline stays a separate, independent
-# number, because a run timeout doubles as the deadline for reaching the marker
-# unless the caller passes one, and interpreting a slow start-up as a product
-# failure would hide the very deadline the test goes on to assert.
-_MARKER_STARTUP_GRACE_S = 10.0
+# The child is a bare interpreter importing only stdlib modules, which was
+# measured at 17 ms (19 ms worst of five) on this host. Two seconds is over a
+# hundred times that, so the cap only bites if start-up has gone pathological,
+# and it is a cap rather than a wait: the marker lands in milliseconds and the
+# run deadline below is what the test actually spends its time on.
+_MARKER_STARTUP_GRACE_S = 2.0
 
-# Long enough to dwarf start-up, yet well inside pytest's 30-second per-test
-# bound, which a run deadline at or above it would trip rather than satisfy.
-# The child blocks for minutes, so once the marker is seen this is simply how
-# long the test waits to observe the timeout it is asserting.
+# Longer than the marker grace, so a slow start-up can never be mistaken for the
+# timeout under test, and short enough to stay well inside pytest's 30-second
+# per-test bound. The child blocks for minutes, so once the marker is seen this
+# is simply how long the test waits to observe the deadline it is asserting.
 _RUN_TIMEOUT_S = 5.0
 
 
