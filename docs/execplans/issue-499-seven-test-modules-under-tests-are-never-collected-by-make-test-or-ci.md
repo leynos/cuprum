@@ -916,6 +916,58 @@ than discovering the gap months later.
     test passed unchanged once the cold toolchain install did not race the 30 s
     ceiling, and nothing on the branch differs between the two runs.
 
+- [x] (2026-10-02) Remedied the CodeScene regression the `6a676b90` refactor
+  introduced, and re-gated at the pushed head `8e1e3b8d`.
+  - *The regression.* CodeScene's hosted review at `6a676b90` raised three
+    findings against `tests/helpers/recipe_flow.py`, all naming `_loop_header`:
+    Complex Method (cyclomatic complexity 10 against threshold 9), Bumpy Road
+    Ahead (2 blocks with nested conditional logic), and Overall Code Complexity
+    (mean 4.44 across 9 functions against threshold 4), scoring the file 8.96.
+    The `done` search added by the previous commit sat nested inside the outer
+    segment walk, which is what lifted the complexity.
+  - *The fix.* `_loop_shape` now owns the header read: it returns the loop
+    variable, the iterated list, and the `done`, or `None` when the tokens are
+    not a header at all — which doubles as how a caller tells a loop from an
+    `echo` carrying its words. The `done` is found with `next((…), -1)` rather
+    than an inline loop, so no condition nests, and the header window is
+    compared as a slice rather than length-checked beside it. `_loop_header`
+    dropped to complexity 4.
+  - *The line budget.* The extraction pushed the module to 406 lines, past the
+    400 the strict pylint pass enforces on `tests/`. The module docstring's
+    enumeration of the three refusals restated what the three guard docstrings
+    already say in full, and the constant comments restated their own
+    constants; trimming that duplication returned the module to exactly 400
+    with no claim lost. The trim is provably documentation-only: with
+    docstrings stripped, `ast.dump(ast.parse(ast.unparse(...)))` is identical
+    before and after, and interrogate stays at 100%.
+  - *Local measurement, from CodeScene's own CLI.* `cs check` scores the file
+    **10.00 with zero penalties** at the new head, where it scored 8.95 at
+    `6a676b90`; `cs delta origin/main --file tests/helpers/recipe_flow.py
+    --output-format json` prints nothing. The 8.95 reading is itself the
+    harness's calibration: it reproduces the score CodeScene published for the
+    rejected revision.
+  - *Hosted CodeScene, quoted.* The check-run at `8e1e3b8d` reads `status:
+    completed`, `conclusion: success`, title `CodeScene PR Check`, body
+    `**Quality Gate Passed**` / `6 Quality Gates Passed`, details
+    `https://codescene.io/projects/74471/delta/results/7792650`. No new
+    `codescene-access[bot]` inline comment exists at this head — the three at
+    `6a676b90` are the whole population, and none is repeated.
+  - *Gates at the new head, from the scrutineer.* `check-fmt` exit 0 (1s),
+    `typecheck` exit 0 (`ty 0.0.74`, "All checks passed!"), `markdownlint`
+    exit 0 (21s, "0 issues in 0 files"), `test` exit 0 (231s), and `lint`
+    exit 0 on retry. `HEAD_BEFORE == HEAD_AFTER == 8e1e3b8d` for every gate and
+    the tree was clean before and after. No gate emitted a warning line.
+  - *One transient lint failure, correctly attributed.* The first `lint`
+    attempt exited 2, but not on a finding: ruff had already printed "All
+    checks passed!", interrogate "RESULT: PASSED … 100.0%", and both pylint
+    passes "rated at 10.00/10"; the failing step was the final `df12-python-
+    lints` dependency, which reported `Failed to resolve --with requirement` /
+    `Git operation failed`. Another worktree was fetching the same pinned
+    `git+https` revision at that moment. The identical command succeeded on
+    retry, and the retry supersedes the failure. Log:
+    `/tmp/lint-issue-499-seven-test-modules-under-tests-are-never-collected-by-make-test-or-ci-2.out`
+    (failed) and `…-retry.out` (passed).
+
 ## Surprises & discoveries
 
 - Observation: all seven modules pass on this Linux host, at the tip of
