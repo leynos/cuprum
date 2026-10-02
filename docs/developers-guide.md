@@ -1651,9 +1651,9 @@ relay_diagnostics=None)`
 and `_drain(stream, config, *, on_chunk=None, relay_diagnostics=None)`
 functions use `config.read_size` for each read. `_drain` is the single
 read/echo/buffer loop behind both consume variants. It reads in that configured
-size, extends the capture buffer when capturing, echoes each chunk to the
-configured sink when echoing, and hands the chunk to the optional `on_chunk`
-callback for variant-specific processing:
+size, extends the capture buffer with the **raw** chunk when capturing, echoes
+each chunk to the configured sink when echoing, and hands the chunk to the
+optional `on_chunk` callback for variant-specific processing:
 
 - `_consume_stream_without_lines` calls `_drain` with no callback.
 - `_consume_stream_with_lines` supplies an `on_chunk` callback that feeds the
@@ -1674,6 +1674,46 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 `_override_read_size`, so every value supplied through `--read-sizes` reaches
 the consume and pipeline pump paths without changing public runtime
 configuration.
+
+### Byte-exact capture mode
+
+The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
+runners. A byte run is an ordinary run carrying one extra fact, `capture_bytes`,
+on its resolved `_SubprocessExecution` state. That fact flows to
+`_StreamConfig.capture_bytes`, and the single payload renderer,
+`cuprum._stream_drain_finish._captured_payload`, decides at the end of the
+drain whether to return `bytes(buffer)` or
+`buffer.decode(config.encoding, errors=config.errors)`.
+
+Capture and line emission are independent channels, which is what lets one
+drain serve both modes:
+
+- The drain's buffer always holds the child's raw bytes; it is never decoded in
+  place.
+- `_consume_stream_with_lines` decodes a *copy* through its own incremental
+  decoder to find line boundaries and publish lines.
+- The two therefore compose. A byte-exact run with a registered `sh.observe()`
+  hook returns the child's own bytes while its observers receive decoded lines.
+
+Narrowing happens on the way out, at one seam per result class:
+`_require_bytes` and `_require_text` in `cuprum._result_assembly` re-take the
+guarantee that a drain's widened `str | bytes | None` payload matches the mode
+the result is being built for, raising `_ExecutionInvariantError` on a
+mismatch. `cuprum._bytes_run` holds the equivalent narrowing for whole result
+objects, plus `_validate_bytes_output`, which rejects a caller-supplied
+`RunOutputOptions.on_line` before anything spawns.
+
+Re-use policy: a new narrowed result class must go through both seams rather
+than asserting a payload's type away with a cast, and any new consume variant
+must keep the buffer raw so byte mode stays available to it. The `on_line`
+rejection is policy, not capability — the drain itself honours the
+combination; see
+[ADR-007](adr-007-bytes-result-mode.md) and the
+[binary output section](users-guide.md#binary-output) of the users' guide.
+
+A stream that was never attached is the one payload the drain does not render:
+`_empty_capture` reports `b""` or `""` according to the mode, matching
+`_consume_stream_without_lines`.
 
 ### Aggregate Python stream-operation observation
 

@@ -254,16 +254,23 @@ Text remains the default, and the mode is explicit: `run()` never returns bytes
 and `run_bytes()` never returns text, so a mismatch is a bug rather than a
 runtime surprise. Everything the text-mode entry points promise still holds —
 timeout partial output is carried through in the same field, `capture=False`
-still yields `None` rather than `b""`, and `cancelled` is reported the same way.
+still yields `None` rather than `b""`, and an external cancellation still
+re-raises `asyncio.CancelledError` instead of being reported as a timeout.
 
 Binary mode covers capture. A run that asks for `on_line` cannot be given one:
-line observation is defined on decoded text, and the line-boundary and encoding
-bookkeeping would have to decode exactly the bytes the mode exists to preserve.
+the capture it returns is byte-exact, so a callback carrying decoded text would
+be a second, contradictory contract for the same stream.
 `run_bytes(output=RunOutputOptions(on_line=lines.append))` is rejected with
 `ValueError` before the child is spawned. Echoing, sinks, and idle heartbeats
 are unaffected, since they mirror output rather than report it; a sink that
 cannot encode the child's bytes records a `relay_fallback` exactly as it does
 in text mode.
+
+The refusal applies only to a caller-supplied `on_line`. Structured
+observation registered with `sh.observe()` still fires in byte mode: those
+hooks receive decoded lines, so undecodable bytes are replaced in the *event*
+while the captured payload keeps the child's own bytes. The two travel on
+separate channels, and neither is a substitute for the other.
 
 For a pipeline, the same rule applies to each stage: only the final stage's
 stdout is captured, interior stdout feeds the next stage and is reported as
