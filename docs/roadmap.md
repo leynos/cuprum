@@ -975,20 +975,20 @@ on a producer that is still running. Today Cuprum terminates only the process
 it spawned. If a caller could opt into owning a child's process group, then
 teardown could signal every member of that group, the inherited pipes would
 reach end-of-file, and the guarantee could be stated precisely: the group the
-run created is terminated, descendants that leave it are not, and no caller
-who does not opt in is affected. See
-[ADR-019](adr-019-process-group-ownership.md).
+run created is terminated, descendants that leave it are not, and no caller who
+does not opt in is affected. See [ADR-019](adr-019-process-group-ownership.md).
 
 ### 12.1. Make group ownership a policy on the execution context
 
 This step answers whether the spawn argument can be carried by the existing
 per-call `ExecutionContext` without changing anything a caller does not ask
-for. Its outcome is the vocabulary every later task in this phase depends on:
-a policy with an unchanged default and one opt-in member.
+for. Its outcome is the vocabulary every later task in this phase depends on: a
+policy with an unchanged default and one opt-in member.
 
 - [ ] 12.1.1. Add the `ProcessGroupPolicy` enum with `INHERIT` and
-  `OWN_GROUP`, and add `process_group: ProcessGroupPolicy =
-  ProcessGroupPolicy.INHERIT` to `ExecutionContext`.
+  `OWN_GROUP`, and add
+  `process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT` to
+  `ExecutionContext`.
   - Success: the enum is exported from `cuprum` and `cuprum.sh`, the default
     builds the same spawn arguments as before, and existing contexts,
     pipelines, and `ExecutionContext` equality are unaffected by the new
@@ -1002,9 +1002,9 @@ a policy with an unchanged default and one opt-in member.
 
 ### 12.2. Spawn owned groups and signal them on teardown
 
-This step answers whether the existing teardown lifecycle can deliver the
-group signal without losing any of its cancellation guarantees. Its outcome is
-the behaviour the phase's acceptance criteria measure.
+This step answers whether the existing teardown lifecycle can deliver the group
+signal without losing any of its cancellation guarantees. Its outcome is the
+behaviour the phase's acceptance criteria measure.
 
 - [ ] 12.2.1. Derive the spawn keyword from the policy in one shared helper:
   no keyword for `INHERIT`, `start_new_session=True` for `OWN_GROUP` on POSIX,
@@ -1033,12 +1033,12 @@ the behaviour the phase's acceptance criteria measure.
 ### 12.3. Prove the guarantee and its limits
 
 This step answers whether the phase's promise survives contact with a real
-grandchild, and whether the documentation states the limits as precisely as
-the implementation enforces them.
+grandchild, and whether the documentation states the limits as precisely as the
+implementation enforces them.
 
 - [ ] 12.3.1. Cover a child that spawns a grandchild which ignores `SIGTERM`
-  and retains an inherited pipe, asserting the group is terminated, the pipe
-  is released, and an unrelated process is untouched.
+  and retains an inherited pipe, asserting the group is terminated, the pipe is
+  released, and an unrelated process is untouched.
   - Requires 12.2.3.
   - Success: the test observes process liveness by targeted identifier rather
     than by group, never signals a group the test process belongs to, and

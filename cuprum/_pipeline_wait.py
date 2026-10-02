@@ -71,6 +71,8 @@ from cuprum._process_lifecycle import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._pipeline_types import _StageObservation, _StageWaitContext
 
 
@@ -238,6 +240,8 @@ async def _terminate_and_report(
     processes: list[asyncio.subprocess.Process],
     cancel_grace: float,
     fields: _CompletionLogFields,
+    *,
+    owns_group: cabc.Sequence[bool] | bool = False,
 ) -> None:
     """Terminate remaining stages and record the teardown outcome."""
     observation = state.observation(fields.stage_index)
@@ -255,6 +259,7 @@ async def _terminate_and_report(
         state.wait_tasks,
         fields.stage_index,
         cancel_grace=cancel_grace,
+        owns_group=owns_group,
     )
     _report_completion_event(
         observation,
@@ -275,6 +280,8 @@ async def _process_completed_task(
     state: _PipelineWaitState,
     processes: list[asyncio.subprocess.Process],
     cancel_grace: float,
+    *,
+    owns_group: cabc.Sequence[bool] | bool = False,
 ) -> None:
     """Process a completed wait task, terminating other stages on failure.
 
@@ -320,7 +327,13 @@ async def _process_completed_task(
     # Published before termination is requested, so a consumer learns the
     # decision even if the teardown then blocks on a stage that will not die.
     _emit_fail_fast_event(observation, fields)
-    await _terminate_and_report(state, processes, cancel_grace, fields)
+    await _terminate_and_report(
+        state,
+        processes,
+        cancel_grace,
+        fields,
+        owns_group=owns_group,
+    )
 
 
 async def _finalize_pipeline_wait(
@@ -342,8 +355,15 @@ async def _wait_for_pipeline(
     pipe_tasks: list[asyncio.Task[None]],
     cancel_grace: float,
     stages: _StageWaitContext,
+    owns_group: cabc.Sequence[bool] | bool = False,
 ) -> _PipelineWaitResult:
-    """Wait for pipeline completion, ensuring subprocess cleanup on cancellation."""
+    """Wait for pipeline completion, ensuring subprocess cleanup on cancellation.
+
+    *owns_group* is threaded to the two teardown routes this function can
+    take — the fail-fast termination of the surviving stages and the cleanup
+    on an error or cancellation — as either one flag for every stage or one
+    flag per stage in ``processes`` order.
+    """
     state = _PipelineWaitState.from_processes(processes, stages=stages)
 
     caught: BaseException | None = None
@@ -368,6 +388,7 @@ async def _wait_for_pipeline(
                     state,
                     processes,
                     cancel_grace,
+                    owns_group=owns_group,
                 )
 
         completed_exit_codes = tuple(
@@ -386,6 +407,7 @@ async def _wait_for_pipeline(
             processes,
             pipe_tasks,
             cancel_grace,
+            owns_group=owns_group,
         )
         await asyncio.gather(*state.wait_tasks, return_exceptions=True)
         raise

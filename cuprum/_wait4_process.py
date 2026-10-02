@@ -52,7 +52,14 @@ class _Wait4InvariantError(_ExecutionInvariantError):
 
 @dc.dataclass(frozen=True, slots=True)
 class DirectProcessConfig:
-    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths."""
+    """The direct-child spawn inputs shared by asyncio and ``wait4`` paths.
+
+    ``start_new_session`` is carried here rather than passed to
+    :func:`spawn_direct_process` as a keyword because both downstream spawn
+    routes — :func:`_spawn_popen` and ``asyncio.create_subprocess_exec`` —
+    accept it, and a single field keeps the two routes from drifting apart on
+    the ownership policy.
+    """
 
     argv: tuple[str, ...]
     stdin: int | None
@@ -60,6 +67,7 @@ class DirectProcessConfig:
     stderr: int | None
     env: cabc.Mapping[str, str] | None
     cwd: str | None
+    start_new_session: bool = False
 
 
 def _close_waiter(
@@ -219,6 +227,7 @@ def _spawn_popen(config: DirectProcessConfig) -> subprocess.Popen[bytes]:
         stderr=config.stderr,
         env=config.env,
         cwd=config.cwd,
+        start_new_session=config.start_new_session,
         shell=False,
     )
 
@@ -251,6 +260,7 @@ async def spawn_direct_process(
         stderr=config.stderr,
         env=config.env,
         cwd=config.cwd,
+        start_new_session=config.start_new_session,
     )
 
 

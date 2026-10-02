@@ -2,11 +2,11 @@
 
 ## Status
 
-Accepted on 2026-10-02. Cuprum adds `ProcessGroupPolicy` to
-`ExecutionContext`: `INHERIT` (the unchanged default) tears down only the
-direct child, while `OWN_GROUP` spawns the child as its own session and
-process-group leader on POSIX and tears the whole group down through
-`os.killpg`. `OWN_GROUP` is rejected with a clear error on Windows.
+Accepted on 2026-10-02. Cuprum adds `ProcessGroupPolicy` to `ExecutionContext`:
+`INHERIT` (the unchanged default) tears down only the direct child, while
+`OWN_GROUP` spawns the child as its own session and process-group leader on
+POSIX and tears the whole group down through `os.killpg`. `OWN_GROUP` is
+rejected with a clear error on Windows.
 
 ## Date
 
@@ -21,8 +21,8 @@ spawns descendants, the descendants are in the parent's process group, are not
 signalled by `process.terminate()`, and can hold inherited pipe descriptors
 open after their parent is reaped.
 
-That matters most for exactly the case the timeout machinery exists to serve.
-A `make` recipe, a shell script, or a test runner that has wedged is usually
+That matters most for exactly the case the timeout machinery exists to serve. A
+`make` recipe, a shell script, or a test runner that has wedged is usually
 waiting on a grandchild. Terminating the runner leaves the grandchild alive, a
 reader waiting for EOF never sees it, and the capture drain falls back to its
 bounded grace window with output still buffered in a dead process's pipe. The
@@ -58,14 +58,14 @@ or a container, and belongs to the caller rather than to a command runner.
 
 Spawn every child with `start_new_session=True` and tear the group down.
 
-This gives containment without an opt-in, but it changes the observable
-process topology for every existing caller. A child that wanted the parent's
-terminal, session, or process group — an interactive tool, a job-control
-shell, a process that a caller already signals by group — silently stops
-receiving group signals at the caller's own `killpg`. Under `os.setpgrp` or an
-interactive session, a group signal the caller sends to its *own* group would
-no longer reach the child. It also changes the meaning of a caller that has
-already established its own group and expects the child to join it.
+This gives containment without an opt-in, but it changes the observable process
+topology for every existing caller. A child that wanted the parent's terminal,
+session, or process group — an interactive tool, a job-control shell, a process
+that a caller already signals by group — silently stops receiving group signals
+at the caller's own `killpg`. Under `os.setpgrp` or an interactive session, a
+group signal the caller sends to its *own* group would no longer reach the
+child. It also changes the meaning of a caller that has already established its
+own group and expects the child to join it.
 
 ### Option B: contain descendants through a supervisor or a cgroup
 
@@ -76,10 +76,10 @@ This is the only approach that can contain a descendant that calls `setsid()`,
 and it is what a container runtime, a systemd unit, or `systemd-run --scope`
 already provides. It is also a different product: it adds a long-lived
 supervisor to a library that today spawns exactly the process the caller asked
-for, needs privileges (or platform-specific orchestration) to establish
-control groups, and cannot be offered uniformly across the platforms Cuprum
-supports. A caller that needs this guarantee should be given the vocabulary to
-say so, not have it silently imposed.
+for, needs privileges (or platform-specific orchestration) to establish control
+groups, and cannot be offered uniformly across the platforms Cuprum supports. A
+caller that needs this guarantee should be given the vocabulary to say so, not
+have it silently imposed.
 
 ### Option C: an opt-in policy, implemented with the platform's own primitive
 
@@ -91,8 +91,9 @@ Windows, where the POSIX process group does not exist.
 This keeps the default unchanged, gives callers who ask for containment the
 strongest guarantee POSIX offers without a supervisor, and keeps the
 implementation inside the existing lifecycle: `_spawn_subprocess` and
-`_spawn_pipeline_stages` gain one spawn keyword, and `_terminate_process_with_wait`
-signals a group instead of a process when the run owns one.
+`_spawn_pipeline_stages` gain one spawn keyword, and
+`_terminate_process_with_wait` signals a group instead of a process when the
+run owns one.
 
 ## Decision outcome / proposed direction
 
@@ -112,8 +113,8 @@ Option C.
 
 The policy rides on `ExecutionContext.process_group`, alongside `cwd` and
 `env_mode`, so it applies identically to single commands and to every pipeline
-stage. `Pipeline` reads its stages' policy from the same `ExecutionContext`,
-and `SafeCmd.lines()` inherits it through the same spawn helper.
+stage. `Pipeline` reads its stages' policy from the same `ExecutionContext`, and
+`SafeCmd.lines()` inherits it through the same spawn helper.
 
 Teardown is unchanged in structure. `_terminate_process_with_wait` keeps its
 `is_done()` short-circuit, its `SIGTERM`-then-grace-then-`SIGKILL` sequence,
@@ -135,15 +136,16 @@ tracked separately, not by this decision.
 The escape hatch is documented rather than hidden. A descendant that calls
 `setsid()` or `setpgid()` leaves the group and is not terminated by group
 teardown; so are processes that predate the spawn, and so are siblings of the
-child. Callers needing containment for hostile or session-detaching
-descendants need a supervisor, a control group, or a container.
+child. Callers needing containment for hostile or session-detaching descendants
+need a supervisor, a control group, or a container.
 
 ## Goals and non-goals
 
 ### Goals
 
-- One opt-in line (`ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)`)
-  opts a command or a pipeline into group ownership.
+- One opt-in line
+  (`ExecutionContext(process_group=ProcessGroupPolicy.OWN_GROUP)`) opts a
+  command or a pipeline into group ownership.
 - `INHERIT` callers observe no change: same spawn arguments, same teardown
   signals, same results.
 - Terminating a run whose process the caller owns terminates the whole
@@ -171,10 +173,10 @@ descendants need a supervisor, a control group, or a container.
   limitation of the primitive, not of the implementation, and it is the reason
   the option is named "own group" rather than "contain descendants".
 - **A group signal is broader than a process signal.** When a run owns its
-  group, `os.killpg` signals every member, including descendants the caller
-  did not spawn through Cuprum but which joined the group. This is the
-  intended semantics — it is what terminates a wedged grandchild — but callers
-  whose children deliberately join the caller's own group should not opt in.
+  group, `os.killpg` signals every member, including descendants the caller did
+  not spawn through Cuprum but which joined the group. This is the intended
+  semantics — it is what terminates a wedged grandchild — but callers whose
+  children deliberately join the caller's own group should not opt in.
 - **Group teardown does not reap descendants.** Cuprum reaps the direct child
   it spawned. Descendants signalled through the group are reaped by their own
   parent, or by `init` when their parent dies first; a descendant that is
@@ -205,8 +207,8 @@ descendants need a supervisor, a control group, or a container.
   deliberately placed in the caller's own group by the caller's own
   orchestration should not be run with `OWN_GROUP`.
 - The policy must be threaded through every spawn and teardown site, so a
-  future spawn path that forgets it loses the guarantee silently. The
-  per-stage ownership recorded at spawn is the mitigation: teardown reads the
-  ownership the spawn recorded rather than re-deriving it from the policy.
+  future spawn path that forgets it loses the guarantee silently. The per-stage
+  ownership recorded at spawn is the mitigation: teardown reads the ownership
+  the spawn recorded rather than re-deriving it from the policy.
 - Windows callers cannot request the guarantee at all until a Job Object
   implementation exists.

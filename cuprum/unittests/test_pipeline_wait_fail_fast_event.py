@@ -299,9 +299,10 @@ class TestFailFastEventOrdering:
             failure_index: int,
             *,
             cancel_grace: float,
+            owns_group: object = False,
         ) -> tuple[bool, ...]:
             """Record that termination started instead of signalling anything."""
-            del processes, wait_tasks, failure_index, cancel_grace
+            del processes, wait_tasks, failure_index, cancel_grace, owns_group
             # Yield like the real helper does, so the recorded order reflects
             # a genuine await point rather than a synchronous call.
             await asyncio.sleep(0)

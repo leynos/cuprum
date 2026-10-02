@@ -353,6 +353,7 @@ async def _spawn_and_drive_pipeline(
             started_at,
             wall_clock_started_at,
             relay_diagnostics_by_stage,
+            owns_group,
         ) = await _spawn_pipeline_processes(
             parts,
             config,
@@ -368,6 +369,7 @@ async def _spawn_and_drive_pipeline(
                 wall_clock_started_at=tuple(wall_clock_started_at),
                 observations=observations,
             ),
+            owns_group=tuple(owns_group),
             idle=config.idle,
         )
     except BaseException as spawn_error:

@@ -24,7 +24,11 @@ from cuprum import _wait4_process
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._pipeline_types import _EventDetails, _StageObservation
 from cuprum._process_lifecycle import _merge_env, _shielded_cleanup
-from cuprum._subprocess_context import _cwd_arg, _sh_module
+from cuprum._subprocess_context import (
+    _cwd_arg,
+    _ownership_spawn_kwargs,
+    _sh_module,
+)
 from cuprum._subprocess_stdin import _cancel_stdin_writer, _spawn_stdin_writer
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 from cuprum._subprocess_streams import (
@@ -42,10 +46,11 @@ from cuprum._subprocess_timeout import (
 )
 from cuprum._subprocess_wait import _wait_for_exit_code_within_timeout
 
-# Imported at runtime, not under ``TYPE_CHECKING``: the policy is this
-# dataclass's own default value, so the name must resolve when the class body
+# Imported at runtime, not under ``TYPE_CHECKING``: the policies below are this
+# dataclass's own default values, so the names must resolve when the class body
 # executes.
 from cuprum.echo_events import BrokenPipePolicy
+from cuprum.sh.execution import ProcessGroupPolicy
 
 if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
@@ -89,6 +94,22 @@ class _SubprocessExecution:
     # once at spawn so every line of a run shares one time base.
     started_at: float = 0.0
     idle: _IdleMonitor | None = None
+    # Mirrors ``ExecutionContext.process_group``. Carried on the bundle so the
+    # spawn and the teardown of the same run cannot disagree about whether the
+    # child's group belongs to this run.
+    process_group: ProcessGroupPolicy = ProcessGroupPolicy.INHERIT
+
+    @property
+    def owns_process_group(self) -> bool:
+        """Whether this run owns the child's process group.
+
+        Derived from ``process_group`` rather than stored again, so the spawn
+        decision and every teardown decision are read from one field and
+        cannot fall out of step. False for a child that was never spawned
+        under ``OWN_GROUP``, which is also the answer for a platform where
+        that policy was rejected before any child existed.
+        """
+        return self.process_group is ProcessGroupPolicy.OWN_GROUP
 
     @property
     def consumes_stdout(self) -> bool:
@@ -184,6 +205,10 @@ async def _spawn_subprocess(
             stdin=asyncio.subprocess.PIPE if execution.stdin_data is not None else None,
             env=_merge_env(execution.ctx.env, execution.ctx.env_mode),
             cwd=_cwd_arg(execution.ctx.cwd),
+            # Raises before spawning when the platform cannot honour the
+            # policy, so the failure names the option rather than arriving as
+            # a run that quietly contained nothing.
+            **_ownership_spawn_kwargs(execution.process_group),
         )
     )
 

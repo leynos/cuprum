@@ -227,9 +227,11 @@ def test_zero_timeout_reconciles_pipe_tasks(
     async def no_termination(
         processes: cabc.Iterable[asyncio.subprocess.Process],
         cancel_grace: float,
+        *,
+        owns_group: object = False,
     ) -> None:
         """Stand in for stage termination without settling anything."""
-        del processes, cancel_grace
+        del processes, cancel_grace, owns_group
         await asyncio.sleep(0)
 
     pipeline = python(
