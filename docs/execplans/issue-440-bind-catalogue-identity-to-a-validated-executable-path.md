@@ -677,6 +677,28 @@ escalation, not a workaround.
       which is a different claim. The consequence is that the Markdown-reading
       gates are *not* inherited from the `2f89a370` run and were re-run, while
       the Python and Rust gate inputs remain byte-identical.
+- [x] (2026-10-02 18:40Z) The mislabelled-`Z` defect recorded above **is still
+      present, and the claim that it was repaired does not hold.** A fresh
+      falsifiable check — a stamp cannot post-date the true UTC time of the
+      commit that first introduced it, since that commit already contains it —
+      finds **31 stamps** in this section violating it, by 12 minutes at the
+      least and 526 at the most. Method: `git log --reverse --format=%H
+      origin/main..HEAD -- <this file>` to get each stamp's earliest containing
+      commit, then that commit's own `%aI` converted to UTC. The two most
+      recent entries are the clearest: the one stamped `2026-10-02 21:58Z` was
+      written by `901794f0` at `18:09Z`, and the one stamped `21:07Z` by
+      `fc92987d` at `17:09Z` — both exactly **two hours** ahead, which is the
+      CEST offset applied in the wrong direction. The earlier `2026-10-01`
+      stamps do not share the fault: the one reading `17:02Z` sits 63 minutes
+      before `ff58bba2`, the commit that first contains it, and equals the true
+      UTC time of `5d1e762f`, whose completion it reports. So the defect began
+      after that day, recurred after being documented, and survived the
+      re-derivation the earlier observation claims to have performed. The
+      stamps are therefore left **as written**: restamping them would destroy
+      the evidence of how they were produced, and a reader wanting a defensible
+      time already has a stronger source than any label — the commit that
+      introduced the entry. This is the hand-summed-total failure seen from the
+      other side: not a figure no command emits, but a figure no clock emitted.
 
 ## Surprises & discoveries
 
@@ -899,7 +921,11 @@ escalation, not a workaround.
   rather than from an artefact. Impact: every Progress timestamp was re-derived
   from a primary source — the commit that produced the work, or the mtime of
   the gate log the entry cites — and then re-checked for both future-dating and
-  ordering. The lesson generalizes to every plan in this repository: a
+  ordering. **That repair did not hold:** a later check on 2026-10-02 found 31
+  stamps still failing the future-dating test, including entries written hours
+  after this observation was recorded, so the re-derivation was either partial
+  or itself written from displayed values. See `Progress` for the method and
+  the counts. The lesson generalizes to every plan in this repository: a
   timestamp is a claim like any other and needs a source; recording one from
   recollection produces a figure that is unfalsifiable until someone measures
   the wall clock against it. Note the local zone is CEST (UTC+2), so a
@@ -1259,7 +1285,11 @@ Progress timestamps were the least trustworthy artefact in it. Every other
 number in this document was derived from a command's output or a commit, while
 the timestamps were written from recollection and were wrong by hours. A living
 document that records progress is only as good as the provenance of what it
-records.
+records. The correction belongs in that lesson too: documenting the fault and
+re-deriving the values did not end it. A final check at `901794f0` found 31
+stamps still ahead of the commits that carry them, so the durable remedy is not
+a one-time repair but reading the introducing commit instead of the label, and
+converting at the point of writing rather than transcribing a displayed time.
 
 ## Context and orientation
 
