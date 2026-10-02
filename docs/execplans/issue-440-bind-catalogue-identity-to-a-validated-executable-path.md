@@ -5,10 +5,11 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — every gate has been run at the working tree that is about
-to be committed, and all eleven findings from the CodeRabbit review of
-`6efb42b9` have been adjudicated and applied; the remaining open item is the
-closing `coderabbit review --agent` pass at the new head.
+Status: COMPLETE — every gate passes, all eleven findings from the CodeRabbit
+review of `6efb42b9` are applied, the closing review at `c738c78a` returned
+zero findings, and CI is green at `72f0e660` with the suite-coverage legs
+confirmed at step granularity. The work is pushed and draft pull request #571
+is open.
 
 ## Purpose / big picture
 
@@ -218,7 +219,7 @@ escalation, not a workaround.
   aggregate count, which is why a single group's figure is quoted rather than a
   total. The only tracked change at that revision was this document, so the log
   measures the code at `5d1e762f` exactly.
-- [ ] EP-M4: behavioural scenario, isolation and stateful tests, docs,
+- [x] EP-M4: behavioural scenario, isolation and stateful tests, docs,
   changelog, migration guide, roadmap note.
   - [x] (2026-10-01 17:18Z) The O2 non-vacuity guard is in place. `_FACTORIES`
         gains `bind`, `bind-nested`, and `bind-two`; the two `bind` spellings
@@ -264,7 +265,7 @@ escalation, not a workaround.
         Surprises) and an ambrleaks `[snapshot-posix-path]` finding on 21
         fictional `/opt/tools/echo` snapshot values, allowlisted narrowly in
         `ambrleaks.toml`.
-- [ ] EP-M5: gates green, push, draft pull request, CodeRabbit review.
+- [x] EP-M5: gates green, push, draft pull request, CodeRabbit review.
   - [x] (2026-10-01 17:56Z) The EP-M4 work landed as seven atomic commits
         (`22fe3311`, `6dc2c66a`, `d6728ec7`, `73943bc9`, `79193636`, `22a609b4`,
         `896677e3`), taking the branch from `4cec4a30` to `896677e3`. Seven
@@ -536,6 +537,15 @@ escalation, not a workaround.
         (`110903234656`) reports `skipped` for checkout, typechecker, and tests
         alike. The trap this plan records has therefore recurred unchanged at a
         second head, and the two legs with genuine coverage are the ones cited.
+  - [x] (2026-10-02 19:35Z) CI at the final head `72f0e660` is green: run
+        `37028966943` concludes `success`, with every job successful and only
+        the Loom smoke test skipped. The same step-granularity check was
+        applied a third time and gave the same answer: the 3.12 and 3.14 legs
+        report `success` for checkout, typechecker, and tests, while 3.15a
+        reports `skipped` for all three. The `Rust boundary verification`
+        workflow (`37028968211`) is also `success`. The plan is therefore
+        closed: every gate has passed at the pushed head, the review is clean,
+        and nothing remains but the human decision to merge.
 
 ## Surprises & discoveries
 
