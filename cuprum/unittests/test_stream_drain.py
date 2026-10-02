@@ -530,9 +530,10 @@ def test_byte_exact_capture_still_observes_decoded_lines() -> None:
     The drain buffer keeps the child's own bytes while the line feeder decodes
     a copy to find boundaries. An undecodable payload proves the two do not
     share a buffer: a regression that decoded into the capture would show
-    replacement characters here.
+    replacement characters here. The invalid byte sits at the end of a word so
+    the decoded line stays legible without breaking the token before it.
     """
-    payload = b"first\nsec\xffond\nthird"
+    payload = b"first\nsecond\xff\nthird"
     lines: list[str] = []
 
     captured = asyncio.run(
@@ -544,7 +545,7 @@ def test_byte_exact_capture_still_observes_decoded_lines() -> None:
     )
 
     assert captured == payload, f"the capture must stay byte-exact, got {captured!r}"
-    assert lines == ["first", "sec�ond", "third"], (
+    assert lines == ["first", "second�", "third"], (
         f"the observer must receive the decoded lines, got {lines!r}"
     )
 
