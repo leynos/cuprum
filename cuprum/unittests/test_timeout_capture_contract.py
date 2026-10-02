@@ -53,6 +53,20 @@ async def _never_reaches_eof_bytes() -> bytes | None:
     await asyncio.Event().wait()
 
 
+# An interpreter start-up plus a module import, with room to spare. This seeds
+# only the *marker* deadline; the run deadline stays a separate, independent
+# number, because a run timeout doubles as the deadline for reaching the marker
+# unless the caller passes one, and interpreting a slow start-up as a product
+# failure would hide the very deadline the test goes on to assert.
+_MARKER_STARTUP_GRACE_S = 10.0
+
+# Long enough to dwarf start-up, yet well inside pytest's 30-second per-test
+# bound, which a run deadline at or above it would trip rather than satisfy.
+# The child blocks for minutes, so once the marker is seen this is simply how
+# long the test waits to observe the timeout it is asserting.
+_RUN_TIMEOUT_S = 5.0
+
+
 #: A consumer that blocks until cancelled, in either capture mode.
 type _WedgedReader = cabc.Callable[
     [], cabc.Coroutine[object, object, str | bytes | None]
@@ -351,8 +365,8 @@ def test_timeout_keeps_flushed_output_after_the_child_is_ready(tmp_path: Path) -
             Program(python_interpreter()),
             catalogue=python_catalogue()[0],
         )(*child_argv(marker))
-        run_timeout = 1.0
-        deadline = asyncio.get_running_loop().time() + run_timeout
+        run_timeout = _RUN_TIMEOUT_S
+        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run(timeout=run_timeout, output=RunOutputOptions(capture=True)),
         )
@@ -438,8 +452,10 @@ def test_bytes_timeout_keeps_flushed_output_after_the_child_is_ready(
             Program(python_interpreter()),
             catalogue=python_catalogue()[0],
         )(*child_argv(marker))
-        run_timeout = 1.0
-        deadline = asyncio.get_running_loop().time() + run_timeout
+        # The run deadline has to allow for start-up *and* still fire while the
+        # child blocks, so that what the test reads came from the timeout path.
+        run_timeout = _RUN_TIMEOUT_S
+        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
         run = asyncio.create_task(
             command.run_bytes(
                 timeout=run_timeout, output=RunOutputOptions(capture=True)
@@ -487,8 +503,10 @@ def test_bytes_timeout_keeps_an_invalid_utf8_prefix(tmp_path: Path) -> None:
 
     async def run_case() -> TimeoutExpired:
         """Wait for readiness, then let the deadline take the child."""
-        deadline = asyncio.get_running_loop().time() + 1.0
-        run = asyncio.create_task(command.run_bytes(timeout=1.0))
+        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        # Long enough that the payload is flushed before the deadline, short
+        # enough that the deadline still takes the child while it sleeps.
+        run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
         await _wait_for_marker(marker, deadline=deadline)
 
@@ -513,8 +531,10 @@ def test_bytes_run_cancelled_externally_reraises_cancellation(tmp_path: Path) ->
 
     async def run_case() -> None:
         """Cancel the run from outside, before its deadline could fire."""
-        deadline = asyncio.get_running_loop().time() + 1.0
-        run = asyncio.create_task(command.run_bytes(timeout=30.0))
+        deadline = asyncio.get_running_loop().time() + _MARKER_STARTUP_GRACE_S
+        # Unreachable in this test: the cancellation is issued long before it,
+        # and the child is terminated rather than waited out.
+        run = asyncio.create_task(command.run_bytes(timeout=_RUN_TIMEOUT_S))
 
         await _wait_for_marker(marker, deadline=deadline)
         run.cancel()

@@ -57,11 +57,6 @@ __all__ = [
 ]
 
 
-def _execution_context() -> ExecutionContext:
-    """Build the default execution context, deferring the module import."""
-    return ExecutionContext()
-
-
 @dc.dataclass(frozen=True, slots=True)
 class SafeCmd:
     """Typed representation of a curated command ready for execution."""
@@ -202,7 +197,7 @@ class SafeCmd:
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
         out = _bytes_output(output)
         _validate_bytes_output(out)
-        ctx = context or _execution_context()
+        ctx = context or ExecutionContext()
         _enforce_allowlist(self)
         stdin_data = stdin.resolve(ctx) if stdin is not None else None
         effective_timeout = _resolve_timeout(timeout=timeout, context=context)
