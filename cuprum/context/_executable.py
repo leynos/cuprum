@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum.executable_binding import resolve_binding
+from cuprum.executable_binding import ExecutableResolutionError, resolve_binding
 
 if typ.TYPE_CHECKING:
     from cuprum.context.executable_overlay import ExecutableBindingOverlay
@@ -136,6 +136,12 @@ class _ExecutableBindingPolicy(_ExecutableBindingSource):
             The executable string, or ``None`` when the program is unbound and
             should run under its catalogued name.
 
+        Raises
+        ------
+        ExecutableResolutionError
+            A bound program's resolver failed. The error names *program* and
+            chains the resolver's own exception as ``__cause__``.
+
         Examples
         --------
         >>> from cuprum.context import CuprumContext
@@ -145,4 +151,16 @@ class _ExecutableBindingPolicy(_ExecutableBindingSource):
         binding = self.executable_binding(program)
         if binding is None:
             return None
-        return resolve_binding(binding, cwd=cwd)
+        try:
+            return resolve_binding(binding, cwd=cwd)
+        except ExecutableResolutionError:
+            raise
+        except Exception as exc:
+            # A resolver is caller-supplied and may fail for any reason at all:
+            # a missing virtual environment, an uninstalled toolchain, a bug in
+            # the resolver itself. None of those is meaningful to a caller as
+            # whichever exception surfaced, and an escaping ``FileNotFoundError``
+            # in particular names a path the caller never configured while
+            # saying nothing about the binding. This is the one place that knows
+            # both the program and the failure, so it is where they are joined.
+            raise ExecutableResolutionError(program, exc) from exc

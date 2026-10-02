@@ -68,6 +68,54 @@ result anchored must return an absolute path itself.
 """
 
 
+class ExecutableResolutionError(RuntimeError):
+    """Raised when a bound program's resolver fails to produce an executable.
+
+    A resolver is caller-supplied and typically consults state that may be
+    absent — a virtual environment that was never created, a toolchain that is
+    not installed. Each of those is a recognizable failure of the *binding*,
+    so it is reported as one rather than escaping as whichever exception the
+    resolver happened to raise: an escaping ``FileNotFoundError`` names a path
+    the caller never configured, and gives no hint that a binding was
+    involved. The original exception is chained as ``__cause__``.
+
+    Parameters
+    ----------
+    program : Program
+        The logical program whose resolver failed.
+    cause : BaseException
+        The exception the resolver raised.
+
+    Attributes
+    ----------
+    program : Program
+        The logical program whose resolver failed.
+    cause : BaseException
+        The exception the resolver raised.
+
+    Examples
+    --------
+    >>> from cuprum.context import CuprumContext
+    >>> def missing() -> str:
+    ...     raise FileNotFoundError("no venv")
+    >>> binding = executable_binding("echo", missing)
+    >>> ctx = CuprumContext().with_executable_binding("echo", binding)
+    >>> try:
+    ...     ctx.resolve_executable("echo", cwd=None)
+    ... except ExecutableResolutionError as err:
+    ...     print(err)
+    Program 'echo' cannot resolve its executable: FileNotFoundError
+    """
+
+    def __init__(self, program: Program, cause: BaseException) -> None:
+        """Record the logical program and the resolver's own failure."""
+        self.program = program
+        self.cause = cause
+        super().__init__(
+            f"Program '{program}' cannot resolve its executable: {type(cause).__name__}"
+        )
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ExecutableBinding:
     """The executable a logical program should run.
@@ -171,6 +219,38 @@ def executable_binding(
     )
 
 
+def _checked_resolver_result(result: object) -> str:
+    """Return *result* when it is the string the resolver contract requires.
+
+    A resolver is typed as returning ``str``, but nothing enforces that at run
+    time, and the failure mode is silent rather than loud: ``None`` is the
+    sentinel the execution layer reads as "unbound", so a resolver that
+    returned it would send the child to the catalogued name instead of the
+    executable the caller chose. That is precisely the substitution
+    :mod:`cuprum.executable_binding` exists to make deliberate, so an
+    accidental one must not be indistinguishable from a deliberate fallback.
+
+    Parameters
+    ----------
+    result : object
+        Whatever the resolver returned.
+
+    Returns
+    -------
+    str
+        The same string, unchanged.
+
+    Raises
+    ------
+    TypeError
+        The resolver returned something other than a ``str``.
+    """
+    if not isinstance(result, str):
+        msg = f"ExecutableResolver must return str; got {type(result).__name__}"
+        raise TypeError(msg)
+    return result
+
+
 def resolve_binding(binding: ExecutableBinding, *, cwd: str | None) -> str:
     """Evaluate *binding* into the executable string to run.
 
@@ -201,7 +281,7 @@ def resolve_binding(binding: ExecutableBinding, *, cwd: str | None) -> str:
     '/srv/project/bin/tool'
     """
     if binding.resolver is not None:
-        return binding.resolver()
+        return _checked_resolver_result(binding.resolver())
     resolved = Path(str(binding.path))
     if cwd is None or resolved.is_absolute():
         return str(resolved)
@@ -211,6 +291,7 @@ def resolve_binding(binding: ExecutableBinding, *, cwd: str | None) -> str:
 __all__ = [
     "ExecutableBinding",
     "ExecutablePath",
+    "ExecutableResolutionError",
     "ExecutableResolver",
     "InvalidExecutableBindingError",
     "PathBindingRejection",
